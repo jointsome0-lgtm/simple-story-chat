@@ -1,0 +1,222 @@
+// Shared story domain. lib/library.js is emitted from lib/library.ts by `npm run cloud:lib`; edit only the TypeScript file.
+
+// Library format v1 as stored by the local bot. Store.read checks only `version`; everything
+// else is trusted as written by this code, and readers of optional fields tolerate their absence.
+export type Seed = { id: string; title: string; startTime: string; text: string };
+// New memory always has these fields, but prompt.ts also reads facts without kind, at or source;
+// keep those fallbacks for older or incomplete v1 data.
+export type Fact = { kind: string; at: string; text: string; source: string[] };
+/** Token counts reported by a provider; null marks a count it did not report. */
+export type Usage = {
+  inputTokens: number | null; outputTokens: number | null; totalTokens: number | null;
+  cachedInputTokens?: number | null; reasoningCharacters?: number | null;
+};
+export type RequestStamp = { model: string; memory: string | null; provider: string; inputBytes: number; systemHash: string };
+export type MemoryVersion = {
+  id: string; parent: string | null; cutoff: string; covered: string[];
+  // `sgr` keeps the validated extraction stages for audit; prompts use only `facts`.
+  delta: { facts: Fact[]; sgr?: { evidence: unknown[]; conflicts: unknown[]; facts: unknown[] } };
+  method?: 'plain' | 'sgr'; repairScenes?: number; usage?: Usage;
+};
+export type SceneNode = {
+  id: string; parent: string | null; input: string; text: string; time: string; truncated: boolean; delivery: 'pending' | 'sent';
+  usage?: Usage | null; requestContext?: RequestStamp; streamResultMismatch?: boolean;
+  modelInfo?: { provider: string; model: string }; messageId?: number;
+};
+export type Branch = { id: string; name: string; head: string | null; memory: string | null };
+export type Checkpoint = { id: string; branchId: string; label: string; kind: string; head: string | null; memory: string | null };
+export type Story = {
+  id: string; seedId: string; title: string; branches: Record<string, Branch>; checkpoints: Record<string, Checkpoint>;
+  nodes: Record<string, SceneNode>; memories: Record<string, MemoryVersion>;
+};
+export type Job = {
+  id: string; storyId: string; branchId: string; head: string | null; memory: string | null; input: string; started: number;
+  kind?: 'compact';
+};
+// New drafts always have draftId and parts, but bot.ts and ui.ts also accept a stored draft without them;
+// keep those fallbacks for older or incomplete v1 data.
+export type SeedDraft = { input: 'seed'; draftId: string; parts: string[]; confirm?: undefined };
+export type DeleteConfirmation = { confirm: string; input?: undefined };
+export type Library = {
+  version: 1; seq: number; seeds: Record<string, Seed>; stories: Record<string, Story>;
+  active: { storyId: string; branchId: string } | null; job: Job | null; ui: SeedDraft | DeleteConfirmation | null; seen: number[];
+  interrupted?: boolean;
+};
+/** A timeline position: a branch or checkpoint head with its memory version. */
+export type Point = { head: string | null; memory: string | null };
+
+export class UserError extends Error {}
+
+export function emptyLibrary(): Library {
+  return { version: 1, seq: 0, seeds: {}, stories: {}, active: null, job: null, ui: null, seen: [] };
+}
+
+export function id(state: Library, prefix: string): string {
+  state.seq += 1;
+  return prefix + state.seq;
+}
+
+export function validTime(text: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/.exec(text);
+  if (!match) return false;
+  const [, y, m, d, h, min] = match.map(Number);
+  const leap = y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return m >= 1 && m <= 12 && d >= 1 && d <= days[m - 1] && h < 24 && min < 60;
+}
+
+export function addSeed(state: Library, text: string): Seed {
+  const [title, startTime, ...body] = text.trim().split('\n');
+  if (!title || title.length > 100 || !validTime(startTime?.trim() ?? '') || !body.join('\n').trim()) {
+    throw new UserError('Нужны название (до 100 знаков), дата в формате 2026-08-02 20:00 и описание мира, каждое с новой строки.');
+  }
+  const seed = { id: id(state, 's'), title, startTime: startTime.trim(), text: body.join('\n').trim() };
+  state.seeds[seed.id] = seed;
+  return seed;
+}
+
+export function newStory(state: Library, seedId: string): { story: Story; branch: Branch } {
+  const seed = state.seeds[seedId];
+  if (!seed) throw new UserError('Сид уже удалён.');
+  const story: Story = { id: id(state, 'h'), seedId, title: seed.title, branches: {}, checkpoints: {}, nodes: {}, memories: {} };
+  const branch: Branch = { id: id(state, 'b'), name: 'Начало', head: null, memory: null };
+  story.branches[branch.id] = branch;
+  state.stories[story.id] = story;
+  state.active = { storyId: story.id, branchId: branch.id };
+  saveCheckpoint(state, story, branch, 'Сид', 'start');
+  return { story, branch };
+}
+
+export function active(state: Library): { story: Story; branch: Branch; seed: Seed } {
+  const story = state.stories[state.active?.storyId as string];
+  const branch = story?.branches[state.active?.branchId as string];
+  if (!branch) throw new UserError('Выбери ветку истории через /seeds.');
+  return { story, branch, seed: state.seeds[story.seedId] };
+}
+
+export function saveCheckpoint(state: Library, story: Story, branch: Branch, label = 'Пауза', kind = 'manual'): Checkpoint {
+  const cp = { id: id(state, 'c'), branchId: branch.id, label: label.slice(0, 100), kind, head: branch.head, memory: branch.memory };
+  story.checkpoints[cp.id] = cp;
+  return cp;
+}
+
+export function fork(state: Library, storyId: string, checkpointId: string): Branch {
+  const story = state.stories[storyId];
+  const cp = story?.checkpoints[checkpointId];
+  if (!cp) throw new UserError('Чекпоинт уже удалён.');
+  const branch = { id: id(state, 'b'), name: `От ${cp.label}`, head: cp.head, memory: cp.memory };
+  story.branches[branch.id] = branch;
+  state.active = { storyId, branchId: branch.id };
+  saveCheckpoint(state, story, branch, 'Точка развилки', 'fork');
+  return branch;
+}
+
+export function history(story: Story, head: string | null): SceneNode[] {
+  const nodes = [];
+  while (head) {
+    const node = story.nodes[head];
+    if (!node) throw new Error('Broken history reference');
+    nodes.push(node);
+    head = node.parent;
+  }
+  return nodes.reverse();
+}
+
+export function memoryChain(story: Story, memory: string | null): MemoryVersion[] {
+  const versions = [];
+  while (memory) {
+    const version = story.memories[memory];
+    if (!version) throw new Error('Broken memory reference');
+    versions.push(version);
+    memory = version.parent;
+  }
+  return versions.reverse();
+}
+
+export function context(story: Story, branch: Point): { memories: MemoryVersion[]; recent: SceneNode[] } {
+  const all = history(story, branch.head);
+  const memories = memoryChain(story, branch.memory);
+  const cutoff = memories.at(-1)?.cutoff;
+  const index = cutoff ? all.findIndex(n => n.id === cutoff) : -1;
+  if (cutoff && index < 0) throw new Error('Memory belongs to another timeline');
+  return { memories, recent: all.slice(index + 1) };
+}
+
+export function beginJob(state: Library, input: string, now: number): Job {
+  if (state.job) throw new UserError('Продолжение уже готовится. /cancel отменит его, если запрос завис.');
+  const { story, branch } = active(state);
+  const job = { id: id(state, 'j'), storyId: story.id, branchId: branch.id, head: branch.head, memory: branch.memory, input, started: now };
+  state.job = job;
+  return job;
+}
+
+export function jobTarget(state: Library, jobId: string) {
+  const job = state.job;
+  if (job?.id !== jobId) return null;
+  const story = state.stories[job.storyId];
+  const branch = story?.branches[job.branchId];
+  if (!branch || branch.head !== job.head || branch.memory !== job.memory) return null;
+  return { job, story, branch, seed: state.seeds[story.seedId] };
+}
+
+export function commitMemory(state: Library, jobId: string, covered: string[], delta: MemoryVersion['delta']): boolean {
+  const target = jobTarget(state, jobId);
+  if (!target) return false;
+  const { story, branch, job } = target;
+  const recent = context(story, branch).recent;
+  if (!covered.length || covered.some((n, i) => recent[i]?.id !== n)) throw new Error('Invalid compaction range');
+  const memory = { id: id(state, 'm'), parent: branch.memory, cutoff: covered.at(-1) as string, covered, delta };
+  story.memories[memory.id] = memory;
+  branch.memory = memory.id;
+  job.memory = memory.id;
+  saveCheckpoint(state, story, branch, 'После сжатия', 'compaction');
+  return true;
+}
+
+export function commitTurn(state: Library, jobId: string, text: string, truncated = false) {
+  const target = jobTarget(state, jobId);
+  if (!target) return null;
+  const { story, branch, job } = target;
+  const time = text.split('\n')[0].trim();
+  if (!validTime(time)) throw new UserError('Модель не указала корректные дату и время. Ответ не записан; отправь продолжение ещё раз.');
+  const node: SceneNode = { id: id(state, 'n'), parent: branch.head, input: job.input, text, time, truncated, delivery: 'pending' };
+  story.nodes[node.id] = node;
+  branch.head = node.id;
+  state.job = null;
+  return { storyId: story.id, branchId: branch.id, nodeId: node.id };
+}
+
+function collect(story: Story): void {
+  const nodeIds = new Set();
+  const memoryIds = new Set();
+  for (const ref of [...Object.values(story.branches), ...Object.values(story.checkpoints)]) {
+    for (const node of history(story, ref.head)) nodeIds.add(node.id);
+    for (const memory of memoryChain(story, ref.memory)) memoryIds.add(memory.id);
+  }
+  for (const key of Object.keys(story.nodes)) if (!nodeIds.has(key)) delete story.nodes[key];
+  for (const key of Object.keys(story.memories)) if (!memoryIds.has(key)) delete story.memories[key];
+}
+
+export function deleteBranch(state: Library, storyId: string, branchId: string): void {
+  const story = state.stories[storyId];
+  if (!story?.branches[branchId]) throw new UserError('Ветка уже удалена.');
+  delete story.branches[branchId];
+  for (const cp of Object.values(story.checkpoints)) if (cp.branchId === branchId) delete story.checkpoints[cp.id];
+  collect(story);
+  if (!Object.keys(story.branches).length) delete state.stories[storyId];
+  if (state.active?.storyId === storyId && state.active.branchId === branchId) state.active = null;
+  if (state.job?.storyId === storyId && state.job.branchId === branchId) state.job = null;
+  state.ui = null;
+}
+
+export function deleteSeed(state: Library, seedId: string): void {
+  if (!state.seeds[seedId]) throw new UserError('Сид уже удалён.');
+  for (const story of Object.values(state.stories)) {
+    if (story.seedId !== seedId) continue;
+    if (state.active?.storyId === story.id) state.active = null;
+    if (state.job?.storyId === story.id) state.job = null;
+    delete state.stories[story.id];
+  }
+  delete state.seeds[seedId];
+  state.ui = null;
+}

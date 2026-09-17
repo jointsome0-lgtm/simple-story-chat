@@ -78,7 +78,7 @@ tmux new -s simple-story-chat-bot 'npm start'
 
 ## Повторяемый тест битвы
 
-`npm run story:probe` создаёт отдельную синтетическую историю на модели из конфигурации. Выбор сценария: `--scenario battle`, `--scenario chess` или `--scenario dance`. Для Opus: `npm run story:probe -- --scenario chess --model claude-opus-5`. Для уже подготовленного GPU: `node --env-file=.env.gpu local/story-probe.mjs --scenario chess`.
+`npm run story:probe` создаёт отдельную синтетическую историю на модели из конфигурации. Выбор сценария: `--scenario battle`, `--scenario chess` или `--scenario dance`. Для Opus: `npm run story:probe -- --scenario chess --model claude-opus-5`. Для уже подготовленного GPU: `node --env-file=.env.gpu local/story-probe.ts --scenario chess`.
 
 Каждый сценарий содержит 16 ходов, три ручных сжатия после седьмой, одиннадцатой и пятнадцатой сцен, продолжение после третьего сжатия и заключительный запрос о сохранённых фактах. Оригиналы, инкременты и метрики записываются в отдельный каталог `/tmp/simple-chat-<сценарий>-*`; путь выводится при запуске. База бота и Telegram в тесте не используются. Это проверка памяти на небольшой истории. Вместимость и кэш при входе около 59K токенов отдельно проверяет `npm run model:probe -- --long`; качество длинной истории эта проба не измеряет.
 

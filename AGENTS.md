@@ -29,6 +29,10 @@ in this project.
 Only `.js` files in `schema.js`, `lib/`, and `handlers/` are deployed. Everything
 else (Markdown, config, `.tgcloud/`) is local-only.
 
+`lib/library.js` is generated from `lib/library.ts` by `npm run cloud:lib` and stays
+plain JS; edit only the `.ts` source and regenerate. The remaining `lib/` and
+`handlers/` files stay hand-written JS for tgcloud.
+
 ## Module system — the rules that bite
 
 - **Import by bare module name, never a relative path or file extension.**

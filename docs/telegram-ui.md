@@ -1,6 +1,6 @@
 # simple-story-chat Telegram interface
 
-`ui.mjs` turns a user's library into plain-text `sendMessage` payloads with inline keyboards. It has no dependencies and does not import `library.js`. It reads state defensively, so broken or stale references lead to a recovery screen instead of an exception.
+`ui.ts` turns a user's library into plain-text `sendMessage` payloads with inline keyboards. It has no runtime dependencies: its imports from `lib/library.ts` and other local modules are type-only. It reads state defensively, so broken or stale references lead to a recovery screen instead of an exception.
 
 ## User paths
 
@@ -52,4 +52,4 @@ Navigation, previews and «Последняя сцена» stay available. Butto
 - Unknown routes show the menu with a note. Missing seeds, stories, branches or checkpoints show «⚠️ … не найден(а)» with «Сиды / Меню» buttons. `render` never throws.
 - Texts are capped at 4000 characters. A checkpoint preview trims the scene so the fork explanation still fits. A button whose callback would exceed 64 bytes is dropped rather than sent broken; with library-generated ids this does not happen.
 - Items are sorted by the numeric suffix of their ids, which is creation order.
-- `ui.test.mjs` (node:test) crawls every screen reachable through `view:` buttons in normal, empty, busy and large libraries. It checks payload limits, the callback protocol, delete scope, stale routes and pagination.
+- `ui.test.ts` (node:test) crawls every screen reachable through `view:` buttons in normal, empty, busy and large libraries. It checks payload limits, the callback protocol, delete scope, stale routes and pagination.

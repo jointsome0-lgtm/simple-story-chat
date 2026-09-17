@@ -2,19 +2,24 @@
   "name": "simple-story-chat",
   "private": true,
   "devDependencies": {
-    "@tgcloud/cli": "0.1.2"
+    "@tgcloud/cli": "0.1.2",
+    "@types/node": "24.9.2",
+    "typescript": "7.0.2"
   },
   "version": "0.1.0",
   "type": "module",
-  "engines": { "node": ">=24.9.0" },
+  "engines": {
+    "node": ">=24.9.0"
+  },
   "scripts": {
-    "test": "node --test local/*.test.mjs",
-    "check": "node local/check.mjs",
-    "start": "node local/start.mjs",
-    "start:gpu": "node --env-file=.env.gpu local/start.mjs",
-    "model:probe": "node --env-file=.env.gpu local/model-probe.mjs",
-    "story:probe": "node local/story-probe.mjs",
-    "memory:probe": "node --env-file=.env.gpu local/memory-probe.mjs",
+    "test": "node --test local/*.test.ts",
+    "check": "tsc -p tsconfig.json && node local/cloud-lib.ts --check && node local/check.ts",
+    "cloud:lib": "node local/cloud-lib.ts",
+    "start": "node local/start.ts",
+    "start:gpu": "node --env-file=.env.gpu local/start.ts",
+    "model:probe": "node --env-file=.env.gpu local/model-probe.ts",
+    "story:probe": "node local/story-probe.ts",
+    "memory:probe": "node --env-file=.env.gpu local/memory-probe.ts",
     "deploy": "tgcloud push",
     "status": "tgcloud status",
     "run:cloud": "tgcloud run"
