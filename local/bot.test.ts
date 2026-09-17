@@ -294,6 +294,63 @@ test('private state cannot be reached from another user, group or unconfirmed de
   assert.equal(f.requests.length, 1);
 });
 
+test('a button whose IDs are not library IDs is stale: answered once, recorded, no change or model call, later input works', async t => {
+  const f = fixture(t);
+  await f.start();
+  const { stories, active } = f.store.read(1);
+  const story = Object.values(stories)[0];
+  const replies = () => f.sent.filter(m => m.method === 'sendMessage').map(m => m.payload.text);
+  // Object.prototype names in place of each ID these actions look up; a delete is confirmed first, as the UI does.
+  for (const { confirm, data } of [{ data: 'use:constructor:b1' }, { data: `use:${story.id}:constructor` },
+    { data: 'fork:constructor:c1' }, { data: `fork:${story.id}:__proto__` }, { data: 'start:constructor' },
+    { confirm: 'view:delete-branch:constructor:b1', data: 'remove-branch:constructor:b1' },
+    { confirm: 'view:delete-seed:constructor', data: 'remove-seed:constructor' }]) {
+    if (confirm) await f.bot.handle(f.click(confirm));
+    const before = f.store.read(1);
+    const count = replies().length;
+    const update = f.click(data);
+    // A rejected update is fetched again, so handling must succeed once and ignore the replay.
+    await f.bot.handle(update);
+    await f.bot.handle(update);
+    await f.bot.idle();
+    assert.deepEqual(replies().slice(count), ['Кнопка устарела. Открой /menu.'], data);
+    const after = f.store.read(1);
+    assert.ok(after.seen.includes(update.update_id), data);
+    assert.deepEqual({ ...after, seen: before.seen }, before, data);
+  }
+  assert.equal(f.requests.length, 1);
+  await f.bot.handle(f.click(`use:${story.id}:${active!.branchId}`));
+  await f.bot.handle(f.message('/continue'));
+  await f.bot.idle();
+  assert.equal(f.requests.length, 2);
+  const current = f.store.read(1).stories[story.id];
+  assert.equal(history(current, current.branches[active!.branchId].head).length, 2);
+});
+
+test('text starting with an Object.prototype name is ordinary text: a character action or a part of a seed draft', async t => {
+  const f = fixture(t);
+  await f.start();
+  for (const text of ['constructor', 'toString и дальше текст', '__proto__']) {
+    const update = f.message(text);
+    await f.bot.handle(update);
+    await f.bot.idle();
+    await f.bot.handle(update);
+    await f.bot.idle();
+    const state = f.store.read(1);
+    const story = state.stories[state.active!.storyId];
+    assert.equal(history(story, story.branches[state.active!.branchId].head).at(-1)!.input, text);
+  }
+  assert.equal(f.requests.length, 4);
+  await f.bot.handle(f.message('/new'));
+  await f.bot.handle(f.message(seedText));
+  await f.bot.handle(f.message('valueOf'));
+  await f.bot.handle(f.click(`save-seed:${(f.store.read(1).ui as SeedDraft).draftId}`));
+  const seeds = Object.values(f.store.read(1).seeds);
+  assert.equal(seeds.length, 2);
+  assert.match(seeds[1].text, /СЕВЕР\.\n\nvalueOf$/);
+  assert.equal(f.requests.length, 4);
+});
+
 test('running generation rejects another input and cancel prevents a late commit', async t => {
   let release: ((result: GenerationResult) => void) | undefined;
   const f = fixture(t, { generate: () => new Promise<GenerationResult>(resolve => { release = resolve; }) });

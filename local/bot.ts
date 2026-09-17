@@ -45,6 +45,8 @@ type Plan = {
 };
 // `promise` is set as soon as the entry is registered.
 type Running = { controller: AbortController; promise?: Promise<void> };
+// Library IDs are a prefix and a sequence number, as id() in lib/library.ts creates them.
+const ID = { seed: /^s\d+$/, story: /^h\d+$/, branch: /^b\d+$/, checkpoint: /^c\d+$/ };
 
 export function createBot({ store, api, provider, gpu, readSeedFile, render: renderUi, scenePrefix = () => '', sceneKeyboard, allowedUsers, maxOutputTokens,
   contextTokens = 65536, compactAtTokens = 54000, keepScenes = 4, memoryMode = 'plain', repairCoverage = false, model = 'unknown', providerName = 'claude-code', log = () => {} }: BotOptions) {
@@ -94,7 +96,8 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
         '/gpu': 'view:model', '/gpu_pause': 'gpu:pause', '/gpu_start': 'gpu:start',
         '/checkpoints': current ? `view:checkpoints:${current.storyId}:${current.branchId}:0` : 'view:seeds:0',
       };
-      action = commands[command];
+      // Only the listed commands: ordinary text may start with an Object.prototype name such as `constructor`.
+      action = command !== undefined && Object.hasOwn(commands, command) ? commands[command] : undefined;
       if (!action && text?.startsWith('/') && state.ui?.input !== 'seed') return { screen: { text: 'Не знаю такой команды. Открой /menu.' } };
     }
     if (action === 'cancel') {
@@ -160,6 +163,12 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
       return { job };
     }
     const [verb, a, b] = (action || '').split(':');
+    // Button data comes from the client, and these actions use its IDs as library keys. A value that is not an ID of
+    // the expected kind, such as `constructor`, could reach Object.prototype, so the button is stale; so is a missing ID.
+    const validIds = verb === 'start' || verb === 'remove-seed' ? ID.seed.test(a)
+      : verb === 'use' || verb === 'remove-branch' ? ID.story.test(a) && ID.branch.test(b)
+      : verb === 'fork' ? ID.story.test(a) && ID.checkpoint.test(b) : true;
+    if (!validIds) throw new UserError('Кнопка устарела. Открой /menu.');
     if (verb === 'remove-seed' || verb === 'remove-branch') {
       if (state.ui?.confirm !== action) throw new UserError('Это подтверждение устарело. Открой удаление заново через /seeds.');
       if (verb === 'remove-seed') deleteSeed(state, a);
