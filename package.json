@@ -1,14 +1,22 @@
 {
-  "name": "simple-chat-gemma-4",
+  "name": "simple-story-chat",
   "private": true,
   "devDependencies": {
-    "@tgcloud/cli": "^0.1.2"
+    "@tgcloud/cli": "0.1.2"
   },
   "version": "0.1.0",
   "type": "module",
+  "engines": { "node": ">=24.9.0" },
   "scripts": {
+    "test": "node --test local/*.test.mjs",
+    "check": "node local/check.mjs",
+    "start": "node local/start.mjs",
+    "start:gpu": "node --env-file=.env.gpu local/start.mjs",
+    "model:probe": "node --env-file=.env.gpu local/model-probe.mjs",
+    "story:probe": "node local/story-probe.mjs",
+    "memory:probe": "node --env-file=.env.gpu local/memory-probe.mjs",
     "deploy": "tgcloud push",
     "status": "tgcloud status",
-    "run": "tgcloud run"
+    "run:cloud": "tgcloud run"
   }
 }

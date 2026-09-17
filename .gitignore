@@ -1,2 +1,26 @@
+# Local credentials and configuration
 .tgcloud/
+.env
+.env.*
+!.env.example
+!.env.gpu.example
+config.local.json
+handlers/_configure.js
+
+# Private stories, exports, backups and diagnostic output
+data/
+seeds/
+stories/
+exports/
+backups/
+logs/
+*.log
+*.sqlite*
+*.db
+*.db-*
+
+# Dependencies and generated reports
 node_modules/
+coverage/
+models/
+*.gguf

@@ -1,10 +1,14 @@
 import { table, integer, text } from 'sdk/db';
 
-// Your database tables go here as named exports. Deploying this file registers the
-// schema; applying the changes (a migration) updates the database.
+export const settings = table('settings', {
+  id: integer('id').primaryKey(),
+  payload: text('payload').notNull(),
+});
 
-// Uncomment to define your first table:
-// export const users = table('users', {
-//   id:   integer('id').primaryKey({ autoIncrement: true }),
-//   name: text('name').notNull(),
-// });
+// A revision-checked write changes the entire single-owner library atomically.
+// No foreign keys or undocumented multi-statement transactions are needed.
+export const library = table('library', {
+  id: integer('id').primaryKey(),
+  revision: integer('revision').notNull(),
+  payload: text('payload').notNull(),
+});

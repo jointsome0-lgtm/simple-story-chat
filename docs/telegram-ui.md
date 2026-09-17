@@ -1,0 +1,55 @@
+# simple-story-chat Telegram interface
+
+`ui.mjs` turns a user's library into plain-text `sendMessage` payloads with inline keyboards. It has no dependencies and does not import `library.js`. It reads state defensively, so broken or stale references lead to a recovery screen instead of an exception.
+
+## User paths
+
+- **First run:** /start shows an empty menu that explains what a seed is → «➕ Новый сид» → the instruction screen (one or several messages, then Save) with a sample → the user sends one or more parts → a receipt after each part → «💾 Сохранить сид» (`save-seed:<draftId>`) creates the seed and shows its screen, where «▶️ Начать новую историю» starts a story.
+- **Seed draft** (`state.ui = {input:'seed', draftId, parts}`): `render(state, 'new-seed')` shows the instructions while `parts` is empty, and a receipt once parts arrive. The receipt shows:
+  - «📝 Черновик сида — ещё не сохранён»;
+  - the part count and character count of the parts joined with blank lines (never tokens);
+  - that no scenes are written, now or on save.
+
+  It never shows draft text: no title, date, body or filename. The UI does not check the format; on Save the backend's seed parser reports any specific error, and the draft stays open. Buttons: Save (only with a `draftId`) and «🗑 Отменить черновик» (`cancel`). There is no Menu button, because the backend sends navigation back to this screen while a draft is open; the text says so.
+- **Files:** the instructions also offer a `.txt`/`.md` attachment (UTF-8, up to 256 КиБ for the whole draft). The file can be complete, with title and date in its first lines, or description only, with title and date sent first as a message. Captions are ignored, and PDF/DOCX are not supported. Each file is one more part with the same receipt and still needs Save. No new state or callbacks.
+- **Play:** the menu shows the current story, branch, scene count and world time. To continue, the user just writes a message (speech, action or author direction). «▶️ Продолжить» asks for the next scene with no input, and «📄 Последняя сцена» shows it again. Scene messages use `sceneKeyboard` to show «Продолжить / Контекст» and «Чекпоинты / Ветки / Меню»; while a scene is being written, only «Остановить / Контекст / Меню» appear.
+- **Browse:** Меню → Сиды (numbered list, 8 per page) → Сид (description, «Начать новую историю», its stories) → История N (its branches, ✅ marks the current one) → Ветка (last scene excerpt, «Играть в этой ветке» or «Продолжить», checkpoints, delete).
+- **Rewind/fork:** Ветка → Чекпоинты (newest first, 8 per page) → preview (input + scene text; for a seed checkpoint, the seed) → «🌿 Продолжить отсюда». The screen says the old branch stays unchanged.
+- **Delete:** «🗑 Удалить сид/ветку» opens a confirmation that shows the scope: stories, branches and scenes for a seed. For a branch it shows its checkpoints, the scenes found in no other branch, and how many branches stay. If it is the only branch, it says the whole story will be deleted. «↩️ Не удалять» returns to the item. The screen also says that deletion only removes items from the bot's saved library: messages already sent stay in the chat.
+
+Stories made from the same seed share its title, so they are called «История N» (by creation order) within that seed.
+
+## Model and manual compaction
+
+`render(state, route, {modelInfo})` accepts public metadata only: `{provider, model, status, checkedAt}`. Home and `sceneKeyboard` link to `view:model`. The backend refreshes the server check before rendering that screen. The screen shows the selected provider, model, status and check time in UTC; it does not change the deployment. Configured, a past successful check and an unavailable server have distinct labels.
+
+`scenePrefix(stats, provenance)` adds the scene's own `{provider, model}` before its context percentage. The backend stores this metadata with new scenes. Old scenes without provenance keep their unlabelled prefix even after a deployment change. No status, endpoint or credential is included in the narrative prompt.
+
+The idle current-context screen offers `compact`. Historical checkpoints and busy screens do not. The backend preserves the last configured number of scenes, archives originals and creates checkpoints before and after compaction. A compaction job uses `state.job.kind = 'compact'`, and the renderer shows compaction wording while navigation and cancellation remain available.
+
+## Context indicators
+
+- **Scene header** (`scenePrefix(stats)`) is one Markdown line plus a blank line, e.g. `_📏 Контекст ≈ 5%_`. It shows `request.estimatedTokens / limitTokens` rounded; below 1% it says «менее 1%». Unless `estimateSource` is `'usage'`, it adds «, грубая оценка». It has no absolute numbers, and it uses no characters that Markdown would need to escape. With unknown stats it returns `''`. The backend puts it above streaming previews, the final scene and /last. It is never saved as narrative or sent to the model, and the scene's date/time stays the first line below it.
+- **Detailed view**, only on request (`view:context` or /context for the current branch, `view:context:STORY:CHECKPOINT` for a checkpoint), shows:
+  - the window limit and the reply reserve;
+  - the next-request estimate with its share of the window, and where the estimate comes from (checked against the last measured request, or UTF-8 bytes ÷ 4 plus overhead);
+  - the input budget (window minus reserve) and what remains of it, with a note that this is a forecast and the actual input is checked again when the model starts answering, before any text is shown;
+  - the auto-compaction threshold and how many latest scenes stay verbatim, noting that measured tokens can correct the estimate and that checkpoints are saved before and after compaction;
+  - the snapshot breakdown: seed, memory, «Сид + память», uncompacted scenes, whole snapshot;
+  - the last measured request.
+- **Where to open it:** «📏 Контекст» is in the menu, in the scene keyboard (also while a scene is being written) and in the checkpoint preview. Checkpoint sizes appear only on the Context screen, never in the preview itself.
+- **Labels:** byte sizes are exact («Б»); every token estimate carries «≈», and component estimates are UTF-8 bytes ÷ 4. The last request is labelled «измерено», and output is called «выход» (the note says it may include hidden reasoning). Missing numbers are shown as «неизвестно» / «нет измерений», never 0. With zero memory parts it says «сжатий ещё не было». The model name is not shown.
+- **Matching stats:** stats are used only if they match the route. For `context:H:C` they need `scope:'checkpoint'` with the same story and checkpoint. For `context` they need a scope other than checkpoint and the active story and branch. Otherwise the screen says there is no data yet and offers the way back (checkpoint or checkpoints + menu). While a scene is being written, the current view notes that the unfinished scene is not counted.
+
+## Busy state (`state.job`)
+
+Navigation, previews and «Последняя сцена» stay available. Buttons for `start`, `use`, `fork`, `continue` and delete confirmations are left out. Where one would normally appear, the screen says it will be available once the scene is done and shows «✖️ Отменить генерацию» (`cancel`). Seed entry stays available. There, the cancel button is labelled «Отмена (остановит и сцену)», because `cancel` also stops generation.
+
+## Integration notes
+
+- `view:ROUTE` should call `render(state, ROUTE)` with the route as is. Besides the listed routes, pagination adds one **optional page suffix**: `seed:SEED_ID:PAGE` and `story:STORY_ID:PAGE` (stories of a seed, branches of a story). Pages out of range are clamped, and invalid page values count as 0.
+- `new-seed` also returns `entities: [{type:'pre', …}]` around the example, so it can be copied with a tap and needs no parse_mode escaping. If the backend only forwards `text` and `reply_markup`, the screen still works.
+- Unknown routes show the menu with a note. Missing seeds, stories, branches or checkpoints show «⚠️ … не найден(а)» with «Сиды / Меню» buttons. `render` never throws.
+- Texts are capped at 4000 characters. A checkpoint preview trims the scene so the fork explanation still fits. A button whose callback would exceed 64 bytes is dropped rather than sent broken; with library-generated ids this does not happen.
+- Items are sorted by the numeric suffix of their ids, which is creation order.
+- `ui.test.mjs` (node:test) crawls every screen reachable through `view:` buttons in normal, empty, busy and large libraries. It checks payload limits, the callback protocol, delete scope, stale routes and pagination.

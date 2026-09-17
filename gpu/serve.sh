@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+task_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$task_dir/manifest.env"
+gpu_dir="${SIMPLE_CHAT_GPU_DIR:-/workspace/simple-chat-gpu}"
+port="${SIMPLE_CHAT_GPU_PORT:-8080}"
+context="${SIMPLE_CHAT_GPU_CONTEXT:-65536}"
+ubatch="${SIMPLE_CHAT_GPU_UBATCH:-128}"
+[[ "$port" =~ ^[0-9]+$ && "$context" =~ ^[0-9]+$ && "$ubatch" =~ ^[0-9]+$ ]] || { echo 'Invalid port/context/ubatch.' >&2; exit 1; }
+(( port > 0 && port <= 65535 && context >= 8192 && context <= 65536 )) || exit 1
+(( ubatch >= 32 && ubatch <= 512 )) || exit 1
+[[ "$(git -C "$gpu_dir/llama.cpp" rev-parse HEAD)" = "$LLAMA_CPP_REVISION" ]] || { echo 'Unexpected llama.cpp revision; rerun bootstrap.' >&2; exit 1; }
+[[ -f "$gpu_dir/models/$MODEL_FILE" ]] || { echo 'Run bootstrap first.' >&2; exit 1; }
+# Error output is classified in memory; only safe categories and process
+# lifecycle events reach disk. Do not enable prompt or JSON payload logging.
+# One slot retains its ordinary prefix KV; the optional RAM snapshot cache is off.
+ulimit -c 0
+echo "Starting $MODEL_ALIAS; context=$context, slots=1, loopback port=$port."
+exec python3 "$task_dir/server-log.py" "$gpu_dir/server-events.jsonl" -- \
+  "$gpu_dir/llama.cpp/build/bin/llama-server" \
+  --model "$gpu_dir/models/$MODEL_FILE" --alias "$MODEL_ALIAS" \
+  --host 127.0.0.1 --port "$port" --ctx-size "$context" --parallel 1 \
+  --gpu-layers 99 --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 \
+  --batch-size 512 --ubatch-size "$ubatch" --jinja --reasoning-format deepseek \
+  --chat-template-kwargs '{"enable_thinking":false}' \
+  --no-context-shift --cache-ram 0 --no-cache-idle-slots --no-slots \
+  --log-verbosity 1 --log-prefix --log-timestamps --log-colors off --no-log-jsonl
