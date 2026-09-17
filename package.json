@@ -20,6 +20,7 @@
     "model:probe": "node --env-file=.env.gpu local/model-probe.ts",
     "story:probe": "node local/story-probe.ts",
     "memory:probe": "node --env-file=.env.gpu local/memory-probe.ts",
+    "gpu:diagnose": "node --env-file-if-exists=.env.gpu local/gpu-diagnose.ts",
     "deploy": "tgcloud push",
     "status": "tgcloud status",
     "run:cloud": "tgcloud run"
