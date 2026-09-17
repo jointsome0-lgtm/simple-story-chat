@@ -90,6 +90,9 @@ export function loadConfig(directory = process.cwd(), inherited: Env = process.e
   const model = modelConfig(env);
   const gpu = gpuConfig(env, model.provider);
   if (gpu && model.baseUrl !== 'http://127.0.0.1:8080') throw new Error('Managed GPU requires the local SSH tunnel on port 8080');
-  return { ...model, gpu, token, allowedUsers, ownerId: env.SIMPLE_CHAT_OWNER_ID || '',
+  // The bot log marks the owner's rows with this ID. A mistyped one would mark them as someone else's without a word.
+  const ownerId = env.SIMPLE_CHAT_OWNER_ID?.trim() || '';
+  if (ownerId && !allowedUsers.has(ownerId)) throw new Error('SIMPLE_CHAT_OWNER_ID must be one of SIMPLE_CHAT_ALLOWED_USER_IDS');
+  return { ...model, gpu, token, allowedUsers, ownerId,
     dbPath: resolve(directory, env.SIMPLE_CHAT_DB_PATH || 'data/simple-chat.sqlite') };
 }

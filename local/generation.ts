@@ -4,7 +4,8 @@ import type { CompactionStatus } from './compact-view.ts';
 import { makeRequest } from './prompt.ts';
 import type { ContextConfig } from './context.ts';
 import { estimateRequest, requestBudget } from './context.ts';
-import { ModelError, errorCode } from './model-error.ts';
+import type { ErrorDetails, Log } from './model-error.ts';
+import { ModelError, errorCode, safeErrorDetails } from './model-error.ts';
 import type { GenerateControls, GenerationResult, ModelRequest, Provider } from './model.ts';
 import { summaryRequest, supplementRequest, parseMemory, inspectMemory } from './memory.ts';
 import type { Store } from './store.ts';
@@ -15,6 +16,10 @@ export type GenerationConfig = ContextConfig & { memoryMode?: 'plain' | 'sgr'; r
 type CompactionConfig = Omit<GenerationConfig, 'model' | 'provider'>;
 type Operation<Config = GenerationConfig> = { store: Store; userId: string; jobId: string; provider: Provider; config: Config; signal?: AbortSignal };
 type Report = (status: CompactionStatus) => void;
+// Sizes and counts of a compaction and of its current model request. They go to the technical log; none is text.
+type Numbers = Required<Pick<ErrorDetails, 'sceneCount' | 'repairSceneCount' | 'requestBytes' | 'outputCharacters'>>
+  & Pick<ErrorDetails, 'inputBytesBefore' | 'inputBytesAfter'>;
+type RecordEvent = (event: string, details?: ErrorDetails) => void;
 // Thrown values are not checked: ModelError carries these fields, other errors lack them.
 type Failure = { operation?: string; code?: string | number; memoryReason?: string };
 
@@ -27,38 +32,51 @@ function loadTarget(store: Store, userId: string, jobId: string, signal: AbortSi
   return { state, ...target };
 }
 
-export async function compactBranch(options: Operation<CompactionConfig> & { onProgress?: Report }) {
-  const { signal, onProgress = () => {} } = options;
+export async function compactBranch(options: Operation<CompactionConfig> & { onProgress?: Report; log?: Log; automatic?: boolean }) {
+  const { signal, onProgress = () => {}, log = () => {}, automatic = false } = options;
   const report = (progress: CompactionStatus) => {
     if (!signal?.aborted) { try { onProgress(progress); } catch {} }
   };
-  try { return await extractAndSave({ ...options, report }); }
+  const started = Date.now();
+  const numbers: Numbers = { sceneCount: 0, repairSceneCount: 0, requestBytes: 0, outputCharacters: 0 };
+  const details = () => ({ automatic, ...numbers, elapsedMs: Date.now() - started });
+  // An automatic compaction that succeeds has no other row in the log; a manual one is logged here the same way.
+  const record: RecordEvent = (event, extra) => log(event, undefined, { ...details(), ...extra });
+  try { return await extractAndSave({ ...options, report, numbers, record }); }
   catch (error) {
     const failure = error as Failure;
-    // No response bodies, source identifiers or story text enter diagnostics.
+    // No response bodies, source identifiers or story text enter diagnostics. The caller logs the failure once, so
+    // the numbers travel on the error. Its own details win: a supplement that fails coverage counts its own scenes.
+    Object.assign(failure, details(), safeErrorDetails(failure));
     failure.operation = 'compact';
     report({ stage: failure.code === 'cancelled' ? 'cancelled' : 'failed', reason: failure.memoryReason ?? failure.code });
     throw error;
   }
 }
 
-async function extractAndSave({ store, userId, jobId, provider, config, signal, report }: Operation<CompactionConfig> & { report: Report }) {
+async function extractAndSave({ store, userId, jobId, provider, config, signal, report, numbers, record }: Operation<CompactionConfig> & {
+  report: Report; numbers: Numbers; record: RecordEvent;
+}) {
   const load = () => loadTarget(store, userId, jobId, signal);
   const target = load();
   let nodes = context(target.story, target.branch).recent.slice(0, -(config.keepScenes ?? 4));
   if (!nodes.length) throw new ModelError('nothing_to_compact');
   for (let attempt = 0; attempt < 8; attempt++) {
     load();
-    let outputCharacters = 0;
-    let repairScenes = 0;
-    const progress = (stage: CompactionStatus['stage']) => report({ stage, scenes: nodes.length, keptScenes: config.keepScenes ?? 4, outputCharacters, repairScenes });
-    const extract = (subset: SceneNode[], request = summaryRequest(target, subset, config.memoryMode)) => {
-      outputCharacters = 0;
+    Object.assign(numbers, { sceneCount: nodes.length, repairSceneCount: 0 });
+    const progress = (stage: CompactionStatus['stage']) => report({ stage, scenes: nodes.length, keptScenes: config.keepScenes ?? 4,
+      outputCharacters: numbers.outputCharacters, repairScenes: numbers.repairSceneCount });
+    const extract = async (subset: SceneNode[], request = summaryRequest(target, subset, config.memoryMode)) => {
+      Object.assign(numbers, { requestBytes: requestBudget(request, config.contextTokens).inputBytes, outputCharacters: 0 });
+      // One row before each model request and one after it. A request that fails has its row written by the caller.
+      record('compaction_request_started');
       progress('extracting');
-      return provider.generate(request, { signal,
+      const result = await provider.generate(request, { signal,
         onQueued: () => progress('queued'), onStart: () => progress('extracting'),
-        onText: delta => { outputCharacters += delta.length; progress('extracting'); },
+        onText: delta => { numbers.outputCharacters += delta.length; progress('extracting'); },
       });
+      record('compaction_request_completed', { inputTokens: result.usage?.inputTokens ?? undefined, outputTokens: result.usage?.outputTokens ?? undefined });
+      return result;
     };
     let result: GenerationResult;
     try {
@@ -75,7 +93,7 @@ async function extractAndSave({ store, userId, jobId, provider, config, signal, 
       if (draft.missingSceneIds.length) {
         const missing = new Set(draft.missingSceneIds);
         const subset = nodes.filter(node => missing.has(node.id));
-        repairScenes = subset.length;
+        numbers.repairSceneCount = subset.length;
         // One supplement, solely for omitted scenes. Never invent coverage or
         // save partial memory; validate the supplement and combined result.
         const repair = await extract(subset, supplementRequest(target, nodes, draft));
@@ -106,18 +124,20 @@ async function extractAndSave({ store, userId, jobId, provider, config, signal, 
       commitMemory(trial, jobId, covered, delta);
       // The trial keeps the job: commitMemory has just found it there.
       const after = requestBudget(makeRequest(trial, trial.job!, config.maxOutputTokens), config.contextTokens).inputBytes;
+      Object.assign(numbers, { inputBytesBefore: before, inputBytesAfter: after });
       if (after >= before) throw new ModelError('memory_not_smaller');
       saveCheckpoint(state, current.story, current.branch, 'До сжатия', 'pre-compaction');
       commitMemory(state, jobId, covered, delta);
       // commitMemory has just set the branch memory.
       const memory = current.story.memories[current.branch.memory!];
       memory.method = config.memoryMode ?? 'plain';
-      if (repairScenes) memory.repairScenes = repairScenes;
+      if (numbers.repairSceneCount) memory.repairScenes = numbers.repairSceneCount;
       if (result.usage) memory.usage = result.usage;
       return memory;
     });
     if (!saved) throw new ModelError('cancelled');
-    report({ stage: 'done', scenes: nodes.length, keptScenes: config.keepScenes ?? 4, facts: delta.facts.length, repairScenes });
+    record('memory_compacted', { factCount: delta.facts.length });
+    report({ stage: 'done', scenes: nodes.length, keptScenes: config.keepScenes ?? 4, facts: delta.facts.length, repairScenes: numbers.repairSceneCount });
     return { scenes: nodes.length, facts: delta.facts.length, ...(result.usage ? { usage: result.usage } : {}) };
   }
   throw new ModelError('context_limit');
@@ -131,8 +151,8 @@ function combinedUsage(first: Usage | null | undefined, second: Usage | null | u
 }
 
 // A cancelled or replaced job cannot commit a late scene or memory increment.
-export async function generateScene({ store, userId, jobId, provider, config, signal, preview = () => async () => {}, onProgress }: Operation & {
-  preview?: (state: Library, job: Job, request: ModelRequest) => GenerateControls['onText']; onProgress?: Report;
+export async function generateScene({ store, userId, jobId, provider, config, signal, preview = () => async () => {}, onProgress, log }: Operation & {
+  preview?: (state: Library, job: Job, request: ModelRequest) => GenerateControls['onText']; onProgress?: Report; log?: Log;
 }) {
   const load = () => loadTarget(store, userId, jobId, signal);
   const storyRequest = (target: ReturnType<typeof load>) => {
@@ -161,7 +181,7 @@ export async function generateScene({ store, userId, jobId, provider, config, si
       }
     }
     if (pass === 4) throw new ModelError('context_limit');
-    try { await compactBranch({ store, userId, jobId, provider, config, signal, onProgress }); }
+    try { await compactBranch({ store, userId, jobId, provider, config, signal, onProgress, log, automatic: true }); }
     catch (error) {
       if (errorCode(error) === 'nothing_to_compact') throw new ModelError('context_limit');
       throw error;

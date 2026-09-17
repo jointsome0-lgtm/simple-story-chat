@@ -16,7 +16,7 @@ import { renderCompaction } from './compact-view.ts';
 import type { CompactionStatus } from './compact-view.ts';
 import type { GpuController } from './gpu.ts';
 import type { Log } from './model-error.ts';
-import { errorCode, member } from './model-error.ts';
+import { errorCode, member, safeErrorDetails } from './model-error.ts';
 import type { Provider } from './model.ts';
 import type { Store } from './store.ts';
 import type { GpuInfo, ModelInfo, RenderDetails } from './ui.ts';
@@ -27,7 +27,7 @@ export type BotOptions = {
   render: (state: Library, route: string, details: RenderDetails) => Screen;
   scenePrefix?: (stats: ContextStats | null, provenance: ModelInfo | undefined) => string;
   sceneKeyboard: (state: Library) => InlineKeyboard | undefined;
-  allowedUsers: Set<string>; maxOutputTokens: number; contextTokens?: number; compactAtTokens?: number; keepScenes?: number;
+  allowedUsers: Set<string>; ownerId?: string; maxOutputTokens: number; contextTokens?: number; compactAtTokens?: number; keepScenes?: number;
   memoryMode?: 'plain' | 'sgr'; repairCoverage?: boolean; model?: string; providerName?: string; log?: Log;
 };
 // Bot API updates are not validated in advance; these are the fields the bot reads.
@@ -48,7 +48,7 @@ type Running = { controller: AbortController; promise?: Promise<void> };
 // Library IDs are a prefix and a sequence number, as id() in lib/library.ts creates them.
 const ID = { seed: /^s\d+$/, story: /^h\d+$/, branch: /^b\d+$/, checkpoint: /^c\d+$/ };
 
-export function createBot({ store, api, provider, gpu, readSeedFile, render: renderUi, scenePrefix = () => '', sceneKeyboard, allowedUsers, maxOutputTokens,
+export function createBot({ store, api, provider, gpu, readSeedFile, render: renderUi, scenePrefix = () => '', sceneKeyboard, allowedUsers, ownerId = '', maxOutputTokens,
   contextTokens = 65536, compactAtTokens = 54000, keepScenes = 4, memoryMode = 'plain', repairCoverage = false, model = 'unknown', providerName = 'claude-code', log = () => {} }: BotOptions) {
   const running = new Map<string, Running>();
   const modelInfo: Required<ModelInfo> = { provider: providerName, model, status: 'configured', checkedAt: null };
@@ -70,7 +70,12 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
     const selection = checkpointId ? { storyId, checkpointId } : undefined;
     return render(state, route, { contextStats: name === 'context' || name === 'checkpoint' ? stats(state, selection) : undefined });
   };
-  const safeSend = async (chat: Chat, screen: Screen) => {
+  // A row about one user's request says whether that user is the owner, never who it is. Only the owner allowed
+  // reading the owner's own stories for debugging, so a row without `owner` points at a library that stays closed.
+  // With no owner configured every row is `other`.
+  const logFor = (userId: string): Log => (event, code, details) =>
+    log(event, code, { ...safeErrorDetails(details), actor: userId === ownerId ? 'owner' : 'other' });
+  const safeSend = async (chat: Chat, screen: Screen, log: Log) => {
     try { await chat.send(screen); log('screen_sent'); } catch (error) { log('telegram_send_failed', errorCode(error)); }
   };
   const last = (state: Library) => {
@@ -204,6 +209,7 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
   }
 
   async function generate(userId: string, chat: Chat, job: Job, controller: AbortController, releaseGpu: (() => void) | undefined) {
+    const log = logFor(userId);
     const progress = createProgress({ chat, render: renderCompaction, signal: controller.signal, log });
     let compactionStatus: CompactionStatus | undefined;
     const onProgress = (event: CompactionStatus) => {
@@ -212,8 +218,9 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
     };
     try {
       if (job.kind === 'compact') {
+        // compactBranch writes the log rows of a compaction, manual or automatic, with its sizes and counts.
         const result = await compactBranch({ store, userId, jobId: job.id, provider,
-          config: contextConfig, signal: controller.signal, onProgress });
+          config: contextConfig, signal: controller.signal, onProgress, log });
         const completed = store.mutate(userId, state => {
           if (controller.signal.aborted || !jobTarget(state, job.id)) return false;
           state.job = null;
@@ -221,12 +228,11 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
         });
         if (!completed) return;
         modelResponded();
-        log('memory_compacted');
-        if (!await progress.finish()) await safeSend(chat, renderCompaction({ ...compactionStatus, stage: 'done', ...result }));
+        if (!await progress.finish()) await safeSend(chat, renderCompaction({ ...compactionStatus, stage: 'done', ...result }), log);
         return;
       }
       const { result, request } = await generateScene({ store, userId, jobId: job.id, provider,
-        config: contextConfig, signal: controller.signal, onProgress,
+        config: contextConfig, signal: controller.signal, onProgress, log,
         preview: (state, current, request) => {
           const measured = stats(state);
           // generateScene sets the estimate before it asks for a preview.
@@ -266,10 +272,10 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
           if (saved) { saved.delivery = 'sent'; saved.messageId = sent.message_id; }
         });
         log('scene_saved_and_sent');
-        if (node.truncated) await safeSend(chat, { text: 'Ответ достиг лимита выходных токенов и мог оборваться. Полученный текст сохранён. /continue продолжит историю.' });
+        if (node.truncated) await safeSend(chat, { text: 'Ответ достиг лимита выходных токенов и мог оборваться. Полученный текст сохранён. /continue продолжит историю.' }, log);
       } catch (error) {
         log('scene_delivery_unconfirmed', errorCode(error));
-        await safeSend(chat, { text: 'Сцена сохранена, но доставка не подтверждена. /last покажет её без новой генерации.' });
+        await safeSend(chat, { text: 'Сцена сохранена, но доставка не подтверждена. /last покажет её без новой генерации.' }, log);
       }
     } catch (error) {
       const stillCurrent = store.mutate(userId, state => {
@@ -292,10 +298,10 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
           ? `Сжатие не удалось проверить. Исходные сцены и готовые чекпоинты сохранены. Повторить: ${retry}.`
           : `Не получилось завершить операцию. Готовые сцены и чекпоинты сохранены. Повторить: ${retry}.`;
       if (failure.operation === 'compact' && compactionStatus?.stage === 'failed') {
-        if (!await progress.finish()) await safeSend(chat, renderCompaction(compactionStatus));
+        if (!await progress.finish()) await safeSend(chat, renderCompaction(compactionStatus), log);
         return;
       }
-      await safeSend(chat, { text, reply_markup: sceneKeyboard(store.read(userId)) });
+      await safeSend(chat, { text, reply_markup: sceneKeyboard(store.read(userId)) }, log);
     } finally {
       await progress.finish();
       releaseGpu?.();
@@ -317,6 +323,7 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
         return;
       }
       const chat = createChat(api, chatInfo.id);
+      const log = logFor(userId);
       if (update.callback_query?.id) {
         try { await api('answerCallbackQuery', { callback_query_id: update.callback_query.id }); } catch {}
       }
@@ -347,13 +354,13 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
       });
       if (!plan) return;
       if (plan.gpuAction) {
-        if (!gpu) await safeSend(chat, { text: 'Управление арендой GPU пока не настроено. /model покажет текущую модель.' });
+        if (!gpu) await safeSend(chat, { text: 'Управление арендой GPU пока не настроено. /model покажет текущую модель.' }, log);
         else {
           try {
             if (plan.gpuAction === 'pause') gpu.pause(); else gpu.resume();
             void gpu.tick();
           } catch { /* Current controller state is rendered below. */ }
-          await safeSend(chat, render(store.read(userId), 'model'));
+          await safeSend(chat, render(store.read(userId), 'model'), log);
         }
       }
       if (plan.modelStatus) {
@@ -369,7 +376,7 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
             Object.assign(modelInfo, { status: 'unavailable', checkedAt: new Date().toISOString() });
           }
         }
-        await safeSend(chat, render(store.read(userId), 'model'));
+        await safeSend(chat, render(store.read(userId), 'model'), log);
       }
       if (plan.cancel) running.get(userId)?.controller.abort();
       if (plan.savedText) {
@@ -377,14 +384,14 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
         try { await chat.final(scenePrefix(stats(snapshot), plan.savedText.modelInfo) + plan.savedText.text, sceneKeyboard(snapshot)); }
         catch (error) { log('saved_scene_delivery_unconfirmed', errorCode(error)); }
       }
-      if (plan.screen) await safeSend(chat, plan.screen);
+      if (plan.screen) await safeSend(chat, plan.screen, log);
       if (plan.job) {
         let releaseGpu: (() => void) | undefined;
         try { releaseGpu = gpu?.acquire(); }
         catch {
           // The plan is not changed after the write, so its job is still set.
           store.mutate(userId, state => { if (state.job?.id === plan.job!.id) state.job = null; });
-          await safeSend(chat, { text: 'GPU перешла на паузу. Открой /model и запусти её; затем отправь действие снова.' });
+          await safeSend(chat, { text: 'GPU перешла на паузу. Открой /model и запусти её; затем отправь действие снова.' }, log);
           return;
         }
         const controller = new AbortController();

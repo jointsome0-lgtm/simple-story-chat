@@ -18,3 +18,12 @@ test('compaction diagnostics expose known reasons, never validation values or ra
     { operation: 'compact', memoryReason: 'coverage' });
   assert.deepEqual(safeErrorDetails({ operation: 'PRIVATE', memoryReason: 'PRIVATE' }), {});
 });
+
+test('bot log rows may name the actor class and carry sizes and counts, never an identifier or text', () => {
+  assert.deepEqual(safeErrorDetails({ actor: 'owner', automatic: true, sceneCount: 22, factCount: 41, repairSceneCount: 0, requestBytes: 180000,
+    inputBytesBefore: 190000, inputBytesAfter: 61000, outputCharacters: 7400, inputTokens: 38000, outputTokens: 2100, elapsedMs: 91000 }),
+  { actor: 'owner', automatic: true, sceneCount: 22, factCount: 41, repairSceneCount: 0, requestBytes: 180000,
+    inputBytesBefore: 190000, inputBytesAfter: 61000, outputCharacters: 7400, inputTokens: 38000, outputTokens: 2100, elapsedMs: 91000 });
+  assert.deepEqual(safeErrorDetails({ actor: '1', automatic: 'PRIVATE', userId: '1', factCount: 'PRIVATE', requestBytes: -1, elapsedMs: 1.5,
+    inputTokens: null, outputCharacters: Number.MAX_SAFE_INTEGER + 1 }), {});
+});

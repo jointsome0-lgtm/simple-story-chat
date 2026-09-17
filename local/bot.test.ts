@@ -6,9 +6,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from './store.ts';
 import { createBot } from './bot.ts';
+import { loadConfig } from './config.ts';
 import type { BotOptions, Update } from './bot.ts';
 import { createGpu } from './gpu.ts';
 import type { GpuController } from './gpu.ts';
+import type { ErrorDetails } from './model-error.ts';
+import { ModelError, safeErrorDetails } from './model-error.ts';
 import type { Controls, GenerateControls, GenerationResult, ModelRequest, Provider } from './model.ts';
 import type { TelegramPayload } from './telegram.ts';
 import { render, scenePrefix, sceneKeyboard } from './ui.ts';
@@ -21,8 +24,10 @@ type FixtureOptions = {
   progressFailure?: boolean; contextFailure?: boolean; deliveryFailure?: boolean;
   generate?: (request: ModelRequest, controls: TextControls) => Promise<GenerationResult>;
   check?: Provider['check']; gpu?: GpuController; readSeedFile?: BotOptions['readSeedFile'];
-  model?: string; providerName?: string; compactAtTokens?: number;
+  model?: string; providerName?: string; compactAtTokens?: number; ownerId?: string;
 };
+// A log row as main.ts writes it: the event, a code and the allowed details.
+type Row = { event: string; code?: string | number } & ErrorDetails;
 // Fields of sent payloads that the tests read; each is present for the methods where it is read.
 type Payload = { chat_id: number; message_id: number; text: string; rich_message: { markdown: string } };
 // A synthetic private message; tests may replace its chat or add rich content, a document or a caption.
@@ -37,6 +42,7 @@ function fixture(t: TestContext, options: FixtureOptions = {}) {
   const store = new Store(path);
   t.after(() => { store.close(); rmSync(directory, { recursive: true, force: true }); });
   const sent: { method: string; payload: Payload }[] = [];
+  const rows: Row[] = [];
   const requests: ModelRequest[] = [];
   let sequence = 0;
   const api = async (method: string, fields?: TelegramPayload) => {
@@ -64,7 +70,8 @@ function fixture(t: TestContext, options: FixtureOptions = {}) {
   if (options.check) provider.check = options.check;
   const bot = createBot({ store, api, provider, gpu: options.gpu, allowedUsers: new Set(['1', '2']), maxOutputTokens: 4096,
     readSeedFile: options.readSeedFile, render, scenePrefix, sceneKeyboard, model: options.model ?? 'test-model',
-    providerName: options.providerName ?? 'claude-code', compactAtTokens: options.compactAtTokens ?? 54000 });
+    providerName: options.providerName ?? 'claude-code', compactAtTokens: options.compactAtTokens ?? 54000, ownerId: options.ownerId,
+    log: (event, code, details) => { rows.push({ event, ...(code === undefined ? {} : { code }), ...safeErrorDetails(details) }); } });
   const message = (text: string | undefined, user = 1, updateId = ++sequence): MessageUpdate => ({ update_id: updateId,
     message: { from: { id: user }, chat: { id: user, type: 'private' }, text } });
   const click = (data: string, user = 1) => ({ update_id: ++sequence,
@@ -82,7 +89,7 @@ function fixture(t: TestContext, options: FixtureOptions = {}) {
     await bot.idle();
     return update;
   }
-  return { bot, store, sent, requests, message, click, seed, start, path, api, provider };
+  return { bot, store, sent, rows, requests, message, click, seed, start, path, api, provider };
 }
 
 async function battleFixture(f: ReturnType<typeof fixture>) {
@@ -125,6 +132,43 @@ test('/compact is explicit, deduplicated, archives originals and never creates a
   await f.bot.idle();
   assert.equal(f.requests.length, 1, 'retained tail cannot be silently discarded');
   assert.match(f.sent.at(-1)!.payload.text, /нечего сжимать/);
+});
+
+test('log rows of a user request say owner or other, never who; compaction rows carry sizes and counts', async t => {
+  for (const ownerId of ['1', undefined]) {
+    const f = fixture(t, { ownerId, generate: async request => {
+      if (request.purpose === 'memory') return compactResult(request);
+      throw new ModelError('provider_failed', { phase: 'generate', transportCode: 'UND_ERR_SOCKET' });
+    } });
+    await battleFixture(f);
+    await f.bot.handle(f.message('/compact'));
+    await f.bot.idle();
+    const first = ownerId ? 'owner' : 'other';
+    assert.ok(f.rows.length > 3 && f.rows.every(row => row.actor === first));
+    const compaction = f.rows.filter(row => row.sceneCount !== undefined);
+    assert.deepEqual(compaction.map(row => row.event), ['compaction_request_started', 'compaction_request_completed', 'memory_compacted']);
+    const { elapsedMs, requestBytes, inputBytesBefore, inputBytesAfter, ...saved } = compaction[2];
+    assert.deepEqual(saved, { event: 'memory_compacted', actor: first, automatic: false, sceneCount: 3, repairSceneCount: 0, factCount: 3, outputCharacters: 0 });
+    assert.ok(elapsedMs! >= 0 && requestBytes! > 0 && inputBytesAfter! < inputBytesBefore!);
+    // The tester's failed scene: the row has the transport details and no trace of whose library it was.
+    const before = f.rows.length;
+    await f.start(2);
+    const other = f.rows.slice(before);
+    assert.ok(other.length > 1 && other.every(row => row.actor === 'other'));
+    assert.deepEqual(other.find(row => row.event === 'generation_failed'),
+      { event: 'generation_failed', code: 'provider_failed', phase: 'generate', transportCode: 'UND_ERR_SOCKET', actor: 'other' });
+    assert.doesNotMatch(JSON.stringify(f.rows), /Защитники|Синтетический|Кодовая|СЕВЕР|userId|"1"|"2"/);
+  }
+});
+
+test('the owner ID is optional, but one outside the access list stops the start instead of mislabelling rows', () => {
+  const env = { TELEGRAM_BOT_TOKEN: '1:synthetic', SIMPLE_CHAT_ALLOWED_USER_IDS: '1, 2' };
+  const load = (ownerId?: string) => loadConfig('/nonexistent-simple-chat-config', { ...env, SIMPLE_CHAT_OWNER_ID: ownerId }).ownerId;
+  assert.equal(load(), '');
+  assert.equal(load(' 2 '), '2');
+  // The message names the two settings and never the rejected value.
+  assert.throws(() => load('3'), { message: 'SIMPLE_CHAT_OWNER_ID must be one of SIMPLE_CHAT_ALLOWED_USER_IDS' });
+  assert.throws(() => load('PRIVATE'), error => !/PRIVATE/.test((error as Error).message));
 });
 
 test('/cancel stops explicit compaction and rejects its late response', async t => {

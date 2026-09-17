@@ -8,6 +8,8 @@ import { ModelError } from './claude.ts';
 import { makeRequest } from './prompt.ts';
 import { requestBudget } from './context.ts';
 import type { CompactionStatus } from './compact-view.ts';
+import type { ErrorDetails } from './model-error.ts';
+import { safeErrorDetails } from './model-error.ts';
 import type { GenerateControls, GenerationResult, ModelRequest, Provider } from './model.ts';
 import type { Checkpoint } from '../lib/library.ts';
 import { addSeed, newStory, beginJob, commitTurn, context, fork, deleteSeed } from '../lib/library.ts';
@@ -372,4 +374,72 @@ test('cancellation during a coverage supplement cannot commit the initial draft 
   f.controller.abort(); release!();
   await assert.rejects(run, { code: 'cancelled' });
   assert.deepEqual(f.store.read('1'), before);
+});
+
+// Log rows as main.ts writes them: the event, a code and the allowed details.
+type Row = { event: string; code?: string | number } & ErrorDetails;
+const rowsOf = (rows: Row[]) => (event: string, code?: string | number, details?: unknown) => { rows.push({ event, ...(code === undefined ? {} : { code }), ...safeErrorDetails(details) }); };
+
+test('an automatic compaction that succeeds leaves rows with its sizes and counts, and none of its text', async t => {
+  const f = fixture(t);
+  const rows: Row[] = [];
+  let extraction: ModelRequest | undefined;
+  f.provider.generate = async (request, controls) => {
+    if (!request.system.startsWith('Извлеки')) return { text: '2026-08-02 20:00\n\nНовая сцена.', finishReason: 'stop' };
+    extraction = request;
+    await controls!.onText?.('PRIVATE SUMMARY CONTENT');
+    return { ...f.summary(request), usage: { inputTokens: 1000, outputTokens: 100, totalTokens: 1100 } };
+  };
+  await generateScene({ store: f.store, userId: '1', jobId: f.job.id, provider: f.provider, config: f.config, log: rowsOf(rows) });
+  assert.deepEqual(rows.map(row => row.event), ['compaction_request_started', 'compaction_request_completed', 'memory_compacted']);
+  const [started, completed, saved] = rows;
+  // The size of the extraction request itself: the three scenes it carries are most of it.
+  const requestBytes = requestBudget(extraction!, f.config.contextTokens).inputBytes;
+  assert.ok(requestBytes > 3 * 300 * Buffer.byteLength('ветер '));
+  const { elapsedMs: startedAfter, ...first } = started;
+  assert.deepEqual(first, { event: 'compaction_request_started', automatic: true, sceneCount: 3, repairSceneCount: 0, requestBytes, outputCharacters: 0 });
+  const { elapsedMs: completedAfter, ...second } = completed;
+  assert.deepEqual(second, { ...first, event: 'compaction_request_completed', outputCharacters: 23, inputTokens: 1000, outputTokens: 100 });
+  const { elapsedMs, inputBytesBefore, inputBytesAfter, ...third } = saved;
+  assert.deepEqual(third, { ...first, event: 'memory_compacted', outputCharacters: 23, factCount: 3 });
+  assert.ok(inputBytesAfter! < inputBytesBefore!);
+  assert.ok(startedAfter! <= completedAfter! && completedAfter! <= elapsedMs!);
+  assert.doesNotMatch(JSON.stringify(rows), /PRIVATE|CONTENT|Синтетический|Исходная|n\d/);
+});
+
+test('a failed compaction carries its numbers on the error, so its one log row tells how far it got', async t => {
+  for (const type of ['transport', 'coverage', 'supplement', 'growth'] as const) {
+    const f = fixture(t, 8);
+    f.config.repairCoverage = type === 'supplement';
+    const rows: Row[] = [];
+    let calls = 0;
+    f.provider.generate = async (request, controls) => {
+      calls++;
+      await controls!.onText?.('PRIVATE');
+      if (type === 'transport') throw Object.assign(new TypeError('PRIVATE_TEXT'), { cause: { code: 'UND_ERR_SOCKET' } });
+      const data: Summary = JSON.parse(f.summary(request).text);
+      if (type === 'coverage') data.facts.pop();
+      if (type === 'supplement') data.facts.splice(1);
+      if (type === 'growth') data.facts.forEach(fact => { fact.text = 'я'.repeat(4000); });
+      return { text: JSON.stringify(data), finishReason: 'stop' };
+    };
+    const error = await compactBranch({ store: f.store, userId: '1', jobId: f.job.id, config: f.config, provider: f.provider, log: rowsOf(rows) })
+      .then(() => assert.fail('compaction must fail'), (error: unknown) => error);
+    // The bot writes the failure row from the error; these are the details that row gets.
+    const { elapsedMs, inputBytesBefore, inputBytesAfter, requestBytes, ...details } = safeErrorDetails(error);
+    assert.ok(elapsedMs! >= 0 && requestBytes! > 0);
+    const common = { operation: 'compact', automatic: false, outputCharacters: 7 };
+    if (type === 'transport') assert.deepEqual(details, { ...common, sceneCount: 4, repairSceneCount: 0 });
+    if (type === 'coverage') assert.deepEqual(details, { ...common, memoryReason: 'coverage', sceneCount: 4, missingCount: 1, repairSceneCount: 0 });
+    // The supplement asked for three scenes and covered one: the error counts the supplement, the row says it was one.
+    if (type === 'supplement') assert.deepEqual(details, { ...common, memoryReason: 'coverage', sceneCount: 3, missingCount: 2, repairSceneCount: 3 });
+    if (type === 'growth') assert.deepEqual(details, { ...common, sceneCount: 4, repairSceneCount: 0 });
+    assert.equal(inputBytesBefore !== undefined && inputBytesAfter! >= inputBytesBefore, type === 'growth');
+    assert.deepEqual(rows.map(row => row.event), type === 'transport' ? ['compaction_request_started']
+      : type === 'supplement' ? ['compaction_request_started', 'compaction_request_completed', 'compaction_request_started', 'compaction_request_completed']
+        : ['compaction_request_started', 'compaction_request_completed']);
+    assert.equal(rows.at(-1)!.repairSceneCount, type === 'supplement' ? 3 : 0);
+    assert.equal(calls, type === 'supplement' ? 2 : 1);
+    assert.doesNotMatch(JSON.stringify([rows, safeErrorDetails(error)]), /PRIVATE/);
+  }
 });

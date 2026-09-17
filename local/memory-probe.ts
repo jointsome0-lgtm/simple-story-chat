@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { loadConfig } from './config.ts';
 import { createBackgroundClient } from './background.ts';
 import { compactBranch } from './generation.ts';
-import { member } from './model-error.ts';
+import { member, safeErrorDetails } from './model-error.ts';
 import type { ModelRequest } from './model.ts';
 import { Store } from './store.ts';
 import type { ProbeNode } from './story-probe.ts';
@@ -61,7 +61,8 @@ const report: ReplayReport = values.resume ? JSON.parse(readFileSync(join(direct
     scope: 'Paired replay of identical frozen synthetic scenes, three compactions, four retained scenes; not a 44K quality test.', modes: {} };
 if (report.sourceHash !== sourceHash || report.model !== config.model || report.scenario !== scenario) throw new Error('Resume mismatch');
 const deadline = AbortSignal.timeout(minutes * 60000);
-const progress = (data: object) => console.log(JSON.stringify(data));
+// Each line has its time, so a compaction here can be matched with the bot log and the GPU snapshots.
+const progress = (data: object) => console.log(JSON.stringify({ at: new Date().toISOString(), ...data }));
 const save = () => writeFileSync(join(directory, 'report.json'), JSON.stringify(report, null, 2));
 // Set at the start of each mode, before the store or the provider uses it.
 let current: ModeReport | undefined;
@@ -101,8 +102,10 @@ try {
       if ([7, 11, 15].includes(index) && !current.compactions.some(c => c.afterTurn === index)) {
         const job = store.mutate('synthetic', state => beginJob(state, 'Сжать.', 0));
         const started = Date.now();
+        // The same rows the bot writes for a compaction: one per model request and one for the saved memory.
         const metrics = await compactBranch({ store, userId: 'synthetic', jobId: job.id, provider,
-          config: { ...config, memoryMode, keepScenes: 4 }, signal: deadline });
+          config: { ...config, memoryMode, keepScenes: 4 }, signal: deadline,
+          log: (event, _code, details) => progress({ event, mode: memoryMode, ...safeErrorDetails(details) }) });
         store.mutate('synthetic', state => { state.job = null; });
         const state = store.read('synthetic');
         const { story, branch } = active(state);
@@ -153,5 +156,6 @@ try {
   const failure = error as Failure;
   const code = deadline.aborted ? 'deadline' : /^[a-z_]{1,40}$/.test(failure.code ?? '') ? failure.code : 'probe_failed';
   if (current) current.error = code;
-  save(); progress({ event: 'deferred_or_failed', code, directory }); process.exitCode = 1;
+  // A failed compaction carries its sizes and counts on the error.
+  save(); progress({ event: 'deferred_or_failed', code, ...safeErrorDetails(error), directory }); process.exitCode = 1;
 } finally { store.close(); }

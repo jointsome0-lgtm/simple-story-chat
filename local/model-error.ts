@@ -6,13 +6,18 @@ const TRANSPORT_CODES = ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EPIPE', 'EN
   'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT'] as const;
 const SIGNALS = ['SIGTERM', 'SIGKILL', 'SIGINT', 'SIGHUP', 'SIGABRT', 'SIGSEGV', 'SIGPIPE'] as const;
 const SSH_REASONS = ['authentication', 'host_key', 'port_in_use', 'connect_timeout', 'connection_refused', 'connection_lost', 'keepalive_timeout', 'network_unreachable', 'other'] as const;
+const ACTORS = ['owner', 'other'] as const;
+// Sizes, counts and durations. Each is kept only as a non-negative safe integer, so none can carry text.
+const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'repairSceneCount', 'requestBytes',
+  'inputBytesBefore', 'inputBytesAfter', 'outputCharacters', 'inputTokens', 'outputTokens', 'elapsedMs'] as const;
 
 export type ErrorDetails = {
   httpStatus?: number; phase?: typeof PHASES[number]; operation?: typeof OPERATIONS[number];
   memoryReason?: typeof MEMORY_REASONS[number]; transportCode?: typeof TRANSPORT_CODES[number] | 'other';
   exitCode?: number; signal?: typeof SIGNALS[number]; sshReason?: typeof SSH_REASONS[number];
-  sceneCount?: number; missingCount?: number; connectionAgeMs?: number;
-};
+  // Whose request a bot log row belongs to. Only the owner allowed reading the owner's own stories for debugging.
+  actor?: typeof ACTORS[number]; automatic?: boolean;
+} & { [Key in typeof COUNTS[number]]?: number };
 export type Log = (event: string, code?: string | number, details?: unknown) => void;
 
 // `includes` for a value of any type, as a guard for a list of literals (inline or `as const`). It compares
@@ -35,7 +40,9 @@ export function safeErrorDetails(value: unknown = {}): ErrorDetails {
   if (typeof exitCode === 'number' && Number.isInteger(exitCode) && exitCode >= 0 && exitCode <= 255) result.exitCode = exitCode;
   if (member(SIGNALS, input?.signal)) result.signal = input.signal;
   if (member(SSH_REASONS, input?.sshReason)) result.sshReason = input.sshReason;
-  for (const key of ['sceneCount', 'missingCount', 'connectionAgeMs'] as const) {
+  if (member(ACTORS, input?.actor)) result.actor = input.actor;
+  if (typeof input?.automatic === 'boolean') result.automatic = input.automatic;
+  for (const key of COUNTS) {
     const count = input?.[key];
     if (typeof count === 'number' && Number.isSafeInteger(count) && count >= 0) result[key] = count;
   }
@@ -47,6 +54,9 @@ export class ModelError extends Error {
   declare memoryReason?: ErrorDetails['memoryReason']; declare transportCode?: ErrorDetails['transportCode'];
   declare exitCode?: number; declare signal?: ErrorDetails['signal']; declare sshReason?: ErrorDetails['sshReason'];
   declare sceneCount?: number; declare missingCount?: number; declare connectionAgeMs?: number;
+  // A failed compaction carries its sizes and counts to the log row of the failure.
+  declare automatic?: boolean; declare repairSceneCount?: number; declare requestBytes?: number; declare inputBytesBefore?: number;
+  declare inputBytesAfter?: number; declare outputCharacters?: number; declare elapsedMs?: number;
   constructor(code: string, details?: unknown) { super(code); this.code = code; Object.assign(this, safeErrorDetails(details)); }
 }
 
