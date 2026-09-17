@@ -80,6 +80,8 @@ export function createLlama(config: LlamaConfig,
       const thrown = error as Thrown;
       const details = { phase: thrown?.phase ?? phase, httpStatus: thrown?.httpStatus,
         transportCode: error instanceof ModelError ? error.transportCode : thrown?.cause?.code ?? thrown?.code };
+      // Health checks from gpu.ts and bot.ts are not queued and pass their own AbortSignal.timeout, so its expiry is
+      // a timeout. Scheduled calls are aborted with the scheduler's reasons, which the scheduler reports instead.
       if (signal?.aborted) throw new ModelError(signal.reason?.name === 'TimeoutError' ? 'timeout' : 'cancelled', details);
       if (timer.aborted) throw new ModelError('timeout', details);
       throw new ModelError(error instanceof ModelError ? error.code : 'provider_failed', details);

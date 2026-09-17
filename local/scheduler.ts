@@ -3,6 +3,8 @@ import { ModelError } from './model-error.ts';
 import type { Controls, GenerateControls, Provider } from './model.ts';
 
 type Priority = 'foreground' | 'background';
+// Reasons the scheduler aborts a running call with. The call rejects with the reason, whatever the provider throws.
+type AbortCode = 'cancelled' | 'background_preempted' | 'background_timeout' | 'background_unavailable';
 // Methods run in the slot always receive its abort signal.
 type Slot = { signal: AbortSignal };
 export type SchedulerOptions = {
@@ -29,7 +31,7 @@ export function createScheduler<Request, Result>(provider: {
   let active: Item<Request> | null | undefined;
   let closed = false;
   let lastForeground = now();
-  const fail = (code: string) => new ModelError(code);
+  const fail = (code: AbortCode | 'queue_full') => new ModelError(code);
   const snapshot = () => ({ foregroundQueued: foreground.length, backgroundQueued: background.length,
     active: active?.priority ?? null, quietRemainingMs: Math.max(0, lastForeground + quietMs - now()) });
   function rejectQueued(item: Item<Request>, error: ModelError) {
@@ -39,7 +41,7 @@ export function createScheduler<Request, Result>(provider: {
     item.signal?.removeEventListener('abort', item.cancel);
     item.reject(error);
   }
-  function stopBackground(code: string) {
+  function stopBackground(code: AbortCode) {
     if (active?.priority === 'background' && !active.controller.signal.aborted) {
       active.controller.abort(fail(code));
       log(code);

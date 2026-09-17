@@ -10,68 +10,76 @@ export type GpuOptions = {
   check: (controls: { signal: AbortSignal }) => unknown;
   idleMinutes?: number; now?: () => number; resumeUntil?: number; readyGraceMs?: number; log?: Log;
 };
+export type GpuStatus = 'unknown' | 'paused' | 'starting' | 'ready' | 'draining' | 'stopping' | 'error';
 export type GpuSnapshot = {
-  status: string; activeJobs: number; idleMinutes: number; checkDegraded: boolean;
+  status: GpuStatus; activeJobs: number; idleMinutes: number; checkDegraded: boolean;
   idleRemainingSeconds: number | null; canStart: boolean; canPause: boolean;
 };
 export type GpuController = ReturnType<typeof createGpu>;
+// A pause (from the owner or the idle deadline) or a start (from the owner) until the instance is confirmed
+// paused or ready. A pause replaces a pending start.
+type Intent = 'none' | 'pause' | 'start';
+// A state assignment is repeated at most this often while Vast does not report it.
+const WRITE_RETRY_MS = 30000;
 
 // One controller for the whole bot. A lease spans a complete scene operation,
 // including token counting, automatic compaction, generation and persistence.
 export function createGpu({ api, connection, check, idleMinutes = 15, now = Date.now,
   resumeUntil = Infinity, readyGraceMs = 30000, log = () => {} }: GpuOptions) {
   const idleMs = idleMinutes * 60000;
-  let status = 'unknown';
+  let status: GpuStatus = 'unknown';
   let activeJobs = 0;
   let idleSince: number | null = null;
-  let pauseRequested = false;
-  let startRequested = false;
+  let intent: Intent = 'none';
   let pending: Promise<GpuSnapshot> | undefined;
   let closed = false;
   let lastWrite = -Infinity;
   let lastReadyAt = -Infinity;
   let checkDegraded = false;
+  // pause() and resume() may change the intent while reconcile awaits. It is read through a call, which TypeScript
+  // does not narrow, so a check made before an await is not assumed to still hold after it.
+  const wants = (value: Intent) => intent === value;
+  const idleExpired = () => !activeJobs && idleSince !== null && now() - idleSince >= idleMs;
   const stopped = (remote: RemoteState) => member(['stopped', 'exited'], remote.actual) && remote.intended === 'stopped';
   const currentStatus = () => status === 'ready' && checkDegraded && now() - lastReadyAt >= readyGraceMs ? 'error' : status;
   const snapshot = (): GpuSnapshot => ({ status: currentStatus(), activeJobs, idleMinutes,
     checkDegraded: checkDegraded && currentStatus() === 'ready',
     idleRemainingSeconds: idleSince === null || activeJobs ? null : Math.max(0, Math.ceil((idleSince + idleMs - now()) / 1000)),
     canStart: !closed && status === 'paused' && now() < resumeUntil,
-    canPause: !closed && !pauseRequested && status !== 'paused',
+    canPause: !closed && !wants('pause') && status !== 'paused',
   });
   function assertReady() {
-    if (closed || pauseRequested || currentStatus() !== 'ready') throw new ModelError('gpu_not_ready');
+    if (closed || wants('pause') || currentStatus() !== 'ready') throw new ModelError('gpu_not_ready');
   }
   async function reconcile(): Promise<GpuSnapshot> {
     // An unavailable control API must not postpone the local idle deadline.
-    if (!activeJobs && idleSince !== null && now() - idleSince >= idleMs) pauseRequested = true;
+    if (idleExpired()) intent = 'pause';
     try {
       const remote = await api.read();
       if (closed) return snapshot();
       if (idleSince === null && !stopped(remote)) idleSince = now();
-      if (!activeJobs && idleSince !== null && now() - idleSince >= idleMs) pauseRequested = true;
-      if (pauseRequested) {
+      if (idleExpired()) intent = 'pause';
+      if (wants('pause')) {
         lastReadyAt = -Infinity;
-        startRequested = false;
         if (activeJobs) { status = 'draining'; return snapshot(); }
         connection.close();
         if (stopped(remote)) {
-          status = 'paused'; idleSince = null; pauseRequested = false;
+          status = 'paused'; idleSince = null; intent = 'none';
         } else {
           status = 'stopping';
           // Read back before retrying a state assignment. A successful PUT alone
           // never establishes that billing has stopped.
-          if (remote.intended !== 'stopped' && now() - lastWrite >= 30000) {
+          if (remote.intended !== 'stopped' && now() - lastWrite >= WRITE_RETRY_MS) {
             lastWrite = now();
             await api.setState('stopped');
           }
         }
         return snapshot();
       }
-      if (startRequested && remote.intended !== 'running') {
+      if (wants('start') && remote.intended !== 'running') {
         lastReadyAt = -Infinity;
         status = 'starting';
-        if (now() - lastWrite >= 30000) { lastWrite = now(); await api.setState('running'); }
+        if (now() - lastWrite >= WRITE_RETRY_MS) { lastWrite = now(); await api.setState('running'); }
         return snapshot();
       }
       if (stopped(remote)) {
@@ -84,16 +92,16 @@ export function createGpu({ api, connection, check, idleMinutes = 15, now = Date
         await connection.ensure();
         // Health checks and menu reads do not count as user activity.
         await check({ signal: AbortSignal.timeout(8000) });
-        status = pauseRequested ? (activeJobs ? 'draining' : 'stopping') : 'ready';
+        status = wants('pause') ? (activeJobs ? 'draining' : 'stopping') : 'ready';
         if (status === 'ready') lastReadyAt = now();
-        startRequested = false;
+        if (wants('start')) intent = 'none';
       } else { lastReadyAt = -Infinity; status = 'starting'; }
       checkDegraded = false;
     } catch (error) {
-      if (!activeJobs && idleSince !== null && now() - idleSince >= idleMs) pauseRequested = true;
+      if (idleExpired()) intent = 'pause';
       const transient = member(['gpu_api_failed', 'gpu_api_timeout', 'cancelled', 'timeout', 'provider_failed', 'model_unavailable'], errorCode(error));
-      checkDegraded = transient && !pauseRequested && !startRequested && now() - lastReadyAt < readyGraceMs;
-      status = checkDegraded ? 'ready' : pauseRequested && activeJobs ? 'draining' : 'error';
+      checkDegraded = transient && wants('none') && now() - lastReadyAt < readyGraceMs;
+      status = checkDegraded ? 'ready' : wants('pause') && activeJobs ? 'draining' : 'error';
       if (!transient) lastReadyAt = -Infinity;
       log(checkDegraded ? 'gpu_check_deferred' : 'gpu_check_failed', errorCode(error), error);
     }
@@ -110,18 +118,18 @@ export function createGpu({ api, connection, check, idleMinutes = 15, now = Date
         if (released) return;
         released = true;
         activeJobs--;
-        if (!activeJobs) { idleSince = now(); if (pauseRequested) void controller.tick(); }
+        if (!activeJobs) { idleSince = now(); if (wants('pause')) void controller.tick(); }
       };
     },
     pause() {
       lastReadyAt = -Infinity; checkDegraded = false;
-      pauseRequested = true; startRequested = false;
+      intent = 'pause';
       status = activeJobs ? 'draining' : 'stopping';
       lastWrite = -Infinity;
     },
     resume() {
       if (!snapshot().canStart) throw new ModelError('gpu_not_ready');
-      startRequested = true; pauseRequested = false; status = 'starting';
+      intent = 'start'; status = 'starting';
       lastReadyAt = -Infinity; checkDegraded = false;
       idleSince = now(); lastWrite = -Infinity;
     },

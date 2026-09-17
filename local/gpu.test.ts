@@ -166,6 +166,91 @@ test('a pending recovery check cannot extend cached readiness past its deadline'
   assert.equal(gpu.snapshot().status, 'ready');
 });
 
+type Await = 'check' | 'ensure' | 'read';
+// Like fixture, but reconcile can be held at one of its awaits, so a test can act while it waits there.
+function heldFixture({ remote = { actual: 'running', intended: 'running' } } = {}) {
+  let time = 0;
+  let failRead = false;
+  const writes: string[] = [];
+  const holding = new Set<Await>();
+  const held: Partial<Record<Await, { resolve: () => void; reject: (error: Error) => void }>> = {};
+  const hold = (name: Await) => holding.has(name) ? new Promise<void>((resolve, reject) => { held[name] = { resolve, reject }; }) : Promise.resolve();
+  const gpu = createGpu({ now: () => time,
+    api: { async read() { await hold('read'); if (failRead) throw new ModelError('gpu_api_failed'); return { ...remote }; },
+      async setState(state) { writes.push(state); remote.intended = state; } },
+    connection: { async ensure() { await hold('ensure'); }, close() {} },
+    check: async () => { await hold('check'); } });
+  return { gpu, writes, holding, held, advance: (ms: number) => { time += ms; },
+    fail: (value: boolean) => { failRead = value; }, setRemote: (value: typeof remote) => { remote = value; } };
+}
+const turn = () => new Promise(resolve => setImmediate(resolve));
+
+for (const point of ['check', 'ensure', 'read'] as const) {
+  test(`pause() arriving during await ${point} is kept: never 'ready', no new lease, next tick stops`, async () => {
+    const f = heldFixture(); await f.gpu.tick();
+    assert.equal(f.gpu.snapshot().status, 'ready');
+    f.holding.add(point);
+    const inflight = f.gpu.tick(); await turn();
+    f.gpu.pause();
+    f.holding.delete(point); f.held[point]!.resolve(); await inflight;
+    const s = f.gpu.snapshot();
+    assert.equal(s.status, 'stopping'); assert.equal(s.canPause, false);
+    assert.throws(() => f.gpu.acquire(), { code: 'gpu_not_ready' });
+    // A pause during the read is seen by the same reconcile; later awaits leave the stop to the next tick.
+    if (point === 'read') assert.deepEqual(f.writes, ['stopped']);
+    else { assert.deepEqual(f.writes, []); await f.gpu.tick(); assert.deepEqual(f.writes, ['stopped']); }
+  });
+}
+
+test('pause() during await check with a held lease drains instead of stopping, then stops on release', async () => {
+  const f = heldFixture(); await f.gpu.tick();
+  const release = f.gpu.acquire();
+  f.holding.add('check'); const inflight = f.gpu.tick(); await turn();
+  f.gpu.pause(); f.holding.delete('check'); f.held.check!.resolve(); await inflight;
+  assert.equal(f.gpu.snapshot().status, 'draining');
+  await f.gpu.tick(); assert.deepEqual(f.writes, []);
+  release(); await turn(); await f.gpu.tick();
+  assert.deepEqual(f.writes, ['stopped']);
+});
+
+test('pause() during a failing check reports error at once, without the readiness grace, and still stops on the next tick', async () => {
+  const f = heldFixture(); await f.gpu.tick();
+  f.holding.add('check'); const inflight = f.gpu.tick(); await turn();
+  f.gpu.pause(); f.held.check!.reject(new ModelError('timeout')); f.holding.delete('check'); await inflight;
+  assert.equal(f.gpu.snapshot().status, 'error');
+  assert.equal(f.gpu.snapshot().checkDegraded, false);
+  await f.gpu.tick(); assert.deepEqual(f.writes, ['stopped']);
+});
+
+test('a start overtaken by the idle deadline while the control API is down: the pause wins and running is never written again', async () => {
+  const f = heldFixture({ remote: { actual: 'exited', intended: 'stopped' } }); await f.gpu.tick();
+  f.gpu.resume(); await f.gpu.tick();
+  assert.deepEqual(f.writes, ['running']);
+  // The idle deadline latches the pause before the failing read.
+  f.fail(true); f.advance(15 * 60000); await f.gpu.tick();
+  assert.equal(f.gpu.snapshot().status, 'error'); assert.equal(f.gpu.snapshot().canPause, false);
+  f.fail(false); f.advance(31000); await f.gpu.tick();
+  assert.deepEqual(f.writes, ['running', 'stopped']);
+  f.setRemote({ actual: 'exited', intended: 'stopped' }); await f.gpu.tick();
+  assert.equal(f.gpu.snapshot().status, 'paused'); assert.equal(f.gpu.snapshot().canStart, true);
+  await f.gpu.tick(); await f.gpu.tick();
+  assert.deepEqual(f.writes, ['running', 'stopped'], 'the overtaken start must not resurface after the pause completes');
+});
+
+test('resume() while an externally started instance is being health-checked ends ready with the start consumed', async () => {
+  const f = heldFixture({ remote: { actual: 'exited', intended: 'stopped' } }); await f.gpu.tick();
+  assert.equal(f.gpu.snapshot().status, 'paused');
+  // Started outside the bot, for example from the Vast console.
+  f.setRemote({ actual: 'running', intended: 'running' });
+  f.holding.add('check'); const inflight = f.gpu.tick(); await turn();
+  f.gpu.resume(); assert.equal(f.gpu.snapshot().status, 'starting');
+  f.holding.delete('check'); f.held.check!.resolve(); await inflight;
+  assert.equal(f.gpu.snapshot().status, 'ready'); assert.deepEqual(f.writes, []);
+  // Without a pending start, a transient failure gets the readiness grace.
+  f.fail(true); f.advance(1000); await f.gpu.tick();
+  assert.equal(f.gpu.snapshot().status, 'ready'); assert.equal(f.gpu.snapshot().checkDegraded, true);
+});
+
 test('Vast adapter is pinned to one instance and discards sensitive response fields', async () => {
   const calls: (RequestInit & { url: string })[] = [];
   const api = createVast({ instanceId: '123', apiKey: 'synthetic-key' }, { fetch: async (url, options) => {

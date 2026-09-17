@@ -3,12 +3,14 @@
 
 import type { Branch, Checkpoint, Library, Story } from '../lib/library.ts';
 import type { ContextStats } from './context.ts';
+import type { GpuStatus } from './gpu.ts';
 import type { InlineButton, InlineKeyboard, Screen } from './telegram.ts';
 
 // Model metadata or scene provenance. Old scenes may lack it and stored values are not trusted.
 export type ModelInfo = { provider?: string; model?: string; status?: string; checkedAt?: string | null };
+// A GPU controller snapshot. Rendering keeps a fallback for any other status.
 export type GpuInfo = {
-  status?: string; activeJobs?: number | null; idleMinutes?: number; idleRemainingSeconds?: number | null;
+  status?: GpuStatus; activeJobs?: number | null; idleMinutes?: number; idleRemainingSeconds?: number | null;
   canStart?: boolean; canPause?: boolean;
 };
 export type RenderDetails = { modelInfo?: ModelInfo | null; gpuInfo?: GpuInfo | null; contextStats?: ContextStats | null };

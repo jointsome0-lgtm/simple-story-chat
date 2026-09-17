@@ -19,7 +19,7 @@ import type { Log } from './model-error.ts';
 import { errorCode, member } from './model-error.ts';
 import type { Provider } from './model.ts';
 import type { Store } from './store.ts';
-import type { ModelInfo, RenderDetails } from './ui.ts';
+import type { GpuInfo, ModelInfo, RenderDetails } from './ui.ts';
 
 export type BotOptions = {
   store: Store; api: TelegramApi; provider: Provider; gpu?: GpuController;
@@ -50,7 +50,9 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
   contextTokens = 65536, compactAtTokens = 54000, keepScenes = 4, memoryMode = 'plain', repairCoverage = false, model = 'unknown', providerName = 'claude-code', log = () => {} }: BotOptions) {
   const running = new Map<string, Running>();
   const modelInfo: Required<ModelInfo> = { provider: providerName, model, status: 'configured', checkedAt: null };
-  const render = (state: Library, route: string, details: RenderDetails = {}) => renderUi(state, route, { ...details, modelInfo: { ...modelInfo }, gpuInfo: gpu?.snapshot() });
+  // The GPU snapshot must provide every field the renderer reads.
+  const render = (state: Library, route: string, details: RenderDetails = {}) =>
+    renderUi(state, route, { ...details, modelInfo: { ...modelInfo }, gpuInfo: gpu?.snapshot() satisfies Required<GpuInfo> | undefined });
   const requireGpu = () => {
     if (!gpu) return;
     try { gpu.assertReady(); }
