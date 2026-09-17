@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.gpu)",
+      "Read(./data/**)",
+      "Read(./backups/**)",
+      "Read(./.tgcloud/**)"
+    ]
+  }
+}

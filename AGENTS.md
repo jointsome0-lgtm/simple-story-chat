@@ -16,6 +16,26 @@ There is no server to run locally and no `node_modules` to import from at runtim
 the only things available inside a module are the platform SDK and other modules
 in this project.
 
+## Privacy: whose data you may read
+
+The local bot in `local/` stores real people's stories in `data/`. Nested `local/AGENTS.md` is not loaded for every
+assistant, so the rule lives here too.
+
+- **Only the owner's stories may be read, and only to debug the bot.** The owner's Telegram ID is
+  `SIMPLE_CHAT_OWNER_ID` in `.env`. Nobody else on the access list gave that permission. The tester's library stays
+  closed even when the tester's failure is the one under investigation: the tester describes the problem and may send
+  an excerpt.
+- **Do not open `data/`, `backups/`, `.env` or `.env.gpu`** with file tools, `sqlite3` or a throwaway script. When you
+  need a fact from them, write code that prints booleans, counts and sizes, never values. Example: whether
+  `SIMPLE_CHAT_OWNER_ID` is set and is on the access list.
+- **Diagnose from the technical logs in `logs/`.** A row is an event, a code and the fields that pass
+  `safeErrorDetails` in `local/model-error.ts`. A row about a user request carries `actor: owner` or `actor: other`,
+  never an ID. Add a new log field to that whitelist first, as an enum, a boolean or a non-negative integer.
+- Test with synthetic stories. Never print credentials, story text, prompts, raw model output or raw provider errors.
+
+`.claude/settings.json` denies the file tools these paths. It cannot see inside a subprocess, so the rule above still
+applies there.
+
 ## Layout
 
 | Path            | What it is                                                        |
