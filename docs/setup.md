@@ -20,7 +20,7 @@
 | `SIMPLE_CHAT_ALLOWED_USER_IDS` | Числовые ID через запятую, без общего доступа |
 | `SIMPLE_CHAT_OWNER_ID` | ID владельца, разрешившего читать свои сообщения для отладки; не разрешение читать других пользователей. Должен входить в список доступа. По нему бот помечает строки журнала как `actor: owner`, остальные получают `other` |
 | `SIMPLE_CHAT_DB_PATH` | По умолчанию `data/simple-chat.sqlite`; можно выбрать локальный путь на компьютере или сервере |
-| `SIMPLE_CHAT_PROVIDER` | `claude-code` или `llama-cpp` |
+| `SIMPLE_CHAT_PROVIDER` | `claude-code`, `llama-cpp` или `openai-compatible` (только пробы, [подробности](model-providers.md)) |
 | `SIMPLE_CHAT_MODEL` | По умолчанию `claude-haiku-4-5-20251001` |
 | `SIMPLE_CHAT_CONTEXT_TOKENS` | 65536, включая резерв под ответ; CLI использует консервативную оценку входа |
 | `SIMPLE_CHAT_MAX_OUTPUT_TOKENS` | Максимум ответа, по умолчанию 4096 |

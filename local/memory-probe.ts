@@ -1,11 +1,14 @@
 // Replay only frozen synthetic scenes. All inference goes through the running
 // bot's background queue; this process never opens its database or starts GPU.
+// With --direct the configured provider is called from this process instead, without the bot.
 import { parseArgs } from 'node:util';
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import { setTimeout as wait } from 'node:timers/promises';
 import { createHash } from 'node:crypto';
-import { loadConfig } from './config.ts';
+import { loadConfig, loadModelConfig } from './config.ts';
+import { createModel } from './model.ts';
 import { createBackgroundClient } from './background.ts';
 import { compactBranch } from './generation.ts';
 import { member, safeErrorDetails } from './model-error.ts';
@@ -39,9 +42,12 @@ type Failure = { code?: string };
 
 process.umask(0o077);
 const { values } = parseArgs({ options: { source: { type: 'string' }, resume: { type: 'string' },
-  minutes: { type: 'string', default: '15' } } });
+  minutes: { type: 'string', default: '15' }, direct: { type: 'boolean', default: false }, mode: { type: 'string' } } });
 const minutes = Number(values.minutes);
-if (!values.source || !Number.isInteger(minutes) || minutes < 1 || minutes > 30) throw new Error('Use --source synthetic-evidence.json [--resume directory] [--minutes 1..30]');
+if (!values.source || !Number.isInteger(minutes) || minutes < 1 || minutes > 30) throw new Error('Use --source synthetic-evidence.json [--resume directory] [--minutes 1..30] [--direct] [--mode plain|sgr]');
+if (values.mode !== undefined && values.mode !== 'plain' && values.mode !== 'sgr') throw new Error('Unknown memory mode');
+// One failed mode ends the run, so eval replays each mode on its own.
+const modes = values.mode ? [values.mode] as const : ['plain', 'sgr'] as const;
 const input = readFileSync(resolve(values.source), 'utf8');
 const frozen: Evidence = JSON.parse(input);
 // Checked on the next line: a missing scenario is looked up as "undefined", which is not a fixture.
@@ -52,8 +58,9 @@ const source = active(frozen.state);
 if (`${source.seed.title}\n${source.seed.startTime}\n${source.seed.text}` !== fixture.seed) throw new Error('Synthetic seed mismatch');
 const scenes = (history(source.story, source.branch.head) as ProbeNode[]).filter(n => n.probeTurn <= fixture.turns.length);
 if (scenes.length !== fixture.turns.length || scenes.some((n, i) => n.input !== fixture.turns[i])) throw new Error('Synthetic input mismatch');
-const config = loadConfig();
+const config = values.direct ? { ...loadModelConfig(), dbPath: join(tmpdir(), 'simple-chat-direct', 'unused.sqlite') } : loadConfig();
 const client = createBackgroundClient({ socketPath: config.dbPath + '.model.sock', model: config.model });
+const direct = values.direct ? createModel(config) : null;
 const directory = values.resume ? resolve(values.resume) : mkdtempSync(join(tmpdir(), `simple-chat-memory-${scenario}-`));
 const sourceHash = createHash('sha256').update(input).digest('hex');
 const report: ReplayReport = values.resume ? JSON.parse(readFileSync(join(directory, 'report.json'), 'utf8'))
@@ -67,7 +74,18 @@ const save = () => writeFileSync(join(directory, 'report.json'), JSON.stringify(
 // Set at the start of each mode, before the store or the provider uses it.
 let current: ModeReport | undefined;
 const provider = { async generate(request: ModelRequest) {
-  for (let attempt = 0; attempt < 20; attempt++) {
+  for (let attempt = 0; direct && attempt < 20; attempt++) {
+    try { return await direct.generate(request, { signal: deadline }); }
+    catch (error) {
+      if ((error as Failure).code !== 'rate_limited') throw error;
+      current!.preemptions++;
+      save();
+      progress({ event: 'yielded', code: 'rate_limited' });
+      // A hosted free model allows 20 requests a minute, and its upstream is often busy for minutes.
+      await wait(30000, undefined, { signal: deadline });
+    }
+  }
+  for (let attempt = 0; !direct && attempt < 20; attempt++) {
     deadline.throwIfAborted();
     // Background work is served only with GPU control, so the status includes its snapshot.
     const state = await client.check({ signal: deadline }) as { gpu: { status: string } };
@@ -87,8 +105,8 @@ const provider = { async generate(request: ModelRequest) {
 const store = new Store(':memory:');
 progress({ event: 'started', scenario, directory, model: config.model });
 try {
-  await client.check({ signal: deadline });
-  for (const memoryMode of ['plain', 'sgr'] as const) {
+  await (direct ? direct.check?.({ signal: deadline }) : client.check({ signal: deadline }));
+  for (const memoryMode of modes) {
     current = report.modes[memoryMode] ??= { preemptions: 0, compactions: [], through: 0 };
     if (current.completedAt) continue;
     delete current.error;

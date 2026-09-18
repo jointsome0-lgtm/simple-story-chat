@@ -5,6 +5,12 @@ This file is auto-loaded by Claude Code, Cursor, and similar tools — keep it s
 and true. For the full SDK reference (db, Bot API, fetch), see
 [docs/tgcloud-sdk.md](docs/tgcloud-sdk.md).
 
+## Improving the story system
+
+If the owner asks you to improve prompts or memory, follow [docs/improve-loop.md](docs/improve-loop.md): what may
+change, what may not, how one step is measured with `npm run eval`, and when to stop. Past steps are in
+`docs/improve-log.md`.
+
 ## What this project is
 
 A **Telegram Mini App bot** running on Telegram's serverless platform. You write
