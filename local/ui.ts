@@ -1,7 +1,7 @@
 // Telegram interface for simple-story-chat: pure functions from a user's library to sendMessage payloads.
 // Plain text only (no parse_mode), inline keyboards, callbacks <= 64 UTF-8 bytes.
 
-import type { Branch, Checkpoint, Library, Story } from '../lib/library.ts';
+import type { Branch, Checkpoint, Library, SceneNode, Story } from '../lib/library.ts';
 import type { ContextStats } from './context.ts';
 import type { GpuStatus } from './gpu.ts';
 import type { InlineButton, InlineKeyboard, Screen } from './telegram.ts';
@@ -104,6 +104,8 @@ function screen(state: State, route: string, details: RenderDetails) {
     case 'seeds': return seedList(state, args[0]);
     case 'seed': return seedScreen(state, args[0], args[1]);
     case 'story': return storyScreen(state, args[0], args[1]);
+    case 'tree': return treeScreen(state, args[0]);
+    case 'log': return logScreen(state, args[0], args[1], args[2]);
     case 'branch': return branchScreen(state, args[0], args[1]);
     case 'checkpoints': return checkpointList(state, args[0], args[1], args[2]);
     case 'checkpoint': return checkpointScreen(state, args[0], args[1]);
@@ -364,7 +366,100 @@ function storyScreen(state: State, storyId: string | undefined, rawPage: string 
   if (!branches.length) lines.push('Веток нет.');
   lines.push('', 'Ветка — отдельная линия событий. Новая появляется, когда продолжаешь историю с чекпоинта; старая остаётся как была.');
   rows.push(pager(p, `story:${story.id}`, '⬅️ Предыдущие', 'Следующие ➡️'));
+  rows.push([btn('🌳 Дерево истории', `view:tree:${story.id}`)]);
   rows.push([seed ? btn('🌱 К сиду', `view:seed:${seed.id}`) : null, btn('🏠 Меню', 'view:home')]);
+  return payload(lines, rows);
+}
+
+// The story as a tree: scenes point at their parents, a branch or a checkpoint marks a scene. A straight run of scenes
+// is one line, so the drawing shows only where the story forks and what stands at each place.
+const TREE_LINES = 40;
+function treeScreen(state: State, storyId: string | undefined) {
+  const story = own(state.stories, storyId);
+  if (!story) return stale('История не найдена.');
+  const children = new Map<string | null, SceneNode[]>();
+  for (const node of ordered(values(story.nodes))) {
+    const parent = node.parent && own(story.nodes, node.parent) ? node.parent : null;
+    children.set(parent, [...children.get(parent) ?? [], node]);
+  }
+  const marks = (head: string | null) => [
+    ...ordered(values(story.branches)).filter(branch => (branch.head ?? null) === head).map(branch => `🌿 ${line(branch.name, 18) || 'ветка'}${isActive(state, story, branch) ? ' ✅' : ''}`),
+    // Every scene gets an automatic checkpoint. The drawing names the places that mean something: where memory was
+    // compacted and what the author saved. A fork needs no mark, the drawing shows it.
+    ...(values(story.checkpoints).some(cp => cp.kind === 'compaction' && (cp.head ?? null) === head) ? ['🗜 сжатие памяти'] : []),
+    ...ordered(values(story.checkpoints)).filter(cp => cp.kind === 'manual' && (cp.head ?? null) === head).map(cp => `📍 ${line(cp.label, 18) || 'чекпоинт'}`),
+  ];
+  const drawn: string[] = [];
+  const seen = new Set<string>();
+  const draw = (parent: string | null, prefix: string) => {
+    const starts = children.get(parent) ?? [];
+    starts.forEach((start, index) => {
+      const lastChild = index === starts.length - 1;
+      // Walk the run until the story forks, ends, or something marks the scene.
+      let node = start;
+      let scenes = 1;
+      seen.add(node.id);
+      while ((children.get(node.id) ?? []).length === 1 && !marks(node.id).length && !seen.has(children.get(node.id)![0].id)) {
+        node = children.get(node.id)![0];
+        seen.add(node.id);
+        scenes++;
+      }
+      const time = /^\d{4}-(\d\d)-(\d\d) (\d\d:\d\d)$/.exec(node.time);
+      drawn.push(`${prefix}${lastChild ? '└─' : '├─'} ${count(scenes, 'сцена', 'сцены', 'сцен')}${time ? ` до ${time[2]}.${time[1]} ${time[3]}` : ''}${marks(node.id).map(mark => ` · ${mark}`).join('')}`);
+      draw(node.id, `${prefix}${lastChild ? '  ' : '│ '}`);
+    });
+  };
+  draw(null, '');
+  const shown = drawn.length > TREE_LINES ? [...drawn.slice(0, TREE_LINES), `… и ещё ${drawn.length - TREE_LINES}`] : drawn;
+  const tree = [`🌱 начало${marks(null).map(mark => ` · ${mark}`).join('')}`, ...shown].join('\n');
+  const result: Screen = payload([`🌳 ${storyName(state, story)}`, '', tree, '', '🌿 ветка · 🗜 сжатие памяти · 📍 твой чекпоинт · ✅ здесь ты сейчас. Участок без развилок и отметок свёрнут в одну строку; время — в мире истории. Каждая сцена участка — в журнале ветки ниже.'],
+    [...ordered(values(story.branches)).slice(0, PAGE).map(branch => [btn(`📜 Сцены: ${line(branch.name, 30) || 'ветка'}${isActive(state, story, branch) ? ' ✅' : ''}`, `view:log:${story.id}:${branch.id}:0`)]),
+      [btn('📖 К истории', `view:story:${story.id}`), btn('🏠 Меню', 'view:home')]]);
+  // A pre entity keeps the drawing monospaced without parse_mode escaping. Offsets are UTF-16 units, as in a JS string.
+  const offset = result.text.indexOf(tree);
+  if (offset >= 0) result.entities = [{ type: 'pre', offset, length: tree.length }];
+  return result;
+}
+
+// The scenes of one branch, newest first, the way a commit log reads: a scene is a commit, and branches, compactions and
+// saved checkpoints are the names that point at it. Every scene has its automatic checkpoint, so every line opens.
+function logScreen(state: State, storyId: string | undefined, branchId: string | undefined, rawPage: string | undefined) {
+  const story = own(state.stories, storyId);
+  const branch = own(story?.branches, branchId);
+  if (!story || !branch) return stale('Ветка не найдена.');
+  const scenes = chain(story, branch.head).map((node, index) => ({ node, number: index + 1 })).reverse();
+  const p = paginate(scenes, rawPage);
+  const checkpoints = ordered(values(story.checkpoints));
+  // Where every other branch leaves this line: the last scene the two have in common.
+  const onLine = new Set(scenes.map(scene => scene.node.id));
+  const forks = new Map<string, string[]>();
+  for (const other of ordered(values(story.branches))) {
+    if (other.id === branch.id) continue;
+    let last: string | null = null;
+    for (const scene of chain(story, other.head)) { if (!onLine.has(scene.id)) break; last = scene.id; }
+    if (last && last !== branch.head) forks.set(last, [...forks.get(last) ?? [], other.name]);
+  }
+  const lines: (string | null)[] = [`📜 Сцены ветки ${quote(branch.name)}${isActive(state, story, branch) ? ' · ✅ сейчас' : ''}`, storyName(state, story),
+    `${count(scenes.length, 'сцена', 'сцены', 'сцен')}, новые сверху`, pageNote(p), ''];
+  const rows: Row[] = [];
+  for (const { node, number } of p.items) {
+    const here = checkpoints.filter(cp => cp.head === node.id);
+    const names = [
+      node.id === branch.head ? `🌿 ${line(branch.name, 18)}` : null,
+      ...(forks.get(node.id) ?? []).map(name => `⑂ ${line(name, 18)}`),
+      here.some(cp => cp.kind === 'compaction') ? '🗜 сжатие' : null,
+      ...here.filter(cp => cp.kind === 'manual').map(cp => `📍 ${line(cp.label, 18)}`),
+      node.truncated ? '⚠️ обрыв' : null,
+    ].filter(Boolean);
+    const words = line(node.input, 48) || line(sceneBody(node.text), 48);
+    lines.push(`${number}. ${node.time}${names.length ? ` · ${names.join(' · ')}` : ''}`, `   ✍️ ${words || '—'}`);
+    const cp = here.find(item => item.kind === 'manual') ?? here.find(item => item.kind === 'scene') ?? here[0];
+    if (cp) rows.push([btn(`${number}. ${line(node.input, 28) || 'сцена'}`, `view:checkpoint:${story.id}:${cp.id}`)]);
+  }
+  if (!scenes.length) lines.push('Сцен пока нет.');
+  lines.push('', 'Открой сцену, чтобы прочитать её или продолжить с неё новой веткой.');
+  rows.push(pager(p, `log:${story.id}:${branch.id}`, '⬆️ Новее', 'Старше ⬇️'));
+  rows.push([btn('🌳 Дерево', `view:tree:${story.id}`), btn('🌿 К ветке', `view:branch:${story.id}:${branch.id}`), btn('🏠 Меню', 'view:home')]);
   return payload(lines, rows);
 }
 
@@ -389,7 +484,7 @@ function branchScreen(state: State, storyId: string | undefined, branchId: strin
     lines.push('', 'Выбери ветку, чтобы играть в ней, — покажу её последнюю сцену.');
     rows.push([btn('✅ Играть в этой ветке', `use:${story.id}:${branch.id}`)]);
   }
-  rows.push([btn(`🔖 Чекпоинты (${checkpoints})`, `view:checkpoints:${story.id}:${branch.id}:0`)]);
+  rows.push([btn('📜 Сцены ветки', `view:log:${story.id}:${branch.id}:0`), btn(`🔖 Чекпоинты (${checkpoints})`, `view:checkpoints:${story.id}:${branch.id}:0`)]);
   if (!state.job) rows.push([btn('🗑 Удалить ветку', `view:delete-branch:${story.id}:${branch.id}`)]);
   rows.push([btn('◀️ Все ветки', `view:story:${story.id}`), btn('🏠 Меню', 'view:home')]);
   return payload(lines, rows);

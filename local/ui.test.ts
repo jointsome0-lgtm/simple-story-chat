@@ -552,3 +552,35 @@ test('scene keyboard follows state', () => {
   state.active = null;
   assert.equal(sceneKeyboard(state), undefined);
 });
+
+test('the story tree folds straight runs, shows forks, saved checkpoints and the active branch in a pre block', () => {
+  const state = fixture();
+  const story = state.stories.h2;
+  story.nodes.n12 = node('n12', 'n9', '2026-08-02 21:00', 'Шаги на лестнице.');
+  story.nodes.n13 = node('n13', 'n12', '2026-08-02 21:20', 'Дверь открыта.');
+  story.branches.b8.head = 'n13';
+  story.checkpoints.c14 = { id: 'c14', branchId: 'b8', label: 'Перед дверью', kind: 'manual', head: 'n12', memory: null };
+  state.active = { storyId: 'h2', branchId: 'b8' };
+  story.nodes.n15 = node('n15', 'n6', '2026-08-02 22:00', 'Туман.');
+  story.nodes.n16 = node('n16', 'n15', '2026-08-02 22:30', 'Колокол.');
+  story.branches.b3.head = 'n16';
+  story.checkpoints.c17 = { id: 'c17', branchId: 'b3', label: 'После сжатия', kind: 'compaction', head: 'n15', memory: null };
+  const tree = ['🌱 начало', '└─ 1 сцена до 02.08 20:00', '  ├─ 2 сцены до 02.08 22:00 · 🗜 сжатие памяти', '  │ └─ 1 сцена до 02.08 22:30 · 🌿 Начало',
+    '  └─ 2 сцены до 02.08 21:00 · 📍 Перед дверью', '    └─ 1 сцена до 02.08 21:20 · 🌿 От Сцена 1 ✅'].join('\n');
+  const screen = render(state, 'tree:h2');
+  assert.ok(screen.text.includes(tree));
+  assert.deepEqual(screen.entities, [{ type: 'pre', offset: screen.text.indexOf(tree), length: tree.length }]);
+  assert.ok(!screen.text.includes('Ветер бьёт'));
+  assert.deepEqual(screen.reply_markup!.inline_keyboard.flat().map(b => b.callback_data), ['view:log:h2:b3:0', 'view:log:h2:b8:0', 'view:story:h2', 'view:home']);
+  // The log of a branch reads like a commit log: every scene, newest first, with the names that point at it.
+  story.checkpoints.c18 = { id: 'c18', branchId: 'b8', label: 'Сцена 3', kind: 'scene', head: 'n12', memory: null };
+  const log = render(state, 'log:h2:b8:0');
+  assert.match(log.text, /4\. 2026-08-02 21:20 · 🌿 От Сцена 1\n {3}✍️ Ввод\n3\. 2026-08-02 21:00 · 📍 Перед дверью\n {3}✍️ Ввод\n2\. 2026-08-02 20:40\n {3}✍️ Ввод\n1\. 2026-08-02 20:00 · ⑂ Начало/);
+  assert.ok(!log.text.includes('Шаги на лестнице'));
+  assert.deepEqual(log.reply_markup!.inline_keyboard.flat().map(b => b.callback_data),
+    // Scene 4 has no checkpoint in this fixture, so it has no button; the bot saves one after every scene.
+    ['view:checkpoint:h2:c14', 'view:checkpoint:h2:c11', 'view:checkpoint:h2:c5', 'view:tree:h2', 'view:branch:h2:b8', 'view:home']);
+  assert.match(render(state, 'log:h2:missing:0').text, /не найдена/);
+  assert.ok(render(state, 'story:h2').reply_markup!.inline_keyboard.flat().some(b => b.callback_data === 'view:tree:h2'));
+  assert.match(render(state, 'tree:missing').text, /не найдена/);
+});
