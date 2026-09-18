@@ -25,7 +25,7 @@ type CliEvent = {
   event?: { type?: unknown; message?: CliMessage; usage?: CliUsage; delta?: { type?: unknown; text?: unknown; stop_reason?: unknown } | null } | null;
   message?: CliMessage;
   // Fields of the terminal result event.
-  is_error?: unknown; result?: unknown; num_turns?: unknown; usage?: CliUsage;
+  is_error?: unknown; result?: unknown; structured_output?: unknown; num_turns?: unknown; usage?: CliUsage;
 };
 
 const tokenCount = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
@@ -92,6 +92,8 @@ export function createClaude(config: ClaudeConfig, { launch = spawn }: { launch?
         '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--no-session-persistence',
         '--permission-prompts', 'none', '--output-format', 'stream-json', '--verbose',
         '--include-partial-messages', '--debug-file', '/dev/null', '--system-prompt', request.system];
+      // With a schema the CLI adds its StructuredOutput tool and validates the reply; the JSON arrives in the result.
+      if (request.outputSchema) args.push('--json-schema', JSON.stringify(request.outputSchema));
       const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(request.maxOutputTokens),
         DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1' };
       for (const key of Object.keys(env)) {
@@ -138,7 +140,9 @@ export function createClaude(config: ClaudeConfig, { launch = spawn }: { launch?
             throw new ModelError('usage_unavailable');
           }
           if (event.type === 'system' && event.subtype === 'init') {
-            if (!Array.isArray(event.tools) || event.tools.length || event.mcp_servers?.length) throw new ModelError('unexpected_tools');
+            const tools = request.outputSchema ? ['StructuredOutput'] : [];
+            if (!Array.isArray(event.tools) || event.tools.length !== tools.length || event.tools.some((tool, index) => tool !== tools[index])
+                || event.mcp_servers?.length) throw new ModelError('unexpected_tools');
             if (event.model !== config.model) throw new ModelError('unexpected_model');
             initialized = true;
           }
@@ -161,14 +165,15 @@ export function createClaude(config: ClaudeConfig, { launch = spawn }: { launch?
         if (!initialized || exitCode !== 0 || !result || result.is_error || result.subtype !== 'success') throw new ModelError('provider_failed');
         // Some CLI versions put only one text block in result.result. The text
         // stream contains the complete answer; result still confirms success.
-        const text = streamText || result.result;
+        const structured = request.outputSchema && result.structured_output && typeof result.structured_output === 'object';
+        const text = request.outputSchema ? (structured ? JSON.stringify(result.structured_output) : '') : streamText || result.result;
         if (typeof text !== 'string' || !text.trim()) throw new ModelError('empty_response');
         const measured = usage.finish(result);
         // A negative limit has already failed the estimate check above, so a missing count never exceeds it.
         if ((measured?.inputTokens ?? 0) > inputLimit) throw new ModelError('context_limit');
         if (measured?.inputTokens == null && inputBytes > inputLimit) throw new ModelError('usage_unavailable');
         return { text, finishReason: stopReason === 'max_tokens' ? 'length' : 'stop', usage: measured,
-          streamResultMismatch: !!streamText && typeof result.result === 'string' && streamText !== result.result };
+          streamResultMismatch: !request.outputSchema && !!streamText && typeof result.result === 'string' && streamText !== result.result };
       } catch (error) {
         stop();
         if (signal?.aborted) throw new ModelError('cancelled');

@@ -156,7 +156,9 @@ try {
     const result = await provider.generate(request);
     if (result.finishReason !== 'stop') throw Object.assign(new Error(), { code: 'truncated_recall' });
     // A reply that is not a JSON object fails with a TypeError when its answers are read.
-    const parsed: { answers?: unknown } = JSON.parse(result.text);
+    // Without a JSON mode Haiku wraps the answer in one Markdown code block, as it does for memory; see memory.ts.
+    const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(result.text.trim());
+    const parsed: { answers?: unknown } = JSON.parse(fenced ? fenced[1] : result.text);
     if (!Array.isArray(parsed.answers) || parsed.answers.length !== questions.length || new Set((parsed.answers as Answer[]).map(a => a.key)).size !== questions.length) {
       throw Object.assign(new Error(), { code: 'invalid_recall' });
     }
@@ -175,5 +177,7 @@ try {
   const code = deadline.aborted ? 'deadline' : /^[a-z_]{1,40}$/.test(failure.code ?? '') ? failure.code : 'probe_failed';
   if (current) current.error = code;
   // A failed compaction carries its sizes and counts on the error.
-  save(); progress({ event: 'deferred_or_failed', code, ...safeErrorDetails(error), directory }); process.exitCode = 1;
+  // An uncoded failure is a JavaScript error of this probe; its class tells a bad reply format from a bug.
+  const errorName = member(['SyntaxError', 'TypeError', 'RangeError'], (error as Error)?.name) ? (error as Error).name : undefined;
+  save(); progress({ event: 'deferred_or_failed', code, errorName, ...safeErrorDetails(error), directory }); process.exitCode = 1;
 } finally { store.close(); }

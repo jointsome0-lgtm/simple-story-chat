@@ -9,7 +9,9 @@ const SSH_REASONS = ['authentication', 'host_key', 'port_in_use', 'connect_timeo
 const ACTORS = ['owner', 'other'] as const;
 // Sizes, counts and durations. Each is kept only as a non-negative safe integer, so none can carry text.
 const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'repairSceneCount', 'requestBytes',
-  'inputBytesBefore', 'inputBytesAfter', 'outputCharacters', 'inputTokens', 'outputTokens', 'elapsedMs'] as const;
+  'inputBytesBefore', 'inputBytesAfter', 'outputCharacters', 'inputTokens', 'outputTokens', 'elapsedMs',
+  // A failed quote check: all quotes, and the failed ones by the loosest comparison that would have matched them.
+  'quoteCount', 'quoteWhitespace', 'quoteTypography', 'quotePunctuation', 'quoteOther'] as const;
 
 export type ErrorDetails = {
   httpStatus?: number; phase?: typeof PHASES[number]; operation?: typeof OPERATIONS[number];

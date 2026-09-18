@@ -37,9 +37,10 @@ test('one request under the API root, without llama.cpp fields; the provider cou
   assert.equal(f.calls.length, 1);
   assert.equal(f.calls[0].url, 'https://openrouter.ai/api/v1/chat/completions');
   assert.equal((f.calls[0].options.headers as { Authorization: string }).Authorization, 'Bearer synthetic-key');
-  assert.deepEqual(Object.keys(f.calls[0].body!).sort(), ['max_tokens', 'messages', 'model', 'reasoning', 'response_format', 'stream', 'stream_options', 'temperature']);
+  assert.deepEqual(Object.keys(f.calls[0].body!).sort(), ['max_tokens', 'messages', 'model', 'provider', 'reasoning', 'response_format', 'stream', 'stream_options', 'temperature']);
   assert.deepEqual(f.calls[0].body!.reasoning, { enabled: false });
-  assert.deepEqual(f.calls[0].body!.response_format, { type: 'json_object' });
+  assert.deepEqual(f.calls[0].body!.response_format, { type: 'json_schema', json_schema: { name: 'reply', strict: true, schema: { type: 'object' } } });
+  assert.deepEqual(f.calls[0].body!.provider, { require_parameters: true });
   assert.equal('countInput' in f.provider, false);
   assert.deepEqual(result.usage, { inputTokens: 140, outputTokens: 8, cachedInputTokens: null,
     reasoningCharacters: 'Рассуждение.'.length, totalTokens: 148 });
@@ -48,8 +49,10 @@ test('one request under the API root, without llama.cpp fields; the provider cou
 test('OpenAI gets max_completion_tokens and its default sampling', async () => {
   const f = fixture(() => stream([chunk({ content: 'Готово.' }, 'stop'), { choices: [], usage: { prompt_tokens: 140, completion_tokens: 8 } }]),
     { baseUrl: 'https://api.openai.com/v1/', model: 'gpt-5.4-mini' });
-  await f.provider.generate(request());
+  await f.provider.generate({ ...request(), outputSchema: { type: 'object', properties: { text: { type: 'string', minLength: 1, maxLength: 9, enum: ['a'] } } } });
   assert.equal(f.calls[0].url, 'https://api.openai.com/v1/chat/completions');
+  assert.deepEqual((f.calls[0].body!.response_format as { json_schema: { schema: unknown } }).json_schema.schema,
+    { type: 'object', properties: { text: { type: 'string', enum: ['a'] } } });
   assert.equal(f.calls[0].body!.max_completion_tokens, 4096);
   assert.equal('max_tokens' in f.calls[0].body!, false);
   assert.equal('temperature' in f.calls[0].body!, false);

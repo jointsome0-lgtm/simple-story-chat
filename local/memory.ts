@@ -76,6 +76,16 @@ function parsePlain(result: Output, nodes: Scene[]): Delta {
   return { facts };
 }
 
+// A quote must match its scene exactly. For the log only: the loosest comparison under which a failed quote would
+// have matched, which tells a model that retypes punctuation from one that paraphrases or invents.
+const spaces = (text: string) => text.replace(/\s+/g, ' ').trim();
+const typography = (text: string) => spaces(text).replace(/[«»„“”‘’']/g, '"').replace(/[–—−]/g, '-').replace(/…/g, '...').replace(/ё/g, 'е').replace(/Ё/g, 'Е');
+const letters = (text: string) => typography(text).toLowerCase().replace(/[^\p{L}\p{N} ]/gu, '').replace(/ +/g, ' ').trim();
+function quoteMiss(source: string, quote: string) {
+  return spaces(source).includes(spaces(quote)) ? 'quoteWhitespace' : typography(source).includes(typography(quote)) ? 'quoteTypography'
+    : letters(source).includes(letters(quote)) ? 'quotePunctuation' : 'quoteOther';
+}
+
 const STATUSES = ['actual', 'planned', 'cancelled', 'uncertain'] as const;
 const STATUS_LABELS: Partial<Record<string, string>> = { planned: 'План: ', cancelled: 'Отменено / не выполнено: ', uncertain: 'Не подтверждено: ' };
 const SGR_RULES = `Извлеки инкремент памяти по схеме evidence → conflicts → facts. Верни только JSON, не продолжай историю.
@@ -118,14 +128,16 @@ function parseSgr(result: Output, nodes: Scene[]): Delta {
   if (!array(data.evidence, 1, 400) || !array(data.conflicts, 0, 100) || !array(data.facts, 1, 200)) invalid();
   const sources = new Map<unknown, Scene>(nodes.map(n => [n.id, n]));
   const evidence = new Map<unknown, Record<'id' | 'scene' | 'part' | 'quote', unknown>>();
+  const misses = { quoteWhitespace: 0, quoteTypography: 0, quotePunctuation: 0, quoteOther: 0 };
   for (const item of data.evidence) {
     keys(item, ['id', 'scene', 'part', 'quote']);
     // test() converts its argument to a string as well.
     if (!/^e[1-9][0-9]{0,3}$/.test(String(item.id)) || evidence.has(item.id) || !sources.has(item.scene)
         || !member(['input', 'text'] as const, item.part) || !nonempty(item.quote, 1000)) invalid('evidence');
-    if (!sources.get(item.scene)![item.part].includes(item.quote)) invalid('quote');
+    if (!sources.get(item.scene)![item.part].includes(item.quote)) misses[quoteMiss(sources.get(item.scene)![item.part], item.quote)]++;
     evidence.set(item.id, item);
   }
+  if (Object.values(misses).some(Boolean)) invalid('quote', { quoteCount: data.evidence.length, ...misses });
   for (const conflict of data.conflicts) {
     keys(conflict, ['input', 'text', 'resolution']);
     const input = evidence.get(conflict.input);

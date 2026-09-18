@@ -24,6 +24,13 @@ const isObject = (value: unknown): value is { readonly [field: string]: unknown 
 const MAX_BODY = 2_000_000;
 // OpenAI's current models reject `max_tokens` and a non-default temperature; OpenRouter lists `max_tokens`.
 const OPENAI_HOST = 'api.openai.com';
+// OpenAI's strict mode rejects string length limits; memory.ts checks the lengths of the parsed reply itself.
+function withoutLengths(schema: unknown): unknown {
+  if (Array.isArray(schema)) return schema.map(withoutLengths);
+  if (!isObject(schema)) return schema;
+  return Object.fromEntries(Object.entries(schema).filter(([key]) => key !== 'minLength' && key !== 'maxLength')
+    .map(([key, value]) => [key, withoutLengths(value)]));
+}
 function messagesFor(request: ModelRequest) {
   const messages: { role: string; content: string }[] = [];
   for (const message of [{ role: 'system', content: request.system }, ...request.messages]) {
@@ -84,14 +91,18 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
   const headers = { 'Content-Type': 'application/json',
     ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}) };
   const prepared = new WeakMap<ModelRequest, { body: ReturnType<typeof bodyFor>; inputTokens: number }>();
-  // Sampling is left to OpenAI's defaults. The hosted JSON mode takes no schema; the caller validates the result.
+  // Sampling is left to OpenAI's defaults. The schema is enforced by the provider's structured output, as the grammar
+  // is on llama.cpp: without it the same model passes one run and breaks the format in the next. OpenRouter must route
+  // to an endpoint that enforces it, so a model that cannot, like free Gemma 4, fails instead of ignoring the schema.
   const bodyFor = (request: ModelRequest) => (hosted ? { model: config.model,
     messages: messagesFor(request),
     [openai ? 'max_completion_tokens' : 'max_tokens']: request.maxOutputTokens, stream: true,
     ...(mistral ? {} : { stream_options: { include_usage: true } }),
     ...(openrouter ? { reasoning: { enabled: false } } : {}),
     ...(openai ? {} : { temperature: request.purpose === 'memory' ? 0.2 : config.temperature ?? 0.8 }),
-    ...(request.outputSchema ? { response_format: { type: 'json_object' } } : {}),
+    ...(request.outputSchema ? { response_format: { type: 'json_schema', json_schema: { name: 'reply', strict: true,
+      schema: openai ? withoutLengths(request.outputSchema) : request.outputSchema } },
+      ...(openrouter ? { provider: { require_parameters: true } } : {}) } : {}),
   } : { model: config.model,
     messages: messagesFor(request),
     max_tokens: request.maxOutputTokens, stream: true, stream_options: { include_usage: true },
