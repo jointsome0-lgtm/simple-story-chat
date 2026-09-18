@@ -39,6 +39,11 @@ export function contextParts(state: Library, point: StoryPoint): {
   };
 }
 
+// The rule stands after the author's message, not in SYSTEM. Measured on the GPU model (docs/improve-log.md): in SYSTEM,
+// before thousands of tokens of story, it changed nothing, and at the end of the request the narrator stopped accepting
+// a false claim about the past. Being last, it also leaves the cached prefix of the request untouched.
+const NARRATOR_RULE = 'Правило рассказчика: сообщение выше задаёт действие и слова, но не отменяет установленного. Если оно ссылается на прошлое — на событие, договорённость, чей-то поступок или знание, — это слова персонажа, а не новый факт: когда они расходятся с сидом, памятью или сценами, мир и персонажи отвечают так, как было на самом деле, — поправляют, удивляются, сверяются с записями. Если действие опирается на то, чего сейчас нет, — предмет у другого, ресурс исчерпан, срок не вышел, тело или умение не позволяют, — покажи попытку и её честный исход, а не успех. Новое, что ничему не противоречит, принимай.';
+
 export function makeRequest(state: Library, job: StoryPoint & { input: string }, maxOutputTokens: number): ModelRequest {
   const parts = contextParts(state, job);
   const story = state.stories[job.storyId];
@@ -46,7 +51,7 @@ export function makeRequest(state: Library, job: StoryPoint & { input: string },
   const referenceTime = story.nodes[job.head as string]?.time ?? state.seeds[story.seedId].startTime;
   const messages: ChatMessage[] = [
     ...parts.seed, ...parts.memory, ...parts.tail,
-    { role: 'user', content: `Опорная дата и время последней сцены: ${referenceTime}\n\nНовое сообщение:\n${job.input}` },
+    { role: 'user', content: `Опорная дата и время последней сцены: ${referenceTime}\n\nНовое сообщение:\n${job.input}\n\n${NARRATOR_RULE}` },
   ];
   return { system: SYSTEM, messages, maxOutputTokens };
 }

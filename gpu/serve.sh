@@ -7,6 +7,11 @@ gpu_dir="${SIMPLE_CHAT_GPU_DIR:-/workspace/simple-chat-gpu}"
 port="${SIMPLE_CHAT_GPU_PORT:-8080}"
 context="${SIMPLE_CHAT_GPU_CONTEXT:-65536}"
 ubatch="${SIMPLE_CHAT_GPU_UBATCH:-128}"
+# The bot writes one scene at a time and keeps one slot. A research batch sets 2..8: the slots share one KV cache of
+# the same size, so memory does not grow, and decoding several scenes at once raises the throughput of the card.
+slots="${SIMPLE_CHAT_GPU_SLOTS:-1}"
+[[ "$slots" =~ ^[1-8]$ ]] || { echo 'Use SIMPLE_CHAT_GPU_SLOTS from 1 to 8.' >&2; exit 1; }
+unified=(); (( slots == 1 )) || unified=(--kv-unified)
 [[ "$port" =~ ^[0-9]+$ && "$context" =~ ^[0-9]+$ && "$ubatch" =~ ^[0-9]+$ ]] || { echo 'Invalid port/context/ubatch.' >&2; exit 1; }
 (( port > 0 && port <= 65535 && context >= 8192 && context <= 65536 )) || exit 1
 (( ubatch >= 32 && ubatch <= 512 )) || exit 1
@@ -16,11 +21,11 @@ ubatch="${SIMPLE_CHAT_GPU_UBATCH:-128}"
 # lifecycle events reach disk. Do not enable prompt or JSON payload logging.
 # One slot retains its ordinary prefix KV; the optional RAM snapshot cache is off.
 ulimit -c 0
-echo "Starting $MODEL_ALIAS; context=$context, slots=1, loopback port=$port."
+echo "Starting $MODEL_ALIAS; context=$context, slots=$slots, loopback port=$port."
 exec python3 "$task_dir/server-log.py" "$gpu_dir/server-events.jsonl" -- \
   "$gpu_dir/llama.cpp/build/bin/llama-server" \
   --model "$gpu_dir/models/$MODEL_FILE" --alias "$MODEL_ALIAS" \
-  --host 127.0.0.1 --port "$port" --ctx-size "$context" --parallel 1 \
+  --host 127.0.0.1 --port "$port" --ctx-size "$context" --parallel "$slots" "${unified[@]}" \
   --gpu-layers 99 --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 \
   --batch-size 512 --ubatch-size "$ubatch" --jinja --reasoning-format deepseek \
   --chat-template-kwargs '{"enable_thinking":false}' \

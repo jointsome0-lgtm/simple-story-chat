@@ -2,13 +2,14 @@
 // bot's background queue; this process never opens its database or starts GPU.
 // With --direct the configured provider is called from this process instead, without the bot.
 import { parseArgs } from 'node:util';
-import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as wait } from 'node:timers/promises';
 import { createHash } from 'node:crypto';
 import { loadConfig, loadModelConfig } from './config.ts';
 import { createModel } from './model.ts';
+import { createLlama } from './llama.ts';
 import { createBackgroundClient } from './background.ts';
 import { compactBranch } from './generation.ts';
 import { member, safeErrorDetails } from './model-error.ts';
@@ -49,9 +50,21 @@ type Failure = { code?: string };
 process.umask(0o077);
 const { values } = parseArgs({ options: { source: { type: 'string' }, resume: { type: 'string' },
   minutes: { type: 'string', default: '15' }, direct: { type: 'boolean', default: false }, mode: { type: 'string' },
-  traps: { type: 'boolean', default: false }, pack: { type: 'string' } } });
+  traps: { type: 'boolean', default: false }, pack: { type: 'string' }, lab: { type: 'string' } } });
 const minutes = Number(values.minutes);
-if (!values.source || !Number.isInteger(minutes) || minutes < 1 || minutes > 30) throw new Error('Use --source synthetic-evidence.json [--resume directory] [--minutes 1..30] [--direct] [--mode plain|sgr|full] [--traps] [--pack directory]');
+// --lab is research, not the meter: every trap scene is written once per variant and sample. A variant is a text added
+// to the end of the last message, so all of them share the prompt prefix and an own GPU pays the prefill once per trap.
+// The file is { "samples": n, "variants": [{ "key": "base", "tail": "" }, ...] }; each pair gets its own report
+// under lab/ in the shape scene-judge.ts reads.
+// "parallel" is how many scenes are requested at once; it pays off when the server has as many slots.
+// "only" names the traps to write, so that samples go to the traps that tell variants apart.
+// "many" asks for all samples of a variant in one request. It is off by default: on the pinned llama-server such a request
+// failed with a context error once another slot held an earlier sequence, although the same requests pass one by one.
+type Lab = { samples: number; parallel?: number; only?: string[]; many?: boolean; variants: { key: string; tail: string }[] };
+const lab: Lab | null = values.lab ? JSON.parse(readFileSync(resolve(values.lab), 'utf8')) : null;
+if (lab && (!Number.isInteger(lab.samples) || lab.samples < 1 || lab.samples > 10 || ![1, 2, 3, 4, 5, 6, 7, 8].includes(lab.parallel ?? 1) || (lab.only !== undefined && !(Array.isArray(lab.only) && lab.only.every(key => typeof key === 'string'))) || !Array.isArray(lab.variants) || !lab.variants.length
+    || !lab.variants.every(variant => /^[a-z][a-z0-9-]{0,23}$/.test(variant?.key) && typeof variant.tail === 'string' && variant.tail.length <= 2000))) throw new Error('Invalid --lab file');
+if (!values.source || !Number.isInteger(minutes) || minutes < 1 || minutes > (lab ? 600 : 30)) throw new Error('Use --source synthetic-evidence.json [--resume directory] [--minutes 1..30] [--direct] [--mode plain|sgr|full] [--traps] [--pack directory] [--lab variants.json]');
 // `full` never compacts: the questions are asked over the whole story. A strong model that fails them there shows
 // that the frozen scenes contradict the fixed answers.
 if (values.mode !== undefined && values.mode !== 'plain' && values.mode !== 'sgr' && values.mode !== 'full') throw new Error('Unknown memory mode');
@@ -68,7 +81,9 @@ const scenes = (history(source.story, source.branch.head) as ProbeNode[]).filter
 if (scenes.length !== fixture.turns.length || scenes.some((n, i) => n.input !== fixture.turns[i])) throw new Error('Synthetic input mismatch');
 const config = values.direct ? { ...loadModelConfig(), dbPath: join(tmpdir(), 'simple-chat-direct', 'unused.sqlite') } : loadConfig();
 const client = createBackgroundClient({ socketPath: config.dbPath + '.model.sock', model: config.model });
-const direct = values.direct ? createModel(config) : null;
+const llamaLab = values.direct && lab && config.provider === 'llama-cpp' ? createLlama(config, { slots: lab.parallel ?? 1 }) : null;
+const labClient = lab?.many && lab.samples <= (lab.parallel ?? 1) ? llamaLab : null;
+const direct = !values.direct ? null : llamaLab ?? createModel(config);
 const directory = values.resume ? resolve(values.resume) : mkdtempSync(join(tmpdir(), `simple-chat-memory-${scenario}-`));
 const sourceHash = createHash('sha256').update(input).digest('hex');
 const report: ReplayReport = values.resume ? JSON.parse(readFileSync(join(directory, 'report.json'), 'utf8'))
@@ -127,12 +142,45 @@ try {
     });
     const persist = () => { current!.state = store.read('synthetic'); save(); };
     // One uncommitted scene per trap: the real narrator request, as the bot builds it for a player's message.
+    // One report per variant and sample, holding only what the judge reads.
+    const labScenes: Record<string, NonNullable<ModeReport['traps']>> = {};
+    const saveLab = (name: string) => {
+      mkdirSync(join(directory, 'lab', name), { recursive: true });
+      writeFileSync(join(directory, 'lab', name, 'report.json'), JSON.stringify({ scenario, model: config.model, modes: { [memoryMode]: { traps: labScenes[name] } } }, null, 2));
+    };
     const writeTraps = async (after: number | undefined) => {
       for (const trap of values.traps ? fixture.traps : []) {
-        if (trap.afterTurn !== after || current!.traps?.some(done => done.key === trap.key)) continue;
+        if (trap.afterTurn !== after || current!.traps?.some(done => done.key === trap.key) || (lab?.only && !lab.only.includes(trap.key))) continue;
         const turn = store.mutate('synthetic', state => beginJob(state, trap.input ?? fixture.turns[trap.afterTurn!], 0));
         let scene;
-        try { scene = await provider.generate(makeRequest(store.read('synthetic'), turn, config.maxOutputTokens)); }
+        try {
+          // On an own server one request returns all samples of a variant: the prompt is read once and the samples
+          // share its cache cells.
+          const state = store.read('synthetic');
+          const variants = [...(lab?.variants ?? [])];
+          let first: { text: string; finishReason: 'stop' | 'length' } | undefined;
+          const writeNext = async (): Promise<void> => {
+            const variant = variants.shift();
+            if (!variant) return;
+            const request = makeRequest(state, turn, config.maxOutputTokens);
+            const last = request.messages.at(-1)!;
+            if (variant.tail) last.content = `${last.content}\n\n${variant.tail}`;
+            const written = labClient ? await labClient.generateMany(request, lab!.samples, { signal: deadline })
+              : await Promise.all(Array.from({ length: lab!.samples }, () => provider.generate({ ...request })));
+            written.forEach((result, index) => {
+              const name = `${variant.key}-${index + 1}`;
+              (labScenes[name] ??= []).push({ key: trap.key, text: result.text, truncated: result.finishReason !== 'stop' });
+              saveLab(name); progress({ event: 'lab_scene', variant: variant.key, sample: index + 1, characters: result.text.length, truncated: result.finishReason !== 'stop' });
+            });
+            if (!variant.tail) first ??= written[0];
+            return writeNext();
+          };
+          // One several-samples request at a time: two of them at once fail on the pinned llama-server with a
+          // context error, although each fits alone.
+          await Promise.all(Array.from({ length: !lab ? 0 : labClient ? 1 : Math.max(1, Math.floor((lab.parallel ?? 1) / lab.samples)) }, writeNext));
+          // A variant with an empty tail is the ordinary request, so its first sample is the trap scene of the report.
+          scene = first ?? await provider.generate(makeRequest(store.read('synthetic'), turn, config.maxOutputTokens));
+        }
         finally { store.mutate('synthetic', state => { state.job = null; }); }
         (current!.traps ??= []).push({ key: trap.key, text: scene.text, truncated: scene.finishReason !== 'stop' });
         persist(); progress({ event: 'trap_scene', mode: memoryMode, characters: scene.text.length, truncated: scene.finishReason !== 'stop' });

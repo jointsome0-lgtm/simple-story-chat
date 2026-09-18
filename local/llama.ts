@@ -65,7 +65,9 @@ async function* events(body: Response['body']) {
 }
 
 // `budget` caps a hosted API; llama.cpp on our own server has none.
-type Options = { fetch?: (url: string, init: RequestInit) => Promise<Response>; budget?: Budget };
+// The bot expects one slot, so that a scene never shares the card with an unknown request. Only a research batch that
+// started the server with more slots names their count here.
+type Options = { fetch?: (url: string, init: RequestInit) => Promise<Response>; budget?: Budget; slots?: number };
 
 export function createLlama(config: LlamaConfig, options: Options = {}) {
   return createChat(config, options, false);
@@ -79,7 +81,7 @@ export function createOpenAI(config: LlamaConfig, options: Options = {}) {
   return { generate, check };
 }
 
-function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, budget }: Options, hosted: boolean) {
+function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, budget, slots = 1 }: Options, hosted: boolean) {
   const origin = hosted ? '' : modelBaseUrl(config.baseUrl);
   const baseUrl = hosted ? apiBaseUrl(config.baseUrl) : origin + '/v1';
   const openai = hosted && new URL(baseUrl).hostname === OPENAI_HOST;
@@ -187,7 +189,7 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
         const props = await json('/props', null, current) as Props;
         const contextTokens = count(props.default_generation_settings?.n_ctx);
         if (contextTokens === null || contextTokens < config.contextTokens) throw new ModelError('context_limit');
-        if (props.total_slots !== 1) throw new ModelError('unexpected_slots');
+        if (props.total_slots !== slots) throw new ModelError('unexpected_slots');
         return { model: config.model, contextTokens, slots: props.total_slots };
       });
     },
@@ -257,6 +259,28 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
         if (inputTokens > limit) throw new ModelError('context_limit');
         return { text, finishReason, usage: { inputTokens, outputTokens, cachedInputTokens, reasoningCharacters,
           totalTokens: outputTokens === null ? null : inputTokens + outputTokens } };
+      });
+    },
+    // Several independent samples of one request, for research batches on an own llama-server started with that many
+    // slots. The server reads the prompt once and the samples share its cache cells; each sample has its own sampler,
+    // so the distribution is that of separate requests. The answer is not streamed.
+    generateMany(request: ModelRequest, samples: number, { signal }: Controls = {}) {
+      return operation(signal, 'generate', async (current): Promise<GenerationResult[]> => {
+        if (hosted || !Number.isInteger(samples) || samples < 1 || samples > slots) throw new ModelError('provider_failed', { phase: 'generate' });
+        const { body, inputTokens } = await prepare(request, current);
+        prepared.delete(request);
+        if (inputTokens > config.contextTokens - request.maxOutputTokens) throw new ModelError('context_limit');
+        const { stream_options: _, ...plain } = body as typeof body & { stream_options?: unknown };
+        const answer = await json('/chat/completions', { ...plain, stream: false, n: samples }, current) as
+          { model?: unknown; choices?: { index?: unknown; finish_reason?: unknown; message?: { content?: unknown; tool_calls?: unknown } }[] };
+        if (answer.model !== config.model) throw new ModelError('unexpected_model');
+        if (!Array.isArray(answer.choices) || answer.choices.length !== samples) throw new ModelError('invalid_response');
+        return answer.choices.map(choice => {
+          const text = choice.message?.content;
+          if (typeof text !== 'string' || choice.message?.tool_calls || !member(['stop', 'length'] as const, choice.finish_reason)) throw new ModelError('invalid_response');
+          if (!text.trim()) throw new ModelError('empty_response');
+          return { text, finishReason: choice.finish_reason, usage: null };
+        });
       });
     },
   };

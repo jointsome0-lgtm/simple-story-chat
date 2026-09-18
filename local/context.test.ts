@@ -49,7 +49,8 @@ test('world clock follows the selected checkpoint and does not change the cachea
   const past = makeRequest(state, { storyId: story.id, ...checkpoint, input: '20:08. Продолжай.' }, 4096);
   const current = makeRequest(state, { storyId: story.id, ...branch, input: 'Продолжай.' }, 4096);
   assert.match(past.messages.at(-1)!.content, /2026-08-02 20:01/);
-  assert.match(past.messages.at(-1)!.content, /20:08\. Продолжай\.$/);
+  // The narrator's rule closes the request, after the author's message, where the model follows it.
+  assert.match(past.messages.at(-1)!.content, /20:08\. Продолжай\.\n\nПравило рассказчика: [^\n]+$/);
   assert.doesNotMatch(JSON.stringify(past.messages), /2026-08-05/);
   assert.match(current.messages.at(-1)!.content, /2026-08-05 17:00/);
   assert.equal(past.system, current.system);

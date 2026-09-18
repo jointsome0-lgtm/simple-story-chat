@@ -57,7 +57,15 @@ catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw ne
 function modelEnv(spec: string): Env {
   const [host, model] = [spec.slice(0, spec.indexOf(':')), spec.slice(spec.indexOf(':') + 1)];
   if (host === 'claude' && model) return { SIMPLE_CHAT_PROVIDER: 'claude-code', SIMPLE_CHAT_MODEL: model };
-  if (!Object.hasOwn(HOSTS, host) || !model) throw new Error('Name a model as <host>:<id>, with host openrouter, openai, cerebras, groq, mistral or claude');
+  // "gpu:<label>" is the owner's own model from .env.gpu, reached through the tunnel that is already open. The rental and
+  // SSH settings are not passed on, so a probe never starts, stops or reconnects the GPU. The label only names the run.
+  if (host === 'gpu' && model) {
+    let gpu: Env = {};
+    try { gpu = parseEnv(readFileSync(join(root, '.env.gpu'), 'utf8')); } catch { throw new Error('Cannot read .env.gpu'); }
+    const names = ['PROVIDER', 'BASE_URL', 'API_KEY', 'MODEL', 'CONTEXT_TOKENS', 'MAX_OUTPUT_TOKENS', 'MODEL_TIMEOUT_MS', 'TEMPERATURE'];
+    return Object.fromEntries(names.map(name => [`SIMPLE_CHAT_${name}`, gpu[`SIMPLE_CHAT_${name}`]]));
+  }
+  if (!Object.hasOwn(HOSTS, host) || !model) throw new Error('Name a model as <host>:<id>, with host openrouter, openai, cerebras, groq, mistral, claude or gpu');
   const { baseUrl, key } = HOSTS[host as keyof typeof HOSTS];
   const apiKey = process.env[key] || keys[key];
   if (!apiKey) throw new Error(`Set ${key} in .env.eval`);

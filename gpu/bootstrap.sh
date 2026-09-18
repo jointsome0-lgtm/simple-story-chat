@@ -22,6 +22,48 @@ required=4 if (directory/'models'/sys.argv[2]).is_file() else 30
 if shutil.disk_usage(directory).free < required * 1024**3:
     raise SystemExit(f'At least {required} GiB free disk is required for download and build.')
 PY
+model_path="$gpu_dir/models/$MODEL_FILE"
+# The weights arrive while llama-server builds, so the network and the compiler do not wait for each other.
+# The body is not indented: the here-document inside it ends at the start of a line.
+fetch_model() {
+if [[ -f "$model_path" ]]; then
+  echo 'Model already present; checking its content hash.'
+  return 0
+fi
+# A completed download can survive an interrupted hash check. Do not resume
+# it beyond EOF; discard an oversized partial file before downloading again.
+# A parallel download writes segments at their offsets, so the file has its full size long before it is complete;
+# aria2 removes its control file only when every segment has arrived.
+local download_needed
+download_needed="$(python3 - "$model_path.part" "$MODEL_BYTES" <<'PY'
+import pathlib,sys
+part=pathlib.Path(sys.argv[1]); expected=int(sys.argv[2])
+if part.exists() and part.stat().st_size > expected: part.unlink()
+unfinished=pathlib.Path(str(part)+'.aria2').exists()
+print('no' if part.exists() and part.stat().st_size == expected and not unfinished else 'yes')
+PY
+)"
+[[ "$download_needed" = yes ]] || return 0
+local model_url="https://huggingface.co/$MODEL_REPO/resolve/$MODEL_REVISION/$MODEL_FILE"
+# One connection to the hub is slow on most rented machines, so the model arrives over several by default.
+# SIMPLE_CHAT_DOWNLOAD_CONNECTIONS=1 keeps the single curl download; 16 is the most aria2 opens to one server.
+if [[ "$connections" != 1 ]] && ! command -v aria2c >/dev/null && command -v apt-get >/dev/null; then
+  (apt-get update -qq && apt-get install -y -qq aria2) >/dev/null 2>&1 || echo 'Could not install aria2; downloading over one connection.' >&2
+fi
+if [[ "$connections" != 1 ]] && command -v aria2c >/dev/null; then
+  aria2c --continue=true --max-connection-per-server="$connections" --split="$connections" --min-split-size=64M \
+    --file-allocation=none --max-tries=5 --retry-wait=5 --console-log-level=warn --summary-interval=60 \
+    --dir="$(dirname -- "$model_path")" --out="$(basename -- "$model_path").part" "$model_url"
+else
+  # curl resumes only a file written from its start; the segments of an unfinished parallel download are not that.
+  if [[ -f "$model_path.part.aria2" ]]; then rm -f -- "$model_path.part" "$model_path.part.aria2"; fi
+  curl --fail --location --silent --show-error --retry 2 --continue-at - "$model_url" -o "$model_path.part"
+fi
+}
+connections="${SIMPLE_CHAT_DOWNLOAD_CONNECTIONS:-16}"
+[[ "$connections" =~ ^([1-9]|1[0-6])$ ]] || { echo 'Use SIMPLE_CHAT_DOWNLOAD_CONNECTIONS from 1 to 16.' >&2; exit 1; }
+fetch_model &
+fetch_pid=$!
 source_dir="$gpu_dir/llama.cpp"
 if [[ ! -d "$source_dir/.git" ]]; then
   git init -q "$source_dir"
@@ -35,24 +77,7 @@ cmake -S "$source_dir" -B "$source_dir/build" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="$cuda_arch" \
   -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=ON
 cmake --build "$source_dir/build" --target llama-server -j "${SIMPLE_CHAT_BUILD_JOBS:-4}"
-model_path="$gpu_dir/models/$MODEL_FILE"
-if [[ ! -f "$model_path" ]]; then
-  # A completed download can survive an interrupted hash check. Do not resume
-  # it beyond EOF; discard an oversized partial file before downloading again.
-  download_needed="$(python3 - "$model_path.part" "$MODEL_BYTES" <<'PY'
-import pathlib,sys
-part=pathlib.Path(sys.argv[1]); expected=int(sys.argv[2])
-if part.exists() and part.stat().st_size > expected: part.unlink()
-print('no' if part.exists() and part.stat().st_size == expected else 'yes')
-PY
-)"
-  if [[ "$download_needed" = yes ]]; then
-    curl --fail --location --silent --show-error --retry 2 --continue-at - \
-      "https://huggingface.co/$MODEL_REPO/resolve/$MODEL_REVISION/$MODEL_FILE" -o "$model_path.part"
-  fi
-else
-  echo 'Model already present; checking its content hash.'
-fi
+wait "$fetch_pid" || { echo 'Model download failed.' >&2; exit 1; }
 python3 - "$model_path" "$MODEL_SHA256" "$MODEL_BYTES" <<'PY'
 import hashlib,pathlib,sys
 target=pathlib.Path(sys.argv[1]); current=target if target.exists() else pathlib.Path(str(target)+'.part')
