@@ -18,23 +18,27 @@ import type { ProbeNode } from './story-probe.ts';
 import { contextParts, makeRequest } from './prompt.ts';
 import { addSeed, newStory, beginJob, commitTurn, active, context, history, emptyLibrary } from '../lib/library.ts';
 import type { Library, Usage } from '../lib/library.ts';
-import { checks } from '../examples/memory-checks.ts';
+import { loadScenario } from './scenarios.ts';
 
 // One memory mode of the replay; `state` is the library saved after the last completed step.
 export type ModeReport = {
   preemptions: number; compactions: { afterTurn: number }[]; through: number; state?: Library;
+  // Compactions repeated after an invalid memory, as the owner repeats /compact in the bot. Sources and checkpoints are kept.
+  compactionRetries?: number;
   answers?: { key: string; expected: string; actual: unknown; pass: boolean }[]; recallUsage?: Usage | null;
+  // With --traps: one scene per continuity trap, each written from the same final state and never committed.
+  // local/scene-judge.ts adds the verdicts.
+  traps?: { key: string; text: string; truncated: boolean }[];
+  verdicts?: { key: string; expected: string; actual: unknown; pass: boolean }[];
   error?: string; completedAt?: string;
 };
 // The report written by this probe; a resumed run trusts what an earlier run wrote.
 export type ReplayReport = {
   scenario: string; sourceHash: string; model: string; startedAt: string; scope: string;
-  modes: { plain?: ModeReport; sgr?: ModeReport }; completedAt?: string;
+  modes: { plain?: ModeReport; sgr?: ModeReport; full?: ModeReport }; completedAt?: string;
 };
 // Evidence written by story-probe.ts; only its scenario, seed and scene inputs are checked.
 type Evidence = { report?: { scenario?: string }; state: Library };
-// Every scenario module has the same exports as this one.
-type Scenario = typeof import('../examples/battle-probe.ts');
 // A recall answer after the list check; an entry that is not an object fails with a TypeError.
 type Answer = { key?: unknown; value?: unknown };
 // Codes are read from ModelError, Node or SQLite errors, which use strings; a deadline abort is recognized before that.
@@ -42,18 +46,20 @@ type Failure = { code?: string };
 
 process.umask(0o077);
 const { values } = parseArgs({ options: { source: { type: 'string' }, resume: { type: 'string' },
-  minutes: { type: 'string', default: '15' }, direct: { type: 'boolean', default: false }, mode: { type: 'string' } } });
+  minutes: { type: 'string', default: '15' }, direct: { type: 'boolean', default: false }, mode: { type: 'string' },
+  traps: { type: 'boolean', default: false }, pack: { type: 'string' } } });
 const minutes = Number(values.minutes);
-if (!values.source || !Number.isInteger(minutes) || minutes < 1 || minutes > 30) throw new Error('Use --source synthetic-evidence.json [--resume directory] [--minutes 1..30] [--direct] [--mode plain|sgr]');
-if (values.mode !== undefined && values.mode !== 'plain' && values.mode !== 'sgr') throw new Error('Unknown memory mode');
+if (!values.source || !Number.isInteger(minutes) || minutes < 1 || minutes > 30) throw new Error('Use --source synthetic-evidence.json [--resume directory] [--minutes 1..30] [--direct] [--mode plain|sgr|full] [--traps] [--pack directory]');
+// `full` never compacts: the questions are asked over the whole story. A strong model that fails them there shows
+// that the frozen scenes contradict the fixed answers.
+if (values.mode !== undefined && values.mode !== 'plain' && values.mode !== 'sgr' && values.mode !== 'full') throw new Error('Unknown memory mode');
 // One failed mode ends the run, so eval replays each mode on its own.
 const modes = values.mode ? [values.mode] as const : ['plain', 'sgr'] as const;
 const input = readFileSync(resolve(values.source), 'utf8');
 const frozen: Evidence = JSON.parse(input);
-// Checked on the next line: a missing scenario is looked up as "undefined", which is not a fixture.
-const scenario = frozen.report?.scenario as keyof typeof checks;
-if (!Object.hasOwn(checks, scenario)) throw new Error('Not a synthetic scenario');
-const fixture: Scenario = await import(`../examples/${scenario}-probe.ts`);
+// The loader refuses a name that is not a built-in scenario or a scenario of the pack.
+const scenario = String(frozen.report?.scenario);
+const fixture = await loadScenario(scenario, values.pack);
 const source = active(frozen.state);
 if (`${source.seed.title}\n${source.seed.startTime}\n${source.seed.text}` !== fixture.seed) throw new Error('Synthetic seed mismatch');
 const scenes = (history(source.story, source.branch.head) as ProbeNode[]).filter(n => n.probeTurn <= fixture.turns.length);
@@ -77,10 +83,12 @@ const provider = { async generate(request: ModelRequest) {
   for (let attempt = 0; direct && attempt < 20; attempt++) {
     try { return await direct.generate(request, { signal: deadline }); }
     catch (error) {
-      if ((error as Failure).code !== 'rate_limited') throw error;
+      // A dropped connection is retried like a busy upstream; any other failure ends the mode.
+      const failure = error as Failure & { transportCode?: string };
+      if (failure.code !== 'rate_limited' && !(failure.code === 'provider_failed' && failure.transportCode)) throw error;
       current!.preemptions++;
       save();
-      progress({ event: 'yielded', code: 'rate_limited' });
+      progress({ event: 'yielded', code: failure.code });
       // A hosted free model allows 20 requests a minute, and its upstream is often busy for minutes.
       await wait(30000, undefined, { signal: deadline });
     }
@@ -116,14 +124,37 @@ try {
         newStory(state, addSeed(state, fixture.seed).id); }
     });
     const persist = () => { current!.state = store.read('synthetic'); save(); };
+    // One uncommitted scene per trap: the real narrator request, as the bot builds it for a player's message.
+    const writeTraps = async (after: number | undefined) => {
+      for (const trap of values.traps ? fixture.traps : []) {
+        if (trap.afterTurn !== after || current!.traps?.some(done => done.key === trap.key)) continue;
+        const turn = store.mutate('synthetic', state => beginJob(state, trap.input ?? fixture.turns[trap.afterTurn!], 0));
+        let scene;
+        try { scene = await provider.generate(makeRequest(store.read('synthetic'), turn, config.maxOutputTokens)); }
+        finally { store.mutate('synthetic', state => { state.job = null; }); }
+        (current!.traps ??= []).push({ key: trap.key, text: scene.text, truncated: scene.finishReason !== 'stop' });
+        persist(); progress({ event: 'trap_scene', mode: memoryMode, characters: scene.text.length, truncated: scene.finishReason !== 'stop' });
+      }
+    };
     for (let index = current.through; index <= scenes.length; index++) {
-      if ([7, 11, 15].includes(index) && !current.compactions.some(c => c.afterTurn === index)) {
-        const job = store.mutate('synthetic', state => beginJob(state, 'Сжать.', 0));
+      if (memoryMode !== 'full' && [7, 11, 15].includes(index) && !current.compactions.some(c => c.afterTurn === index)) {
         const started = Date.now();
-        // The same rows the bot writes for a compaction: one per model request and one for the saved memory.
-        const metrics = await compactBranch({ store, userId: 'synthetic', jobId: job.id, provider,
-          config: { ...config, memoryMode, keepScenes: 4 }, signal: deadline,
-          log: (event, _code, details) => progress({ event, mode: memoryMode, ...safeErrorDetails(details) }) });
+        let metrics;
+        for (let attempt = 0; ; attempt++) {
+          const job = store.mutate('synthetic', state => beginJob(state, 'Сжать.', 0));
+          // The same rows the bot writes for a compaction: one per model request and one for the saved memory.
+          try {
+            metrics = await compactBranch({ store, userId: 'synthetic', jobId: job.id, provider,
+              config: { ...config, memoryMode, keepScenes: 4 }, signal: deadline,
+              log: (event, _code, details) => progress({ event, mode: memoryMode, ...safeErrorDetails(details) }) });
+            break;
+          } catch (error) {
+            if ((error as Failure).code !== 'invalid_memory' || attempt === 2) throw error;
+            store.mutate('synthetic', state => { state.job = null; });
+            current.compactionRetries = (current.compactionRetries ?? 0) + 1;
+            progress({ event: 'compaction_retry', mode: memoryMode, ...safeErrorDetails(error) });
+          }
+        }
         store.mutate('synthetic', state => { state.job = null; });
         const state = store.read('synthetic');
         const { story, branch } = active(state);
@@ -137,13 +168,14 @@ try {
         current.compactions.push(metric); persist(); progress({ event: 'compacted', mode: memoryMode, ...metric });
       }
       if (index === scenes.length) break;
+      await writeTraps(index);
       store.mutate('synthetic', state => {
         const job = beginJob(state, scenes[index].input, index);
         commitTurn(state, job.id, scenes[index].text);
       });
       current.through = index + 1; persist();
     }
-    const questions = checks[scenario];
+    const questions = fixture.checks;
     const job = store.mutate('synthetic', state => beginJob(state,
       'Проверка памяти, не продолжай историю. Верни JSON {"answers":[{"key":"ключ", "value":"точный ответ строкой"}]}. Без пояснений и единиц, если вопрос требует число. Неизвестное пометь unknown.\n'
         + questions.map(([key, question]) => `${key}: ${question}`).join('\n'), 0));
@@ -167,6 +199,8 @@ try {
       return { key, expected, actual, pass: typeof actual === 'string' && actual.trim() === expected };
     });
     current.recallUsage = result.usage;
+    store.mutate('synthetic', state => { state.job = null; });
+    await writeTraps(undefined);
     current.completedAt = new Date().toISOString();
     store.mutate('synthetic', state => { state.job = null; }); persist();
     progress({ event: 'mode_complete', mode: memoryMode, passed: current.answers.filter(a => a.pass).length, total: questions.length });
