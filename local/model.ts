@@ -1,7 +1,12 @@
 import type { Usage } from '../lib/library.ts';
 import type { ModelConfig } from './config.ts';
 import { createClaude } from './claude.ts';
-import { createLlama } from './llama.ts';
+import { createLlama, createOpenAI } from './llama.ts';
+import { createBudget, channelFor, capsFor } from './budget.ts';
+import { resolve } from 'node:path';
+
+// One ledger for every probe on this computer; *.sqlite is ignored by Git.
+export const BUDGET_PATH = resolve(import.meta.dirname, '..', 'eval-usage.sqlite');
 
 export type ChatMessage = { role: 'user' | 'assistant'; content: string };
 export type ModelRequest = {
@@ -23,5 +28,9 @@ export type Provider = {
 export function createModel(config: ModelConfig & { dbPath: string }): Provider {
   if (config.provider === 'claude-code') return createClaude(config);
   if (config.provider === 'llama-cpp') return createLlama(config);
+  if (config.provider === 'openai-compatible') {
+    const channel = channelFor(config.baseUrl!, config.model);
+    return createOpenAI(config, { budget: createBudget(BUDGET_PATH, channel, capsFor(channel, config.budget)) });
+  }
   throw new Error('Unsupported model provider');
 }

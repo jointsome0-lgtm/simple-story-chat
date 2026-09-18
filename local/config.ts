@@ -4,9 +4,11 @@ import { resolve } from 'node:path';
 
 export type Env = NodeJS.Dict<string>;
 export type ModelConfig = {
-  provider: 'claude-code' | 'llama-cpp'; model: string; baseUrl: string | undefined; apiKey: string; temperature: number;
+  provider: 'claude-code' | 'llama-cpp' | 'openai-compatible'; model: string; baseUrl: string | undefined; apiKey: string; temperature: number;
   memoryMode: 'plain' | 'sgr'; repairCoverage: boolean; timeoutMs: number; contextTokens: number; maxOutputTokens: number;
   compactAtTokens: number; keepScenes: number;
+  // Overrides of the daily cap of a hosted API's channel; see budget.ts.
+  budget: { requests: number | undefined; tokens: number | undefined };
 };
 export type GpuConfig = { instanceId: string; apiKey: string; sshHost: string; idleMinutes: number };
 export type Config = ModelConfig & { gpu: GpuConfig | undefined; token: string; allowedUsers: Set<string>; ownerId: string; dbPath: string };
@@ -30,6 +32,16 @@ export function modelBaseUrl(value: string | undefined): string {
   return url.origin;
 }
 
+// The versioned root of a hosted API, such as https://openrouter.ai/api/v1. Unlike the llama.cpp root it has a path.
+export function apiBaseUrl(value: string | undefined): string {
+  let url;
+  try { url = new URL(String(value)); } catch { throw new Error('Set SIMPLE_CHAT_BASE_URL to the API root, such as https://openrouter.ai/api/v1'); }
+  if (url.username || url.password || url.search || url.hash || url.protocol !== 'https:') {
+    throw new Error('SIMPLE_CHAT_BASE_URL must be an HTTPS API root without credentials');
+  }
+  return url.origin + url.pathname.replace(/\/+$/, '');
+}
+
 function modelConfig(env: Env): ModelConfig {
   const integer = (name: string, fallback: number, min: number, max: number) => {
     const value = Number(env[name] || fallback);
@@ -37,13 +49,15 @@ function modelConfig(env: Env): ModelConfig {
     return value;
   };
   const provider = env.SIMPLE_CHAT_PROVIDER || 'claude-code';
-  if (provider !== 'claude-code' && provider !== 'llama-cpp') throw new Error('Unsupported SIMPLE_CHAT_PROVIDER');
-  const baseUrl = provider === 'llama-cpp' ? modelBaseUrl(env.SIMPLE_CHAT_BASE_URL) : undefined;
+  if (provider !== 'claude-code' && provider !== 'llama-cpp' && provider !== 'openai-compatible') throw new Error('Unsupported SIMPLE_CHAT_PROVIDER');
+  const baseUrl = provider === 'llama-cpp' ? modelBaseUrl(env.SIMPLE_CHAT_BASE_URL)
+    : provider === 'openai-compatible' ? apiBaseUrl(env.SIMPLE_CHAT_BASE_URL) : undefined;
   const apiKey = env.SIMPLE_CHAT_API_KEY?.trim() || '';
   if (/[\r\n]/.test(apiKey)) throw new Error('Invalid SIMPLE_CHAT_API_KEY');
   if (baseUrl?.startsWith('https:') && !apiKey) throw new Error('Set SIMPLE_CHAT_API_KEY for a remote HTTPS server');
   const temperature = Number(env.SIMPLE_CHAT_TEMPERATURE || '0.8');
   if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) throw new Error('Invalid SIMPLE_CHAT_TEMPERATURE');
+  if (provider === 'openai-compatible' && !env.SIMPLE_CHAT_MODEL) throw new Error('Set SIMPLE_CHAT_MODEL for the hosted API');
   const model = env.SIMPLE_CHAT_MODEL || (provider === 'llama-cpp' ? 'gemma-4-31b-heretic-q6k' : 'claude-haiku-4-5-20251001');
   if (!/^[A-Za-z0-9][A-Za-z0-9_./:-]{0,199}$/.test(model)) throw new Error('Invalid SIMPLE_CHAT_MODEL');
   const contextTokens = integer('SIMPLE_CHAT_CONTEXT_TOKENS', 65536, 8192, 65536);
@@ -58,8 +72,10 @@ function modelConfig(env: Env): ModelConfig {
     provider, model, baseUrl, apiKey, temperature, memoryMode, repairCoverage: repairCoverage === 'true',
     timeoutMs: integer('SIMPLE_CHAT_MODEL_TIMEOUT_MS', 300000, 1000, 1800000),
     contextTokens, maxOutputTokens,
-    compactAtTokens: integer('SIMPLE_CHAT_COMPACT_AT_TOKENS', Math.min(provider === 'llama-cpp' ? 44000 : 54000, maxInput), 2048, maxInput),
+    compactAtTokens: integer('SIMPLE_CHAT_COMPACT_AT_TOKENS', Math.min(provider === 'claude-code' ? 54000 : 44000, maxInput), 2048, maxInput),
     keepScenes: integer('SIMPLE_CHAT_KEEP_SCENES', 4, 1, 20),
+    budget: { requests: env.SIMPLE_CHAT_BUDGET_REQUESTS ? integer('SIMPLE_CHAT_BUDGET_REQUESTS', 0, 0, 1e9) : undefined,
+      tokens: env.SIMPLE_CHAT_BUDGET_TOKENS ? integer('SIMPLE_CHAT_BUDGET_TOKENS', 0, 0, 1e12) : undefined },
   };
 }
 
@@ -88,6 +104,8 @@ export function loadConfig(directory = process.cwd(), inherited: Env = process.e
   const allowedUsers = new Set((env.SIMPLE_CHAT_ALLOWED_USER_IDS || '').split(',').map(s => s.trim()).filter(Boolean));
   if (!allowedUsers.size || [...allowedUsers].some(id => !/^\d+$/.test(id))) throw new Error('Set numeric SIMPLE_CHAT_ALLOWED_USER_IDS in .env');
   const model = modelConfig(env);
+  // A hosted API may log requests and train on them. It serves synthetic probes and never the bot's real stories.
+  if (model.provider === 'openai-compatible') throw new Error('The openai-compatible provider is for synthetic probes only');
   const gpu = gpuConfig(env, model.provider);
   if (gpu && model.baseUrl !== 'http://127.0.0.1:8080') throw new Error('Managed GPU requires the local SSH tunnel on port 8080');
   // The bot log marks the owner's rows with this ID. A mistyped one would mark them as someone else's without a word.

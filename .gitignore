@@ -4,6 +4,7 @@
 .env.*
 !.env.example
 !.env.gpu.example
+!.env.eval.example
 config.local.json
 handlers/_configure.js
 
