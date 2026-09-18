@@ -14,7 +14,8 @@ import { BUDGET_PATH } from './model.ts';
 
 type Env = NodeJS.Dict<string>;
 // A cell of the result: one model, one scenario, one memory mode.
-type Cell = { passed: number; total: number; error?: string; failedKeys: string[]; scene?: Part; compactionRetries?: number };
+// readingMisses: failed numeric questions whose answer stood in the memory message, so the memory was right and the reading was not.
+type Cell = { passed: number; total: number; error?: string; failedKeys: string[]; readingMisses?: string[]; scene?: Part; compactionRetries?: number };
 // With --judge: the verdicts on the trap scenes this model wrote after the replay.
 type Part = { passed: number; total: number; error?: string; failedKeys: string[] };
 
@@ -127,6 +128,7 @@ async function replay(spec: string): Promise<Record<string, Record<string, Cell>
       // A mode that did not finish answers nothing: a model that cannot keep a memory scores zero here.
       cells[scenario][mode] = { passed: answers.filter(a => a.pass).length, total: checks[scenario].length,
         failedKeys: checks[scenario].map(([key]) => key).filter(key => !answers.some(a => a.key === key && a.pass)),
+        readingMisses: answers.filter(a => !a.pass && a.stated === 'memory').map(a => a.key),
         ...(result?.completedAt ? {} : { error: result?.error ?? (run.code || 'probe_failed') }),
         ...(result?.compactionRetries ? { compactionRetries: result.compactionRetries } : {}) };
       const questions = fixtures[scenario].traps.flatMap(trap => trap.questions.map(([key]) => key));

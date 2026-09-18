@@ -25,7 +25,9 @@ export type ModeReport = {
   preemptions: number; compactions: { afterTurn: number }[]; through: number; state?: Library;
   // Compactions repeated after an invalid memory, as the owner repeats /compact in the bot. Sources and checkpoints are kept.
   compactionRetries?: number;
-  answers?: { key: string; expected: string; actual: unknown; pass: boolean }[]; recallUsage?: Usage | null;
+  // `stated` is set for a numeric answer of two digits or more: whether the number stands in the memory message or in
+  // the scenes kept as text. A sum stated nowhere had to be added at recall; a stated one that failed is a reading miss.
+  answers?: { key: string; expected: string; actual: unknown; pass: boolean; stated?: 'memory' | 'scenes' | 'none' }[]; recallUsage?: Usage | null;
   // With --traps: one scene per continuity trap, each written from the same final state and never committed.
   // local/scene-judge.ts adds the verdicts.
   traps?: { key: string; text: string; truncated: boolean }[];
@@ -194,9 +196,15 @@ try {
     if (!Array.isArray(parsed.answers) || parsed.answers.length !== questions.length || new Set((parsed.answers as Answer[]).map(a => a.key)).size !== questions.length) {
       throw Object.assign(new Error(), { code: 'invalid_recall' });
     }
+    // No model reads this: the number is looked up in the text the recall request carried, digit groups joined.
+    const parts = contextParts(store.read('synthetic'), job);
+    const digits = (messages: { content: string }[]) => messages.map(message => message.content).join('\n').replace(/(?<=\d)[\s\u00a0\u202f](?=\d{3}\b)/g, '');
+    const [inMemory, inScenes] = [digits(parts.memory), digits(parts.tail)];
+    const stands = (text: string, value: string) => new RegExp(`(?<![\\d.,:-])${value}(?![\\d:-])`).test(text);
     current.answers = questions.map(([key, , expected]) => {
       const actual = (parsed.answers as Answer[]).find(a => a.key === key)?.value;
-      return { key, expected, actual, pass: typeof actual === 'string' && actual.trim() === expected };
+      const stated = /^\d{2,}$/.test(expected) ? { stated: stands(inMemory, expected) ? 'memory' as const : stands(inScenes, expected) ? 'scenes' as const : 'none' as const } : {};
+      return { key, expected, actual, pass: typeof actual === 'string' && actual.trim() === expected, ...stated };
     });
     current.recallUsage = result.usage;
     store.mutate('synthetic', state => { state.job = null; });
