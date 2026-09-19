@@ -11,7 +11,7 @@ import type { Provider } from './model.ts';
 import { createClaude } from './claude.ts';
 import { generateScene, compactBranch } from './generation.ts';
 import { normalizeScene } from './prompt.ts';
-import { contextStats, requestStamp, CONTINUE } from './context.ts';
+import { contextStats, requestStamp, continueInput } from './context.ts';
 import { addSeed, newStory, beginJob, commitTurn, active, context, history, saveCheckpoint } from '../lib/library.ts';
 import type { Library, SceneNode } from '../lib/library.ts';
 
@@ -76,7 +76,9 @@ progress({ event: previous ? 'resumed' : 'started', directory, model: config.mod
 async function compactAfter(turn: number) {
   if (![7, 11, 15].includes(turn) || report.compactions.some(c => c.afterTurn === turn)) return;
   const before = contextStats(store.read('synthetic'), config).request.estimatedTokens;
-  const job = store.mutate('synthetic', state => { const j = beginJob(state, CONTINUE, Date.now()); j.kind = 'compact'; return j; });
+  const job = store.mutate('synthetic', state => {
+    const j = beginJob(state, continueInput(state, active(state).story.id), Date.now()); j.kind = 'compact'; return j;
+  });
   const started = Date.now();
   const compacted = await compactBranch({ store, userId: 'synthetic', jobId: job.id, provider, config });
   store.mutate('synthetic', state => { state.job = null; });

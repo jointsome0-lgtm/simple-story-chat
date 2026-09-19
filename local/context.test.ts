@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { emptyLibrary, addSeed, newStory, beginJob, commitTurn, commitMemory, saveCheckpoint, fork } from '../lib/library.ts';
 import type { Fact } from '../lib/library.ts';
-import { contextStats, requestBudget, requestStamp, CONTINUE } from './context.ts';
+import { contextStats, estimateTokens, requestBudget, requestStamp, continueInput } from './context.ts';
 import { contextParts, makeRequest } from './prompt.ts';
 
 const config = { model: 'test-model', contextTokens: 65536, maxOutputTokens: 4096 };
@@ -72,7 +72,7 @@ test('prefix includes only the checkpoint memory chain and separates unsummarize
   commitMemory(state, job.id, [turns[2].nodeId], { facts: [{ text: 'Будущий инкремент не относится к старой точке.' } as Fact] });
   assert.deepEqual(contextStats(state, config, selected), before);
   assert.equal(contextStats(state, config).memory.count, 2);
-  const request = makeRequest(state, { storyId: story.id, ...checkpoint, input: CONTINUE }, 4096);
+  const request = makeRequest(state, { storyId: story.id, ...checkpoint, input: continueInput(state, story.id) }, 4096);
   assert.match(JSON.stringify(request), /Память о двух сценах/);
   assert.doesNotMatch(JSON.stringify(request), /Будущий инкремент/);
   assert.equal(branch.memory, Object.keys(story.memories).at(-1));
@@ -80,7 +80,7 @@ test('prefix includes only the checkpoint memory chain and separates unsummarize
 
 test('serialized sizes match the request and token budgets include the reply reserve', () => {
   const { state, story, branch } = fixture();
-  const point = { storyId: story.id, head: branch.head, memory: branch.memory, input: CONTINUE };
+  const point = { storyId: story.id, head: branch.head, memory: branch.memory, input: continueInput(state, story.id) };
   const request = makeRequest(state, point, config.maxOutputTokens);
   const budget = requestBudget(request, config.contextTokens);
   const measured = contextStats(state, config);
@@ -119,7 +119,7 @@ test('memory text preserves exact facts and provenance without changing the stor
 
 test('input estimates use measured input only for the same model, rules and memory', () => {
   const { state, story, branch } = fixture();
-  const point = { storyId: story.id, head: branch.head, memory: branch.memory, input: CONTINUE };
+  const point = { storyId: story.id, head: branch.head, memory: branch.memory, input: continueInput(state, story.id) };
   const request = makeRequest(state, point, config.maxOutputTokens);
   story.nodes[branch.head!].requestContext = requestStamp(request, config.model, branch.memory);
   assert.equal(contextStats(state, config).request.estimatedTokens, 300);
@@ -128,6 +128,22 @@ test('input estimates use measured input only for the same model, rules and memo
   const job = beginJob(state, 'Дальше.', 4);
   commitMemory(state, job.id, [Object.keys(story.nodes)[0]], { facts: [{ text: 'Сжатая сцена.' } as Fact] });
   assert.equal(contextStats(state, config).request.estimateSource, 'bytes');
+});
+
+test('a Han or kana character counts as a token, Latin and Cyrillic keep the byte ratio', () => {
+  const bytes = (text: string) => Math.ceil(Buffer.byteLength(text, 'utf8') / 4);
+  const latin = 'The keeper lit the lamp in the tower.';
+  const cyrillic = 'Смотритель зажёг лампу на башне.';
+  const hangul = '등대의 관리인이 등을 켰다.';
+  assert.equal(estimateTokens(latin), bytes(latin));
+  assert.equal(estimateTokens(cyrillic), bytes(cyrillic));
+  // Hangul already fits under four bytes per token; Han and kana do not, and are measured at about one token each.
+  assert.equal(estimateTokens(hangul), bytes(hangul));
+  assert.equal(estimateTokens('守塔人点亮了灯'), 7);
+  assert.equal(estimateTokens('守り手はランプをつけた'), 11);
+  // A Chinese story of the size at which the bot compacts is no longer estimated a fifth short.
+  const scene = '守塔人点亮了灯，海湾里的水静止不动。'.repeat(200);
+  assert.ok(estimateTokens(scene) > bytes(scene) * 1.3);
 });
 
 test('older checkpoints without usage remain unknown, and stale references are rejected', () => {

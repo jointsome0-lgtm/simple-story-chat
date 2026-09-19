@@ -1,10 +1,10 @@
 import { UserError, id, active, addSeed, newStory, fork, beginJob, commitTurn, saveCheckpoint,
   deleteSeed, deleteBranch, history, context, jobTarget, setLanguage } from '../lib/library.ts';
 import type { Job, Library, SceneNode } from '../lib/library.ts';
-import { normalizeScene } from './prompt.ts';
+import { normalizeScene, storyNarration } from './prompt.ts';
 import { createChat } from './telegram.ts';
 import type { Chat, InlineKeyboard, Screen, TelegramApi } from './telegram.ts';
-import { CONTINUE, contextStats, requestStamp } from './context.ts';
+import { continueInput, contextStats, requestStamp } from './context.ts';
 import type { ContextSelection, ContextStats } from './context.ts';
 import { generateScene, compactBranch } from './generation.ts';
 import { messageText, seedInput } from './incoming.ts';
@@ -178,7 +178,7 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
       }
       requireGpu(t);
       state.ui = null;
-      const job = beginJob(state, CONTINUE, Date.now());
+      const job = beginJob(state, continueInput(state, story.id), Date.now());
       job.kind = 'compact';
       return { job };
     }
@@ -210,10 +210,10 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
     let input = text;
     if (verb === 'start') {
       requireGpu(t);
-      newStory(state, a, t.labels);
-      // Sent to the model and kept as the scene's input, so it is not part of the interface catalogs.
-      input = 'Начни историю из сида. Покажи первую сцену.';
-    } else if (action === 'continue') input = CONTINUE;
+      const { story } = newStory(state, a, t.labels);
+      // Sent to the model and kept as the scene's input, so it follows the language of the seed, not of the menus.
+      input = storyNarration(state, story.id).startStory;
+    } else if (action === 'continue') input = continueInput(state, active(state).story.id);
     else if (action) throw refuse(t, 'staleButton');
     if (!input) return { screen: { text: t.notices.textOnly } };
     if (!state.active) return { screen: render(state, 'home') };

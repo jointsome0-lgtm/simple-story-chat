@@ -1,6 +1,6 @@
 import { UserError } from '../lib/library.ts';
 import type { Branch, Library, RequestStamp } from '../lib/library.ts';
-import { contextParts, makeRequest } from './prompt.ts';
+import { contextParts, makeRequest, storyNarration } from './prompt.ts';
 import type { StoryPoint } from './prompt.ts';
 import type { ChatMessage, ModelRequest } from './model.ts';
 import { createHash } from 'node:crypto';
@@ -13,23 +13,33 @@ export type ContextSelection = { storyId?: string; branchId?: string; checkpoint
 export type ContextStats = ReturnType<typeof contextStats>;
 type Measure = { bytes: number; estimatedTokens: number };
 
-export const CONTINUE = 'Продолжай историю самостоятельно с текущего места.';
+// The message the bot sends for "continue on your own", in the language of the story (story-text.ts).
+export const continueInput = (state: Library, storyId: string) => storyNarration(state, storyId).continueStory;
 const CLI_RESERVE = 4096;
 const count = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
 // Missing keys, including null and undefined, are simply not found.
 const own = <T>(object: Record<string, T> | undefined, key: string | null | undefined) =>
   object && Object.hasOwn(object, key as string) ? object[key as string] : undefined;
+// UTF-8 bytes over four is the ratio the bot was tuned on, and it stays that for Latin, Cyrillic and Hangul text. A Han
+// or kana character takes three bytes but about one token, so it counts as four. Measured on 19 September 2026 against
+// provider-reported input tokens, bytes per token: en 4.9, ru 5.7, ko 4.3, ja 3.9, zh 3.6 on Gemma 4 31B and
+// 5.0 / 5.8 / 4.0 / 3.3 / 3.3 on gpt-5.4-mini. Without the correction a Japanese or Chinese story reaches the
+// compaction threshold about a fifth of a window late, that is, after the context is already full.
+const CJK = /[⺀-〿぀-ヿ㐀-䶿一-鿿豈-﫿︰-﹏＀-￯]|[\u{20000}-\u{3ffff}]/gu;
+export const estimateTokens = (text: string) =>
+  Math.ceil((Buffer.byteLength(text, 'utf8') + (text.match(CJK) ?? []).length) / 4);
+const requestText = (request: ModelRequest) => request.system + JSON.stringify({ messages: request.messages });
 const measure = (messages: ChatMessage[]): Measure => {
-  const bytes = messages.length ? Buffer.byteLength(JSON.stringify(messages), 'utf8') : 0;
+  const text = messages.length ? JSON.stringify(messages) : '';
   // Component sizes are approximate; live input usage is checked separately.
-  return { bytes, estimatedTokens: Math.ceil(bytes / 4) };
+  return { bytes: Buffer.byteLength(text, 'utf8'), estimatedTokens: estimateTokens(text) };
 };
 const sum = (a: Measure, b: Measure): Measure => ({ bytes: a.bytes + b.bytes, estimatedTokens: a.estimatedTokens + b.estimatedTokens });
 
 export function requestBudget(request: ModelRequest, contextTokens: number) {
   const input = JSON.stringify({ messages: request.messages });
   const inputBytes = Buffer.byteLength(request.system + input, 'utf8');
-  const inputTokens = count(request.estimatedInputTokens) ?? Math.ceil(inputBytes / 4) + CLI_RESERVE;
+  const inputTokens = count(request.estimatedInputTokens) ?? estimateTokens(requestText(request)) + CLI_RESERVE;
   const limitTokens = Math.max(0, contextTokens - request.maxOutputTokens);
   return { input, inputBytes, inputTokens, limitTokens, remainingTokens: Math.max(0, limitTokens - inputTokens) };
 }
@@ -49,9 +59,10 @@ export function estimateRequest(state: Library, point: StoryPoint, request: Mode
       && previous.memory === stamp.memory && previous.systemHash === stamp.systemHash) {
     // The previous measured input includes CLI overhead. Only the changed text
     // needs estimating; never carry this anchor across a compaction or model.
+    // The delta is a scene or two, so the plain byte ratio is close enough even where the script is denser.
     return { tokens: Math.max(0, Math.ceil(measured + (stamp.inputBytes - previous.inputBytes) / 4)), source: 'usage' };
   }
-  return { tokens: Math.ceil(stamp.inputBytes / 4) + CLI_RESERVE, source: 'bytes' };
+  return { tokens: estimateTokens(requestText(request)) + CLI_RESERVE, source: 'bytes' };
 }
 
 export function contextStats(state: Library, config: ContextConfig, selection: ContextSelection = {}) {
@@ -68,7 +79,7 @@ export function contextStats(state: Library, config: ContextConfig, selection: C
   const memory = { ...measure(parts.memory), count: parts.memoryCount };
   const tail = { ...measure(parts.tail), count: parts.sceneCount };
   const prefix = sum(seed, memory);
-  const request = makeRequest(state, { ...ref, input: CONTINUE }, config.maxOutputTokens);
+  const request = makeRequest(state, { ...ref, input: continueInput(state, storyId) }, config.maxOutputTokens);
   const estimate = estimateRequest(state, ref, request, config);
   request.estimatedInputTokens = estimate.tokens;
   const budget = requestBudget(request, config.contextTokens);

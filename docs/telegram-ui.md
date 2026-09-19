@@ -22,7 +22,7 @@ Stories made from the same seed share its title, so they are called «Истор
 
 ## Interface language
 
-What the bot itself says (screens, buttons, refusals, the compaction status, the command menu) comes from a catalog per language in `local/text/`. The button labels quoted in this document are the Russian ones. Stories are not affected: prompts, memory, the eval and the language a story is written in stay as they were, and the language of a story still comes from its seed and the author's messages.
+What the bot itself says (screens, buttons, refusals, the compaction status, the command menu) comes from a catalog per language in `local/text/`. The button labels quoted in this document are the Russian ones. The language of a story is a separate choice, made by its seed, not by this picker: see "Story language" below.
 
 - `local/text/ru.ts` is the Russian catalog and defines the shape, `Messages`: nested groups by screen, where a value is a string or a function of typed arguments. Plural forms and word order live inside those functions, so the code never glues a sentence from fragments. Comments above the entries tell a translator where a text appears and what it must keep (an emoji at the start, a length, a date format). `local/text/en.ts` is `const en: Messages`.
 - `local/text.ts` holds `Lang` (`ru`, `en`, `zh`, `ko`, `ja`), the languages' own names for the picker, `texts(lang)`, `langFromTelegram(code)` and the command lists for `setMyCommands` (English by default, plus one per registered language).
@@ -32,6 +32,16 @@ What the bot itself says (screens, buttons, refusals, the compaction status, the
 - **Fallbacks:** a library without `language` predates the choice and is shown in Russian, whatever Telegram reports. A new user (nothing handled and nothing created yet) gets `langFromTelegram(from.language_code)`: `ru`, `zh`, `ko`, `ja` by prefix, anything else or nothing → `en`. A stored language that has no catalog yet is shown in English and switches by itself once its catalog is registered.
 - The menu has «🌐 Language», the same label in every language, and `/language` opens the same picker (`view:language`). It lists the registered languages by their own names and marks the one shown; `lang:<code>` stores the choice and shows the menu in it. The picker also works during a seed draft and a model job.
 - Stored names are not translated: the labels of checkpoints and branches the bot creates («Сцена 3», “Scene 3”) are written in the interface language of that moment and stay as stored.
+
+## Story language
+
+Everything the model reads and writes — the narrator's rules, the memory extraction rules, the headers around the seed and the accumulated memory, and the two messages the code itself sends («Начни историю из сида», «Продолжай историю…») — comes from a catalog per language in `local/story-text/`. Interface language and story language are independent: a user with Korean menus who writes a Russian seed gets Russian scenes, and the other way round.
+
+- The seed decides. `detectStoryLanguage` in `local/story-text.ts` counts the scripts of the seed's title and body: Cyrillic is `ru`, Hangul `ko`, kana (with any Han) `ja`, Han without kana `zh`, anything else `en`. Counting, not the first letter, so a quoted name in another script changes nothing. The choice is derived on every request, never stored, so old libraries need no migration and the request prefix stays stable for a server-side cache.
+- `en` is also the fallback for a seed in a language without a catalog: its rules tell the narrator to follow the language of the seed, so a Spanish or German seed gets Spanish or German scenes from English rules.
+- `local/story-text/ru.ts` is the production prompt measured by the improvement loop and defines the shape, `Narration`; it may change only through `docs/improve-loop.md`. The other four are faithful translations of it — same rules, same order — with the language named in the "write in …" clause. `zh`, `ko` and `ja` have not been reviewed by a native speaker.
+- **To add a language:** write `local/story-text/<lang>.ts` as `export const <lang>: Narration = { … }`, add it to `StoryLang` and `CATALOGS` in `local/story-text.ts`, and give `detectStoryLanguage` a rule for its script. `story-text.test.ts` compares the catalogs' keys and checks that each keeps the untranslatable parts: the scene format `YYYY-MM-DD HH:MM`, the JSON field names, the enum values and the evidence ids.
+- The token estimate follows the script too (`estimateTokens` in `local/context.ts`): UTF-8 bytes over four, plus one byte per Han or kana character, which measures at about one token each. Without it a Chinese or Japanese story reaches the compaction threshold about a fifth of a window late.
 
 ## Model and manual compaction
 

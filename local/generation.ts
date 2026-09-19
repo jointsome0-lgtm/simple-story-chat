@@ -8,6 +8,7 @@ import type { ErrorDetails, Log } from './model-error.ts';
 import { ModelError, errorCode, safeErrorDetails } from './model-error.ts';
 import type { GenerateControls, GenerationResult, ModelRequest, Provider } from './model.ts';
 import { summaryRequest, supplementRequest, parseMemory, inspectMemory } from './memory.ts';
+import { seedLanguage } from './story-text.ts';
 import type { Store } from './store.ts';
 
 // Only the configuration fields generation reads; the bot and probes pass their full configuration.
@@ -63,6 +64,8 @@ async function extractAndSave({ store, userId, jobId, provider, config, signal, 
 }) {
   const load = () => loadTarget(store, userId, jobId, signal);
   const target = load();
+  // The story's own language, from its seed: a memory increment is written for the narrator to read.
+  const lang = seedLanguage(target.seed);
   let nodes = context(target.story, target.branch).recent.slice(0, -(config.keepScenes ?? 4));
   if (!nodes.length) throw new ModelError('nothing_to_compact');
   for (let attempt = 0; attempt < 8; attempt++) {
@@ -93,7 +96,7 @@ async function extractAndSave({ store, userId, jobId, provider, config, signal, 
     load();
     progress('validating');
     if (config.repairCoverage && (config.memoryMode ?? 'plain') === 'plain') {
-      const draft = inspectMemory(result, nodes);
+      const draft = inspectMemory(result, nodes, 'plain', lang);
       if (draft.missingSceneIds.length) {
         const missing = new Set(draft.missingSceneIds);
         const subset = nodes.filter(node => missing.has(node.id));
@@ -103,7 +106,7 @@ async function extractAndSave({ store, userId, jobId, provider, config, signal, 
         const repair = await extract(subset, supplementRequest(target, nodes, draft));
         load();
         progress('validating');
-        const extra = parseMemory(repair, subset);
+        const extra = parseMemory(repair, subset, 'plain', lang);
         const positions = new Map(nodes.map((node, index) => [node.id, index]));
         // A fact covering an entire transition belongs after its latest source;
         // putting it at the first source can precede an intermediate correction.
@@ -114,7 +117,7 @@ async function extractAndSave({ store, userId, jobId, provider, config, signal, 
           usage: combinedUsage(result.usage, repair.usage) };
       }
     }
-    const delta = parseMemory(result, nodes, config.memoryMode);
+    const delta = parseMemory(result, nodes, config.memoryMode ?? 'plain', lang);
     const covered = nodes.map(node => node.id);
     progress('saving');
     const saved = store.mutate(userId, state => {

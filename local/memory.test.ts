@@ -28,7 +28,7 @@ function extraction() {
 }
 const result = (data: unknown): GenerationResult => ({ text: JSON.stringify(data), finishReason: 'stop' });
 test('SGR keeps cancelled quantities, resolves sources mechanically and stores evidence separately', () => {
-  const parsed = parseMemory(result(extraction()), nodes, 'sgr');
+  const parsed = parseMemory(result(extraction()), nodes, 'sgr', 'ru');
   assert.match(parsed.facts[0].text, /^Отменено \/ не выполнено: .*40/);
   assert.deepEqual(parsed.facts.map(f => f.source), [['n1'], ['n2']]);
   assert.equal((parsed.sgr!.evidence[2] as { quote: string }).quote, 'Он сыграл 4.Nf3.');
@@ -49,9 +49,9 @@ test('SGR rejects fabricated quotes, missing scene coverage, ignored conflicts, 
   ];
   for (const mutate of mutations) {
     const data = extraction(); mutate(data);
-    assert.throws(() => parseMemory(result(data), nodes, 'sgr'), { code: 'invalid_memory' });
+    assert.throws(() => parseMemory(result(data), nodes, 'sgr', 'ru'), { code: 'invalid_memory' });
   }
-  assert.throws(() => parseMemory({ ...result(extraction()), finishReason: 'length' }, nodes, 'sgr'), { code: 'invalid_memory' });
+  assert.throws(() => parseMemory({ ...result(extraction()), finishReason: 'length' }, nodes, 'sgr', 'ru'), { code: 'invalid_memory' });
 });
 test('three SGR increments preserve checkpoints, exclude audit quotes from prompts and roll back invalid memory', async t => {
   const store = new Store(':memory:'); t.after(() => store.close());
