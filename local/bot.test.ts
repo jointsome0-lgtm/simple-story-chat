@@ -482,6 +482,30 @@ test('a slow status never lands after the scene text or the final message', asyn
   assert.deepEqual(order, ['⏳ Очередь к модели: перед вами 2 запроса.', 'scene', 'final']);
 });
 
+test('a turn cancelled while its status is in flight sends no late scene text', async t => {
+  let release: (() => void) | undefined;
+  let held = false;
+  let f: ReturnType<typeof fixture>;
+  f = fixture(t, {
+    hold: (method, payload) => {
+      if (method !== 'sendRichMessageDraft' || held || !payload.rich_message.markdown.startsWith('⏳')) return undefined;
+      held = true;
+      return new Promise<void>(resolve => { release = resolve; });
+    },
+    generate: async (request, controls) => {
+      controls.onWait?.(1);
+      await new Promise(resolve => setImmediate(resolve));
+      controls.onStart?.();
+      // The person cancels while the status is still in flight, then the status goes out.
+      setTimeout(async () => { await f.bot.handle(f.message('/cancel')); release!(); }, 10);
+      await controls.onText('2026-08-02 20:00\n\nПоздний текст.');
+      throw new ModelError('cancelled');
+    },
+  });
+  await f.start();
+  assert.ok(!f.sent.some(m => m.method === 'sendRichMessageDraft' && m.payload.rich_message.markdown.includes('Поздний текст')));
+});
+
 test('model and percentage stay above Markdown; full context is on demand and never enters narrative', async t => {
   const text = '2026-08-02 20:00\n\n**Лодка** качнулась. *Тихо*.\n\n> На берег!\n\n- Фонарь\n- Весло';
   const f = fixture(t, { generate: async (request, controls) => {

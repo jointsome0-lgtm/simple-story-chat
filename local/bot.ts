@@ -322,7 +322,11 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
           if (measured) measured.request.estimatedTokens = request.estimatedInputTokens!;
           const onText = chat.preview(current.id, scenePrefix(measured, modelInfo, state.language));
           return async delta => {
-            if (!over) await endStatus();
+            if (!over) {
+              await endStatus();
+              // The turn may have been cancelled or replaced while the status was in flight.
+              if (controller.signal.aborted || store.read(userId).job?.id !== job.id) return;
+            }
             return onText(delta);
           };
         },
