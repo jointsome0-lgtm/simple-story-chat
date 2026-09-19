@@ -2,6 +2,44 @@
 
 Every step of the loop from [improve-loop.md](improve-loop.md): date, hypothesis, change, numbers before and after per model, decision. Rejected hypotheses are recorded too. New entries go on top.
 
+## 2026-09-19 · Opus 5 · the story system in the language of the seed
+
+The owner's task: a user who writes a seed and turns in English, Chinese, Korean or Japanese gets scenes and memory in that language with the same continuity discipline, and Russian gets no worse. Until now the narrator's rules, the memory rules, the headers around the seed and memory, and the two messages the code writes («Начни историю из сида…», «Продолжай историю…») were Russian for every story. The only language rule was «Пиши по-русски, если сид не задаёт другой язык» ("write in Russian unless the seed sets another language").
+
+Hypothesis: with rules and headers in Russian, a model writes a non-Russian story's memory, and some of its scenes, in Russian. The fix is to give each story the prompts of its own language.
+
+Change: `local/story-text/` has one catalog per language. `ru.ts` is the production prompt copied verbatim. `en`, `zh`, `ko` and `ja` are faithful translations: the same rules in the same order, with the language named in the "write in …" clause. `en` is also the fallback for a seed in any other language, and its rules say to follow the seed. `detectStoryLanguage` counts the scripts in the seed's title and body. It runs on every request and nothing is stored. It is separate from the interface language. `estimateTokens` in `context.ts` counts a Han or kana character as four bytes instead of three (details under limitations).
+
+Russian: for a Cyrillic seed, the scene request, the plain memory request and the sgr memory request are byte-for-byte identical to `331f3ec`. This was checked by building all three with the old and the new code on one synthetic story. No Russian eval was run: identical requests can only show the noise, so the result that the holdout pack cannot see a Russian change is by construction.
+
+Measurement pack: `packs/language/` is the open `battle` scenario translated into English (`battle-en`) and Korean (`battle-ko`), including the 16 frozen scenes, by Opus 5 agents (`authors: ["opus-5"]`). Keys and expected answers are unchanged, and `eval ceiling` with `gpt-5.4` is 8/8 on both. The pack is new, unreviewed and not part of the meter. Baseline = `331f3ec` (Russian prompts) and after = this change, both run in parallel on the same pack. Settings: `--mode plain --judge claude:claude-opus-5`, models `claude:claude-haiku-4-5-20251001` and `openai:gpt-5.4-mini`. English ran twice, Korean once. Paid Gemma was not used: its channel was nearly exhausted today.
+
+Memory / scenes (judge), per run:
+
+| model | scenario | before | after |
+| --- | --- | --- | --- |
+| Haiku 4.5 | battle-en | 8/8, 14/15; failed `provider_failed` | 7/8, 14/15; 8/8, 14/15 |
+| Haiku 4.5 | battle-ko | failed `provider_failed` | failed `provider_failed` |
+| gpt-5.4-mini | battle-en | 8/8, 12/15; 8/8, 11/15 | 8/8, 11/15; 8/8, 10/15 |
+| gpt-5.4-mini | battle-ko | 8/8, 13/15 | 8/8, 12/15 |
+
+Language of the output (majority script of each trap scene and each stored fact; failed runs counted up to where they stopped):
+
+| | before | after |
+| --- | --- | --- |
+| trap scenes not in the story's language | 11 of 58 (Haiku en 2/12 and 1/5, gpt-5.4-mini en 5/12, Haiku ko 3/5) | 0 of 65 |
+| memory runs whose facts are all Russian | 2 of 6 (Haiku en 79 of 79 facts, Haiku ko 57 of 57) | 0 of 6 |
+
+Decision: accepted, but not on the loop's measures. `score` and `sceneScore` do not separate the two sides. The failed scene questions come from the same set on both sides: `healer_still_broken`, `seal_allowed_charges`, `dagger_source`, `turn9_left_hand_spared` and `turn14_dagger_with_tarek`. Their spread is within the known noise of `gpt-5.4-mini` (up to 3 questions). The judge reads Russian as easily as Korean, so a scene written in the wrong language still passes, and the meter does not register the defect this change removes. The gain is the language of the output. With the old prompts, a fifth of the trap scenes and a third of the memories of English and Korean stories were written in Russian. Unlike the other failures, this one is visible to every user. For Russian nothing changes, as shown above.
+
+Limitations:
+- Haiku's compactions through the CLI failed with `provider_failed` in 3 of 6 runs, on both sides. This is the known CLI timeout, not a memory error.
+- One sample per cell for Korean and two for English. Chinese and Japanese were not measured; their catalogs are checked only by `story-text.test.ts`.
+- `zh`, `ko` and `ja` have not been reviewed by a native speaker.
+- The recall question wrapper in `memory-probe.ts` and the judge's system prompt stay Russian for every pack, so that the meter stays the same.
+- Not checked on the GPU model.
+- Token estimate: measured against provider-reported input, bytes per token are en 4.9, ru 5.7, ko 4.3, ja 3.9 and zh 3.6 on Gemma 4 31B, and 5.0, 5.8, 4.0, 3.3 and 3.3 on `gpt-5.4-mini`. At bytes/4, a Chinese or Japanese request was estimated 10–20% short. With the default settings, that is enough to reach the compaction threshold only after the context is already full. Only providers without `countInput` are affected, that is, all except llama.cpp. Latin, Cyrillic and Hangul keep the old estimate exactly.
+
 ## 2026-09-19 · Fable 5.1 · «не более 12 абзацев» ("no more than 12 paragraphs"): a number, a principle or nothing (no change)
 
 The tester's hypothesis: the limit named in SYSTEM, «Пиши не более 12 абзацев» ("Write no more than 12 paragraphs"), makes the model fit the length to the number; without the number the model will focus on the scene. Variants: `base` (as is), `principle` («Объём сцены определяй по тому, что в ней происходит: короткий ход — короткая сцена, поворотный — подробнее. Не дописывай ради объёма; заканчивай там, где автору есть на что ответить» — "Decide the length of a scene by what happens in it: a short move gets a short scene, a turning-point move gets more detail. Do not add text for the sake of length; end where the author has something to answer"), `none` (the phrase is removed). Three worktrees, `npm run eval --mode plain --judge claude:claude-opus-5` on the main group, then a repeat on the paid Gemma; not checked on the GPU.
