@@ -7,7 +7,7 @@ The bot now runs as a local process on a computer and uses the ordinary Telegram
 1. Create an ordinary bot with `/newbot` in [BotFather](https://t.me/BotFather). Keep its token only on your computer.
 2. Copy `.env.example` to `.env` and set the permissions with `chmod 600 .env`.
 3. Fill in `TELEGRAM_BOT_TOKEN` and `SIMPLE_CHAT_ALLOWED_USER_IDS`. At first add only your own numeric Telegram ID.
-4. Install Claude Code and sign in with your subscription through the ordinary CLI login. The chosen connection does not need an API key.
+4. For the default connection, install Claude Code and sign in with your subscription through the ordinary CLI login; it does not need an API key. The other connections are set by `SIMPLE_CHAT_PROVIDER` in the table below.
 5. Run `npm start` from the project root. It requires Linux, Node 24.9+ and `flock`. The computer must stay on while the bot is running.
 
 `.env` is read at startup; the environment variables of the process take priority. Restart the bot after you change the settings.
@@ -72,15 +72,15 @@ The measured counters of the last request include the input together with the ca
 
 Scenes are sent in full through `sendRichMessage`, for which Telegram allows up to 32768 UTF-8 characters. This is a Telegram limit in characters, separate from the generation limit in tokens. Ordinary menu messages through `sendMessage` allow up to 4096 characters. [Rich Messages limits](https://core.telegram.org/bots/api#rich-message-limits), [sendMessage](https://core.telegram.org/bots/api#sendmessage).
 
-## Handing over to the tester
+## Giving access to another person
 
-After our run we connect the chosen Gemma, check that it works and add the tester's ID to the access list. The tester gets a link to the bot and presses Start. The tester does not need the source code, the bot token or an account at the GPU service. The GPU profile uses the verified Gemma 4 31B Q6_K; `/model` shows the model and the state of the rental. If the GPU is stopped, the tester presses «Запустить GPU» ("Start GPU") and waits until it is ready. An ordinary message does not start the rental by itself.
+This section uses our own setup as the example: a tester who writes on a Gemma model on a rented GPU. Connect the model, check that it works and add the tester's ID to the access list. The tester gets a link to the bot and presses Start. The tester does not need the source code, the bot token or an account at the GPU service. The GPU profile uses the verified Gemma 4 31B Q6_K; `/model` shows the model and the state of the rental. If the GPU is stopped, the tester presses «Запустить GPU» ("Start GPU") and waits until it is ready. An ordinary message does not start the rental by itself.
 
 If the tester is not on the access list yet, their personal `/start` command saves only the ID and the time of the request in the private metadata of the database (`access_requests`, no more than 100 senders). Access is not opened automatically. Other messages from such users are not saved and are not passed to the model. The administrator adds the ID to `.env` and restarts the bot; after that the tester opens `/start` or `/menu` again.
 
 We do not open or export the tester's stories for debugging. The tester describes the problem and, if they wish, sends a chosen excerpt. We store the library separately from the public code and back it up on the machine where the bot runs.
 
-## Repeatable battle test
+## Repeatable scenario tests
 
 `npm run story:probe` creates a separate synthetic story on the model from the configuration. Choose the scenario with `--scenario battle`, `--scenario chess` or `--scenario dance`. For Opus: `npm run story:probe -- --scenario chess --model claude-opus-5`. For a GPU that is already prepared: `node --env-file=.env.gpu local/story-probe.ts --scenario chess`.
 
