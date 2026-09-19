@@ -28,6 +28,7 @@
     "mcp": "node local/mcp.ts",
     "mcp:gpu": "node --env-file=.env.gpu local/mcp.ts",
     "gpu:diagnose": "node --env-file-if-exists=.env.gpu local/gpu-diagnose.ts",
+    "gpu:measure": "node --env-file-if-exists=.env.gpu local/gpu-measure.ts",
     "deploy": "tgcloud push",
     "status": "tgcloud status",
     "run:cloud": "tgcloud run"

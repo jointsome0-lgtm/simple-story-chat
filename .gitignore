@@ -23,5 +23,6 @@ logs/
 # Dependencies and generated reports
 node_modules/
 coverage/
+measurements/
 models/
 *.gguf

@@ -139,6 +139,29 @@ One background call is limited to 90 seconds. It is allowed only when the GPU is
 
 On the RX 580 with Gemma 3 1B (3 slots, 12288 cells) a 6.4K-token tester kept its cache through two agent requests beside it and one after it (8 tokens re-read of 6400); the second agent waited for room instead of pushing the tester out. The numbers for the 5090 come from the measurement session.
 
+### Measurement session
+
+The rented card is paid by the minute, so what to keep is decided by a script and not by an impression. `npm run gpu:measure -- --profile <name>` measures one server profile and writes `measurements/<name>/report.json`; `npm run gpu:measure -- --decide measurements` reads every report and prints one answer. The prompts are synthetic, and a report holds counters only, never text.
+
+A run has two phases with the same synthetic tester, who writes a scene, reads it for `--read-seconds` and writes the next, so its history grows and its cache is what the work beside it must not evict:
+
+- **solo** — the tester alone, the card idling while it reads, which is how the bot runs today;
+- **loaded** — the same tester with agent turns (a compaction and a scene) and probes filling the card.
+
+The owner's thresholds, agreed on 20 September 2026 and encoded in `THRESHOLDS` in `local/gpu-measure.ts`:
+
+| # | What is decided | Threshold |
+|---|-----------------|-----------|
+| 1 | Free video memory at the peak | at least 1 GiB |
+| 2 | The tester's cache while others work | kept, 32 tokens of tolerance |
+| 3 | Useful work per hour with lanes beside the tester | at least 1.2× |
+| 4 | The tester's scene beside that work | no more than 1.5× slower |
+| 5 | The tester's longest wait for the queue | 120 seconds |
+| 6 | The draft model (MTP) | at least 1.2×, without a format regression |
+| 7 | The pool and the draft model do not fit together | keep the pool, drop the draft model |
+
+Checks 1 to 5 are answered by one profile's two phases. Checks 6 and 7 compare profiles, so they need a pair that differs only by the draft model. Video memory is read on the instance over SSH (`SIMPLE_CHAT_GPU_SSH_HOST`); without it check 1 stays `unknown` and never becomes a pass. Check 6 verifies the scene format, the way `model:probe` does; it does not judge the prose, which is what `npm run eval` is for. A profile whose own checks did not all pass is not taken, however much work it does.
+
 After the managed GPU profile starts, the bot creates a Unix socket `<database path>.model.sock` with `0600` permissions. Only background generation and the service status are available in it. The story database is not available through it. For these probes use `memory:probe`; the earlier `model:probe` and `story:probe` contact the model directly and are not meant to run at the same time as a working tester.
 
 ```bash
