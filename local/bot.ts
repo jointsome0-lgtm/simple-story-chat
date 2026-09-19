@@ -1,12 +1,13 @@
-import { UserError, id, active, addSeed, newStory, fork, beginJob, commitTurn, saveCheckpoint,
-  deleteSeed, deleteBranch, history, context, jobTarget, setLanguage } from '../lib/library.ts';
+import { UserError, id, active, addSeed, newStory, fork, beginJob,
+  deleteSeed, deleteBranch, context, jobTarget, setLanguage } from '../lib/library.ts';
 import type { Job, Library, SceneNode } from '../lib/library.ts';
-import { normalizeScene, storyNarration } from './prompt.ts';
+import { storyNarration } from './prompt.ts';
 import { createChat } from './telegram.ts';
 import type { Chat, InlineKeyboard, Screen, TelegramApi } from './telegram.ts';
-import { continueInput, contextStats, requestStamp } from './context.ts';
+import { continueInput, contextStats } from './context.ts';
 import type { ContextSelection, ContextStats } from './context.ts';
-import { generateScene, compactBranch } from './generation.ts';
+import { compactBranch } from './generation.ts';
+import { beginTurn, runTurn } from './turn.ts';
 import { messageText, seedInput } from './incoming.ts';
 import type { IncomingMessage } from './incoming.ts';
 import { SEED_BYTES } from './seed-file.ts';
@@ -220,7 +221,7 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
     requireGpu(t);
     state.ui = null;
     state.interrupted = false;
-    const job = beginJob(state, input, Date.now());
+    const job = beginTurn(state, input, Date.now());
     return { job };
   }
 
@@ -236,74 +237,7 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
       compactionStatus = { ...compactionStatus, ...event, automatic: job.kind !== 'compact' };
       progress.update(compactionStatus);
     };
-    try {
-      if (job.kind === 'compact') {
-        // compactBranch writes the log rows of a compaction, manual or automatic, with its sizes and counts.
-        const result = await compactBranch({ store, userId, jobId: job.id, provider,
-          config: contextConfig, signal: controller.signal, onProgress, log, labels });
-        const completed = store.mutate(userId, state => {
-          if (controller.signal.aborted || !jobTarget(state, job.id)) return false;
-          state.job = null;
-          return true;
-        });
-        if (!completed) return;
-        modelResponded();
-        if (!await progress.finish()) await safeSend(chat, renderCompaction({ ...compactionStatus, stage: 'done', ...result }, language), log);
-        return;
-      }
-      const { result, request } = await generateScene({ store, userId, jobId: job.id, provider,
-        config: contextConfig, signal: controller.signal, onProgress, log, labels,
-        preview: (state, current, request) => {
-          const measured = stats(state);
-          // generateScene sets the estimate before it asks for a preview.
-          if (measured) measured.request.estimatedTokens = request.estimatedInputTokens!;
-          return chat.preview(current.id, scenePrefix(measured, modelInfo, state.language));
-        },
-      });
-      if (controller.signal.aborted) return;
-      modelResponded();
-      if (result.streamResultMismatch) log('model_result_differs_from_stream');
-      const ref = store.mutate(userId, state => {
-        if (state.job?.id !== job.id) return null;
-        const story = state.stories[job.storyId];
-        const stamp = requestStamp(request, model, state.job.memory, providerName);
-        // A null head (no scenes yet) is never a node id, so the seed start time is used.
-        const fallback = story.nodes[job.head as string]?.time || state.seeds[story.seedId].startTime;
-        const committed = commitTurn(state, job.id, normalizeScene(result.text, fallback), result.finishReason === 'length');
-        if (!committed) return null;
-        story.nodes[committed.nodeId].usage = result.usage ?? null;
-        story.nodes[committed.nodeId].requestContext = stamp;
-        story.nodes[committed.nodeId].streamResultMismatch = result.streamResultMismatch ?? false;
-        story.nodes[committed.nodeId].modelInfo = { provider: providerName, model };
-        const branch = story.branches[job.branchId];
-        const checkpoint = saveCheckpoint(state, story, branch, texts(state.language).labels.scene(history(story, branch.head).length), 'scene');
-        return { ...committed, checkpointId: checkpoint.id };
-      });
-      if (!ref) return;
-      const snapshot = store.read(userId);
-      const node = snapshot.stories[ref.storyId].nodes[ref.nodeId];
-      try {
-        // Persisted above. An ambiguous response must never trigger a new model run.
-        const prefix = scenePrefix(stats(snapshot, { storyId: ref.storyId, checkpointId: ref.checkpointId }), node.modelInfo, snapshot.language);
-        // Bot API results are not validated; the id of the sent message is stored as returned.
-        const sent = await chat.final(prefix + node.text, sceneKeyboard(snapshot)) as { message_id: number };
-        store.mutate(userId, state => {
-          const saved = state.stories[ref.storyId]?.nodes[ref.nodeId];
-          if (saved) { saved.delivery = 'sent'; saved.messageId = sent.message_id; }
-        });
-        log('scene_saved_and_sent');
-        if (node.truncated) await safeSend(chat, { text: notices().truncated }, log);
-      } catch (error) {
-        log('scene_delivery_unconfirmed', errorCode(error));
-        await safeSend(chat, { text: notices().deliveryUnconfirmed }, log);
-      }
-    } catch (error) {
-      const stillCurrent = store.mutate(userId, state => {
-        if (state.job?.id !== job.id) return false;
-        state.job = null;
-        return true;
-      });
-      if (!stillCurrent || controller.signal.aborted) return;
+    const reportFailure = async (error: unknown) => {
       // Thrown values are not checked: ModelError carries these fields, other errors lack them.
       const failure = error as { code?: string | number; operation?: string };
       if (member(['provider_failed', 'timeout', 'unauthorized', 'model_unavailable', 'unexpected_model'], failure.code)) {
@@ -322,6 +256,63 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
         : failure.code === 'invalid_memory' || failure.code === 'memory_not_smaller' ? t.notices.compactionUnverified(retry)
         : t.notices.failed(retry);
       await safeSend(chat, { text, reply_markup: sceneKeyboard(snapshot) }, log);
+    };
+    try {
+      if (job.kind === 'compact') {
+        // compactBranch writes the log rows of a compaction, manual or automatic, with its sizes and counts.
+        const result = await compactBranch({ store, userId, jobId: job.id, provider,
+          config: contextConfig, signal: controller.signal, onProgress, log, labels });
+        const completed = store.mutate(userId, state => {
+          if (controller.signal.aborted || !jobTarget(state, job.id)) return false;
+          state.job = null;
+          return true;
+        });
+        if (!completed) return;
+        modelResponded();
+        if (!await progress.finish()) await safeSend(chat, renderCompaction({ ...compactionStatus, stage: 'done', ...result }, language), log);
+        return;
+      }
+      const outcome = await runTurn({ store, userId, job, provider, config: contextConfig, signal: controller.signal, onProgress, log, labels,
+        preview: (state, current, request) => {
+          const measured = stats(state);
+          // generateScene sets the estimate before it asks for a preview.
+          if (measured) measured.request.estimatedTokens = request.estimatedInputTokens!;
+          return chat.preview(current.id, scenePrefix(measured, modelInfo, state.language));
+        },
+        onGenerated: result => {
+          modelResponded();
+          if (result.streamResultMismatch) log('model_result_differs_from_stream');
+        },
+      });
+      if (outcome.status === 'gone') return;
+      if (outcome.status === 'failed') { await reportFailure(outcome.error); return; }
+      const ref = outcome.ref;
+      const snapshot = store.read(userId);
+      const node = snapshot.stories[ref.storyId].nodes[ref.nodeId];
+      try {
+        // Persisted above. An ambiguous response must never trigger a new model run.
+        const prefix = scenePrefix(stats(snapshot, { storyId: ref.storyId, checkpointId: ref.checkpointId }), node.modelInfo, snapshot.language);
+        // Bot API results are not validated; the id of the sent message is stored as returned.
+        const sent = await chat.final(prefix + node.text, sceneKeyboard(snapshot)) as { message_id: number };
+        store.mutate(userId, state => {
+          const saved = state.stories[ref.storyId]?.nodes[ref.nodeId];
+          if (saved) { saved.delivery = 'sent'; saved.messageId = sent.message_id; }
+        });
+        log('scene_saved_and_sent');
+        if (node.truncated) await safeSend(chat, { text: notices().truncated }, log);
+      } catch (error) {
+        log('scene_delivery_unconfirmed', errorCode(error));
+        await safeSend(chat, { text: notices().deliveryUnconfirmed }, log);
+      }
+    } catch (error) {
+      // A failed compaction; a failed scene comes back from runTurn with its job already released.
+      const stillCurrent = store.mutate(userId, state => {
+        if (state.job?.id !== job.id) return false;
+        state.job = null;
+        return true;
+      });
+      if (!stillCurrent || controller.signal.aborted) return;
+      await reportFailure(error);
     } finally {
       await progress.finish();
       releaseGpu?.();
