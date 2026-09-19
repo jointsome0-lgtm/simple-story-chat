@@ -7,7 +7,8 @@
 | `llama-cpp` | Gemma 4 на своём или арендованном GPU | HTTP-запрос к серверу модели |
 | `anthropic-api` | Haiku по API-ключу | HTTP-запрос к Anthropic |
 | `claude-code` | Haiku через учётную запись Claude | Официальный CLI/SDK в процессе на компьютере или сервере |
-| `openai-compatible` | Gemma 4 на OpenRouter, модели OpenAI | HTTP-запрос к размещённому API; только синтетические пробы |
+| `openai-compatible` | Gemma 4 на OpenRouter, модели OpenAI | HTTP-запрос к размещённому API; по умолчанию только синтетические пробы |
+| `codex-cli` | модели OpenAI через учётную запись ChatGPT | Официальный Codex CLI (`codex exec --json`) в процессе на компьютере; по умолчанию только синтетические пробы |
 
 Новый способ вызова добавляется отдельным адаптером. Его подключение не требует менять Telegram-интерфейс, формат сохранённых сообщений или логику продолжения истории.
 
@@ -82,6 +83,20 @@ SGR получает до 8192 выходных токенов, обычный �
 До отправки запроса на генерацию точный вход проверяется с резервом под выход. Сообщённый в конце `prompt_tokens` должен совпасть с предварительным подсчётом. Кэш входит в полный вход и повторно к нему не прибавляется. Обрыв без события завершения, инструменты и несогласованные счётчики отклоняются. Отмена и таймаут закрывают запрос; автоматического повторения нет. [Закреплённая документация сервера](https://github.com/ggml-org/llama.cpp/blob/b29c606e28a01b1bc8c1351026a0fa6e616bf6c4/tools/server/README.md).
 
 Технические источники: [потоковый вывод Claude Code](https://code.claude.com/docs/en/headless#stream-responses), [подсчёт токенов Anthropic](https://platform.claude.com/docs/en/build-with-claude/token-counting), [llama.cpp server](https://github.com/ggml-org/llama.cpp/tree/master/tools/server), [SDK Telegram Serverless](tgcloud-sdk.md).
+
+## Codex CLI: `codex-cli`
+
+Добавлено 19 сентября 2026. `local/codex.ts` запускает установленный `codex exec --json` так же, как `local/claude.ts` запускает Claude Code: вход через собственную авторизацию CLI (`CODEX_HOME`), `OPENAI_API_KEY` и `CODEX_API_KEY` из окружения процесса удаляются, чтобы запрос не ушёл на другой счёт. `SIMPLE_CHAT_MODEL` обязателен: набор моделей зависит от тарифа учётной записи (на ChatGPT-аккаунте, например, `gpt-5.4-mini` недоступна).
+
+Codex — агент с оболочкой, а рассказчику она не нужна. Запрос идёт с `--ephemeral --ignore-user-config --ignore-rules --skip-git-repo-check --sandbox read-only`, в пустом временном каталоге, с отключёнными `shell_tool`, `unified_exec`, `apps`, `plugins`, `memories`, `browser_use`, `computer_use`, `image_generation`, `view_image`, `skill_search`, `tool_suggest`, `sleep_tool`, `hooks`, `goals` и `web_search="disabled"`. Системный промпт передаётся файлом через `model_instructions_file`, схема ответа — файлом через `--output-schema`; ни промпт, ни история не попадают в аргументы процесса. Любой элемент потока, кроме `agent_message`, `reasoning` и предупреждения `error`, завершает запрос ошибкой `unexpected_tools`. Временные файлы удаляются после каждого запроса.
+
+Отличия от `claude-code`: CLI отдаёт сообщение целиком, поэтому текст сцены в Telegram появляется сразу весь, без постепенного вывода; предела выходных токенов у CLI нет, `finishReason` всегда `stop`, действует только общий предел 100 000 знаков; имя модели сервер не подтверждает. Вход считается по `turn.completed.usage.input_tokens` (кэшированная часть уже внутри).
+
+Проверено 19 сентября 2026: набор аргументов принят CLI 0.154.0 под `--strict-config`, ключ `model_instructions_file` существует. Успешный ответ вживую не проверен: учётная запись в тот день упёрлась в лимит использования (`turn.failed`). Формат успешных событий взят из документации `codex exec --json` и покрыт тестами на подставном процессе; первая живая проверка — `npm run eval -- ceiling --model codex:<модель>` на синтетическом сценарии.
+
+## Согласие на размещённое подключение для бота
+
+`openai-compatible` и `codex-cli` отправляют текст истории стороннему сервису, который может хранить запросы и учиться на них (у бесплатных каналов OpenRouter и потребительских учётных записей это обычное условие). Поэтому бот с ними не стартует. Тот, кто запускает бота для собственных историй и принимает это, пишет в `.env` дословно `SIMPLE_CHAT_ALLOW_HOSTED=stories-leave-this-computer`; любое другое значение, включая `1` и `true`, согласием не считается. Экземпляр с чужими историями (тестер) это значение не получает. Дневные лимиты токенов из `local/budget.ts` действуют и для бота; их меняют `SIMPLE_CHAT_BUDGET_REQUESTS` и `SIMPLE_CHAT_BUDGET_TOKENS`.
 
 ## Размещённые API: `openai-compatible`
 

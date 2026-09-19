@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 
 export type Env = NodeJS.Dict<string>;
 export type ModelConfig = {
-  provider: 'claude-code' | 'llama-cpp' | 'openai-compatible'; model: string; baseUrl: string | undefined; apiKey: string; temperature: number;
+  provider: 'claude-code' | 'codex-cli' | 'llama-cpp' | 'openai-compatible'; model: string; baseUrl: string | undefined; apiKey: string; temperature: number;
   memoryMode: 'plain' | 'sgr'; repairCoverage: boolean; timeoutMs: number; contextTokens: number; maxOutputTokens: number;
   compactAtTokens: number; keepScenes: number;
   // Overrides of the daily cap of a hosted API's channel; see budget.ts.
@@ -49,7 +49,7 @@ function modelConfig(env: Env): ModelConfig {
     return value;
   };
   const provider = env.SIMPLE_CHAT_PROVIDER || 'claude-code';
-  if (provider !== 'claude-code' && provider !== 'llama-cpp' && provider !== 'openai-compatible') throw new Error('Unsupported SIMPLE_CHAT_PROVIDER');
+  if (provider !== 'claude-code' && provider !== 'codex-cli' && provider !== 'llama-cpp' && provider !== 'openai-compatible') throw new Error('Unsupported SIMPLE_CHAT_PROVIDER');
   const baseUrl = provider === 'llama-cpp' ? modelBaseUrl(env.SIMPLE_CHAT_BASE_URL)
     : provider === 'openai-compatible' ? apiBaseUrl(env.SIMPLE_CHAT_BASE_URL) : undefined;
   const apiKey = env.SIMPLE_CHAT_API_KEY?.trim() || '';
@@ -58,6 +58,8 @@ function modelConfig(env: Env): ModelConfig {
   const temperature = Number(env.SIMPLE_CHAT_TEMPERATURE || '0.8');
   if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) throw new Error('Invalid SIMPLE_CHAT_TEMPERATURE');
   if (provider === 'openai-compatible' && !env.SIMPLE_CHAT_MODEL) throw new Error('Set SIMPLE_CHAT_MODEL for the hosted API');
+  // Which models a Codex account may use depends on its plan, so there is no safe default.
+  if (provider === 'codex-cli' && !env.SIMPLE_CHAT_MODEL) throw new Error('Set SIMPLE_CHAT_MODEL for the Codex CLI');
   const model = env.SIMPLE_CHAT_MODEL || (provider === 'llama-cpp' ? 'gemma-4-31b-heretic-q6k' : 'claude-haiku-4-5-20251001');
   if (!/^[A-Za-z0-9][A-Za-z0-9_./:-]{0,199}$/.test(model)) throw new Error('Invalid SIMPLE_CHAT_MODEL');
   const contextTokens = integer('SIMPLE_CHAT_CONTEXT_TOKENS', 65536, 8192, 65536);
@@ -72,7 +74,7 @@ function modelConfig(env: Env): ModelConfig {
     provider, model, baseUrl, apiKey, temperature, memoryMode, repairCoverage: repairCoverage === 'true',
     timeoutMs: integer('SIMPLE_CHAT_MODEL_TIMEOUT_MS', 300000, 1000, 1800000),
     contextTokens, maxOutputTokens,
-    compactAtTokens: integer('SIMPLE_CHAT_COMPACT_AT_TOKENS', Math.min(provider === 'claude-code' ? 54000 : 44000, maxInput), 2048, maxInput),
+    compactAtTokens: integer('SIMPLE_CHAT_COMPACT_AT_TOKENS', Math.min(provider === 'claude-code' || provider === 'codex-cli' ? 54000 : 44000, maxInput), 2048, maxInput),
     keepScenes: integer('SIMPLE_CHAT_KEEP_SCENES', 4, 1, 20),
     budget: { requests: env.SIMPLE_CHAT_BUDGET_REQUESTS ? integer('SIMPLE_CHAT_BUDGET_REQUESTS', 0, 0, 1e9) : undefined,
       tokens: env.SIMPLE_CHAT_BUDGET_TOKENS ? integer('SIMPLE_CHAT_BUDGET_TOKENS', 0, 0, 1e12) : undefined },
@@ -104,8 +106,11 @@ export function loadConfig(directory = process.cwd(), inherited: Env = process.e
   const allowedUsers = new Set((env.SIMPLE_CHAT_ALLOWED_USER_IDS || '').split(',').map(s => s.trim()).filter(Boolean));
   if (!allowedUsers.size || [...allowedUsers].some(id => !/^\d+$/.test(id))) throw new Error('Set numeric SIMPLE_CHAT_ALLOWED_USER_IDS in .env');
   const model = modelConfig(env);
-  // A hosted API may log requests and train on them. It serves synthetic probes and never the bot's real stories.
-  if (model.provider === 'openai-compatible') throw new Error('The openai-compatible provider is for synthetic probes only');
+  // A hosted API or a consumer Codex account may log requests and train on them. By default they serve synthetic probes
+  // and never the bot's real stories; the one who runs the bot may accept that for their own stories in so many words.
+  if ((model.provider === 'openai-compatible' || model.provider === 'codex-cli') && env.SIMPLE_CHAT_ALLOW_HOSTED !== 'stories-leave-this-computer') {
+    throw new Error(`The ${model.provider} provider is for synthetic probes only; SIMPLE_CHAT_ALLOW_HOSTED=stories-leave-this-computer lets the bot use it`);
+  }
   const gpu = gpuConfig(env, model.provider);
   if (gpu && model.baseUrl !== 'http://127.0.0.1:8080') throw new Error('Managed GPU requires the local SSH tunnel on port 8080');
   // The bot log marks the owner's rows with this ID. A mistyped one would mark them as someone else's without a word.

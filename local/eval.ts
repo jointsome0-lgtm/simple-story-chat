@@ -57,6 +57,8 @@ catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw ne
 function modelEnv(spec: string): Env {
   const [host, model] = [spec.slice(0, spec.indexOf(':')), spec.slice(spec.indexOf(':') + 1)];
   if (host === 'claude' && model) return { SIMPLE_CHAT_PROVIDER: 'claude-code', SIMPLE_CHAT_MODEL: model };
+  // "codex:<model>" goes through the installed Codex CLI and its own sign-in.
+  if (host === 'codex' && model) return { SIMPLE_CHAT_PROVIDER: 'codex-cli', SIMPLE_CHAT_MODEL: model };
   // "gpu:<label>" is the owner's own model from .env.gpu, reached through the tunnel that is already open. The rental and
   // SSH settings are not passed on, so a probe never starts, stops or reconnects the GPU. The label only names the run.
   if (host === 'gpu' && model) {

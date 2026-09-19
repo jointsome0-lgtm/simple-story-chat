@@ -977,6 +977,8 @@ function cancelRow(state: State): Row {
 const PROVIDER = {
   'claude-code': { short: 'Claude Code', full: 'Claude Code по подписке Claude (не наш GPU-сервер)' },
   'llama-cpp': { short: 'наш сервер', full: 'наш сервер модели (llama.cpp)' },
+  'codex-cli': { short: 'Codex', full: 'Codex CLI по подписке ChatGPT (не наш GPU-сервер)' },
+  'openai-compatible': { short: 'размещённый API', full: 'размещённый API в формате OpenAI (не наш GPU-сервер)' },
 };
 
 function modelKnown(info: ModelInfo | null | undefined): info is ModelInfo & { provider: keyof typeof PROVIDER; model: string } {
