@@ -43,6 +43,28 @@ test('foreground work preempts a real socket request; only synthetic background 
   assert.equal(await f.scheduler.foreground.generate('foreground'), 'user result');
   await rejection;
 });
+test('an agent request over the socket goes to the agent queue and a person does not cut it off', async t => {
+  let finish: ((value: unknown) => void) | undefined;
+  const calls: unknown[] = [];
+  const f = await fixture(t, (req, { signal }) => {
+    calls.push(req === 'foreground' ? 'foreground' : 'agent');
+    if (req === 'foreground') return Promise.resolve('user result');
+    return new Promise((resolve, reject) => {
+      finish = resolve;
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    });
+  });
+  const agent = createBackgroundClient({ socketPath: f.socketPath, model: 'synthetic-model', timeoutMs: 2000, work: 'agent' });
+  const scene = agent.generate(request);
+  while (!finish) await turn();
+  assert.equal(f.scheduler.snapshot().active, 'agent');
+  const user = f.scheduler.foreground.generate('foreground');
+  await turn();
+  assert.deepEqual(calls, ['agent']);
+  finish({ text: 'Agent scene', finishReason: 'stop' });
+  assert.equal((await scene).text, 'Agent scene');
+  assert.equal(await user, 'user result');
+});
 test('disconnecting a background client cancels its request; no other process can steal a live socket', async t => {
   let started: (() => void) | undefined;
   const ready = new Promise<void>(resolve => { started = resolve; });

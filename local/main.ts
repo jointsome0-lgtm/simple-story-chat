@@ -51,6 +51,13 @@ try {
       // Without an idle deadline (null) background work is not allowed.
       return state?.status === 'ready' && state.activeJobs === 0 && (state.idleRemainingSeconds ?? 0) > 100;
     },
+    // An agent call is not cut off by the idle countdown, so it starts only if it can end before it, and never extends it.
+    agentCanStart: () => {
+      const state = gpu?.snapshot();
+      return state?.status === 'ready' && state.activeJobs === 0 && (state.idleRemainingSeconds ?? 0) > config.timeoutMs / 1000 + 100;
+    },
+    // Without GPU control there is no socket and no agent work here; with it, only a paused or stopping GPU stops one.
+    agentCanRun: () => gpu?.snapshot().status === 'ready',
   });
   const provider = scheduler.foreground;
   const api = createApi(config.token);

@@ -23,7 +23,7 @@ delivery on top; the agent interface adds receipts.
 
 The agent interface has its own SQLite file, `data/agents.sqlite` by default (`SIMPLE_CHAT_AGENT_DB_PATH`), and its
 own user ids (`agent` by default; `--agent <id>` or `SIMPLE_CHAT_AGENT_ID` for another). It never opens the bot's
-database, and the loader refuses a path equal to it. Use synthetic stories. Technical log rows go to stderr and carry
+database: the loader refuses its path, also through a symlink or a hard link. Use synthetic stories. Technical log rows go to stderr and carry
 only codes, enums and counts (`safeErrorDetails` in `local/model-error.ts`), with `actor: agent`; never story text,
 prompts or model output. The stories and results themselves are in the agent library, like the bot's are in its own.
 
@@ -34,13 +34,18 @@ The same model configuration as the bot (`.env`, or `.env.gpu` with the `:gpu` s
 for the bot.
 
 When the bot runs with GPU control it serves its model queue on `<bot database>.model.sock` (`local/background.ts`).
-If that socket answers, agent turns go through it as background work, so people in Telegram keep priority:
+If that socket answers, agent turns go through it in their own queue (`local/scheduler.ts`), between people and
+disposable probes:
 
-- background work runs only when the GPU is ready and the bot has been quiet for a minute; a stopped or paused GPU gives
-  `failed` / `gpu_not_ready` at once, it is never woken for an agent;
-- a person's request stops a running agent request: the turn ends `preempted` (`background_preempted` or
-  `background_unavailable`). It is never rerun silently; ask again with a new `requestId`;
-- the bot's scheduler gives one background request at most 90 seconds (`background_timeout`).
+- people in Telegram go first: an agent call starts only after the bot has been quiet for a minute, the GPU is ready
+  and the auto-pause is further away than the model's timeout plus 100 seconds. Until then it waits in the queue; the
+  agent's `wait` keeps answering `running`;
+- once started, an agent call is not cut off by a person: the person waits for that one call (a scene, or one step of
+  a compaction), then goes next. An agent call has no time limit of its own, only the model's timeout;
+- an agent call stops a running probe;
+- a stopped or paused GPU gives `failed` / `gpu_not_ready` at once, it is never woken for an agent, and agent work does
+  not reset the idle timer. A manual pause stops a running agent call: the turn ends `preempted`
+  (`background_unavailable`). It is never rerun silently; ask again with a new `requestId`.
 
 The queue checks that it serves the configured model, so start the agent with the bot's model configuration
 (`npm run agent:gpu`, `npm run mcp:gpu`). Without the socket the agent calls the configured provider directly. The
@@ -93,7 +98,7 @@ Every response has one shape:
   if one committed before the scene failed.
 - `interrupted`: the process stopped during the turn (`shutdown` for a clean stop, `process_exited` after a crash). The
   result names the saved point as for `failed`.
-- `preempted`: a person's request took the GPU; see Model access.
+- `preempted`: the GPU was paused under the call; see Model access.
 - `stale`: `expected` is not the branch's revision; `result.revision` is the current one. Nothing was generated.
 - `busy`: the library already has a running turn (`result.runningRequestId`), or another process holds the library
   (`library_locked`). One agent id runs one turn at a time.

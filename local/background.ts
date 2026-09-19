@@ -59,9 +59,11 @@ export async function serveBackground({ socketPath, scheduler, status }: {
     try {
       let body: unknown;
       if (req.method === 'GET' && req.url === '/status') body = { ...status(), queue: scheduler.snapshot() };
-      else if (req.method === 'POST' && req.url === '/generate') {
+      else if (req.method === 'POST' && (req.url === '/generate' || req.url === '/agent/generate')) {
         const request = validateRequest(await jsonBody(req));
-        body = await scheduler.background.generate(request, { signal: controller.signal });
+        // An agent turn is real work and is not cut off by people; a probe is disposable (local/scheduler.ts).
+        const queue = req.url === '/agent/generate' ? scheduler.agent : scheduler.background;
+        body = await queue.generate(request, { signal: controller.signal });
       } else throw new ModelError('background_invalid_request');
       if (!res.destroyed) { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)); }
     } catch (error) {
@@ -80,7 +82,9 @@ export async function serveBackground({ socketPath, scheduler, status }: {
   } };
 }
 
-export function createBackgroundClient({ socketPath, model, timeoutMs = 600000 }: { socketPath: string; model: string; timeoutMs?: number }) {
+export function createBackgroundClient({ socketPath, model, timeoutMs = 600000, work = 'probe' }: {
+  socketPath: string; model: string; timeoutMs?: number; work?: 'probe' | 'agent';
+}) {
   async function call(path: string, body: ModelRequest | null, signal: AbortSignal | undefined) {
     const timer = AbortSignal.timeout(timeoutMs);
     const current = signal ? AbortSignal.any([signal, timer]) : timer;
@@ -113,6 +117,7 @@ export function createBackgroundClient({ socketPath, model, timeoutMs = 600000 }
       if (state.model !== model) throw new ModelError('unexpected_model');
       return state;
     },
-    generate: (request: ModelRequest, controls: Controls = {}) => call('/generate', request, controls.signal) as Promise<GenerationResult>,
+    generate: (request: ModelRequest, controls: Controls = {}) =>
+      call(work === 'agent' ? '/agent/generate' : '/generate', request, controls.signal) as Promise<GenerationResult>,
   };
 }

@@ -122,3 +122,34 @@ test('a provider without a check gets none from the scheduler', async t => {
   t.after(() => server.close());
   assert.deepEqual(await server.foreground.check!(), { model: 'test-model' });
 });
+test('an agent call waits for people and the quiet window, then runs to its end while a person waits', async t => {
+  let time = 0;
+  const f = fixture(t, { now: () => time, quietMs: 60000 });
+  const user = f.scheduler.foreground.generate('user one');
+  const agent = f.scheduler.agent.generate('agent turn');
+  time = 1000; f.calls[0].finish(); await user; await turn();
+  time = 60999; f.scheduler.tick(); assert.equal(f.calls.length, 1);
+  time = 61000; f.scheduler.tick(); assert.equal(f.calls[1].name, 'agent turn');
+  // A person arrives mid-call: the agent call is not aborted, the person is next.
+  const next = f.scheduler.foreground.generate('user two');
+  await turn();
+  assert.equal(f.calls[1].signal.aborted, false);
+  assert.equal(f.calls.length, 2);
+  f.calls[1].finish(); assert.equal(await agent, 'agent turn'); await turn();
+  assert.equal(f.calls[2].name, 'user two');
+  f.calls[2].finish(); await next;
+});
+test('an agent call preempts a probe, starts only when allowed and stops only when it may not run', async t => {
+  let start = false, run = true;
+  const f = fixture(t, { agentCanStart: () => start, agentCanRun: () => run });
+  const probe = f.scheduler.background.generate('probe');
+  const preempted = assert.rejects(probe, { code: 'background_preempted' });
+  const agent = f.scheduler.agent.generate('agent turn');
+  await preempted; await turn();
+  assert.deepEqual(f.calls.map(c => c.name), ['probe']);
+  start = true; f.scheduler.tick(); assert.equal(f.calls[1].name, 'agent turn');
+  // The start rule turning false (the idle countdown running down) does not stop a running call; a pause does.
+  start = false; f.scheduler.tick(); assert.equal(f.calls[1].signal.aborted, false);
+  const stopped = assert.rejects(agent, { code: 'background_unavailable' });
+  run = false; f.scheduler.tick(); await stopped;
+});

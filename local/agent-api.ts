@@ -44,7 +44,8 @@ const CHECK = { story: /^h\d+$/, branch: /^b\d+$/, checkpoint: /^c\d+$/, seed: /
 const REQUEST_ID = /^[\x21-\x7e]{1,128}$/;
 const INPUT_BYTES = 32 * 1024;
 const LABELS = texts('en').labels;
-// The bot's model queue stops background work for a human's request; the client decides whether to ask again.
+// The bot's model queue stops an agent call only when its GPU is paused; the client decides whether to ask again.
+// `background_preempted` is the probe's code and stays here for a bot that predates the agent queue.
 const PREEMPTED = ['background_preempted', 'background_unavailable'] as const;
 
 class Journal {
@@ -387,7 +388,8 @@ export async function agentProvider(config: AgentConfig): Promise<{ provider: Pr
   const directModel = () => direct ??= createModel(config);
   async function queued(): Promise<Provider | null> {
     if (!existsSync(config.modelSocket) || !lstatSync(config.modelSocket).isSocket()) return null;
-    const client = createBackgroundClient({ socketPath: config.modelSocket, model: config.model, timeoutMs: config.timeoutMs });
+    // The time covers waiting behind people and the quiet window, then the call itself under the model's timeout.
+    const client = createBackgroundClient({ socketPath: config.modelSocket, model: config.model, work: 'agent', timeoutMs: config.timeoutMs + 600_000 });
     const live = await client.status().then(() => true, (error: unknown) => errorCode(error) !== 'background_unavailable');
     return live ? {
       async generate(request, controls = {}) {
