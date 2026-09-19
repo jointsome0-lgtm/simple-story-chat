@@ -51,7 +51,7 @@ try {
       // Without an idle deadline (null) background work is not allowed.
       return state?.status === 'ready' && state.activeJobs === 0 && (state.idleRemainingSeconds ?? 0) > 100;
     },
-    // An agent call is not cut off by the idle countdown, so it starts only if it can end before it, and never extends it.
+    // An agent turn holds the GPU through the idle countdown, so it starts only if it can end before it, and never extends it.
     agentCanStart: () => {
       const state = gpu?.snapshot();
       return state?.status === 'ready' && state.activeJobs === 0 && (state.idleRemainingSeconds ?? 0) > config.timeoutMs / 1000 + 100;

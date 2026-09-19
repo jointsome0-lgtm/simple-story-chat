@@ -40,12 +40,14 @@ disposable probes:
 - people in Telegram go first: an agent call starts only after the bot has been quiet for a minute, the GPU is ready
   and the auto-pause is further away than the model's timeout plus 100 seconds. Until then it waits in the queue; the
   agent's `wait` keeps answering `running`;
-- once started, a turn keeps the model to its end: nobody runs between its compaction steps and its scene, so a
-  started step is never cut off and another turn's prompt never evicts this one's cache. (The compaction and the scene
-  have different system prompts, so llama.cpp reuses only their common prefix; the turn does not make the scene's
-  prefill free.) A person who writes meanwhile waits for the rest of that turn. The agent holds a control request to
-  the bot for the whole turn; when it closes, or the agent process dies, the turn ends, its running call stops and a
-  later call under its id is refused. An agent call has no time limit of its own, only the model's timeout;
+- a person never waits for an agent: a person's model call ends the agent's whole turn at once, which gives
+  `preempted` (`background_preempted`). What committed before stays saved, as for `failed`;
+- otherwise a started turn keeps the model to its end: no other agent turn or probe runs between its compaction steps
+  and its scene, so their prompts never evict its cache. (The compaction and the scene have different system prompts,
+  so llama.cpp reuses only their common prefix; the turn does not make the scene's prefill free.) The agent holds a
+  control request to the bot for the whole turn; when it closes, or the agent process dies, the turn ends, its running
+  call stops and a later call under its id is refused. An agent call has no time limit of its own, only the model's
+  timeout;
 - an agent call stops a running probe;
 - a stopped or paused GPU gives `failed` / `gpu_not_ready` at once and is never woken for an agent. A started turn holds
   the GPU: an idle or manual pause waits for it (the bot shows the GPU draining), but agent work does not reset the
@@ -104,7 +106,7 @@ Every response has one shape:
   if one committed before the scene failed.
 - `interrupted`: the process stopped during the turn (`shutdown` for a clean stop, `process_exited` after a crash). The
   result names the saved point as for `failed`.
-- `preempted`: the GPU was paused under the call; see Model access.
+- `preempted`: a person needed the model, or the GPU was paused under the call; see Model access.
 - `stale`: `expected` is not the branch's revision; `result.revision` is the current one. Nothing was generated.
 - `busy`: the library already has a running turn (`result.runningRequestId`), or another process holds the library
   (`library_locked`). One agent id runs one turn at a time.
