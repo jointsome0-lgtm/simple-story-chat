@@ -49,6 +49,7 @@ applies there.
 | Path            | What it is                                                        |
 |-----------------|-------------------------------------------------------------------|
 | `local/`        | The bot: Telegram transport, storage, model adapters, memory, UI, eval and probes, with tests next to the code. |
+| `local/agent-api.ts`, `agent-cli.ts`, `mcp.ts` | The agent interface: CLI and MCP server over a separate agent library ([docs/agent-interface.md](docs/agent-interface.md)). |
 | `lib/library.ts`| Pure story-library logic shared by the bot and the cloud draft.   |
 | `examples/`     | Synthetic seeds and eval scenarios. Safe to read and to send to models. |
 | `gpu/`          | Bootstrap and start scripts for llama.cpp on a rented GPU ([docs/gpu.md](docs/gpu.md)). |

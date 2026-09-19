@@ -308,3 +308,19 @@ test('the agent interface keeps the hosted-provider consent gate and never share
   assert.equal(local.modelSocket, join(directory, 'data/simple-chat.sqlite.model.sock'));
   assert.throws(() => loadAgentConfig(directory, { SIMPLE_CHAT_AGENT_DB_PATH: 'data/simple-chat.sqlite' }), /must not be the bot database/);
 });
+
+test('a clean stop ends a running turn as interrupted, and the next process starts nothing', async t => {
+  const f = fixture(t, { hold: true });
+  f.api.createSeed({ requestId: 'seed-1', text: SEED });
+  assert.equal((await f.api.startStory({ requestId: 'start-1', seedId: 's1', wait: 0 })).status, 'running');
+  await f.until(() => f.held.length === 1);
+  const pending = f.api.wait({ requestId: 'start-1', seconds: 5 });
+  await f.api.close();
+  const stopped = await pending;
+  assert.deepEqual([stopped.status, stopped.reason], ['interrupted', 'shutdown']);
+  assert.deepEqual(stopped.result, { storyId: 'h2', branchId: 'b3', scene: null, revision: (f.api.read({ storyId: 'h2' }).result as View).revision });
+  assert.equal(f.store.read('agent').job, null);
+  const next = f.open();
+  assert.equal(next.api.status({ requestId: 'start-1' }).reason, 'shutdown');
+  assert.equal(f.requests.length, 1);
+});
