@@ -345,3 +345,33 @@ console.error(err);                          // error — red, includes a stack
 
 Each line is tagged with its `[file:line]`. `console.error` and `console.trace`
 append a full stack trace; `console.warn` does not.
+
+# Project layout and deploy
+
+Only `.js` files in `schema.js`, `lib/` and `handlers/` are deployed; `handlers/` is one level deep and its file names
+match Telegram Bot API update types (`message`, `callback_query`, …).
+
+## Deploy & migrate workflow
+
+**Deploying never touches the database.** Schema sync is a separate, explicit step.
+
+The CLI is a local dev-dependency, so run it with `npx tgcloud <command>` (or use
+the `npm run` scripts in package.json — e.g. `npm run deploy`):
+
+```
+npx tgcloud status     # what changed locally vs the cloud
+npx tgcloud push       # deploy modules to the cloud
+npx tgcloud migrate    # apply schema.js changes to the database (interactive)
+npx tgcloud run <module> [args]   # execute a handler server-side
+npx tgcloud pull       # bring the local project in line with the cloud
+npx tgcloud login      # link this project to a bot
+npx tgcloud webhook    # show the bot's webhook and whether it matches your handlers
+```
+
+After you change `schema.js`, `push` reports what the DB *would* change but applies
+nothing — run `npx tgcloud migrate` to actually apply it.
+
+The platform manages the bot's webhook for you, derived from your deployed
+`handlers/*`, and refreshes it on `push`. If it ever drifts — e.g. someone called
+`setWebhook` with the raw bot token — `npx tgcloud webhook` shows the mismatch and
+`npx tgcloud webhook sync` repairs it.

@@ -17,12 +17,16 @@ function fixture(t: TestContext, events: object[], exitCode = 0) {
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const config = { dbPath: join(directory, 'test.sqlite'), model: 'test-model', contextTokens: 65536 };
   let launches = 0;
+  // The provider must not pass another address or token on to the CLI.
+  process.env.ANTHROPIC_BASE_URL = 'http://elsewhere.invalid';
+  t.after(() => { delete process.env.ANTHROPIC_BASE_URL; });
   const provider = createClaude(config, { launch(command, args, options) {
     launches++;
     assert.equal(args[args.indexOf('--tools') + 1], '');
     assert.ok(args.includes('--no-session-persistence'));
     assert.ok(!args.join(' ').includes('synthetic private seed'));
     assert.equal(options.env.TELEGRAM_BOT_TOKEN, undefined);
+    assert.equal(options.env.ANTHROPIC_BASE_URL, undefined);
     const output = events.map(e => JSON.stringify(e)).join('\n') + '\n';
     return spawn(process.execPath, ['-e', 'process.stdin.resume(); process.stdin.on("end", () => { process.stdout.write(' + JSON.stringify(output) + '); process.exitCode=' + exitCode + '; });'], options);
   } });

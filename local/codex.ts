@@ -23,6 +23,7 @@ const FEATURES_OFF = ['shell_tool', 'unified_exec', 'apps', 'plugins', 'memories
   'image_generation', 'view_image', 'skill_search', 'tool_suggest', 'sleep_tool', 'hooks', 'goals'];
 // `error` items are the CLI's own warnings (unknown model metadata), not a failure; the turn's end decides that.
 const PASSIVE_ITEMS = ['agent_message', 'reasoning', 'error'];
+const SIGN_IN_OVERRIDES = ['OPENAI_API_KEY', 'CODEX_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_ORGANIZATION', 'OPENAI_PROJECT'];
 const tokenCount = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
 
 export function createCodex(config: CodexConfig, { launch = spawn }: { launch?: Launch } = {}) {
@@ -51,9 +52,10 @@ export function createCodex(config: CodexConfig, { launch = spawn }: { launch?: 
       }
       args.push('-');
       const env: NodeJS.ProcessEnv = { ...process.env };
-      // The CLI signs in through its own CODEX_HOME. An API key in the environment would bill another account.
+      // The CLI signs in through its own CODEX_HOME. A key or another address in the environment would send the story
+      // to another account or another server.
       for (const key of Object.keys(env)) {
-        if (key.startsWith('SIMPLE_CHAT_') || key === 'TELEGRAM_BOT_TOKEN' || key === 'OPENAI_API_KEY' || key === 'CODEX_API_KEY') delete env[key];
+        if (key.startsWith('SIMPLE_CHAT_') || key === 'TELEGRAM_BOT_TOKEN' || SIGN_IN_OVERRIDES.includes(key)) delete env[key];
       }
       let child: ReturnType<Launch> | undefined;
       let forceKill: NodeJS.Timeout | undefined;

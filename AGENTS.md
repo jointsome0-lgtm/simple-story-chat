@@ -2,8 +2,7 @@
 
 Orientation for AI coding assistants (and humans) working in this project.
 This file is auto-loaded by Claude Code, Cursor, and similar tools — keep it short
-and true. For the full SDK reference (db, Bot API, fetch), see
-[docs/tgcloud-sdk.md](docs/tgcloud-sdk.md).
+and true.
 
 ## Improving the story system
 
@@ -13,18 +12,21 @@ change, what may not, how one step is measured with `npm run eval`, and when to 
 
 ## What this project is
 
-A **Telegram Mini App bot** running on Telegram's serverless platform. You write
-JavaScript modules (database schema, shared library code, update handlers); the
-platform runs them in a V8 isolate. The `tgcloud` CLI syncs this local project
-with the bot's cloud environment — think `wrangler`/`vercel` + `drizzle-kit`.
+A **Telegram bot for branching interactive stories** that runs locally: Node 24.9+, strict TypeScript executed
+without a build step, `node:sqlite`, the ordinary Bot API over long polling. The working code is in `local/`.
+Whoever runs the bot brings the model; adapters behind one interface are described in
+[docs/model-providers.md](docs/model-providers.md).
 
-There is no server to run locally and no `node_modules` to import from at runtime:
-the only things available inside a module are the platform SDK and other modules
-in this project.
+- `npm start` runs the bot from `.env`; `npm run start:gpu` swaps in the model connection from `.env.gpu`.
+- `npm test` needs no `npm install`, network, Telegram or model. `npm run check` (after `npm install`) type-checks
+  `local/`, verifies the generated `lib/library.js` and the syntax of the cloud files.
+- `local/*.ts` import each other with explicit `.ts` specifiers and use erasable syntax only. More in
+  [local/AGENTS.md](local/AGENTS.md).
+- `npm run eval` measures world consistency on synthetic stories; see "Improving the story system" above.
 
 ## Privacy: whose data you may read
 
-The local bot in `local/` stores real people's stories in `data/`. Nested `local/AGENTS.md` is not loaded for every
+The bot stores real people's stories in `data/`. Nested `local/AGENTS.md` is not loaded for every
 assistant, so the rule lives here too.
 
 - **Only the owner's stories may be read, and only to debug the bot.** The owner's Telegram ID is
@@ -46,80 +48,23 @@ applies there.
 
 | Path            | What it is                                                        |
 |-----------------|-------------------------------------------------------------------|
-| `schema.js`     | Database schema — tables as **named exports**. One file, at root. |
-| `lib/`          | Shared modules. Subdirectories allowed (`lib/internal/util.js`).  |
-| `handlers/`     | Update handlers, **one level only**. Names match Telegram Bot API update types (`message`, `callback_query`, …). |
-| `docs/`         | Reference docs (this project's, for you). Not deployed.           |
+| `local/`        | The bot: Telegram transport, storage, model adapters, memory, UI, eval and probes, with tests next to the code. |
+| `lib/library.ts`| Pure story-library logic shared by the bot and the cloud draft.   |
+| `examples/`     | Synthetic seeds and eval scenarios. Safe to read and to send to models. |
+| `gpu/`          | Bootstrap and start scripts for llama.cpp on a rented GPU ([docs/gpu.md](docs/gpu.md)). |
+| `docs/`         | Reference docs, the improvement loop and its log.                 |
+| `schema.js`, `handlers/`, other `lib/` files | The undeployed Telegram Serverless draft, see below. |
+| `data/`, `backups/`, `exports/`, `logs/`, `.env*` | Local state, gitignored. See Privacy above. |
 | `.tgcloud/`     | CLI state (credentials, snapshot, cached layout). **Never edit or read from here** — it's gitignored machine state. |
 
-Only `.js` files in `schema.js`, `lib/`, and `handlers/` are deployed. Everything
-else (Markdown, config, `.tgcloud/`) is local-only.
+## The cloud draft (not deployed)
 
-`lib/library.js` is generated from `lib/library.ts` by `npm run cloud:lib` and stays
-plain JS; edit only the `.ts` source and regenerate. The remaining `lib/` and
-`handlers/` files stay hand-written JS for tgcloud.
+`schema.js`, `handlers/` and the hand-written JS in `lib/` are an earlier draft for Telegram's serverless platform
+(V8 isolate, `tgcloud` CLI). It is not deployed and the local bot does not use it, apart from the shared
+`lib/library.ts`. `lib/library.js` is generated from `lib/library.ts` by `npm run cloud:lib` and stays plain JS; edit
+only the `.ts` source and regenerate. The rest of `lib/` and `handlers/` stays hand-written JS.
 
-## Module system — the rules that bite
-
-- **Import by bare module name, never a relative path or file extension.**
-  The platform resolves modules by their name in the module space, not by the
-  filesystem.
-  - ✅ `import { users } from 'schema'`
-  - ✅ `import { addItem } from 'lib/cart'`
-  - ✅ `import { db, api, fetch } from 'sdk'` / `import { eq, sql } from 'sdk/db'`
-  - ❌ `import { users } from './schema'` or `'../schema'` → **won't compile**
-  - ❌ `import x from 'lib/cart.js'` → drop the `.js`
-- **No filesystem, no npm packages** at runtime. Only `sdk` (and its submodules
-  like `sdk/db`) and your own project modules exist.
-- A handler module's `export default` is what the platform invokes, with the
-  update's **payload** as the first argument — for `handlers/message` that's the
-  `Message` (i.e. `update.message`), for `handlers/callback_query` the
-  `CallbackQuery`, and so on. The full `Update` (with `update_id`) is on the
-  second argument: `ctx.update`.
-
-## Platform SDK (`import … from 'sdk'`)
-
-- **`db`** — the database (query builder + schema DSL). Full API: [docs/tgcloud-sdk.md](docs/tgcloud-sdk.md).
-- **`api`** — the Telegram Bot API. `api.<method>({...})` (e.g. `api.sendMessage`,
-  `api.getMe`) returns the **unwrapped** result and **throws `BotApiError`** on
-  failure (`import { BotApiError } from 'sdk'`; it has `.code`/`.description`/`.parameters`).
-- **`fetch`** — outbound HTTP, web-`fetch`-like (`res.status/ok`, `res.json()`,
-  `res.text()`, streaming via `for await`, redirects followed).
-
-## Database — the rules that bite
-
-Full API in [docs/tgcloud-sdk.md](docs/tgcloud-sdk.md). The non-obvious parts:
-
-- **Every DB call is async — always `await`.** `.all()`, `.get()`, `.values()`,
-  `.run()`, `db.$count()` and the raw `db.run/all/get` all return Promises.
-- **No foreign keys.** `.references()` and `foreignKey()` **throw at declaration**
-  — the runtime runs with FKs off, so they'd be silently inert. Enforce integrity
-  in application code (delete children before parents, etc.).
-- **Drops happen only via `.deprecated('reason')`** on a column/table/index.
-  Deleting the declaration does *not* drop anything.
-- **Type changes aren't automatic** — do them by hand with `db.run(...)`.
-
-## Deploy & migrate workflow
-
-**Deploying never touches the database.** Schema sync is a separate, explicit step.
-
-The CLI is a local dev-dependency, so run it with `npx tgcloud <command>` (or use
-the `npm run` scripts in package.json — e.g. `npm run deploy`):
-
-```
-npx tgcloud status     # what changed locally vs the cloud
-npx tgcloud push       # deploy modules to the cloud
-npx tgcloud migrate    # apply schema.js changes to the database (interactive)
-npx tgcloud run <module> [args]   # execute a handler server-side
-npx tgcloud pull       # bring the local project in line with the cloud
-npx tgcloud login      # link this project to a bot
-npx tgcloud webhook    # show the bot's webhook and whether it matches your handlers
-```
-
-After you change `schema.js`, `push` reports what the DB *would* change but applies
-nothing — run `npx tgcloud migrate` to actually apply it.
-
-The platform manages the bot's webhook for you, derived from your deployed
-`handlers/*`, and refreshes it on `push`. If it ever drifts — e.g. someone called
-`setWebhook` with the raw bot token — `npx tgcloud webhook` shows the mismatch and
-`npx tgcloud webhook sync` repairs it.
+The platform's rules differ from Node's: modules are imported by bare name (`'schema'`, `'lib/cart'`, `'sdk'`), never
+by a relative path or with an extension; there is no filesystem and no npm at runtime; every DB call is async; there
+are no foreign keys; drops happen only via `.deprecated('reason')`; deploying never touches the database. Read
+[docs/tgcloud-sdk.md](docs/tgcloud-sdk.md) before touching those files.

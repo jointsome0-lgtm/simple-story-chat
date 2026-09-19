@@ -1,6 +1,7 @@
 {
   "name": "simple-story-chat",
   "private": true,
+  "description": "Telegram bot for branching interactive stories: bring your own model (Claude Code, llama.cpp, Codex CLI or an OpenAI-compatible API); seeds, story tree, checkpoints, memory compaction and a world-consistency eval.",
   "license": "MIT",
   "devDependencies": {
     "@tgcloud/cli": "0.1.2",

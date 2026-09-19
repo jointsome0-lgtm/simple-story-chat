@@ -28,6 +28,7 @@ type CliEvent = {
   is_error?: unknown; result?: unknown; structured_output?: unknown; num_turns?: unknown; usage?: CliUsage;
 };
 
+const SIGN_IN_OVERRIDES = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_CUSTOM_HEADERS'];
 const tokenCount = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
 function inputTokens(usage: CliUsage) {
   if (tokenCount(usage?.input_tokens) === null) return null;
@@ -96,8 +97,10 @@ export function createClaude(config: ClaudeConfig, { launch = spawn }: { launch?
       if (request.outputSchema) args.push('--json-schema', JSON.stringify(request.outputSchema));
       const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(request.maxOutputTokens),
         DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1' };
+      // The CLI signs in through the subscription. A key, a token or another address in the environment would send the
+      // story to another account or another server.
       for (const key of Object.keys(env)) {
-        if (key.startsWith('SIMPLE_CHAT_') || key === 'TELEGRAM_BOT_TOKEN' || key === 'ANTHROPIC_API_KEY') delete env[key];
+        if (key.startsWith('SIMPLE_CHAT_') || key === 'TELEGRAM_BOT_TOKEN' || SIGN_IN_OVERRIDES.includes(key)) delete env[key];
       }
       let child: ReturnType<Launch> | undefined;
       let forceKill: NodeJS.Timeout | undefined;

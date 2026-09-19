@@ -20,15 +20,19 @@
 | `SIMPLE_CHAT_ALLOWED_USER_IDS` | Числовые ID через запятую, без общего доступа |
 | `SIMPLE_CHAT_OWNER_ID` | ID владельца, разрешившего читать свои сообщения для отладки; не разрешение читать других пользователей. Должен входить в список доступа. По нему бот помечает строки журнала как `actor: owner`, остальные получают `other` |
 | `SIMPLE_CHAT_DB_PATH` | По умолчанию `data/simple-chat.sqlite`; можно выбрать локальный путь на компьютере или сервере |
-| `SIMPLE_CHAT_PROVIDER` | `claude-code`, `llama-cpp` или `openai-compatible` (только пробы, [подробности](model-providers.md)) |
-| `SIMPLE_CHAT_MODEL` | По умолчанию `claude-haiku-4-5-20251001` |
+| `SIMPLE_CHAT_PROVIDER` | `claude-code`, `llama-cpp`, `codex-cli` или `openai-compatible`. Два последних отправляют историю стороннему сервису и без согласия ниже годятся только для проб ([подробности](model-providers.md)) |
+| `SIMPLE_CHAT_ALLOW_HOSTED` | Дословно `stories-leave-this-computer`, чтобы бот стартовал с `codex-cli` или `openai-compatible`. Только для собственных историй; любое другое значение согласием не считается |
+| `SIMPLE_CHAT_MODEL` | По умолчанию `claude-haiku-4-5-20251001`; для `codex-cli` и `openai-compatible` обязателен |
 | `SIMPLE_CHAT_CONTEXT_TOKENS` | 65536, включая резерв под ответ; CLI использует консервативную оценку входа |
 | `SIMPLE_CHAT_MAX_OUTPUT_TOKENS` | Максимум ответа, по умолчанию 4096 |
-| `SIMPLE_CHAT_COMPACT_AT_TOKENS` | Порог автоматического сжатия входа: 44000 для llama.cpp, 54000 для Claude Code |
+| `SIMPLE_CHAT_COMPACT_AT_TOKENS` | Порог автоматического сжатия входа: 44000 для llama.cpp, 54000 для Claude Code и Codex CLI |
 | `SIMPLE_CHAT_KEEP_SCENES` | Сколько последних сцен оставлять целиком, по умолчанию 4 |
-| `SIMPLE_CHAT_API_KEY`, `SIMPLE_CHAT_BASE_URL` | Ключ и корневой адрес llama.cpp; для Claude Code пустые |
+| `SIMPLE_CHAT_API_KEY`, `SIMPLE_CHAT_BASE_URL` | Ключ и корневой адрес llama.cpp или размещённого API; для Claude Code и Codex CLI пустые |
 | `SIMPLE_CHAT_MODEL_TIMEOUT_MS` | Таймаут вызова модели через CLI или HTTP; по умолчанию 300000 мс, в GPU-примере 600000 мс |
 | `SIMPLE_CHAT_TEMPERATURE` | Температура художественного ответа llama.cpp, по умолчанию 0.8 |
+| `SIMPLE_CHAT_MEMORY_MODE` | `plain` (по умолчанию) или экспериментальный `sgr` |
+| `SIMPLE_CHAT_BUDGET_REQUESTS`, `SIMPLE_CHAT_BUDGET_TOKENS` | Дневные лимиты для `openai-compatible`; без них действуют значения канала из [таблицы](model-providers.md#дневные-лимиты-размещённых-api) |
+| `SIMPLE_CHAT_VAST_INSTANCE_ID`, `SIMPLE_CHAT_VAST_API_KEY` | Необязательные: экземпляр Vast.ai, который бот запускает и останавливает сам ([инструкция](gpu.md)) |
 
 Для Gemma на арендованной карте предусмотрены [отдельный профиль `.env.gpu` и инструкция](gpu.md). Команда `npm run start:gpu` использует прежние настройки Telegram и базу, заменяя подключение модели. Сначала требуется подготовить сервер и пройти `npm run model:probe`.
 

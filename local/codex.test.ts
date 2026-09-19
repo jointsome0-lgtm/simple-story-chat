@@ -17,6 +17,9 @@ function fixture(t: TestContext, events: object[], exitCode = 0) {
   const directory = mkdtempSync(join(tmpdir(), 'simple-chat-codex-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const seen: { instructions?: string; schema?: string } = {};
+  // The provider must not pass another address or key on to the CLI.
+  process.env.OPENAI_BASE_URL = 'http://elsewhere.invalid';
+  t.after(() => { delete process.env.OPENAI_BASE_URL; });
   const provider = createCodex({ dbPath: join(directory, 'test.sqlite'), model: 'test-model', contextTokens: 65536 }, { launch(command, args, options) {
     assert.equal(command, 'codex');
     assert.deepEqual(args.slice(0, 2), ['exec', '--json']);
@@ -26,7 +29,7 @@ function fixture(t: TestContext, events: object[], exitCode = 0) {
     // Neither the story nor the system prompt travels in the argument list.
     assert.ok(!args.join(' ').includes('synthetic'));
     assert.equal(args.at(-1), '-');
-    for (const key of ['TELEGRAM_BOT_TOKEN', 'OPENAI_API_KEY', 'SIMPLE_CHAT_MODEL']) assert.equal(options.env[key], undefined);
+    for (const key of ['TELEGRAM_BOT_TOKEN', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'SIMPLE_CHAT_MODEL']) assert.equal(options.env[key], undefined);
     assert.deepEqual(readdirSync(options.cwd), []);
     const file = (args.find(arg => arg.startsWith('model_instructions_file=')) ?? '').slice('model_instructions_file='.length);
     seen.instructions = readFileSync(JSON.parse(file), 'utf8');
