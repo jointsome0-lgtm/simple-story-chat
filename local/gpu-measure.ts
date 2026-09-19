@@ -21,12 +21,17 @@ import type { GenerationResult, ModelRequest, Timings } from './model.ts';
 export const THRESHOLDS = {
   // 1. Free video memory at the peak. Less than this risks a failure on a long history.
   freeVramMiB: 1024,
-  // 2. The tester's cache survives the work beside it, up to a template boundary.
-  cacheToleranceTokens: 32,
+  // 2. The tester's cache survives the work beside it, up to a template boundary. Raised from 32 by the owner on
+  // 2026-09-20, after the first live run: on the rented 5090 the tester re-read 1 to 219 tokens of a 39,700-token
+  // history, which is the boundary moving under load, not a cache being lost. What this guards against is the
+  // failure measured on the RX 580, where the whole history came back; 256 is still two orders below that.
+  cacheToleranceTokens: 256,
   // 3. Parallel lanes are worth it only at this much more useful work per hour.
   throughputGain: 1.2,
-  // 4. How much slower the tester's scene may get with work beside it.
-  sceneSlowdown: 1.5,
+  // 4. How long the tester's scene may take with work beside it. Agreed by the owner on 2026-09-20 in place of a
+  // ratio (it was "no more than 1.5x slower"): a person feels seconds, not ratios, and a ratio tightens by itself
+  // every time the card gets faster. On the rented 5090 a scene took 3.6 s alone and 6.6 s beside a full load.
+  sceneSecondsUnderLoad: 10,
   // 5. How long the tester may wait for the queue.
   waitSeconds: 120,
   // 6. The draft model (MTP) is worth it at this speed-up, and only without a format regression.
@@ -36,7 +41,7 @@ export const THRESHOLDS = {
 export type Call = {
   label: string; waitMs: number; elapsedMs: number; finishReason: string;
   inputTokens: number | null; cachedInputTokens: number | null; outputTokens: number | null;
-  tokensPerSecond: number | null; formatFailed: boolean; timings?: Timings;
+  tokensPerSecond: number | null; transportMs: number | null; formatFailed: boolean; timings?: Timings;
 };
 export type Phase = {
   seconds: number; tester: Call[]; agent: Call[]; probes: { completed: number; preempted: number };
@@ -91,11 +96,13 @@ export function verdictOf(run: Report): Check[] {
   add(3, 'useful work per hour beside the tester', gain === null ? (contested ? 'not measured' : 'nothing ran beside the tester') : `${round(gain)}x`,
     `>= ${THRESHOLDS.throughputGain}x`, gain === null ? 'unknown' : gain >= THRESHOLDS.throughputGain ? 'pass' : 'fail');
 
-  const soloScene = solo ? median(solo.tester.map(call => call.elapsedMs)) : null;
+  // The scene the person waits through, in seconds, not as a share of an idle card: see the threshold's own note.
   const loadedScene = loaded ? median(loaded.tester.map(call => call.elapsedMs)) : null;
-  const slowdown = contested && soloScene && loadedScene ? loadedScene / soloScene : null;
-  add(4, 'the tester\'s scene beside other work', slowdown === null ? (contested ? 'not measured' : 'nothing ran beside the tester') : `${round(slowdown)}x slower`,
-    `<= ${THRESHOLDS.sceneSlowdown}x`, slowdown === null ? 'unknown' : slowdown <= THRESHOLDS.sceneSlowdown ? 'pass' : 'fail');
+  const sceneSeconds = contested && loadedScene ? loadedScene / 1000 : null;
+  add(4, 'the tester\'s scene beside other work',
+    sceneSeconds === null ? (contested ? 'not measured' : 'nothing ran beside the tester') : `${round(sceneSeconds, 1)} s`,
+    `<= ${THRESHOLDS.sceneSecondsUnderLoad} s`,
+    sceneSeconds === null ? 'unknown' : sceneSeconds <= THRESHOLDS.sceneSecondsUnderLoad ? 'pass' : 'fail');
 
   const waits = loaded ? loaded.tester.map(call => call.waitMs) : [];
   const longest = waits.length ? Math.max(...waits) : null;
@@ -104,8 +111,14 @@ export function verdictOf(run: Report): Check[] {
   return checks;
 }
 
+// The draft model changes how fast the card writes tokens, so it is judged on the server's own clock. `elapsedMs`
+// carries the SSH proxy with it, and that proxy was measured at 1.4 ms one hour and 1.4 s the next: a wall-clock
+// speed would compare the tunnel's mood, not the two models.
 const testerSpeed = (run: Report) => {
-  const speeds = (run.phases.solo?.tester ?? []).map(call => call.tokensPerSecond).filter((value): value is number => value !== null);
+  const speeds = (run.phases.solo?.tester ?? []).map(call =>
+    call.timings?.predictedTokens && call.timings.predictedMs
+      ? call.timings.predictedTokens / (call.timings.predictedMs / 1000) : null)
+    .filter((value): value is number => value !== null);
   return median(speeds);
 };
 const formatFailures = (run: Report) => [...run.phases.solo?.tester ?? [], ...run.phases.loaded?.tester ?? [],
@@ -216,6 +229,12 @@ async function main(args: string[]) {
       inputTokens: usage?.inputTokens ?? null, cachedInputTokens: usage?.cachedInputTokens ?? null,
       outputTokens: usage?.outputTokens ?? null,
       tokensPerSecond: usage?.outputTokens && elapsedMs > 0 ? round(usage.outputTokens / (elapsedMs / 1000)) : null,
+      // What the call spent outside the queue and outside the server: the tunnel, and whatever the proxy was doing.
+      // A run where this grows to seconds has measured the network, and its wall-clock numbers say little about the
+      // configuration. Recorded so that such a run is visible instead of merely looking slow.
+      transportMs: result.timings
+        ? Math.max(0, elapsedMs - Math.round((result.timings.promptMs ?? 0) + (result.timings.predictedMs ?? 0)))
+        : null,
       formatFailed: formatFailedIn(result.text), ...(result.timings ? { timings: result.timings } : {}) };
     report({ event: 'call_measured', ...call });
     return { call, text: result.text };

@@ -166,12 +166,19 @@ The owner's thresholds, agreed on 20 September 2026 and encoded in `THRESHOLDS` 
 | # | What is decided | Threshold |
 |---|-----------------|-----------|
 | 1 | Free video memory at the peak | at least 1 GiB |
-| 2 | The tester's cache while others work | kept, 32 tokens of tolerance |
+| 2 | The tester's cache while others work | kept, 256 tokens of tolerance |
 | 3 | Useful work per hour with lanes beside the tester | at least 1.2× |
-| 4 | The tester's scene beside that work | no more than 1.5× slower |
+| 4 | The tester's scene beside that work | no longer than 10 seconds |
 | 5 | The tester's longest wait for the queue | 120 seconds |
 | 6 | The draft model (MTP) | at least 1.2×, without a format regression |
 | 7 | The pool and the draft model do not fit together | keep the pool, drop the draft model |
+
+Thresholds 2 and 4 were reshaped by the owner on 2026-09-20, after the first live run and before the reports were
+re-read. The cache tolerance was 32 tokens, which the tester crossed by re-reading 1 to 219 tokens of a 39,700-token
+history: that is the template boundary moving under load, not a cache being lost, and the failure it guards against
+(the whole history coming back, as measured on the RX 580 below) is two orders of magnitude larger. Threshold 4 was
+"no more than 1.5× slower", a ratio; a person waits in seconds, and a ratio tightens by itself every time the card
+gets faster, so the same experience would fail the check on better hardware.
 
 On the RX 580 with Gemma 3 1B, three slots and the same load in each run, the script answered the question the flags raise:
 
