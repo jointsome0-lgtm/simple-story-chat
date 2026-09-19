@@ -318,3 +318,19 @@ test('a start counter separates a real restart from a failing control API', asyn
   time = 70000; await gpu.tick();
   assert.equal((await gpu.tick()).starts, 2);
 });
+
+test('an intention to stop that never took effect is not a restart', async () => {
+  let state = { actual: 'running', intended: 'running' };
+  let writes = 0;
+  const gpu = createGpu({ now: () => 0,
+    api: { read: async () => state, setState: async () => { writes++; } },
+    connection: { ensure: async () => {}, close() {} }, check: async () => {} });
+  assert.equal((await gpu.tick()).starts, 1);
+  // Somebody outside the bot asks Vast to stop the instance and then takes it back. The instance never left 'running',
+  // so the model server and its caches stayed up.
+  state = { actual: 'running', intended: 'stopped' };
+  assert.equal((await gpu.tick()).status, 'stopping');
+  state = { actual: 'running', intended: 'running' };
+  const back = await gpu.tick();
+  assert.deepEqual([back.status, back.starts, writes], ['ready', 1, 0]);
+});

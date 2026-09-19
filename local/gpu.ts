@@ -52,13 +52,15 @@ export function createGpu({ api, connection, check, idleMinutes = 15, now = Date
   // The instance was down (or not yet known) since the last time a tick saw it ready.
   let down = true;
   let starts = 0;
-  // Counted once per tick, so a state the bot never observed still counts.
+  // Counted once per tick, so a state the bot never observed still counts. Only a state that means the instance itself
+  // is not running empties the caches: an intention to stop ('stopping', 'draining') leaves the server and its caches
+  // in place until the instance actually goes down, and a failing control API ('error') says nothing about either.
   function count() {
     const current = currentStatus();
     if (current === 'ready') {
       if (down) starts++;
       down = false;
-    } else if (current !== 'error') down = true;
+    } else if (current === 'paused' || current === 'starting' || current === 'unknown') down = true;
   }
   const snapshot = (): GpuSnapshot => ({ status: currentStatus(), starts, activeJobs, idleMinutes,
     checkDegraded: checkDegraded && currentStatus() === 'ready',

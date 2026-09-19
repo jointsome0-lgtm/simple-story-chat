@@ -219,14 +219,18 @@ export function createScheduler<Request, Result>(provider: {
       log('turn_lost');
       return endTurn(lane.reserved.turn, 'background_unavailable');
     }
-    // A reserved slot runs only the next call of its turn; an agent's is not held back by the quiet window.
+    // A reserved slot runs only the next call of its turn; an agent's is not held back by the quiet window. A turn kept
+    // waiting there clears its own way below, unless it yields: such a turn preempts nothing and keeps nobody behind it.
     let held: Item<Request> | undefined;
+    let heldAgent: Item<Request> | undefined;
     for (const lane of lanes) if (!lane.active && lane.reserved) {
       const turn = lane.reserved.turn;
       const item = turn.priority === 'agent' && !agentCanRun() ? undefined : waiting(turn);
       if (!item) continue;
       if (admit(item, lane)) start(item, lane);
+      else if (turn.yields) continue;
       else if (item.priority === 'foreground') held ??= item;
+      else if (item.priority === 'agent') heldAgent ??= item;
     }
     const quiet = pool || now() - lastForeground >= quietMs;
     // Calls of turns that hold a slot wait for it above; the rest go in order while a slot has room for them. A yielding
@@ -251,8 +255,9 @@ export function createScheduler<Request, Result>(provider: {
       }
       return;
     }
-    // An agent kept from the model by a probe stops it: a probe is disposable, an agent turn is not.
-    const keptAgent = place(agent, () => quiet && agentCanStart());
+    // An agent kept from the model by a probe stops it: a probe is disposable, an agent turn is not. A started turn
+    // waiting for its own next call counts here too, and no longer asks whether an agent may start.
+    const keptAgent = heldAgent ?? place(agent, () => quiet && agentCanStart());
     if (pool && keptAgent?.inputTokens !== undefined) stop('background', 'background_preempted');
     place(background, () => quiet && backgroundAllowed());
   }

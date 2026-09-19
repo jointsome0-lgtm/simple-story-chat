@@ -478,6 +478,44 @@ test('an agent kept by a probe in a pool stops it, and a turn waiting for room i
   agentTurn.end();
   await assert.rejects(next, { code: 'cancelled' });
 });
+test('an agent between its own calls stops a probe that leaves it no room', async t => {
+  const f = poolFixture(t, { poolTokens: 65536 });
+  const agentTurn = f.scheduler.agent.openTurn({ holder: 'agent' });
+  const small = agentTurn.generate('agent small:1000');
+  await f.started(1);
+  f.calls[0].finish(); await small;
+  const probe = f.scheduler.background.generate('probe:40000');
+  await f.started(2);
+  // The turn holds its slot, so nothing but the probe stands between it and the model.
+  const preempted = assert.rejects(probe, { code: 'background_preempted' });
+  const big = agentTurn.generate('agent big:30000');
+  await preempted;
+  await f.started(3);
+  assert.deepEqual([f.calls[2].name, f.calls[2].slot], ['agent big', 0]);
+  f.calls[2].finish(); await big; agentTurn.end();
+});
+test('a yielding turn waiting for room in a pool keeps nobody behind it', async t => {
+  const f = poolFixture(t, { poolTokens: 65536 });
+  const agent = f.scheduler.agent.generate('agent:40000');
+  await f.started(1);
+  const prepared = f.scheduler.foreground.openTurn({ holder: 'owner', yields: true });
+  const first = prepared.generate('prepared small:1000');
+  await f.started(2);
+  f.calls[1].finish(); await first;
+  // Its next call does not fit beside the agent, and a turn that yields preempts nobody to make room for itself.
+  const next = prepared.generate('prepared big:30000');
+  await turn(); await turn();
+  assert.equal(f.calls.length, 2);
+  // A person who does fit is not kept waiting by it.
+  const tester = f.scheduler.foreground.generate('tester:1000');
+  await f.started(3);
+  assert.equal(f.calls[2].name, 'tester');
+  assert.equal(f.calls[0].signal.aborted, false);
+  f.calls[2].finish(); await tester;
+  f.calls[0].finish(); await agent;
+  await f.started(4);
+  f.calls[3].finish(); await next; prepared.end();
+});
 test('cancelling a queued call in a pool ends the token count it started', async t => {
   let release: ((value: number) => void) | undefined;
   const aborted: string[] = [];
