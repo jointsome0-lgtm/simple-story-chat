@@ -31,6 +31,12 @@ export function beginTurn(state: Library, input: string, now: number, operation?
   return job;
 }
 
+// Runs one scene or compaction operation as a turn of the provider, if it has turns; `end` runs however it finishes.
+export async function inTurn<T>(provider: Provider, operation: (provider: Provider) => Promise<T>): Promise<T> {
+  const turn = provider.openTurn?.();
+  try { return await operation(turn ?? provider); } finally { turn?.end(); }
+}
+
 export async function runTurn({ store, userId, job, provider, config, signal, onProgress, log, labels, preview, onGenerated, operation }: {
   store: Store; userId: string; job: Job; provider: Provider; config: GenerationConfig & { provider: string }; signal: AbortSignal;
   onProgress?: (status: CompactionStatus) => void; log?: Log; labels?: CompactionLabels;
@@ -39,7 +45,9 @@ export async function runTurn({ store, userId, job, provider, config, signal, on
   onGenerated?: (result: GenerationResult) => void; operation?: TurnOperation;
 }): Promise<TurnOutcome> {
   try {
-    const { result, request } = await generateScene({ store, userId, jobId: job.id, provider, config, signal, onProgress, log, labels, preview });
+    // The model calls of the turn end with the scene; saving it needs no model.
+    const { result, request } = await inTurn(provider, provider =>
+      generateScene({ store, userId, jobId: job.id, provider, config, signal, onProgress, log, labels, preview }));
     if (signal.aborted) return { status: 'gone' };
     onGenerated?.(result);
     const ref = store.mutate(userId, state => {

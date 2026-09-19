@@ -80,3 +80,58 @@ test('disconnecting a background client cancels its request; no other process ca
   await ready; controller.abort(); await rejection; await stopped; await turn();
   assert.equal(f.scheduler.snapshot().active, null);
 });
+test('an agent turn over the socket holds the slot until its control request closes; a late call is refused', async t => {
+  const calls: string[] = [];
+  const finishes: ((value: unknown) => void)[] = [];
+  const f = await fixture(t, (req, { signal }) => {
+    const name = req === 'foreground' ? 'foreground' : 'agent';
+    calls.push(name);
+    if (name === 'foreground') return Promise.resolve('user result');
+    return new Promise((resolve, reject) => {
+      finishes.push(resolve);
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    });
+  });
+  const agent = createBackgroundClient({ socketPath: f.socketPath, model: 'synthetic-model', timeoutMs: 2000, work: 'agent' });
+  const turnChannel = await agent.openTurn();
+  const compaction = agent.generate(request, { turn: turnChannel.id });
+  while (!finishes.length) await turn();
+  const user = f.scheduler.foreground.generate('foreground');
+  finishes[0]({ text: 'Memory', finishReason: 'stop' });
+  await compaction;
+  // Between the turn's calls the person still waits.
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.deepEqual(calls, ['agent']);
+  const scene = agent.generate(request, { turn: turnChannel.id });
+  while (finishes.length < 2) await turn();
+  finishes[1]({ text: 'Scene', finishReason: 'stop' });
+  assert.equal((await scene).text, 'Scene');
+  turnChannel.close();
+  assert.equal(await user, 'user result');
+  await assert.rejects(agent.generate(request, { turn: turnChannel.id }), { code: 'background_unavailable' });
+});
+test('a lost agent process ends its turn and stops its running call', async t => {
+  let aborted = false;
+  const f = await fixture(t, (req, { signal }) => new Promise((resolve, reject) => {
+    signal.addEventListener('abort', () => { aborted = true; reject(signal.reason); }, { once: true });
+  }));
+  const agent = createBackgroundClient({ socketPath: f.socketPath, model: 'synthetic-model', timeoutMs: 2000, work: 'agent' });
+  const turnChannel = await agent.openTurn();
+  const call = agent.generate(request, { turn: turnChannel.id }).catch(() => null);
+  while (f.scheduler.snapshot().active !== 'agent') await turn();
+  // The control request closes as it would when the agent process dies.
+  turnChannel.close();
+  while (!aborted) await turn();
+  await call;
+  assert.equal(f.scheduler.snapshot().active, null);
+});
+test('the input limit of an agent call reaches the model through the socket', async t => {
+  let limit: unknown;
+  const f = await fixture(t, async (req, controls) => {
+    limit = (controls as { inputLimitTokens?: number }).inputLimitTokens;
+    return { text: 'Scene', finishReason: 'stop' };
+  });
+  const agent = createBackgroundClient({ socketPath: f.socketPath, model: 'synthetic-model', timeoutMs: 2000, work: 'agent' });
+  await agent.generate(request, { inputLimitTokens: 43999 });
+  assert.equal(limit, 43999);
+});

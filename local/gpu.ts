@@ -29,6 +29,9 @@ export function createGpu({ api, connection, check, idleMinutes = 15, now = Date
   const idleMs = idleMinutes * 60000;
   let status: GpuStatus = 'unknown';
   let activeJobs = 0;
+  // Agent turns that have started (local/scheduler.ts). They keep the instance from pausing until they end, but unlike
+  // a user's job they do not stop or reset the idle countdown.
+  let holds = 0;
   let idleSince: number | null = null;
   let intent: Intent = 'none';
   let pending: Promise<GpuSnapshot> | undefined;
@@ -39,6 +42,7 @@ export function createGpu({ api, connection, check, idleMinutes = 15, now = Date
   // pause() and resume() may change the intent while reconcile awaits. It is read through a call, which TypeScript
   // does not narrow, so a check made before an await is not assumed to still hold after it.
   const wants = (value: Intent) => intent === value;
+  const busy = () => activeJobs + holds > 0;
   const idleExpired = () => !activeJobs && idleSince !== null && now() - idleSince >= idleMs;
   const stopped = (remote: RemoteState) => member(['stopped', 'exited'], remote.actual) && remote.intended === 'stopped';
   const currentStatus = () => status === 'ready' && checkDegraded && now() - lastReadyAt >= readyGraceMs ? 'error' : status;
@@ -61,7 +65,7 @@ export function createGpu({ api, connection, check, idleMinutes = 15, now = Date
       if (idleExpired()) intent = 'pause';
       if (wants('pause')) {
         lastReadyAt = -Infinity;
-        if (activeJobs) { status = 'draining'; return snapshot(); }
+        if (busy()) { status = 'draining'; return snapshot(); }
         connection.close();
         if (stopped(remote)) {
           status = 'paused'; idleSince = null; intent = 'none';
@@ -92,7 +96,7 @@ export function createGpu({ api, connection, check, idleMinutes = 15, now = Date
         await connection.ensure();
         // Health checks and menu reads do not count as user activity.
         await check({ signal: AbortSignal.timeout(8000) });
-        status = wants('pause') ? (activeJobs ? 'draining' : 'stopping') : 'ready';
+        status = wants('pause') ? (busy() ? 'draining' : 'stopping') : 'ready';
         if (status === 'ready') lastReadyAt = now();
         if (wants('start')) intent = 'none';
       } else { lastReadyAt = -Infinity; status = 'starting'; }
@@ -101,7 +105,7 @@ export function createGpu({ api, connection, check, idleMinutes = 15, now = Date
       if (idleExpired()) intent = 'pause';
       const transient = member(['gpu_api_failed', 'gpu_api_timeout', 'cancelled', 'timeout', 'provider_failed', 'model_unavailable'], errorCode(error));
       checkDegraded = transient && wants('none') && now() - lastReadyAt < readyGraceMs;
-      status = checkDegraded ? 'ready' : wants('pause') && activeJobs ? 'draining' : 'error';
+      status = checkDegraded ? 'ready' : wants('pause') && busy() ? 'draining' : 'error';
       if (!transient) lastReadyAt = -Infinity;
       log(checkDegraded ? 'gpu_check_deferred' : 'gpu_check_failed', errorCode(error), error);
     }
@@ -118,13 +122,24 @@ export function createGpu({ api, connection, check, idleMinutes = 15, now = Date
         if (released) return;
         released = true;
         activeJobs--;
-        if (!activeJobs) { idleSince = now(); if (wants('pause')) void controller.tick(); }
+        if (!activeJobs) { idleSince = now(); if (!busy() && wants('pause')) void controller.tick(); }
+      };
+    },
+    // Keeps a started agent turn from being cut off by a pause; the idle countdown goes on.
+    hold() {
+      holds++;
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        holds--;
+        if (!busy() && wants('pause')) void controller.tick();
       };
     },
     pause() {
       lastReadyAt = -Infinity; checkDegraded = false;
       intent = 'pause';
-      status = activeJobs ? 'draining' : 'stopping';
+      status = busy() ? 'draining' : 'stopping';
       lastWrite = -Infinity;
     },
     resume() {

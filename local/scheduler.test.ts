@@ -153,3 +153,86 @@ test('an agent call preempts a probe, starts only when allowed and stops only wh
   const stopped = assert.rejects(agent, { code: 'background_unavailable' });
   run = false; f.scheduler.tick(); await stopped;
 });
+test('a turn keeps the slot from its first call until it ends, however long it pauses between calls', async t => {
+  let time = 0;
+  const f = fixture(t, { now: () => time });
+  const owner = f.scheduler.foreground.openTurn();
+  const first = owner.generate('owner compaction');
+  const tester = f.scheduler.foreground.generate('tester');
+  f.calls[0].finish(); await first; await turn();
+  // Local work between the steps takes its time; nobody takes the slot meanwhile.
+  time = 30000; f.scheduler.tick(); assert.equal(f.calls.length, 1);
+  const scene = owner.generate('owner scene');
+  await turn();
+  assert.equal(f.calls[1].name, 'owner scene');
+  f.calls[1].finish(); await scene; await turn();
+  assert.equal(f.calls.length, 2);
+  owner.end(); await turn();
+  assert.equal(f.calls[2].name, 'tester');
+  f.calls[2].finish(); await tester;
+  // An ended turn takes no more calls.
+  await assert.rejects(owner.generate('late'), { code: 'cancelled' });
+});
+test('an agent turn continues past the quiet window and holds the GPU until it ends', async t => {
+  let time = 0, start = true, holds = 0, released = 0;
+  const f = fixture(t, { now: () => time, quietMs: 60000, agentCanStart: () => start,
+    holdAgentTurn: () => { holds++; return () => { released++; }; } });
+  time = 60000;
+  const agentTurn = f.scheduler.agent.openTurn();
+  // Opening a turn reserves nothing; the first call's actual start does.
+  assert.equal(holds, 0);
+  const compaction = agentTurn.generate('agent compaction');
+  assert.equal(f.calls[0].name, 'agent compaction');
+  // A person arrives: the quiet window restarts and the start rule turns false, yet the turn's next call goes first.
+  const user = f.scheduler.foreground.generate('user');
+  start = false;
+  f.calls[0].finish(); await compaction; await turn();
+  const scene = agentTurn.generate('agent scene');
+  await turn();
+  assert.deepEqual(f.calls.map(c => c.name), ['agent compaction', 'agent scene']);
+  f.calls[1].finish(); await scene; await turn();
+  assert.deepEqual([holds, released], [1, 0]);
+  agentTurn.end(); await turn();
+  assert.deepEqual([holds, released], [1, 1]);
+  assert.equal(f.calls[2].name, 'user');
+  f.calls[2].finish(); await user;
+});
+test('ending a turn between its calls frees the slot at once; ending it during a call stops the call', async t => {
+  const f = fixture(t);
+  const owner = f.scheduler.foreground.openTurn();
+  const first = owner.generate('owner');
+  f.calls[0].finish(); await first; await turn();
+  const tester = f.scheduler.foreground.generate('tester');
+  await turn(); assert.equal(f.calls.length, 1);
+  owner.end(); await turn();
+  assert.equal(f.calls[1].name, 'tester');
+  f.calls[1].finish(); await tester;
+  // A lost owner: its running call is stopped and the slot is free.
+  const lost = f.scheduler.agent.openTurn();
+  const running = lost.generate('agent');
+  const stopped = assert.rejects(running, { code: 'cancelled' });
+  lost.end(); await stopped;
+});
+test('a turn that holds the slot without calls for too long is taken as lost', async t => {
+  let time = 0;
+  const events: string[] = [];
+  const f = fixture(t, { now: () => time, turnIdleMs: 60000, log: event => { events.push(event); } });
+  const owner = f.scheduler.foreground.openTurn();
+  const first = owner.generate('owner');
+  f.calls[0].finish(); await first; await turn();
+  const tester = f.scheduler.foreground.generate('tester');
+  time = 59999; f.scheduler.tick(); assert.equal(f.calls.length, 1);
+  time = 60000; f.scheduler.tick(); await turn();
+  assert.equal(f.calls[1].name, 'tester');
+  assert.ok(events.includes('turn_lost'));
+  await assert.rejects(owner.generate('late'), { code: 'cancelled' });
+  f.calls[1].finish(); await tester;
+});
+test('a pausing GPU ends waiting agent calls instead of leaving them queued', async t => {
+  let run = true;
+  const f = fixture(t, { agentCanStart: () => false, agentCanRun: () => run });
+  const waiting = f.scheduler.agent.generate('agent turn');
+  const rejected = assert.rejects(waiting, { code: 'background_unavailable' });
+  run = false; f.scheduler.tick(); await rejected;
+  assert.equal(f.calls.length, 0);
+});

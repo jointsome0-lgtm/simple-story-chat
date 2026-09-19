@@ -7,7 +7,7 @@ import type { Chat, InlineKeyboard, Screen, TelegramApi } from './telegram.ts';
 import { continueInput, contextStats } from './context.ts';
 import type { ContextSelection, ContextStats } from './context.ts';
 import { compactBranch } from './generation.ts';
-import { beginTurn, runTurn } from './turn.ts';
+import { beginTurn, inTurn, runTurn } from './turn.ts';
 import { messageText, seedInput } from './incoming.ts';
 import type { IncomingMessage } from './incoming.ts';
 import { SEED_BYTES } from './seed-file.ts';
@@ -260,8 +260,8 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
     try {
       if (job.kind === 'compact') {
         // compactBranch writes the log rows of a compaction, manual or automatic, with its sizes and counts.
-        const result = await compactBranch({ store, userId, jobId: job.id, provider,
-          config: contextConfig, signal: controller.signal, onProgress, log, labels });
+        const result = await inTurn(provider, provider => compactBranch({ store, userId, jobId: job.id, provider,
+          config: contextConfig, signal: controller.signal, onProgress, log, labels }));
         const completed = store.mutate(userId, state => {
           if (controller.signal.aborted || !jobTarget(state, job.id)) return false;
           state.job = null;

@@ -43,6 +43,19 @@ test('idle stop waits 15 minutes after the last job; status reads never extend i
   assert.equal(f.gpu.snapshot().status, 'paused');
 });
 
+test('an agent turn holds the GPU past the idle deadline without resetting the countdown', async () => {
+  const f = fixture(); await f.gpu.tick();
+  f.gpu.acquire()();
+  f.advance(14 * 60000);
+  const release = f.gpu.hold();
+  // The countdown goes on while the agent turn holds the GPU.
+  assert.equal(f.gpu.snapshot().idleRemainingSeconds, 60);
+  f.advance(60000); await f.gpu.tick();
+  assert.deepEqual([f.gpu.snapshot().status, f.writes], ['draining', []]);
+  release(); await f.gpu.tick();
+  assert.deepEqual(f.writes, ['stopped']);
+});
+
 test('manual pause drains all users and refuses new jobs without interrupting existing work', async () => {
   const f = fixture(); await f.gpu.tick();
   const owner = f.gpu.acquire(); const tester = f.gpu.acquire();

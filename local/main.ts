@@ -56,8 +56,10 @@ try {
       const state = gpu?.snapshot();
       return state?.status === 'ready' && state.activeJobs === 0 && (state.idleRemainingSeconds ?? 0) > config.timeoutMs / 1000 + 100;
     },
-    // Without GPU control there is no socket and no agent work here; with it, only a paused or stopping GPU stops one.
-    agentCanRun: () => gpu?.snapshot().status === 'ready',
+    // Without GPU control there is no socket and no agent work here. A started agent turn holds the GPU, which then
+    // drains instead of pausing under it; a stopped or failing GPU stops the turn.
+    agentCanRun: () => ['ready', 'draining'].includes(gpu?.snapshot().status ?? ''),
+    holdAgentTurn: () => gpu ? gpu.hold() : () => {},
   });
   const provider = scheduler.foreground;
   const api = createApi(config.token);

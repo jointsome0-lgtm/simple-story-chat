@@ -2,7 +2,7 @@
 // (agent-cli.ts) and the MCP server (mcp.ts). It never opens the bot's database. No package import here, so `npm test`
 // runs it without `npm install`.
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -386,29 +386,49 @@ export type AgentApi = ReturnType<typeof createAgentApi>;
 export async function agentProvider(config: AgentConfig): Promise<{ provider: Provider; queue: boolean }> {
   let direct: Provider | undefined;
   const directModel = () => direct ??= createModel(config);
-  async function queued(): Promise<Provider | null> {
+  // The bot's queue, if its socket answers now.
+  async function queue() {
     if (!existsSync(config.modelSocket) || !lstatSync(config.modelSocket).isSocket()) return null;
     // The time covers waiting behind people and the quiet window, then the call itself under the model's timeout.
     const client = createBackgroundClient({ socketPath: config.modelSocket, model: config.model, work: 'agent', timeoutMs: config.timeoutMs + 600_000 });
     const live = await client.status().then(() => true, (error: unknown) => errorCode(error) !== 'background_unavailable');
-    return live ? {
-      async generate(request, controls = {}) {
-        // Background work never wakes a stopped GPU and must not wait in the queue for one.
-        const state = await client.check(controls) as { gpu?: { status?: unknown } };
-        if (state.gpu?.status !== 'ready') throw new ModelError('gpu_not_ready');
-        return client.generate(request, controls);
-      },
-    } : null;
+    return live ? client : null;
   }
-  const provider: Provider = {
-    async generate(request, controls) { return ((await queued()) ?? directModel()).generate(request, controls); },
+  type Client = NonNullable<Awaited<ReturnType<typeof queue>>>;
+  // A turn opens its control request on its first queued call and holds the bot's slot until `end` closes it.
+  type Turn = { started: () => boolean; open: (client: Client) => Promise<string> };
+  const calls = (turn?: Turn): Provider => ({
+    async generate(request, controls = {}) {
+      const client = await queue();
+      if (!client) return directModel().generate(request, controls);
+      // Agent work never wakes a stopped GPU and must not wait in the queue for one. A turn that holds the slot keeps
+      // the GPU through a pause, which the bot then reports as draining.
+      const state = await client.check(controls) as { gpu?: { status?: unknown } };
+      if (state.gpu?.status !== 'ready' && !(turn?.started() && state.gpu?.status === 'draining')) throw new ModelError('gpu_not_ready');
+      return client.generate(request, { ...controls, turn: turn && await turn.open(client) });
+    },
     // The queue does not count input; the estimate the request already carries stands in for it.
     async countInput(request, controls) {
-      const model = (await queued()) ? null : directModel();
+      const model = (await queue()) ? null : directModel();
       return model?.countInput ? model.countInput(request, controls) : request.estimatedInputTokens ?? requestBudget(request, config.contextTokens).inputTokens;
     },
+  });
+  const provider: Provider = { ...calls(),
+    openTurn() {
+      let channel: ReturnType<Client['openTurn']> | undefined;
+      let ended = false;
+      const turn: Turn = {
+        started: () => channel !== undefined,
+        async open(client) {
+          if (ended) throw new ModelError('cancelled');
+          channel ??= client.openTurn();
+          return (await channel).id;
+        },
+      };
+      return { ...calls(turn), end() { ended = true; void channel?.then(open => open.close(), () => {}); } };
+    },
   };
-  return { provider, queue: (await queued()) !== null };
+  return { provider, queue: (await queue()) !== null };
 }
 
 export async function openAgent(config: AgentConfig, { userId, readOnly = false, log, onProgress }: {

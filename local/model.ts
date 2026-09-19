@@ -24,6 +24,8 @@ export type Provider = {
   countInput?(request: ModelRequest, controls?: Controls): Promise<number>;
   // Only a provider that can verify its server has `check`; the CLI providers have none.
   check?(controls?: Controls): Promise<unknown>;
+  // A shared model (local/scheduler.ts) keeps its slot for one operation's calls until `end`.
+  openTurn?(): Provider & { end(): void };
 };
 
 export function createModel(config: ModelConfig & { dbPath: string }): Provider {

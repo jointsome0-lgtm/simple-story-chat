@@ -40,12 +40,17 @@ disposable probes:
 - people in Telegram go first: an agent call starts only after the bot has been quiet for a minute, the GPU is ready
   and the auto-pause is further away than the model's timeout plus 100 seconds. Until then it waits in the queue; the
   agent's `wait` keeps answering `running`;
-- once started, an agent call is not cut off by a person: the person waits for that one call (a scene, or one step of
-  a compaction), then goes next. An agent call has no time limit of its own, only the model's timeout;
+- once started, a turn keeps the model to its end: nobody runs between its compaction steps and its scene, so a
+  started step is never cut off and another turn's prompt never evicts this one's cache. (The compaction and the scene
+  have different system prompts, so llama.cpp reuses only their common prefix; the turn does not make the scene's
+  prefill free.) A person who writes meanwhile waits for the rest of that turn. The agent holds a control request to
+  the bot for the whole turn; when it closes, or the agent process dies, the turn ends, its running call stops and a
+  later call under its id is refused. An agent call has no time limit of its own, only the model's timeout;
 - an agent call stops a running probe;
-- a stopped or paused GPU gives `failed` / `gpu_not_ready` at once, it is never woken for an agent, and agent work does
-  not reset the idle timer. A manual pause stops a running agent call: the turn ends `preempted`
-  (`background_unavailable`). It is never rerun silently; ask again with a new `requestId`.
+- a stopped or paused GPU gives `failed` / `gpu_not_ready` at once and is never woken for an agent. A started turn holds
+  the GPU: an idle or manual pause waits for it (the bot shows the GPU draining), but agent work does not reset the
+  idle countdown, so the rental runs at most one turn longer. If the GPU stops or fails anyway, the turn ends
+  `preempted` (`background_unavailable`). It is never rerun silently; ask again with a new `requestId`.
 
 The queue checks that it serves the configured model, so start the agent with the bot's model configuration
 (`npm run agent:gpu`, `npm run mcp:gpu`). Without the socket the agent calls the configured provider directly. The
