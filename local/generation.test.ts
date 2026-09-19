@@ -391,8 +391,9 @@ test('an automatic compaction that succeeds leaves rows with its sizes and count
     return { ...f.summary(request), usage: { inputTokens: 1000, outputTokens: 100, totalTokens: 1100 } };
   };
   await generateScene({ store: f.store, userId: '1', jobId: f.job.id, provider: f.provider, config: f.config, log: rowsOf(rows) });
-  assert.deepEqual(rows.map(row => row.event), ['compaction_request_started', 'compaction_request_completed', 'memory_compacted']);
-  const [started, completed, saved] = rows;
+  assert.deepEqual(rows.map(row => row.event), ['compaction_request_started', 'compaction_request_completed', 'memory_compacted', 'scene_request_completed']);
+  const [started, completed, saved, scene] = rows;
+  assert.deepEqual(Object.keys(scene).sort(), ['elapsedMs', 'event']);
   // The size of the extraction request itself: the three scenes it carries are most of it.
   const requestBytes = requestBudget(extraction!, f.config.contextTokens).inputBytes;
   assert.ok(requestBytes > 3 * 300 * Buffer.byteLength('ветер '));

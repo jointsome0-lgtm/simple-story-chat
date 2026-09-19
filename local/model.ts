@@ -18,7 +18,12 @@ export type Controls = { signal?: AbortSignal };
 export type GenerateControls = Controls & {
   onText?: (delta: string) => unknown; inputLimitTokens?: number; onQueued?: () => void; onStart?: () => void;
 };
-export type GenerationResult = { text: string; finishReason: 'stop' | 'length'; usage?: Usage | null; streamResultMismatch?: boolean };
+// Server-side counts and durations of one request, as llama-server reports them. For logs only; never stored.
+export type Timings = Partial<Record<'cacheTokens' | 'promptTokens' | 'promptMs' | 'predictedTokens' | 'predictedMs'
+  | 'draftTokens' | 'draftAcceptedTokens', number>>;
+export type GenerationResult = {
+  text: string; finishReason: 'stop' | 'length'; usage?: Usage | null; timings?: Timings; streamResultMismatch?: boolean;
+};
 export type Provider = {
   generate(request: ModelRequest, controls?: GenerateControls): Promise<GenerationResult>;
   countInput?(request: ModelRequest, controls?: Controls): Promise<number>;

@@ -2,7 +2,7 @@ import type { ErrorDetails } from './model-error.ts';
 import { ModelError, member } from './model-error.ts';
 import type { ModelConfig } from './config.ts';
 import { modelBaseUrl, apiBaseUrl } from './config.ts';
-import type { Controls, GenerateControls, GenerationResult, ModelRequest } from './model.ts';
+import type { Controls, GenerateControls, GenerationResult, ModelRequest, Timings } from './model.ts';
 import type { Budget } from './budget.ts';
 
 // Only the fields this provider reads; tests pass a partial configuration.
@@ -16,7 +16,20 @@ type Props = { default_generation_settings?: { n_ctx?: unknown } | null; total_s
 type StreamEvent = {
   error?: unknown; model?: unknown; choices?: unknown;
   usage?: { prompt_tokens?: unknown; completion_tokens?: unknown; prompt_tokens_details?: { cached_tokens?: unknown } | null };
+  timings?: unknown;
 };
+// llama-server's field for each of our timing names. Durations come as fractional milliseconds.
+const TIMINGS = { cacheTokens: 'cache_n', promptTokens: 'prompt_n', promptMs: 'prompt_ms', predictedTokens: 'predicted_n',
+  predictedMs: 'predicted_ms', draftTokens: 'draft_n', draftAcceptedTokens: 'draft_n_accepted' } as const;
+function timingsOf(value: unknown): Timings | undefined {
+  if (!isObject(value)) return undefined;
+  const timings: Timings = {};
+  for (const [name, field] of Object.entries(TIMINGS) as [keyof Timings, string][]) {
+    const number = value[field];
+    if (typeof number === 'number' && Number.isFinite(number) && number >= 0) timings[name] = Math.round(number);
+  }
+  return timings;
+}
 type Choice = { index?: unknown; delta?: unknown; finish_reason?: unknown };
 
 const count = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
@@ -212,6 +225,7 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
         let outputTokens: number | null = null;
         let cachedInputTokens: number | null = null;
         let reasoningCharacters = 0;
+        let timings: Timings | undefined;
         let measured = !hosted;
         for await (const data of events(response.body)) {
           if (data === '[DONE]') { done = true; break; }
@@ -227,6 +241,7 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
             outputTokens = count(event.usage.completion_tokens);
             cachedInputTokens = count(event.usage.prompt_tokens_details?.cached_tokens);
           }
+          timings = timingsOf(event.timings) ?? timings;
           if (event.choices.length > 1) throw new ModelError('invalid_stream');
           for (const choice of event.choices as Choice[]) {
             if (choice.index !== 0) throw new ModelError('invalid_stream');
@@ -258,7 +273,7 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
         if (!measured) throw new ModelError('usage_unavailable');
         if (inputTokens > limit) throw new ModelError('context_limit');
         return { text, finishReason, usage: { inputTokens, outputTokens, cachedInputTokens, reasoningCharacters,
-          totalTokens: outputTokens === null ? null : inputTokens + outputTokens } };
+          totalTokens: outputTokens === null ? null : inputTokens + outputTokens }, ...(timings ? { timings } : {}) };
       });
     },
     // Several independent samples of one request, for research batches on an own llama-server started with that many

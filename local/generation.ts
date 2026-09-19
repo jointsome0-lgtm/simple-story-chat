@@ -78,11 +78,14 @@ async function extractAndSave({ store, userId, jobId, provider, config, signal, 
       // One row before each model request and one after it. A request that fails has its row written by the caller.
       record('compaction_request_started');
       progress('extracting');
+      const asked = Date.now();
+      let waitMs: number | undefined;
       const result = await provider.generate(request, { signal,
-        onQueued: () => progress('queued'), onStart: () => progress('extracting'),
+        onQueued: () => progress('queued'), onStart: () => { waitMs = Date.now() - asked; progress('extracting'); },
         onText: delta => { numbers.outputCharacters += delta.length; progress('extracting'); },
       });
-      record('compaction_request_completed', { inputTokens: result.usage?.inputTokens ?? undefined, outputTokens: result.usage?.outputTokens ?? undefined });
+      record('compaction_request_completed', { ...result.timings, waitMs,
+        inputTokens: result.usage?.inputTokens ?? undefined, outputTokens: result.usage?.outputTokens ?? undefined });
       return result;
     };
     let result: GenerationResult;
@@ -170,14 +173,22 @@ export async function generateScene({ store, userId, jobId, provider, config, si
   for (let pass = 0; pass <= 4; pass++) {
     const target = load();
     const request = storyRequest(target);
+    const counting = Date.now();
     if (provider.countInput) request.estimatedInputTokens = await provider.countInput(request, { signal });
+    const countMs = provider.countInput ? Date.now() - counting : undefined;
     const threshold = Math.min(config.compactAtTokens ?? 54000, config.contextTokens - config.maxOutputTokens);
     // storyRequest has set the estimate.
     if (request.estimatedInputTokens! < threshold) {
       try {
+        const asked = Date.now();
+        let waitMs: number | undefined;
         const result = await provider.generate(request, {
           signal, inputLimitTokens: threshold - 1, onText: preview(target.state, target.job, request),
+          onStart: () => { waitMs = Date.now() - asked; },
         });
+        // Counts and durations only: where the time of a scene went (queue, token count, prefill, decoding).
+        log?.('scene_request_completed', undefined, { ...result.timings, waitMs, countMs, elapsedMs: Date.now() - asked,
+          inputTokens: result.usage?.inputTokens ?? undefined, outputTokens: result.usage?.outputTokens ?? undefined });
         load();
         // The threshold is above a non-negative estimate here, so a missing count never reaches it.
         if ((result.usage?.inputTokens ?? 0) >= threshold) throw new ModelError('context_limit');

@@ -57,6 +57,15 @@ test('exact count and generation share a body; fragmented UTF-8 and reasoning re
     reasoningCharacters: 'Скрытое рассуждение.'.length, totalTokens: 128 });
 });
 
+test('llama-server timings of the last chunk become rounded counts; malformed ones are dropped', async () => {
+  const timings = { cache_n: 100, prompt_n: 20, prompt_ms: 41.6, prompt_per_second: 480.7, predicted_n: 8,
+    predicted_ms: 250.4, draft_n: -1, draft_n_accepted: 'x' };
+  const f = fixture(() => stream([chunk({ content: 'Готово.' }, 'stop'), { choices: [], usage, timings }]));
+  const result = await f.provider.generate(request());
+  assert.deepEqual(result.timings, { cacheTokens: 100, promptTokens: 20, promptMs: 42, predictedTokens: 8, predictedMs: 250 });
+  assert.equal('timings' in await fixture().provider.generate(request()), false);
+});
+
 test('input/output reservation rejects before generating, even when an estimate says it fits', async () => {
   const f = fixture();
   await assert.rejects(f.provider.generate({ ...request(), estimatedInputTokens: 1 }, { inputLimitTokens: 119 }), { code: 'context_limit' });
