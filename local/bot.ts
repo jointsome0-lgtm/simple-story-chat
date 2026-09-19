@@ -297,10 +297,16 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
         return;
       }
       let usage: GenerationResult['usage'];
-      // Statuses go out one after another, and none after the model has started reading the scene request.
+      // Statuses share the scene's draft. They go out one after another; one already superseded by a newer status is
+      // skipped, and none goes out once the scene's text has begun or the turn is over. The text and every later
+      // message wait for the status in flight, so a stale status never lands on top of them.
       let status = Promise.resolve();
-      let queued = false, reading = false;
-      const show = (text: string) => { status = status.then(() => chat.status(job.id, text)); };
+      let latest = '', over = false, queued = false, reading = false;
+      const show = (text: string) => {
+        latest = text;
+        status = status.then(() => over || latest !== text ? undefined : chat.status(job.id, text));
+      };
+      const endStatus = () => { over = true; return status; };
       const outcome = await runTurn({ store, userId, job, provider, config: contextConfig, signal: controller.signal,
         prepared: preparedFor(userId), onProgress, log, labels,
         waiting: ahead => {
@@ -314,7 +320,11 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
           const measured = stats(state);
           // generateScene sets the estimate before it asks for a preview.
           if (measured) measured.request.estimatedTokens = request.estimatedInputTokens!;
-          return chat.preview(current.id, scenePrefix(measured, modelInfo, state.language));
+          const onText = chat.preview(current.id, scenePrefix(measured, modelInfo, state.language));
+          return async delta => {
+            if (!over) await endStatus();
+            return onText(delta);
+          };
         },
         onGenerated: result => {
           usage = result.usage;
@@ -322,6 +332,7 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
           if (result.streamResultMismatch) log('model_result_differs_from_stream');
         },
       });
+      await endStatus();
       if (outcome.status === 'gone') return;
       if (outcome.status === 'failed') { await reportFailure(outcome.error); return; }
       const ref = outcome.ref;

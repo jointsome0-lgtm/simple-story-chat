@@ -26,6 +26,8 @@ type FixtureOptions = {
   generate?: (request: ModelRequest, controls: TextControls) => Promise<GenerationResult>;
   check?: Provider['check']; gpu?: GpuController; readSeedFile?: BotOptions['readSeedFile'];
   model?: string; providerName?: string; compactAtTokens?: number; ownerId?: string;
+  // Holds a Telegram call until the returned promise settles.
+  hold?: (method: string, payload: Payload) => Promise<void> | undefined;
 };
 // A log row as main.ts writes it: the event, a code and the allowed details.
 type Row = { event: string; code?: string | number } & ErrorDetails;
@@ -48,6 +50,7 @@ function fixture(t: TestContext, options: FixtureOptions = {}) {
   let sequence = 0;
   const api = async (method: string, fields?: TelegramPayload) => {
     const payload = fields as Payload;
+    await options.hold?.(method, payload);
     if (options.progressFailure && ['sendMessage', 'editMessageText'].includes(method) && payload.text.startsWith('🗜')) {
       throw Object.assign(new Error('PRIVATE TRANSPORT ERROR'), { code: 'network' });
     }
@@ -430,12 +433,12 @@ test('SQLite survives reopening, keeps update deduplication, and clears interrup
 test('a scene waiting for the shared model shows its place in the queue in the disappearing draft', async t => {
   const text = '2026-08-02 20:00\n\nСинтетическая сцена.';
   const f = fixture(t, { generate: async (request, controls) => {
-    controls.onWait?.(2);
-    controls.onWait?.(1);
-    controls.onWait?.(0);
-    controls.onStart?.();
-    // Statuses are sent one after another; let them out before the scene's own text.
-    await new Promise(resolve => setImmediate(resolve));
+    // Each status goes out before the next; one superseded before it is sent is skipped.
+    const out = () => new Promise(resolve => setImmediate(resolve));
+    controls.onWait?.(2); await out();
+    controls.onWait?.(5); controls.onWait?.(1); await out();
+    controls.onWait?.(0); await out();
+    controls.onStart?.(); await out();
     controls.onWait?.(3);
     await controls.onText(text);
     return { text, finishReason: 'stop', usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 } };
@@ -448,6 +451,35 @@ test('a scene waiting for the shared model shows its place in the queue in the d
   assert.equal(drafts.length, 5);
   assert.ok(drafts[4].endsWith(text));
   assert.equal(new Set(f.sent.filter(m => m.method === 'sendRichMessageDraft').map(m => m.payload.draft_id)).size, 1);
+});
+
+test('a slow status never lands after the scene text or the final message', async t => {
+  const text = '2026-08-02 20:00\n\nСинтетическая сцена.';
+  let release: (() => void) | undefined;
+  let held = false;
+  const f = fixture(t, {
+    // The first status stays in flight until the scene is over.
+    hold: (method, payload) => {
+      if (method !== 'sendRichMessageDraft' || held || !payload.rich_message.markdown.startsWith('⏳')) return undefined;
+      held = true;
+      return new Promise<void>(resolve => { release = resolve; });
+    },
+    generate: async (request, controls) => {
+      controls.onWait?.(2);
+      await new Promise(resolve => setImmediate(resolve));
+      // The first status is in flight now; these are queued behind it.
+      controls.onWait?.(1);
+      controls.onStart?.();
+      setTimeout(() => release?.(), 20);
+      await controls.onText(text);
+      return { text, finishReason: 'stop', usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 } };
+    },
+  });
+  await f.start();
+  const order = f.sent.filter(m => m.method.startsWith('sendRich')).map(m => m.method === 'sendRichMessage' ? 'final'
+    : m.payload.rich_message.markdown.endsWith(text) ? 'scene' : m.payload.rich_message.markdown);
+  // The held status went out first; the superseded ones were skipped; nothing came after the scene began.
+  assert.deepEqual(order, ['⏳ Очередь к модели: перед вами 2 запроса.', 'scene', 'final']);
 });
 
 test('model and percentage stay above Markdown; full context is on demand and never enters narrative', async t => {
