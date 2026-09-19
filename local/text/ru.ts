@@ -504,8 +504,8 @@ export const ru = {
     // Above the menu after /cancel stopped a model job.
     cancelled: 'Операция отменена. Готовые сцены и чекпоинты сохранены.',
     // `keep` is the configured number of latest scenes that are never compacted.
-    nothingToCompact: (keep: number) => `Пока нечего сжимать: последние ${keep} сцены оставляем целиком. Новая сцена не создаётся.`,
-    nothingToCompactYet: (keep: number) => `Пока нечего сжимать: последние ${keep} сцены оставляем целиком.`,
+    nothingToCompact: (keep: number) => `Пока нечего сжимать: ${lastScenes(keep)} оставляем целиком. Новая сцена не создаётся.`,
+    nothingToCompactYet: (keep: number) => `Пока нечего сжимать: ${lastScenes(keep)} оставляем целиком.`,
     textOnly: 'Пока поддерживаются текстовые сообщения. Открой /menu или напиши действие персонажа.',
     truncated: 'Ответ достиг лимита выходных токенов и мог оборваться. Полученный текст сохранён. /continue продолжит историю.',
     deliveryUnconfirmed: 'Сцена сохранена, но доставка не подтверждена. /last покажет её без новой генерации.',

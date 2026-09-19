@@ -4,6 +4,9 @@
 import { ru } from './text/ru.ts';
 import type { Messages } from './text/ru.ts';
 import { en } from './text/en.ts';
+import { zh } from './text/zh.ts';
+import { ko } from './text/ko.ts';
+import { ja } from './text/ja.ts';
 
 export type { Messages };
 export type Lang = 'ru' | 'en' | 'zh' | 'ko' | 'ja';
@@ -14,7 +17,7 @@ export const LANGUAGE_BUTTON = '🌐 Language';
 
 // REGISTER A LANGUAGE HERE: import its catalog above and add it to this map. Nothing else needs to change.
 // A language of `Lang` that is not in the map yet is shown in English.
-const CATALOGS: Partial<Record<Lang, Messages>> = { ru, en };
+const CATALOGS: Partial<Record<Lang, Messages>> = { ru, en, zh, ko, ja };
 
 export const REGISTERED: Lang[] = (Object.keys(LANGS) as Lang[]).filter(lang => CATALOGS[lang]);
 export const isRegistered = (lang: unknown): lang is Lang => (REGISTERED as unknown[]).includes(lang);

@@ -26,6 +26,7 @@ What the bot itself says (screens, buttons, refusals, the compaction status, the
 
 - `local/text/ru.ts` is the Russian catalog and defines the shape, `Messages`: nested groups by screen, where a value is a string or a function of typed arguments. Plural forms and word order live inside those functions, so the code never glues a sentence from fragments. Comments above the entries tell a translator where a text appears and what it must keep (an emoji at the start, a length, a date format). `local/text/en.ts` is `const en: Messages`.
 - `local/text.ts` holds `Lang` (`ru`, `en`, `zh`, `ko`, `ja`), the languages' own names for the picker, `texts(lang)`, `langFromTelegram(code)` and the command lists for `setMyCommands` (English by default, plus one per registered language).
+- Registered now: `ru` (the original), `en`, `zh` (Simplified), `ko`, `ja`. The last three were translated by a model from `ru.ts` and `en.ts` and have not been reviewed by a native speaker; each file starts with its glossary, so a reviewer can fix a term in one place.
 - **To add a language:** write `local/text/<lang>.ts` as `export const <lang>: Messages = { … }` from `ru.ts` and `en.ts`, then import it in `local/text.ts` and add it to `CATALOGS`. A missing or extra key fails `npm run check`; `text.test.ts` renders every screen in every registered language and compares the catalogs' keys, value kinds and function arities.
 - The choice is stored as `language` in the user's library. `render`, `sceneKeyboard` read it from the state; `renderContext`, `scenePrefix` and `renderCompaction` take it as an argument. Errors thrown below the bot (library, seed files, incoming messages) carry a catalog key next to their Russian text, and the bot shows `errors[key]` in the user's language.
 - **Fallbacks:** a library without `language` predates the choice and is shown in Russian, whatever Telegram reports. A new user (nothing handled and nothing created yet) gets `langFromTelegram(from.language_code)`: `ru`, `zh`, `ko`, `ja` by prefix, anything else or nothing → `en`. A stored language that has no catalog yet is shown in English and switches by itself once its catalog is registered.
@@ -56,7 +57,7 @@ The idle current-context screen offers `compact`. Historical checkpoints and bus
 
 ## Busy state (`state.job`)
 
-Navigation, previews and «Последняя сцена» stay available. Buttons for `start`, `use`, `fork`, `continue` and delete confirmations are left out. Where one would normally appear, the screen says it will be available once the scene is done and shows «✖️ Отменить генерацию» ("Cancel generation", `cancel`). Seed entry stays available. There, the cancel button is labelled «Отмена (остановит и сцену)» ("Cancel (will also stop the scene)"), because `cancel` also stops generation.
+Navigation, previews and «Последняя сцена» stay available. Buttons for `start`, `use`, `fork`, `continue` and delete confirmations are left out. Where one would normally appear, the screen says it will be available once the scene is done and shows «✖️ Отменить генерацию» ("Cancel generation", `cancel`). Seed entry stays available. There, the cancel button is the ordinary «✖️ Отмена» ("Cancel"); note that `cancel` also stops a running generation.
 
 ## Integration notes
 
