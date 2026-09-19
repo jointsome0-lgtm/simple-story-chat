@@ -38,17 +38,17 @@ export async function inTurn<T>(provider: Provider, operation: (provider: Provid
   try { return await operation(turn ?? provider); } finally { turn?.end(); }
 }
 
-export async function runTurn({ store, userId, job, provider, config, signal, prepared, onProgress, log, labels, preview, onGenerated, operation }: {
+export async function runTurn({ store, userId, job, provider, config, signal, prepared, onProgress, log, labels, preview, waiting, onGenerated, operation }: {
   store: Store; userId: string; job: Job; provider: Provider; config: GenerationConfig & { provider: string }; signal: AbortSignal; prepared?: Prepared;
   onProgress?: (status: CompactionStatus) => void; log?: Log; labels?: CompactionLabels;
-  preview?: (state: Library, job: Job, request: ModelRequest) => GenerateControls['onText'];
+  preview?: (state: Library, job: Job, request: ModelRequest) => GenerateControls['onText']; waiting?: (ahead: number | null) => void;
   // Called once the model has answered, before the scene is saved.
   onGenerated?: (result: GenerationResult) => void; operation?: TurnOperation;
 }): Promise<TurnOutcome> {
   try {
     // The model calls of the turn end with the scene; saving it needs no model.
     const { result, request } = await inTurn(provider, provider =>
-      generateScene({ store, userId, jobId: job.id, provider, config, signal, prepared, onProgress, log, labels, preview }));
+      generateScene({ store, userId, jobId: job.id, provider, config, signal, prepared, onProgress, log, labels, preview, waiting }));
     if (signal.aborted) return { status: 'gone' };
     onGenerated?.(result);
     const ref = store.mutate(userId, state => {

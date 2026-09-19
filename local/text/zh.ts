@@ -374,6 +374,12 @@ export const zh: Messages = {
     discard: '🗑 放弃草稿',
   },
 
+  wait: {
+    ahead: n => `模型队列中你前面还有 ${n} 个请求。`,
+    queued: n => `⏳ 模型队列：你前面还有 ${n} 个请求。`,
+    next: '⏳ 轮到你了。',
+    reading: '📖 模型正在阅读故事，很快开始写作…',
+  },
   compact: {
     title: '🗜 记忆压缩',
     titleAutomatic: '🗜 写新场景前的记忆压缩',

@@ -51,6 +51,12 @@ export function createChat(api: TelegramApi, chatId: number | string) {
       return api('sendRichMessage', { chat_id: chatId, rich_message: { markdown: text },
         ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
     },
+    // A disappearing status in the draft the scene will stream into (`preview`, same draft id): the scene's text
+    // replaces it, and the final message removes the draft. Failures are ignored: it is a hint, never needed.
+    async status(jobId: string, text: string) {
+      try { await api('sendRichMessageDraft', { chat_id: chatId, draft_id: Number(jobId.slice(1)), rich_message: { markdown: text } }); }
+      catch {}
+    },
     preview(jobId: string, prefix = '') {
       let text = prefix;
       let next = 0;

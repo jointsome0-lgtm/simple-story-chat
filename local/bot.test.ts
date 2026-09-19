@@ -20,7 +20,7 @@ import { UserError, addSeed, history, newStory, beginJob, commitTurn, context } 
 import type { Job, SeedDraft } from '../lib/library.ts';
 
 // Scene and memory requests from the bot always pass a text callback.
-type TextControls = Required<Pick<GenerateControls, 'onText'>>;
+type TextControls = GenerateControls & Required<Pick<GenerateControls, 'onText'>>;
 type FixtureOptions = {
   progressFailure?: boolean; contextFailure?: boolean; deliveryFailure?: boolean;
   generate?: (request: ModelRequest, controls: TextControls) => Promise<GenerationResult>;
@@ -30,7 +30,7 @@ type FixtureOptions = {
 // A log row as main.ts writes it: the event, a code and the allowed details.
 type Row = { event: string; code?: string | number } & ErrorDetails;
 // Fields of sent payloads that the tests read; each is present for the methods where it is read.
-type Payload = { chat_id: number; message_id: number; text: string; rich_message: { markdown: string } };
+type Payload = { chat_id: number; message_id: number; text: string; rich_message: { markdown: string }; draft_id: number };
 // A synthetic private message; tests may replace its chat or add rich content, a document or a caption.
 type MessageUpdate = Update & { message: NonNullable<Update['message']> & { chat: { id: number; type: string }; caption?: string } };
 // Summary requests carry their scenes as JSON in the first message.
@@ -425,6 +425,29 @@ test('SQLite survives reopening, keeps update deduplication, and clears interrup
     assert.equal(Object.keys(Object.values(reopened.read(1).stories)[0].nodes).length, 1);
     assert.equal(reopened.offset(), update.update_id + 1);
   } finally { reopened.close(); }
+});
+
+test('a scene waiting for the shared model shows its place in the queue in the disappearing draft', async t => {
+  const text = '2026-08-02 20:00\n\nСинтетическая сцена.';
+  const f = fixture(t, { generate: async (request, controls) => {
+    controls.onWait?.(2);
+    controls.onWait?.(1);
+    controls.onWait?.(0);
+    controls.onStart?.();
+    // Statuses are sent one after another; let them out before the scene's own text.
+    await new Promise(resolve => setImmediate(resolve));
+    controls.onWait?.(3);
+    await controls.onText(text);
+    return { text, finishReason: 'stop', usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 } };
+  } });
+  await f.start();
+  const drafts = f.sent.filter(m => m.method === 'sendRichMessageDraft').map(m => m.payload.rich_message.markdown);
+  assert.deepEqual(drafts.slice(0, 4), ['⏳ Очередь к модели: перед вами 2 запроса.', '⏳ Очередь к модели: перед вами 1 запрос.',
+    '⏳ Подошла ваша очередь.', '📖 Модель читает историю, скоро начнёт писать…']);
+  // Nothing about the queue after the model has started; the scene replaces the status in the same draft.
+  assert.equal(drafts.length, 5);
+  assert.ok(drafts[4].endsWith(text));
+  assert.equal(new Set(f.sent.filter(m => m.method === 'sendRichMessageDraft').map(m => m.payload.draft_id)).size, 1);
 });
 
 test('model and percentage stay above Markdown; full context is on demand and never enters narrative', async t => {

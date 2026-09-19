@@ -26,7 +26,7 @@ export type Scheduler<Request, Result> = ReturnType<typeof createScheduler<Reque
 type Item<Request> = {
   priority: Priority; method: 'generate' | 'countInput'; request: Request; controls: GenerateControls; turn: Turn | null;
   resolve: (value: unknown) => void; reject: (reason: unknown) => void; signal: AbortSignal | undefined;
-  controller: AbortController; cancel: () => void; done?: Promise<void>;
+  controller: AbortController; cancel: () => void; done?: Promise<void>; ahead?: number;
 };
 
 // One inference slot. Foreground calls are FIFO; disposable background work
@@ -114,7 +114,27 @@ export function createScheduler<Request, Result>(provider: {
       pump();
     });
   }
+  // Tells every waiting call how many calls go before it: the queues of higher priority, the calls ahead in its own,
+  // and the work holding the slot. A turn's own next call goes first while the turn holds the slot.
+  function notify() {
+    if (closed) return;
+    let before = 0;
+    for (const queue of [foreground, agent, background]) {
+      queue.forEach((item, index) => {
+        const own = !!reserved && reserved.turn === item.turn;
+        const ahead = own ? (active ? 1 : 0) : before + index + (active || reserved ? 1 : 0);
+        if (ahead === item.ahead) return;
+        item.ahead = ahead;
+        try { item.controls.onWait?.(ahead); } catch {}
+      });
+      before += queue.length;
+    }
+  }
   function pump() {
+    step();
+    notify();
+  }
+  function step() {
     if (closed || active) return;
     if (reserved && now() - reserved.turn.idleSince >= turnIdleMs) {
       log('turn_lost');

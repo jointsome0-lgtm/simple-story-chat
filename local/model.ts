@@ -14,7 +14,8 @@ export type ModelRequest = {
   system: string; messages: ChatMessage[]; maxOutputTokens: number;
   purpose?: 'memory'; outputSchema?: object; estimatedInputTokens?: number;
 };
-export type Controls = { signal?: AbortSignal };
+// `onWait`: a shared model's queue reports how many calls are ahead of this one, each time the number changes.
+export type Controls = { signal?: AbortSignal; onWait?: (ahead: number) => void };
 export type GenerateControls = Controls & {
   onText?: (delta: string) => unknown; inputLimitTokens?: number; onQueued?: () => void; onStart?: () => void;
 };

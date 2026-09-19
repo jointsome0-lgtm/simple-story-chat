@@ -383,6 +383,12 @@ export const ko: Messages = {
     discard: '🗑 초안 취소',
   },
 
+  wait: {
+    ahead: n => `모델 대기열에서 앞에 ${n}건이 있습니다.`,
+    queued: n => `⏳ 모델 대기열: 앞에 ${n}건.`,
+    next: '⏳ 차례가 되었습니다.',
+    reading: '📖 모델이 이야기를 읽고 있습니다. 곧 쓰기 시작합니다…',
+  },
   compact: {
     title: '🗜 기억 압축',
     titleAutomatic: '🗜 새 장면 전 기억 압축',

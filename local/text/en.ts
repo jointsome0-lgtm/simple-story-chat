@@ -364,6 +364,12 @@ export const en: Messages = {
     discard: '🗑 Discard draft',
   },
 
+  wait: {
+    ahead: n => `Ahead of you in the model queue: ${count(n, 'request', 'requests')}.`,
+    queued: n => `⏳ Model queue: ${count(n, 'request', 'requests')} ahead of you.`,
+    next: '⏳ Your turn has come.',
+    reading: '📖 The model is reading the story and will start writing soon…',
+  },
   compact: {
     title: '🗜 Memory compaction',
     titleAutomatic: '🗜 Memory compaction before the new scene',

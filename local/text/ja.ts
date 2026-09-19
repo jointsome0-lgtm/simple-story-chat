@@ -373,6 +373,12 @@ export const ja: Messages = {
     discard: '🗑 下書きを破棄',
   },
 
+  wait: {
+    ahead: n => `モデルの待ち行列であなたの前に${n}件あります。`,
+    queued: n => `⏳ モデルの順番待ち：前に${n}件。`,
+    next: '⏳ あなたの番になりました。',
+    reading: '📖 モデルが物語を読んでいます。まもなく書き始めます…',
+  },
   compact: {
     title: '🗜 記憶の圧縮',
     titleAutomatic: '🗜 新しいシーンの前に記憶を圧縮',

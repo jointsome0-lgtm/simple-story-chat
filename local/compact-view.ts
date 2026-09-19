@@ -12,6 +12,8 @@ export type CompactionStatus = {
   stage?: 'queued' | 'extracting' | 'validating' | 'saving' | 'done' | 'failed' | 'cancelled';
   automatic?: boolean; elapsedMs?: number; scenes?: number; keptScenes?: number;
   outputCharacters?: number; repairScenes?: number; facts?: number; reason?: string | number;
+  // Calls ahead in the model queue while queued.
+  ahead?: number;
 };
 
 const STEPS = ['queued', 'extracting', 'validating', 'saving'] as const;
@@ -44,6 +46,8 @@ function view(t: Messages, p: CompactionStatus) {
       steps(t, p.stage),
       elapsed ? c.elapsed(elapsed) : null,
     ];
+    const ahead = whole(p.ahead);
+    if (p.stage === 'queued' && ahead != null && ahead > 0) lines.push(t.wait.ahead(ahead));
     if (scenes != null) lines.push(c.scope(scenes, kept));
     const repair = whole(p.repairScenes) ?? 0;
     if (repair > 0) lines.push(c.repair(repair));

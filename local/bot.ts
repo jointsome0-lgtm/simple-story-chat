@@ -297,8 +297,19 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
         return;
       }
       let usage: GenerationResult['usage'];
+      // Statuses go out one after another, and none after the model has started reading the scene request.
+      let status = Promise.resolve();
+      let queued = false, reading = false;
+      const show = (text: string) => { status = status.then(() => chat.status(job.id, text)); };
       const outcome = await runTurn({ store, userId, job, provider, config: contextConfig, signal: controller.signal,
         prepared: preparedFor(userId), onProgress, log, labels,
+        waiting: ahead => {
+          if (reading) return;
+          const wait = texts(store.read(userId).language).wait;
+          if (ahead === null) { reading = true; show(wait.reading); }
+          else if (ahead > 0) { queued = true; show(wait.queued(ahead)); }
+          else if (queued) show(wait.next);
+        },
         preview: (state, current, request) => {
           const measured = stats(state);
           // generateScene sets the estimate before it asks for a preview.

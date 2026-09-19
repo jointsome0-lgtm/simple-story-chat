@@ -441,6 +441,13 @@ export const ru = {
     discard: '🗑 Отменить черновик',
   },
 
+  // Waiting for the shared model: a line of the compaction status, and a disappearing draft before a scene.
+  wait: {
+    ahead: (n: number) => `Перед вами в очереди к модели: ${count(n, 'запрос', 'запроса', 'запросов')}.`,
+    queued: (n: number) => `⏳ Очередь к модели: перед вами ${count(n, 'запрос', 'запроса', 'запросов')}.`,
+    next: '⏳ Подошла ваша очередь.',
+    reading: '📖 Модель читает историю, скоро начнёт писать…',
+  },
   // Status of a memory compaction: one message edited in place. Every title must start with its emoji (🗜 ✅ ⚠️ ✖️):
   // tests and the owner's eye find the message by it.
   compact: {

@@ -255,3 +255,27 @@ test('a pausing GPU ends waiting agent calls instead of leaving them queued', as
   run = false; f.scheduler.tick(); await rejected;
   assert.equal(f.calls.length, 0);
 });
+test('a waiting call hears how many calls are ahead of it, each time the number changes', async t => {
+  const f = fixture(t);
+  const heard: Record<string, number[]> = { second: [], third: [] };
+  const first = f.scheduler.foreground.generate('first');
+  const second = f.scheduler.foreground.generate('second', { onWait: ahead => { heard.second.push(ahead); } });
+  const third = f.scheduler.foreground.generate('third', { onWait: ahead => { heard.third.push(ahead); } });
+  assert.deepEqual(heard, { second: [1], third: [2] });
+  f.calls[0].finish(); await first; await turn();
+  assert.deepEqual(heard, { second: [1], third: [2, 1] });
+  f.calls[1].finish(); await second; await turn();
+  f.calls[2].finish(); await third; await turn();
+  // A turn's own next call goes first while the turn holds the slot, whoever else waits.
+  const owner = f.scheduler.foreground.openTurn();
+  const step = owner.generate('owner step');
+  const other = f.scheduler.foreground.generate('other', { onWait: () => {} });
+  f.calls[3].finish(); await step; await turn();
+  const own: number[] = [];
+  const next = owner.generate('owner next', { onWait: ahead => { own.push(ahead); } });
+  await turn();
+  assert.deepEqual(own, []);
+  f.calls[4].finish(); await next;
+  owner.end(); await turn();
+  f.calls[5].finish(); await other;
+});

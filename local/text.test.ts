@@ -120,6 +120,7 @@ function screens(lang: Lang | undefined): [string, Screen][] {
       { stage, scenes: 12, keptScenes: 4, outputCharacters: 12345, elapsedMs: 75_000 },
       { stage, automatic: true, scenes: 1, repairScenes: 2, outputCharacters: 1, elapsedMs: 4_000_000 },
     ]),
+    { stage: 'queued', automatic: true, scenes: 3, ahead: 2 },
     { stage: 'done', scenes: 12, keptScenes: 4, facts: 30, repairScenes: 2, elapsedMs: 9000, automatic: true }, { stage: 'done' }, { stage: 'done', scenes: 3 }, { stage: 'done', facts: 3 },
     ...Object.keys(texts('ru').compact.reasons).map(reason => ({ stage: 'failed' as const, reason, elapsedMs: 1000 })),
     { stage: 'failed', reason: 'unlisted' }, { stage: 'cancelled', automatic: true }, {},
