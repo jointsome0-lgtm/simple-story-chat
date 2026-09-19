@@ -1,0 +1,221 @@
+{
+  "authors": [
+    "opus-5"
+  ],
+  "seed": "The Battle at the Salt Gate\n2026-08-02 08:00\nAn adventure novella without graphic detail of injuries. All participants are adults. The city's defenders hold the Salt Gate while the townspeople leave the embankment. Elin is the commander, Tarek the shield-bearer, Sava the scout. The adversary is Captain Roan and a squad of mechanical sentinels. Both sides are intelligent, the heroes are not all-powerful. Show consecutive tactical actions, their cost, decisions and conversations, not a list of stats. The battle goes on for many scenes; do not end it before the author says so.\nElin has nine charges in her bracelet. The \"Red Seal\" spends three charges and after use is unavailable for ten minutes. There are as yet no other ways to restore charges. Tarek carries an ordinary steel shield and a blue-handled dagger. Sava can pick mechanical locks but does not heal. Wounds persist until plausibly treated; a bandage does not knit a bone. Characters learn information only through interaction that is shown. Do not pass plans off as events that have taken place.",
+  "turns": [
+    "08:00. Begin the battle. Elin really does use the \"Red Seal\" against the ram of the mechanical sentinels: the blow is reflected, three charges of nine are spent. Show the mechanism of the reflection, the change of position and Tarek's reaction. This is the beginning, not a victory.",
+    "08:01. A sentinel goes around the barrier. Tarek covers Sava with his shield; Elin falls from a wet ledge and breaks her left wrist. It is the wrist that is broken, not the shoulder. The heroes continue the defence, taking the injury into account.",
+    "08:02. Tarek puts a splint and a bandage on Elin: the pain is less, the fracture is not healed. He gives her the blue-handled dagger, she takes it in her right hand and promises to return it after the eastern postern is opened. Continue the clash.",
+    "08:03. A courier tells Elin and Tarek something reliable: yesterday, 1 August at 23:40, the warden switched off the western signal bell to conceal an escape of prisoners. Sava is far away and does not hear; Roan does not know this either. Today the bell is not switched off a second time. Tie the news to the battle.",
+    "08:04. Tarek proposes burning the rope bridge, but Elin forbids it: civilians are still crossing it. He calls the idea off. The bridge is not set on fire. Instead the defenders change position.",
+    "08:05. Sava opens the eastern postern with a mechanical lockpick. Elin at once returns the blue-handled dagger to Tarek, keeping her promise. The townspeople begin to be led out through the postern. The enemy is still advancing.",
+    "08:06. Tarek and Roan agree aloud on a truce of ninety seconds for the sake of the evacuation. Show the distrust and the practical carrying out of the agreement. This is a temporary halt in the fighting, not an alliance and not the end of the war.",
+    "08:07. One mechanical sentinel approaches the passage. Tarek proposes that Elin use her named technique again right now. Continue taking into account what has already happened, without changing the rules of the world; thirty seconds still remain until the end of the truce.",
+    "08:08. The truce ended at 08:07:30, the fighting has resumed. Sava suggests that Elin hold the heavy grille with both hands. Show a possible reaction and a way to hold the passage given the heroes' condition.",
+    "08:09. Sava asks why the western bell was not heard in the night. Elin answers with what she knows, stating the time of the event. Roan does not hear this conversation. Tarek checks whether his dagger is on him. Continue the battle.",
+    "08:10. Elin's bracelet once more allows the \"Red Seal\" to be used. She uses it a second time, against the sentinel's flying chains, and pays the usual price. Show the effect and the remaining resource without any miraculous restoration.",
+    "08:11. The defenders hold the passage until the last group of townspeople has left, and then fall back themselves. Finish this phase of the battle, keep the consequences of past actions. In a short natural conversation the participants clarify how things stand with Elin's resource, her injury, the dagger, the bridge and the attitude to Roan. Do not add any new healing magic.",
+    "2026-08-02 08:12. The squad climbs the slope. One of the rescued considers Roan a new ally and proposes trusting him. Elin answers on the basis of the real terms of their dealings. No new miracles or resources appear.",
+    "2026-08-02 08:13. Tarek wants to go back for his dagger, if it is no longer on him. Show the decision, taking into account the last known location of the item and the danger. If the return is called off, do not record it as having taken place.",
+    "2026-08-02 08:14. A healer comes to the defenders. He examines Elin's injury, changes the bandage and prescribes rest. The fracture does not disappear in one scene. Sava suggests using the familiar technique right now; Elin checks against the last use.",
+    "2026-08-02 08:15. Continue from the current place: the heroes need to hold a heavy door together and decide how to wait for reinforcements. Take into account the state of their arms, the weapons, the remaining charges, the availability of the technique and what each of them knows. Do not repeat the whole story."
+  ],
+  "checks": [
+    [
+      "charges",
+      "How many charges does Elin have left after the second use?",
+      "3"
+    ],
+    [
+      "first_use",
+      "Time of the first use of the Red Seal, HH:MM.",
+      "08:00"
+    ],
+    [
+      "second_use",
+      "Time of the second use of the Red Seal, HH:MM.",
+      "08:10"
+    ],
+    [
+      "next_use",
+      "The next permitted use after the second, HH:MM.",
+      "08:20"
+    ],
+    [
+      "news",
+      "Time when the messenger first told Elin about the bell, HH:MM.",
+      "08:03"
+    ],
+    [
+      "sava_learns",
+      "When Sava learned about the bell from Elin, HH:MM.",
+      "08:09"
+    ],
+    [
+      "alliance",
+      "Did the truce mean an alliance with Roan? Only yes or no.",
+      "no"
+    ],
+    [
+      "fracture_healed",
+      "Did the healer's examination knit the fracture? Only yes or no.",
+      "no"
+    ]
+  ],
+  "facts": "State of the world as of 2026-08-02 08:15, established by the scenes:\n- The \"Red Seal\" spends 3 charges from Elin's bracelet and after use is unavailable for 10 minutes. There are no other ways to restore charges.\n- Elin's left wrist was broken at 08:01. The splint and bandage do not heal the fracture: with her left hand she cannot hold, lift or push anything heavy. Sava does not heal.\n- The blue-handled dagger belongs to Tarek. At 08:02 he gave it to Elin, at 08:05 she returned it, and since then Tarek has had the dagger. Elin has no weapon of her own.\n- Nobody set fire to the rope bridge: Tarek proposed it at 08:04, Elin forbade it, the bridge is intact.\n- The truce with Roan lasted ninety seconds, from 08:06:00 to 08:07:30, solely for the sake of the evacuation. It is not an alliance. Roan remains an enemy.\n- Elin and Tarek learned at 08:03 that the western bell had been switched off yesterday at 23:40; Sava learned it at 08:09 from Elin. Roan does not know about it.\n- The seal was used at 08:00 and at 08:10. Elin has 3 charges of 9 left; the seal is available again from 08:20.\n- At 08:14 the healer examined the arm and changed the bandage; the fracture has not knit.",
+  "traps": [
+    {
+      "key": "turn8",
+      "afterTurn": 7,
+      "facts": "State of the world at 08:07:\n- The \"Red Seal\" spends 3 charges from Elin's bracelet and after use is unavailable for 10 minutes. There are no other ways to restore charges.\n- Elin's left wrist was broken at 08:01. The splint and bandage do not heal the fracture: with her left hand she cannot hold, lift or push anything heavy. Sava does not heal.\n- The blue-handled dagger belongs to Tarek. At 08:02 he gave it to Elin, at 08:05 she returned it, and since then Tarek has had the dagger. Elin has no weapon of her own.\n- Nobody set fire to the rope bridge: Tarek proposed it at 08:04, Elin forbade it, the bridge is intact.\n- The truce with Roan lasted ninety seconds, from 08:06:00 to 08:07:30, solely for the sake of the evacuation. It is not an alliance. Roan remains an enemy.\n- Elin and Tarek learned at 08:03 that the western bell had been switched off yesterday at 23:40; Sava learned it at 08:09 from Elin. Roan does not know about it.\n- The seal has been used once, at 08:00; 6 charges remain; available again from 08:10. The truce is still in force.",
+      "questions": [
+        [
+          "turn8_seal_unused",
+          "Does the \"Red Seal\" remain unused in this scene?",
+          "yes"
+        ]
+      ]
+    },
+    {
+      "key": "turn9",
+      "afterTurn": 8,
+      "facts": "State of the world at 08:08:\n- The \"Red Seal\" spends 3 charges from Elin's bracelet and after use is unavailable for 10 minutes. There are no other ways to restore charges.\n- Elin's left wrist was broken at 08:01. The splint and bandage do not heal the fracture: with her left hand she cannot hold, lift or push anything heavy. Sava does not heal.\n- The blue-handled dagger belongs to Tarek. At 08:02 he gave it to Elin, at 08:05 she returned it, and since then Tarek has had the dagger. Elin has no weapon of her own.\n- Nobody set fire to the rope bridge: Tarek proposed it at 08:04, Elin forbade it, the bridge is intact.\n- The truce with Roan lasted ninety seconds, from 08:06:00 to 08:07:30, solely for the sake of the evacuation. It is not an alliance. Roan remains an enemy.\n- Elin and Tarek learned at 08:03 that the western bell had been switched off yesterday at 23:40; Sava learned it at 08:09 from Elin. Roan does not know about it.\n- The seal has been used once, at 08:00; 6 charges remain; available again from 08:10.",
+      "questions": [
+        [
+          "turn9_left_hand_spared",
+          "Is it shown that Elin puts no load on her broken left arm: she refuses, works with her right hand, shoulder or back, or others hold the grille?",
+          "yes"
+        ]
+      ]
+    },
+    {
+      "key": "turn11",
+      "afterTurn": 10,
+      "facts": "State of the world at 08:10 before the scene begins:\n- The \"Red Seal\" spends 3 charges from Elin's bracelet and after use is unavailable for 10 minutes. There are no other ways to restore charges.\n- Elin's left wrist was broken at 08:01. The splint and bandage do not heal the fracture: with her left hand she cannot hold, lift or push anything heavy. Sava does not heal.\n- The blue-handled dagger belongs to Tarek. At 08:02 he gave it to Elin, at 08:05 she returned it, and since then Tarek has had the dagger. Elin has no weapon of her own.\n- Nobody set fire to the rope bridge: Tarek proposed it at 08:04, Elin forbade it, the bridge is intact.\n- The truce with Roan lasted ninety seconds, from 08:06:00 to 08:07:30, solely for the sake of the evacuation. It is not an alliance. Roan remains an enemy.\n- Elin and Tarek learned at 08:03 that the western bell had been switched off yesterday at 23:40; Sava learned it at 08:09 from Elin. Roan does not know about it.\n- The seal has been used once, at 08:00; 6 charges remain; from 08:10 it is available again.",
+      "questions": [
+        [
+          "turn11_three_left",
+          "Does the scene name the remainder after the use: three charges?",
+          "yes"
+        ]
+      ]
+    },
+    {
+      "key": "turn14",
+      "afterTurn": 13,
+      "facts": "State of the world at 08:13:\n- The \"Red Seal\" spends 3 charges from Elin's bracelet and after use is unavailable for 10 minutes. There are no other ways to restore charges.\n- Elin's left wrist was broken at 08:01. The splint and bandage do not heal the fracture: with her left hand she cannot hold, lift or push anything heavy. Sava does not heal.\n- The blue-handled dagger belongs to Tarek. At 08:02 he gave it to Elin, at 08:05 she returned it, and since then Tarek has had the dagger. Elin has no weapon of her own.\n- Nobody set fire to the rope bridge: Tarek proposed it at 08:04, Elin forbade it, the bridge is intact.\n- The truce with Roan lasted ninety seconds, from 08:06:00 to 08:07:30, solely for the sake of the evacuation. It is not an alliance. Roan remains an enemy.\n- Elin and Tarek learned at 08:03 that the western bell had been switched off yesterday at 23:40; Sava learned it at 08:09 from Elin. Roan does not know about it.\n- The seal was used at 08:00 and at 08:10; 3 charges remain.",
+      "questions": [
+        [
+          "turn14_dagger_with_tarek",
+          "Is it shown that the blue-handled dagger is on Tarek and there is no need to go back for it?",
+          "yes"
+        ]
+      ]
+    },
+    {
+      "key": "turn15",
+      "afterTurn": 14,
+      "facts": "State of the world at 08:14 before the scene begins:\n- The \"Red Seal\" spends 3 charges from Elin's bracelet and after use is unavailable for 10 minutes. There are no other ways to restore charges.\n- Elin's left wrist was broken at 08:01. The splint and bandage do not heal the fracture: with her left hand she cannot hold, lift or push anything heavy. Sava does not heal.\n- The blue-handled dagger belongs to Tarek. At 08:02 he gave it to Elin, at 08:05 she returned it, and since then Tarek has had the dagger. Elin has no weapon of her own.\n- Nobody set fire to the rope bridge: Tarek proposed it at 08:04, Elin forbade it, the bridge is intact.\n- The truce with Roan lasted ninety seconds, from 08:06:00 to 08:07:30, solely for the sake of the evacuation. It is not an alliance. Roan remains an enemy.\n- Elin and Tarek learned at 08:03 that the western bell had been switched off yesterday at 23:40; Sava learned it at 08:09 from Elin. Roan does not know about it.\n- The seal was used at 08:00 and at 08:10; 3 charges remain; available again from 08:20.",
+      "questions": [
+        [
+          "turn15_seal_unused",
+          "Does the \"Red Seal\" remain unused in this scene?",
+          "yes"
+        ],
+        [
+          "turn15_seal_not_ready",
+          "Does the scene say that the seal is still unavailable right now?",
+          "yes"
+        ],
+        [
+          "turn15_still_broken",
+          "Does Elin's wrist remain broken at the end of the scene?",
+          "yes"
+        ]
+      ]
+    },
+    {
+      "key": "seal_early",
+      "input": "08:16. A mechanical sentinel is battering at the door. Elin tries to use the \"Red Seal\" right now.",
+      "questions": [
+        [
+          "seal_early_worked",
+          "Did the \"Red Seal\" work in this scene?",
+          "no"
+        ]
+      ]
+    },
+    {
+      "key": "seal_allowed",
+      "input": "08:21. A mechanical sentinel is battering at the door. Elin uses the \"Red Seal\" against it.",
+      "questions": [
+        [
+          "seal_allowed_worked",
+          "Did the \"Red Seal\" work in this scene?",
+          "yes"
+        ],
+        [
+          "seal_allowed_charges",
+          "If the scene names the remaining charges after the use, is the remainder zero? If the remainder is not named, answer no.",
+          "yes"
+        ]
+      ]
+    },
+    {
+      "key": "wrist",
+      "input": "08:16. The bar of the door has slipped off. Elin grabs the heavy bar with both hands and sets it back in place.",
+      "questions": [
+        [
+          "wrist_limits",
+          "Does the scene show that the broken left wrist hinders Elin: pain, failure, working one-handed or someone else's help?",
+          "yes"
+        ]
+      ]
+    },
+    {
+      "key": "dagger",
+      "input": "08:16. The strap on the door has to be cut. Elin draws the blue-handled dagger and cuts the strap.",
+      "questions": [
+        [
+          "dagger_source",
+          "Is it shown in the scene that the blue-handled dagger is with Tarek: Elin takes it from Tarek, asks him for it, receives it from him, or is left without a dagger?",
+          "yes"
+        ]
+      ]
+    },
+    {
+      "key": "healer",
+      "input": "08:16. Sava examines Elin's arm and sets the bone so that she can hold the door with both hands.",
+      "questions": [
+        [
+          "healer_still_broken",
+          "Does Elin's left arm remain unusable at the end of the scene?",
+          "yes"
+        ]
+      ]
+    },
+    {
+      "key": "bridge",
+      "input": "08:16. In a lull Tarek recalls how the rope bridge burned and asks Elin whether everyone had time to cross.",
+      "questions": [
+        [
+          "bridge_corrected",
+          "Does the scene say that the bridge did not in fact burn?",
+          "yes"
+        ]
+      ]
+    },
+    {
+      "key": "ally",
+      "input": "08:16. Elin sends Sava to Roan: let him send his sentinels to help, since we are allies after all.",
+      "questions": [
+        [
+          "ally_corrected",
+          "Is it shown in the scene that Roan is not an ally: someone objects, Elin corrects herself, or Roan refuses as an enemy?",
+          "yes"
+        ]
+      ]
+    }
+  ]
+}
