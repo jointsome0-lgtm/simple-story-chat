@@ -1,817 +1,886 @@
-# План экспериментов над промптами и памятью
+# Plan of experiments over prompts and memory
 
-2026-09-19 · Opus 5 (сводка роя) · только анализ: код не правился, ни одного платного или лимитированного запроса
-к моделям не сделано, GPU не арендовалась. Исследовательская записка: числа с пометкой [И] сняты с локальных технических журналов, которые не публикуются.
+2026-09-19 · Opus 5 (swarm summary) · analysis only: no code was changed, not a single paid or rate-limited request
+was made to any model, no GPU was rented. This is a research note: the numbers marked [M] were taken from local
+technical logs, which are not published.
 
-Свод шести углов разведки и вердиктов скептиков к ним. Предложения, опровергнутые скептиками, сюда не вошли;
-исправленные вошли с исправленными числами. Пометки: **[И]** измерено (код, `logs/`, счётчики),
-**[В]** выведено расчётом из измеренного, **[П]** предположение, которое надо закрыть замером.
+This is a summary of six reconnaissance angles and of the skeptics' verdicts on them. Proposals that the skeptics
+refuted are not included here; proposals that were corrected are included with the corrected numbers. Markers:
+**[M]** measured (code, `logs/`, counters), **[D]** derived by calculation from measured values, **[A]** an
+assumption that must be closed by a measurement.
 
-Читалось: `docs/improve-loop.md`, `docs/improve-log.md`, `docs/gpu.md`, `docs/model-providers.md`,
+Files read: `docs/improve-loop.md`, `docs/improve-log.md`, `docs/gpu.md`, `docs/model-providers.md`,
 `docs/eval-economics-proposal.md`, `local/eval.ts`, `local/memory-probe.ts`, `local/scene-judge.ts`, `local/llama.ts`,
 `local/prompt.ts`, `local/memory.ts`, `local/generation.ts`, `examples/scene-traps.ts`, `gpu/serve.sh`,
-`logs/gpu-q6-final-*.jsonl`, `logs/eval.jsonl`. Скрытый набор, `data/`, `.env*` не открывались.
+`logs/gpu-q6-final-*.jsonl`, `logs/eval.jsonl`. The holdout pack, `data/` and `.env*` were not opened.
 
-## Отношение к `docs/eval-economics-proposal.md`
+## Relation to `docs/eval-economics-proposal.md`
 
-Тот файл написан параллельно и независимо; расхождений по сути мало, и они названы ниже явно.
+That file was written in parallel and independently. There are few real disagreements, and they are named
+explicitly below.
 
-Совпадаем: единица парности и ресемплирования — **ловушка**, а не вопрос и не сцена; счёт «105 наблюдений»
-завышает точность примерно в 1,7 раза; плоский пул запросов в lab — первая правка; поле `system` в файле пачки
-снимает worktree-на-вариант; судья не стоит денег и должен идти вне окна аренды; «дотягивать до часа» при
-посекундной оплате бессмысленно.
+We agree on these points. The unit of pairing and resampling is the **trap**, not the question and not the scene.
+The count "105 observations" overstates the precision by a factor of about 1.7. A flat request pool in lab mode is
+the first change. A `system` field in the batch file removes the need for a worktree per variant. The judge costs
+no money and must run outside the rental window. "Filling up the hour" makes no sense with per-second billing.
 
-Расходимся в трёх местах.
+We disagree in three places.
 
-1. **Скорость префилла.** Там P ≈ 2300 ток/с (подгонка по шести строкам сжатия из `logs/bot-gpu.jsonl`, вход
-   12–39 тыс. токенов). Моя подгонка по 51 строке `scene` из `logs/gpu-q6-final-*.jsonl` (вход 0,7–7,2 тыс.,
-   то есть ровно рабочий диапазон пачки) даёт **P ≈ 1290 ток/с, D ≈ 39 ток/с**. Для коротких входов пачки верна
-   моя; разницу трактуйте как вилку 1300–2300 и не считайте префилл дешевле 2,5 с на 6 тыс. токенов.
-2. **`cachedInputTokens` как «проверка допущения, на котором стоит весь lab»** (там — пункт «сделать первыми»).
-   Допущение уже подтверждено журналом: поле приходит и не равно нулю в 41 строке `scene` из 51 (нули — первая
-   сцена и сцены сразу после сжатия). Печатать его в `lab_scene` всё равно надо, но это не повод для отдельного
-   шага: я понижаю его до части проверки пункта 1.
-3. **Приоритет прерываемости.** Там его нет вовсе. При оплате за фактическое время нормальная сессия — 15–25
-   минут, и сегодня она невосстановима: `--resume` молча стирает уже записанные сцены вариантов (пункт 1.4).
-   Я ставлю эту правку в первую тройку.
+1. **Prefill speed.** That file has P ≈ 2300 tokens/s (a fit over six compaction rows from `logs/bot-gpu.jsonl`,
+   input 12–39 thousand tokens). My fit over 51 `scene` rows from `logs/gpu-q6-final-*.jsonl` (input 0.7–7.2
+   thousand, which is exactly the working range of a batch) gives **P ≈ 1290 tokens/s, D ≈ 39 tokens/s**. For the
+   short inputs of a batch my value is correct. Treat the difference as a range of 1300–2300 and do not assume
+   that prefill is cheaper than 2.5 s per 6 thousand tokens.
+2. **`cachedInputTokens` as "a check of the assumption that the whole lab mode rests on"** (in that file it is an
+   item under "do first"). The assumption is already confirmed by the log: the field arrives and is non-zero in 41
+   of 51 `scene` rows (the zeros are the first scene and the scenes right after a compaction). It still must be
+   printed in `lab_scene`, but this is not a reason for a separate step: I lower it to a part of the check of
+   item 1.
+3. **Priority of interruptibility.** That file does not have it at all. When you pay for actual time, a normal
+   session is 15–25 minutes, and today such a session cannot be recovered: `--resume` silently erases the variant
+   scenes that are already written (item 1.4). I put this change in the top three.
 
 ---
 
-## 1. Где сейчас теряются время, деньги и точность
+## 1. Where time, money and precision are lost now
 
-### 1.1 Что на самом деле стоит времени на GPU
+### 1.1 What really costs time on the GPU
 
-**[И]** Моя подгонка по 51 сцене `logs/gpu-q6-final-*.jsonl` (боевая Gemma 4 31B heretic Q6_K, один слот, KV
-`q8_0`): медиана сцены **15,6 с**, медиана сжатия **19,1 с** (n=9, разброс 11,9–25,5), выход сцены медиана
-**591 токен**, вход медиана **4 668** (максимум 7 219). Отсюда **декод ≈39 ток/с**, **префилл ≈1 290 ток/с**.
+**[M]** My fit over 51 scenes from `logs/gpu-q6-final-*.jsonl` (production Gemma 4 31B heretic Q6_K, one slot, KV
+`q8_0`): median scene **15.6 s**, median compaction **19.1 s** (n=9, spread 11.9–25.5), scene output median
+**591 tokens**, input median **4,668** (maximum 7,219). From this: **decode ≈39 tokens/s**, **prefill ≈1,290
+tokens/s**.
 
-**[В]** Декод одной сцены — 591/39 ≈ **15 с из 15,6**, то есть **~95 % одиночной сцены**. Всё, что ускоряет
-декод (число занятых слотов, тип KV-кэша), бьёт в 95 % счёта; всё, что экономит префилл (общий префикс, банк
-памяти), — в оставшиеся 5 % плюс в редкие холодные запросы.
+**[D]** The decode of one scene is 591/39 ≈ **15 s out of 15.6**, that is **~95 % of a single scene**. Everything
+that speeds up decode (the number of busy slots, the KV cache type) acts on 95 % of the bill. Everything that saves
+prefill (a shared prefix, a memory bank) acts on the remaining 5 %, plus on rare cold requests.
 
-### 1.2 Слоты недоиспользованы: в полёте 3 запроса из 5
+### 1.2 Slots are underused: 3 requests of 5 are in flight
 
-**[И]** `local/memory-probe.ts:180`: число цепочек равно `Math.max(1, Math.floor(parallel / samples))`, каждая
-цепочка шлёт `samples` запросов одним `Promise.all`. При `parallel: 5, samples: 3` это **одна цепочка и три
-запроса**, а не пять. Полная занятость бывает только когда `samples` делит `parallel`.
+**[M]** `local/memory-probe.ts:180`: the number of chains equals `Math.max(1, Math.floor(parallel / samples))`, and
+each chain sends `samples` requests in one `Promise.all`. With `parallel: 5, samples: 3` this is **one chain and
+three requests**, not five. Full occupancy happens only when `samples` divides `parallel`.
 
-**[В]** Измеренные 8 с на сцену получены на батче 3: совокупный декод 591/8 ≈ 74 ток/с против идеальных
-3 × 39 = 117, эффективность батчинга 63 %. Переход 3 → 5 в полёте реалистично даёт **5,7–6,5 с** на сцену
-(не 5,0: эффективность батчинга падает с числом потоков), то есть **−20…−30 % времени пачки**.
+**[D]** The measured 8 s per scene were obtained at batch size 3: total decode 591/8 ≈ 74 tokens/s against the
+ideal 3 × 39 = 117, so the batching efficiency is 63 %. Going from 3 to 5 requests in flight realistically gives
+**5.7–6.5 s** per scene (not 5.0: batching efficiency falls as the number of streams grows), that is
+**−20…−30 % of the batch time**.
 
-**[И, опровергает обходной путь]** «Запустить три процесса с `parallel: 2`» невозможно: `local/llama.ts:192`
-бросает `unexpected_slots`, если `props.total_slots !== lab.parallel`. Каждый процесс обязан объявить все слоты.
+**[M, refutes the workaround]** "Start three processes with `parallel: 2`" is impossible: `local/llama.ts:192`
+throws `unexpected_slots` if `props.total_slots !== lab.parallel`. Every process must declare all slots.
 
-### 1.3 Варианты `SYSTEM` гоняются полным eval из отдельного worktree
+### 1.3 `SYSTEM` variants are run as a full eval from a separate worktree
 
-**[И]** `type Lab` (`memory-probe.ts:63`) знает только `{ key, tail }`, `tail` ≤ 2000 знаков. Вариант, меняющий
-`SYSTEM`, сегодня требует git-worktree и полного eval с пересжатием памяти — так шла пачка 3 в журнале.
+**[M]** `type Lab` (`memory-probe.ts:63`) knows only `{ key, tail }`, with `tail` ≤ 2000 characters. A variant that
+changes `SYSTEM` today needs a git worktree and a full eval with memory compacted again. Batch 3 in the log was run
+this way.
 
-**[И]** Пересжимать незачем: запрос сжатия собирается в `local/memory.ts` со своим `SUMMARY_RULES` и `SYSTEM`
-рассказчика не видит; запрос проверочных вопросов перезаписывает `request.system` своим текстом
-(`memory-probe.ts:233`); в `generation.ts:123-128` длина `SYSTEM` входит одинаковой добавкой в обе стороны
-сравнения размеров. **Правка `SYSTEM` не может изменить ни память, ни `score`.**
+**[M]** There is no need to compact again. The compaction request is built in `local/memory.ts` with its own
+`SUMMARY_RULES` and does not see the narrator's `SYSTEM`. The recall-question request overwrites `request.system`
+with its own text (`memory-probe.ts:233`). In `generation.ts:123-128` the length of `SYSTEM` enters both sides of
+the size comparison as the same addend. **A change to `SYSTEM` cannot change either the memory or `score`.**
 
-**[В]** Цена варианта `SYSTEM` при честном сравнении: сегодня ≈11 минут GPU на вариант-сэмпл (9 сжатий + 3 recall
-+ 22 сцены), то есть 5 вариантов × 3 сэмпла ≈ 165 минут ≈ **$1,7** — больше половины остатка кредита $2,7.
-Через поле `system` в файле пачки: те же 330 сцен по 8–11 с ≈ **55–75 минут ≈ $0,6–0,75**. Экономия
-**$0,9–1,1**, а не «$1,1–1,3»: варианты с разным `SYSTEM` теряют общий префикс и каждый платит свой префилл
-(6 тыс. токенов ≈ 2,5–4,6 с при 1290–2300 ток/с), то есть пачка дорожает на **+25…+55 %** против пачки хвостов.
+**[D]** The price of a `SYSTEM` variant in a fair comparison: today ≈11 minutes of GPU per variant-sample
+(9 compactions + 3 recall + 22 scenes), that is 5 variants × 3 samples ≈ 165 minutes ≈ **$1.7**, which is more
+than half of the remaining credit of $2.7. With a `system` field in the batch file: the same 330 scenes at 8–11 s
+each ≈ **55–75 minutes ≈ $0.6–0.75**. The saving is **$0.9–1.1**, not "$1.1–1.3": variants with different `SYSTEM`
+lose the shared prefix and each one pays for its own prefill (6 thousand tokens ≈ 2.5–4.6 s at 1290–2300 tokens/s),
+so the batch costs **+25…+55 %** more than a batch of tails.
 
-### 1.4 Длинная пачка невосстановима — это главный конфликт с поминутной оплатой
+### 1.4 A long batch cannot be recovered — this is the main conflict with per-minute billing
 
-**[И]** `labScenes` создаётся пустым внутри цикла по режимам (`memory-probe.ts:146`), ловушка пропускается по
-наличию её **базовой** сцены в `current.traps` (:153), а `saveLab` (:147-150) перезаписывает
-`lab/<вариант>-<сэмпл>/report.json` целиком тем, что накоплено в текущем процессе. После `--resume` первый же
-`saveLab` обрезает отчёты вариантов до ловушек, записанных после продолжения, **без единой ошибки**. Судья затем
-сравнит варианты на разных наборах ловушек.
+**[M]** `labScenes` is created empty inside the loop over modes (`memory-probe.ts:146`). A trap is skipped if its
+**base** scene is present in `current.traps` (:153). `saveLab` (:147-150) overwrites
+`lab/<variant>-<sample>/report.json` completely with what the current process has accumulated. After `--resume`,
+the very first `saveLab` cuts the variant reports down to the traps written after the resume, **without a single
+error**. The judge will then compare variants on different sets of traps.
 
-**[И]** Второй обрыв: блок проверочных вопросов (`:228-257`) стоит **перед** `writeTraps(undefined)` (:259), а
-`truncated_recall` / `invalid_recall` / `TypeError` уходят во внешний catch и завершают процесс с кодом 1.
-Послеисторических ловушек **17 из 22** (battle 7 из 12, dance 6 из 6, chess 4 из 4), и пачка идёт по одному
-сценарию: для dance и chess один сбой recall убивает всю пачку.
+**[M]** The second break: the recall-question block (`:228-257`) stands **before** `writeTraps(undefined)` (:259),
+and `truncated_recall` / `invalid_recall` / `TypeError` go to the outer catch and end the process with exit code 1.
+There are **17 after-story traps out of 22** (battle 7 of 12, dance 6 of 6, chess 4 of 4), and a batch runs over
+one scenario: for dance and chess one recall failure kills the whole batch.
 
-**[В]** Цена одного такого сбоя при $0,6/час — **$0,4–0,7** (40–60 минут). Обходной путь в ноль строк есть
-(копировать каталог `lab/` перед `--resume` и потом сливать), но он ручной и его легко забыть у включённой карты.
+**[D]** The price of one such failure at $0.6/hour is **$0.4–0.7** (40–60 minutes). A workaround with zero lines
+of code exists (copy the `lab/` directory before `--resume` and merge afterwards), but it is manual and easy to
+forget while the GPU is running.
 
-### 1.5 Пересчёт памяти между прогонами
+### 1.5 Recomputing memory between runs
 
-**[И]** Сжатия — 844 278 из 1 892 286 токенов платного канала Gemma за 18 сентября (44,6 %) и 140 из 270 запросов
-(51,9 %); у `openai-small` 867 373 из 2 026 057 при крыше 2 250 000 (канал выбран на 90 %).
+**[M]** Compactions are 844,278 of 1,892,286 tokens of the paid Gemma channel on 18 September (44.6 %) and 140 of
+270 requests (51.9 %). For `openai-small` they are 867,373 of 2,026,057 with a cap of 2,250,000 (the channel is
+90 % used).
 
-**[В, поправка]** Это доля для прогонов **без судьи**. В судимом прогоне 3 сжатия ≈ 54 тыс. токенов против 22 сцен
-× 6–7 тыс. ≈ 140 тыс., то есть сжатие — около **25 %**, и «два прогона вместо одного» получается только для
-прогонов на память. На GPU 9 сжатий трёх сценариев — **≈3 минуты ($0,03)**, а не 5–10 минут на вариант: внутри
-одной пачки сжатия уже общие для всех вариантов-хвостов. Банк памяти экономит **между** прогонами (повторные
-микропачки, отладка, повтор после сбоя) и, что важнее денег, **убирает компоненту дисперсии «разная память у
-разных рук»**, которую журнал 19 сентября сам записал как ограничение замера.
+**[D, correction]** This is the share for runs **without a judge**. In a judged run, 3 compactions ≈ 54 thousand
+tokens against 22 scenes × 6–7 thousand ≈ 140 thousand, so compaction is about **25 %**, and "two runs instead of
+one" is true only for memory runs. On the GPU, 9 compactions of three scenarios take **≈3 minutes ($0.03)**, not
+5–10 minutes per variant: inside one batch the compactions are already shared by all tail variants. A memory bank
+saves **between** runs (repeated micro-batches, debugging, a repeat after a failure). More important than money, it
+**removes the variance component "different memory in different arms"**, which the log of 19 September itself
+recorded as a limitation of the measurement.
 
-### 1.6 Сгоревшая работа упавших ячеек
+### 1.6 Wasted work of failed cells
 
-**[И]** В ячейках, которые потом упали, сгорело **255 тыс. токенов и 50 запросов сжатия** (12,6 % токенов,
-15,7 % запросов) за один день 18 сентября; пять прогонов дали `score` 0. Но по кодам: `invalid_memory` — 172 из
-255 тыс., а это ровно то, что измеритель считает сигналом («a mode that did not finish answers nothing»,
-`eval.ts:136`), и проба уже повторяет сжатие до трёх раз. `invalid_stream` сжёг 0 токенов, `provider_failed`
-уже повторяется до 20 раз внутри пробы, `deadline` за день не случился ни разу. **Чисто восстановимая потеря —
-`probe_failed`: 62,8 тыс. токенов, 2 ячейки.** Выигрыш от `--resume` в eval вчетверо меньше заявленного; ценность
-в другом — один случайный сбой не обнуляет весь прогон через `Math.min` по моделям.
+**[M]** In cells that later failed, **255 thousand tokens and 50 compaction requests** were wasted (12.6 % of
+tokens, 15.7 % of requests) in one day, 18 September; five runs gave `score` 0. But by code: `invalid_memory` is
+172 of the 255 thousand, and this is exactly what the eval counts as a signal ("a mode that did not finish answers
+nothing", `eval.ts:136`), and the probe already repeats a compaction up to three times. `invalid_stream` wasted
+0 tokens, `provider_failed` is already repeated up to 20 times inside the probe, and `deadline` did not happen
+once that day. **The purely recoverable loss is `probe_failed`: 62.8 thousand tokens, 2 cells.** The gain from
+`--resume` in eval is four times smaller than claimed. The value is elsewhere: one random failure no longer zeroes
+the whole run through `Math.min` over models.
 
-### 1.7 Точность: где мы себя обманываем
+### 1.7 Precision: where we deceive ourselves
 
-- **[В]** Скрытый набор «105 наблюдений» — это 35 вопросов × 3 сэмпла, а сэмплы одной ловушки почти всегда дают
-  0/3 или 3/3. Эффективный размер выборки — **число ловушек (~30), а не 105**; биномиальный интервал по 105 у́же
-  истинного примерно в **√3 ≈ 1,7 раза**.
-- **[И]** Мера почти вырождена по ответу: в `examples/scene-traps.ts` **25 вопросов, 24 ждут `yes` и ровно один —
-  `no`** (`seal_early_worked`). Фиктивный судья «всегда yes» получает **24/25 = 0,96**. На сохранённом корпусе
-  вердиктов (240 штук) реальный судья набрал 215/240 = 0,896, а «всегда yes» — 228/240 = 0,950: **тупой судья
-  обыгрывает настоящего**. Смещение судьи в сторону «yes» движет `sceneScore` сильнее, чем любой эффект после
-  принятого правила (94 против 93 из 105).
-- **[И]** Собственный шум судьи не измерялся **ни разу**; известно только межсудейское расхождение 4 из 40.
-  **[В]** При доле переобдумываний 5 % на 105 вопросах sd счёта = 2,2 вопроса, sd разности двух прогонов = 3,2 —
-  то есть разница «`rule` 94 против `short` 93» неотличима от шума в принципе.
-- **[В]** Мощность (симуляция из `eval-economics-proposal.md`, §2.2, я её не пересчитывал): нынешние 35 вопросов
-  × 3 сэмпла надёжно ловят только **сконцентрированные** эффекты от +10 п.п. (5–6 переключённых ловушек).
-  Три переключённые ловушки не докажет никакой бюджет сэмплов.
-- **[И]** Правило приёмки «`score` или `sceneScore` вырос» в `improve-loop.md:39` конъюнктивно (вторая мера не
-  упала, ни одна модель не упала, три прогона на сторону) — упрёк «оно срабатывает в 75 % случаев под нулём»
-  **неверен** и в план не вошёл. Настоящая слабость `Math.min` другая: минимум отслеживает одну модель и вбирает
-  её хвост вниз (журнал 18 сентября: `gpt-5.4-mini` упала с 24–25 до 15 из 36 без ошибки пробы), и один такой
-  прогон обнуляет сравнение.
+- **[D]** The holdout pack's "105 observations" are 35 questions × 3 samples, and the samples of one trap almost
+  always give 0/3 or 3/3. The effective sample size is **the number of traps (~30), not 105**. A binomial interval
+  over 105 is narrower than the true one by a factor of about **√3 ≈ 1.7**.
+- **[M]** The measure is almost degenerate in the expected answer: in `examples/scene-traps.ts` there are
+  **25 questions, 24 expect `yes` and exactly one expects `no`** (`seal_early_worked`). A dummy judge that says
+  "always yes" gets **24/25 = 0.96**. On the saved corpus of verdicts (240 of them) the real judge scored
+  215/240 = 0.896, and "always yes" scored 228/240 = 0.950: **the dumb judge beats the real one**. The judge's
+  bias toward "yes" moves `sceneScore` more than any effect after the accepted rule (94 against 93 out of 105).
+- **[M]** The judge's own noise has **never** been measured. Only the disagreement between judges is known: 4 of 40.
+  **[D]** With a 5 % share of changed verdicts on 105 questions, the sd of the score = 2.2 questions and the sd of
+  the difference between two runs = 3.2. So the difference "`rule` 94 against `short` 93" cannot be told from noise
+  in principle.
+- **[D]** Power (simulation from `eval-economics-proposal.md`, §2.2, I did not recompute it): the current
+  35 questions × 3 samples reliably catch only **concentrated** effects from +10 percentage points (pp), that is
+  5–6 flipped traps. No budget of samples will prove three flipped traps.
+- **[M]** The acceptance rule "`score` or `sceneScore` went up" in `improve-loop.md:39` is conjunctive (the second
+  measure did not fall, no model fell, three runs per side). The criticism "it fires in 75 % of cases under the
+  null" is **wrong** and is not included in the plan. The real weakness of `Math.min` is different: the minimum
+  tracks one model and absorbs its downward tail (log of 18 September: `gpt-5.4-mini` fell from 24–25 to 15 out of
+  36 without a probe error), and one such run zeroes the comparison.
 
-### 1.8 Судья: дорог не деньгами, а местом в расписании
+### 1.8 The judge: expensive not in money but in its place in the schedule
 
-**[И]** Медиана на ловушку у размещённых судей 1,1–1,5 с; у Opus по 28 промежуткам медиана 1,44 с, но **среднее
-5,11 с** (один промежуток 101 с). Судья вызывается **на ловушку**, а не на вопрос: пачка 5 вариантов × 3 сэмпла ×
-22 ловушки = **330 вызовов**, а по одному сценарию (battle) — 180.
+**[M]** The median per trap for hosted judges is 1.1–1.5 s. For Opus, over 28 intervals, the median is 1.44 s but
+the **mean is 5.11 s** (one interval was 101 s). The judge is called **per trap**, not per question: a batch of
+5 variants × 3 samples × 22 traps = **330 calls**, and for one scenario (battle) it is 180.
 
-**[В]** 180 вызовов по среднему 5,1 с ≈ **15 минут**. При посекундной оплате это ноль долларов, **если машина уже
-выключена**: сцены пишутся на локальный диск, `scene-judge.ts` работает офлайн по сохранённому отчёту и идёт по
-подписке. Опасность одна — судить, не выключив карту.
+**[D]** 180 calls at the mean of 5.1 s ≈ **15 minutes**. With per-second billing this is zero dollars, **if the
+machine is already turned off**: scenes are written to the local disk, `scene-judge.ts` works offline on the saved
+report and runs on a subscription. There is one danger: judging without turning the GPU off.
 
-### 1.9 Сводка потерь
+### 1.9 Summary of losses
 
-| Потеря | Оценка | Тип |
+| Loss | Estimate | Type |
 |---|---|---|
-| В полёте 3 запроса из 5 слотов | 20–30 % времени пачки, ≈$0,10 на 330 сцен | [В] |
-| Вариант `SYSTEM` через worktree + полный eval | $1,7 против $0,6–0,75 за ту же лестницу | [В] |
-| Пачка не переживает `--resume` и сбой recall | $0,4–0,7 за один сбой | [И] механика, [В] цена |
-| Пересжатие памяти между прогонами | ≈3 мин ($0,03) на прогон + лишняя компонента дисперсии | [И]+[В] |
-| Восстановимая часть упавших ячеек | 62,8 тыс. токенов (не 285 тыс.) | [И] |
-| Счёт точности по 105 вместо ~30 ловушек | интервалы у́же истинных в 1,7 раза | [В] |
-| Да-смещение судьи | база «всегда yes» = 0,96 при реальных 0,896 | [И] |
-| Неизмеренный шум судьи | ±3 п.п. неучтённой дисперсии | [В] |
-| Карта ждёт судью | $0,01 за минуту ожидания, до $0,15 за сеанс | [В] |
+| 3 requests in flight out of 5 slots | 20–30 % of batch time, ≈$0.10 per 330 scenes | [D] |
+| `SYSTEM` variant through a worktree + full eval | $1.7 against $0.6–0.75 for the same ladder | [D] |
+| A batch does not survive `--resume` or a recall failure | $0.4–0.7 per failure | [M] mechanics, [D] price |
+| Compacting memory again between runs | ≈3 min ($0.03) per run + an extra variance component | [M]+[D] |
+| Recoverable part of failed cells | 62.8 thousand tokens (not 285 thousand) | [M] |
+| Precision counted over 105 instead of ~30 traps | intervals narrower than the true ones by a factor of 1.7 | [D] |
+| Yes-bias of the judge | the "always yes" baseline = 0.96 against the real 0.896 | [M] |
+| Unmeasured judge noise | ±3 pp of unaccounted variance | [D] |
+| The GPU waits for the judge | $0.01 per minute of waiting, up to $0.15 per session | [D] |
 
 ---
 
-## 2. Статистический протокол сравнения (выполнять буквально)
+## 2. Statistical protocol of a comparison (follow it literally)
 
-**Ш0. До пачки, письменно в журнал.** Одна гипотеза одним предложением. **Одна основная мера** (обычно
-`sceneScore`, режим `plain`) и **одна основная модель** (боевая Gemma на GPU). Ожидаемое направление сдвига.
-Сколько ловушек гипотеза физически может переключить — считается по прошлым `report.json` без модели; **меньше
-пяти — эксперимент не ставится** (§1.7: он недоказуем при любом бюджете сэмплов).
+**S0. Before the batch, in writing, in the log.** One hypothesis in one sentence. **One primary measure** (usually
+`sceneScore`, mode `plain`) and **one primary model** (the production Gemma on the GPU). The expected direction of
+the shift. How many traps the hypothesis can physically flip: this is counted from past `report.json` files without
+a model. **If it is fewer than five, the experiment is not run** (§1.7: it cannot be proven with any budget of
+samples).
 
-**Ш1. Единица.** Единица парности и ресемплирования — **ловушка**. Вопросы внутри ловушки делят одну сцену и
-коррелированы; сэмплы одной ловушки почти детерминированы. Никакого McNemar по «вопросам» и никакого
-биномиального интервала по `вопросы × сэмплы`.
+**S1. Unit.** The unit of pairing and resampling is the **trap**. Questions inside one trap share one scene and
+are correlated. Samples of one trap are almost deterministic. No McNemar test over "questions" and no binomial
+interval over `questions × samples`.
 
-**Ш2. Парность по трём осям сразу.** Один банк памяти, один список ловушек, один судья на все руки пачки.
-Различается только текст варианта. Руки, снятые разными прогонами памяти или разными судьями, не сравниваются.
+**S2. Pairing on three axes at once.** One memory bank, one list of traps, one judge for all arms of the batch.
+Only the text of the variant differs. Arms that were taken with different memory runs or different judges are not
+compared.
 
-**Ш3. Состав пачки.** База (пустой хвост) обязательна всегда. Скрининг: все варианты, `samples: 3`, ловушки из
-`only`. Подтверждение: победитель против базы, **все** ловушки, `samples: 5`. Сэмплов больше 5 не брать: мощность
-покупается числом различающих ловушек, а не сэмплов.
+**S3. Composition of a batch.** The base (empty tail) is always required. Screening: all variants, `samples: 3`,
+traps from `only`. Confirmation: the winner against the base, **all** traps, `samples: 5`. Do not take more than
+5 samples: power is bought with the number of discriminating traps, not with the number of samples.
 
-**Ш4. Тест.** Перестановочный тест по ловушкам: для каждой ловушки берётся разность долей прохождения двух рук,
-метки рук переставляются **внутри ловушки**, 10 000 перестановок, статистика — среднее разностей, гипотеза
-односторонняя. Рядом — кластерный бутстрэп по ловушкам: 95 % ДИ на разницу долей. Вывод пишется как
-«+16 п.п., ДИ [+8, +23], p < 0,01», а не как «74 против 62».
+**S4. Test.** A permutation test over traps: for each trap take the difference between the pass rates of the two
+arms, permute the arm labels **inside the trap**, 10,000 permutations, the statistic is the mean of the
+differences, the hypothesis is one-sided. Next to it, a cluster bootstrap over traps: a 95 % CI for the difference
+of rates. The conclusion is written as "+16 pp, CI [+8, +23], p < 0.01", not as "74 against 62".
 
-**Ш5. Обязательные спутники числа** (все считаются кодом, без судьи и без GPU):
-- вклад по ловушкам: сколько очков разницы дала каждая — видно, держится эффект на трёх ловушках или размазан;
-- **контрольные ловушки отдельным числом** (в открытом наборе `seal_allowed` даёт два вопроса; `colors_right`,
-  `gold_silver`, `count10_pause` — нейтральные): победитель обязан их не уронить, иначе он просто научился
-  отказывать;
-- `judgeYesRate` и база «всегда yes» по тому же набору вопросов (§1.7);
-- доля `truncated` (обрыв сцены проваливает все вопросы ловушки без вызова судьи, `scene-judge.ts:38`).
+**S5. Required companions of the number** (all are computed by code, without a judge and without a GPU):
+- contribution per trap: how many points of the difference each trap gave. This shows whether the effect rests on
+  three traps or is spread out;
+- **control traps as a separate number** (in the open pack `seal_allowed` gives two questions; `colors_right`,
+  `gold_silver`, `count10_pause` are neutral): the winner must not make them fail, otherwise it has simply learned
+  to refuse;
+- `judgeYesRate` and the "always yes" baseline over the same set of questions (§1.7);
+- the share of `truncated` (a truncated scene fails all questions of the trap without a judge call,
+  `scene-judge.ts:38`).
 
-**Ш6. Отбрасывать ненаписанные ловушки.** `scene-judge.ts:38` ставит `pass: false` всем ловушкам фикстуры,
-которых нет в отчёте. При `lab.only` знаменатель раздут фантомными провалами — анализатор обязан считать только
-фактически написанные ловушки.
+**S6. Discard traps that were not written.** `scene-judge.ts:38` sets `pass: false` for all traps of the fixture
+that are missing from the report. With `lab.only` the denominator is inflated by phantom failures. The analyzer
+must count only the traps that were actually written.
 
-**Ш7. Порядок принятия.** Замкнутая процедура: скрининг (поиск, p не объявляются) → подтверждение (перестановочный
-тест, одна пара) → скрытый набор один раз, заранее объявленной стороной. На скрытый набор выходит ровно один
-вариант. Каждое обращение к скрытому набору записывается в журнал отдельной строкой со счётчиком: при α = 0,05 и
-восьми заглядываниях вероятность хотя бы одной ложной победы — 0,34.
+**S7. Order of acceptance.** A closed procedure: screening (a search, p-values are not declared) → confirmation
+(permutation test, one pair) → the holdout pack once, with the side declared in advance. Exactly one variant goes
+to the holdout pack. Every access to the holdout pack is written to the log as a separate line with a counter: at
+α = 0.05 and eight looks, the probability of at least one false win is 0.34.
 
-**Ш8. Чего протокол не меняет.** `Math.min` по моделям в `eval.ts` остаётся: «решает худшая модель» — объявленная
-цель, а не оценка эффекта (`improve-loop.md:7`). Предложение считать медиану парных сдвигов вместо минимума
-**отклонено**: под нулевой гипотезой любая статистика растёт в 50 % прогонов, это не дефект минимума. Правило
-«минимум три прогона на сторону» сохраняется для полных прогонов eval, где память пересжимается каждый раз.
+**S8. What the protocol does not change.** `Math.min` over models in `eval.ts` stays: "the worst model decides" is
+the declared goal, not an estimate of the effect (`improve-loop.md:7`). The proposal to take the median of paired
+shifts instead of the minimum is **rejected**: under the null hypothesis any statistic goes up in 50 % of runs, and
+this is not a defect of the minimum. The rule "at least three runs per side" stays for full eval runs, where memory
+is compacted again every time.
 
-**Ш9. Что нельзя.** Отбирать ловушки по наблюдённому разбросу между руками и на тех же данных мерить новые
-варианты — отбор по шуму (при 3 сэмплах стандартная ошибка доли 0,27–0,29). Выбрасывать ловушки, которые «никто
-никогда не проходит»: `turn15_crates_35`, `turn9_agata_in_dark`, `debt_remainder` — это работа для памяти и
-предмет следующего шага цикла. Поле `only` применяется как список **известных различающих** ловушек, а итоговое
-число победителя берётся из подтверждающего прогона на всех ловушках.
-
----
-
-## 3. Ранжированный список изменений
-
-★ — сделать первыми. **[В]** — требует решения владельца (файл из раздела «Что менять нельзя» или правило цикла).
-
-### ★1. Плоский пул запросов в lab + `ms` и `cachedInputTokens` в строке сцены
-
-**Что.** В `local/memory-probe.ts` сложить пары «вариант × сэмпл» **одной ловушки** в один список и держать в
-полёте ровно `lab.parallel` запросов вместо `floor(parallel/samples)` цепочек. Пул **внутри ловушки**, а не между
-ловушками: `beginJob` не допускает двух задач разом, смешивание ловушек потребовало бы переделки работы с job.
-Туда же — поля `inputTokens`, `cachedInputTokens`, `outputTokens`, `ms` в `progress({event:'lab_scene'})`; время
-префилла и время запроса разделять (`llama.ts:165-176` делает отдельный POST на токенизацию промпта).
-
-**Выигрыш.** [В] 8 с → 5,7–6,5 с на сцену: пачка 330 сцен 44 → 31–36 минут, $0,44 → $0,31–0,36. Поля в логе
-закрывают вопрос «делится ли префикс» окончательно и дают цену любой будущей правки в секундах.
-**Труд.** S (полчаса). **Риск.** Низкий: не-lab ветку не трогать, поведение измерителя не меняется.
-**Проверка.** Та же пачка до и после: секунды на сцену в `lab_scene`, `nvidia-smi --query-gpu=utilization.gpu`.
-У второго и последующих вариантов ловушки `cachedInputTokens` должен быть близок к `inputTokens`.
-
-### ★2. Поле `system` в файле пачки (и починка выбора «официальной» сцены)
-
-**Что.** Разрешить варианту `system?: string` рядом с `tail` (валидация как у `tail`). Обязательные спутники:
-(а) `if (!variant.tail) first ??= written[0]` на `memory-probe.ts:175` починить на `!variant.tail && !variant.system`,
-иначе `SYSTEM`-вариант станет официальной сценой отчёта; (б) хранить в файле пачки хэш текущего `SYSTEM` из
-`prompt.ts` и падать при несовпадении, иначе копия молча разойдётся с кодом; (в) держать в полёте по одному
-запросу **на вариант**, чтобы каждый слот удерживал свой префикс — это переписывание обоих циклов, а не одна строка.
-
-**Выигрыш.** [В] Лестница 5 вариантов × 3 сэмпла: $1,7 → $0,6–0,75 (§1.3). Плюс исчезает конфаунд «разная память
-у разных рук»: сравнение «правило в конце сообщения против правила в `SYSTEM`» впервые станет парным.
-**Труд.** M (не «~10 строк»). **Риск.** Средний: потеря общего префикса, +25…+55 % ко времени пачки; не смешивать
-`system`- и `tail`-варианты в одной пачке — время станет непредсказуемым.
-**Проверка.** Положительный контроль, а не воспроизведение нуля: одна и та же база, заданная хвостом и полем
-`system`, обязана дать одно число; известный эффект (правило в конце сообщения) обязан воспроизвестись в том же
-прогоне. Воспроизведение «31 против 32 из 45» ничего не доказывает — сломанный механизм даст то же.
-
-### ★3. Сделать пачку прерываемой: слияние `lab/` при `--resume` и нефатальный recall
-
-**Что.** При старте прочитать существующие `lab/*/report.json` в `labScenes` (сверяя `model` и `scenario`) и вести
-учёт готовых троек «ловушка × вариант × сэмпл» вместо проверки одной базовой сцены. Отдельно: в `--lab` сделать
-проверочные вопросы необязательными (`"recall": false`) или нефатальными — записать код ошибки в отчёт и идти
-писать ловушки.
-
-**Выигрыш.** Это то, ради чего поминутная оплата вообще имеет смысл: пачку можно резать на куски по 15–20 минут,
-останавливать машину между ними и продолжать. Сегодня один сбой стоит $0,4–0,7 и полный переигрыш.
-**Труд.** S (~40 строк с тестом в `local/memory-probe.test.ts`). **Риск.** Низкий: правка чисто лабораторного
-пути (`--lab` помечен в коде как research). Нефатальный recall **не должен** просочиться в обычный путь, иначе
-провал памяти перестанет обнулять ячейку — это была бы правка измерителя.
-**Проверка.** Записать пачку из двух ловушек, прервать после первой, продолжить: в `lab/<вариант>/report.json`
-обе ловушки; судья насчитывает столько же вопросов, сколько при непрерывном прогоне. Подсунуть заведомо ломающийся
-recall — пачка дописывает все ловушки и возвращает код ошибки в отчёте, а не код выхода 1.
-
-### 4. Читающий анализатор пачек `local/lab-stats.ts`
-
-**Что.** Новый файл, только чтение готовых `lab/<вариант>-<сэмпл>/report.json` и `verdicts`, ни одного вызова
-модели. Печатает: перестановочный тест по ловушкам, кластерный бутстрэп-ДИ, вклад каждой ловушки, отдельные
-столбцы «ложная посылка» и «контрольные», `judgeYesRate` и базу «всегда yes», доли `truncated`. Обязательно
-отбрасывает ловушки, которых нет в отчёте (§2, Ш6). Проверка парности — «каталоги `lab/` лежат внутри одной
-директории пробы»; `sourceHash` для этого не годится (он одинаков у любых двух прогонов одного сценария).
-
-**Выигрыш.** Превращает «74 против 62» в число с интервалом и p. Стоит 0 секунд GPU и 0 запросов.
-**Труд.** M (~150 строк + тест на синтетической матрице). **Риск.** Низкий; интерпретационный — тест валиден
-только внутри одного прогона памяти.
-**Проверка.** Плацебо-рука или две руки с одинаковым текстом под разными ключами: p должно быть распределено
-равномерно, ДИ накрывать ноль. **Задним числом применить не к чему**: каталогов `lab/` на машине нет ни одного
-(проверил: 45 каталогов `/tmp/simple-chat-memory-*`, подкаталога `lab/` нет ни в одном) — инструмент работает
-только на будущих пачках.
-
-### 5. Детерминированные меры формы сцены (`local/scene-shape.ts`)
-
-**Что.** Читающий скрипт по тем же отчётам: знаки, абзацы, предложения, `truncated`, валидность метки времени,
-доля 5-грамм, повторяющихся с предыдущими сценами, грубый лексический признак «рассказчик возражает игроку».
-Числа по варианту и по ловушке. Вывод текста — только по явному флагу и никогда для `--pack`.
-
-**Выигрыш.** Идущий эксперимент про длину сцен получает свою меру: длина — непрерывная величина (по 72 сценам
-Gemma на `battle` среднее 2056 знаков, sd 201, CV 10 %), поэтому сдвиг на 20 % ловится **4–8 сценами на сторону**
-против 75 вопросов судьи. Описательная половина вопроса уже закрыта **бесплатно, задним числом**: по 213
-сохранённым сценам-ловушкам длиннее 12 абзацев — Gemma 27/90 (30 %), `gpt-5.4-mini` 32/66, `ministral` 17/36,
-`haiku` 7/21, то есть требование `SYSTEM` «не более 12 абзацев» исполняется наполовину. (Обратное утверждение
-про замороженные сцены — ошибка счёта на строку метки времени: из 48 эталонных сцен лимит не нарушает ни одна,
-и написаны они агентом вне бота, так что `SYSTEM` на них и не действовал.)
-**Труд.** S–M. **Риск.** Эвристики абзацев и «поправки» грубые: годятся для сравнения вариантов и как сигнал
-«посмотри глазами», не как мера приёмки. Самоповтор **вдоль истории** этим путём не измеряется вовсе: во всех
-режимах пробы история коммитится замороженными сценами, модель её не пишет — самоповтор живёт только в живом логе.
-**Проверка.** Ручной пересчёт на `examples/frozen/*.json` (battle: 16 сцен, медиана 2148 знаков, 16/16 валидных
-меток, 5-граммы медиана 0,000, максимум 0,0115).
-
-### 6. Банк готовой памяти по хэшу **[В]**
-
-**Что.** Флаг `--memory <путь>` в `--lab`: брать готовые `state`, `compactions`, `through` из чужого отчёта-банка
-вместо своих трёх сжатий. Ключ — `sha256(frozen.json)` + хэш `local/memory.ts` + модель + режим; при несовпадении
-банк отвергается. Отбор кэшируемого запроса — **по форме** (`outputSchema` со `facts`/`evidence`), а не по
-`purpose`: у запроса проверочных вопросов тоже `purpose: 'memory'`, и его кэширование заморозило бы `score`.
-Строка `compaction_request_completed` на попадании обязана быть помечена «из банка», иначе журнал перестанет
-сходиться с ledger.
-
-**Выигрыш.** [В] 3 минуты ($0,03) на каждый повторный прогон и микропакет; главное — убирает компоненту дисперсии
-«разная память у разных рук». На размещённом контуре — 45 % токенов прогона **на память** и ~25 % судимого прогона.
-**Труд.** M. **Риск.** Средний и named: подставленная не та память тихо обесценит сравнение — отсюда хэши и отказ
-при несовпадении. Банк для скрытого набора хранится рядом с набором, ведущий цикл его не читает.
-**Почему решение владельца.** `improve-loop.md:34` требует базовую линию **того же дня**: банк легитимен только
-внутри дня либо требует явной оговорки в правиле.
-**Проверка.** Пачка дважды, с холодным и горячим банком: факты памяти совпадают байт в байт, время падает на время
-сжатий; изменить одну букву в `memory.ts` — обязан быть промах и полный пересчёт.
-
-### 7. Шум судьи и его да-смещение: три пересуда и два числа **[В]**
-
-**Что.** (а) Бесплатно и без кода: `cp -r` каталог пробы трижды и трижды `npm run eval -- judge --resume <копия>
---mode plain`; посчитать долю вопросов, где вердикт менялся (`p_flip`). То же для второго допущенного судьи.
-(б) Печатать `judgeYesRate` и константную базу «всегда yes» рядом со `sceneScore` — считается из уже лежащих полей
-`actual`, новых замеров не требует. (в) Для новых ловушек держать долю вопросов с ожидаемым `no` не ниже трети.
-
-**Выигрыш.** `p_flip` — число, без которого правило «минимум три прогона» не защищает: при 5 % разница в 1–3
-вопроса на 105 недоказуема в принципе. Да-смещение сегодня невидимо, а стоит до 0,12 `sceneScore` — больше любого
-эффекта, который цикл сейчас ищет.
-**Труд.** S (пересуд), S (числа в отчёте). **Риск.** Пересуд меряет шум **судьи**, а не шум меры — называть честно.
-**Препятствие [И]:** `eval.ts:203` не передаёт `packArgs` в `scene-judge`, поэтому пересудить отчёт по скрытому
-набору через `eval judge` нельзя — нужен прямой вызов `local/scene-judge.ts --pack`.
-**Почему решение владельца.** Судья и `scene-judge.ts` — измеритель; правка состава вопросов — тем более.
-
-### 8. Профиль сервера для пачек: один замер вместо гаданий
-
-**Что.** Добавить в `gpu/serve.sh` переменную типа KV рядом с уже существующими `SIMPLE_CHAT_GPU_SLOTS` и
-`SIMPLE_CHAT_GPU_UBATCH` и один раз прогнать микропакет (chess, 4 ловушки, 2 варианта, 3 сэмпла = 24 сцены) на
-конфигурациях: A — как сейчас; B — A + KV `f16`; C — B + конкуренция клиента = числу слотов (пункт 1);
-D — C + `--ubatch-size 512`; затем повтор A как контроль дрейфа. Результат записать в манифест навсегда.
-Не трогать `--cache-reuse`, `--swa-full`, `--ctx-checkpoints 0`; `n>1` не возвращать.
-
-**Выигрыш.** [П] 1,2–1,8× на декоде, то есть в 95 % стоимости (§1.1), если гипотеза про деквантизацию `q8_0`
-при ≥3 слотах верна. Потолок жёсткий: измеренные 39 ток/с — это 55 % от полосы памяти (≈71 ток/с), больше 1,8×
-получить неоткуда.
-**Труд.** S (правка скрипта), 30–35 минут GPU и $0,30–0,35 на замер — **не 20 минут**: каждый микропакет заново
-платит три сжатия (~60 с) и перезапуск сервера с перечитыванием весов.
-**Блокеры [И], без которых замер измерит старую конфигурацию:** `ensure-server.sh` ничего не перезапускает
-(`flock`, новый процесс молча умирает) — старый сервер надо убить и сверить `/props`; клиент проверяет
-`n_ctx >= config.contextTokens` (`llama.ts:190`), поэтому снижать ctx без правки `.env.gpu` нельзя;
-при ctx/слоты < промпт+выход конфигурация без `--kv-unified` вообще не стартует.
-**Проверка.** Таблица «конфигурация → секунды на сцену → utilization.gpu → VRAM»; повтор A должен отличаться от
-первого A меньше чем на 10 %.
-
-### 9. `eval` продолжает упавшую ячейку **[В]**
-
-**Что.** `eval.ts:131` запускает пробу без `--resume` и каждый раз в новом `mkdtemp`. Завести каталог прогона
-с подкаталогом на ячейку, передавать его как `--resume` при повторе и повторять ячейку 1–2 раза при кодах,
-проходящих при повторе (`probe_failed`, `deadline`, транспортные). Число повторов писать в итоговый файл рядом
-с `compactionRetries`.
-
-**Выигрыш.** [И] Возврат токенов скромный (62,8 тыс., §1.6), но один случайный сбой перестаёт обнулять весь
-прогон через `Math.min`.
-**Труд.** M. **Риск.** Повтор упавшей ячейки смещает выборку в сторону удачных попыток — отсюда обязательный
-счётчик повторов в отчёте. `invalid_memory` повторять **нельзя**: это сигнал меры, а не сбой.
-**Проверка.** Убить пробу посреди второго сценария и перезапустить eval с тем же каталогом: в `logs/eval.jsonl`
-нет повторных `compaction_request_*` для уже посчитанных сжатий, итоговые числа совпадают с непрерывным прогоном.
-
-### 10. Числовой сигнал от живой игры
-
-**Что.** В `local/bot.ts` к событию `scene_saved_and_sent` добавить `elapsedMs` (таймер надо завести: сейчас
-меряется только сжатие, `generation.ts:40`), `outputCharacters`, `inputTokens`, `outputTokens` — все четыре уже
-в белом списке `local/model-error.ts:11-14`. Новыми полями в белый список: `paragraphCount` (целое), `truncated`
-(булево), `dateChanged` (булево), `promptVersion` (целое). Новые события: `generation_cancelled` (сейчас отмена
-не пишет ни строки) и `branch_forked` с `rolledBackScenes` — самый честный дешёвый признак недовольства сценой,
-не читая ни строки истории.
-
-**Выигрыш.** Сегодня о качестве живой игры известно ровно ноль: у `scene_saved_and_sent` нет ни одного числового
-поля. При поминутной оплате `elapsedMs` — прямо деньги.
-**Труд.** M. **Риск.** Приватность: только целые, булевы и перечисления. **`repeatPercent` в этот список не
-включён намеренно** — это статистика, выведенная из текста истории тестера, и она требует слова владельца.
-`stamped` (модель сама поставила метку времени) не включён: по 213 сохранённым сценам метка валидна в 213 из 213,
-сигнала не будет.
-**Проверка.** `npm test`; после одной сцены строка с `elapsedMs>0` и `outputCharacters>0`; grep по кириллице в
-новых полях даёт ноль.
-
-### Что требует решения владельца отдельным списком
-
-1. **Банк памяти** против правила «базовая линия того же дня» (`improve-loop.md:34`) — пункт 6.
-2. **`eval.ts`**: `--resume` ячейки (пункт 9), отдельное число контрольных ловушек (`controlScore`), счётчик
-   `truncatedScenes`, `judgeYesRate` — всё это измеритель.
-3. **`scene-judge.ts`**: инкрементальное сохранение вердиктов (сейчас пишутся один раз в конце, и сбой на девятой
-   ловушке из двенадцати выбрасывает всю работу), передача `--pack` в `eval judge`.
-4. **Состав ловушек** (`examples/scene-traps.ts`): близнецы с **истинной** посылкой (ни одной такой ловушки нет,
-   значит ложная «поправка» принятого правила сегодня физически не измерима); доля вопросов с ожидаемым `no` не
-   ниже трети; расширение с 25 до ~50 вопросов в классах «счётчики» и «кто что знает». Любое добавление обнуляет
-   сравнимость и требует пересъёмки базовой линии и новой ревизии публичного датасета.
-5. **Частота обращений к скрытому набору** и кто их запускает. Отбор вариантов по скрытому набору лишит цикл
-   единственного слепого счёта; счётчик заглядываний — минимум.
-6. **Калибровка прокси** (§5): 0,8 млн токенов больше дневной крыши платного канала Gemma, то есть либо два дня,
-   либо ручной лимит — исполнителю цикла это запрещено.
-7. **Interruptible-ставка** ($0,25/час против $0,6) — разумна только **после** пункта 3, иначе вытеснение молча
-   портит отчёты вариантов.
-8. **Передача `seed` в `local/llama.ts`** — не измеритель, но боевой адаптер бота; при температуре 0,8 общий сид
-   по индексу сэмпла снимает часть дисперсии разности. [П] величина не измерена.
-
-### Что рассмотрено и отклонено (чтобы не предлагали снова)
-
-- **Двухуровневый судья** (дешёвый первый проход, Opus на спорных): полный прогон — 88 вызовов по 1,2–1,5 с,
-  бесплатных по подписке; дешёвые судьи уже упёрлись в дневные лимиты, их ошибки коррелированы (оба пропускают
-  нарушение), а требование дословной цитаты давит слабого судью в сторону «yes» — ровно то смещение, от которого
-  защищаемся. Плюс все базовые линии пришлось бы переснять.
-- **Гонка вариантов с выбыванием**: при нынешних 25 вопросах экономит 17 % пачки ($0,085) против дня работы и
-  обязательного подтверждающего прогона; точки «треть сэмплов» в коде не существует (цикл идёт ловушка-внешняя).
-- **Отбор ловушек по наблюдённому разбросу** и выбрасывание «никто не проходит» — отбор по шуму и слепота к
-  работе памяти (§2, Ш9).
-- **Таблица порогов вместо правила «больше шума»**: порог не свойство (K, m, руки), а функция наблюдённых долей;
-  её точно считает перестановочный тест.
-- **Медиана парных сдвигов вместо `Math.min`** — меняет объявленную цель, а не оценку (§2, Ш8).
-- **Переезд на vLLM/SGLang или другой квант как боевой**: боевая модель опубликована только как GGUF, путь через
-  AWQ/FP8 требует ~62 ГБ исходных весов и отдельной квантизации (≈$1 из $2,7) и даёт **другую** модель,
-  на которой обнуляются все прежние числа. Q4 допустим максимум как сито с подтверждением на Q6 — и стоит
-  +17,4 ГиБ диска, что конфликтует с уменьшением диска.
+**S9. What is not allowed.** Selecting traps by the observed spread between arms and then measuring new variants
+on the same data: this is selection on noise (with 3 samples the standard error of a rate is 0.27–0.29).
+Discarding traps that "nobody ever passes": `turn15_crates_35`, `turn9_agata_in_dark`, `debt_remainder` are work
+for memory and the subject of the next step of the loop. The `only` field is used as a list of **known
+discriminating** traps, and the final number of the winner is taken from the confirmation run on all traps.
 
 ---
 
-## 4. Шаблон GPU-сессии при поминутной оплате
+## 3. Ranked list of changes
 
-Единица — **сеанс произвольной длины с фиксированной ценой входа**. Оптимизируется не заполнение часа, а сцены
-на доллар. Четыре числа: вход ≈$0,15 (15 минут подготовки) **плюс трафик $0,07–1,00 за 25,2 ГБ**; минута работы
-$0,01; минута простоя тоже $0,01; минута остановленной машины $0,00028.
+★ means do first. **[O]** means it requires the owner's decision (a file from the section "What may not change" or
+a rule of the loop).
 
-### До сеанса (бесплатно, на машине бота)
+### ★1. A flat request pool in lab mode + `ms` and `cachedInputTokens` in the scene row
 
-1. Файлы пачек готовы и провалидированы: `screen.json` (все варианты, `only`, `samples: 3`) и `confirm.json`
-   (победитель против базы, все ловушки, `samples: 5`). Вторая правится на одну строку, когда победитель известен.
-2. Скрытый набор скачан заранее (`local/pack-hf.ts pull`), если он нужен; `npm test` и `npm run check` прошли.
-3. **Сухой прогон**: повторить сцены и собрать запросы, напечатав их размеры, **не вызывая модель**. Самая дорогая
-   ошибка аренды — опечатка в JSON пачки, найденная на десятой минуте.
-4. Очередь одной командой (`queue.sh`): сеанс начинается с запуска, а не с раздумий — раздумья у включённой карты
-   стоят $0,01 в минуту.
-5. Посчитать сцены в очереди. **Меньше ≈115 сцен — сеанс не оправдан** (вход больше половины счёта), вопрос
-   откладывается и копится. Хорошо от ≈340.
-6. В конец очереди положить лишние сэмплы **базовой** руки: самая дешёвая мощность, какая бывает.
-7. Выбор машины: сравнивать предложения по сумме «ставка + трафик», а не по цене часа (`docs/gpu.md`: разброс
-   трафика в 20 раз). Канал проверяется в первую минуту уже существующим `gpu/progress.sh` (он печатает Мбит/с и
-   остаток): ниже ~300 Мбит/с — удалить экземпляр и взять следующий, тест стоит ~$0,01.
+**What.** In `local/memory-probe.ts`, put the "variant × sample" pairs of **one trap** into one list and keep
+exactly `lab.parallel` requests in flight instead of `floor(parallel/samples)` chains. The pool is **inside a
+trap**, not across traps: `beginJob` does not allow two jobs at once, and mixing traps would need a rework of the
+job handling. In the same change: the fields `inputTokens`, `cachedInputTokens`, `outputTokens`, `ms` in
+`progress({event:'lab_scene'})`. Separate the prefill time from the request time (`llama.ts:165-176` makes a
+separate POST to tokenize the prompt).
 
-### На машине
+**Gain.** [D] 8 s → 5.7–6.5 s per scene: a batch of 330 scenes goes from 44 to 31–36 minutes, $0.44 → $0.31–0.36.
+The fields in the log close the question "is the prefix shared" for good and give the price of any future change
+in seconds.
+**Effort.** S (half an hour). **Risk.** Low: do not touch the non-lab branch; the behavior of the eval does not
+change.
+**Check.** The same batch before and after: seconds per scene in `lab_scene`,
+`nvidia-smi --query-gpu=utilization.gpu`. For the second and later variants of a trap, `cachedInputTokens` must be
+close to `inputTokens`.
 
-| Минуты | GPU | Параллельно на машине бота |
+### ★2. A `system` field in the batch file (and a fix for the choice of the "official" scene)
+
+**What.** Allow a variant to have `system?: string` next to `tail` (validation as for `tail`). Required
+companions: (a) fix `if (!variant.tail) first ??= written[0]` at `memory-probe.ts:175` to
+`!variant.tail && !variant.system`, otherwise a `SYSTEM` variant will become the official scene of the report;
+(b) store in the batch file a hash of the current `SYSTEM` from `prompt.ts` and fail on a mismatch, otherwise the
+copy will silently diverge from the code; (c) keep one request in flight **per variant**, so that each slot keeps
+its own prefix. This is a rewrite of both loops, not one line.
+
+**Gain.** [D] A ladder of 5 variants × 3 samples: $1.7 → $0.6–0.75 (§1.3). Also, the confound "different memory in
+different arms" disappears: the comparison "rule at the end of the message against rule in `SYSTEM`" becomes paired
+for the first time.
+**Effort.** M (not "~10 lines"). **Risk.** Medium: loss of the shared prefix, +25…+55 % to the batch time. Do not
+mix `system` variants and `tail` variants in one batch: the time becomes unpredictable.
+**Check.** A positive control, not a reproduction of a null: the same base, given once as a tail and once as the
+`system` field, must give one number; a known effect (the rule at the end of the message) must reproduce in the
+same run. Reproducing "31 against 32 out of 45" proves nothing: a broken mechanism would give the same.
+
+### ★3. Make the batch interruptible: merge `lab/` on `--resume` and make recall non-fatal
+
+**What.** At start, read the existing `lab/*/report.json` files into `labScenes` (checking `model` and `scenario`)
+and track the finished triples "trap × variant × sample" instead of checking one base scene. Separately: in
+`--lab`, make the recall questions optional (`"recall": false`) or non-fatal: write the error code to the report
+and go on to write the traps.
+
+**Gain.** This is the reason per-minute billing makes sense at all: a batch can be cut into pieces of 15–20
+minutes, the machine can be stopped between them, and the batch can be continued. Today one failure costs
+$0.4–0.7 and a full rerun.
+**Effort.** S (~40 lines with a test in `local/memory-probe.test.ts`). **Risk.** Low: the change is in the purely
+lab path (`--lab` is marked in the code as research). The non-fatal recall **must not** leak into the normal path,
+otherwise a memory failure will stop zeroing the cell, and that would be a change to the eval.
+**Check.** Write a batch of two traps, interrupt it after the first, continue: `lab/<variant>/report.json` has both
+traps, and the judge counts the same number of questions as in an uninterrupted run. Feed in a recall that is
+known to break: the batch writes all traps and returns an error code in the report, not exit code 1.
+
+### 4. A read-only batch analyzer `local/lab-stats.ts`
+
+**What.** A new file that only reads finished `lab/<variant>-<sample>/report.json` files and `verdicts`, with not a
+single model call. It prints: the permutation test over traps, the cluster bootstrap CI, the contribution of each
+trap, separate columns "false premise" and "control", `judgeYesRate` and the "always yes" baseline, the shares of
+`truncated`. It must discard traps that are missing from the report (§2, S6). The pairing check is "the `lab/`
+directories are inside one probe directory"; `sourceHash` is not suitable for this (it is the same for any two
+runs of one scenario).
+
+**Gain.** Turns "74 against 62" into a number with an interval and a p-value. Costs 0 seconds of GPU and
+0 requests.
+**Effort.** M (~150 lines + a test on a synthetic matrix). **Risk.** Low. The risk is in interpretation: the test
+is valid only inside one memory run.
+**Check.** A placebo arm, or two arms with the same text under different keys: p must be uniformly distributed and
+the CI must cover zero. **There is nothing to apply it to retroactively**: there is not a single `lab/` directory
+on the machine (I checked: 45 directories `/tmp/simple-chat-memory-*`, none of them has a `lab/` subdirectory). The
+tool works only on future batches.
+
+### 5. Deterministic measures of scene shape (`local/scene-shape.ts`)
+
+**What.** A read-only script over the same reports: characters, paragraphs, sentences, `truncated`, validity of
+the timestamp, the share of 5-grams repeated from previous scenes, a rough lexical sign "the narrator objects to
+the player". Numbers per variant and per trap. Text output only with an explicit flag and never for `--pack`.
+
+**Gain.** The ongoing experiment about scene length gets its own measure. Length is a continuous value (over
+72 Gemma scenes on `battle` the mean is 2056 characters, sd 201, CV 10 %), so a 20 % shift is caught with
+**4–8 scenes per side** against 75 judge questions. The descriptive half of the question is already closed **for
+free, retroactively**: of 213 saved trap scenes, those longer than 12 paragraphs are Gemma 27/90 (30 %),
+`gpt-5.4-mini` 32/66, `ministral` 17/36, `haiku` 7/21. So the `SYSTEM` requirement "no more than 12 paragraphs" is
+followed about half of the time. (The opposite claim about the frozen scenes is a counting error on the timestamp
+line: of 48 reference scenes none breaks the limit, and they were written by an agent outside the bot, so `SYSTEM`
+did not act on them at all.)
+**Effort.** S–M. **Risk.** The heuristics for paragraphs and for "corrections" are rough: they are good for
+comparing variants and as a signal "look with your own eyes", not as an acceptance measure. Self-repetition **along
+the story** is not measured this way at all: in all probe modes the story is committed with frozen scenes, the
+model does not write it. Self-repetition lives only in the live log.
+**Check.** A manual recount on `examples/frozen/*.json` (battle: 16 scenes, median 2148 characters, 16/16 valid
+timestamps, 5-grams median 0.000, maximum 0.0115).
+
+### 6. A bank of ready memory keyed by hash **[O]**
+
+**What.** A flag `--memory <path>` in `--lab`: take ready `state`, `compactions`, `through` from another run's bank
+report instead of doing three compactions. The key is `sha256(frozen.json)` + the hash of `local/memory.ts` + the
+model + the mode; on a mismatch the bank is rejected. The cacheable request is selected **by shape**
+(`outputSchema` with `facts`/`evidence`), not by `purpose`: the recall-question request also has
+`purpose: 'memory'`, and caching it would freeze `score`. On a hit, the `compaction_request_completed` row must be
+marked "from the bank", otherwise the log will stop matching the ledger.
+
+**Gain.** [D] 3 minutes ($0.03) on every repeated run and micro-batch. The main point: it removes the variance
+component "different memory in different arms". On the hosted path it is 45 % of the tokens of a **memory** run and
+~25 % of a judged run.
+**Effort.** M. **Risk.** Medium and named: the wrong memory, if substituted, silently makes the comparison
+worthless. This is why there are hashes and a rejection on a mismatch. The bank for the holdout pack is stored next
+to the pack, and the agent that runs the loop does not read it.
+**Why it is the owner's decision.** `improve-loop.md:34` requires a baseline from **the same day**: the bank is
+legitimate only within one day, or it needs an explicit exception in the rule.
+**Check.** Run a batch twice, with a cold bank and a warm bank: the memory facts match byte for byte, and the time
+falls by the time of the compactions. Change one letter in `memory.ts`: there must be a miss and a full recompute.
+
+### 7. Judge noise and its yes-bias: three re-judgings and two numbers **[O]**
+
+**What.** (a) Free and without code: `cp -r` the probe directory three times and run
+`npm run eval -- judge --resume <copy> --mode plain` three times; count the share of questions where the verdict
+changed (`p_flip`). Do the same for the second allowed judge. (b) Print `judgeYesRate` and the constant "always
+yes" baseline next to `sceneScore`. This is computed from the `actual` fields that are already saved and needs no
+new measurements. (c) For new traps, keep the share of questions with an expected `no` at one third or higher.
+
+**Gain.** `p_flip` is the number without which the rule "at least three runs" gives no protection: at 5 %, a
+difference of 1–3 questions out of 105 cannot be proven in principle. The yes-bias is invisible today but costs up
+to 0.12 of `sceneScore`, which is more than any effect the loop is looking for now.
+**Effort.** S (re-judging), S (numbers in the report). **Risk.** Re-judging measures the noise of the **judge**,
+not the noise of the measure. Name it honestly.
+**Obstacle [M]:** `eval.ts:203` does not pass `packArgs` to `scene-judge`, so a report on the holdout pack cannot
+be re-judged through `eval judge`. A direct call of `local/scene-judge.ts --pack` is needed.
+**Why it is the owner's decision.** The judge and `scene-judge.ts` are the eval. A change to the set of questions
+is even more so.
+
+### 8. A server profile for batches: one measurement instead of guesses
+
+**What.** Add to `gpu/serve.sh` a variable for the KV type next to the existing `SIMPLE_CHAT_GPU_SLOTS` and
+`SIMPLE_CHAT_GPU_UBATCH`, and run a micro-batch once (chess, 4 traps, 2 variants, 3 samples = 24 scenes) on these
+configurations: A — as now; B — A + KV `f16`; C — B + client concurrency = the number of slots (item 1);
+D — C + `--ubatch-size 512`; then repeat A as a drift control. Write the result to the manifest forever.
+Do not touch `--cache-reuse`, `--swa-full`, `--ctx-checkpoints 0`; do not bring back `n>1`.
+
+**Gain.** [A] 1.2–1.8× on decode, that is on 95 % of the cost (§1.1), if the hypothesis about `q8_0`
+dequantization at ≥3 slots is true. The ceiling is hard: the measured 39 tokens/s is 55 % of the memory bandwidth
+(≈71 tokens/s), so more than 1.8× cannot come from anywhere.
+**Effort.** S (script change), 30–35 minutes of GPU and $0.30–0.35 for the measurement, **not 20 minutes**: every
+micro-batch pays again for three compactions (~60 s) and a server restart that reads the weights again.
+**Blockers [M], without which the measurement will measure the old configuration:** `ensure-server.sh` restarts
+nothing (`flock`, the new process silently dies), so the old server must be killed and `/props` checked; the client
+checks `n_ctx >= config.contextTokens` (`llama.ts:190`), so ctx cannot be lowered without a change to `.env.gpu`;
+when ctx/slots < prompt+output, a configuration without `--kv-unified` does not start at all.
+**Check.** A table "configuration → seconds per scene → utilization.gpu → VRAM". The repeat of A must differ from
+the first A by less than 10 %.
+
+### 9. `eval` continues a failed cell **[O]**
+
+**What.** `eval.ts:131` starts the probe without `--resume` and in a new `mkdtemp` every time. Create a run
+directory with a subdirectory per cell, pass it as `--resume` on a repeat, and repeat a cell 1–2 times for codes
+that pass on a repeat (`probe_failed`, `deadline`, transport codes). Write the number of repeats to the final file
+next to `compactionRetries`.
+
+**Gain.** [M] The return in tokens is modest (62.8 thousand, §1.6), but one random failure stops zeroing the whole
+run through `Math.min`.
+**Effort.** M. **Risk.** Repeating a failed cell biases the sample toward lucky attempts. This is why the repeat
+counter in the report is required. `invalid_memory` **must not** be repeated: it is a signal of the measure, not
+a failure.
+**Check.** Kill the probe in the middle of the second scenario and restart eval with the same directory:
+`logs/eval.jsonl` has no repeated `compaction_request_*` for compactions that were already computed, and the final
+numbers match an uninterrupted run.
+
+### 10. A numeric signal from live play
+
+**What.** In `local/bot.ts`, add to the `scene_saved_and_sent` event: `elapsedMs` (a timer must be added: now only
+compaction is timed, `generation.ts:40`), `outputCharacters`, `inputTokens`, `outputTokens`. All four are already
+in the whitelist at `local/model-error.ts:11-14`. New fields for the whitelist: `paragraphCount` (integer),
+`truncated` (boolean), `dateChanged` (boolean), `promptVersion` (integer). New events: `generation_cancelled` (now
+a cancel writes no row at all) and `branch_forked` with `rolledBackScenes`. The latter is the most honest cheap
+sign of dissatisfaction with a scene that does not need reading a single line of the story.
+
+**Gain.** Today exactly nothing is known about the quality of live play: `scene_saved_and_sent` has no numeric
+field at all. With per-minute billing, `elapsedMs` is directly money.
+**Effort.** M. **Risk.** Privacy: only integers, booleans and enums. **`repeatPercent` is deliberately not in this
+list**: it is a statistic derived from the text of the tester's story, and it needs the owner's word. `stamped`
+(the model put the timestamp itself) is not included: over 213 saved scenes the timestamp is valid in 213 of 213,
+so there will be no signal.
+**Check.** `npm test`; after one scene, a row with `elapsedMs>0` and `outputCharacters>0`; a grep for Cyrillic in
+the new fields gives zero.
+
+### What requires the owner's decision, as a separate list
+
+1. **The memory bank** against the rule "baseline from the same day" (`improve-loop.md:34`) — item 6.
+2. **`eval.ts`**: `--resume` of a cell (item 9), a separate number for control traps (`controlScore`), a
+   `truncatedScenes` counter, `judgeYesRate`. All of this is the eval.
+3. **`scene-judge.ts`**: incremental saving of verdicts (now they are written once at the end, and a failure on
+   the ninth trap of twelve throws away all the work), passing `--pack` to `eval judge`.
+4. **The set of traps** (`examples/scene-traps.ts`): twins with a **true** premise (there is not one such trap, so a
+   false "correction" by the accepted rule is physically not measurable today); a share of questions with an
+   expected `no` of one third or higher; an expansion from 25 to ~50 questions in the classes "counters" and "who
+   knows what". Any addition resets comparability to zero and requires a new baseline and a new revision of the
+   public dataset.
+5. **The frequency of access to the holdout pack** and who starts it. Selecting variants on the holdout pack would
+   take away the loop's only blind score; a counter of looks is the minimum.
+6. **Calibration of the proxy** (§5): 0.8 million tokens is more than the daily cap of the paid Gemma channel, so
+   it is either two days or a manual limit, and the agent that runs the loop is forbidden to do that.
+7. **The interruptible rate** ($0.25/hour against $0.6) is reasonable only **after** item 3, otherwise a
+   preemption silently corrupts the variant reports.
+8. **Passing `seed` in `local/llama.ts`**: this is not the eval, but it is the bot's production adapter. At
+   temperature 0.8 a common seed by sample index removes part of the variance of the difference. [A] the size is
+   not measured.
+
+### What was considered and rejected (so that it is not proposed again)
+
+- **A two-level judge** (a cheap first pass, Opus on disputed cases): a full run is 88 calls of 1.2–1.5 s each,
+  free on the subscription. The cheap judges have already hit their daily limits, their errors are correlated (both
+  miss a violation), and the requirement of a verbatim quote pushes a weak judge toward "yes", which is exactly the
+  bias we defend against. Also, all baselines would have to be taken again.
+- **A race of variants with elimination**: with the current 25 questions it saves 17 % of a batch ($0.085) against
+  a day of work and a required confirmation run. The point "one third of the samples" does not exist in the code
+  (the loop runs with the trap as the outer level).
+- **Selecting traps by observed spread** and discarding "nobody passes" traps: selection on noise and blindness to
+  the work of memory (§2, S9).
+- **A table of thresholds instead of the rule "more than the noise"**: the threshold is not a property of (K, m,
+  arms) but a function of the observed rates; the permutation test computes it exactly.
+- **The median of paired shifts instead of `Math.min`**: it changes the declared goal, not the estimate (§2, S8).
+- **A move to vLLM/SGLang or another quant as production**: the production model is published only as GGUF. The
+  path through AWQ/FP8 needs ~62 GB of source weights and a separate quantization (≈$1 out of $2.7) and gives a
+  **different** model, on which all previous numbers are reset to zero. Q4 is allowed at most as a filter with
+  confirmation on Q6, and it costs +17.4 GiB of disk, which conflicts with reducing the disk.
+
+---
+
+## 4. Template of a GPU session with per-minute billing
+
+The unit is a **session of any length with a fixed entry price**. What is optimized is scenes per dollar, not
+filling the hour. Four numbers: entry ≈$0.15 (15 minutes of preparation) **plus traffic $0.07–1.00 for 25.2 GB**;
+a minute of work $0.01; a minute of idle time also $0.01; a minute of a stopped machine $0.00028.
+
+### Before the session (free, on the bot's machine)
+
+1. The batch files are ready and validated: `screen.json` (all variants, `only`, `samples: 3`) and `confirm.json`
+   (the winner against the base, all traps, `samples: 5`). The second file is edited by one line when the winner is
+   known.
+2. The holdout pack is downloaded in advance (`local/pack-hf.ts pull`), if it is needed; `npm test` and
+   `npm run check` have passed.
+3. **Dry run**: replay the scenes and build the requests, printing their sizes, **without calling the model**. The
+   most expensive rental mistake is a typo in the batch JSON that is found at the tenth minute.
+4. The queue is one command (`queue.sh`): the session starts with a launch, not with thinking. Thinking while the
+   GPU is running costs $0.01 per minute.
+5. Count the scenes in the queue. **Fewer than ≈115 scenes: the session is not justified** (the entry is more than
+   half of the bill); the question is postponed and accumulated. It is good from ≈340.
+6. Put extra samples of the **base** arm at the end of the queue: this is the cheapest power there is.
+7. Choice of machine: compare offers by the sum "rate + traffic", not by the hourly price (`docs/gpu.md`: traffic
+   prices differ by a factor of 20). The network link is checked in the first minute with the existing
+   `gpu/progress.sh` (it prints Mbit/s and the remainder): below ~300 Mbit/s, delete the instance and take the next
+   one; the test costs ~$0.01.
+
+### On the machine
+
+| Minutes | GPU | In parallel on the bot's machine |
 |---|---|---|
-| −15…0 | bootstrap: сборка и загрузка весов идут одновременно, смотреть `progress.sh` | проверка скорости канала на первой минуте |
+| −15…0 | bootstrap: the build and the download of weights run at the same time, watch `progress.sh` | check of the link speed in the first minute |
 | 0…2 | `model:probe`, `gpu:diagnose --watch 30` | — |
-| 2…8 | **только на первом длинном сеансе**: замер конфигурации сервера (§3.8), результат записать навсегда | выбор конфигурации |
-| 8…11 | 9 сжатий, запись банка памяти (один раз на ревизию кода памяти) | — |
-| 11…30 | пачка отсева | суд готовых каталогов `lab/*`, 4 процесса |
-| 30 | **остановка машины**, если разбор займёт больше трёх минут | досуд, перестановочный тест, выбор победителя |
-| +0…25 | старт из остановки (~2 мин), пачка подтверждения | суд |
-| конец | `gpu:diagnose --pull`, затем остановка или удаление | — |
+| 2…8 | **only in the first long session**: measurement of the server configuration (§3.8), write the result forever | choice of configuration |
+| 8…11 | 9 compactions, writing the memory bank (once per revision of the memory code) | — |
+| 11…30 | screening batch | judging of ready `lab/*` directories, 4 processes |
+| 30 | **stop the machine** if the analysis takes more than three minutes | the rest of the judging, permutation test, choice of the winner |
+| +0…25 | start from the stopped state (~2 min), confirmation batch | judging |
+| end | `gpu:diagnose --pull`, then stop or delete | — |
 
-Правило сеанса: **на GPU идёт только то, что нельзя сделать без GPU, и ровно столько, сколько идёт очередь.**
-Пауза больше трёх минут — остановка, а не простой: простой $0,01/мин против $0,00028/мин, и даже две минуты
-на перезапуск окупаются.
+The rule of the session: **only what cannot be done without a GPU runs on the GPU, and only for as long as the
+queue runs.** A pause longer than three minutes means a stop, not idle time: idle time is $0.01/min against
+$0.00028/min, and even two minutes for a restart pay off.
 
-**Остановить или удалить.** Порог = (стоимость повторной подготовки) ÷ $0,017 за час хранения. Повторная
-подготовка = $0,15 + трафик: на дешёвой по трафику машине $0,22 → **порог ≈13 часов**; если считать без трафика
-(машина, где он копеечный) — ≈7 часов; на дорогой по трафику $1,13 → ≈66 часов, то есть такую машину удалять
-почти никогда не выгодно. (Здесь расхождение с `eval-economics-proposal.md`, где назван один порог 7 часов:
-он верен только при бесплатном трафике.) Риск держать остановленной — карту может занять другой арендатор,
-поэтому запасное предложение выбирается заранее.
+**Stop or delete.** The threshold = (cost of preparing again) ÷ $0.017 per hour of storage. Preparing again =
+$0.15 + traffic. On a machine with cheap traffic, $0.22 → **threshold ≈13 hours**. Counted without traffic (a
+machine where traffic costs almost nothing) it is ≈7 hours. On a machine with expensive traffic, $1.13 →
+≈66 hours, so deleting such a machine almost never pays off. (This is a disagreement with
+`eval-economics-proposal.md`, which names one threshold of 7 hours: it is correct only with free traffic.) The risk
+of keeping the machine stopped is that another renter may take the GPU, so a backup offer is chosen in advance.
 
-### После выключения (бесплатно)
+### After turning off (free)
 
-1. Досудить остаток каталогов `lab/*` (параллельно, 4 процесса; `scene-judge.ts` требует свежей копии каталога
-   на каждый повторный суд, он перезаписывает `verdicts`).
-2. `lab-stats`: перестановочный тест по ловушкам, ДИ, вклад по ловушкам, **отдельно контрольные ловушки**,
-   `judgeYesRate` и база «всегда yes», доля `truncated`.
-3. `scene-shape`: абзацы, знаки, обрывы, повторы — по тем же отчётам.
-4. Счёт сеанса: минуты аренды, фактический счёт Vast, сцены, **$ за сцену** — сравнить с $0,0013 и записать.
-5. Запись в `improve-log.md`: гипотеза, числа с интервалами, решение, **сколько заглядываний в скрытый набор
-   израсходовано**, сколько повторов ячеек случилось.
+1. Judge the rest of the `lab/*` directories (in parallel, 4 processes; `scene-judge.ts` needs a fresh copy of the
+   directory for every repeated judging, because it overwrites `verdicts`).
+2. `lab-stats`: permutation test over traps, CI, contribution per trap, **control traps separately**,
+   `judgeYesRate` and the "always yes" baseline, the share of `truncated`.
+3. `scene-shape`: paragraphs, characters, truncations, repetitions, over the same reports.
+4. The session bill: minutes of rental, the actual Vast bill, scenes, **$ per scene**. Compare with $0.0013 and
+   write it down.
+5. An entry in `improve-log.md`: the hypothesis, numbers with intervals, the decision, **how many looks at the
+   holdout pack were spent**, how many cell repeats happened.
 
 ---
 
-## 5. Воронка прокси → GPU и когда ей доверять
+## 5. The proxy → GPU funnel and when to trust it
 
-**Исходное «перевернуть воронку: GPU по умолчанию» отклонено** — по цене оно не выигрывает: $2,7 на Vast это
-невозобновляемый запас (≈4 часа карты, 3–4 сеанса навсегда), а размещённые каналы — возобновляемый дневной поток,
-из которого деньги стоит один канал из четырёх. Выигрыш $0,0009 на сцене — это $0,30 на всю лестницу.
+**The original "turn the funnel over: GPU by default" is rejected.** It does not win on price: $2.7 on Vast is a
+non-renewable reserve (≈4 hours of GPU, 3–4 sessions forever), and the hosted channels are a renewable daily flow,
+in which only one channel of four costs money. A gain of $0.0009 per scene is $0.30 for the whole ladder.
 
-Правильное разделение — **по валидности, а не по цене**:
+The correct split is **by validity, not by price**:
 
-| Вопрос | Где мерить | Почему |
+| Question | Where to measure | Why |
 |---|---|---|
-| Какой из N вариантов правила лучше | **GPU, lab-пачка** | Боевая модель; нет дневной крыши; парность по памяти, ловушкам и судье. [В] потолок прокси — ≈90 сцен-ловушек в сутки на платном канале Gemma (6,5 тыс. токенов на сцену из 600 тыс.) |
-| Не ломает ли правка другие семейства моделей | Размещённые, полный eval | Цель цикла — «работать на любой модели» (`improve-loop.md:7`) |
-| Вопросы памяти и схемы сжатия | Размещённые | Один прогон памяти по трём сценариям ≈64 тыс. токенов: 9 прогонов в сутки |
-| Ясна ли формулировка слабой модели | `openrouter:liquid/lfm-2.5-2.6b:free` | Бесплатно |
-| Годится ли записанная история | `eval ceiling` | Дёшево, но **не бесплатно**: 18 сентября `ceiling` сам упёрся в лимит |
-| Приёмка принятой правки | GPU на боевых настройках | `improve-loop.md:96` |
+| Which of N rule variants is better | **GPU, lab batch** | The production model; no daily cap; pairing on memory, traps and judge. [D] the ceiling of the proxy is ≈90 trap scenes per day on the paid Gemma channel (6.5 thousand tokens per scene out of 600 thousand) |
+| Does the change break other model families | Hosted, full eval | The goal of the loop is "work on any model" (`improve-loop.md:7`) |
+| Questions about memory and the compaction schema | Hosted | One memory run over three scenarios ≈64 thousand tokens: 9 runs per day |
+| Is the wording clear to a weak model | `openrouter:liquid/lfm-2.5-2.6b:free` | Free |
+| Is the recorded story usable | `eval ceiling` | Cheap, but **not free**: on 18 September `ceiling` itself hit the limit |
+| Acceptance of an accepted change | GPU with production settings | `improve-loop.md:96` |
 
-**Когда прокси можно доверять — пока неизвестно, и это закрывается одним замером.** Прогнать ту же лестницу
-вариантов на размещённой Gemma тем же lab-кодом (`--direct` работает с любым провайдером) и посчитать не одно
-число, а таблицу 2×2 по каждому ключу ловушки: падает ли на прокси × падает ли на GPU, то есть чувствительность
-и специфичность прокси **как сита**. Итог записать правилом: «прокси допускается как сито по ключам X, Y, Z;
-величина эффекта с него не переносится никогда».
+**When the proxy can be trusted is not known yet, and one measurement closes this.** Run the same ladder of
+variants on the hosted Gemma with the same lab code (`--direct` works with any provider) and compute not one number
+but a 2×2 table for each trap key: fails on the proxy × fails on the GPU. This gives the sensitivity and the
+specificity of the proxy **as a filter**. Write the result as a rule: "the proxy is allowed as a filter for keys
+X, Y, Z; the effect size is never transferred from it".
 
-Оговорки к этому замеру, без которых он не запустится:
+Caveats for this measurement, without which it will not start:
 
-- **[И]** «Переснять лестницу на HEAD» нельзя: после коммита `9c32c26` `makeRequest` дописывает `NARRATOR_RULE`
-  безусловно (`prompt.ts:56`), а хвост варианта клеится **после** него — руки «без добавки» не существует.
-  Нужен либо worktree на родителе коммита, либо поле `system` из пункта 3.2.
-- **[И]** Калибровать против пачки 3 (31/32/29 из 45) нельзя: там на боевой стороне сигнала нет, и совпадение
-  знака с нулевым эталоном не определено. Калибровать надо против пачки 1 (62 → 74 из 75).
-- **[И]** 0,8 млн токенов больше дневной крыши платного канала — **решение владельца** (§3, список владельца, п. 6).
-- **[В]** Память прокси строится его же сжатием и по содержанию отличается от памяти боевой модели: «ключ падает
-  на прокси» может значить «в его памяти нет факта». Для ловушек с ложной посылкой это неважно, для числовых важно.
+- **[M]** "Take the ladder again on HEAD" is impossible: after commit `9c32c26`, `makeRequest` appends
+  `NARRATOR_RULE` unconditionally (`prompt.ts:56`), and the tail of a variant is attached **after** it, so an arm
+  "without the addition" does not exist. Either a worktree on the parent of the commit is needed, or the `system`
+  field from item 3.2.
+- **[M]** Calibrating against batch 3 (31/32/29 out of 45) is impossible: there is no signal there on the
+  production side, and agreement of the sign with a null reference is not defined. Calibrate against batch 1
+  (62 → 74 out of 75).
+- **[M]** 0.8 million tokens is more than the daily cap of the paid channel: **the owner's decision** (§3, owner's
+  list, item 6).
+- **[D]** The memory of the proxy is built by its own compaction and differs in content from the memory of the
+  production model: "the key fails on the proxy" may mean "the fact is not in its memory". For traps with a false
+  premise this does not matter; for numeric traps it matters.
 
-**Критерий провала воронки, объявленный заранее:** ключи, которые база на GPU валит 0 из 3 (`healer_still_broken`,
-`castle_corrected`, `samira_corrected`), обязаны валиться и у базы на прокси. Если прокси их проходит — он слеп
-к главному классу ошибок и как сито не годится вовсе.
-
----
-
-## 6. Новые меры и сигнал от живой игры
-
-**Меры, которые считаются кодом по уже оплаченным сценам** (ни одного вызова модели):
-
-1. **Длина и абзацы** — непрерывная мера вместо двоичной: 4–8 сцен на сторону против 75 вопросов судьи (§3.5).
-   Идущий эксперимент про длину получает свою меру; половина его вопроса уже отвечена задним числом (30–48 %
-   сцен длиннее 12 абзацев у четырёх моделей).
-2. **Доля обрывов** рядом со `sceneScore`: обрыв проваливает все вопросы ловушки без судьи. Сегодня риска нет —
-   0 обрывов на 152 сцены, медиана 1989 знаков (~745 токенов) при лимите 4096, запас 5,5×, — но вариант «без
-   ограничения длины» обязан печатать это число. Проверять снижением лимита **нельзя через eval**: `eval.ts:85`
-   вырезает из окружения дочернего процесса все переменные `SIMPLE_CHAT_*`; только прямой вызов пробы.
-3. **`judgeYesRate` и база «всегда yes»** (§1.7) — считаются из уже сохранённых полей `actual`.
-4. **Контрольные ловушки отдельным числом** — защита от рассказчика, который просто начал отказывать.
-5. **Вклад по ловушкам** — показывает, держится эффект на трёх ловушках или размазан.
-6. **Самоповтор** — считается, но **источника данных для него в пробе нет**: во всех режимах история коммитится
-   замороженными сценами, модель пишет только сцены-ловушки из одного состояния. Мера живёт только на живом логе
-   или на свежем `eval write`.
-
-**Сигнал от живой игры** (пункт 3.10 плюс то, что требует владельца):
-
-- Числа в `scene_saved_and_sent` и события `generation_cancelled` / `branch_forked` — распределение живой игры,
-  которого сегодня нет вовсе.
-- **Кнопки под сценой (👍/👎 с причиной-перечислением)** — единственный сигнал, который прямо называет пропущенное
-  мерой свойство. Две поправки к исходному предложению: (а) «переписать» **не** сводится к существующему `fork`:
-  `commitTurn` ставит `branch.head` на новый узел **до** сохранения чекпоинта, поэтому чекпоинт «Сцена N»
-  указывает на саму сцену N, и ветка от него продолжает историю, а не переписывает её — нужен новый путь от
-  `node.parent`; (б) статистика: при доле 👎 20 % против 10 % и 30 сценах на сторону sd разности ≈9 п.п. —
-  «живого A/B промптов» не выйдет, версия промпта меняется вместе со стадией истории. Ценность кнопок —
-  генератор гипотез, какую меру строить следующей, а не мера.
-- **Регистр классов ошибок тестера**: строка — класс ошибки, столбцы — свидетельство (слова тестера пересказом
-  класса, **без цитат и отрывков**), частота, есть ли ключ ловушки, установленный класс причины, самый дешёвый
-  ярус, который может ответить. Правило допуска: гипотеза не входит в воронку, пока у её целевых ключей не
-  установлен класс причины бесплатными средствами (`eval ceiling` и поле `stated: memory|scenes|none`). Половина
-  этого уже в `improve-loop.md:60`; новизна — превратить проверку фикстуры во входной фильтр гипотезы.
+**Failure criterion of the funnel, declared in advance:** the keys that the base on the GPU fails 0 of 3
+(`healer_still_broken`, `castle_corrected`, `samira_corrected`) must also fail for the base on the proxy. If the
+proxy passes them, it is blind to the main class of errors and is not usable as a filter at all.
 
 ---
 
-## 7. Что осталось предположением и чем это закрыть
+## 6. New measures and a signal from live play
 
-| Предположение | Чем закрыть | Цена |
+**Measures that are computed by code over scenes that are already paid for** (not a single model call):
+
+1. **Length and paragraphs**: a continuous measure instead of a binary one: 4–8 scenes per side against 75 judge
+   questions (§3.5). The ongoing experiment about length gets its own measure; half of its question is already
+   answered retroactively (30–48 % of scenes are longer than 12 paragraphs for four models).
+2. **The share of truncations** next to `sceneScore`: a truncation fails all questions of the trap without a
+   judge. Today there is no risk: 0 truncations in 152 scenes, median 1989 characters (~745 tokens) with a limit of
+   4096, a margin of 5.5×. But a variant "without a length limit" must print this number. It **cannot be checked
+   through eval** by lowering the limit: `eval.ts:85` removes all `SIMPLE_CHAT_*` variables from the environment of
+   the child process; only a direct call of the probe works.
+3. **`judgeYesRate` and the "always yes" baseline** (§1.7): computed from the `actual` fields that are already
+   saved.
+4. **Control traps as a separate number**: protection against a narrator that has simply started to refuse.
+5. **Contribution per trap**: shows whether the effect rests on three traps or is spread out.
+6. **Self-repetition**: it can be computed, but **the probe has no data source for it**: in all modes the story is
+   committed with frozen scenes, and the model writes only trap scenes from one state. The measure lives only on
+   the live log or on a fresh `eval write`.
+
+**A signal from live play** (item 3.10 plus what requires the owner):
+
+- Numbers in `scene_saved_and_sent` and the events `generation_cancelled` / `branch_forked`: a distribution of
+  live play, which does not exist at all today.
+- **Buttons under a scene (👍/👎 with a reason chosen from an enum)**: the only signal that directly names a
+  property that the measure missed. Two corrections to the original proposal. (a) "Rewrite" does **not** reduce to
+  the existing `fork`: `commitTurn` sets `branch.head` to the new node **before** the checkpoint is saved, so the
+  checkpoint «Сцена N» ("Scene N") points to scene N itself, and a branch from it continues the story instead of
+  rewriting it. A new path from `node.parent` is needed. (b) Statistics: with a 👎 share of 20 % against 10 % and
+  30 scenes per side, the sd of the difference is ≈9 pp. A "live A/B of prompts" will not work, because the prompt
+  version changes together with the stage of the story. The value of the buttons is a generator of hypotheses
+  about which measure to build next, not a measure.
+- **A register of the tester's error classes**: a row is an error class; the columns are the evidence (the
+  tester's words retold as a class, **without quotes or excerpts**), the frequency, whether a trap key exists, the
+  established cause class, and the cheapest tier that can answer. Admission rule: a hypothesis does not enter the
+  funnel until the cause class of its target keys is established by free means (`eval ceiling` and the field
+  `stated: memory|scenes|none`). Half of this is already in `improve-loop.md:60`; the new part is to turn the
+  fixture check into an entry filter for a hypothesis.
+
+---
+
+## 7. What remains an assumption and how to close it
+
+| Assumption | How to close it | Price |
 |---|---|---|
-| Шум судьи `p_flip` (от него зависит, различимы ли разницы в 1–3 вопроса) | Три пересуда одного каталога копиями, `eval judge` | 0, без кода, ~10 минут |
-| Держит ли llama-server префикс варианта за слотом при разных `system` | `cachedInputTokens` в `lab_scene` на микропакете из 24 сцен | 3 минуты GPU |
-| Даёт ли `f16` KV обещанные 1,2–1,8× на декоде | Протокол §3.8 (A/B/C/D + повтор A) | 30–35 минут GPU, $0,30–0,35 |
-| Реальная занятость слотов после плоского пула | `nvidia-smi -l 1` + секунды на сцену на том же микропакете | входит в предыдущий |
-| Предсказывает ли прокси ранги вариантов | Таблица 2×2 по ключам, §5 | 0,8 млн токенов, решение владельца |
-| τ — разброс **эффекта** между независимыми цепочками памяти | Три цепочки дают sd с 2 степенями свободы (95 % ДИ множится на [0,52; 6,28]) — для решения нужно 5–8 цепочек | $0,6–0,9, то есть 22–33 % кредита: **сначала бесплатный `p_flip`**, потом решать |
-| Зависит ли эффект правила от длины контекста (eval живёт ниже 8K, тестер до 44K) | Контраст `plain` против `full` на одних ловушках; но контраст грязный (различаются и длина, и наличие памяти), а градиент всего 1,5–2×, не 4× | ~$0,15 + нужен worktree без `NARRATOR_RULE`; вывод будет о направлении, не о величине |
-| Лимиты параллельности подписки Claude для судьи | Один запуск 4 процессов, смотреть коды `rate_limited` | 0 |
-| Поведение Vast при вытеснении interruptible (пауза или удаление) | Один прогон на ставке с записью числа вытеснений — **только после §3.3** | $0,25/час |
-| Частота классов ошибок у тестера | Регистр (§6); из `logs/` она сегодня не выводится: строки о сценах не несут ни одного числа | 0 |
+| Judge noise `p_flip` (it decides whether differences of 1–3 questions can be told apart) | Three re-judgings of one directory on copies, `eval judge` | 0, no code, ~10 minutes |
+| Does llama-server keep the variant's prefix in the slot with different `system` | `cachedInputTokens` in `lab_scene` on a micro-batch of 24 scenes | 3 minutes of GPU |
+| Does `f16` KV give the promised 1.2–1.8× on decode | Protocol §3.8 (A/B/C/D + repeat of A) | 30–35 minutes of GPU, $0.30–0.35 |
+| Real slot occupancy after the flat pool | `nvidia-smi -l 1` + seconds per scene on the same micro-batch | included in the previous one |
+| Does the proxy predict the ranks of variants | 2×2 table by keys, §5 | 0.8 million tokens, the owner's decision |
+| τ, the spread of the **effect** between independent memory chains | Three chains give an sd with 2 degrees of freedom (the 95 % CI is multiplied by [0.52; 6.28]); a decision needs 5–8 chains | $0.6–0.9, that is 22–33 % of the credit: **first the free `p_flip`**, then decide |
+| Does the effect of the rule depend on context length (eval lives below 8K, the tester goes up to 44K) | Contrast `plain` against `full` on the same traps; but the contrast is dirty (both the length and the presence of memory differ), and the gradient is only 1.5–2×, not 4× | ~$0.15 + a worktree without `NARRATOR_RULE` is needed; the conclusion will be about the direction, not the size |
+| Concurrency limits of the Claude subscription for the judge | One launch of 4 processes, watch the `rate_limited` codes | 0 |
+| Behavior of Vast on preemption of an interruptible instance (pause or deletion) | One run at that rate with the number of preemptions recorded — **only after §3.3** | $0.25/hour |
+| Frequency of error classes for the tester | The register (§6); today it cannot be derived from `logs/`: the rows about scenes carry no number at all | 0 |
 
-**Последнее и самое дешёвое.** Из всего списка ровно три вещи не стоят ни секунды GPU и ни одного платного
-запроса: измерить шум судьи, напечатать `judgeYesRate` рядом со `sceneScore` и посчитать форму уже записанных
-сцен. Их стоит сделать до следующей аренды — иначе следующая аренда снова купит числа, про которые неизвестно,
-отличимы ли они от шума.
+**The last and the cheapest.** Of the whole list, exactly three things cost not a second of GPU and not a single
+paid request: measure the judge noise, print `judgeYesRate` next to `sceneScore`, and compute the shape of the
+scenes that are already written. They should be done before the next rental. Otherwise the next rental will again
+buy numbers for which it is unknown whether they can be told from noise.
 
 ---
 
-## 8. Критика и открытые вопросы
+## 8. Criticism and open questions
 
-2026-09-19 · Opus 5 (критик полноты) · только чтение: код не правился, модель не вызывалась, GPU не арендовалась,
-ни одного платного или лимитированного запроса. Сверял текст плана с `local/memory-probe.ts`, `local/scene-judge.ts`,
-`local/eval.ts`, `local/llama.ts`, `local/model-probe.ts`, `local/prompt.ts`, `local/budget.ts`, `gpu/serve.sh`,
-`examples/scene-traps.ts`, `docs/improve-log.md`, с 51 строкой `scene` из `logs/gpu-q6-final-*.jsonl` и с 45
-каталогами проб `/tmp/simple-chat-memory-*` (синтетические сценарии: 230 сцен-ловушек, сведённых с 266 вердиктами
-судьи). Скрытый набор, `data/`, `.env*` не открывались. Пометки: **[И]** измерено мной заново, **[В]** выведено,
-**[П]** предположение.
+2026-09-19 · Opus 5 (completeness critic) · read only: no code was changed, no model was called, no GPU was rented,
+not a single paid or rate-limited request. I checked the text of the plan against `local/memory-probe.ts`,
+`local/scene-judge.ts`, `local/eval.ts`, `local/llama.ts`, `local/model-probe.ts`, `local/prompt.ts`,
+`local/budget.ts`, `gpu/serve.sh`, `examples/scene-traps.ts`, `docs/improve-log.md`, against the 51 `scene` rows
+from `logs/gpu-q6-final-*.jsonl` and against the 45 probe directories `/tmp/simple-chat-memory-*` (synthetic
+scenarios: 230 trap scenes, joined with 266 judge verdicts). The holdout pack, `data/` and `.env*` were not opened.
+Markers: **[M]** measured again by me, **[D]** derived, **[A]** assumption.
 
-### 8.1 Что подтвердилось при пересчёте, а что нет
+### 8.1 What was confirmed on recount and what was not
 
-| Утверждение плана | Пересчёт |
+| Claim of the plan | Recount |
 |---|---|
-| §1.1 декод — ~95 % сцены | **[И] верно.** На 51 строке: D ≈ 39,5 ток/с, доля декода на медианах 0,96, медиана `outputTokens/ms` 36,6 ток/с |
-| §1.7 «всегда yes» обыгрывает судью | **[И] верно и на большем корпусе:** 266 вопросов — судья 0,906, «всегда yes» 0,955, `judgeYesRate` 0,861 |
-| §1.7 состав вопросов | **[И] верно:** 25 вопросов, 24 ждут `yes`, 1 — `no`; 22 ловушки, из них 17 послеисторических (battle 12 при 5 `afterTurn`, dance 6, chess 4) |
-| §1.4 механика обрыва пачки | **[И] верно по коду:** `:146` пустой `labScenes`, `:153` пропуск по базовой сцене, `:147-150` перезапись файла целиком |
-| §6.2 ноль обрывов по лимиту | **[И] верно:** 0 из 230 сцен |
-| §1.1 P ≈ 1290 ток/с | **[И] воспроизводится только как скорость по НЕкэшированным токенам** (см. К2) |
-| §3.4 «задним числом применить не к чему» | **[И] неверно:** lab-каталогов правда нет ни одного, но 32 отчёта режимов содержат 245 сцен-ловушек, а 29 — 266 вердиктов. Повторяемость меры, `judgeYesRate`, доля обрывов и разброс по ловушкам считаются по ним сегодня |
+| §1.1 decode is ~95 % of a scene | **[M] correct.** On 51 rows: D ≈ 39.5 tokens/s, the decode share at the medians is 0.96, the median of `outputTokens/ms` is 36.6 tokens/s |
+| §1.7 "always yes" beats the judge | **[M] correct on a larger corpus too:** 266 questions: judge 0.906, "always yes" 0.955, `judgeYesRate` 0.861 |
+| §1.7 the set of questions | **[M] correct:** 25 questions, 24 expect `yes`, 1 expects `no`; 22 traps, of which 17 are after-story (battle 12 with 5 `afterTurn`, dance 6, chess 4) |
+| §1.4 mechanics of a broken batch | **[M] correct by the code:** `:146` empty `labScenes`, `:153` skip by the base scene, `:147-150` the file is overwritten completely |
+| §6.2 zero truncations at the limit | **[M] correct:** 0 of 230 scenes |
+| §1.1 P ≈ 1290 tokens/s | **[M] reproduces only as the speed over NON-cached tokens** (see K2) |
+| §3.4 "there is nothing to apply it to retroactively" | **[M] wrong:** it is true that there is not a single lab directory, but 32 mode reports contain 245 trap scenes, and 29 of them contain 266 verdicts. The repeatability of the measure, `judgeYesRate`, the share of truncations and the spread per trap can be computed from them today |
 
-### 8.2 Главная дыра: у воронки пуст вход
+### 8.2 The main hole: the funnel has an empty input
 
-План расписывает протокол сравнения и экономику сеанса, но нигде не спрашивает, **осталось ли на открытом наборе
-что измерять**. Считается бесплатно, по тем же 45 каталогам:
+The plan describes the comparison protocol and the economics of a session, but nowhere asks **whether there is
+anything left to measure on the open pack**. This is computed for free, from the same 45 directories:
 
-**[И]** Разброс `sceneScore` между прогонами одного кода, `plain`, платная Gemma (варианты `SYSTEM` идущего
-эксперимента я не различаю, то есть это разброс «между любыми прогонами 19 сентября»):
+**[M]** The spread of `sceneScore` between runs of one code, `plain`, paid Gemma (I do not distinguish the `SYSTEM`
+variants of the ongoing experiment, so this is the spread "between any runs of 19 September"):
 
-| модель | battle (из 15) | chess (из 4) | dance (из 6) | итог из 25 |
+| model | battle (out of 15) | chess (out of 4) | dance (out of 6) | total out of 25 |
 |---|---|---|---|---|
 | `openrouter:google/gemma-4-31b-it` | 15, 15, 14, 14, 15, 14 | 4, 4, 4, 4, 4 | 6, 6, 6, 6, 6 | **24–25** |
 | `openai:gpt-5.4-mini` | 11, 14, 12 | 4, 4, 4 | 6, 5, 5 | 21–24 |
 | `mistral:ministral-14b-2512` | 11, 10, 12 | — | — | — |
 
-**[И]** 13 ловушек из 22 пройдены в **100 %** сохранённых прогонов. Ловушки, которые вообще падают, всего девять,
-и заметно падают четыре: `turn9` 6/12, `turn14` 7/12, `healer` 8/12, `b_total` 7/9.
+**[M]** 13 traps out of 22 are passed in **100 %** of the saved runs. There are only nine traps that fail at all,
+and four fail noticeably: `turn9` 6/12, `turn14` 7/12, `healer` 8/12, `b_total` 7/9.
 
-Следствия, которых в плане нет.
+Consequences that are not in the plan.
 
-1. **Открытый набор насыщен.** На боевой модели принятое правило даёт 74 из 75 (журнал), на прокси-Gemma — 24–25
-   из 25. Запас — один вопрос. Значит **списка «известных различающих ловушек» для `only` (Ш3, Ш9) сегодня не
-   существует**, и первая же пачка отсева не с чем сравнивать. План обязан назвать источник `only`: либо ослабленная
-   база из worktree на родителе `9c32c26` (тогда это не отсев новых вариантов, а пересъёмка старого эффекта), либо
-   слабые модели, либо скрытый набор — но он для подтверждения, а не для поиска.
-2. **Гейт Ш0 («меньше пяти переключаемых ловушек — эксперимент не ставится») на открытом наборе не выполним в
-   принципе:** ловушек, способных переключиться, всего девять, и пять из них уже почти всегда проходят. По
-   собственному правилу плана ни одна промптовая гипотеза сейчас не допускается к постановке. Это либо запрет на
-   работу, либо признание, что открытый набор исчерпан и следующий шаг — память или расширение набора
-   (**решение владельца**, `examples/scene-traps.ts`).
-3. **Запас сигнала лежит там, где GPU не нужен.** У `gpt-5.4-mini` 3–4 проваленных вопроса из 25, у `ministral`
-   3–5 из 15 на одном battle. Ш0 («одна основная модель — боевая Gemma») направляет самый дефицитный ресурс в руку
-   с наименьшим запасом и противоречит Ш8 и `improve-loop.md:7`, где решает худшая модель. Прежде чем платить за
-   карту, надо ответить: мы ищем правило для худшей модели (тогда полигон — `ministral` и `gpt-5.4-mini`, даром)
-   или доводим боевую (тогда `Math.min` в приёмке лишний).
+1. **The open pack is saturated.** On the production model the accepted rule gives 74 out of 75 (log); on the
+   proxy Gemma it gives 24–25 out of 25. The margin is one question. So **a list of "known discriminating traps"
+   for `only` (S3, S9) does not exist today**, and the very first screening batch has nothing to compare against.
+   The plan must name the source of `only`: a weakened base from a worktree on the parent of `9c32c26` (then it is
+   not a screening of new variants but a retake of the old effect), or weak models, or the holdout pack. But the
+   holdout pack is for confirmation, not for search.
+2. **The S0 gate ("fewer than five flippable traps: the experiment is not run") cannot be met on the open pack in
+   principle:** there are only nine traps that can flip, and five of them already pass almost always. By the plan's
+   own rule, no prompt hypothesis is allowed to be run now. This is either a ban on work, or an admission that the
+   open pack is exhausted and the next step is memory or an expansion of the pack (**the owner's decision**,
+   `examples/scene-traps.ts`).
+3. **The reserve of signal is where no GPU is needed.** `gpt-5.4-mini` has 3–4 failed questions out of 25, and
+   `ministral` has 3–5 out of 15 on battle alone. S0 ("one primary model: the production Gemma") sends the scarcest
+   resource to the arm with the smallest reserve and contradicts S8 and `improve-loop.md:7`, where the worst model
+   decides. Before paying for the GPU, one question must be answered: are we looking for a rule for the worst model
+   (then the test ground is `ministral` and `gpt-5.4-mini`, for free), or are we tuning the production model (then
+   `Math.min` in acceptance is not needed).
 
-### 8.3 Непроверенные допущения, поданные как закрытые
+### 8.3 Unchecked assumptions presented as closed
 
-**К1. «Варианты делят KV-префикс» — не проверено, и довод плана не работает.** План (раздел «Отношение к…»,
-п. 2) понижает приоритет `cachedInputTokens` на том основании, что поле «приходит и не равно нулю в 41 строке из
-51». **[И]** Эти 51 строка — последовательный однослотовый прогон истории: медиана некэшированного входа
-846 токенов при медиане входа 4 668. Это кэш **предыдущего запроса в том же слоте**, а не дедупликация одинаковых
-префиксов **параллельных** последовательностей под `--kv-unified`, на которой стоит вся раскладка lab. Допущение
-остаётся [П], и проверять его надо ровно так, как предлагал экономист: полем в `lab_scene` на первом же
-микропакете. Заодно: `gpu/serve.sh` запускает сервер с `--no-slots`, то есть со стороны сервера посмотреть
-занятость слотов нельзя — кроме `cachedInputTokens` других глаз нет.
+**K1. "Variants share the KV prefix" is not checked, and the plan's argument does not work.** The plan (section
+"Relation to…", item 2) lowers the priority of `cachedInputTokens` on the grounds that the field "arrives and is
+non-zero in 41 of 51 rows". **[M]** These 51 rows are a sequential single-slot run of a story: the median
+non-cached input is 846 tokens with a median input of 4,668. This is the cache of **the previous request in the
+same slot**, not deduplication of identical prefixes of **parallel** sequences under `--kv-unified`, on which the
+whole lab layout rests. The assumption remains [A], and it must be checked exactly as the economist proposed: with
+a field in `lab_scene` on the very first micro-batch. Also: `gpu/serve.sh` starts the server with `--no-slots`, so
+slot occupancy cannot be seen from the server side. There are no other eyes than `cachedInputTokens`.
 
-**К2. Цена потери префикса посчитана двумя несовместимыми способами.** **[И]** На тех же 51 строке подгонка
-`t = вход/P + выход/D` даёт P ≈ 3 544 по сырому входу и P ≈ 1 287 по некэшированному; план взял второе, но
-применяет его к 6 000 токенов, тогда как медиана некэшированного входа в данных — 846, максимум 5 395, то есть
-это экстраполяция в семь раз. **[И]** Подгонка с константой на тех же строках: фиксированные **1,67 с** на запрос
-(отдельный POST токенизации `llama.ts:170` плюс очередь и SSH), P ≈ 4 300, D ≈ 43,6. Под этой моделью потерянный
-префикс стоит 1,4 с, а не 4,6 с. Вилка «+25…+55 % ко времени пачки» из §1.3 к тому же делит секунды
-**однопоточного** префилла на **сетевое** время сцены в пятислотовой пачке. Честная формулировка: **от +15 % до
-+55 %, [П]**. Для решения «не смешивать `system`- и `tail`-варианты» этого хватает, для планирования бюджета
-сеанса — нет.
+**K2. The price of losing the prefix is computed in two incompatible ways.** **[M]** On the same 51 rows, the fit
+`t = input/P + output/D` gives P ≈ 3,544 over the raw input and P ≈ 1,287 over the non-cached input. The plan took
+the second value but applies it to 6,000 tokens, while the median non-cached input in the data is 846 and the
+maximum is 5,395, so this is an extrapolation by a factor of seven. **[M]** A fit with a constant on the same rows:
+a fixed **1.67 s** per request (the separate tokenization POST at `llama.ts:170` plus queue and SSH), P ≈ 4,300,
+D ≈ 43.6. Under this model a lost prefix costs 1.4 s, not 4.6 s. Also, the range "+25…+55 % to the batch time"
+from §1.3 divides seconds of **single-stream** prefill by the **net** scene time in a five-slot batch. The honest
+wording is: **from +15 % to +55 %, [A]**. This is enough for the decision "do not mix `system` variants and `tail`
+variants", but not enough for planning the budget of a session.
 
-**К3. Схема перестановочного теста не определена, а от неё зависит гейт «пять ловушек».** Ш4 говорит «метки рук
-переставляются внутри ловушки», что читается двумя способами. Если переставляются **руки целиком** (знаковый флип),
-минимально достижимое одностороннее p равно 2^−d, где d — число ловушек с ненулевой разностью: d = 4 даёт 0,0625
-(выиграть невозможно ни при каком эффекте), d = 5 — ровно 0,031, и только если **все пять** сдвинулись в одну
-сторону и ни одна не сдвинулась в обратную. Если же переставляются **сэмплы внутри ловушки**, тест перестаёт быть
-кластерным и прямо противоречит Ш1. Первое прочтение надо записать явно, а гейт Ш0 переформулировать: «пять
-ловушек **и ни одной в обратную сторону**», иначе реалистичный порог — семь-восемь.
+**K3. The scheme of the permutation test is not defined, and the "five traps" gate depends on it.** S4 says "the
+arm labels are permuted inside the trap", which can be read in two ways. If **whole arms** are permuted (a sign
+flip), the smallest reachable one-sided p equals 2^−d, where d is the number of traps with a non-zero difference:
+d = 4 gives 0.0625 (winning is impossible with any effect), d = 5 gives exactly 0.031, and only if **all five**
+shifted in one direction and none shifted in the opposite direction. If **samples inside a trap** are permuted
+instead, the test stops being a cluster test and directly contradicts S1. The first reading must be written down
+explicitly, and the S0 gate must be reworded: "five traps **and none in the opposite direction**", otherwise the
+realistic threshold is seven or eight.
 
-**К4. Расчёт мощности импортирован целиком и не пересчитан** (план это честно помечает, но затем опирается на него
-в Ш0 и §3.5). Таблицы §2.2 `eval-economics-proposal.md` считались для K = 35 (скрытый набор). Пачка отсева идёт
-по `only` с K = 4…9, и число «пять» туда перенесено без пересчёта. На открытом наборе, где 25 вопросов приходятся
-на 22 ловушки, различие «единица — ловушка, а не вопрос» почти ничего не меняет; вся поправка в 1,7 раза — про
-сэмплы, и только на скрытом наборе.
+**K4. The power calculation is imported as a whole and not recomputed** (the plan marks this honestly, but then
+relies on it in S0 and §3.5). The tables of §2.2 of `eval-economics-proposal.md` were computed for K = 35 (the
+holdout pack). A screening batch runs over `only` with K = 4…9, and the number "five" was carried over there
+without a recount. On the open pack, where 25 questions fall on 22 traps, the distinction "the unit is the trap,
+not the question" changes almost nothing; the whole correction by a factor of 1.7 is about samples, and only on
+the holdout pack.
 
-### 8.4 Противоречия между пунктами
+### 8.4 Contradictions between items
 
-**П1. ★1 и ★2 — несовместимые политики расписания, и выигрыш ★1 не достаётся тому эксперименту, который идёт.**
-★1 просит держать в полёте `parallel` запросов, перемешивая варианты внутри ловушки; ★2(в) просит держать по
-одному запросу **на вариант**, чтобы слот удерживал свой префикс. Выигрыш «−20…−30 %» посчитан для пачки хвостов,
-а ближайшая задача — три варианта `SYSTEM` (эксперимент про длину сцен), где ★1 не применяется вовсе. Порядок
-«★1 первым» обоснован для пачки, которой в очереди нет.
+**P1. ★1 and ★2 are incompatible scheduling policies, and the gain of ★1 does not go to the experiment that is
+running.** ★1 asks to keep `parallel` requests in flight, mixing variants inside a trap; ★2(c) asks to keep one
+request **per variant**, so that a slot keeps its own prefix. The gain "−20…−30 %" is computed for a batch of
+tails, but the nearest task is three `SYSTEM` variants (the experiment about scene length), where ★1 does not
+apply at all. The order "★1 first" is justified for a batch that is not in the queue.
 
-**П2. Правка `first ??=` в ★2 возвращает лишнюю сцену, которую 19 сентября специально убрали.** Журнал: «лишняя
-одиночная сцена после ловушки убрана». **[И]** Механика: `memory-probe.ts:182` берёт официальную сцену отчёта как
-`first ?? await provider.generate(...)`. Предлагаемое условие `!variant.tail && !variant.system` в **чисто
-`SYSTEM`-пачке не выполнится ни для одного варианта**, и на каждую ловушку добавится ещё один запрос —
-последовательный, вне пула: **[В]** 22 ловушки × ~15 с ≈ 5,5 минуты и ≈$0,06 на пачку, то есть половина выигрыша
-★1. Третий путь дешевле и очевиднее: официальной сценой назначать вариант с заранее объявленным ключом (`base`)
-или первый в списке.
+**P2. The `first ??=` fix in ★2 brings back the extra scene that was deliberately removed on 19 September.** The
+log says: "the extra single scene after a trap is removed". **[M]** Mechanics: `memory-probe.ts:182` takes the
+official scene of the report as `first ?? await provider.generate(...)`. The proposed condition
+`!variant.tail && !variant.system` **will not be true for any variant in a pure `SYSTEM` batch**, and one more
+request will be added per trap, sequential and outside the pool: **[D]** 22 traps × ~15 s ≈ 5.5 minutes and ≈$0.06
+per batch, that is half of the gain of ★1. A third way is cheaper and more obvious: make the official scene the
+variant with a key declared in advance (`base`), or the first one in the list.
 
-**П3. Потоковый суд параллельно с пачкой (§4, строка «11…30») несовместим с тем, как пишутся файлы.** **[И]**
-`saveLab` (`memory-probe.ts:147-150`) после **каждого сэмпла** перезаписывает `lab/<вариант>/report.json` целиком
-объектом `{scenario, model, modes}` **без поля `verdicts`**, а `scene-judge.ts:65-66` пишет вердикты в тот же
-файл. Значит суд, запущенный до конца пачки: (а) посчитает все ещё не написанные ловушки провалами
-(`scene-judge.ts:38`), (б) его вердикты будут молча затёрты следующим `saveLab`. «Готовых каталогов `lab/*`» в
-нынешней раскладке не бывает — каталог варианта готов только в конце пачки. Либо суд идёт по **копии** каталога
-(как и требует §4 «после выключения»), либо потоковый суд — это правка раскладки (каталог на ловушку), а не
-«запустить 4 процесса»; в обоих случаях пункт §4 надо переписать, потому что сейчас он планирует минуты аренды под
-работу, которая испортит отчёты.
+**P3. Streaming judging in parallel with the batch (§4, row "11…30") is incompatible with how the files are
+written.** **[M]** `saveLab` (`memory-probe.ts:147-150`) overwrites `lab/<variant>/report.json` completely after
+**every sample** with the object `{scenario, model, modes}` **without the `verdicts` field**, and
+`scene-judge.ts:65-66` writes the verdicts to the same file. So a judging that starts before the end of the batch:
+(a) will count all traps that are not yet written as failures (`scene-judge.ts:38`), (b) will have its verdicts
+silently erased by the next `saveLab`. "Ready `lab/*` directories" do not exist in the current layout: a variant
+directory is ready only at the end of the batch. Either the judging runs on a **copy** of the directory (as §4
+"after turning off" already requires), or streaming judging is a change of the layout (a directory per trap), not
+"start 4 processes". In both cases the item in §4 must be rewritten, because now it plans rental minutes for work
+that will corrupt the reports.
 
-**П4. §5 не может завершиться без ★3, и это не проставлено зависимостью.** **[И]** `local/budget.ts` бросает
-`budget_exceeded` **до отправки** запроса, а цикл повторов пробы (`memory-probe.ts:100-112`) повторяет только
-`rate_limited` и `provider_failed` с транспортным кодом. Пачка на 0,8 млн токенов больше дневной крыши, то есть
-упрётся в лимит **посреди прогона** и потеряет всё. Значит §5 требует ★3 и двух дней, а два дня ломают Ш2 (один
-банк памяти, один судья, одна пачка) и `improve-loop.md:34` (базовая линия того же дня).
+**P4. §5 cannot finish without ★3, and this is not recorded as a dependency.** **[M]** `local/budget.ts` throws
+`budget_exceeded` **before sending** the request, and the retry loop of the probe (`memory-probe.ts:100-112`)
+repeats only `rate_limited` and `provider_failed` with a transport code. A batch of 0.8 million tokens is more
+than the daily cap, so it will hit the limit **in the middle of the run** and lose everything. So §5 requires ★3
+and two days, and two days break S2 (one memory bank, one judge, one batch) and `improve-loop.md:34` (baseline from
+the same day).
 
-**П5. Критерий провала воронки §5 противоречит первой же оговорке того же раздела.** Критерий: «ключи, которые база
-на GPU валит 0 из 3 (`healer_still_broken`, `castle_corrected`, `samira_corrected`), обязаны валиться и у базы на
-прокси». Но «база» из пачки 1 — это рука **без** `NARRATOR_RULE`, а на HEAD её не существует (сам план это пишет).
-**[И]** На текущем коде прокси эти ключи проходит: `castle` 8/8, `samira` 9/9, `healer` 8/12 по сохранённым
-прогонам после 19 сентября. Критерий в нынешней формулировке неприменим: его надо привязать к руке из worktree на
-родителе `9c32c26` или заменить другим.
+**P5. The failure criterion of the funnel in §5 contradicts the very first caveat of the same section.** The
+criterion: "the keys that the base on the GPU fails 0 of 3 (`healer_still_broken`, `castle_corrected`,
+`samira_corrected`) must also fail for the base on the proxy". But the "base" from batch 1 is the arm **without**
+`NARRATOR_RULE`, and it does not exist on HEAD (the plan itself says so). **[M]** On the current code the proxy
+passes these keys: `castle` 8/8, `samira` 9/9, `healer` 8/12 over the saved runs after 19 September. The criterion
+in its current wording cannot be applied: it must be tied to the arm from a worktree on the parent of `9c32c26` or
+replaced with another one.
 
-**П6. Банк памяти и базовая рука оценены по разным правилам.** Пункт 6 объявляет законным брать **память** из
-чужого прогона по хэшу, а §2 Ш3 требует писать **базовую руку** заново в каждой пачке. Но если совпадение хэшей
-делает память сравнимой, то и сцены базы, написанные на той же памяти, тем же кодом и той же моделью, сравнимы
-ровно настолько же. База — это 1/N каждой пачки: **[В]** при пяти вариантах кэш базовой руки экономит 20 % всех
-сцен, то есть в разы больше, чем $0,03 от банка памяти. Либо законно и то и другое (тогда в план входит банк
-сцен базы с одним свежим сэмплом на дрейф), либо ни то ни другое.
+**P6. The memory bank and the base arm are judged by different rules.** Item 6 declares it legitimate to take
+**memory** from another run by hash, while §2 S3 requires writing the **base arm** again in every batch. But if
+matching hashes make the memory comparable, then the base scenes written on the same memory, by the same code and
+the same model, are comparable to exactly the same degree. The base is 1/N of every batch: **[D]** with five
+variants, a cache of the base arm saves 20 % of all scenes, which is several times more than the $0.03 from the
+memory bank. Either both are legitimate (then the plan gets a bank of base scenes with one fresh sample for drift),
+or neither is.
 
-**П7. Меры формы не могут закончиться решением.** §3.5 и §6 вводят длину, абзацы, повторы как меру идущего
-эксперимента, но `improve-loop.md:39` принимает правку только по `score` или `sceneScore`. Эксперимент про длину
-сцен в нынешнем виде не может ни победить, ни проиграть. Это **решение владельца** (новая мера приёмки), и в
-списке владельца §3 его нет.
+**P7. The shape measures cannot end in a decision.** §3.5 and §6 introduce length, paragraphs and repetitions as
+the measure of the ongoing experiment, but `improve-loop.md:39` accepts a change only by `score` or `sceneScore`.
+The experiment about scene length in its current form can neither win nor lose. This is **the owner's decision**
+(a new acceptance measure), and it is not in the owner's list of §3.
 
-### 8.5 Что дороже выигрыша при наших объёмах
+### 8.5 What costs more than it gains at our volumes
 
-- **§3.8, замер конфигурации сервера: 30–35 минут и $0,30–0,35 при остатке $2,7.** **[В]** Остаток — ~4,5 часа
-  карты, из которых на генерацию при трёх сеансах уйдёт 2–2,5 часа. Ускорение декода в 1,3× вернёт 35–45 минут
-  (~$0,35–0,45), в 1,2× — 20–25 минут ($0,20–0,25), то есть замер окупается в лучшем случае один к одному, и это
-  при гипотезе, помеченной [П]. Дешевле и точнее: `llama-batched-bench` (он назван в находках прошлого скаута, но
-  §3.8 его не использует) — он не платит ни за три сжатия, ни за перезапуск пробы, ни за проверку `n_ctx` в
-  клиенте, и даёт матрицу «батч × тип KV × ubatch» за минуты. Протокол A/B/C/D через микропакеты стоит впятеро
-  дороже ради тех же чисел.
-- **Пункт 9 (`--resume` ячейки eval, труд M)** возвращает 62,8 тыс. токенов — 3 % дневной крыши одного канала.
-- **Пункт 10 (сигнал живой игры, труд M)**: по собственному расчёту плана sd разности при 30 сценах на сторону
-  ≈9 п.п., а живой игры на GPU за весь остаток кредита наберётся несколько десятков сцен. `elapsedMs` «прямо
-  деньги» только пока карта арендована, то есть считаные часы за всю историю проекта.
-- **Пункт 4 (анализатор `local/lab-stats.ts`, ~150 строк + тест)**: при остатке кредита на 3–4 пачки
-  перестановочный тест дешевле посчитать разовым скриптом в scratchpad по тем же файлам (симуляция мощности так и
-  считалась), а файл в репозитории заводить, когда пачек станет больше.
-- **Цена самого плана.** Десять пунктов — это несколько дней работы против суммарной экономии, которая по
-  собственным числам плана меньше $1,5, то есть меньше оставшегося кредита. При одном тестере и трёх-четырёх
-  сеансах «навсегда» порядок §3 надо перевернуть: сначала бесплатное (§7), затем ★3 (прерываемость — единственное,
-  что делает поминутную оплату полезной), и только потом ускорения.
+- **§3.8, measurement of the server configuration: 30–35 minutes and $0.30–0.35 with $2.7 remaining.** **[D]** The
+  remainder is ~4.5 hours of GPU, of which 2–2.5 hours will go to generation over three sessions. A decode speedup
+  of 1.3× returns 35–45 minutes (~$0.35–0.45), a speedup of 1.2× returns 20–25 minutes ($0.20–0.25). So the
+  measurement pays back one to one at best, and this is under a hypothesis marked [A]. Cheaper and more exact:
+  `llama-batched-bench` (it is named in the findings of the previous scout, but §3.8 does not use it). It does not
+  pay for three compactions, for a probe restart, or for the `n_ctx` check in the client, and it gives a matrix
+  "batch × KV type × ubatch" in minutes. The A/B/C/D protocol through micro-batches costs five times more for the
+  same numbers.
+- **Item 9 (`--resume` of an eval cell, effort M)** returns 62.8 thousand tokens, which is 3 % of the daily cap of
+  one channel.
+- **Item 10 (signal from live play, effort M)**: by the plan's own calculation the sd of the difference at
+  30 scenes per side is ≈9 pp, and live play on the GPU over the whole remaining credit will amount to a few dozen
+  scenes. `elapsedMs` is "directly money" only while the GPU is rented, that is a handful of hours over the whole
+  history of the project.
+- **Item 4 (the analyzer `local/lab-stats.ts`, ~150 lines + a test)**: with credit left for 3–4 batches, the
+  permutation test is cheaper to compute with a one-off script in the scratchpad over the same files (the power
+  simulation was computed this way), and a file in the repository can be added when there are more batches.
+- **The price of the plan itself.** Ten items are several days of work against a total saving that, by the plan's
+  own numbers, is less than $1.5, that is less than the remaining credit. With one tester and three or four
+  sessions "forever", the order of §3 must be reversed: first the free things (§7), then ★3 (interruptibility is
+  the only thing that makes per-minute billing useful), and only then the speedups.
 
-### 8.6 Забытые дешёвые ходы
+### 8.6 Forgotten cheap moves
 
-**Д1. `--mode plain` в каждом прогоне eval.** **[И]** `eval.ts:46`: без `--mode` прогоняются **оба** режима, а
-решения принимаются по `plain`, потому что `sgr` не проходит проверку `quote` ни у одной модели
-(`improve-loop.md:84`). Половина токенов каждого прогона уходит в режим, по которому не принимают решений. Ноль
-строк кода, только флаг, — и это крупнейшая экономия размещённого канала из всех названных в плане.
+**D1. `--mode plain` in every eval run.** **[M]** `eval.ts:46`: without `--mode`, **both** modes are run, but
+decisions are made on `plain`, because `sgr` does not pass the `quote` check for any model
+(`improve-loop.md:84`). Half of the tokens of every run go to a mode on which no decisions are made. Zero lines of
+code, only a flag, and this is the largest saving on the hosted channel of all those named in the plan.
 
-**Д2. Сид как лабораторный параметр, а не как правка бота.** План отправил `seed` в список владельца как
-«изменение боевого адаптера». Если поле необязательное и его ставит только `--lab`, поведение бота не меняется ни
-на бит: без поля сервер берёт свой сид, как сейчас. Общие случайные числа при температуре 0,8
-(`llama.ts:104,111`) — самая дешёвая правка дисперсии разности, и она заблокирована формальностью. (Формально
-`llama.ts` всё же боевой адаптер, так что **решение владельца** — но вопрос надо задать именно в такой форме.)
+**D2. The seed as a lab parameter, not as a change to the bot.** The plan sent `seed` to the owner's list as "a
+change to the production adapter". If the field is optional and only `--lab` sets it, the behavior of the bot does
+not change by a single bit: without the field the server takes its own seed, as now. Common random numbers at
+temperature 0.8 (`llama.ts:104,111`) are the cheapest change to the variance of the difference, and it is blocked
+by a formality. (Formally `llama.ts` is still the production adapter, so it is **the owner's decision**, but the
+question must be asked in exactly this form.)
 
-**Д3. Разброс прогон-к-прогону уже лежит на диске** (§8.2) и считается до аренды. Он же показывает, что правило
-«минимум три прогона на сторону» (`improve-loop.md:44`) откалибровано по `gpt-5.4-mini`: у Gemma на открытых
-сценариях разброс ±0,5 вопроса, у `gpt-5.4-mini` — 3 вопроса из 15. Одно правило на все модели либо переплачивает,
-либо недоплачивает.
+**D3. The run-to-run spread is already on disk** (§8.2) and can be computed before a rental. It also shows that
+the rule "at least three runs per side" (`improve-loop.md:44`) is calibrated on `gpt-5.4-mini`: for Gemma on the
+open scenarios the spread is ±0.5 of a question, for `gpt-5.4-mini` it is 3 questions out of 15. One rule for all
+models either overpays or underpays.
 
-**Д4. Определение абзаца надо зафиксировать до того, как оно станет мерой.** **[И]** По одним и тем же 230 сценам
-доля «длиннее 12 абзацев» равна **44 %**, если считать все блоки, и **34 %**, если не считать строку метки
-времени. План строит вывод «требование исполняется наполовину» на парсере, который сам двигает ответ на 10 п.п.
-Определение (считается ли метка времени, считается ли однострочная реплика) должно быть записано в §3.5 до первого
-числа.
+**D4. The definition of a paragraph must be fixed before it becomes a measure.** **[M]** Over the same 230 scenes,
+the share "longer than 12 paragraphs" equals **44 %** if all blocks are counted, and **34 %** if the timestamp line
+is not counted. The plan builds the conclusion "the requirement is followed about half of the time" on a parser
+that itself moves the answer by 10 pp. The definition (whether the timestamp is counted, whether a one-line remark
+is counted) must be written in §3.5 before the first number.
 
-**Д5. Связь длины сцены и `sceneScore` проверяется бесплатно — и проверена.** **[И]** Внутримодельная корреляция
-длины сцены и доли пройденных вопросов по 230 сценам равна **−0,03**; по медианному разрезу: Gemma 1,000 против
-0,962, `gpt-5.4-mini` 0,853 против 0,878, `ministral` 0,652 против 0,818. То есть в наблюдаемом диапазоне
-(1,2–4,0 тыс. знаков) механической накрутки `sceneScore` за счёт укорачивания сцен не видно. Это стоит объявить
-**до** эксперимента про длину: иначе любой сдвиг спишут на неё, а её нет.
+**D5. The link between scene length and `sceneScore` can be checked for free — and it has been checked.** **[M]**
+The within-model correlation between scene length and the share of passed questions over 230 scenes equals
+**−0.03**. By median split: Gemma 1.000 against 0.962, `gpt-5.4-mini` 0.853 against 0.878, `ministral` 0.652
+against 0.818. So in the observed range (1.2–4.0 thousand characters) no mechanical inflation of `sceneScore`
+through shorter scenes is visible. This should be declared **before** the experiment about length: otherwise any
+shift will be blamed on it, and it does not exist.
 
-**Д6. Санитарная проверка в шаблоне сеанса упадёт.** **[И]** `model-probe.ts:21` создаёт клиент без `slots`, а
-`llama.ts:192` бросает `unexpected_slots`, если `props.total_slots !== 1`. В §4 `model:probe` стоит на минуте 0–2,
-то есть на сервере, уже поднятом с пятью слотами под пачку. Либо проба получает число слотов, либо её место
-занимает микропакет из одной ловушки. Сейчас это гарантированные несколько минут оплаченного недоумения.
+**D6. The sanity check in the session template will fail.** **[M]** `model-probe.ts:21` creates the client without
+`slots`, and `llama.ts:192` throws `unexpected_slots` if `props.total_slots !== 1`. In §4, `model:probe` stands at
+minute 0–2, that is on a server already started with five slots for the batch. Either the probe gets the number of
+slots, or its place is taken by a micro-batch of one trap. Now this is a guaranteed few minutes of paid confusion.
 
-### 8.7 Чего в плане нет вовсе
+### 8.7 What the plan does not have at all
 
-1. **Приёмка и скрытый набор не заложены в сеанс.** `improve-loop.md:96` требует прогон на GPU, Ш7 — один прогон
-   по скрытому набору. **[В]** Это ещё ~90–105 сцен (12–15 минут, $0,12–0,15) плюс 9 сжатий, и ни в таблице §4,
-   ни в счёте §5 их нет. Сеанс «отсев + подтверждение» их не вмещает — нужен либо третий сеанс, либо явное
-   решение, что скрытый счёт идёт отдельной арендой.
-2. **Риск обрыва SSH-туннеля не в реестре.** Единственный документированный дорогой сбой аренды (`docs/gpu.md`,
-   ночь 17 сентября: новые SSH-сессии зависали, компакты падали) в §1.9 и §3 отсутствует, хотя пачка из 330 сцен
-   идёт через один туннель **двумя** запросами на сцену (`llama.ts:170` отдельным POST считает токены). ★3 и есть
-   лечение, но сформулировано оно вокруг recall и ручной остановки; в проверку ★3 надо добавить обрыв транспорта.
-3. **Что делает исполнитель, когда гипотеза не подтвердилась.** `improve-loop.md:101` (три отклонённые подряд →
-   владелец) в протокол §2 не вписан, а при запасе в один вопрос (§8.2) это самый вероятный исход ближайших пачек.
-4. **Сравнимость между арендами.** План фиксирует конфигурацию сервера «навсегда в манифест», но нигде не говорит,
-   что числа разных машин (другая карта, другой драйвер, другая сборка) между собой не сравниваются — в отличие от
-   ревизии скрытого набора, для которой такое правило есть.
-5. **Что именно пишется в журнал по итогам пачки.** §4 перечисляет пять пунктов записи, но не требует сохранить
-   сами файлы пачки (`screen.json`, `confirm.json`) и хэш `SYSTEM`/кода. Без них через неделю нельзя сказать, что
-   именно сравнивалось, а пересъёмка стоит новой аренды.
+1. **Acceptance and the holdout pack are not built into the session.** `improve-loop.md:96` requires a run on the
+   GPU, and S7 requires one run on the holdout pack. **[D]** This is another ~90–105 scenes (12–15 minutes,
+   $0.12–0.15) plus 9 compactions, and they are neither in the table of §4 nor in the bill of §5. A session
+   "screening + confirmation" does not fit them. Either a third session is needed, or an explicit decision that the
+   holdout score runs in a separate rental.
+2. **The risk of a broken SSH tunnel is not in the register.** The only documented expensive rental failure
+   (`docs/gpu.md`, the night of 17 September: new SSH sessions hung, compactions failed) is absent from §1.9 and
+   §3, although a batch of 330 scenes goes through one tunnel with **two** requests per scene (`llama.ts:170`
+   counts tokens with a separate POST). ★3 is the cure, but it is worded around recall and a manual stop; a
+   transport break must be added to the check of ★3.
+3. **What the agent that runs the loop does when a hypothesis is not confirmed.** `improve-loop.md:101` (three
+   rejections in a row → the owner) is not written into the protocol of §2, and with a margin of one question
+   (§8.2) this is the most likely outcome of the next batches.
+4. **Comparability between rentals.** The plan fixes the server configuration "forever in the manifest", but
+   nowhere says that numbers from different machines (another GPU, another driver, another build) are not compared
+   with each other, unlike the revision of the holdout pack, for which such a rule exists.
+5. **What exactly is written to the log after a batch.** §4 lists five points of the entry, but does not require
+   saving the batch files themselves (`screen.json`, `confirm.json`) and the hash of `SYSTEM` and of the code.
+   Without them, a week later it is impossible to say what exactly was compared, and a retake costs a new rental.
 
-### 8.8 Порядок, который я бы поставил вместо §3
+### 8.8 The order I would set instead of §3
 
-**[В]** По цене за снятую неопределённость, а не по размеру экономии.
+**[D]** By the price per unit of removed uncertainty, not by the size of the saving.
 
-1. **Бесплатное, сегодня, без кода:** разброс прогон-к-прогону и `judgeYesRate`/«всегда yes» по 45 каталогам
-   (§8.2, уже посчитано); `p_flip` судьи тремя пересудами копий; `--mode plain` в прогонах (Д1).
-2. **Ответить на вопрос §8.2** — где вообще осталась измеримая разница. Без этого ответа любая аренда покупает
-   числа у потолка.
-3. **★3, прерываемость** — единственное, что делает поминутную оплату полезной, и предусловие §5.
-4. **★1 + `cachedInputTokens`/`ms` в `lab_scene`** — и вместе с ними закрыть К1 на первом же микропакете.
-5. **★2 `system`**, с официальной сценой по ключу `base` вместо условия из П2.
-6. Всё остальное — после того, как п. 2 покажет, что мерить.
+1. **Free, today, no code:** the run-to-run spread and `judgeYesRate`/"always yes" over the 45 directories (§8.2,
+   already computed); the judge's `p_flip` with three re-judgings of copies; `--mode plain` in the runs (D1).
+2. **Answer the question of §8.2**: where a measurable difference is left at all. Without this answer any rental
+   buys numbers at the ceiling.
+3. **★3, interruptibility**: the only thing that makes per-minute billing useful, and a precondition of §5.
+4. **★1 + `cachedInputTokens`/`ms` in `lab_scene`**, and together with them close K1 on the very first micro-batch.
+5. **★2 `system`**, with the official scene by the `base` key instead of the condition from P2.
+6. Everything else, after item 2 shows what to measure.

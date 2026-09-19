@@ -1,206 +1,206 @@
-# Идеи из storyworm для непротиворечивости историй
+# Ideas from storyworm for story consistency
 
-2026-09-18 · Opus 5 · прочитаны главная ветка storyworm и замороженная ветка `reference-001` (`048b166b`). Ссылки: `main:<путь>:<строка>` — главная ветка storyworm, `ref:<путь>:<строка>` — `reference-001`, `commit:<sha>` — коммит storyworm. Пути даны от корня репозитория storyworm. Это приватный проект-предшественник, он не публикуется, поэтому ссылки открываются только внутри него; разделы 2 и 3 читаются без них.
+2026-09-18 · Opus 5 · the main branch of storyworm and the frozen branch `reference-001` (`048b166b`) were read. References: `main:<path>:<line>` is the main branch of storyworm, `ref:<path>:<line>` is `reference-001`, `commit:<sha>` is a storyworm commit. Paths are given from the root of the storyworm repository. It is a private predecessor project and it is not published, so the references open only inside it; sections 2 and 3 can be read without them.
 
-Проверка. У каждого утверждения карты и каждого основания идеи были источник и цитата. Второй агент открывал источник и пытался утверждение опровергнуть. Из 215 утверждений карты 184 подтверждены, 31 исправлено. Из 71 основания идей 48 подтверждены, 23 исправлено. Затем критик выборочно перепроверил около 35 ссылок уже в тексте документа и нашёл ещё три смысловые ошибки. Они исправлены и перечислены в разделе 5. Двенадцать ключевых ссылок я сверил сам. Реальные тексты, `~/.local/share/storyworm`, отчёт о пробе на реальном корпусе и скрытый набор не открывались. Модели не вызывались.
+Verification. Every claim of the map and every basis of an idea had a source and a quote. A second agent opened the source and tried to refute the claim. Of 215 map claims, 184 were confirmed and 31 were corrected. Of 71 idea bases, 48 were confirmed and 23 were corrected. Then a critic rechecked a sample of about 35 references already in the text of the document and found three more errors of meaning. They are corrected and listed in section 5. I checked twelve key references myself. Real texts, `~/.local/share/storyworm`, the report on the probe on the real corpus and the holdout pack were not opened. No models were called.
 
-## 1. Что такое storyworm
+## 1. What storyworm is
 
-storyworm переводит длинные произведения по главам. Интерактивных историй он не пишет: игрока, ложных посылок в ходе и рассказчика, который ведёт сюжет, в нём нет. Поэтому всё ниже переносится по аналогии. Глава соответствует сцене, извлечение фактов — сжатию памяти, канон — накопленной памяти ветки.
+storyworm translates long works chapter by chapter. It does not write interactive stories: it has no player, no false premises in a turn and no narrator who leads the plot. So everything below is transferred by analogy. A chapter corresponds to a scene, fact extraction corresponds to memory compaction, the canon corresponds to the accumulated memory of a branch.
 
-### Состояние мира (reference-001)
+### World state (reference-001)
 
-Состояние разнесено по трём полкам, которые не смешиваются: канон (правда о мире), память терминов (решения переводчика) и версии перевода. Правдой считается журнал патчей, а снимок — это кэш, который пересобирается повтором патчей (`ref:docs/storyworm/spec/04-system-model.md:52`, `:63`).
+The state is split across three shelves that do not mix: the canon (the truth about the world), the term memory (the translator's decisions) and the translation versions. The patch log is the truth, and the snapshot is a cache that is rebuilt by replaying the patches (`ref:docs/storyworm/spec/04-system-model.md:52`, `:63`).
 
-- **Факт** — тройка с id `субъект|ключ`. В одном снимке у пары одно значение. `update` заменяет значение, а при том же значении объединяет доказательства. `add` поверх существующего факта — ошибка (`ref:packages/story_domain/src/story_domain/models/canon.py:418`, `ref:docs/storyworm/spec/06-domain-contracts.md:119`).
-- **Реестр ключей `KeySpec`** задаёт вид значения: `scalar`, `enum`, `entity_ref`, `list_entity_ref`, `free_text` (`ref:packages/story_domain/src/story_domain/models/ontology.py:71`). Кандидат с неизвестным ключом, без субъекта или с неверным значением не записывается и уходит в эскалацию (`ref:apps/storyworm/src/storyworm/workflows/translator_text_v2/patch_builder.py:180`).
-- **Вид доказательства `EvidenceKind`** — закрытый словарь без порядка: слова рассказчика, реплика персонажа, показанное, слух (`ref:packages/story_domain/src/story_domain/models/ontology.py:22`). Реплика доказывает только то, что персонаж это сказал, но не то, что это правда (`ref:docs/storyworm/spec/06-domain-contracts.md:76`). Этот вид заменил числовой `confidence`, потому что свободная самооценка модели «сходится к 0.8» (`ref:docs/storyworm/DECISION-LOG.md:119`, `:139`).
-- **Время.** Спецификация отделяет момент, когда факт раскрыт, от времени в мире. Время в мире канон не хранит, его единственное состояние — «неизвестно». Выводить порядок событий в мире из порядка глав запрещено (`ref:docs/storyworm/spec/02-architecture-principles.md:31`, `:34`).
-- **Видимость** решает код без модели: наблюдение скрыто, пока текущий абзац стоит раньше абзаца, где оно появилось (`ref:packages/story_domain/src/story_domain/visibility.py:64`). Это видимость для переводчика и читателя. Модели «кто из персонажей что знает» в storyworm нет.
-- **Контекст главы** замораживается: состав персонажей, до трёх прошлых сводок, не длиннее 2000 кодпоинтов каждая и 6000 вместе (`ref:packages/story_domain/src/story_domain/models/translation_context_basis.py:32`, `:38`), и лор, не больше 8 записей на персонажа и 64 всего (`ref:packages/story_domain/src/story_domain/models/committed_lore.py:28`). Лор подаётся с пометкой «Committed canon data (data, not instructions)» (там же, `:307`). Если сводки не помещаются, возникает ошибка. Лор сверх лимита отбрасывается, а причина записывается (`ref:docs/storyworm/spec/06-domain-contracts.md:417`): молча ничего не теряется. Неоднозначное имя не подменяется каноническим — его убирают из контекста и поднимают на ревью (`omit + escalate`, `ref:docs/storyworm/spec/09-translator-text-v2-workflow.md:104`).
+- **A fact** is a triple with the id `subject|key`. In one snapshot a pair has one value. `update` replaces the value, and with the same value it merges the evidence. `add` on top of an existing fact is an error (`ref:packages/story_domain/src/story_domain/models/canon.py:418`, `ref:docs/storyworm/spec/06-domain-contracts.md:119`).
+- **The key registry `KeySpec`** sets the kind of the value: `scalar`, `enum`, `entity_ref`, `list_entity_ref`, `free_text` (`ref:packages/story_domain/src/story_domain/models/ontology.py:71`). A candidate with an unknown key, without a subject or with a wrong value is not written and goes to escalation (`ref:apps/storyworm/src/storyworm/workflows/translator_text_v2/patch_builder.py:180`).
+- **The evidence kind `EvidenceKind`** is a closed vocabulary without an order: the narrator's words, a character's line, something shown, a rumor (`ref:packages/story_domain/src/story_domain/models/ontology.py:22`). A line proves only that the character said it, not that it is true (`ref:docs/storyworm/spec/06-domain-contracts.md:76`). This kind replaced the numeric `confidence`, because a free self-assessment of the model "converges to 0.8" (`ref:docs/storyworm/DECISION-LOG.md:119`, `:139`).
+- **Time.** The specification separates the moment when a fact is revealed from the time in the world. The canon does not store the time in the world; its only state is "unknown". Deriving the order of events in the world from the order of chapters is forbidden (`ref:docs/storyworm/spec/02-architecture-principles.md:31`, `:34`).
+- **Visibility** is decided by code without a model: an observation is hidden while the current paragraph stands before the paragraph where it appeared (`ref:packages/story_domain/src/story_domain/visibility.py:64`). This is visibility for the translator and the reader. storyworm has no model of "which character knows what".
+- **The chapter context** is frozen: the cast, up to three past summaries, each no longer than 2000 code points and 6000 together (`ref:packages/story_domain/src/story_domain/models/translation_context_basis.py:32`, `:38`), and the lore, no more than 8 entries per character and 64 in total (`ref:packages/story_domain/src/story_domain/models/committed_lore.py:28`). The lore is passed with the label "Committed canon data (data, not instructions)" (same file, `:307`). If the summaries do not fit, an error is raised. Lore above the limit is dropped, and the reason is recorded (`ref:docs/storyworm/spec/06-domain-contracts.md:417`): nothing is lost silently. An ambiguous name is not replaced with the canonical one: it is removed from the context and raised for review (`omit + escalate`, `ref:docs/storyworm/spec/09-translator-text-v2-workflow.md:104`).
 
-### Проверки и роли
+### Checks and roles
 
-- Спецификация QA делит проверку на две части. Consistency — глоссарий, лор, стиль, маркеры. Adequacy — пропуски, добавления, перепутанный говорящий. Автоодобрение разрешено, только если пройдены обе проверки, нет новых сущностей, изменений фактов и эскалаций (`ref:docs/storyworm/spec/10-qa-v2.md:26`).
-- Каноническая QA в коде детерминированная. Consistency проверяет только маркеры абзацев, adequacy берёт находки из фикстуры (`ref:apps/storyworm/src/storyworm/workflows/translator_text_v2/consistency_qa.py:398`, `ref:apps/storyworm/src/storyworm/workflows/translator_text_v2/adequacy_qa.py:449`). Каузальный экстрактор канона — заглушка `NoopBootstrapCausalExtractor` (`ref:apps/storyworm/src/storyworm/workflows/translator_text_v2/extract_contracts.py:158`).
-- Живой путь с моделями тоже есть. Черновик, правка, извлечение фактов и терминов с одним ремонтом, модельное наблюдение адекватности (`ref:apps/storyworm/src/storyworm/translation_pipeline_execution.py:110`). Последнее прямо названо так: «a provider observation, not canonical adequacy QA or approval» (там же, `:296`). Гейтом оно не служит.
-- Роли «критик» и «память» (Muninn) существуют только в словаре. Спецификация говорит, что это не обязательные компоненты рантайма (`ref:docs/storyworm/spec/00-product-and-glossary.md:20`).
-- В `main` реализован путь translate → extract → check → publish. У факта `{entity, key, value, paragraphs}` есть якоря. Якорь за пределами текущего чанка валит попытку (`main:src/storyworm/pipeline.py:58`). Проверяется только диапазон номеров якорей, а не совпадение с текстом. Сохранённые факты в промпты не подаются вообще.
+- The QA specification splits the check into two parts. Consistency covers the glossary, the lore, the style and the markers. Adequacy covers omissions, additions and a mixed-up speaker. Auto-approval is allowed only if both checks pass and there are no new entities, no fact changes and no escalations (`ref:docs/storyworm/spec/10-qa-v2.md:26`).
+- The canonical QA in the code is deterministic. Consistency checks only the paragraph markers, adequacy takes its findings from a fixture (`ref:apps/storyworm/src/storyworm/workflows/translator_text_v2/consistency_qa.py:398`, `ref:apps/storyworm/src/storyworm/workflows/translator_text_v2/adequacy_qa.py:449`). The causal canon extractor is the stub `NoopBootstrapCausalExtractor` (`ref:apps/storyworm/src/storyworm/workflows/translator_text_v2/extract_contracts.py:158`).
+- A live path with models also exists. A draft, an edit, extraction of facts and terms with one repair, a model observation of adequacy (`ref:apps/storyworm/src/storyworm/translation_pipeline_execution.py:110`). The last one is named directly: "a provider observation, not canonical adequacy QA or approval" (same file, `:296`). It does not serve as a gate.
+- The roles "critic" and "memory" (Muninn) exist only in the glossary. The specification says that they are not required runtime components (`ref:docs/storyworm/spec/00-product-and-glossary.md:20`).
+- `main` implements the path translate → extract → check → publish. A fact `{entity, key, value, paragraphs}` has anchors. An anchor outside the current chunk fails the attempt (`main:src/storyworm/pipeline.py:58`). Only the range of the anchor numbers is checked, not the match with the text. Saved facts are not passed into prompts at all.
 
-### Что измерялось и что вышло
+### What was measured and what came out
 
-- Живой прогон с моделями был один: одна глава, четыре стадии, три провайдера, по локальной оценке $0.384248. Кэш не сработал ни разу (все счётчики 0). В канон ничего не попало: остались кандидаты и шесть записанных решений оператора (`ref:docs/storyworm/exec-plans/completed/2026-05-18-second-live-e2e-workbench-rehearsal.md:403`, `:678`).
-- Проба кэша прошла на синтетическом префиксе и экономию на реальной главе не доказала (`ref:docs/storyworm/exec-plans/backlog/2026-05-14-provider-structured-context-cache-adoption.md:281`).
-- **Качество и согласованность мира на живой модели не измерялись ни разу.** Корпус наблюдённых ошибок (#334) стоял в плане после живых этапов (`ref:docs/storyworm/dev-plan.md:76`). Приёмка v1.5.0 шла на фейковом провайдере, и документ оговаривает, что готовой версию не объявляет (`ref:docs/storyworm/mvp-acceptance-trace.md:14`).
-- На фейках сработали причинная видимость, атомарная запись одобренной памяти и порядок гейтов: одобрение до QA получает 409.
-- Что не сработало, по их же записям. Демо называет главным пробелом то, что закоммиченный патч не превращается в снимок, который читает следующая глава (`ref:examples/two_chapter_memory_demo.py:639`). Обещанного гейта продвижения главы не оказалось (`ref:docs/storyworm/DECISION-LOG.md:51`).
+- There was one live run with models: one chapter, four stages, three providers, $0.384248 by the local estimate. The cache did not hit even once (all counters are 0). Nothing got into the canon: candidates and six recorded operator decisions remained (`ref:docs/storyworm/exec-plans/completed/2026-05-18-second-live-e2e-workbench-rehearsal.md:403`, `:678`).
+- The cache probe ran on a synthetic prefix and did not prove savings on a real chapter (`ref:docs/storyworm/exec-plans/backlog/2026-05-14-provider-structured-context-cache-adoption.md:281`).
+- **Quality and world consistency on a live model were never measured.** The corpus of observed errors (#334) stood in the plan after the live stages (`ref:docs/storyworm/dev-plan.md:76`). The acceptance of v1.5.0 ran on a fake provider, and the document states that it does not declare the version ready (`ref:docs/storyworm/mvp-acceptance-trace.md:14`).
+- On fakes these worked: causal visibility, the atomic write of approved memory and the order of gates: an approval before QA gets 409.
+- What did not work, by their own records. The demo names as the main gap that a committed patch does not turn into a snapshot that the next chapter reads (`ref:examples/two_chapter_memory_demo.py:639`). The promised chapter promotion gate did not exist (`ref:docs/storyworm/DECISION-LOG.md:51`).
 
-### Почему reference-001 заморожена
+### Why reference-001 is frozen
 
-`commit:247550a8` («Start main over from GOALS.md; old tree frozen on reference-001») фиксирует объём: 124 тыс. строк кода, 135 тыс. строк тестов, SDD из 16 разделов, 190 exec plans. Урезать не стали. Мигрировать было нечего, урезание через тесты, приваренные к схеме, превратилось бы в переписывание, а репозиторий уже втрое превысил собственный бюджет контекста. SDD устаревал, потому что его проза пересказывала тесты. Мягкие лимиты игнорировались, потому что ничего не падало. Новый `main` держится на `GOALS.md` и числах, которые проверяет CI. Для нас главная мысль этого коммита такая: канон из собственных извлечений системы сам себя не проверит, поэтому якорем служит исходный текст.
+`commit:247550a8` ("Start main over from GOALS.md; old tree frozen on reference-001") records the size: 124 thousand lines of code, 135 thousand lines of tests, an SDD of 16 sections, 190 exec plans. They decided not to cut it down. There was nothing to migrate, cutting through tests welded to the schema would have become a rewrite, and the repository had already exceeded its own context budget three times over. The SDD went stale because its prose retold the tests. Soft limits were ignored because nothing failed. The new `main` rests on `GOALS.md` and on numbers that CI checks. For us the main thought of this commit is this: a canon made of the system's own extractions will not check itself, so the source text serves as the anchor.
 
-## 2. Кандидаты
+## 2. Candidates
 
-Дубликаты трёх линз (состояние, рассказчик, проверки) слиты. Строки отсортированы по ожидаемому эффекту на непротиворечивость. Классы ошибок взяты из записи журнала о ловушках посреди истории (`docs/improve-log.md`): 1 — исполняется невозможная посылка, 2 — теряется место предмета, 3 — арифметика времени и счётчиков, «зн» — кто что знает.
+Duplicates from the three lenses (state, narrator, checks) are merged. The rows are sorted by the expected effect on consistency. The error classes are taken from the log entry about traps in the middle of a story (`docs/improve-log.md`): 1 means an impossible premise is carried out, 2 means the place of an item is lost, 3 means arithmetic of time and counters, "kn" means who knows what.
 
-| # | Идея | Откуда | Класс | Перенос | Цена | Главный риск | Отличие от отклонённого |
+| # | Idea | Source | Class | Transfer | Cost | Main risk | Difference from what was rejected |
 |---|---|---|---|---|---|---|---|
-| A | Утверждение игрока о прошлом, о чужих поступках и отношениях — реплика персонажа, а не факт мира; мир и персонажи отвечают по памяти, новое без противоречия принимается | `ref:docs/storyworm/spec/06-domain-contracts.md:76`, `ref:docs/storyworm/DECISION-LOG.md:133` | 1, зн | промпт (`SYSTEM`) | +80–120 токенов в системном промпте, вызовов нет | рассказчик спорит с честной авторской правкой; сцены суше | Память не трогает. Откаченная правка говорила о *действии* против факта, эта — о *посылке* в тексте хода (ничья, мост, союз, 40 повторов) |
-| B | Время доступности считает код: из HH:MM в памяти и времени хода печатается «доступно с 08:20; на 08:14 ещё 6 мин» | принцип «детерминированное решает код»: `ref:packages/story_domain/src/story_domain/visibility.py:64`, `ref:docs/storyworm/DECISION-LOG.md:46`. Счёт мирового времени — наша гипотеза: storyworm его не хранит | 3, 1 | код без модели (`prompt.ts`) | +20–60 токенов на штамп, вызовов нет | неверный разбор времени даёт уверенное «доступна» | Инкременты не складываются: одна разность двух явных моментов, накопления ошибки нет |
-| C | Слоты состояния из закрытого словаря `subject`+`slot` (у кого/где, тело, доступно с, действующая версия) без `counters`; код канонизирует имя, печатает последнее значение, при сомнении — оба кандидата | `ref:packages/story_domain/src/story_domain/models/canon.py:418`, `ref:packages/story_domain/src/story_domain/models/ontology.py:71`, `ref:apps/storyworm/src/storyworm/workflows/translator_text_v2/patch_builder.py:180`, `ref:docs/storyworm/spec/09-translator-text-v2-workflow.md:104` | 2, 1 | схема памяти + код | +10–20 токенов на факт при сжатии (~5% ответа), +200–600 токенов в промпте сцены | пропущенная передача даёт неверную строку сводки | Шаг (2) из журнала: `key` отдельно от `counters`. Сумм нет, значит нет и двугорбости `dance`. Вместо свободных ключей — словарь |
-| D | Основание факта из закрытого словаря: показано / сказал персонаж / план / отменено / частично / слух. Код собирает отменённое и обсуждённое в блок «НЕ ПРОИСХОДИЛО»; в итог счётчика идёт только «показано» | `ref:packages/story_domain/src/story_domain/models/ontology.py:22`, `ref:docs/storyworm/DECISION-LOG.md:119`, `:139` | 1, 3, зн | схема памяти + код | +3–6 токенов на факт при сжатии, блок 100–400 токенов | модель пометит свершившееся как «обсуждали»; блок отрицаний толкает к отказам | С `STATUSES` режима `sgr` пересекается частично (`planned`, `cancelled`). Различие «полный / частичный / отменённый» переезжает из прозы правил в поле, отбор делает код |
-| E | Сверка перед сценой в том же вызове: затронутые факты с источником, минуты и остатки числами; код вырезает её до сохранения | `commit:247550a8` (якорь — исходный текст), `ref:docs/storyworm/DECISION-LOG.md:68` (живой промпт — простой текст, JSON модель не видит) | 1, 2, 3 | промпт + код | +150–350 токенов выхода, на GPU +5–15 с (+15–30% к сцене) | **блокер:** `memory-probe.ts` отдаёт судье сырой текст, превью стримит сверку игроку; нужна правка измерителя — решение владельца | Сверка не хранится: ошибка портит одну сцену, а не всю ветку |
-| F | Ход игрока — попытка; перед исходом упорядоченная проверка: умение → место предмета (последняя сцена важнее памяти) → ресурс и срок → тело | `ref:docs/storyworm/spec/10-qa-v2.md:8`, `:17`; перенос проверок QA в правило генератора — вывод линзы, у storyworm этого нет | 1, 2, 3 | промпт | +120–180 токенов в системном промпте | отказы на разрешённых ходах; длинный список у Gemma размывает формат | Гипотеза (б) из журнала в другой форме: вместо общего запрета — порядок источников истины. Сначала прогнать базу старой правки на исправной истории |
-| G | Полнота счётчика: если сцена называет предмет счётчика и число, а слагаемого нет, итог печатается как «не менее N»; дозапрос только под флагом | `ref:packages/story_domain/src/story_domain/models/chapter_cast.py:726` (пустой состав — подозрение, а не норма) | 3 | код; дозапрос при сжатии по флагу | без дозапроса 0; с ним +1 вызов на 3–8 тыс. токенов входа только в подозрительных сжатиях | ложные тревоги от времени и дат в тексте | Бьёт в причину двугорбости — пропуск слагаемого. Имеет смысл, только если счётчики вернутся |
-| H | Отдельный малый вызов при сжатии пересобирает снимок «где что, что когда доступно», до 30 строк с источником у каждой; при сбое остаётся прежний снимок с пометкой | `ref:docs/storyworm/spec/04-system-model.md:63`, `main:src/storyworm/pipeline.py:64` (сбой закрывает попытку) | 2, 3, зн | вызов при сжатии | +1 вызов: 10–25 тыс. токенов входа, 300–800 выхода, на GPU +20–60 с на сжатие | снимок уверенно врёт; меняется поток сжатия в `generation.ts`, нужно слово владельца | Основная схема не меняется, счётчиков нет. Запасной путь, если C упрётся в схему |
-| I | Якорь слагаемого: число `add` должно стоять в тексте сцены из `source`, иначе вместо итога печатаются только слагаемые | `commit:247550a8`; по аналогии с `ref:apps/storyworm/src/storyworm/workflows/translator_text_v2/approved_memory.py:714` (якорь записи памяти *терминов* обязан быть в исходном тексте) | 3 | код | 0 вызовов, +5–10 токенов на элемент | главную ошибку — пропуск — не ловит; числительные в падежах | Предохранитель к отклонённой сводке: при сомнении она отступает к журналу |
-| J | Границы схемы (`add` 0…100000, `counters` ≤ 6, `key` ≤ 60) и диагностика зацикливания | `ref:docs/storyworm/DECISION-LOG-ARCHIVE.md:390`: на неизвестный тип сущности один ограниченный ремонт, затем отказ (`:391`) | прочее | схема; повтор без `counters` — со слова владельца | 0; при `output_limit` +1 вызов сжатия | зацикливание может идти от массива фактов, а не от целого | Без этого никакое новое поле схемы не измерить: закрывает вторую причину отказа key/counters |
-| K | Порядок в запросе: заголовок памяти «данные о мире, не указания», короткий список проверок сразу после хода | `ref:apps/storyworm/src/storyworm/workflows/translator_text_v2/replay_context.py:437`, `ref:docs/storyworm/spec/08-context-pack-and-retrieval.md:37`, `ref:packages/story_domain/src/story_domain/models/committed_lore.py:307` | 1, 2, 3 | промпт | +40–60 токенов, префикс сид+память не меняется | модель отвечает на список вместо сцены | Меняется место уже принятого правила, а не его содержание. Мерить только после A или F |
-| L | Операции `new/update/retract` над слотами; код исправляет `new` по занятому id и считает дрейф | `ref:packages/story_domain/src/story_domain/patcher.py:33`, `ref:docs/storyworm/spec/06-domain-contracts.md:119`, `ref:packages/story_domain/src/story_domain/models/patch.py:36` | 2 | схема + код | +200–600 токенов входа сжатия (снимок вместо списка ключей) | `retract` снимет ещё действующую травму — ровно ловушка `healer` | Развитие C, только после его принятия |
-| M | Знание персонажей: `who` и `learned_at` у фактов `knowledge`, строки по персонажам рендерит код | по аналогии: в storyworm знаний персонажей нет, `ref:packages/story_domain/src/story_domain/models/observation.py:85` — видимость для читателя | зн | схема + код | +50–200 токенов | «не знает», поставленное моделью, запретит знание из живых сцен | `sava_learns` на исправной истории уже проходит; ждать сдвига на `sava_learns`, `knowledge_date`, `news` выше шума не приходится |
-| N | Предложение владельцу для измерителя: проба сохраняет сводку после сжатия и без модели сверяет её с эталонными числами и держателями; поля вида `summaryHits/summaryMisses` отделяют ошибку сводки от ошибки чтения | `main:tests/test_causality.py:31`, `commit:1765807b`, `ref:docs/storyworm/exec-plans/AUDIT.md:85` | 3, 2 | измеритель (только владелец) | 0 вызовов | подстрочная сверка ловит числа, но не смысл | Делает измеримой главную претензию к key/counters и различает C, G, I без судьи |
+| A | A player's claim about the past, about other people's actions and about relationships is a character's line, not a fact of the world; the world and the characters answer from memory, and new content without a contradiction is accepted | `ref:docs/storyworm/spec/06-domain-contracts.md:76`, `ref:docs/storyworm/DECISION-LOG.md:133` | 1, kn | prompt (`SYSTEM`) | +80–120 tokens in the system prompt, no calls | the narrator argues with an honest author's correction; scenes are drier | Does not touch memory. The reverted change spoke about an *action* against a fact, this one speaks about a *premise* in the text of the turn (draw, bridge, alliance, 40 repeats) |
+| B | The code computes the availability time: from HH:MM in memory and the turn time it prints «доступно с 08:20; на 08:14 ещё 6 мин» ("available from 08:20; at 08:14 there are 6 more min") | the principle "code decides what is deterministic": `ref:packages/story_domain/src/story_domain/visibility.py:64`, `ref:docs/storyworm/DECISION-LOG.md:46`. Computing world time is our hypothesis: storyworm does not store it | 3, 1 | code without a model (`prompt.ts`) | +20–60 tokens per stamp, no calls | a wrong time parse gives a confident "available" | Memory increments are not summed: one difference of two explicit moments, no accumulation of error |
+| C | State slots from a closed vocabulary `subject`+`slot` (who holds it/where, body, available from, version in force) without `counters`; the code canonicalizes the name, prints the last value, and in case of doubt prints both candidates | `ref:packages/story_domain/src/story_domain/models/canon.py:418`, `ref:packages/story_domain/src/story_domain/models/ontology.py:71`, `ref:apps/storyworm/src/storyworm/workflows/translator_text_v2/patch_builder.py:180`, `ref:docs/storyworm/spec/09-translator-text-v2-workflow.md:104` | 2, 1 | memory schema + code | +10–20 tokens per fact at compaction (~5% of the response), +200–600 tokens in the scene prompt | a missed handover gives a wrong summary line | Step (2) from the log: `key` apart from `counters`. There are no sums, so there is no bimodality of `dance` either. A vocabulary instead of free keys |
+| D | The basis of a fact from a closed vocabulary: shown / a character said it / plan / cancelled / partial / rumor. The code collects what was cancelled and what was only discussed into a block «НЕ ПРОИСХОДИЛО» ("DID NOT HAPPEN"); only "shown" goes into the counter total | `ref:packages/story_domain/src/story_domain/models/ontology.py:22`, `ref:docs/storyworm/DECISION-LOG.md:119`, `:139` | 1, 3, kn | memory schema + code | +3–6 tokens per fact at compaction, a block of 100–400 tokens | the model will mark something that happened as "discussed"; the block of negations pushes towards refusals | It overlaps with `STATUSES` of the `sgr` mode only partly (`planned`, `cancelled`). The distinction "full / partial / cancelled" moves from the prose of the rules into a field, and the code does the selection |
+| E | A reconciliation before the scene in the same call: the affected facts with their source, minutes and remainders as numbers; the code cuts it out before saving | `commit:247550a8` (the anchor is the source text), `ref:docs/storyworm/DECISION-LOG.md:68` (the live prompt is plain text, the model does not see JSON) | 1, 2, 3 | prompt + code | +150–350 output tokens, on the GPU +5–15 s (+15–30% to a scene) | **blocker:** `memory-probe.ts` gives the judge the raw text, the preview streams the reconciliation to the player; the eval needs a change, which is the owner's decision | The reconciliation is not stored: an error spoils one scene, not the whole branch |
+| F | The player's turn is an attempt; before the outcome there is an ordered check: skill → place of the item (the last scene outweighs memory) → resource and deadline → body | `ref:docs/storyworm/spec/10-qa-v2.md:8`, `:17`; moving the QA checks into a generator rule is a conclusion of the lens, storyworm does not have this | 1, 2, 3 | prompt | +120–180 tokens in the system prompt | refusals on allowed turns; a long list blurs the format for Gemma | Hypothesis (b) from the log in another form: an order of sources of truth instead of a general ban. First run the baseline of the old change on the corrected story |
+| G | Counter completeness: if a scene names the counter's item and a number, and there is no addend, the total is printed as «не менее N» ("at least N"); a follow-up request only under a flag | `ref:packages/story_domain/src/story_domain/models/chapter_cast.py:726` (an empty cast is a suspicion, not the norm) | 3 | code; a follow-up request at compaction under a flag | 0 without the follow-up request; with it +1 call of 3–8 thousand input tokens only in suspicious compactions | false alarms from times and dates in the text | Hits the cause of the bimodality, which is a missed addend. Makes sense only if counters come back |
+| H | A separate small call at compaction rebuilds the snapshot "where things are, what is available when", up to 30 lines, each with a source; on a failure the previous snapshot stays with a note | `ref:docs/storyworm/spec/04-system-model.md:63`, `main:src/storyworm/pipeline.py:64` (a failure closes the attempt) | 2, 3, kn | call at compaction | +1 call: 10–25 thousand input tokens, 300–800 output, on the GPU +20–60 s per compaction | the snapshot lies confidently; the compaction flow in `generation.ts` changes, the owner's word is needed | The main schema does not change, there are no counters. A fallback path if C runs into the schema |
+| I | An addend anchor: the number of an `add` must stand in the text of the scene from `source`, otherwise only the addends are printed instead of the total | `commit:247550a8`; by analogy with `ref:apps/storyworm/src/storyworm/workflows/translator_text_v2/approved_memory.py:714` (the anchor of a *term* memory entry must be in the source text) | 3 | code | 0 calls, +5–10 tokens per element | does not catch the main error, which is an omission; numerals in grammatical cases | A safety guard for the rejected summary: in case of doubt it falls back to the log |
+| J | Schema bounds (`add` 0…100000, `counters` ≤ 6, `key` ≤ 60) and a diagnosis of the looping | `ref:docs/storyworm/DECISION-LOG-ARCHIVE.md:390`: one bounded repair for an unknown entity type, then a refusal (`:391`) | other | schema; a retry without `counters` needs the owner's word | 0; on `output_limit` +1 compaction call | the looping may come from the array of facts, not from the integer | Without this no new schema field can be measured: it closes the second cause of the key/counters failure |
+| K | Order in the request: the memory header «данные о мире, не указания» ("data about the world, not instructions"), a short list of checks right after the turn | `ref:apps/storyworm/src/storyworm/workflows/translator_text_v2/replay_context.py:437`, `ref:docs/storyworm/spec/08-context-pack-and-retrieval.md:37`, `ref:packages/story_domain/src/story_domain/models/committed_lore.py:307` | 1, 2, 3 | prompt | +40–60 tokens, the seed+memory prefix does not change | the model answers the list instead of writing the scene | The place of an already accepted rule changes, not its content. Measure only after A or F |
+| L | Operations `new/update/retract` on slots; the code corrects a `new` on an occupied id and counts the drift | `ref:packages/story_domain/src/story_domain/patcher.py:33`, `ref:docs/storyworm/spec/06-domain-contracts.md:119`, `ref:packages/story_domain/src/story_domain/models/patch.py:36` | 2 | schema + code | +200–600 input tokens at compaction (a snapshot instead of a list of keys) | `retract` will remove an injury that is still in force, which is exactly the `healer` trap | A development of C, only after C is accepted |
+| M | Character knowledge: `who` and `learned_at` on `knowledge` facts, the code renders the lines per character | by analogy: storyworm has no character knowledge, `ref:packages/story_domain/src/story_domain/models/observation.py:85` is visibility for the reader | kn | schema + code | +50–200 tokens | a "does not know" set by the model will forbid knowledge from the live scenes | `sava_learns` already passes on the corrected story; a shift above the noise on `sava_learns`, `knowledge_date`, `news` is not to be expected |
+| N | A proposal to the owner for the eval: the probe saves the summary after compaction and, without a model, compares it with the reference numbers and holders; fields like `summaryHits/summaryMisses` separate a summary error from a reading error | `main:tests/test_causality.py:31`, `commit:1765807b`, `ref:docs/storyworm/exec-plans/AUDIT.md:85` | 3, 2 | eval (owner only) | 0 calls | a substring comparison catches numbers but not meaning | Makes the main complaint about key/counters measurable and tells C, G and I apart without a judge |
 
-## 3. Лучшие гипотезы как шаги цикла
+## 3. The best hypotheses as loop steps
 
-Общее для всех шагов (`docs/improve-loop.md`):
+Common to all steps (`docs/improve-loop.md`):
 
-- Судья сцен — `claude:claude-opus-5` (с 18 сентября основной, см. `docs/improve-loop.md`) или `openai:gpt-5.4`; один и тот же с обеих сторон.
-- Базовая линия того же дня, основная группа моделей. Перед прогоном — `npm run eval -- usage`.
-- Не меньше трёх прогонов на сторону, сравнивается сумма по прогонам. Шум Gemma — около одного вопроса, у `gpt-5.4-mini` до трёх из восьми на `battle` (журнал, запись «разброс на одном коде»). Целевые ключи сцен бинарные, поэтому один прогон ничего не различает.
-- Память `dance` у Gemma с key/counters давала 13, 9, 13, 13, 13, 7 из 13 (журнал, запись «состояние по ключам и счётчики»). Где задет `dance`, нужно пять прогонов: три не отличат горбы.
-- Скрытый набор запускает владелец или Fable один раз после принятия. Падение на нём отменяет принятие.
-- Окончательная приёмка — `npm run memory:probe` на GPU по слову владельца. Размещённая Gemma оптимистичнее расцензуренной Q6K.
+- The scene judge is `claude:claude-opus-5` (the main one since September 18, see `docs/improve-loop.md`) or `openai:gpt-5.4`; the same one on both sides.
+- A baseline of the same day, the main model group. Before a run: `npm run eval -- usage`.
+- No fewer than three runs per side; the sum over the runs is compared. The noise of Gemma is about one question, for `gpt-5.4-mini` it is up to three out of eight on `battle` (the log, entry "spread on the same code"). The target scene keys are binary, so one run distinguishes nothing.
+- The `dance` memory of Gemma with key/counters gave 13, 9, 13, 13, 13, 7 out of 13 (the log, entry "state by keys and counters"). Where `dance` is affected, five runs are needed: three will not tell the two humps apart.
+- The holdout pack is run by the owner or by Fable once after acceptance. A drop on it cancels the acceptance.
+- The final acceptance is `npm run memory:probe` on the GPU when the owner says so. The hosted Gemma is more optimistic than the uncensored Q6K.
 
-### Шаг 1. A: посылка игрока — реплика персонажа
+### Step 1. A: the player's premise is a character's line
 
-Гипотеза: если рассказчик читает утверждение о прошлом в ходе игрока как слова персонажа, а не как факт мира, ловушки-поправки начнут проходить, а разрешённые ходы останутся исполненными.
+Hypothesis: if the narrator reads a claim about the past in the player's turn as the words of a character and not as a fact of the world, the correction traps will start to pass, and the allowed turns will stay carried out.
 
-Правка: `local/prompt.ts`, только `SYSTEM`. Одно общее правило без деталей сценариев:
-- установленный факт меняет только явная авторская правка;
-- новое, что не противоречит установленному, принимается;
-- если сведений нет, утверждение не подтверждается и не опровергается.
+Change: `local/prompt.ts`, only `SYSTEM`. One general rule without scenario details:
+- an established fact is changed only by an explicit author's correction;
+- new content that does not contradict what is established is accepted;
+- if there is no information, the claim is neither confirmed nor refuted.
 
-Ключи:
-- Сдвиг: `draw_corrected`, `castle_corrected`, `mate_corrected`, `bridge_corrected`, `ally_corrected`, `tango40_corrected`, `partial_corrected`, `samira_corrected`.
-- Контроль: `seal_allowed_worked`, `colors_right`, `gold_silver`, `count10_pause` и все вопросы `examples/memory-checks.ts`.
+Keys:
+- Shift: `draw_corrected`, `castle_corrected`, `mate_corrected`, `bridge_corrected`, `ally_corrected`, `tango40_corrected`, `partial_corrected`, `samira_corrected`.
+- Control: `seal_allowed_worked`, `colors_right`, `gold_silver`, `count10_pause` and all questions of `examples/memory-checks.ts`.
 
-Прогоны: три на сторону по всем трём сценариям у Gemma и `gpt-5.4-mini`. Если разница 1–2 ловушки, ещё два. Правка дешёвая и не зависит от схемы памяти, поэтому её разумно мерить первой.
+Runs: three per side on all three scenarios for Gemma and `gpt-5.4-mini`. If the difference is 1–2 traps, two more. The change is cheap and does not depend on the memory schema, so it is reasonable to measure it first.
 
-Откат (`git checkout -- local/prompt.ts`):
-- сумма ловушек-поправок за три прогона выросла меньше чем на 2 у обеих моделей;
-- любой контроль упал в двух прогонах из трёх;
-- растёт только один сценарий (признак подгонки);
-- падение на скрытом наборе.
+Revert (`git checkout -- local/prompt.ts`):
+- the sum of correction traps over three runs grew by less than 2 for both models;
+- any control dropped in two runs out of three;
+- only one scenario grows (a sign of overfitting);
+- a drop on the holdout pack.
 
-### Шаг 2. B: минуты до готовности считает код
+### Step 2. B: the code computes the minutes until readiness
 
-Гипотеза: если «сколько минут до готовности на время хода» считает код по уже записанным моментам, рассказчик перестанет объявлять способность доступной раньше срока и ошибаться в минутах.
+Hypothesis: if the code computes "how many minutes until readiness at the turn time" from the moments already recorded, the narrator will stop declaring an ability available before its time and stop making mistakes in the minutes.
 
-Правка: `local/prompt.ts`, схема памяти не меняется.
-- Время хода берётся из префикса HH:MM в сообщении игрока (соглашение уже описано в `SYSTEM`), иначе из `referenceTime`.
-- В фактах памяти с той же датой код находит HH:MM и в последнем сообщении печатает строки вида «момент 08:20 — через 6 мин от времени хода» с пометкой «по памяти на конец охваченных сцен».
-- Разные даты и относительные сроки («через час») не трогаются.
-- Если моментов в памяти мало, следующим шагом добавить поле «доступно с» в схему. Это уже отдельный шаг.
-- Юнит-тест разбора обязан ловить «08:08 — не восьмое августа».
+Change: `local/prompt.ts`, the memory schema does not change.
+- The turn time is taken from the HH:MM prefix in the player's message (the convention is already described in `SYSTEM`), otherwise from `referenceTime`.
+- In memory facts with the same date the code finds HH:MM and prints, in the last message, lines like «момент 08:20 — через 6 мин от времени хода» ("moment 08:20: in 6 min from the turn time") with the note «по памяти на конец охваченных сцен» ("by memory as of the end of the covered scenes").
+- Different dates and relative deadlines («через час», "in an hour") are not touched.
+- If there are few moments in memory, the next step is to add an "available from" field to the schema. That is already a separate step.
+- The unit test of the parse must catch "08:08 is not the eighth of August".
 
-Ключи:
-- Сдвиг: `turn15_seal_not_ready`, `turn15_seal_unused`, `seal_early_worked`, `turn8_seal_unused`.
-- Контроль: `seal_allowed_worked` (в 08:21 при готовности с 08:20 печать обязана сработать), `seal_allowed_charges`, `turn11_three_left`, память `first_use`, `second_use`, `next_use`.
+Keys:
+- Shift: `turn15_seal_not_ready`, `turn15_seal_unused`, `seal_early_worked`, `turn8_seal_unused`.
+- Control: `seal_allowed_worked` (at 08:21 with readiness from 08:20 the seal must work), `seal_allowed_charges`, `turn11_three_left`, memory `first_use`, `second_use`, `next_use`.
 
-Прогоны: `battle` — четыре на сторону у Gemma, по три у `gpt-5.4-mini` и Ministral. Это единственный сценарий с минутной шкалой, а все четыре целевых ключа бинарные. `dance` и `chess` — по одному прогону на сторону, только чтобы убедиться, что ничего не сломалось.
+Runs: `battle` gets four per side for Gemma, three each for `gpt-5.4-mini` and Ministral. It is the only scenario with a minute scale, and all four target keys are binary. `dance` and `chess` get one run per side, only to make sure that nothing broke.
 
-Откат:
-- `seal_allowed_worked` упал хотя бы раз;
-- сумма по целевым выросла не больше чем на 1 за три прогона;
-- служебная пометка хоть раз попала в прозу сцены;
-- упали вопросы памяти о моментах;
-- падение на скрытом наборе.
+Revert:
+- `seal_allowed_worked` dropped at least once;
+- the sum over the target keys grew by no more than 1 over three runs;
+- the service note got into the prose of a scene at least once;
+- the memory questions about moments dropped;
+- a drop on the holdout pack.
 
-### Шаг 3. C: слоты состояния без счётчиков, после диагностики J
+### Step 3. C: state slots without counters, after the J diagnosis
 
-Сначала диагностика J, без принятия: тот же запрос сжатия без `counters`. Если `output_limit` пропал, зацикливание шло от них. После этого — C.
+First the J diagnosis, without acceptance: the same compaction request without `counters`. If `output_limit` is gone, the looping came from them. After that comes C.
 
-Гипотеза: если текущее значение («где предмет, что с телом, что доступно, какая версия действует») хранится одним перезаписываемым слотом из закрытого словаря и без сумм, Gemma перестанет терять место предмета после второго сжатия, а `dance` не станет двугорбым.
+Hypothesis: if the current value ("where the item is, what is with the body, what is available, which version is in force") is stored as one overwritable slot from a closed vocabulary and without sums, Gemma will stop losing the place of an item after the second compaction, and `dance` will not become bimodal.
 
-Правка:
-- `local/memory.ts` (`plain`): у факта `kind=state` поля `subject` (имя дословно по тексту) и `slot` из enum `holder`, `condition`, `available_from`, `version`, `remaining`. У `remaining` только число, названное в тексте. `counters` убираются, абзац правил про ключи сокращается до одной-двух фраз, границы длины — как в J.
-- `local/prompt.ts`: `stateText` группирует последние значения по `subject`. Имя канонизирует код: регистр, ё/е, кавычки, пробелы. Если два имени различаются одним словом, печатаются оба кандидата с датами, без выбора.
-- `lib/library.ts`: тип `Fact`, затем `npm run cloud:lib`. Тесты — в `local/memory.test.ts`.
+Change:
+- `local/memory.ts` (`plain`): a fact with `kind=state` gets the fields `subject` (the name verbatim from the text) and `slot` from the enum `holder`, `condition`, `available_from`, `version`, `remaining`. `remaining` holds only a number named in the text. `counters` are removed, the rules paragraph about keys is shortened to one or two sentences, the length bounds are as in J.
+- `local/prompt.ts`: `stateText` groups the last values by `subject`. The code canonicalizes the name: case, ё/е, quotation marks, spaces. If two names differ by one word, both candidates are printed with dates, without a choice.
+- `lib/library.ts`: the `Fact` type, then `npm run cloud:lib`. The tests go in `local/memory.test.ts`.
 
-Ключи:
-- Сдвиг: `turn14_dagger_with_tarek`, `dagger_source`, `turn9_left_hand_spared`, `turn15_still_broken`, `healer_still_broken`, `wrist_limits`.
-- Контроль: `seal_allowed_worked`, `b_total_38` (без `counters` итог снова считает модель), память `battle` (`charges`, `next_use`, `fracture_healed`), вся память `dance` (13 вопросов), `compactionRetries`, `invalid_memory`.
+Keys:
+- Shift: `turn14_dagger_with_tarek`, `dagger_source`, `turn9_left_hand_spared`, `turn15_still_broken`, `healer_still_broken`, `wrist_limits`.
+- Control: `seal_allowed_worked`, `b_total_38` (without `counters` the model computes the total again), memory of `battle` (`charges`, `next_use`, `fracture_healed`), all memory of `dance` (13 questions), `compactionRetries`, `invalid_memory`.
 
-Прогоны: Gemma — `battle` четыре на сторону, `dance` пять. `gpt-5.4-mini` и Ministral — по три на `battle` и `dance`. `chess` — три прогона как контроль. Сравнивать с `HEAD` без key/counters, а не с рабочим деревом.
+Runs: Gemma gets four per side on `battle` and five on `dance`. `gpt-5.4-mini` and Ministral get three each on `battle` and `dance`. `chess` gets three runs as a control. Compare with `HEAD` without key/counters, not with the working tree.
 
-Откат (`git checkout -- local/memory.ts local/prompt.ts lib/library.ts local/memory.test.ts`):
-- любой прогон Gemma на `dance` ниже 12/13;
-- `compactionRetries` выше базы (до key/counters — 0 примерно на 18 сжатий, журнал);
-- `turn14_dagger_with_tarek` проходит реже чем в трёх прогонах из четырёх;
-- контроль упал;
-- падение на скрытом наборе.
+Revert (`git checkout -- local/memory.ts local/prompt.ts lib/library.ts local/memory.test.ts`):
+- any run of Gemma on `dance` below 12/13;
+- `compactionRetries` above the baseline (before key/counters it was 0 over about 18 compactions, the log);
+- `turn14_dagger_with_tarek` passes less often than in three runs out of four;
+- a control dropped;
+- a drop on the holdout pack.
 
-### Шаг 4. D: основание факта и блок «не происходило»
+### Step 4. D: the basis of a fact and the "did not happen" block
 
-Гипотеза: если у каждого факта есть основание из закрытого словаря, а отменённое и только обсуждавшееся код выносит в отдельный блок, рассказчик реже подтверждает несбывшееся, и вопросы памяти не падают.
+Hypothesis: if every fact has a basis from a closed vocabulary, and the code moves what was cancelled and what was only discussed into a separate block, the narrator confirms things that did not happen less often, and the memory questions do not drop.
 
-Правка:
-- `local/memory.ts` (`plain`): обязательное enum-поле `basis` со значениями `shown`, `told`, `planned`, `cancelled`, `partial`, `rumor`. Со `STATUSES` режима `sgr` (`actual`, `planned`, `cancelled`, `uncertain`) оно пересекается частично: `shown` соответствует `actual`, а `uncertain` здесь нет. Значения `other` тоже нет: storyworm отказался от него для типов сущностей, потому что под `other` прячется ошибка классификации (`ref:docs/storyworm/DECISION-LOG-ARCHIVE.md:400`).
-- `local/prompt.ts`: метка у факта и блок «НЕ ПРОИСХОДИЛО» в конце памяти. `SYSTEM` не меняется.
-- Если к этому времени вернутся счётчики, в итог идёт только `shown`. Это отдельный шаг.
+Change:
+- `local/memory.ts` (`plain`): a required enum field `basis` with the values `shown`, `told`, `planned`, `cancelled`, `partial`, `rumor`. It overlaps with `STATUSES` of the `sgr` mode (`actual`, `planned`, `cancelled`, `uncertain`) only partly: `shown` corresponds to `actual`, and there is no `uncertain` here. There is no `other` value either: storyworm gave it up for entity types, because a classification error hides under `other` (`ref:docs/storyworm/DECISION-LOG-ARCHIVE.md:400`).
+- `local/prompt.ts`: a label on the fact and the block «НЕ ПРОИСХОДИЛО» at the end of memory. `SYSTEM` does not change.
+- If counters come back by that time, only `shown` goes into the total. That is a separate step.
 
-Ключи:
-- Сдвиг: `draw_corrected`, `castle_corrected`, `mate_corrected`, `bridge_corrected`, `ally_corrected`, `tango40_corrected`, `partial_corrected`. Вопросы памяти: `cancelled_tango`, `partial_repeats`, `partial_clean`, `draw`, `mate`, `variation`, `alliance`, `extra_castle`.
-- Контроль: `seal_allowed_worked`, `colors_right`, `count10_pause`, `gold_silver`, `compactionRetries`.
+Keys:
+- Shift: `draw_corrected`, `castle_corrected`, `mate_corrected`, `bridge_corrected`, `ally_corrected`, `tango40_corrected`, `partial_corrected`. Memory questions: `cancelled_tango`, `partial_repeats`, `partial_clean`, `draw`, `mate`, `variation`, `alliance`, `extra_castle`.
+- Control: `seal_allowed_worked`, `colors_right`, `count10_pause`, `gold_silver`, `compactionRetries`.
 
-Прогоны: три на сторону по всем трём сценариям у Gemma, `gpt-5.4-mini` и Ministral. Ministral проверяет, держит ли слабая модель ещё одно обязательное поле. Мерить после шага 1: A и D бьют в одни и те же ловушки, и их эффекты иначе смешаются.
+Runs: three per side on all three scenarios for Gemma, `gpt-5.4-mini` and Ministral. Ministral checks whether a weak model holds one more required field. Measure after step 1: A and D hit the same traps, and otherwise their effects will mix.
 
-Откат:
-- контроль упал хотя бы раз;
-- `invalid_memory` или `compactionRetries` выше базы;
-- сумма верных ответов памяти по прогонам ниже базы;
-- ловушки-поправки выросли меньше чем на 2 за три прогона;
-- падение на скрытом наборе.
+Revert:
+- a control dropped at least once;
+- `invalid_memory` or `compactionRetries` above the baseline;
+- the sum of correct memory answers over the runs is below the baseline;
+- the correction traps grew by less than 2 over three runs;
+- a drop on the holdout pack.
 
-## 4. Что из storyworm брать не надо
+## 4. What not to take from storyworm
 
-| Что | Почему не брать | Цена, если взять |
+| What | Why not to take it | Cost if taken |
 |---|---|---|
-| Отдельный вызов-критик на каждую сцену (consistency/adequacy QA моделью) | Каноническая QA в reference-001 детерминированная. Модельная проверка адекватности была только наблюдением на одном живом прогоне, без гейта и без измерения пользы. Для бота это второй проход по тому же контексту | +1 вызов на сцену с ~50 тыс. токенов входа: на одном GPU задержка сцены примерно удваивается |
-| Эскалация к другой роли, затем к другой семье моделей; открытый вопрос с двумя кандидатами | В `main` это цель из `GOALS.md` (`commit:247550a8`), а не проверенный механизм. У бота одна модель на своём GPU, взрослое содержание на размещённые API не уходит, второй семьи нет | вторая модель в памяти GPU или запрещённый внешний вызов |
-| Человек в петле: пакет ревью, approve/reject/defer, карточки кандидатов, workbench | Владелец не ревьюит каждое сжатие. storyworm сам признал, что голый JSON человеку не годится, и строил UI | UI и очередь решений; сжатие ждёт человека |
-| Журнал патчей со статусами DRAFT/COMMITTED/REJECTED, хешированные версионированные контракты, проверки дрейфа на каждом шаге | Память ветки уже дописываемая и пишется атомарно (`local/generation.ts`). Именно эта бюрократия раздула reference-001 | код и тесты, приваренные к схеме, — урок их сброса |
-| Долговечная авторизация, аренды, учёт в микродолларах, лимиты повторов по линиям | Дневные лимиты уже есть в `local/budget.ts`. Остальное — инфраструктура продукта для многих пользователей | код, не влияющий на непротиворечивость |
-| Причинная видимость по абзацам, политика раскрытия, состав главы | Бот пишет вперёд: будущего текста нет, утечь нечему. Аналог «кто знает с какого момента» вынесен в M и ожидаемо слаб | поля и фильтры без цели |
-| Память терминов, политика поверхностной формы, блокировки переводов | Слой задачи перевода, в истории его нет | — |
-| Числовой порог уверенности | Авторы сами называют его некалиброванной серединой: самооценка модели сходится к 0.8 (`ref:docs/storyworm/DECISION-LOG.md:139`) | шум вместо сигнала |
-| Проза спецификаций поверх тестов | storyworm от неё отказался: текст пересказывал тесты и устаревал. Для нас это довод держать `improve-loop.md` коротким, а правила проверять eval | устаревшие документы |
+| A separate critic call for every scene (consistency/adequacy QA by a model) | The canonical QA in reference-001 is deterministic. The model check of adequacy was only an observation on one live run, without a gate and without a measurement of its benefit. For the bot this is a second pass over the same context | +1 call per scene with ~50 thousand input tokens: on one GPU the scene latency roughly doubles |
+| Escalation to another role, then to another model family; an open question with two candidates | In `main` this is a goal from `GOALS.md` (`commit:247550a8`), not a verified mechanism. The bot has one model on its own GPU, adult content does not go to hosted APIs, and there is no second family | a second model in GPU memory or a forbidden external call |
+| A human in the loop: a review package, approve/reject/defer, candidate cards, a workbench | The owner does not review every compaction. storyworm itself admitted that bare JSON is not fit for a human, and it was building a UI | a UI and a decision queue; compaction waits for a human |
+| A patch log with the statuses DRAFT/COMMITTED/REJECTED, hashed versioned contracts, drift checks at every step | The branch memory is already append-only and is written atomically (`local/generation.ts`). This bureaucracy is exactly what bloated reference-001 | code and tests welded to the schema, which is the lesson of their reset |
+| Durable authorization, leases, accounting in microdollars, retry limits per line | Daily limits already exist in `local/budget.ts`. The rest is product infrastructure for many users | code that does not affect consistency |
+| Causal visibility by paragraph, a disclosure policy, the chapter cast | The bot writes forward: there is no future text, so nothing can leak. The analog "who knows from which moment" is moved into M and is expected to be weak | fields and filters without a purpose |
+| Term memory, a surface form policy, translation locks | A layer of the translation task; a story does not have it | — |
+| A numeric confidence threshold | The authors themselves call it an uncalibrated middle: the model's self-assessment converges to 0.8 (`ref:docs/storyworm/DECISION-LOG.md:139`) | noise instead of a signal |
+| Specification prose on top of tests | storyworm gave it up: the text retold the tests and went stale. For us this is an argument to keep `improve-loop.md` short and to check the rules with the eval | stale documents |
 
-Брать стоит не механизм, а дисциплину. Утверждение не сильнее самого слабого доказательства (`ref:docs/storyworm/exec-plans/AUDIT.md:85`). Команды субагентов в их плане разработки отложены, а отдачу там ждут от тестов, схемы, adequacy QA и eval (`ref:docs/storyworm/learning-plan.md:278`). У нас многоагентность сворачивается в правило промпта (A, F), в поле схемы (C, D) или в код (B, G, I). Дополнительный вызов допустим только при сжатии (H, J) и только после согласия владельца на правку потока.
+What is worth taking is not a mechanism but a discipline. A claim is no stronger than its weakest evidence (`ref:docs/storyworm/exec-plans/AUDIT.md:85`). Subagent teams are postponed in their development plan, and the payoff there is expected from tests, the schema, adequacy QA and the eval (`ref:docs/storyworm/learning-plan.md:278`). For us, multi-agent work collapses into a prompt rule (A, F), into a schema field (C, D) or into code (B, G, I). An extra call is acceptable only at compaction (H, J) and only after the owner agrees to a change of the flow.
 
-## 5. Проверка
+## 5. Verification
 
-Первый проход. Каждое утверждение проверял отдельный агент по файлу и строке. Его вердикт — подтверждено, исправлено, опровергнуто или не подтверждено. Опровергнутых и неподтверждённых не было, 54 утверждения исправлены. Исправления, которые меняют смысл:
+First pass. A separate agent checked each claim by file and line. Its verdict was confirmed, corrected, refuted or not confirmed. There were no refuted and no unconfirmed claims; 54 claims were corrected. The corrections that change the meaning:
 
-- «Round 12 требует `e{n}` в промпте». Round 12 (`commit:1765807b`) сравнивает размеры контекста по роли и номеру вызова, а `e{n}` появилось в Round 17 (`commit:e194c82f`).
-- «Учёт затрат реализован». В `main` его задаёт только тест: маршрута `/ledger` нет, тест падает.
-- «Политика раскрытия моделирует, кто что знает». Она говорит, что видно и с какого момента, а оси «кто» в ней нет. Поэтому M — перенос по аналогии.
-- «Канон держит две оси времени». Время в мире не хранится. B — наша гипотеза, из storyworm взят только принцип «детерминированное решает код».
-- «Якорь проверяет факт по тексту» (`main:src/storyworm/pipeline.py:58`). Проверяется только диапазон номеров абзацев. I требует больше, чем storyworm делал.
-- «`other` отклонён для вида доказательства». Отклонён для типа сущности, в C и D это перенос.
-- «Любой невалидный выход получает ремонт». Только неизвестный тип сущности, один платный вызов, затем отказ.
-- «Промптов ролей нет». Они зашиты строками в код, и промпт перевода не один.
-- «Приёмка v1.5.0 доказана». Документ прямо оговаривает, что готовой версию не объявляет.
-- «Повтор только при доказанной отправке». Наоборот: только когда запрос точно не ушёл или ответ известен (429/5xx).
-- «SDD и журнал решений отменены по одной причине». SDD устаревал, а журнал решений заменён git.
-- «Шесть решений оператора приняты». Записаны шесть решений, одобрены ли они — источник не говорит.
+- "Round 12 requires `e{n}` in the prompt". Round 12 (`commit:1765807b`) compares context sizes by role and call number, and `e{n}` appeared in Round 17 (`commit:e194c82f`).
+- "Cost accounting is implemented". In `main` only a test defines it: there is no `/ledger` route, and the test fails.
+- "The disclosure policy models who knows what". It says what is visible and from which moment, and it has no "who" axis. So M is a transfer by analogy.
+- "The canon keeps two time axes". The time in the world is not stored. B is our hypothesis; only the principle "code decides what is deterministic" is taken from storyworm.
+- "The anchor checks the fact against the text" (`main:src/storyworm/pipeline.py:58`). Only the range of paragraph numbers is checked. I requires more than storyworm did.
+- "`other` was rejected for the evidence kind". It was rejected for the entity type; in C and D this is a transfer.
+- "Any invalid output gets a repair". Only an unknown entity type, one paid call, then a refusal.
+- "There are no role prompts". They are hardcoded as strings in the code, and there is more than one translation prompt.
+- "The acceptance of v1.5.0 is proven". The document directly states that it does not declare the version ready.
+- "A retry only when the sending is proven". The opposite: only when the request definitely did not go out or the response is known (429/5xx).
+- "The SDD and the decision log were cancelled for one reason". The SDD was going stale, and the decision log was replaced by git.
+- "Six operator decisions were accepted". Six decisions were recorded; the source does not say whether they were approved.
 
-Второй проход: критик перепроверил около 35 ссылок в тексте документа. Три утверждения первого черновика оказались неверными, два — неточными. Всё исправлено выше:
+Second pass: the critic rechecked about 35 references in the text of the document. Three claims of the first draft turned out to be wrong, two were imprecise. Everything is corrected above:
 
-- «В reference-001 модельной QA не было». Модельное наблюдение адекватности было (`ref:apps/storyworm/src/storyworm/translation_pipeline_execution.py:296`), но без гейта.
-- «Экстрактор в коде — заглушка». Заглушка только у каузального экстрактора канона. На живом прогоне факты и термины извлекала модель, результат остался кандидатами.
-- «Переполнение контекста даёт ошибку». Это верно только для сводок. Лор сверх лимита отбрасывается с записанной причиной.
-- Ссылки на лимиты сводок и лора вели не на тот файл. Исправлено на `translation_context_basis.py` и `committed_lore.py:28`.
-- «`basis` совпадает со `STATUSES`». Совпадение только частичное.
+- "reference-001 had no model QA". There was a model observation of adequacy (`ref:apps/storyworm/src/storyworm/translation_pipeline_execution.py:296`), but without a gate.
+- "The extractor in the code is a stub". Only the causal canon extractor is a stub. On the live run a model extracted the facts and terms, and the result remained as candidates.
+- "A context overflow gives an error". This is true only for summaries. Lore above the limit is dropped with a recorded reason.
+- The references to the limits of summaries and lore pointed to the wrong file. Corrected to `translation_context_basis.py` and `committed_lore.py:28`.
+- "`basis` matches `STATUSES`". The match is only partial.
 
-Идеи B, F, M и N опираются на storyworm слабее остальных и помечены как собственные выводы. Числа по simple-story-chat взяты из `docs/improve-log.md` и `docs/improve-loop.md` (шум, двугорбость `dance`, повторы сжатия, судья).
+Ideas B, F, M and N rest on storyworm more weakly than the others and are marked as our own conclusions. The numbers on simple-story-chat are taken from `docs/improve-log.md` and `docs/improve-loop.md` (noise, the bimodality of `dance`, compaction retries, the judge).

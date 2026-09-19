@@ -1,26 +1,26 @@
-# Gemma на арендованном GPU
+# Gemma on a rented GPU
 
-Проверено 17 сентября 2026 на RTX 5090 32 GB: CUDA 13, Q4_K_M и Q6_K, окно 65536 и синтетический вход около 59000 токенов. Это проверка вместимости и протокола; сохранение фактов в истории проверяется отдельно.
+Verified on 17 September 2026 on an RTX 5090 32 GB: CUDA 13, Q4_K_M and Q6_K, a 65536 window and a synthetic input of about 59000 tokens. This is a check of capacity and protocol; whether facts are kept in a story is checked separately.
 
-Бот и SQLite остаются на компьютере или отдельном сервере. На GPU работает только llama.cpp; соединение идёт через SSH. Переносить туда токен Telegram или базу историй не нужно. При каждом запросе сервер модели получает необходимый контекст истории.
+The bot and SQLite stay on the computer or on a separate server. Only llama.cpp runs on the GPU; the connection goes through SSH. You do not need to move the Telegram token or the story database there. With every request the model server receives the story context that it needs.
 
-## Что запускаем
+## What we run
 
-Используется [Gemma 4 31B IT Uncensored Heretic, GGUF](https://huggingface.co/llmfan46/gemma-4-31B-it-uncensored-heretic-GGUF), файл `Q6_K`, 25 201 484 928 байт. Это плотная модель. Указанный в карточке статус uncensored не гарантирует качество повествования или сохранение фактов: это проверяется на историях отдельно.
+We use [Gemma 4 31B IT Uncensored Heretic, GGUF](https://huggingface.co/llmfan46/gemma-4-31B-it-uncensored-heretic-GGUF), file `Q6_K`, 25 201 484 928 bytes. This is a dense model. The uncensored status stated in the model card does not guarantee narration quality or that facts are kept: this is checked on stories separately.
 
-[manifest.env](../gpu/manifest.env) фиксирует ревизию модели, имя файла, размер и SHA256, а также коммит [llama.cpp 0.4.1](https://github.com/ggml-org/llama.cpp/commit/b29c606e28a01b1bc8c1351026a0fa6e616bf6c4). Скрипт проверяет файл после загрузки. Обновление версии — отдельное изменение манифеста и повторная проверка.
+[manifest.env](../gpu/manifest.env) pins the model revision, the file name, the size and the SHA256, and also the commit of [llama.cpp 0.4.1](https://github.com/ggml-org/llama.cpp/commit/b29c606e28a01b1bc8c1351026a0fa6e616bf6c4). The script verifies the file after the download. A version update is a separate change of the manifest and a repeated check.
 
-Для первого прогона выбираем одну RTX 5090 с 32 GB VRAM, не менее 32 GB RAM и 60 GB диска. Нужен CUDA development image с `nvcc`, CUDA 12.8 или новее и совместимым драйвером; архитектура сборки для 5090 — `120`. Аренда On-demand подходит для короткого теста без месячного обязательства. Конкретная цена, плата за диск и трафик проверяются у выбранного предложения. Цена трафика на Vast отличается между машинами в двадцать раз: от $2.6 до $52 за TB. Загрузка весов (25 GB) на машине с $39/TB стоила около доллара — больше часа самой аренды; на машине с $2.6/TB она стоит семь центов. Поэтому сравнивай предложения по сумме «час + загрузка», а не по одной цене часа.
+For the first run we choose one RTX 5090 with 32 GB VRAM, at least 32 GB RAM and 60 GB of disk. You need a CUDA development image with `nvcc`, CUDA 12.8 or newer and a compatible driver; the build architecture for the 5090 is `120`. An On-demand rental fits a short test without a monthly commitment. The exact price, the disk fee and the traffic fee are checked on the chosen offer. The traffic price on Vast differs between machines by a factor of twenty: from $2.6 to $52 per TB. Downloading the weights (25 GB) on a machine with $39/TB cost about one dollar, which is more than an hour of the rental itself; on a machine with $2.6/TB it costs seven cents. So compare offers by the sum "hour + download", not by the hourly price alone.
 
-Прогон выполнен на образе `vastai/base-image:cuda-13.0.3-cudnn-devel-ubuntu24.04-py312-2026-09-07`, digest `sha256:c1d2b5326fae806b04d2c2d97a2b3948d0ccb0026dd3085e9a2ad55e304193f8`, с драйвером 580.142 и nvcc 13.0.88. Запуск SSH direct, 60 GB диска, без опубликованных HTTP-портов. Встречавшийся ранее шаблон CUDA 12.8 не описывает этот проверенный запуск.
+The run was done on the image `vastai/base-image:cuda-13.0.3-cudnn-devel-ubuntu24.04-py312-2026-09-07`, digest `sha256:c1d2b5326fae806b04d2c2d97a2b3948d0ccb0026dd3085e9a2ad55e304193f8`, with driver 580.142 and nvcc 13.0.88. The launch was SSH direct, 60 GB of disk, with no published HTTP ports. The CUDA 12.8 template seen earlier does not describe this verified launch.
 
-В конфигурации родительской модели 60 слоёв: 50 с локальным окном 1024 и 10 с полным вниманием. Запускаем один слот с контекстом 65536, Flash Attention и KV-кэшем Q8. Полный KV-кэш для локальных слоёв не включаем. [Конфигурация модели](https://huggingface.co/llmfan46/gemma-4-31B-it-uncensored-heretic/blob/main/config.json).
+The configuration of the parent model has 60 layers: 50 with a local window of 1024 and 10 with full attention. We run one slot with a context of 65536, Flash Attention and a Q8 KV cache. We do not enable the full KV cache for the local layers. [Model configuration](https://huggingface.co/llmfan46/gemma-4-31B-it-uncensored-heretic/blob/main/config.json).
 
-При microbatch 128 Q4 занимала около 22206 MiB VRAM, Q6 — 28394 MiB; у Q6 оставалось около 4213 MiB. Для входа 59097 токенов первый текст пришёл через 33,8 с на Q4 и 38,4 с на Q6. Повторный запрос использовал 59093 токена кэша и дал первый текст через 5,1 и 4,4 с соответственно. Это единичные измерения, не гарантированная скорость. Длинная проба выявила нарушение указания о фиксированном времени сцены при повторном запросе; считать весь прогон безошибочным нельзя.
+With microbatch 128, Q4 used about 22206 MiB of VRAM and Q6 used 28394 MiB; Q6 had about 4213 MiB left. For an input of 59097 tokens the first text arrived after 33.8 s on Q4 and 38.4 s on Q6. The repeated request used 59093 cached tokens and gave the first text after 5.1 and 4.4 s respectively. These are single measurements, not a guaranteed speed. The long probe found a violation of the instruction about the fixed scene time on the repeated request; the whole run cannot be counted as free of errors.
 
-## Подготовка сервера
+## Preparing the server
 
-После создания экземпляра возьми адрес, SSH-порт и пользователя из Vast. Добавь локальную запись в `~/.ssh/config`; значения ниже — образец:
+After you create the instance, take the address, the SSH port and the user from Vast. Add a local entry to `~/.ssh/config`; the values below are a sample:
 
 ```sshconfig
 Host simple-chat-vast
@@ -31,9 +31,9 @@ Host simple-chat-vast
     IdentitiesOnly yes
 ```
 
-При первом `ssh simple-chat-vast` проверь ключ хоста. Туннель затем требует уже известный ключ и не принимает подмену автоматически.
+On the first `ssh simple-chat-vast` verify the host key. After that the tunnel requires the already known key and does not accept a replaced key automatically.
 
-Из корня проекта загрузи только скрипты:
+From the project root upload only the scripts:
 
 ```sh
 ssh simple-chat-vast 'mkdir -p /workspace/simple-chat/gpu'
@@ -41,7 +41,7 @@ scp gpu/*.sh gpu/server-log.py gpu/manifest.env simple-chat-vast:/workspace/simp
 ssh simple-chat-vast
 ```
 
-В контейнере нужны `git`, `cmake`, `ninja`, `curl`, `python3`, C++ toolchain и CUDA compiler. Для образа на Ubuntu недостающие пакеты можно установить так:
+The container needs `git`, `cmake`, `ninja`, `curl`, `python3`, a C++ toolchain and a CUDA compiler. For an Ubuntu image you can install the missing packages like this:
 
 ```sh
 apt-get update
@@ -50,25 +50,25 @@ bash /workspace/simple-chat/gpu/bootstrap.sh
 bash /workspace/simple-chat/gpu/ensure-server.sh
 ```
 
-`nvcc` должен входить в выбранный development image. Драйвер хоста этим способом не устанавливается. Подготовка скачивает около 25.2 GB весов и собирает `llama-server`. Веса по умолчанию идут через `aria2c` в 16 соединений (если его нет в образе, скрипт ставит его через `apt-get`; не вышло — качает одним `curl`). Загрузка идёт в фоне, пока собирается `llama-server`, и скрипт ждёт её после сборки; на канале 850 Mbit/s веса пришли за шесть минут, раньше конца сборки. `SIMPLE_CHAT_BUILD_JOBS` задаёт число потоков сборки (по умолчанию 4). `SIMPLE_CHAT_DOWNLOAD_CONNECTIONS=1..16` меняет число соединений, `1` возвращает одиночную загрузку. Прерванная параллельная загрузка продолжается с места остановки; SHA256 проверяется как прежде. По умолчанию файлы находятся в `/workspace/simple-chat-gpu`; `ensure-server.sh` оставляет один процесс под `flock` после отключения SSH. В проверенном образе пришлось восстановить отсутствовавшую `libisl.so.23` переустановкой `libisl23 libmpc3 libmpfr6 libgmp10 gcc-13 g++-13 build-essential`, затем заново настроить CMake через `--fresh`.
+`nvcc` must be part of the chosen development image. The host driver is not installed this way. The preparation downloads about 25.2 GB of weights and builds `llama-server`. By default the weights go through `aria2c` with 16 connections (if the image does not have it, the script installs it through `apt-get`; if that fails, the script downloads with a single `curl`). The download runs in the background while `llama-server` is built, and the script waits for it after the build; on an 850 Mbit/s link the weights arrived in six minutes, before the end of the build. `SIMPLE_CHAT_BUILD_JOBS` sets the number of build threads (4 by default). `SIMPLE_CHAT_DOWNLOAD_CONNECTIONS=1..16` changes the number of connections, and `1` brings back the single download. An interrupted parallel download continues from the place where it stopped; SHA256 is verified as before. By default the files are in `/workspace/simple-chat-gpu`; `ensure-server.sh` leaves one process under `flock` after SSH disconnects. In the verified image we had to restore the missing `libisl.so.23` by reinstalling `libisl23 libmpc3 libmpfr6 libgmp10 gcc-13 g++-13 build-essential`, and then configure CMake again with `--fresh`.
 
-За подготовкой удобно следить с компьютера бота: `ssh -t simple-chat-vast bash /workspace/simple-chat/gpu/progress.sh`. Экран обновляется раз в три секунды и показывает скачанный объём весов, скорость за последние полминуты и оставшееся время, а для сборки — пройденные шаги из общего числа и оставшееся время. Скрипт только читает и сам выходит, когда веса проверены и `llama-server` собран. Заявленная в предложении скорость канала ничего не обещает: на машине с «1171 Mbit/s» веса шли с Hugging Face на 115 Mbit/s, около получаса.
+It is convenient to watch the preparation from the bot's computer: `ssh -t simple-chat-vast bash /workspace/simple-chat/gpu/progress.sh`. The screen refreshes once every three seconds and shows the downloaded amount of weights, the speed over the last half minute and the remaining time, and for the build it shows the completed steps out of the total number and the remaining time. The script only reads, and it exits by itself when the weights are verified and `llama-server` is built. The link speed stated in the offer promises nothing: on a machine with "1171 Mbit/s" the weights came from Hugging Face at 115 Mbit/s, about half an hour.
 
-Бот пишет одну сцену за раз, и сервер по умолчанию стартует с одним слотом; клиент бота проверяет это. Исследовательская пачка (`memory-probe.ts --lab`) запускает сервер с `SIMPLE_CHAT_GPU_SLOTS=2..8`: слоты делят один KV-кэш того же размера (`--kv-unified`), память не растёт. На 5 слотах пачка шла 8 с на сцену против 15 с на одном. Перед возвратом бота на GPU сервер перезапускается без этой переменной.
+The bot writes one scene at a time, and the server starts with one slot by default; the bot's client checks this. The research batch (`memory-probe.ts --lab`) starts the server with `SIMPLE_CHAT_GPU_SLOTS=2..8`: the slots share one KV cache of the same size (`--kv-unified`), and memory does not grow. With 5 slots the batch took 8 s per scene against 15 s with one slot. Before the bot returns to the GPU, the server is restarted without this variable.
 
-Сервер слушает только `127.0.0.1:8080`. Публиковать этот HTTP-порт в интернете не требуется. Снимки слотов на диск и дополнительный RAM-кэш снимков отключены; обычный KV-кэш текущего слота остаётся в памяти.
+The server listens only on `127.0.0.1:8080`. You do not need to publish this HTTP port on the internet. Slot snapshots to disk and the additional RAM cache of snapshots are disabled; the ordinary KV cache of the current slot stays in memory.
 
-`server-log.py` сохраняет время запуска и завершения модели, код выхода или сигнал и категории ошибок в `/workspace/simple-chat-gpu/server-events.jsonl`. Исходный вывод сервера обрабатывается только в памяти и не сохраняется: даже сообщение об ошибке может содержать часть запроса. Уровень llama.cpp — только ошибки; логи промптов, JSON-пакетов и core dump отключены. Файл имеет права `0600` и две ротации по 1 MiB. Категория ошибки помогает диагностике, но сама по себе не доказывает её причину.
+`server-log.py` saves the start and end time of the model, the exit code or signal and the error categories to `/workspace/simple-chat-gpu/server-events.jsonl`. The original server output is processed only in memory and is not saved: even an error message can contain a part of the request. The llama.cpp level is errors only; logs of prompts, of JSON packets and core dumps are disabled. The file has `0600` permissions and two rotations of 1 MiB each. The error category helps the diagnosis, but by itself it does not prove the cause of the error.
 
-## Подключение и проверка
+## Connection and check
 
-На компьютере с ботом открой отдельный терминал и запусти:
+On the computer with the bot open a separate terminal and run:
 
 ```sh
 bash gpu/tunnel.sh simple-chat-vast
 ```
 
-В другом терминале, из корня проекта:
+In another terminal, from the project root:
 
 ```sh
 cp -n .env.gpu.example .env.gpu
@@ -77,165 +77,165 @@ npm run model:probe
 npm run model:probe -- --long
 ```
 
-`.env.gpu` содержит настройки модели и управления GPU и дополняет обычный `.env`; токен бота и путь к базе остаются в `.env`. Оба рабочих файла исключены из git. Для собственного HTTPS-шлюза предусмотрены `SIMPLE_CHAT_BASE_URL` и `SIMPLE_CHAT_API_KEY`. Незашифрованный HTTP разрешён только через loopback. Шлюз должен передавать совместимые с указанной версией llama.cpp маршруты, включая `/props` и подсчёт токенов.
+`.env.gpu` contains the settings of the model and of GPU control and adds to the ordinary `.env`; the bot token and the database path stay in `.env`. Both working files are excluded from git. For your own HTTPS gateway there are `SIMPLE_CHAT_BASE_URL` and `SIMPLE_CHAT_API_KEY`. Unencrypted HTTP is allowed only over loopback. The gateway must pass the routes that are compatible with the stated llama.cpp version, including `/props` and token counting.
 
-Проба не обращается к Telegram или базе. Она использует искусственный сюжет и выводит только счётчики и статусы:
+The probe does not contact Telegram or the database. It uses an artificial plot and prints only counters and statuses:
 
-- совпадение имени модели, число слотов и размер контекста;
-- потоковый ответ с датой, отсутствие служебных тегов;
-- повторный запрос с общим префиксом и сообщённое сервером число токенов кэша;
-- отказ до генерации при превышении входного лимита;
-- соблюдение JSON Schema вопреки запросу ответить обычным текстом;
-- отмену во время ответа и успешный запрос после неё;
-- с `--long` — запрос примерно на 60000 входных токенов.
+- the model name matches, the number of slots and the context size;
+- a streamed answer with a date, and no service tags;
+- a repeated request with a shared prefix and the number of cached tokens reported by the server;
+- a refusal before generation when the input limit is exceeded;
+- JSON Schema is followed in spite of a request to answer in plain text;
+- a cancellation during the answer and a successful request after it;
+- with `--long`, a request of about 60000 input tokens.
 
-`firstTextMs` включает подсчёт токенов, очередь и обработку входа. `cachedInputTokens: null` означает отсутствие счётчика, а не нулевой кэш. Проба требует повторного использования входного префикса с допуском 32 токена на границу шаблона; с `--long` проверяется и повтор длинного запроса. Если кэш не используется, проба завершается ошибкой, хотя обычная генерация может работать. Сопоставь счётчики со временем повторного запроса. Наличие отдельного `reasoning_content` также завершает пробу ошибкой. Большой синтетический запрос проверяет вместимость и протокол, но не качество истории.
+`firstTextMs` includes the token counting, the queue and the input processing. `cachedInputTokens: null` means that there is no counter, not that the cache is zero. The probe requires the input prefix to be reused, with a tolerance of 32 tokens at the template boundary; with `--long` the repeat of the long request is checked too. If the cache is not used, the probe ends with an error, although ordinary generation may work. Compare the counters with the time of the repeated request. The presence of a separate `reasoning_content` also ends the probe with an error. A large synthetic request checks capacity and protocol, but not story quality.
 
-Во время длинной пробы проверь память на GPU:
+During the long probe check the memory on the GPU:
 
 ```sh
 nvidia-smi --query-gpu=memory.used,memory.free,utilization.gpu --format=csv
 ```
 
-Начальный microbatch — 128. После измерения VRAM можно перезапустить сервер с `SIMPLE_CHAT_GPU_UBATCH=512` и сравнить те же пробы; это может ускорить обработку длинного входа ценой памяти. Значения скорости до такого прогона не известны. Для диагностики смотри категории в `server-events.jsonl`; не включай сохранение сырого вывода при обработке личных историй.
+The initial microbatch is 128. After you measure VRAM, you can restart the server with `SIMPLE_CHAT_GPU_UBATCH=512` and compare the same probes; this may speed up the processing of a long input at the cost of memory. The speed values are not known before such a run. For diagnosis look at the categories in `server-events.jsonl`; do not enable saving of the raw output when personal stories are processed.
 
-## Переключение бота
+## Switching the bot
 
-После успешной пробы останови текущий процесс бота через Ctrl+C и дождись завершения. Затем в том же проекте:
+After a successful probe stop the current bot process with Ctrl+C and wait until it ends. Then in the same project:
 
 ```sh
 npm run start:gpu
 ```
 
-Используется прежняя база: сиды, ветки и чекпоинты доступны через те же кнопки Telegram. При смене провайдера измерения контекста предыдущей модели не используются для калибровки следующего запроса. Чтобы вернуться к настройкам обычного `.env`, останови GPU-вариант и выполни `npm start`. Два poller-процесса одновременно запускать не нужно.
+The same database is used: seeds, branches and checkpoints are available through the same Telegram buttons. When the provider changes, the context measurements of the previous model are not used to calibrate the next request. To return to the settings of the ordinary `.env`, stop the GPU variant and run `npm start`. Do not run two poller processes at the same time.
 
-Перед генерацией адаптер вызывает `/v1/chat/completions/input_tokens` с тем же телом запроса, которое пойдёт в генерацию. В закреплённой версии оба маршрута используют один шаблон чата и токенизатор. Отсутствие этого маршрута останавливает работу; грубая оценка его не заменяет. [Протокол llama.cpp](https://github.com/ggml-org/llama.cpp/blob/b29c606e28a01b1bc8c1351026a0fa6e616bf6c4/tools/server/README.md).
+Before generation the adapter calls `/v1/chat/completions/input_tokens` with the same request body that will go to generation. In the pinned version both routes use one chat template and one tokenizer. If this route is missing, the work stops; a rough estimate does not replace it. [llama.cpp protocol](https://github.com/ggml-org/llama.cpp/blob/b29c606e28a01b1bc8c1351026a0fa6e616bf6c4/tools/server/README.md).
 
-Для llama.cpp сжатие по умолчанию начинается при 44000 входных токенов, общий контекст — 65536, резерв ответа — 4096. В художественном промпте остаётся максимум 12 абзацев. Порог 44000 даёт запас до технического предела; граница деградации Gemma этим не установлена. Пробы битвы, шахмат и танцев сжимают память вручную три раза при гораздо меньшем контексте. Они проверяют последовательные компакты, но не заменяют проверку качества на 44K.
+For llama.cpp compaction starts by default at 44000 input tokens, the total context is 65536, and the answer reserve is 4096. At most 12 paragraphs stay in the narrative prompt. The 44000 threshold gives a margin before the technical limit; it does not establish the degradation boundary of Gemma. The battle, chess and dance probes compact the memory manually three times at a much smaller context. They check consecutive compactions, but they do not replace a quality check at 44K.
 
-Компакт передаёт llama.cpp JSON Schema через `response_format`: ограничение формата действует при генерации. Затем код проверяет завершение ответа, ссылки на сцены, покрытие и уменьшение запроса. Исходный JSON сохраняется, а `local/prompt.ts` превращает его в текст с датами, типами фактов и источниками без повторного пересказа моделью. Сид, цепочка инкрементов и последние несжатые сцены образуют контекст выбранного чекпоинта. Проверки структуры не подтверждают истинность каждого извлечённого факта.
+Compaction passes a JSON Schema to llama.cpp through `response_format`: the format constraint works during generation. Then the code checks that the answer is complete, the references to scenes, the coverage and that the request became smaller. The original JSON is saved, and `local/prompt.ts` turns it into text with dates, fact types and sources, without a second retelling by the model. The seed, the chain of memory increments and the last uncompacted scenes form the context of the selected checkpoint. The structure checks do not confirm that every extracted fact is true.
 
-При `SIMPLE_CHAT_MEMORY_REPAIR_COVERAGE=true` режим `plain` допускает один дополнительный запрос для пропущенных сцен. По умолчанию эта доработка выключена для отдельной проверки качества памяти. Он получает черновик фактов и предшествующие сцены для понимания, но ссылки в новых фактах могут указывать только на пропущенные сцены. Черновик отдельно не сохраняется: весь инкремент проходит общую проверку и записывается одной транзакцией. Повторный пропуск, обрыв соединения или увеличение размера памяти оставляет исходный контекст без изменений. Счётчик JSON в сообщении прогресса показывает символы, а не токены.
+With `SIMPLE_CHAT_MEMORY_REPAIR_COVERAGE=true` the `plain` mode allows one additional request for missed scenes. By default this repair is turned off, so that memory quality can be checked separately. The additional request receives the draft of facts and the preceding scenes for understanding, but the references in the new facts may point only to the missed scenes. The draft is not saved separately: the whole memory increment passes the common check and is written in one transaction. A repeated miss, a broken connection or a growth of the memory size leaves the original context unchanged. The JSON counter in the progress message shows characters, not tokens.
 
-Q4 и Q6 прошли по три искусственные истории: битва, шахматы и танцы, по 16 сцен и три компакта в каждой. Архивы, ссылки на источники и ветвление проверены; семантические ошибки остались. Q6 выдала неверную шахматную FEN и пропустила в сумме танцевальных повторов тренировку, которая присутствовала в памяти. Успешное сохранение JSON не означает, что модель правильно использует его при продолжении. Входы этих историй оставались ниже 8K токенов. У Q4 и Q6 различались правила суммаризации и представление памяти, поэтому сравнение не изолирует влияние квантования.
+Q4 and Q6 each went through three artificial stories: a battle, chess and dance, with 16 scenes and three compactions in each. The archives, the source references and the branching were checked; semantic errors remained. Q6 produced a wrong chess FEN, and in the sum of dance repetitions it missed a training session that was present in the memory. A successful save of the JSON does not mean that the model uses it correctly when it continues the story. The inputs of these stories stayed below 8K tokens. Q4 and Q6 had different summarization rules and a different memory representation, so the comparison does not isolate the effect of quantization.
 
-Незавершённый поток, вызов инструментов и расхождение счётчиков не становятся готовой сценой. Автоматического повтора генерации после сетевой ошибки нет. Общий таймаут GPU-вызова в примере — 10 минут; отдельного таймаута простоя потока пока нет. Это предел ожидания, не обещание скорости. Отмена закрывает HTTP-поток. Проба после отмены проверяет доступность слота и сообщает задержку; сам по себе успешный следующий ответ ещё не доказывает немедленное прекращение вычислений на сервере.
+An unfinished stream, a tool call and a mismatch of counters do not become a finished scene. There is no automatic retry of generation after a network error. The total timeout of a GPU call in the example is 10 minutes; there is no separate timeout for an idle stream yet. This is a limit of waiting, not a promise of speed. A cancellation closes the HTTP stream. The probe after a cancellation checks that the slot is available and reports the delay; a successful next answer by itself does not yet prove that the computation on the server stopped immediately.
 
-## Фоновое сравнение памяти
+## Background memory comparison
 
-У бота одна очередь вычислений в `local/scheduler.ts`. Запросы пользователей обслуживаются по порядку. Фоновая проба начинает вычисление после 60 секунд без пользовательских запросов. Новый пользовательский запрос отменяет фоновое вычисление; проба повторяет только свой незавершённый шаг. Ответы пользователей автоматически не повторяются.
+The bot has one computation queue in `local/scheduler.ts`. User requests are served in order. A background probe starts a computation after 60 seconds without user requests. A new user request cancels the background computation; the probe repeats only its own unfinished step. User answers are not repeated automatically.
 
-Один фоновый вызов ограничен 90 секундами. Он допускается только при готовой GPU, отсутствии пользовательских заданий и запасе больше 100 секунд до автопаузы. Фон не запускает аренду, не сбрасывает таймер простоя и уступает ручной паузе. Пауза и недоступность проверяются каждую секунду. У модели один слот, поэтому фоновая работа может вытеснить кэш истории и увеличить время до первого текста следующего пользовательского ответа.
+One background call is limited to 90 seconds. It is allowed only when the GPU is ready, there are no user jobs and more than 100 seconds remain before the auto-pause. The background work does not start a rental, does not reset the idle timer and yields to a manual pause. The pause and the unavailability are checked every second. The model has one slot, so the background work can evict the story cache and increase the time to the first text of the next user answer.
 
-После запуска управляемого GPU-профиля бот создаёт Unix-сокет `<путь базы>.model.sock` с правами `0600`. В нём доступны только фоновая генерация и служебный статус. База историй через него недоступна. Для этих проб используй `memory:probe`; прежние `model:probe` и `story:probe` обращаются к модели напрямую и не предназначены для одновременного запуска с работающим тестером.
+After the managed GPU profile starts, the bot creates a Unix socket `<database path>.model.sock` with `0600` permissions. Only background generation and the service status are available in it. The story database is not available through it. For these probes use `memory:probe`; the earlier `model:probe` and `story:probe` contact the model directly and are not meant to run at the same time as a working tester.
 
 ```bash
 npm run memory:probe -- --source /path/to/synthetic/dance/evidence.json --minutes 15
 ```
 
-Источник должен быть результатом `story:probe` для одного из синтетических примеров проекта. Скрипт сверяет сид и все авторские вводы, воспроизводит одни и те же сцены для `plain` и `sgr`, выполняет по три компакта и проверяет ответы на заранее заданные вопросы. Новых художественных сцен он не генерирует. Файл `report.json` в выведенном временном каталоге содержит инкременты, точные счётчики, ответы и ожидаемые значения. В техническом выводе только метаданные.
+The source must be the result of `story:probe` for one of the synthetic examples of the project. The script compares the seed and all author inputs, reproduces the same scenes for `plain` and `sgr`, performs three compactions for each and checks the answers to questions that were set in advance. It does not generate new narrative scenes. The file `report.json` in the printed temporary directory contains the memory increments, the exact counters, the answers and the expected values. The technical output has only metadata.
 
-После остановки можно продолжить с сохранённой точки:
+After a stop you can continue from the saved point:
 
 ```bash
 npm run memory:probe -- --source /path/to/synthetic/dance/evidence.json --resume /tmp/simple-chat-memory-dance-EXAMPLE --minutes 15
 ```
 
-Проба ограничена указанным временем, от 1 до 30 минут. Занятая или остановленная GPU может оставить её незавершённой. Это не результат проверки качества. Для сравнения нужны оба завершённых режима на одном исходном файле и одной модели. Такой прогон оценивает всю схему компакта, включая разный бюджет выхода; он не изолирует влияние одной инструкции SGR и не проверяет качество на 44K.
+The probe is limited to the given time, from 1 to 30 minutes. A busy or stopped GPU can leave it unfinished. This is not a result of a quality check. A comparison needs both modes completed on one source file and one model. Such a run evaluates the whole compaction scheme, including the different output budget; it does not isolate the effect of one SGR instruction and does not check quality at 44K.
 
-## Диагностика сбоев связи
+## Diagnosing connection failures
 
-В ночь на 17 сентября проверки модели и два компакта падали из-за SSH. Сервер модели работал без перезапусков, память GPU была занята как обычно. Новые соединения через туннель зависали, уже открытые продолжали передавать данные. Причину зависаний тогда не установили. Журнал сервера остался на экземпляре и пропал вместе с ним. Поэтому следующую аренду начинай с журналов.
+In the night before 17 September the model checks and two compactions failed because of SSH. The model server worked without restarts, and the GPU memory was used as usual. New connections through the tunnel hung, and the already open ones continued to pass data. The cause of the hangs was not found at that time. The server log stayed on the instance and was lost together with it. So start the next rental with the logs.
 
-### Журнал бота
+### Bot log
 
-Бот пишет технические события в stdout. Без перенаправления они пропадают вместе с терминалом.
+The bot writes technical events to stdout. Without a redirect they are lost together with the terminal.
 
 ```sh
 mkdir -p logs && chmod 700 logs
 npm run start:gpu 2>&1 | tee -ai logs/bot-gpu.jsonl
 ```
 
-Ключ `-i` обязателен. Ctrl+C получает весь конвейер, и обычный `tee` завершается раньше бота. Тогда строки о завершении, включая запрос остановки GPU, в файл не попадают. Каталог `logs/` исключён из git.
+The `-i` flag is required. Ctrl+C goes to the whole pipeline, and an ordinary `tee` ends before the bot. Then the rows about the shutdown, including the GPU stop request, do not reach the file. The `logs/` directory is excluded from git.
 
-### Строки компакта
+### Compaction rows
 
-Каждая строка о запросе пользователя несёт поле `actor`. У владельца из `SIMPLE_CHAT_OWNER_ID` оно равно `owner`, у всех остальных `other`. ID в журнал не попадает. По метке видно, чей был сбой, и для этого не нужно открывать ничью библиотеку. Строки `other` относятся к историям, которые читать нельзя.
+Every row about a user request carries the `actor` field. For the owner from `SIMPLE_CHAT_OWNER_ID` it equals `owner`, for everyone else `other`. The ID does not reach the log. The label shows whose failure it was, and for this you do not need to open anyone's library. The `other` rows belong to stories that must not be read.
 
-Ручной и автоматический компакт пишут одни и те же события:
+Manual and automatic compaction write the same events:
 
-| Событие | Когда |
+| Event | When |
 | --- | --- |
-| `compaction_request_started` | Перед каждым запросом к модели. Это извлечение, повтор с половиной сцен после `context_limit` или дополнение пропущенных сцен. |
-| `compaction_request_completed` | Модель ответила. В строке есть `inputTokens` и `outputTokens` этого запроса. |
-| `memory_compacted` | Память сохранена. В строке есть `factCount`, `inputBytesBefore` и `inputBytesAfter`. |
+| `compaction_request_started` | Before every request to the model. This is an extraction, a retry with half of the scenes after `context_limit`, or a repair request for missed scenes. |
+| `compaction_request_completed` | The model answered. The row has the `inputTokens` and `outputTokens` of this request. |
+| `memory_compacted` | The memory is saved. The row has `factCount`, `inputBytesBefore` and `inputBytesAfter`. |
 
-Раньше успешный автоматический компакт не оставлял в журнале ни одной строки. Сбой по-прежнему пишет одну строку `generation_failed` с `operation: compact`, и теперь в ней те же числа.
+Earlier a successful automatic compaction left no row in the log. A failure still writes one `generation_failed` row with `operation: compact`, and now it has the same numbers.
 
-- `automatic` равно `true`, если компакт запустился сам перед сценой.
-- `sceneCount` показывает, сколько сцен сжимает попытка. После `context_limit` бот повторяет запрос с половиной сцен, и в следующей строке число меньше.
-- `repairSceneCount` показывает, сколько пропущенных сцен бот запросил в дополнении. У первого запроса это ноль.
-- `requestBytes` содержит размер запроса к модели в байтах.
-- `outputCharacters` показывает, сколько символов ответа пришло к моменту записи строки.
-- `elapsedMs` отсчитывается от начала компакта. Длительность одного запроса равна разнице времени между его строками `started` и `completed`.
-- `inputBytesBefore` и `inputBytesAfter` содержат размер запроса следующей сцены до и после сжатия. С ними приходит и ошибка `memory_not_smaller`.
+- `automatic` equals `true` if the compaction started by itself before a scene.
+- `sceneCount` shows how many scenes the attempt compacts. After `context_limit` the bot repeats the request with half of the scenes, and the number in the next row is smaller.
+- `repairSceneCount` shows how many missed scenes the bot asked for in the repair request. For the first request it is zero.
+- `requestBytes` contains the size of the request to the model in bytes.
+- `outputCharacters` shows how many characters of the answer had arrived when the row was written.
+- `elapsedMs` is counted from the start of the compaction. The duration of one request equals the time difference between its `started` and `completed` rows.
+- `inputBytesBefore` and `inputBytesAfter` contain the size of the request for the next scene before and after compaction. The `memory_not_smaller` error comes with them too.
 
-По строке сбоя читается, где оборвался запрос. `provider_failed` с `outputCharacters: 0` означает, что связь пропала до первого символа ответа, пока сервер обрабатывал вход. Ненулевое значение означает обрыв посреди ответа. `memoryReason: coverage` приходит с `sceneCount` и `missingCount`, то есть с числом запрошенных и пропущенных сцен. Если при этом `repairSceneCount` больше нуля, не справилось уже дополнение, и `sceneCount` считает только его сцены.
+The failure row tells where the request broke. `provider_failed` with `outputCharacters: 0` means that the connection was lost before the first character of the answer, while the server processed the input. A non-zero value means a break in the middle of the answer. `memoryReason: coverage` comes with `sceneCount` and `missingCount`, that is, with the number of requested and missed scenes. If `repairSceneCount` is greater than zero in that row, it was the repair request that failed, and `sceneCount` counts only its scenes.
 
-`npm run memory:probe` пишет те же строки для синтетических компактов и ставит время в каждую свою строку. Текста сцен, фактов и идентификаторов в этих строках нет. В журнал проходят только поля из белого списка в `local/model-error.ts`.
+`npm run memory:probe` writes the same rows for synthetic compactions and puts the time into each of its rows. These rows contain no scene text, no facts and no identifiers. Only the fields from the whitelist in `local/model-error.ts` pass into the log.
 
-### Снимок состояния
+### State snapshot
 
 ```sh
 npm run gpu:diagnose
 npm run gpu:diagnose -- --watch 30
 ```
 
-Команда в один и тот же момент спрашивает сервер модели двумя путями. Первый идёт через порт `127.0.0.1:8080`, который пробросил бот. Второй открывает отдельную SSH-сессию и обращается к серверу на его собственном loopback. Сравнение отвечает на вопрос прошлого сбоя: виноват SSH или llama-server.
+At one and the same moment the command asks the model server over two paths. The first path goes through port `127.0.0.1:8080`, which the bot forwarded. The second path opens a separate SSH session and contacts the server on its own loopback. The comparison answers the question of the past failure: is SSH at fault, or llama-server.
 
-Через туннель команда повторяет проверку бота: `/v1/models`, затем `/props`, общий срок 8 секунд. Поэтому её результат можно сопоставлять с событиями `gpu_check_failed` в журнале бота. Имя модели и размер контекста она не сверяет.
+Through the tunnel the command repeats the bot's check: `/v1/models`, then `/props`, with a total deadline of 8 seconds. So its result can be compared with the `gpu_check_failed` events in the bot log. It does not compare the model name and the context size.
 
-Без ключей команда делает один снимок через новую SSH-сессию. С `--watch` она открывает одну сессию, держит её открытой и получает по ней снимок каждые 30 секунд, пока не нажмёшь Ctrl+C. Интервал задаётся от 10 до 3600 секунд. В прошлый раз зависали и новые SSH-сессии, а уже открытые продолжали работать. Поэтому `--watch` нужно запустить в начале аренды, до сбоя. Снимок, запрошенный во время сбоя, скорее всего покажет только `ssh_unreachable`.
+Without flags the command makes one snapshot through a new SSH session. With `--watch` it opens one session, keeps it open and receives a snapshot over it every 30 seconds until you press Ctrl+C. The interval can be set from 10 to 3600 seconds. Last time new SSH sessions hung too, and the already open ones continued to work. So `--watch` must be started at the beginning of the rental, before a failure. A snapshot requested during a failure will most likely show only `ssh_unreachable`.
 
-Команда ничего не меняет на экземпляре и не требует загрузки файлов. Скрипт `gpu/diagnose-remote.py` передаётся в `python3` через ту же SSH-сессию. Команда не читает Telegram, базу историй и вывод сервера. Адреса, сырые ошибки SSH и произвольные строки с удалённой стороны в отчёт не попадают. Каждый снимок выводится одной строкой JSON и дописывается в `logs/gpu-diagnose.jsonl`. SSH-алиас берётся из `SIMPLE_CHAT_GPU_SSH_HOST` в `.env.gpu`, как у бота. Другой алиас задаётся через `--host`. Потерянную сессию `--watch` открывает заново и записывает, чем она закончилась. Забытый на экземпляре процесс наблюдения сам завершается через час.
+The command changes nothing on the instance and does not require uploading files. The script `gpu/diagnose-remote.py` is passed to `python3` through the same SSH session. The command does not read Telegram, the story database or the server output. Addresses, raw SSH errors and arbitrary strings from the remote side do not reach the report. Every snapshot is printed as one line of JSON and is appended to `logs/gpu-diagnose.jsonl`. The SSH alias is taken from `SIMPLE_CHAT_GPU_SSH_HOST` in `.env.gpu`, as for the bot. A different alias is set through `--host`. `--watch` opens a lost session again and records how it ended. A watch process forgotten on the instance ends by itself after one hour.
 
-Вывод записан в поле `reading`:
+The conclusion is written in the `reading` field:
 
-| `reading` | Что произошло |
+| `reading` | What happened |
 | --- | --- |
-| `ok` | Проверка прошла обоими путями. Длительность ответов записана в полях `seconds`. |
-| `no_tunnel` | На локальном порту 8080 никто не слушает. Бот не запущен, GPU на паузе или туннель переподключается. |
-| `ssh_path` | Сервер отвечает у себя, а через туннель ответа нет. Так выглядел сбой 17 сентября. Искать нужно в sshd экземпляра, прокси Vast или сети. |
-| `server` | llama-server не прошёл проверку даже на своём loopback, где на каждый ответ даётся 5 секунд. |
-| `ssh_unreachable` | Отдельная SSH-сессия не открылась или оборвалась. Причина записана в `direct.sshReason` и `direct.exitCode`. |
-| `ssh_stalled` | Сессия `--watch` открыта, но очередной снимок не пришёл вовремя. Значит, встали и уже открытые соединения, чего 17 сентября не было. |
-| `unclear` | Сессия открылась, но отчёта нет. Чаще всего на экземпляре нет `python3`. |
+| `ok` | The check passed over both paths. The duration of the answers is written in the `seconds` fields. |
+| `no_tunnel` | Nothing listens on local port 8080. The bot is not running, the GPU is paused or the tunnel is reconnecting. |
+| `ssh_path` | The server answers on its own side, but there is no answer through the tunnel. This is how the failure of 17 September looked. Look in the sshd of the instance, the Vast proxy or the network. |
+| `server` | llama-server did not pass the check even on its own loopback, where every answer is given 5 seconds. |
+| `ssh_unreachable` | The separate SSH session did not open or broke. The cause is written in `direct.sshReason` and `direct.exitCode`. |
+| `ssh_stalled` | The `--watch` session is open, but the next snapshot did not arrive in time. This means that the already open connections stalled too, which did not happen on 17 September. |
+| `unclear` | The session opened, but there is no report. Most often the instance has no `python3`. |
 
-Остальные поля уточняют вывод:
+The other fields refine the conclusion:
 
-- `remote.processes.sshd.startups` показывает, сколько SSH-соединений ещё не прошли аутентификацию по счёту самого sshd. Начиная с `dropFrom` sshd отбрасывает часть новых соединений, при `dropAllAt` отбрасывает все. `unauthenticated` считает те же соединения по процессам. `sessions` считает открытые сессии без собственной сессии диагностики. Туннель бота даёт одну.
-- `remote.sockets` считает TCP-соединения порта модели на экземпляре. Рост `established` или `closeWait` при `reading: server` указывает на llama-server, который держит старые соединения.
-- `remote.container` показывает пределы самого контейнера. Растущие `throttledPeriods` и `throttledSeconds` означают, что Vast ограничивает контейнеру процессор. `pressure` показывает, какую долю последних 10 секунд процессы ждали процессор, диск или память. При таком ожидании новая SSH-сессия может зависнуть, хотя сеть исправна. Если `pressure.scope` равен `machine`, ядро отдаёт эти числа только для всей машины вместе с чужими контейнерами.
-- `remote.machine` относится ко всей арендованной машине вместе с чужими контейнерами.
-- `remote.gpus` содержит память, загрузку и температуру каждой карты. Значения, которые драйвер не сообщает, пропущены.
-- `remote.failed` перечисляет части снимка, которые не удалось прочитать. Остальные части приходят как обычно.
-- `remote.processes.llamaServer[].ageSeconds` показывает, перезапускался ли сервер.
-- `remote.serverEvents.rows` содержит последние события из `server-events.jsonl`: 25 в одиночном снимке и 5 в каждом снимке `--watch`.
-- `direct.seconds` показывает, сколько длится отдельная SSH-сессия.
+- `remote.processes.sshd.startups` shows how many SSH connections have not yet passed authentication, by the count of sshd itself. Starting from `dropFrom` sshd drops a part of new connections, and at `dropAllAt` it drops all of them. `unauthenticated` counts the same connections by processes. `sessions` counts open sessions without the diagnosis's own session. The bot's tunnel gives one.
+- `remote.sockets` counts the TCP connections of the model port on the instance. A growth of `established` or `closeWait` with `reading: server` points to a llama-server that holds old connections.
+- `remote.container` shows the limits of the container itself. Growing `throttledPeriods` and `throttledSeconds` mean that Vast limits the CPU of the container. `pressure` shows what share of the last 10 seconds the processes waited for CPU, disk or memory. With such waiting a new SSH session can hang although the network is fine. If `pressure.scope` equals `machine`, the kernel gives these numbers only for the whole machine together with other people's containers.
+- `remote.machine` refers to the whole rented machine together with other people's containers.
+- `remote.gpus` contains the memory, the load and the temperature of each card. Values that the driver does not report are omitted.
+- `remote.failed` lists the parts of the snapshot that could not be read. The other parts arrive as usual.
+- `remote.processes.llamaServer[].ageSeconds` shows whether the server was restarted.
+- `remote.serverEvents.rows` contains the last events from `server-events.jsonl`: 25 in a single snapshot and 5 in every `--watch` snapshot.
+- `direct.seconds` shows how long the separate SSH session lasts.
 
-### В начале аренды
+### At the beginning of the rental
 
-Три проверки занимают пару минут и ничего не меняют.
+Three checks take a couple of minutes and change nothing.
 
-1. После запуска бота выполни в отдельном терминале `npm run gpu:diagnose -- --watch 30` и оставь до конца аренды. Первый снимок должен показать `ok`.
-2. Узнай, идёт ли SSH напрямую или через прокси Vast:
+1. After the bot starts, run `npm run gpu:diagnose -- --watch 30` in a separate terminal and leave it until the end of the rental. The first snapshot must show `ok`.
+2. Find out whether SSH goes directly or through the Vast proxy:
 
    ```sh
    ssh -G simple-chat-vast | grep -Ei '^(hostname|port|proxyjump|proxycommand) '
    ```
 
-   Имя вида `sshN.vast.ai` означает прокси. Прямое подключение идёт на IP машины. Вывод содержит адрес, не сохраняй его в проект.
-3. Проверь путь до SSH-хоста. Вместо `HOST` подставь `hostname` из предыдущего шага.
+   A name of the form `sshN.vast.ai` means a proxy. A direct connection goes to the IP of the machine. The output contains an address, do not save it into the project.
+3. Check the path to the SSH host. Put the `hostname` from the previous step in place of `HOST`.
 
    ```sh
    tracepath -n HOST
@@ -244,91 +244,91 @@ npm run gpu:diagnose -- --watch 30
    ping -M do -s 1300 -c 5 HOST
    ```
 
-   Потери на 1472 при успехе на меньших размерах означают проблему с MTU на пути. Разбор прошлого сбоя считает её маловероятной, но не исключает. Если не проходит ни один размер, хост не отвечает на ping и проверка ничего не говорит.
+   Losses at 1472 with success at the smaller sizes mean an MTU problem on the path. The analysis of the past failure considers it unlikely, but does not rule it out. If no size passes, the host does not answer ping and the check tells nothing.
 
-### Во время сбоя
+### During a failure
 
-Ничего не перезапускай, пока `--watch` пишет снимки: они и есть цель аренды. Рядом смотри события `gpu_connection_closed` в журнале бота. Они показывают, как закончился каждый процесс ssh: `connectionAgeMs`, `exitCode`, `signal` и `sshReason`. Момент запуска процесса равен времени события минус `connectionAgeMs`.
+Do not restart anything while `--watch` writes snapshots: they are the very goal of the rental. Next to them look at the `gpu_connection_closed` events in the bot log. They show how each ssh process ended: `connectionAgeMs`, `exitCode`, `signal` and `sshReason`. The start moment of the process equals the event time minus `connectionAgeMs`.
 
-- `keepalive_timeout` означает, что сервер 45 секунд не отвечал на проверки ssh: `ServerAliveInterval=15` и три пропуска. Соединение зависло, но его никто не закрывал.
-- `connection_lost` означает, что соединение закрыла или сбросила удалённая сторона либо узел на пути.
-- `port_in_use` или `authentication` сразу после запуска означают занятый локальный порт 8080 или отказ в аутентификации.
+- `keepalive_timeout` means that the server did not answer the ssh checks for 45 seconds: `ServerAliveInterval=15` and three misses. The connection hung, but nobody closed it.
+- `connection_lost` means that the connection was closed or reset by the remote side or by a node on the path.
+- `port_in_use` or `authentication` right after the start mean a busy local port 8080 or an authentication refusal.
 
-После неудачной попытки бот ждёт 10, затем 20, затем по 30 секунд перед новым запуском ssh. Раньше он запускал ssh на каждой 10-секундной проверке, и прерванные попытки могли копиться на стороне sshd. Туннель, проработавший минуту, переподключается сразу. Пауза и запуск GPU сбрасывают задержку. Пока бот ждёт, его проверки пишут `gpu_check_failed` с `phase: ssh_wait`. Такая строка означает, что ssh в этот момент не запускался.
+After a failed attempt the bot waits 10, then 20, then 30 seconds each time before a new ssh start. Earlier it started ssh on every 10-second check, and interrupted attempts could pile up on the sshd side. A tunnel that worked for a minute reconnects at once. A GPU pause and a GPU start reset the delay. While the bot waits, its checks write `gpu_check_failed` with `phase: ssh_wait`. Such a row means that ssh was not started at that moment.
 
-### Перед удалением экземпляра
+### Before deleting the instance
 
 ```sh
 npm run gpu:diagnose -- --pull
 ```
 
-Команда сохраняет все события `server-events.jsonl` вместе с ротациями в `logs/gpu-server-events-ДАТА.jsonl`. В файл попадают только время, имя события, категория, PID, код выхода и сигнал. После удаления экземпляра взять их будет неоткуда.
+The command saves all events of `server-events.jsonl` together with the rotations to `logs/gpu-server-events-DATE.jsonl`. Only the time, the event name, the category, the PID, the exit code and the signal reach the file. After the instance is deleted, there will be nowhere to get them from.
 
-## Завершение аренды
+## Ending the rental
 
-### Пауза из Telegram
+### Pause from Telegram
 
-Для управления конкретным экземпляром укажи его ID в `.env.gpu` как
-`SIMPLE_CHAT_VAST_INSTANCE_ID`, а ключ — в приватном `.env.gpu` или `.env` как
-`SIMPLE_CHAT_VAST_API_KEY`. Создай отдельный ключ с правами чтения и изменения
-только этого экземпляра. `CONTAINER_API_KEY` в нашем прогоне работал внутри
-контейнера, но с компьютера бота возвращал 401; для локального управления он
-не использовался.
+To control a specific instance, put its ID in `.env.gpu` as
+`SIMPLE_CHAT_VAST_INSTANCE_ID`, and the key in the private `.env.gpu` or `.env` as
+`SIMPLE_CHAT_VAST_API_KEY`. Create a separate key with the rights to read and change
+only this instance. In our run `CONTAINER_API_KEY` worked inside the
+container, but from the bot's computer it returned 401; it was not used for
+local control.
 
-В проверенном интерфейсе ключей Vast ограничения `id` задаются под HTTP-методом:
+In the verified Vast key interface the `id` constraints are set under the HTTP method:
 `api.instance.show` → `GET` → `constraints`, `api.instance.manage` → `PUT` →
-`constraints`; значение ограничения — `{"id":{"eq":INSTANCE_ID}}`. Право
-`api.instance.destroy` → `DELETE` с тем же ограничением нужно только отдельному
-таймеру удаления. Сам бот использует GET/PUT и не создаёт новые аренды.
+`constraints`; the constraint value is `{"id":{"eq":INSTANCE_ID}}`. The right
+`api.instance.destroy` → `DELETE` with the same constraint is needed only by the separate
+deletion timer. The bot itself uses GET/PUT and does not create new rentals.
 
-SSH-алиас `SIMPLE_CHAT_GPU_SSH_HOST` должен указывать на тот же экземпляр с
-проверенным ключом хоста. Положи GPU-скрипты проекта в
-`/workspace/simple-chat/gpu/`. Управляемый бот сам открывает туннель на локальном
-порту 8080 и запускает `ensure-server.sh`; отдельный `gpu/tunnel.sh` при этом не
-нужен. Сначала выполни bootstrap и пробу модели.
+The SSH alias `SIMPLE_CHAT_GPU_SSH_HOST` must point to the same instance with a
+verified host key. Put the project's GPU scripts in
+`/workspace/simple-chat/gpu/`. The managed bot opens the tunnel on local
+port 8080 by itself and runs `ensure-server.sh`; a separate `gpu/tunnel.sh` is not
+needed in this case. First run the bootstrap and the model probe.
 
-В `/model` появятся кнопки «Пауза GPU» и «Запустить GPU»; те же действия доступны
-через `/gpu_pause` и `/gpu_start`. Управление общее для всех допущенных
-пользователей. Пауза ждёт завершения всех активных сцен и сжатий и закрывает
-приём новых заданий. Одна сцена удерживает GPU и во время автоматического
-компакта, и во время следующей за ним генерации.
+The buttons «Пауза GPU» ("Pause GPU") and «Запустить GPU» ("Start GPU") appear in `/model`; the same actions are available
+through `/gpu_pause` and `/gpu_start`. The control is shared by all admitted
+users. The pause waits until all active scenes and compactions end, and it closes
+the intake of new jobs. One scene holds the GPU both during the automatic
+compaction and during the generation that follows it.
 
-`SIMPLE_CHAT_GPU_IDLE_MINUTES=15` задаёт автопаузу через 15 минут после последней
-операции. Проверка выполняется каждые 10 секунд. Просмотр меню и состояния не
-сбрасывает таймер. Обычное сообщение не запускает остановленную аренду.
-После явного запуска бот ждёт доступности GPU, SSH и модели. Свободная карта
-после паузы не гарантирована: Vast может ожидать её освобождения.
+`SIMPLE_CHAT_GPU_IDLE_MINUTES=15` sets an auto-pause 15 minutes after the last
+operation. The check runs every 10 seconds. Viewing the menu and the status does not
+reset the timer. An ordinary message does not start a stopped rental.
+After an explicit start the bot waits until the GPU, SSH and the model are available. A free card
+after a pause is not guaranteed: Vast may wait until it is released.
 
-«На паузе» показывается только после подтверждения остановки со стороны Vast.
-Ошибка API не означает прекращение оплаты. Диск при паузе оплачивается
-отдельно; тариф нужно проверить на карточке экземпляра.
+«На паузе» ("Paused") is shown only after Vast confirms the stop.
+An API error does not mean that the payment stopped. The disk is paid for
+separately during a pause; check the rate on the instance card.
 
-После успешной проверки бот сохраняет готовность максимум на 30 секунд при
-временном сбое API или проверки модели. Повторные ошибки не продлевают этот
-срок. Так единичный сбой не блокирует следующий запрос. Подтверждённая остановка,
-несовпадение экземпляра или модели, ручная пауза и истечение простоя отменяют
-допуск сразу. Срок простоя проверяется и при недоступном API.
+After a successful check the bot keeps the readiness for at most 30 seconds during a
+temporary failure of the API or of the model check. Repeated errors do not extend this
+period. This way a single failure does not block the next request. A confirmed stop,
+a mismatch of the instance or of the model, a manual pause and the expiry of the idle period cancel
+the admission at once. The idle period is checked even when the API is unavailable.
 
-Техническая ошибка содержит безопасный код, HTTP-статус, если он получен,
-этап и известный транспортный код; неизвестные транспортные коды обозначаются
-как `other`. Для SSH сохраняются выход процесса, сигнал и фиксированная категория
-ошибки соединения. Тайм-аут проверки модели отличается от отмены пользователем.
-Тексты промптов, сцен, ошибок сервера и адреса запросов в журнал не попадают.
-Старый общий код `provider_failed` не позволяет восстановить точную причину
-прошлого сбоя или сделать вывод о фильтрации содержания.
+A technical error contains a safe code, the HTTP status if one was received,
+the stage and the known transport code; unknown transport codes are marked
+as `other`. For SSH the process exit, the signal and a fixed category of the
+connection error are saved. A timeout of the model check differs from a cancellation by the user.
+The texts of prompts, of scenes, of server errors and the request addresses do not reach the log.
+The old general code `provider_failed` does not allow you to recover the exact cause
+of a past failure or to draw a conclusion about content filtering.
 
-Таймер работает, пока компьютер с ботом включён и имеет доступ к Vast API.
-Корректное завершение бота также запрашивает остановку GPU; аварийное выключение
-компьютера этого не гарантирует. Для ограниченного теста нужен отдельный срок
-удаления экземпляра и проверка его выполнения. Истории и чекпоинты находятся
-в локальной базе и от паузы не зависят.
+The timer works while the computer with the bot is on and has access to the Vast API.
+A correct shutdown of the bot also requests the GPU stop; an emergency power-off
+of the computer does not guarantee this. A limited test needs a separate deletion
+deadline for the instance and a check that it was carried out. Stories and checkpoints are
+in the local database and do not depend on the pause.
 
-### Удаление
+### Deletion
 
-Оплата аренды поминутная, поэтому пауза дольше двух-трёх минут — повод остановить машину: работа стоит около $0.01 в минуту, хранение остановленной — $0.017 в час. Но диск привязан к хосту, и пока машина остановлена, её карту может занять другой арендатор; хранение при этом продолжает списываться. Правило: пауза внутри рабочей сессии (до двух-трёх часов) — останавливай, и если машина не поднялась за пару минут, удаляй и бери другую, потеря — цент; «на сегодня всё» или срок возврата неизвестен — удаляй сразу: подготовка с нуля на хорошем канале стоит около $0.15 и 15 минут, ночь хранения — $0.20.
+The rental is billed per minute, so a pause longer than two or three minutes is a reason to stop the machine: running costs about $0.01 per minute, and storage of a stopped machine costs $0.017 per hour. But the disk is tied to the host, and while the machine is stopped, another renter can take its card; the storage is still charged during that time. The rule: for a pause inside a work session (up to two or three hours), stop the machine, and if the machine did not come up within a couple of minutes, delete it and take another one, the loss is one cent; for "that is all for today" or when the return time is unknown, delete at once: a preparation from zero on a good link costs about $0.15 and 15 minutes, and a night of storage costs $0.20.
 
-Остановка процесса модели или SSH-туннеля не прекращает аренду. Управляемый бот запрашивает остановку через API при корректном завершении, но результат нужно подтвердить в Vast. Экземпляр нужно остановить или удалить на стороне сервиса; при остановке хранение диска продолжает оплачиваться. Перед удалением проверь, где лежат нужные файлы, и сохрани журнал сервера через `npm run gpu:diagnose -- --pull`. В описанной схеме истории находятся на машине бота, а на GPU — загружаемые заново веса и сборка. [Правила оплаты Vast](https://docs.vast.ai/guides/instances/pricing).
+Stopping the model process or the SSH tunnel does not end the rental. The managed bot requests the stop through the API on a correct shutdown, but the result must be confirmed in Vast. The instance must be stopped or deleted on the side of the service; after a stop the disk storage is still paid for. Before the deletion check where the files that you need are, and save the server log through `npm run gpu:diagnose -- --pull`. In the described scheme the stories are on the bot's machine, and the GPU has the weights, which are downloaded again, and the build. [Vast billing rules](https://docs.vast.ai/guides/instances/pricing).
 
-`gpu/trial-onstart.sh` предназначен только для одноразового прогона на искусственных историях. В качестве Vast onstart-скрипта он сохраняет первоначальный срок и запрашивает удаление собственного экземпляра через три часа; повторный запуск не продлевает срок. Он использует только выданный этому экземпляру `CONTAINER_API_KEY`. Можно передать `SIMPLE_CHAT_SSH_PUBLIC_KEY`, чтобы добавить публичный ключ только внутри этого контейнера. Скрипт не является денежным лимитом Vast: отключённый контейнер не выполняет свой таймер, а сетевой сбой может задержать удаление. Нужна внешняя проверка завершения аренды. Не используй такой шаблон для постоянной работы с данными.
+`gpu/trial-onstart.sh` is meant only for a one-time run on artificial stories. As a Vast onstart script it saves the initial deadline and requests the deletion of its own instance after three hours; a repeated start does not extend the deadline. It uses only the `CONTAINER_API_KEY` issued to this instance. You can pass `SIMPLE_CHAT_SSH_PUBLIC_KEY` to add a public key only inside this container. The script is not a Vast money limit: a disconnected container does not run its timer, and a network failure can delay the deletion. An external check that the rental ended is needed. Do not use such a template for permanent work with data.
 
-SSH защищает передачу данных. Администратор арендованного хоста всё равно контролирует машину, на которой обрабатывается промпт; это нужно учитывать при выборе места для личных историй.
+SSH protects the data in transit. The administrator of the rented host still controls the machine on which the prompt is processed; take this into account when you choose a place for personal stories.

@@ -1,152 +1,152 @@
-# Подключение моделей
+# Model connections
 
-Обновлено 17 сентября 2026: один интерфейс генерации, отдельные адаптеры для разных способов вызова. Реализованы `claude-code` и `llama-cpp`. Haiku проверен живым коротким вызовом; Gemma Q4_K_M и Q6_K запущены на RTX 5090, включая синтетический вход около 59K токенов. [Подготовка и измерения GPU](gpu.md). Прямой `anthropic-api` пока не реализован.
+Updated 17 September 2026: one generation interface, separate adapters for different ways of calling a model. `claude-code` and `llama-cpp` are implemented. Haiku was checked with a short live call; Gemma Q4_K_M and Q6_K were run on an RTX 5090, including a synthetic input of about 59K tokens. [GPU setup and measurements](gpu.md). The direct `anthropic-api` adapter is not implemented yet.
 
-| Адаптер | Пример | Как вызывается |
+| Adapter | Example | How it is called |
 | --- | --- | --- |
-| `llama-cpp` | Gemma 4 на своём или арендованном GPU | HTTP-запрос к серверу модели |
-| `anthropic-api` | Haiku по API-ключу | HTTP-запрос к Anthropic |
-| `claude-code` | Haiku через учётную запись Claude | Официальный CLI/SDK в процессе на компьютере или сервере |
-| `openai-compatible` | Gemma 4 на OpenRouter, модели OpenAI | HTTP-запрос к размещённому API; по умолчанию только синтетические пробы |
-| `codex-cli` | модели OpenAI через учётную запись ChatGPT | Официальный Codex CLI (`codex exec --json`) в процессе на компьютере; по умолчанию только синтетические пробы |
+| `llama-cpp` | Gemma 4 on an own or rented GPU | HTTP request to the model server |
+| `anthropic-api` | Haiku with an API key | HTTP request to Anthropic |
+| `claude-code` | Haiku through a Claude account | The official CLI/SDK in a process on a computer or server |
+| `openai-compatible` | Gemma 4 on OpenRouter, OpenAI models | HTTP request to a hosted API; by default only synthetic probes |
+| `codex-cli` | OpenAI models through a ChatGPT account | The official Codex CLI (`codex exec --json`) in a process on the computer; by default only synthetic probes |
 
-Новый способ вызова добавляется отдельным адаптером. Его подключение не требует менять Telegram-интерфейс, формат сохранённых сообщений или логику продолжения истории.
+A new way of calling a model is added as a separate adapter. Connecting it does not require changes to the Telegram interface, to the format of saved messages, or to the story continuation logic.
 
-## Минимальный интерфейс
+## Minimal interface
 
 ```js
 const result = await provider.generate(
   { system, messages, maxOutputTokens, estimatedInputTokens, outputSchema },
-  { onText: async (delta) => { /* показать новую часть текста */ }, signal, inputLimitTokens },
+  { onText: async (delta) => { /* show the new part of the text */ }, signal, inputLimitTokens },
 );
 // result: { text, finishReason, usage? }
 ```
 
-Модель, адрес и авторизация задаются при создании адаптера. Запрос содержит правила и сообщения диалога в порядке записи. `onText` получает только новые части художественного текста, без служебных событий и рассуждений. Успешный результат возвращается после подтверждённого завершения; `finishReason` различает обычное окончание и предел длины ответа. Обрыв потока является ошибкой.
+The model, the address and the authorization are set when the adapter is created. A request contains the rules and the dialog messages in the order they were recorded. `onText` receives only new parts of the story text, without service events and without reasoning. A successful result is returned after a confirmed completion; `finishReason` distinguishes a normal end from the response length limit. A broken stream is an error.
 
-Токены и расходы возвращаются в `usage`, когда подключение их сообщает. Неизвестные значения не заменяем нулём. Подсчёт входа и проверка доступного контекста выполняются средствами конкретного адаптера: у llama.cpp и Anthropic они различаются, а CLI требует отдельной проверки. Оценку не выдаём за точный подсчёт. Ограничение 64K нельзя объявить проверенным для нового подключения без такой проверки.
+Tokens and costs are returned in `usage` when the connection reports them. We do not replace unknown values with zero. Input counting and the check of the available context are done with the means of the specific adapter: they differ between llama.cpp and Anthropic, and the CLI needs a separate check. We do not present an estimate as an exact count. The 64K limit cannot be declared verified for a new connection without such a check.
 
-Адаптер может предоставлять `countInput(request, { signal })` для точного подсчёта до решения о сжатии и `check()` для проверки сервера при запуске. Подключение выбирает `local/model.ts`; безопасные коды ошибок определены в `local/model-error.ts`.
+An adapter may provide `countInput(request, { signal })` for an exact count before the compaction decision, and `check()` to check the server at startup. `local/model.ts` selects the connection; the safe error codes are defined in `local/model-error.ts`.
 
-Ошибки недоступности, авторизации, лимита контекста и лимита использования приводятся к понятному приложению виду. Сбой отправки ответа в Telegram не запускает повторную генерацию.
+Errors of unavailability, authorization, context limit and usage limit are converted to a form the application understands. A failure to send the response to Telegram does not start a second generation.
 
-## Где выполняется вызов
+## Where the call runs
 
-Пока аккаунт владельца находится в листе ожидания Telegram Serverless, бот запускается на компьютере командой `npm start`. Он вызывает Claude Code на той же машине. Рабочий код находится в `local/`.
+While the owner's account is on the Telegram Serverless waiting list, the bot is started on a computer with the command `npm start`. It calls Claude Code on the same machine. The working code is in `local/`.
 
-HTTP-подключения можно вызывать из Telegram Serverless. Claude Code требует отдельного процесса: в Serverless нет среды Node и запуска локальных команд. Если бот остаётся в Telegram Serverless, для CLI понадобится внешний процесс с аутентифицированным соединением. При локальном запуске бота CLI можно вызывать непосредственно. Эта разница находится внутри подключения модели.
+HTTP connections can be called from Telegram Serverless. Claude Code needs a separate process: Serverless has no Node environment and cannot run local commands. If the bot stays in Telegram Serverless, the CLI will need an external process with an authenticated connection. When the bot runs locally, the CLI can be called directly. This difference is inside the model connection.
 
-История хранится у приложения. Сессия провайдера не становится единственным местом хранения диалога. При смене подключения приложение передаёт сохранённые сообщения и заново проверяет доступный контекст. Инструменты агента в режиме рассказчика отключаются: задача вызова — вернуть текст истории.
+The story is stored by the application. The provider's session does not become the only place where the dialog is stored. When the connection changes, the application passes the saved messages and checks the available context again. Agent tools are turned off in narrator mode: the task of the call is to return story text.
 
-## Claude Code и tmux
+## Claude Code and tmux
 
-Для первого прогона выбран Claude Code с подпиской. tmux держит локальный процесс бота, а адаптер на каждое продолжение запускает `claude -p`, передаёт собранный диалог через stdin и читает stdout как `stream-json`. Содержимое экрана tmux и файлы сессий Claude не служат протоколом обмена. История остаётся в базе приложения.
+Claude Code with a subscription was chosen for the first run. tmux keeps the local bot process, and for each continuation the adapter starts `claude -p`, passes the assembled dialog through stdin, and reads stdout as `stream-json`. The contents of the tmux screen and the Claude session files are not used as an exchange protocol. The story stays in the application database.
 
-В установленном Claude Code 2.1.273 проверены флаги `--tools ""`, `--safe-mode`, `--strict-mcp-config` и `--no-session-persistence`. Они позволяют отключить встроенные инструменты, пользовательские настройки и расширения, не подключать MCP и не сохранять сессию Claude. В реализации явно передаём пустую конфигурацию MCP и проверяем список инструментов в событии `system/init`. Для подписки не используем `--bare`: этот режим отключает OAuth и требует отдельной авторизации API.
+In the installed Claude Code 2.1.273 the flags `--tools ""`, `--safe-mode`, `--strict-mcp-config` and `--no-session-persistence` were checked. They make it possible to turn off the built-in tools, user settings and extensions, to connect no MCP, and to not save the Claude session. In the implementation we explicitly pass an empty MCP configuration and check the tool list in the `system/init` event. We do not use `--bare` with a subscription: this mode turns off OAuth and requires a separate API authorization.
 
-Потоковый вывод включается через `--output-format stream-json --verbose --include-partial-messages`. Адаптер читает текстовые фрагменты до итогового события `result` и проверяет успешное завершение. Полный поток и необработанный stderr не записываются в технические логи или экран tmux: они могут содержать текст истории. В терминале остаются только состояние процесса и безопасные диагностические сведения. Отключение сохранения сессии не означает отсутствия любой внутренней диагностики CLI; это нужно проверить перед тестированием чужих историй.
+Streaming output is turned on with `--output-format stream-json --verbose --include-partial-messages`. The adapter reads text fragments until the final `result` event and checks for successful completion. The full stream and the raw stderr are not written to the technical logs or to the tmux screen: they may contain story text. Only the process state and safe diagnostic information stay in the terminal. Turning off session saving does not mean that the CLI has no internal diagnostics at all; this must be checked before testing other people's stories.
 
-Адаптер находится в `local/claude.ts`. Он проверяет пустые списки инструментов/MCP и выбранную модель в `system/init`, а также успешный `result` и завершение процесса. Итоговый художественный текст собирается из текстовых частей потока: отдельное `result.result` может оказаться неполным. Несовпадение отмечается безопасным техническим событием без текста. Таймаут задаётся `SIMPLE_CHAT_MODEL_TIMEOUT_MS`, по умолчанию 300 секунд. Превышение возвращает отдельный код `timeout`; незавершённый ответ не становится сценой или инкрементом. `/cancel` останавливает вызов. Промпт и диалог не сохраняются в технические логи; диагностический файл CLI направлен в `/dev/null`, сохранение сессии и телеметрия отключены. Перед передачей чужих историй нужно отдельно проверить поведение выбранного провайдера.
+The adapter is in `local/claude.ts`. It checks the empty tool/MCP lists and the selected model in `system/init`, and also the successful `result` and the process exit. The final story text is assembled from the text parts of the stream: a separate `result.result` may be incomplete. A mismatch is recorded as a safe technical event without text. The timeout is set by `SIMPLE_CHAT_MODEL_TIMEOUT_MS`, 300 seconds by default. Exceeding it returns a separate code `timeout`; an unfinished response does not become a scene or a memory increment. `/cancel` stops the call. The prompt and the dialog are not saved to the technical logs; the CLI diagnostic file is directed to `/dev/null`, session saving and telemetry are turned off. Before passing other people's stories, the behavior of the chosen provider must be checked separately.
 
-`usage` содержит нормализованные `inputTokens`, `outputTokens`, `totalTokens` последнего запроса модели; неизвестное значение равно `null`. Во вход входят `input_tokens`, `cache_creation_input_tokens` и `cache_read_input_tokens`. Промежуточный `assistant.message.usage.output_tokens` не используется как длина ответа: это начальный счётчик. Окончательное значение берётся из `message_delta`; его накопительные значения не складываются. Агрегированный `result.usage` допустим только как запасной источник для подтверждённого одиночного ответа. [Счётчики Claude Code](https://code.claude.com/docs/en/agent-sdk/cost-tracking#read-output-tokens-from-the-result-message).
+`usage` contains the normalized `inputTokens`, `outputTokens`, `totalTokens` of the last model request; an unknown value is `null`. The input includes `input_tokens`, `cache_creation_input_tokens` and `cache_read_input_tokens`. The intermediate `assistant.message.usage.output_tokens` is not used as the response length: it is an initial counter. The final value is taken from `message_delta`; its cumulative values are not added together. The aggregated `result.usage` is allowed only as a fallback source for a confirmed single response. [Claude Code counters](https://code.claude.com/docs/en/agent-sdk/cost-tracking#read-output-tokens-from-the-result-message).
 
-Счётчики сохраняются с готовой сценой до отправки Telegram. Процент перед сценой и команда `/context` работают отдельно от промпта. Размер чекпоинта вычисляется из его `head` и цепочки `memory`; будущие сцены и соседние ветки не учитываются. Префикс составляет сид плюс инкременты, полный снимок также включает ещё не сжатые сцены. Байты измеряются для сериализованных частей запроса; оценка токенов отдельных компонентов равна UTF-8 байтам / 4 с округлением вверх.
+The counters are saved with the finished scene before it is sent to Telegram. The percentage before a scene and the `/context` command work separately from the prompt. The size of a checkpoint is computed from its `head` and its `memory` chain; future scenes and neighboring branches are not counted. The prefix consists of the seed plus the memory increments; the full snapshot also includes the scenes that are not compacted yet. Bytes are measured for the serialized parts of the request; the token estimate of individual components equals UTF-8 bytes / 4, rounded up.
 
-Оценка всего входа опирается на сохранённый замер предыдущего запроса, если совпадают модель, системный промпт и цепочка памяти. К этому замеру добавляется оценка изменившегося текста по байтам / 4. Без подходящего замера используются байты / 4 плюс 4096 резерва на CLI. Поле `estimatedInputTokens` не сериализуется в сообщения модели. На старте потока адаптер проверяет реальные входные токены вместе с кэшем; превышение `inputLimitTokens` останавливает вызов до показа текста. Большой вход без счётчиков не допускается. Это не локальный точный токенизатор: обработка запроса у провайдера уже могла начаться. Лимит ответа передаётся через `CLAUDE_CODE_MAX_OUTPUT_TOKENS`. [Переменные Claude Code](https://code.claude.com/docs/en/env-vars).
+The estimate of the whole input relies on the saved measurement of the previous request, if the model, the system prompt and the memory chain match. An estimate of the changed text, by bytes / 4, is added to this measurement. Without a suitable measurement, bytes / 4 plus a 4096 reserve for the CLI is used. The `estimatedInputTokens` field is not serialized into the model messages. At the start of the stream the adapter checks the real input tokens together with the cache; exceeding `inputLimitTokens` stops the call before any text is shown. A large input without counters is not allowed. This is not a local exact tokenizer: the provider may have already started processing the request. The response limit is passed through `CLAUDE_CODE_MAX_OUTPUT_TOKENS`. [Claude Code variables](https://code.claude.com/docs/en/env-vars).
 
-`local/generation.ts` сжимает старый непрерывный префикс сцен перед продолжением: по умолчанию при 44000 входных токенов для llama.cpp и 54000 для Claude Code. Последние четыре сцены и новый ввод не попадают в сжимаемый диапазон. Суммаризатор возвращает JSON с фактами, временем и ссылками на исходные сцены. Проверяются схема, ссылки, охват всех переданных сцен, полное завершение ответа и уменьшение запроса. Проверка структуры не доказывает точность пересказа: исходные сцены и чекпоинты до/после остаются доступными. Новый инкремент добавляется к прежней памяти атомарно и только для ещё действующего задания. На одно продолжение допускается не больше четырёх сжатий; слишком большой запрос суммаризатора уменьшается делением старого префикса пополам, максимум восемь попыток. Отмена, ошибка формата и поздний ответ не могут применить непроверенную память.
+`local/generation.ts` compacts the old continuous prefix of scenes before a continuation: by default at 44000 input tokens for llama.cpp and 54000 for Claude Code. The last four scenes and the new input are not part of the compacted range. The summarizer returns JSON with facts, time and references to the source scenes. The schema, the references, the coverage of all passed scenes, the full completion of the response and the reduction of the request are checked. The structure check does not prove that the retelling is accurate: the source scenes and the checkpoints before/after stay available. A new memory increment is added to the previous memory atomically and only for a job that is still valid. At most four compactions are allowed per continuation; a summarizer request that is too large is reduced by splitting the old prefix in half, eight attempts at most. A cancellation, a format error and a late response cannot apply unverified memory.
 
-Необязательное поле `outputSchema` используется llama.cpp для ограниченной схемой генерации JSON через `response_format`; у Claude Code пока остаются инструкция о JSON и проверка полученного результата. Сохранённая память остаётся JSON. `local/prompt.ts` строит из неё текст с датами, видами фактов и ссылками, сохраняя порядок инкрементов и не вычисляя новое состояние.
+The optional `outputSchema` field is used by llama.cpp for schema-constrained JSON generation through `response_format`; for Claude Code, for now, there is still the instruction about JSON and the check of the received result. The saved memory stays JSON. `local/prompt.ts` builds from it a text with dates, fact kinds and references, keeping the order of the memory increments and not computing a new state.
 
-`SIMPLE_CHAT_MEMORY_MODE=plain` сохраняет прежнее извлечение фактов. Экспериментальный `sgr` в `local/memory.ts` задаёт последовательность `evidence → conflicts → facts`. Сначала модель выписывает точные цитаты из новых сцен, затем отмечает противоречия между вводом и продолжением, затем формирует факты с явным статусом события. План, отмена и неопределённость получают отдельные статусы. Это применение принципа Schema-Guided Reasoning, без установки отдельного агентного фреймворка.
+`SIMPLE_CHAT_MEMORY_MODE=plain` keeps the previous fact extraction. The experimental `sgr` in `local/memory.ts` sets the sequence `evidence → conflicts → facts`. First the model writes out exact quotes from the new scenes, then it marks contradictions between the input and the continuation, then it forms facts with an explicit event status. A plan, a cancellation and an uncertainty get separate statuses. This is an application of the Schema-Guided Reasoning principle, without installing a separate agent framework.
 
-Код проверяет каждую цитату в указанном источнике, уникальность идентификаторов, ссылки фактов и охват всех сжимаемых сцен. Обнаруженный конфликт должен попасть в итоговые факты. Эти проверки не доказывают, что модель нашла все противоречия или верно их поняла. Невалидный или незавершённый ответ не меняет память. Архив свидетельств хранится с инкрементом, а в следующие промпты входят только факты. Старые чекпоинты не переписываются.
+The code checks every quote in the stated source, the uniqueness of identifiers, the references of the facts and the coverage of all compacted scenes. A detected conflict must get into the final facts. These checks do not prove that the model found all contradictions or understood them correctly. An invalid or unfinished response does not change the memory. The evidence archive is stored with the memory increment, and only the facts go into the next prompts. Old checkpoints are not rewritten.
 
-SGR получает до 8192 выходных токенов, обычный компакт до 4096. Это максимумы, не заданная длина инкремента. Фактические счётчики провайдера сохраняются с памятью. Перед включением SGR для пользователей сравни его с обычным режимом на своей модели через [фоновую пробу](gpu.md#фоновое-сравнение-памяти).
+SGR gets up to 8192 output tokens, ordinary compaction up to 4096. These are maximums, not a set length of the memory increment. The actual provider counters are saved with the memory. Before turning on SGR for users, compare it with the ordinary mode on your own model with the [background probe](gpu.md#background-memory-comparison).
 
-## Подписка и первый запуск
+## Subscription and first start
 
-Подключение по подписке использует поддерживаемую авторизацию конкретного CLI/SDK. На проверенной странице Anthropic есть уточнение: объявленный переход на отдельные кредиты приостановлен; Agent SDK и `claude -p` при авторизации через подписку продолжают использовать её лимиты. API-ключ означает другой способ оплаты. [Условия Anthropic](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan).
+A subscription connection uses the supported authorization of the specific CLI/SDK. The checked Anthropic page has a clarification: the announced move to separate credits is paused; the Agent SDK and `claude -p`, when authorized through a subscription, continue to use its limits. An API key means a different way of paying. [Anthropic terms](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan).
 
-Первичную пробу проводим сами на Claude Haiku 4.5: один сид и несколько продолжений, проверка цикла «сид → сцена → сообщение → продолжение», потокового вывода и сохранения диалога. Идентификатор API — `claude-haiku-4-5-20251001`. [Модели Anthropic](https://platform.claude.com/docs/en/models/overview).
+We do the initial probe ourselves on Claude Haiku 4.5: one seed and several continuations, a check of the cycle "seed → scene → message → continuation", of streaming output and of saving the dialog. The API identifier is `claude-haiku-4-5-20251001`. [Anthropic models](https://platform.claude.com/docs/en/models/overview).
 
-После нашего прогона тестер глубже проверяет истории на Gemma 4 Uncensored. Для GPU используется плотная сборка 31B Heretic Q6_K, зафиксированная в [манифесте](../gpu/manifest.env). Вместимость проверена отдельно от качества памяти. Тестер сам сообщает о проблемах; его переписку не читаем и не выгружаем для отладки. Адаптеры не записывают текст запросов, ответов или необработанных ошибок провайдера в технические логи. [Правила приватности тестера](../README.md#приватность).
+After our run, the tester checks stories more deeply on Gemma 4 Uncensored. For the GPU, the dense build 31B Heretic Q6_K is used, fixed in the [manifest](../gpu/manifest.env). Capacity was checked separately from memory quality. The tester reports problems themselves; we do not read their correspondence and do not export it for debugging. The adapters do not write the text of requests, of responses or of raw provider errors to the technical logs. [Tester privacy rules](../README.md#privacy).
 
-Другие подключения добавляем через тот же интерфейс по мере необходимости. Контракт проверяется на передаче диалога, порядке частей потока, завершении и обрыве. Чекпоинты, ветвление и автоматическое сжатие используют библиотеку историй.
+We add other connections through the same interface as needed. The contract is checked on passing the dialog, on the order of the stream parts, on completion and on a broken stream. Checkpoints, branching and automatic compaction use the story library.
 
 ## llama.cpp
 
-`local/llama.ts` вызывает закреплённую версию llama.cpp по HTTP через SSH-туннель либо HTTPS-шлюз. Это адаптер llama.cpp, а не обещание совместимости с любым OpenAI-подобным API. На старте проверяются имя модели, один слот и достаточный контекст на слот.
+`local/llama.ts` calls a pinned version of llama.cpp over HTTP through an SSH tunnel or an HTTPS gateway. This is a llama.cpp adapter, not a promise of compatibility with any OpenAI-like API. At startup the model name, a single slot and a sufficient context per slot are checked.
 
-Подсчёт `/v1/chat/completions/input_tokens` и генерация `/v1/chat/completions` получают одинаковое тело запроса. Сервер применяет к ним один шаблон чата. Соседние сообщения одной роли объединяются, рассуждения отключаются параметрами шаблона, а отдельные `reasoning_content` не показываются пользователю. Суммаризация использует более низкую температуру, чем художественный ответ.
+The count `/v1/chat/completions/input_tokens` and the generation `/v1/chat/completions` receive the same request body. The server applies one chat template to both. Neighboring messages of the same role are merged, reasoning is turned off by template parameters, and separate `reasoning_content` is not shown to the user. Summarization uses a lower temperature than the story response.
 
-До отправки запроса на генерацию точный вход проверяется с резервом под выход. Сообщённый в конце `prompt_tokens` должен совпасть с предварительным подсчётом. Кэш входит в полный вход и повторно к нему не прибавляется. Обрыв без события завершения, инструменты и несогласованные счётчики отклоняются. Отмена и таймаут закрывают запрос; автоматического повторения нет. [Закреплённая документация сервера](https://github.com/ggml-org/llama.cpp/blob/b29c606e28a01b1bc8c1351026a0fa6e616bf6c4/tools/server/README.md).
+Before the generation request is sent, the exact input is checked with a reserve for the output. The `prompt_tokens` reported at the end must match the preliminary count. The cache is part of the full input and is not added to it a second time. A break without a completion event, tools, and inconsistent counters are rejected. A cancellation and a timeout close the request; there is no automatic retry. [Pinned server documentation](https://github.com/ggml-org/llama.cpp/blob/b29c606e28a01b1bc8c1351026a0fa6e616bf6c4/tools/server/README.md).
 
-Технические источники: [потоковый вывод Claude Code](https://code.claude.com/docs/en/headless#stream-responses), [подсчёт токенов Anthropic](https://platform.claude.com/docs/en/build-with-claude/token-counting), [llama.cpp server](https://github.com/ggml-org/llama.cpp/tree/master/tools/server), [SDK Telegram Serverless](tgcloud-sdk.md).
+Technical sources: [Claude Code streaming output](https://code.claude.com/docs/en/headless#stream-responses), [Anthropic token counting](https://platform.claude.com/docs/en/build-with-claude/token-counting), [llama.cpp server](https://github.com/ggml-org/llama.cpp/tree/master/tools/server), [Telegram Serverless SDK](tgcloud-sdk.md).
 
 ## Codex CLI: `codex-cli`
 
-`local/codex.ts` запускает установленный `codex exec --json` так же, как `local/claude.ts` запускает Claude Code: вход через собственную авторизацию CLI (`CODEX_HOME`), `OPENAI_API_KEY`, `CODEX_API_KEY` и `OPENAI_BASE_URL` из окружения процесса удаляются, чтобы запрос не ушёл на другой счёт или другой сервер. `SIMPLE_CHAT_MODEL` обязателен: набор моделей зависит от тарифа учётной записи (на ChatGPT-аккаунте, например, `gpt-5.4-mini` недоступна).
+`local/codex.ts` starts the installed `codex exec --json` the same way `local/claude.ts` starts Claude Code: login goes through the CLI's own authorization (`CODEX_HOME`); `OPENAI_API_KEY`, `CODEX_API_KEY` and `OPENAI_BASE_URL` are removed from the process environment, so that the request does not go to a different account or a different server. `SIMPLE_CHAT_MODEL` is required: the set of models depends on the plan of the account (on a ChatGPT account, for example, `gpt-5.4-mini` is not available).
 
-Codex — агент с оболочкой, а рассказчику она не нужна. Запрос идёт с `--ephemeral --ignore-user-config --ignore-rules --skip-git-repo-check --sandbox read-only`, в пустом временном каталоге, с отключёнными `shell_tool`, `unified_exec`, `apps`, `plugins`, `memories`, `browser_use`, `computer_use`, `image_generation`, `view_image`, `skill_search`, `tool_suggest`, `sleep_tool`, `hooks`, `goals` и `web_search="disabled"`. Системный промпт передаётся файлом через `model_instructions_file`, схема ответа — файлом через `--output-schema`; ни промпт, ни история не попадают в аргументы процесса. Любой элемент потока, кроме `agent_message`, `reasoning` и предупреждения `error`, завершает запрос ошибкой `unexpected_tools`. Временные файлы удаляются после каждого запроса.
+Codex is an agent with a shell, and the narrator does not need a shell. The request goes with `--ephemeral --ignore-user-config --ignore-rules --skip-git-repo-check --sandbox read-only`, in an empty temporary directory, with `shell_tool`, `unified_exec`, `apps`, `plugins`, `memories`, `browser_use`, `computer_use`, `image_generation`, `view_image`, `skill_search`, `tool_suggest`, `sleep_tool`, `hooks`, `goals` turned off and `web_search="disabled"`. The system prompt is passed as a file through `model_instructions_file`, the response schema as a file through `--output-schema`; neither the prompt nor the story gets into the process arguments. Any stream item other than `agent_message`, `reasoning` and the `error` warning ends the request with the error `unexpected_tools`. Temporary files are deleted after every request.
 
-Отличия от `claude-code`: CLI отдаёт сообщение целиком, поэтому текст сцены в Telegram появляется сразу весь, без постепенного вывода; предела выходных токенов у CLI нет, `finishReason` всегда `stop`, действует только общий предел 100 000 знаков; имя модели сервер не подтверждает. Вход считается по `turn.completed.usage.input_tokens` (кэшированная часть уже внутри).
+Differences from `claude-code`: the CLI gives the message as a whole, so the scene text appears in Telegram all at once, without gradual output; the CLI has no output token limit, `finishReason` is always `stop`, only the general limit of 100 000 characters applies; the server does not confirm the model name. The input is counted from `turn.completed.usage.input_tokens` (the cached part is already inside).
 
-Проверено 19 сентября 2026: набор аргументов принят CLI 0.154.0 под `--strict-config`, ключ `model_instructions_file` существует. Успешный ответ вживую не проверен: учётная запись в тот день упёрлась в лимит использования (`turn.failed`). Формат успешных событий взят из документации `codex exec --json` и покрыт тестами на подставном процессе; первая живая проверка — `npm run eval -- ceiling --model codex:<модель>` на синтетическом сценарии.
+Checked on 19 September 2026: the set of arguments is accepted by CLI 0.154.0 under `--strict-config`, the key `model_instructions_file` exists. A successful response was not checked live: on that day the account hit the usage limit (`turn.failed`). The format of successful events is taken from the `codex exec --json` documentation and is covered by tests on a fake process; the first live check is `npm run eval -- ceiling --model codex:<model>` on a synthetic scenario.
 
-## Согласие на размещённое подключение для бота
+## Consent to a hosted connection for the bot
 
-`openai-compatible` и `codex-cli` отправляют текст истории стороннему сервису, который может хранить запросы и учиться на них (у бесплатных каналов OpenRouter и потребительских учётных записей это обычное условие). Поэтому бот с ними не стартует. Тот, кто запускает бота для собственных историй и принимает это, пишет в `.env` дословно `SIMPLE_CHAT_ALLOW_HOSTED=stories-leave-this-computer`; любое другое значение, включая `1` и `true`, согласием не считается. Экземпляр с чужими историями (тестер) это значение не получает. Для `openai-compatible` дневные лимиты токенов из `local/budget.ts` действуют и в боте; их меняют `SIMPLE_CHAT_BUDGET_REQUESTS` и `SIMPLE_CHAT_BUDGET_TOKENS`. У `codex-cli` локального счётчика нет: расход ограничивает только подписка.
+`openai-compatible` and `codex-cli` send story text to a third-party service that may store requests and train on them (for free OpenRouter channels and consumer accounts this is the usual condition). Therefore the bot does not start with them. Whoever runs the bot for their own stories and accepts this writes in `.env`, word for word, `SIMPLE_CHAT_ALLOW_HOSTED=stories-leave-this-computer`; any other value, including `1` and `true`, does not count as consent. An instance with other people's stories (the tester) does not get this value. For `openai-compatible`, the daily token limits from `local/budget.ts` also apply in the bot; they are changed by `SIMPLE_CHAT_BUDGET_REQUESTS` and `SIMPLE_CHAT_BUDGET_TOKENS`. `codex-cli` has no local counter: only the subscription limits the spending.
 
-## Размещённые API: `openai-compatible`
+## Hosted APIs: `openai-compatible`
 
-Адаптер работает с любым API в формате OpenAI Chat Completions: `SIMPLE_CHAT_BASE_URL` задаёт версионный корень (`https://openrouter.ai/api/v1`, `https://api.openai.com/v1`), `SIMPLE_CHAT_API_KEY` и `SIMPLE_CHAT_MODEL` обязательны. Код общий с `llama-cpp` и находится в `local/llama.ts`. Через него сделаны все прогоны размещённых моделей из [журнала](improve-log.md).
+The adapter works with any API in the OpenAI Chat Completions format: `SIMPLE_CHAT_BASE_URL` sets the versioned root (`https://openrouter.ai/api/v1`, `https://api.openai.com/v1`), `SIMPLE_CHAT_API_KEY` and `SIMPLE_CHAT_MODEL` are required. The code is shared with `llama-cpp` and is in `local/llama.ts`. All runs of hosted models from the [log](improve-log.md) were made through it.
 
-По умолчанию подключение служит только синтетическим пробам. Размещённый провайдер может сохранять запросы и обучаться на них: бесплатные модели OpenRouter и бесплатная дневная квота OpenAI выдаются именно на таких условиях. Поэтому `loadConfig` без [согласия владельца](#согласие-на-размещённое-подключение-для-бота) отказывается запускать бота с этим провайдером, а `story:probe` читает `loadModelConfig` и работает. `memory:probe` идёт через очередь запущенного бота и с этим подключением пока не работает.
+By default the connection serves only synthetic probes. A hosted provider may save requests and train on them: the free OpenRouter models and the free daily OpenAI quota are given on exactly these conditions. Therefore, without the [owner's consent](#consent-to-a-hosted-connection-for-the-bot), `loadConfig` refuses to start the bot with this provider, while `story:probe` reads `loadModelConfig` and works. `memory:probe` goes through the queue of the running bot and does not work with this connection yet.
 
-Отличия от llama.cpp:
+Differences from llama.cpp:
 
-- Точного подсчёта входа до генерации нет, метода `countInput` у адаптера нет. До запроса действует оценка приложения или байты / 4. После ответа действует `usage.prompt_tokens` провайдера: без него результат отклоняется с `usage_unavailable`, при превышении лимита с `context_limit`. Текст к этому моменту уже показан через `onText`, но сценой не становится.
-- Поля llama.cpp (`top_k`, `min_p`, `chat_template_kwargs`, `cache_prompt`) не отправляются. Для `api.openai.com` лимит ответа передаётся как `max_completion_tokens`, а температура не передаётся: текущие модели OpenAI отклоняют `max_tokens` и нестандартную температуру.
-- `outputSchema` уходит как `response_format` типа `json_schema` со `strict: true`; для OpenRouter добавляется `require_parameters`, чтобы запрос попал только к исполнителю, который схему соблюдает. Модель без `structured_outputs`, например бесплатная Gemma 4, на таком запросе падает, а не игнорирует схему. Результат всё равно проверяет приложение.
-- Имя модели в потоке не сверяется: провайдер отвечает своим именем, например датированным снимком. `check()` ищет модель в `/models`.
-- Рассуждения приходят отдельным полем (`reasoning` или `reasoning_content`) и учитываются только как число символов. Рассуждающая модель расходует на них лимит ответа и может закончить с `length`.
+- There is no exact input count before generation, and the adapter has no `countInput` method. Before the request, the application's estimate or bytes / 4 applies. After the response, the provider's `usage.prompt_tokens` applies: without it the result is rejected with `usage_unavailable`, and when the limit is exceeded, with `context_limit`. By this moment the text has already been shown through `onText`, but it does not become a scene.
+- The llama.cpp fields (`top_k`, `min_p`, `chat_template_kwargs`, `cache_prompt`) are not sent. For `api.openai.com` the response limit is passed as `max_completion_tokens`, and the temperature is not passed: the current OpenAI models reject `max_tokens` and a non-standard temperature.
+- `outputSchema` goes as a `response_format` of type `json_schema` with `strict: true`; for OpenRouter, `require_parameters` is added so that the request reaches only an executor that follows the schema. A model without `structured_outputs`, for example the free Gemma 4, fails on such a request instead of ignoring the schema. The application checks the result anyway.
+- The model name in the stream is not compared: the provider answers with its own name, for example a dated snapshot. `check()` looks for the model in `/models`.
+- Reasoning comes in a separate field (`reasoning` or `reasoning_content`) and is counted only as a number of characters. A reasoning model spends the response limit on it and may finish with `length`.
 
-Лимиты на 18 сентября 2026: бесплатные модели OpenRouter дают 20 запросов в минуту и 1000 в день при покупке кредитов от $10 за всё время, иначе 50 в день. [Лимиты OpenRouter](https://openrouter.ai/docs/api-reference/limits). `google/gemma-4-31b-it:free` заявляет контекст 262144 и параметры `max_tokens`, `temperature`, `top_p`, `response_format`.
+Limits as of 18 September 2026: the free OpenRouter models give 20 requests per minute and 1000 per day if credits of $10 or more have been bought over all time, otherwise 50 per day. [OpenRouter limits](https://openrouter.ai/docs/api-reference/limits). `google/gemma-4-31b-it:free` declares a context of 262144 and the parameters `max_tokens`, `temperature`, `top_p`, `response_format`.
 
-## Оценка изменений: `npm run eval`
+## Evaluating changes: `npm run eval`
 
-Цель — одно число для сравнения версий промптов и памяти на нескольких моделях сразу. Ключи размещённых API лежат в `.env.eval` (шаблон `.env.eval.example`); пробы запускаются в пустом каталоге, поэтому `.env` бота до них не доходит.
+The goal is one number for comparing versions of prompts and memory on several models at once. The keys of the hosted APIs are in `.env.eval` (template `.env.eval.example`); the probes are started in an empty directory, so the bot's `.env` does not reach them.
 
 ```
 npm run eval -- write --model openrouter:google/gemma-4-31b-it:free
 npm run eval -- --models openrouter:google/gemma-4-31b-it:free,openai:gpt-5.4-mini,claude:claude-haiku-4-5-20251001
 ```
 
-`write` один раз пишет синтетические истории через `story:probe` и сохраняет их в `examples/frozen/<сценарий>.json`; при `rate_limited` проба продолжается с последней сохранённой сцены. Основная команда прогоняет одни и те же замороженные сцены через память каждой модели (`memory:probe --direct`, режимы `plain` и `sgr`) и сверяет ответы с `examples/memory-checks.ts`. Модели идут параллельно, сценарии последовательно.
+`write` writes the synthetic stories once through `story:probe` and saves them in `examples/frozen/<scenario>.json`; on `rate_limited` the probe continues from the last saved scene. The main command runs the same frozen scenes through the memory of each model (`memory:probe --direct`, modes `plain` and `sgr`) and compares the answers with `examples/memory-checks.ts`. Models go in parallel, scenarios go one after another.
 
-С `--judge openai:gpt-5.4` после вопросов о памяти каждая модель пишет по сцене на ходы-ловушки из `examples/scene-traps.ts`, а судья отвечает на фиксированные вопросы yes/no (`local/scene-judge.ts`); итог — `sceneScore` рядом со `score`. `npm run eval -- judge --judge <модель> --resume <каталог пробы> --mode plain` судит готовые сцены заново.
+With `--judge openai:gpt-5.4`, after the memory questions each model writes one scene for each of the trap moves from `examples/scene-traps.ts`, and the judge answers fixed yes/no questions (`local/scene-judge.ts`); the result is `sceneScore` next to `score`. `npm run eval -- judge --judge <model> --resume <probe directory> --mode plain` judges the finished scenes again.
 
-`npm run eval -- watch` в другом терминале показывает текущий прогон: последнее событие каждой модели, сценария и режима и расход за день. События пишутся в `logs/eval.jsonl`; в них коды и счётчики, без текста.
+`npm run eval -- watch` in another terminal shows the current run: the last event of each model, scenario and mode, and the spending for the day. Events are written to `logs/eval.jsonl`; they contain codes and counters, without text.
 
-Итог `score` по каждому режиму равен доле верных ответов у худшей модели: правка не может выиграть за счёт самой послушной. Незавершённый режим даёт ноль ответов, его код ошибки остаётся в отчёте. Полный отчёт с несданными ключами пишется в `eval.json`, путь печатается в последней строке. Проверки фиксированные, без модели-судьи; качество прозы они не измеряют.
+The final `score` for each mode equals the share of correct answers of the worst model: a change cannot win because of the most obedient model. An unfinished mode gives zero answers, and its error code stays in the report. The full report with the failed keys is written to `eval.json`; the path is printed in the last line. The checks are fixed, without a judge model; they do not measure the quality of the prose.
 
-## Дневные лимиты размещённых API
+## Daily limits of hosted APIs
 
-Каждый запрос `openai-compatible` проходит через `local/budget.ts`. Счётчик лежит в `eval-usage.sqlite` в корне проекта, общий для параллельных проб; в нём день по UTC, имя канала, число запросов и токенов, без текста. `npm run eval -- usage` показывает расход за сегодня и действующие лимиты.
+Every `openai-compatible` request goes through `local/budget.ts`. The counter is in `eval-usage.sqlite` in the project root and is shared by parallel probes; it holds the day in UTC, the channel name, the number of requests and tokens, without text. `npm run eval -- usage` shows today's spending and the limits in effect.
 
-| Канал | Что в него попадает | Лимит по умолчанию |
+| Channel | What goes into it | Default limit |
 | --- | --- | --- |
-| `openrouter-free` | модели OpenRouter с `:free` | 900 запросов |
-| `openrouter-paid` | остальные модели OpenRouter | закрыт |
-| `openai-small` | mini и nano из бесплатной квоты OpenAI | 2 250 000 токенов |
-| `openai-large` | большие модели из той же квоты | 225 000 токенов |
-| `cerebras` | все модели Cerebras | 900 000 токенов |
-| `groq` | все модели Groq | 900 запросов и 180 000 токенов |
-| `mistral` | все модели Mistral | 500 000 токенов |
-| `openai-paid`, `other` | всё остальное | закрыт |
+| `openrouter-free` | OpenRouter models with `:free` | 900 requests |
+| `openrouter-paid` | the other OpenRouter models | closed |
+| `openai-small` | mini and nano from the free OpenAI quota | 2 250 000 tokens |
+| `openai-large` | large models from the same quota | 225 000 tokens |
+| `cerebras` | all Cerebras models | 900 000 tokens |
+| `groq` | all Groq models | 900 requests and 180 000 tokens |
+| `mistral` | all Mistral models | 500 000 tokens |
+| `openai-paid`, `other` | everything else | closed |
 
-Значения по умолчанию на десятую часть ниже бесплатных квот. Платный канал закрыт, пока лимит не задан вручную в `.env.eval` (`OPENROUTER_PAID_DAILY_TOKENS` и подобные) или через `SIMPLE_CHAT_BUDGET_REQUESTS` и `SIMPLE_CHAT_BUDGET_TOKENS` при прямом запуске пробы. Перед отправкой резервируется оценка входа плюс весь лимит ответа; после ответа резерв заменяется на `usage` провайдера. Запрос, который упал, сохраняет резерв: неизвестно, засчитал ли его провайдер. Превышение даёт `budget_exceeded` до отправки.
+The default values are one tenth below the free quotas. A paid channel is closed until a limit is set by hand in `.env.eval` (`OPENROUTER_PAID_DAILY_TOKENS` and similar) or through `SIMPLE_CHAT_BUDGET_REQUESTS` and `SIMPLE_CHAT_BUDGET_TOKENS` when a probe is started directly. Before sending, the input estimate plus the whole response limit is reserved; after the response, the reserve is replaced with the provider's `usage`. A request that failed keeps its reserve: it is unknown whether the provider counted it. Exceeding the limit gives `budget_exceeded` before sending.
 
-Это локальный счётчик: он не видит расход с других компьютеров и из других программ. Жёсткую границу ставит сам провайдер: у ключа OpenRouter есть лимит кредитов, у проекта OpenAI — месячный бюджет.
+This is a local counter: it does not see spending from other computers or from other programs. The hard boundary is set by the provider itself: an OpenRouter key has a credit limit, an OpenAI project has a monthly budget.
 

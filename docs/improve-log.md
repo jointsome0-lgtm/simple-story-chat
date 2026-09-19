@@ -1,241 +1,241 @@
-# Журнал улучшений
+# Improvement log
 
-Каждый шаг цикла из [improve-loop.md](improve-loop.md): дата, гипотеза, правка, числа до и после по моделям, решение. Отклонённые гипотезы записываются тоже. Новые записи сверху.
+Every step of the loop from [improve-loop.md](improve-loop.md): date, hypothesis, change, numbers before and after per model, decision. Rejected hypotheses are recorded too. New entries go on top.
 
-## 2026-09-19 · Fable 5.1 · «не более 12 абзацев»: число, принцип или ничего (без изменения)
+## 2026-09-19 · Fable 5.1 · «не более 12 абзацев» ("no more than 12 paragraphs"): a number, a principle or nothing (no change)
 
-Гипотеза тестера: названный в SYSTEM предел «Пиши не более 12 абзацев» заставляет модель подстраивать объём под число; без числа она сосредоточится на сцене. Варианты: `base` (как есть), `principle` («Объём сцены определяй по тому, что в ней происходит: короткий ход — короткая сцена, поворотный — подробнее. Не дописывай ради объёма; заканчивай там, где автору есть на что ответить»), `none` (фраза убрана). Три worktree, `npm run eval --mode plain --judge claude:claude-opus-5` на основной группе, затем повтор на платной Gemma; на GPU не проверялось.
+The tester's hypothesis: the limit named in SYSTEM, «Пиши не более 12 абзацев» ("Write no more than 12 paragraphs"), makes the model fit the length to the number; without the number the model will focus on the scene. Variants: `base` (as is), `principle` («Объём сцены определяй по тому, что в ней происходит: короткий ход — короткая сцена, поворотный — подробнее. Не дописывай ради объёма; заканчивай там, где автору есть на что ответить» — "Decide the length of a scene by what happens in it: a short move gets a short scene, a turning-point move gets more detail. Do not add text for the sake of length; end where the author has something to answer"), `none` (the phrase is removed). Three worktrees, `npm run eval --mode plain --judge claude:claude-opus-5` on the main group, then a repeat on the paid Gemma; not checked on the GPU.
 
-Длина сцен-ловушек, платная Gemma (OpenRouter), два прогона: `base` 44 сцены, медиана 1922 знака, максимум 2507; `principle` 44, 1890, 2750; `none` 34, 1961, 2610. У `gpt-5.4-mini` и Ministral без числа медиана растёт на 1–2 абзаца и появляются хвосты до 21–28 абзацев против 17–19. Обрывов по лимиту токенов нет ни в одной из 230 сцен. Ловушки на Gemma: 49/50, 50/50, 38/40 — различий нет; у остальных моделей разница в пределах шума. Неполные клетки: Ministral упёрся в дневной лимит (три прогона делили 500 тыс. токенов), Haiku и дважды Gemma падали с `provider_failed`.
+Length of trap scenes, paid Gemma (OpenRouter), two runs: `base` 44 scenes, median 1922 characters, maximum 2507; `principle` 44, 1890, 2750; `none` 34, 1961, 2610. For `gpt-5.4-mini` and Ministral, without the number the median grows by 1–2 paragraphs and tails of up to 21–28 paragraphs appear, against 17–19. No scene out of 230 was cut off by the token limit. Traps on Gemma: 49/50, 50/50, 38/40 — no difference; for the other models the difference is within noise. Incomplete cells: Ministral hit the daily limit (three runs shared 500 thousand tokens), Haiku and, twice, Gemma failed with `provider_failed`.
 
-Решение: промпт не менять. Число не тянет объём вверх: модели пишут свой привычный объём (около 2000 знаков) при любой формулировке, а «не более 12» слегка придерживает хвосты и нарушается в трети сцен. Принцип безвреден, но измеримого эффекта не дал. Ограничения замера: все ходы-ловушки похожи по размеру, поэтому не видно, пишет ли модель короче на короткий ход, — это отдельная мера; длина не входит в меры приёмки (`score`, `sceneScore`), так что такой эксперимент по правилам цикла не может закончиться принятием; определение абзаца двигает долю «длиннее 12» на 10 п.п. и должно быть зафиксировано до следующего замера. Критика измерителя и план ускорения экспериментов — в [eval-experiments-plan.md](eval-experiments-plan.md) и [eval-economics-proposal.md](eval-economics-proposal.md).
+Decision: do not change the prompt. The number does not pull the length up: the models write their usual length (about 2000 characters) with any wording, and «не более 12» slightly holds back the tails and is broken in a third of the scenes. The principle is harmless, but it gave no measurable effect. Limitations of the measurement: all trap moves are similar in size, so it is not visible whether the model writes shorter for a short move — this is a separate measure; length is not part of the acceptance measures (`score`, `sceneScore`), so by the rules of the loop such an experiment cannot end in acceptance; the definition of a paragraph moves the share of "longer than 12" by 10 percentage points and must be fixed before the next measurement. The critique of the eval and the plan to speed up experiments are in [eval-experiments-plan.md](eval-experiments-plan.md) and [eval-economics-proposal.md](eval-economics-proposal.md).
 
-## 2026-09-19 · Fable 5.1 · правило рассказчика в конце запроса; замер на боевой модели на GPU
+## 2026-09-19 · Fable 5.1 · the narrator's rule at the end of the request; measurement on the production model on a GPU
 
-Гипотеза (идеи A и K из `storyworm-ideas.md`): рассказчик принимает ложную посылку автора («рука уже вылечена», «мы договорились о ничьей»), потому что подчиняется сообщению, а не потому что забыл состояние. Правило «слова о прошлом — речь персонажа, а не факт» должно стоять там, где модель его читает последним.
+Hypothesis (ideas A and K from `storyworm-ideas.md`): the narrator accepts the author's false premise («рука уже вылечена» — "the arm is already healed", «мы договорились о ничьей» — "we agreed on a draw") because it obeys the message, not because it forgot the state. The rule «слова о прошлом — речь персонажа, а не факт» ("words about the past are a character's speech, not a fact") must stand where the model reads it last.
 
-Измеритель: режим `--lab` в `local/memory-probe.ts`. Каждая сцена-ловушка пишется для каждого варианта и сэмпла внутри одного прогона, то есть на одной и той же памяти. Вариант — текст в конце последнего сообщения, поэтому все варианты делят префикс запроса. Модель: `gemma-4-31b-heretic-q6k` на арендованной RTX 5090, боевые настройки сервера, кроме числа слотов (5 вместо 1). Судья: `claude:claude-opus-5`, вариант он не видит. В ячейке «прошло/всего» по вопросам судьи.
+Eval: the `--lab` mode in `local/memory-probe.ts`. Every trap scene is written for every variant and sample inside one run, that is, on the same memory. A variant is a text at the end of the last message, so all variants share the request prefix. Model: `gemma-4-31b-heretic-q6k` on a rented RTX 5090, production server settings, except the number of slots (5 instead of 1). Judge: `claude:claude-opus-5`; it does not see the variant. A cell shows "passed/total" over the judge's questions.
 
-Пачка 1, открытые сценарии (`battle`, `chess`, `dance`), 3 сэмпла, правило в конце сообщения. Рабочее дерево при этом содержало непринятую правку памяти со счётчиками; она одинакова для всех вариантов.
+Batch 1, open scenarios (`battle`, `chess`, `dance`), 3 samples, the rule at the end of the message. The working tree at that time contained an unaccepted memory change with counters; it is the same for all variants.
 
-| вариант | всего из 75 | `healer_still_broken` | `castle_corrected` | `samira_corrected` | контрольные (разрешённое действие) |
+| variant | total out of 75 | `healer_still_broken` | `castle_corrected` | `samira_corrected` | control (allowed action) |
 | --- | --- | --- | --- | --- | --- |
-| без добавки | 62 | 0/3 | 0/3 | 0/3 | все пройдены |
-| `rule` (принятый текст) | 74 | 3/3 | 3/3 | 3/3 | все пройдены |
-| `short` (две фразы) | 74 | 2/3 | 3/3 | 3/3 | все пройдены |
-| `check` (молчаливый чек-лист) | 70 | 3/3 | 3/3 | 0/3 | все пройдены |
-| `state` («восстанови состояние») | 67 | 0/3 | 1/3 | 0/3 | все пройдены |
+| no addition | 62 | 0/3 | 0/3 | 0/3 | all passed |
+| `rule` (the accepted text) | 74 | 3/3 | 3/3 | 3/3 | all passed |
+| `short` (two phrases) | 74 | 2/3 | 3/3 | 3/3 | all passed |
+| `check` (a silent checklist) | 70 | 3/3 | 3/3 | 0/3 | all passed |
+| `state` («восстанови состояние» — "restore the state") | 67 | 0/3 | 1/3 | 0/3 | all passed |
 
-Скрытый набор (правило его не видело), 3 сэмпла, правило в конце сообщения; `secrets` и `voyage` шли из чистого дерева на закоммиченной памяти:
+Holdout pack (the rule did not see it), 3 samples, the rule at the end of the message; `secrets` and `voyage` ran from a clean tree on the committed memory:
 
-| сценарий | вопросов | без добавки | `rule` | `short` |
+| scenario | questions | no addition | `rule` | `short` |
 | --- | --- | --- | --- | --- |
 | `ledger` | 33 | 31 | 33 | 32 |
 | `secrets` | 36 | 21 | 28 | 28 |
 | `voyage` | 36 | 28 | 33 | 33 |
-| всего | 105 | 80 | 94 | 93 |
+| total | 105 | 80 | 94 | 93 |
 
-Ни одна контрольная ловушка с разрешённым действием не упала. Не закрыты ни одним вариантом: `turn15_crates_35` (сумма счётчика через сжатия, 0/3), `turn9_agata_in_dark` (0/3), `turn12_from_workshop` (0–1/3), `debt_remainder` (остаток долга, 0–2/3) — это числа и «кто что знает», работа для памяти, а не для правила.
+No control trap with an allowed action failed. Not closed by any variant: `turn15_crates_35` (a counter sum across compactions, 0/3), `turn9_agata_in_dark` (0/3), `turn12_from_workshop` (0–1/3), `debt_remainder` (the remainder of a debt, 0–2/3) — these are numbers and "who knows what", which is work for the memory, not for the rule.
 
-Пачка 3, закоммиченный код памяти, 5 сэмплов, 8 ловушек (5 с ложной посылкой, 3 контрольные), тот же текст в `SYSTEM` вместо конца сообщения:
+Batch 3, committed memory code, 5 samples, 8 traps (5 with a false premise, 3 control), the same text in `SYSTEM` instead of the end of the message:
 
-| где правило | всего из 45 | `healer` | `castle` | `samira` |
+| where the rule is | total out of 45 | `healer` | `castle` | `samira` |
 | --- | --- | --- | --- | --- |
-| нигде | 31 | 0/5 | 2/5 | 2/5 |
-| `rule` в `SYSTEM` | 32 | 0/5 | 3/5 | 1/5 |
-| `short` в `SYSTEM` | 29 из 44 | 0/5 | 2/5 | 1/5 |
+| nowhere | 31 | 0/5 | 2/5 | 2/5 |
+| `rule` in `SYSTEM` | 32 | 0/5 | 3/5 | 1/5 |
+| `short` in `SYSTEM` | 29 out of 44 | 0/5 | 2/5 | 1/5 |
 
-Вывод: в `SYSTEM`, перед тысячами токенов истории, правило не меняет ничего; в конце запроса оно закрывает ловушки с ложной посылкой и не вызывает лишних отказов. `state` не помогает, значит дело не в забытом состоянии.
+Conclusion: in `SYSTEM`, before thousands of tokens of story, the rule changes nothing; at the end of the request it closes the traps with a false premise and causes no extra refusals. `state` does not help, so the cause is not a forgotten state.
 
-Решение: принято. `makeRequest` в `local/prompt.ts` дописывает `NARRATOR_RULE` после сообщения автора. Префикс запроса не меняется, кэш сервера не страдает. Ограничения замера: 3–5 сэмплов на ячейку; парное сравнение «конец сообщения против `SYSTEM`» шло на разных прогонах памяти; на запасной модели из `.env` правило не мерилось. Непринятая правка памяти со счётчиками отложена в `git stash` и пойдёт отдельным шагом.
+Decision: accepted. `makeRequest` in `local/prompt.ts` appends `NARRATOR_RULE` after the author's message. The request prefix does not change, so the server cache is not harmed. Limitations of the measurement: 3–5 samples per cell; the paired comparison "end of the message against `SYSTEM`" ran on different memory runs; the rule was not measured on the fallback model from `.env`. The unaccepted memory change with counters is put aside in `git stash` and will go as a separate step.
 
-Скорость пачек (правки измерителя, не промптов): 5 слотов с общим KV-кэшем дали 8 с на сцену против 15 с; лишняя одиночная сцена после ловушки убрана. Запрос всех сэмплов варианта одним вызовом с `n` (`generateMany` в `local/llama.ts`, поле `many` в файле пачки) выключен: на закреплённой ревизии `llama-server` после таких запросов сервер отвечал «context size exceeded» на любые следующие, пока его не перезапустили. Воспроизведено на синтетических запросах.
+Speed of batches (changes to the eval, not to the prompts): 5 slots with a shared KV cache gave 8 s per scene against 15 s; the extra single scene after a trap is removed. Requesting all samples of a variant in one call with `n` (`generateMany` in `local/llama.ts`, the `many` field in the batch file) is turned off: on the pinned revision of `llama-server`, after such requests the server answered "context size exceeded" to every following request until it was restarted. Reproduced on synthetic requests.
 
-## 2026-09-18 · Fable 5.1 · мерка «стоит ли ответ в памяти» (идея N из `storyworm-ideas.md`)
+## 2026-09-18 · Fable 5.1 · the measure "is the answer stated in the memory" (idea N from `storyworm-ideas.md`)
 
-Правка измерителя (`local/memory-probe.ts`, `local/eval.ts`): у числового ответа проба без модели отмечает `stated: memory | scenes | none`, `eval` собирает `readingMisses`. Проверка на рабочем дереве со счётчиками, `gpt-5.4-mini`, `dance`: 13/13, итоги по версиям — `memory`, общий итог чистых — `none` (модель сложила сама), `readingMisses` пуст. Назначение: при починке счётчиков отличать «сводка неверна или неполна» от «сводка верна, модель не прочла»; на базовом коде без сводки суммы скрытого набора должны давать `none`.
+A change to the eval (`local/memory-probe.ts`, `local/eval.ts`): for a numeric answer the probe, without a model, marks `stated: memory | scenes | none`, and `eval` collects `readingMisses`. Check on the working tree with counters, `gpt-5.4-mini`, `dance`: 13/13, the totals per version are `memory`, the overall total of clean repeats is `none` (the model added it up itself), `readingMisses` is empty. Purpose: when fixing the counters, to tell "the summary is wrong or incomplete" from "the summary is right, the model did not read it"; on the base code without a summary, the sums of the holdout pack must give `none`.
 
-## 2026-09-18 · Fable 5.1 · Opus 5 как судья сцен
+## 2026-09-18 · Fable 5.1 · Opus 5 as the scene judge
 
-Зачем: судья `openai:gpt-5.4` упирается в дневной лимит 225 тыс. токенов, после 120 запросов оценка сцен останавливается. Opus 5 идёт по подписке (`--judge claude:claude-opus-5`, провайдер `claude-code` без инструментов, ответ по JSON-схеме).
+Why: the judge `openai:gpt-5.4` hits the daily limit of 225 thousand tokens, and after 120 requests the scene scoring stops. Opus 5 runs on a subscription (`--judge claude:claude-opus-5`, the `claude-code` provider without tools, the answer follows a JSON schema).
 
-Проверка: четыре уже оценённых отчёта (battle ×2, chess, dance; сцены Gemma и `gpt-5.4-mini`), 40 вопросов, те же сцены отданы Opus (`local/scene-judge.ts` на копиях). Совпало 36 из 40. Четыре расхождения прочитаны вручную:
+Check: four already scored reports (battle ×2, chess, dance; scenes by Gemma and `gpt-5.4-mini`), 40 questions, the same scenes were given to Opus (`local/scene-judge.ts` on copies). 36 out of 40 matched. The four differences were read by hand:
 
-| Вопрос | `gpt-5.4` | Opus | Кто прав |
+| Question | `gpt-5.4` | Opus | Who is right |
 |---|---|---|---|
-| `seal_early_worked` | no | yes | Opus: в сцене печать сработала в 08:16, `gpt-5.4` пропустила нарушение |
-| `castle_corrected` | no | yes | Opus: «короткая рокировка была возможна только на бумаге» — сказано, что её не делали |
-| `turn9_left_hand_spared` | yes | no | спорно, Opus строже: героиня упирает сломанную руку в шине как клин |
-| `draw_corrected` | no | yes | по букве вопроса Opus (арбитр говорит, что предложения нет в протоколе), но сцена утверждает, что Виктор о ничьей говорил, — вопрос пропускает это противоречие |
+| `seal_early_worked` | no | yes | Opus: in the scene the seal worked at 08:16, `gpt-5.4` missed the violation |
+| `castle_corrected` | no | yes | Opus: «короткая рокировка была возможна только на бумаге» ("short castling was possible only on paper") — the scene says that castling was not done |
+| `turn9_left_hand_spared` | yes | no | disputable, Opus is stricter: the heroine braces her broken arm in a splint as a wedge |
+| `draw_corrected` | no | yes | by the letter of the question, Opus (the arbiter says the offer is not in the protocol), but the scene states that Viktor did speak about a draw — the question misses this contradiction |
 
-Решение: Opus 5 допущен судьёй наравне с `gpt-5.4`; он читает не хуже и поймал ошибку прежнего судьи. Числа, полученные разными судьями, между собой не сравниваются: обе стороны одного сравнения судит один судья. Вопрос `draw_corrected` надо разделить на два (нет в протоколе; сцена не утверждает, что предложение прозвучало) — вместе со следующей пересъёмкой базовой линии.
+Decision: Opus 5 is admitted as a judge on equal terms with `gpt-5.4`; it reads no worse and caught an error of the previous judge. Numbers obtained by different judges are not compared with each other: both sides of one comparison are judged by one judge. The question `draw_corrected` must be split into two (not in the protocol; the scene does not state that the offer was made) — together with the next re-recording of the baseline.
 
-## 2026-09-18 · Fable 5.1 · скрытый набор сценариев с авторством
+## 2026-09-18 · Fable 5.1 · a holdout pack of scenarios with authorship
 
-Зачем: открытые сценарии читает тот, кто улучшает промпты, и правило можно незаметно подогнать под них. Скрытый набор лежит вне репозитория (`~/simple-story-chat-holdout/`, приватный датасет HF `Teadomi/simple-story-chat-holdout`, ревизия `a24e6c75f29a`, выгрузка и скачивание `local/pack-hf.ts`); ведущий цикл его не открывает.
+Why: the open scenarios are read by the one who improves the prompts, and a rule can be fitted to them without noticing. The holdout pack lies outside the repository (`~/simple-story-chat-holdout/`, the private HF dataset `Teadomi/simple-story-chat-holdout`, revision `a24e6c75f29a`, upload and download by `local/pack-hf.ts`); the one who leads the loop does not open it.
 
-Измеритель: `local/scenarios.ts` грузит сценарий из `examples/` или из набора (`scenario.json` с обязательным `authors`, 16 ходов, `frozen.json` рядом); `--pack` понимают `eval`, `eval ceiling`, `memory-probe`, `scene-judge`, `freeze-scenes`; авторы попадают в итоговый файл. Тесты: `local/scenarios.test.ts`.
+Eval: `local/scenarios.ts` loads a scenario from `examples/` or from the pack (`scenario.json` with a required `authors`, 16 turns, `frozen.json` next to it); `--pack` is understood by `eval`, `eval ceiling`, `memory-probe`, `scene-judge`, `freeze-scenes`; the authors go into the result file. Tests: `local/scenarios.test.ts`.
 
-Открытая часть опубликована как публичный датасет `Teadomi/simple-story-chat-eval`, ревизия `632a57972119` (экспорт `local/pack-hf.ts export`, публиковал владелец); источник истины — `examples/`.
+The open part is published as the public dataset `Teadomi/simple-story-chat-eval`, revision `632a57972119` (export by `local/pack-hf.ts export`, published by the owner); the source of truth is `examples/`.
 
-Набор: три сценария, авторы `fable-5.1` (три чистых агента, по одному на сценарий; Astra сегодня недоступна и может позже отрецензировать и вписать себя). Содержание здесь не описывается.
+The pack: three scenarios, authors `fable-5.1` (three fresh agents, one per scenario; Astra is not available today and may later review them and add itself as an author). The content is not described here.
 
-| Сценарий | Вопросы памяти | Вопросы по сценам | Независимый читатель (Fable, без эталона) | `ceiling` `gpt-5.4-mini` | `ceiling` `gpt-5.4` |
+| Scenario | Memory questions | Scene questions | Independent reader (Fable, without the reference) | `ceiling` `gpt-5.4-mini` | `ceiling` `gpt-5.4` |
 |---|---|---|---|---|---|
 | `ledger` | 12 | 11 | 12/12 | 5/12 | 10/12 |
-| `secrets` | 12 | 12 | 12/12 | 9/12 после правки формата | не хватило лимита |
-| `voyage` | 12 | 12 | 12/12 | 9/12 | не хватило лимита |
+| `secrets` | 12 | 12 | 12/12 | 9/12 after a format fix | the limit was not enough |
+| `voyage` | 12 | 12 | 12/12 | 9/12 | the limit was not enough |
 
-Находки: `gpt-5.4-mini` вернула имена латиницей, в вопросы добавлено «кириллицей, точно как в списке»; `gpt-5.4` прибавила к выручке за товар продажу посторонней вещи — вопрос уточнён, сцены не менялись. Все провалы `ceiling` — суммы по 8–14 слагаемым, которые модель считает одним ответом без рассуждения; читатель с ведомостью получает эталон, противоречий в текстах не нашёл. Вывод: для скрытого набора потолок слабых моделей низкий, сравнивать версии надо относительно `ceiling` той же модели, а не максимума.
+Findings: `gpt-5.4-mini` returned names in Latin letters, so «кириллицей, точно как в списке» ("in Cyrillic, exactly as in the list") was added to the questions; `gpt-5.4` added the sale of an unrelated item to the revenue for the goods — the question was made more precise, the scenes were not changed. All `ceiling` failures are sums of 8–14 terms, which the model computes in one answer without reasoning; a reader with a state sheet gets the reference answers and found no contradictions in the texts. Conclusion: for the holdout pack the ceiling of weak models is low, so versions must be compared relative to the `ceiling` of the same model, not to the maximum.
 
-Базовая линия памяти по набору, `plain`, ревизия `a24e6c75f29a`, код `a3fc763` (без key/counters):
+Memory baseline on the pack, `plain`, revision `a24e6c75f29a`, code `a3fc763` (without key/counters):
 
-| Модель | Прогон 1 | Прогон 2 | Прогон 3 |
+| Model | Run 1 | Run 2 | Run 3 |
 |---|---|---|---|
 | `openrouter:google/gemma-4-31b-it` | 27/36 (9, 10, 8) | 28/36 (10, 9, 9) | 27/36 (10, 9, 8) |
 | `openai:gpt-5.4-mini` | 24/36 (6, 7, 11) | 25/36 (8, 8, 9) | 15/36 (0, 7, 8) |
 
-В скобках `ledger`, `secrets`, `voyage` из 12. Шум Gemma — один вопрос. Из 26 провалов Gemma за три прогона 22 — накопленные суммы (в каждом прогоне: письма, бочки, километраж общий и в ограниченном режиме, топливо, ночлег), остальное — даты «кто когда узнал» и год, который надо вывести. Вопросы «у кого сейчас предмет» Gemma прошла во всех прогонах. Один прогон `gpt-5.4-mini` дал 0/12 без ошибки пробы — причина не разобрана. Бесплатная Gemma на OpenRouter для eval непригодна: эндпоинт отвечает `unsupported_server` на схему ответа.
+In parentheses: `ledger`, `secrets`, `voyage` out of 12. The noise of Gemma is one question. Out of 26 Gemma failures over three runs, 22 are accumulated sums (in every run: letters, barrels, total mileage and mileage in the restricted mode, fuel, lodging); the rest are dates of "who learned what and when" and a year that must be derived. Gemma passed the questions "who holds the item now" in all runs. One run of `gpt-5.4-mini` gave 0/12 without a probe error — the cause is not investigated. The free Gemma on OpenRouter is not usable for eval: the endpoint answers `unsupported_server` to the response schema.
 
-Вывод: на открытой части память Gemma почти у потолка, на скрытой главная слабость — суммы через инкременты. Счётчики надо чинить, а не убирать.
+Conclusion: on the open part the memory of Gemma is almost at the ceiling; on the holdout part the main weakness is sums across increments. The counters must be fixed, not removed.
 
-Осталось: `ceiling` на `gpt-5.4` для `secrets` и `voyage` (лимит завтра), базовая линия Gemma и Ministral по набору.
+Remaining: `ceiling` on `gpt-5.4` for `secrets` and `voyage` (the limit resets tomorrow), the baseline of Gemma and Ministral on the pack.
 
-## 2026-09-18 · Fable 5.1 · состояние по ключам и счётчики, которые складывает код (в работе)
+## 2026-09-18 · Fable 5.1 · state by keys and counters that the code adds up (in progress)
 
-Гипотеза: модель ошибается не в фактах, а в выводе «что сейчас» из журнала событий; если вывод делает код, ошибок станет меньше. Журнал инкрементов остаётся дописываемым, прежние инкременты не меняются.
+Hypothesis: the model makes mistakes not in facts but in deriving "what is true now" from the event log; if the code does the deriving, there will be fewer mistakes. The log of increments stays append-only, earlier increments do not change.
 
-Правка (`local/memory.ts`, `local/prompt.ts`, `lib/library.ts`, только режим `plain`): у факта появились `key` — постоянное имя отслеживаемой величины (при сжатии модель видит уже занятые ключи в `stateKeys`) — и `add` — число, прибавленное к счётчику. `prompt.ts` после инкрементов печатает сводку «состояние на конец охваченных памятью сцен»: по каждому ключу последний факт, а для счётчика сумму всех `add` с разбивкой по датам. Сводка стоит перед живыми сценами, потому что они могли состояние изменить.
+Change (`local/memory.ts`, `local/prompt.ts`, `lib/library.ts`, only the `plain` mode): a fact now has `key` — a permanent name of a tracked quantity (during compaction the model sees the keys already taken in `stateKeys`) — and `add` — a number added to a counter. After the increments, `prompt.ts` prints the summary «состояние на конец охваченных памятью сцен» ("state at the end of the scenes covered by the memory"): for every key the last fact, and for a counter the sum of all `add` values with a breakdown by dates. The summary stands before the live scenes, because they could have changed the state.
 
-Промежуточный вариант, где итог счётчика писала сама модель, отклонён: `gpt-5.4-mini` записала «25 = прежние 20 + 5 новых» там, где было 20 + 25, и «все 38 чистые» вместо 35. Складывать при сжатии модель умеет не лучше, чем при чтении.
+An intermediate variant, where the model itself wrote the counter total, is rejected: `gpt-5.4-mini` wrote «25 = прежние 20 + 5 новых» ("25 = the previous 20 + 5 new") where it was 20 + 25, and «все 38 чистые» ("all 38 are clean") instead of 35. The model adds no better during compaction than during reading.
 
-`gpt-5.4-mini`, `dance`, память: до правки 7–9 из 13 (её потолок по полному тексту 9), с `add` — 13/13 в одном прогоне: слабая модель с памятью отвечает лучше, чем по полному тексту. Второй прогон упал с `invalid_memory (coverage)`: одна из четырёх сцен не попала ни в один факт. С правкой это 2 падения из 4 прогонов против 0 из 3 до неё — возможно, длинные правила про состояние отвлекают от покрытия сцен; проверить на Gemma и, если подтвердится, сократить правило или включить `SIMPLE_CHAT_MEMORY_REPAIR_COVERAGE`.
+`gpt-5.4-mini`, `dance`, memory: before the change 7–9 out of 13 (its ceiling on the full text is 9), with `add` — 13/13 in one run: a weak model with the memory answers better than on the full text. The second run failed with `invalid_memory (coverage)`: one of the four scenes did not get into any fact. With the change this is 2 failures out of 4 runs against 0 out of 3 before it — possibly the long rules about state distract from covering the scenes; check on Gemma and, if confirmed, shorten the rule or turn on `SIMPLE_CHAT_MEMORY_REPAIR_COVERAGE`.
 
-Дальнейшие варианты того же дня. `add` стал целым (дробное число давало `output_limit`), затем одно число на факт заменено списком `counters` с обязательными `subject` и `measure`: Gemma с одним числом считала только «всего» и не вела «чистых», а с одним полем имени заводила общий счётчик «повторы полные» на все танцы. Проба теперь повторяет сжатие после `invalid_memory` до двух раз и пишет `compactionRetries`, как владелец повторяет `/compact`.
+Further variants of the same day. `add` became an integer (a fractional number gave `output_limit`), then the single number per fact was replaced by a `counters` list with required `subject` and `measure`: with a single number Gemma counted only «всего» ("total") and did not track «чистых» ("clean"), and with a single name field it created one common counter «повторы полные» ("full repeats") for all dances. The probe now repeats a compaction after `invalid_memory` up to two times and writes `compactionRetries`, the same way the owner repeats `/compact`.
 
-Итог на платной Gemma 4 31B, `plain`, последняя версия правки:
+Result on the paid Gemma 4 31B, `plain`, the latest version of the change:
 
-| | до правки | после |
+| | before the change | after |
 | --- | --- | --- |
-| `battle`, память | 8/8, 8/8 | 8/8 во всех 4 завершённых прогонах |
-| `battle`, сцены | 13/15: `turn14_dagger_with_tarek`, `healer_still_broken` | 14, 13, 14, 13 из 15; `turn14_dagger_with_tarek` проходит 4 из 4; `healer_still_broken` падает всегда, по разу `ally_corrected` и `bridge_corrected` |
-| `dance`, память | 12, 13, 13 из 13 | 13, 9, 13, 13, 13, 7 из 13 |
-| повторы сжатия | 0 примерно на 18 сжатий | 3 на последние 12 сжатий, все `output_limit` при обычном размере ответа около 1000 токенов, то есть зацикливание |
+| `battle`, memory | 8/8, 8/8 | 8/8 in all 4 completed runs |
+| `battle`, scenes | 13/15: `turn14_dagger_with_tarek`, `healer_still_broken` | 14, 13, 14, 13 out of 15; `turn14_dagger_with_tarek` passes 4 out of 4; `healer_still_broken` always fails, `ally_corrected` and `bridge_corrected` failed once each |
+| `dance`, memory | 12, 13, 13 out of 13 | 13, 9, 13, 13, 13, 7 out of 13 |
+| compaction retries | 0 over about 18 compactions | 3 over the last 12 compactions, all `output_limit` with a usual answer size of about 1000 tokens, that is, looping |
 
-`gpt-5.4-mini`, `dance`, память: до 7–9 из 13, с одним `add` 13/13 в 7 прогонах из 7 завершённых; со списком счётчиков 13, 9 и один сбой, после правила об именах 13, 13, 13.
+`gpt-5.4-mini`, `dance`, memory: before 7–9 out of 13, with a single `add` 13/13 in 7 runs out of 7 completed; with the list of counters 13, 9 and one failure, after the rule about names 13, 13, 13.
 
-Решение: не принято. Для слабого читателя счётчики в коде — крупный выигрыш; у Gemma место предмета стало держаться, но `dance` стал двугорбым: когда она пропускает одно слагаемое или путает счётчик, сводка уверенно врёт, и ответ хуже, чем без сводки. Плюс зацикливание при сжатии. Следующие шаги: (1) найти причину зацикливания (целое без границ или массив; проверить на том же запросе без `counters`); (2) отделить `key` от `counters` и мерить их порознь; (3) сделать сводку счётчиков проверяемой: печатать рядом с итогом число слагаемых и даты, а в правилах требовать счётчик для каждого занятия, где названо число.
+Decision: not accepted. For a weak reader, counters in the code are a large gain; for Gemma the location of an item started to hold, but `dance` became bimodal: when Gemma misses one term or confuses a counter, the summary states a wrong value with confidence, and the answer is worse than without the summary. In addition, there is looping during compaction. Next steps: (1) find the cause of the looping (an integer without bounds, or the array; check on the same request without `counters`); (2) separate `key` from `counters` and measure them apart; (3) make the counter summary checkable: print the number of terms and the dates next to the total, and in the rules require a counter for every lesson where a number is named.
 
-С первым вариантом правки (сводка без `add`) сцены `gpt-5.4-mini`: `dance` 5/6 → 6/6, `chess` 2/4 → 4/4, `battle` 12/14 → 11/15; по одному прогону, в пределах шума не различить. Главная проверка — Gemma на `battle` (кинжал, срок печати) — ждёт дневного лимита.
+With the first variant of the change (a summary without `add`), the scenes of `gpt-5.4-mini`: `dance` 5/6 → 6/6, `chess` 2/4 → 4/4, `battle` 12/14 → 11/15; one run each, not distinguishable within noise. The main check — Gemma on `battle` (the dagger, the seal deadline) — waits for the daily limit.
 
-## 2026-09-18 · Fable 5.1 · ловушки посреди истории и с ложной посылкой; судья `gpt-5.4`
+## 2026-09-18 · Fable 5.1 · traps in the middle of the story and traps with a false premise; judge `gpt-5.4`
 
-Цель владельца — непротиворечивость мира, поэтому измеритель сцен расширен: `afterTurn` пишет сцену на авторскую реплику посреди истории (после сжатий), а конечные ловушки мимоходом утверждают то, чего не было (мост горел, Роан союзник, сорок повторов сделаны, ничью предлагали). Ловушки есть для всех трёх сценариев: 15, 6 и 4 вопроса.
+The owner's goal is a consistent world, so the scene eval is extended: `afterTurn` writes a scene for an author's message in the middle of the story (after compactions), and the final traps state in passing something that did not happen (the bridge burned, Roan is an ally, forty repeats are done, a draw was offered). There are traps for all three scenarios: 15, 6 and 4 questions.
 
-Судья: `gpt-5.4-mini` на внимательном чтении ошибается (из пяти провалов, сверенных вручную, один ложный; ещё один провал пропущен). `gpt-5.4` оба случая решил верно; из трёх расхождений двух судей два в его пользу, третье — двусмысленная сцена. Судья теперь `openai:gpt-5.4`, расход около 25 тыс. токенов на модель и прогон из 225 тыс. бесплатных в день. После сверки исправлен вопрос `castle_corrected` и добавлен `turn15_seal_not_ready`.
+Judge: `gpt-5.4-mini` makes mistakes on careful reading (out of five failures checked by hand, one is false; one more failure was missed). `gpt-5.4` decided both cases correctly; out of three differences between the two judges, two are in its favor, and the third is an ambiguous scene. The judge is now `openai:gpt-5.4`; the cost is about 25 thousand tokens per model and run, out of 225 thousand free tokens per day. After the check, the question `castle_corrected` was fixed and `turn15_seal_not_ready` was added.
 
-`plain`, один прогон, судья `gpt-5.4` (сцены `gpt-5.4-mini` судились до добавления `turn15_seal_not_ready`):
+`plain`, one run, judge `gpt-5.4` (the scenes of `gpt-5.4-mini` were judged before `turn15_seal_not_ready` was added):
 
-| Модель | `battle` | `dance` | `chess` |
+| Model | `battle` | `dance` | `chess` |
 | --- | --- | --- | --- |
-| `openrouter:google/gemma-4-31b-it` | 13/15: `turn14_dagger_with_tarek`, `healer_still_broken` | 6/6 | не запускалась: дневной лимит |
+| `openrouter:google/gemma-4-31b-it` | 13/15: `turn14_dagger_with_tarek`, `healer_still_broken` | 6/6 | not run: daily limit |
 | `openai:gpt-5.4-mini` | 12/14: `dagger_source`, `healer_still_broken` | 5/6: `b_total_38` | 2/4: `draw_corrected`, `castle_corrected` |
 
-Провалы прочитаны вручную, все настоящие. Три вида ошибок, каждый у обеих моделей или в обоих сценариях:
+The failures were read by hand; all are real. Three kinds of errors, each one in both models or in both scenarios:
 
-1. Рассказчик исполняет невозможную посылку игрока. «Сава вправляет кость» — и у Gemma, и у `gpt-5.4-mini` разведчица, которая по сиду не лечит, вправляет перелом, и Элин упирается обеими руками. То же с «предлагал ничью»: арбитр подтверждает разговор, которого не было.
-2. Теряется текущее место предмета. У Gemma после второго сжатия Тарек «оставил кинжал у решётки», хотя кинжал при нём с 08:05 и он проверял это в 08:09. Память хранит события передачи, а не текущее состояние «кинжал у Тарека».
-3. Арифметика по времени и счётчикам. `gpt-5.4-mini` в 08:14 объявляет печать доступной (до 08:20 шесть минут), Gemma в 08:13 называет «девять минут» вместо семи; Вера насчитывает 48 повторов версии B вместо 38.
+1. The narrator carries out an impossible premise of the player. «Сава вправляет кость» ("Sava sets the bone") — with both Gemma and `gpt-5.4-mini` the scout, who by the seed does not heal, sets the fracture, and Elin braces herself with both arms. The same with «предлагал ничью» ("offered a draw"): the arbiter confirms a conversation that did not happen.
+2. The current location of an item is lost. With Gemma, after the second compaction Tarek «оставил кинжал у решётки» ("left the dagger at the grate"), although he has had the dagger since 08:05 and he checked this at 08:09. The memory stores the handover events, not the current state «кинжал у Тарека» ("Tarek has the dagger").
+3. Arithmetic on time and counters. `gpt-5.4-mini` at 08:14 declares the seal available (six minutes remain until 08:20), Gemma at 08:13 says «девять минут» ("nine minutes") instead of seven; Vera counts 48 repeats of version B instead of 38.
 
-Гипотезы по убыванию ожидаемой пользы: (а) блок «текущее состояние» в памяти — где каждый предмет, остатки и итоги счётчиков, сроки доступности, травмы — перезаписываемый при каждом сжатии, а не только журнал событий (закрывает 2 и 3); (б) правило рассказчику сверять ход игрока с установленным и показывать препятствие (закрывает 1; дифф уже пробовался на негодной истории); контроль обеих — ловушка `seal_allowed` и вопросы памяти не должны упасть.
+Hypotheses in decreasing order of expected benefit: (a) a "current state" block in the memory — where every item is, remainders and totals of counters, availability deadlines, injuries — rewritten at every compaction, and not only an event log (closes 2 and 3); (b) a rule for the narrator to check the player's move against what is established and to show an obstacle (closes 1; the diff was already tried on an unusable story); the control for both — the trap `seal_allowed` and the memory questions must not fail.
 
-Расход за день на этот момент: платная Gemma 481 тыс. из 600 тыс., Mistral почти исчерпана; сравнительные прогоны — с завтрашнего дня.
+Spending for the day at this point: the paid Gemma 481 thousand out of 600 thousand, Mistral is almost used up; comparative runs start tomorrow.
 
-## 2026-09-18 · Fable 5.1 · эталонные истории написаны агентами Fable, новая базовая линия
+## 2026-09-18 · Fable 5.1 · reference stories written by Fable agents, a new baseline
 
-По слову владельца все три истории написаны заново: по одному чистому агенту Fable 5.1 на сценарий, с ведомостью состояния и сверкой с эталонными вопросами; запись Haiku остановлена. Файлы сцен собирает `local/freeze-scenes.ts`. Все числа в записях ниже относятся к старой истории и с этими не сравниваются.
+On the owner's word all three stories were written again: one fresh Fable 5.1 agent per scenario, with a state sheet and a check against the reference questions; the recording by Haiku is stopped. The scene files are built by `local/freeze-scenes.ts`. All numbers in the entries below belong to the old story and are not compared with these.
 
-`ceiling` (вопросы по полному тексту без сжатия):
+`ceiling` (questions on the full text without compaction):
 
-| Сценарий | `gpt-5.4` | `gpt-5.4-mini` |
+| Scenario | `gpt-5.4` | `gpt-5.4-mini` |
 | --- | --- | --- |
 | `battle` | 8/8 | 8/8 |
-| `chess` | 6/7, мимо `fen` | 5/7, мимо `fen`, `extra_a3` |
-| `dance` | 13/13 | 9/13, мимо `a_repeats`, `a_clean`, `b_repeats`, `b_clean` |
+| `chess` | 6/7, misses `fen` | 5/7, misses `fen`, `extra_a3` |
+| `dance` | 13/13 | 9/13, misses `a_repeats`, `a_clean`, `b_repeats`, `b_clean` |
 
-`fen` требует в уме проиграть 87 полуходов; его не берёт никто, реальный максимум `chess` — 6/7. Ходы в сценах агент сверил с эталонной партией скриптом.
+`fen` requires playing through 87 half-moves in the head; no model gets it, so the real maximum of `chess` is 6/7. The agent checked the moves in the scenes against the reference game with a script.
 
-Базовая линия, `plain`, один прогон, судья `openai:gpt-5.4-mini`:
+Baseline, `plain`, one run, judge `openai:gpt-5.4-mini`:
 
-| Модель | `battle` | сцены `battle` | `chess` | `dance` |
+| Model | `battle` | `battle` scenes | `chess` | `dance` |
 | --- | --- | --- | --- | --- |
 | `openrouter:google/gemma-4-31b-it` | 8/8 | 5/5 | 6/7, `fen` | 12/13, `cancelled_tango` |
 | `mistral:ministral-14b-2512` | 8/8 | 4/5, `seal_allowed_charges` | 6/7, `fen` | 9/13, `a_repeats`, `a_clean`, `all_repeats`, `all_clean` |
-| `openai:gpt-5.4-mini` | 8/8 | 5/5 | 4/7, `fen`, `extra_a3`, `extra_castle` | 7/13, все шесть сумм |
+| `openai:gpt-5.4-mini` | 8/8 | 5/5 | 4/7, `fen`, `extra_a3`, `extra_castle` | 7/13, all six sums |
 
 `score` 0.68, `sceneScore` 0.8.
 
-- На непротиворечивой истории `battle` проходит у всех, включая `sava_learns`: «устойчивый провал» из прежних записей был следствием путаной истории, а не памяти. Гипотезу про «кто когда узнал» снять.
-- Память `plain` у Gemma почти на потолке (26/28, из них один мёртвый вопрос). Промптом тут выигрывать нечего.
-- Настоящая слабость — суммы по нескольким сценам в `dance`: `gpt-5.4-mini` проваливает их и по полному тексту, то есть это арифметика читателя, а не потеря фактов. Кандидат в общий принцип для памяти: счётные величины хранить нарастающим итогом (новое значение и из чего оно сложилось), а не россыпью событий. Проверять по `dance`, следя, чтобы `battle` и `chess` не упали.
-- Ловушки есть только для `battle`, и их почти все проходят: для различения правок нужны ловушки потруднее и для других сценариев.
-- Расход за день: Mistral 453 тыс. из 500 тыс. токенов, сегодня её больше не запускать; платная Gemma 294 тыс. из 600 тыс.
+- On a consistent story `battle` passes for every model, including `sava_learns`: the "stable failure" from the earlier entries was a result of a confused story, not of the memory. Drop the hypothesis about "who learned what and when".
+- The `plain` memory of Gemma is almost at the ceiling (26/28, and one of the misses is a dead question). There is nothing to win here with a prompt.
+- The real weakness is sums across several scenes in `dance`: `gpt-5.4-mini` fails them on the full text too, that is, this is the reader's arithmetic, not a loss of facts. A candidate for a general principle for the memory: store countable quantities as a running total (the new value and what it was made of), not as scattered events. Check on `dance`, and watch that `battle` and `chess` do not fall.
+- Traps exist only for `battle`, and almost all of them pass: to tell changes apart, harder traps are needed, and traps for the other scenarios.
+- Spending for the day: Mistral 453 thousand out of 500 thousand tokens, do not run it again today; the paid Gemma 294 thousand out of 600 thousand.
 
-## 2026-09-18 · Fable 5.1 · замороженная история DeepSeek противоречит эталону
+## 2026-09-18 · Fable 5.1 · the frozen DeepSeek story contradicts the reference
 
-Все числа ниже этой записи получены на `battle`, записанной `deepseek-v4-flash:free`, и годятся только как история отладки измерителя.
+All numbers below this entry were obtained on `battle` recorded by `deepseek-v4-flash:free`, and they are useful only as a history of debugging the eval.
 
-- Гипотеза «ход, противоречащий факту, не исполняется молча» (правка `SYSTEM` в `local/prompt.ts`) не сдвинула `dagger_source` ни у одной модели. Разбор показал, что виновата ловушка: по замыслу автора кинжал у Тарека, а в записанных сценах DeepSeek вернул его Элин, и память моделей честно это хранит. Гипотеза не проверена, правка откачена; дифф пробовать заново на исправной истории.
-- В тех же сценах после второго применения печати написано «осталось пять зарядов» при эталоне 3. Вопросы `charges` и `next_use` наказывали модель за верность тексту.
-- Новая команда `npm run eval -- ceiling --model <модель>` задаёт вопросы по полной истории без сжатия. `gpt-5.4` набирает 8/8 (разрешает противоречие по авторским репликам), `gpt-5.4-mini` — 5/8, мимо `charges`, `next_use`, `sava_learns`: ровно те ключи, которые она «теряла» с памятью. То есть её провалы были ошибками чтения противоречивого текста, а не памяти, и разброс из записи ниже во многом отсюда.
-- Запись `chess` тем же DeepSeek пять раз подряд упала на сжатии с `invalid_memory`.
+- The hypothesis "a move that contradicts a fact is not carried out silently" (a change to `SYSTEM` in `local/prompt.ts`) did not move `dagger_source` for any model. The analysis showed that the trap is at fault: by the author's design Tarek has the dagger, but in the recorded scenes DeepSeek returned it to Elin, and the memory of the models honestly stores this. The hypothesis is not tested, the change is rolled back; try the diff again on a correct story.
+- In the same scenes, after the second use of the seal the text says «осталось пять зарядов» ("five charges remain") while the reference is 3. The questions `charges` and `next_use` punished the model for being faithful to the text.
+- The new command `npm run eval -- ceiling --model <model>` asks the questions on the full story without compaction. `gpt-5.4` scores 8/8 (it resolves the contradiction by the author's messages), `gpt-5.4-mini` scores 5/8, missing `charges`, `next_use`, `sava_learns`: exactly the keys that it "lost" with the memory. That is, its failures were errors of reading a contradictory text, not of the memory, and the spread from the entry below comes largely from this.
+- The recording of `chess` by the same DeepSeek failed five times in a row at compaction with `invalid_memory`.
 
-Решение (заменено записью выше: сцены написали агенты Fable): автор замороженных сцен — `claude:claude-haiku-4-5-20251001`, все три сценария переписываются. История принимается, только если `ceiling` у сильной модели максимальный, а факты ловушек сверены с текстом сцен, а не с авторскими репликами. Прежний `battle.json` сохранён вне репозитория.
+Decision (replaced by the entry above: the scenes were written by Fable agents): the author of the frozen scenes is `claude:claude-haiku-4-5-20251001`, all three scenarios are rewritten. A story is accepted only if the `ceiling` of a strong model is the maximum, and the facts of the traps are checked against the text of the scenes, not against the author's messages. The previous `battle.json` is saved outside the repository.
 
-## 2026-09-18 · Fable 5.1 · измеритель сцен, первая базовая линия
+## 2026-09-18 · Fable 5.1 · the scene eval, the first baseline
 
-Правка измерителя, не промптов: `--judge`, `examples/scene-traps.ts`, `local/scene-judge.ts`. Сценарий `battle`, режим `plain`, судья `openai:gpt-5.4-mini`, один прогон.
+A change to the eval, not to the prompts: `--judge`, `examples/scene-traps.ts`, `local/scene-judge.ts`. Scenario `battle`, mode `plain`, judge `openai:gpt-5.4-mini`, one run.
 
-| Модель | память | сцены | провалы сцен |
+| Model | memory | scenes | scene failures |
 | --- | --- | --- | --- |
 | `openrouter:google/gemma-4-31b-it` | 7/8 | 4/5 | `dagger_source` |
-| `mistral:ministral-14b-2512` | 8/8 | 3/5 (отдельный прогон) | `seal_allowed_charges`, `dagger_source` |
+| `mistral:ministral-14b-2512` | 8/8 | 3/5 (a separate run) | `seal_allowed_charges`, `dagger_source` |
 | `openai:gpt-5.4-mini` | 7/8 | 3/5 | `seal_allowed_charges`, `dagger_source` |
 
-- `dagger_source` проваливают все три: игрок пишет, что героиня достаёт кинжал, который по установленным фактам у другого персонажа, и рассказчик молча исполняет. Память здесь ни при чём, факт в ней есть. Кандидат в общий принцип для `local/prompt.ts`: ход игрока, противоречащий установленному факту, не исполняется молча — сцена показывает препятствие. Контрольная ловушка `seal_allowed` обязана при этом остаться зелёной, иначе рассказчик просто начал отказывать.
-- `seal_allowed_charges` проваливают две из трёх: после разрешённого третьего применения сцена называет прежний остаток зарядов. При этом на вопрос памяти о зарядах обе отвечают верно: знать факт и пересчитать его в сцене — разные умения.
-- Во втором прогоне Ministral потеряла соединение на сценах-ловушках (`provider_failed`, `UND_ERR_SOCKET`) и получила 0/5 с `no_scenes`; её строка взята из первого прогона. Проба теперь повторяет запрос после обрыва соединения.
+- All three fail `dagger_source`: the player writes that the heroine draws a dagger which, by the established facts, another character has, and the narrator silently carries it out. The memory is not the cause here; the fact is in it. A candidate for a general principle for `local/prompt.ts`: a player's move that contradicts an established fact is not carried out silently — the scene shows an obstacle. The control trap `seal_allowed` must stay green with this, otherwise the narrator has simply started to refuse.
+- Two out of three fail `seal_allowed_charges`: after the allowed third use, the scene names the previous remainder of charges. At the same time both answer the memory question about the charges correctly: knowing a fact and recalculating it in a scene are different skills.
+- In the second run Ministral lost the connection on the trap scenes (`provider_failed`, `UND_ERR_SOCKET`) and got 0/5 with `no_scenes`; its row is taken from the first run. The probe now repeats a request after a dropped connection.
 
-## 2026-09-18 · Fable 5.1 · разброс на одном коде
+## 2026-09-18 · Fable 5.1 · spread on the same code
 
-Три прогона `plain` на `battle` без единой правки между ними (первый — из таблицы ниже):
+Three `plain` runs on `battle` without a single change between them (the first is from the table below):
 
-| Модель | 1 | 2 | 3 |
+| Model | 1 | 2 | 3 |
 | --- | --- | --- | --- |
-| `openrouter:google/gemma-4-31b-it` | 7/8 | 6/8, мимо `news`, `sava_learns` | 7/8, мимо `sava_learns` |
+| `openrouter:google/gemma-4-31b-it` | 7/8 | 6/8, misses `news`, `sava_learns` | 7/8, misses `sava_learns` |
 | `mistral:ministral-14b-2512` | 8/8 | 8/8 | 8/8 |
-| `openai:gpt-5.4-mini` | 6/8 | 8/8 | 5/8, мимо `charges`, `next_use`, `sava_learns` |
+| `openai:gpt-5.4-mini` | 6/8 | 8/8 | 5/8, misses `charges`, `next_use`, `sava_learns` |
 
-`score` по прогонам: 0.75, 0.75, 0.625. Вывод: на одном сценарии из 8 вопросов разброс у `gpt-5.4-mini` достигает трёх вопросов (у неё температура по умолчанию, не 0.2), у Gemma — одного. Сдвиг `score` на 0.125 и даже 0.25 в одном прогоне ничего не значит. Пока сценарий один, правку сравнивать минимум по трём прогонам на сторону и смотреть на сумму по прогонам, а не на минимум; надёжнее сначала записать `chess` и `dance`, чтобы вопросов стало 24. Устойчив только провал `sava_learns`: Gemma 3 из 3, `gpt-5.4-mini` 2 из 3, Haiku 1 из 1.
+`score` per run: 0.75, 0.75, 0.625. Conclusion: on one scenario of 8 questions the spread of `gpt-5.4-mini` reaches three questions (it has the default temperature, not 0.2), and the spread of Gemma is one question. A shift of `score` by 0.125 and even by 0.25 in one run means nothing. While there is only one scenario, compare a change over at least three runs per side and look at the sum over the runs, not at the minimum; it is more reliable to first record `chess` and `dance`, so that there are 24 questions. Only the `sava_learns` failure is stable: Gemma 3 out of 3, `gpt-5.4-mini` 2 out of 3, Haiku 1 out of 1.
 
-## 2026-09-18 · Fable 5.1 · формат памяти навязывается провайдером
+## 2026-09-18 · Fable 5.1 · the memory format is enforced by the provider
 
-Это правка измерителя и адаптеров, а не промптов. Сценарий `battle`, сцены записаны DeepSeek V4 Flash.
+This is a change to the eval and the adapters, not to the prompts. Scenario `battle`, the scenes are recorded by DeepSeek V4 Flash.
 
-Без навязанной схемы (только режим «любой JSON» и описание формата в промпте) результаты не воспроизводились: `gpt-5.4-mini` в `plain` дала 8/8 в первом прогоне и `invalid_memory (shape)` во втором на том же коде; `ministral-14b` падала с `shape` оба раза; `sgr` не прошёл ни у одной модели, включая Haiku. Бесплатная `gemma-4-31b-it:free` оба раза закончила `retry_limit`: апстрим отвечал 429 дольше десяти минут.
+Without an enforced schema (only the "any JSON" mode and a description of the format in the prompt) the results were not reproducible: `gpt-5.4-mini` in `plain` gave 8/8 in the first run and `invalid_memory (shape)` in the second on the same code; `ministral-14b` failed with `shape` both times; `sgr` did not pass for any model, including Haiku. The free `gemma-4-31b-it:free` ended with `retry_limit` both times: the upstream answered 429 for more than ten minutes.
 
-Правка: `outputSchema` передаётся как structured output (`json_schema`, strict) в OpenAI, Mistral и OpenRouter, в Claude CLI через `--json-schema`. OpenRouter обязан выбрать эндпоинт, который схему исполняет, поэтому бесплатная Gemma 4 теперь отказывает явно; вместо неё платная `google/gemma-4-31b-it`.
+Change: `outputSchema` is passed as structured output (`json_schema`, strict) to OpenAI, Mistral and OpenRouter, and to the Claude CLI through `--json-schema`. OpenRouter must choose an endpoint that enforces the schema, so the free Gemma 4 now refuses explicitly; the paid `google/gemma-4-31b-it` is used instead.
 
-| Модель | `plain` | `sgr` |
+| Model | `plain` | `sgr` |
 | --- | --- | --- |
-| `openrouter:google/gemma-4-31b-it` | 7/8, мимо `sava_learns` | `invalid_memory (quote)` |
+| `openrouter:google/gemma-4-31b-it` | 7/8, misses `sava_learns` | `invalid_memory (quote)` |
 | `mistral:ministral-14b-2512` | 8/8 | `invalid_memory (quote)` |
-| `openai:gpt-5.4-mini` | 6/8, мимо `charges`, `sava_learns` | `invalid_memory (quote)` |
-| `claude:claude-haiku-4-5-20251001` | 7/8, мимо `sava_learns` | `timeout` |
+| `openai:gpt-5.4-mini` | 6/8, misses `charges`, `sava_learns` | `invalid_memory (quote)` |
+| `claude:claude-haiku-4-5-20251001` | 7/8, misses `sava_learns` | `timeout` |
 
-`score`: `plain` 0.75, `sgr` 0. Один прогон, шум не измерен. Haiku шла отдельным прогоном; со схемой через `--json-schema` CLI тратит около двух минут на сжатие, и запрос `sgr` не уложился в таймаут 300 секунд.
+`score`: `plain` 0.75, `sgr` 0. One run, the noise is not measured. Haiku ran as a separate run; with the schema through `--json-schema` the CLI spends about two minutes on a compaction, and the `sgr` request did not fit into the 300-second timeout.
 
-Открытые вопросы для следующего шага:
+Open questions for the next step:
 
-- `sgr` у всех моделей проходит проверку структуры и падает на `quote`: свидетельство не совпало с текстом сцены дословно. Вид расхождения измерен (счётчики `quoteCount`, `quoteWhitespace`, `quoteTypography`, `quotePunctuation`, `quoteOther` в строке сбоя): у `gpt-5.4-mini` из 40 цитат 36 дословных, 1 отличается пунктуацией, 3 другим; у Gemma из 20 дословных 12, остальные 8 «другое». Пробелы и типографика не виноваты ни разу, поэтому нормализация сравнения не поможет: модели пересказывают, меняют форму слова или склеивают куски. Одна недословная цитата сейчас выбрасывает весь инкремент. Кандидаты: отбрасывать недословные цитаты и факты только на них с порогом брака; разрешить цитату с пропуском, если обе части дословны; требовать в промпте короткий непрерывный фрагмент без смены формы слов.
-- `sava_learns` проваливают три модели из четырёх в `plain`: кандидат в общий принцип о том, кто и когда что узнал.
+- `sgr` passes the structure check for all models and fails on `quote`: the evidence did not match the scene text word for word. The kind of mismatch is measured (the counters `quoteCount`, `quoteWhitespace`, `quoteTypography`, `quotePunctuation`, `quoteOther` in the failure row): for `gpt-5.4-mini`, out of 40 quotes 36 are verbatim, 1 differs in punctuation, 3 differ in something else; for Gemma, out of 20 quotes 12 are verbatim, and the other 8 are "other". Whitespace and typography are not at fault even once, so normalizing the comparison will not help: the models paraphrase, change the form of a word or join pieces together. One non-verbatim quote now throws away the whole increment. Candidates: drop non-verbatim quotes and the facts that rest only on them, with a threshold for the reject rate; allow a quote with a gap if both parts are verbatim; require in the prompt a short continuous fragment without changing the form of the words.
+- Three models out of four fail `sava_learns` in `plain`: a candidate for a general principle about who learned what and when.

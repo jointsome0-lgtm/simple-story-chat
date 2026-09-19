@@ -1,589 +1,589 @@
-# Экономика экспериментов над промптами и памятью
+# The economics of experiments on prompts and memory
 
-2026-09-19 · Opus 5 (скаут) · анализ без правок кода и без платных запросов. Исследовательская записка: числа с пометкой [И] сняты с локальных технических журналов, которые не публикуются.
+2026-09-19 · Opus 5 (scout) · analysis with no code edits and no paid requests. A research note: numbers marked [M] were taken from local technical logs, which are not published.
 
-Цель: поднять скорость eval, статистическую силу и отдачу на доллар аренды. Ниже отделено **[И]** измеренное
-(из кода и технических журналов `logs/`) от **[В]** выведенного расчётом и **[П]** предположений, которые надо
-проверить.
+Goal: raise eval speed, statistical power and the return per rental dollar. Below, **[M]** measured facts
+(from the code and the technical logs in `logs/`) are kept apart from **[D]** facts derived by calculation and from **[A]** assumptions that
+still need to be checked.
 
-Что я читал: `docs/improve-loop.md`, `docs/improve-log.md`, `docs/gpu.md`, `docs/model-providers.md`,
+What I read: `docs/improve-loop.md`, `docs/improve-log.md`, `docs/gpu.md`, `docs/model-providers.md`,
 `docs/storyworm-ideas.md`, `local/eval.ts`, `local/memory-probe.ts`, `local/scene-judge.ts`, `local/scenarios.ts`,
 `local/prompt.ts`, `local/memory.ts`, `local/generation.ts`, `local/llama.ts`, `local/budget.ts`,
-`examples/scene-traps.ts`, `gpu/serve.sh`, `gpu/bootstrap.sh`, и технические журналы `logs/eval.jsonl`,
-`logs/bot-gpu.jsonl`. Скрытый набор, `data/`, `.env*` не открывались; из журналов брались только счётчики и коды.
+`examples/scene-traps.ts`, `gpu/serve.sh`, `gpu/bootstrap.sh`, and the technical logs `logs/eval.jsonl`,
+`logs/bot-gpu.jsonl`. The holdout pack, `data/` and `.env*` were not opened; only counters and codes were taken from the logs.
 
 ---
 
-## 0. Константы, из которых считается всё остальное
+## 0. The constants everything else is computed from
 
-### Боевая модель на 5090 (Gemma 4 31B heretic Q6_K, 1 слот, KV q8_0, ubatch 128)
+### The production model on a 5090 (Gemma 4 31B heretic Q6_K, 1 slot, KV q8_0, ubatch 128)
 
-**[И]** Шесть строк `compaction_request_completed` из `logs/bot-gpu.jsonl` дают пары «входные токены, выходные
-токены, elapsedMs»:
+**[M]** Six `compaction_request_completed` rows from `logs/bot-gpu.jsonl` give sets of "input tokens, output
+tokens, elapsedMs":
 
-| вход | выход | время |
+| input | output | time |
 |---|---|---|
-| 11 876 | 250 | 12,6 с |
-| 15 032 | 530 | 19,9 с |
-| 19 631 | 724 | 29,1 с |
-| 31 079 | 2 164 | 69,5 с |
-| 33 112 | 2 357 | 78,7 с |
-| 39 267 | 3 207 | 108,2 с |
+| 11,876 | 250 | 12.6 s |
+| 15,032 | 530 | 19.9 s |
+| 19,631 | 724 | 29.1 s |
+| 31,079 | 2,164 | 69.5 s |
+| 33,112 | 2,357 | 78.7 s |
+| 39,267 | 3,207 | 108.2 s |
 
-**[В]** Подгонка `t = вход/P + выход/D` по крайним строкам даёт **P ≈ 2300 ток/с на префилле** и
-**D ≈ 35 ток/с на декоде**. Проверка на остальных четырёх строках — расхождение не более 8 %.
+**[D]** Fitting `t = input/P + output/D` to the first and last rows gives **P ≈ 2300 tok/s on prefill** and
+**D ≈ 35 tok/s on decode**. Checked against the other four rows, the difference is at most 8 %.
 
-Отсюда главный факт всей экономики: **в одной сцене-ловушке декод занимает 85–90 % времени**. Вход сцены
-(сид + память + 4 сцены + ход) — около 5–7 тыс. токенов, это 2–3 с префилла; выход 500–700 токенов, это 15–20 с
-декода. Значит всё, что экономит префилл (общий KV-префикс, банк памяти), бьёт по 10–15 % стоимости, а всё, что
-ускоряет декод (число слотов, тип KV-кэша), бьёт по 85 %.
+This gives the main fact of the whole economics: **in one trap scene, decode takes 85–90 % of the time**. The scene input
+(seed + memory + 4 scenes + the move) is about 5–7 thousand tokens, which is 2–3 s of prefill; the output is 500–700 tokens, which is 15–20 s
+of decode. So everything that saves prefill (a shared KV prefix, a memory bank) affects 10–15 % of the cost, and everything that
+speeds up decode (the number of slots, the KV cache type) affects 85 %.
 
-**[П]** Потолок декода по пропускной способности памяти: 1792 ГБ/с ÷ 25,2 ГБ весов ≈ **71 ток/с** при батче 1.
-Мы получаем 35, то есть 49 % от потолка.
+**[A]** The decode ceiling set by memory bandwidth: 1792 GB/s ÷ 25.2 GB of weights ≈ **71 tok/s** at batch 1.
+We get 35, which is 49 % of the ceiling.
 
-### Что измерено на пачках 18–19 сентября
+### What was measured on the batches of 18–19 September
 
-**[И]** 15 с на сцену при одном слоте, 8 с на сцену при сервере с 5 слотами (`improve-log.md`, запись 19 сентября).
+**[M]** 15 s per scene with one slot, 8 s per scene with a 5-slot server (`improve-log.md`, the 19 September entry).
 
-**[В]** Но при `samples: 3` и `parallel: 5` код в `local/memory-probe.ts:180` запускает
-`Math.max(1, Math.floor(parallel / samples))` = **одну** цепочку, то есть **три** одновременных запроса, а не пять.
-Значит 8 с на сцену получены на батче 3, а не 5. Совокупная скорость декода при батче 3 ≈ 66 ток/с против
-идеальных 105 (3 × 35): эффективность батчинга 63 %.
+**[D]** But with `samples: 3` and `parallel: 5` the code at `local/memory-probe.ts:180` starts
+`Math.max(1, Math.floor(parallel / samples))` = **one** chain, which means **three** simultaneous requests, not five.
+So the 8 s per scene were obtained at batch 3, not 5. The aggregate decode speed at batch 3 ≈ 66 tok/s against
+an ideal 105 (3 × 35): batching efficiency is 63 %.
 
-### Хостинговые модели
+### Hosted models
 
-**[И]** Из `logs/eval.jsonl` (медианы по запросу сжатия):
+**[M]** From `logs/eval.jsonl` (medians per compaction request):
 
-| модель | сжатие, с | вход, ток. | выход, ток. | сцена-ловушка, с |
+| model | compaction, s | input, tok. | output, tok. | trap scene, s |
 |---|---|---|---|---|
-| `openrouter:google/gemma-4-31b-it` | 26,5 (n=133) | 4 901 | 954 | 17,2 |
-| `openai:gpt-5.4-mini` | 7,3 (n=119) | 5 440 | 1 385 | 5,9 |
-| `mistral:ministral-14b-2512` | 16,9 (n=27) | 6 076 | 1 608 | 7,9 |
-| `claude:claude-haiku-4-5` | 29,2 (n=9) | 8 313 | 2 967 | — |
+| `openrouter:google/gemma-4-31b-it` | 26.5 (n=133) | 4,901 | 954 | 17.2 |
+| `openai:gpt-5.4-mini` | 7.3 (n=119) | 5,440 | 1,385 | 5.9 |
+| `mistral:ministral-14b-2512` | 16.9 (n=27) | 6,076 | 1,608 | 7.9 |
+| `claude:claude-haiku-4-5` | 29.2 (n=9) | 8,313 | 2,967 | — |
 
-**[И]** Судья (в тех прогонах — OpenAI): **1,2 с на ловушку**, медиана по 186 промежуткам. Задержка Opus 5 через
-`claude-code` **не измерена ни разу**; у неё есть отдельная цена — запуск CLI на каждый вызов.
+**[M]** The judge (OpenAI in those runs): **1.2 s per trap**, the median over 186 intervals. The latency of Opus 5 through
+`claude-code` **has never been measured**; it has a separate cost: a CLI start on every call.
 
-**[И]** Длина сцены-ловушки: медиана 2017 знаков у Gemma (n=84), p90 2287, максимум 2471. Обрывов по лимиту
-(`truncated`) за всю историю журнала — **ноль из 152**.
+**[M]** Length of a trap scene: median 2017 characters for Gemma (n=84), p90 2287, maximum 2471. Cut-offs at the limit
+(`truncated`) over the whole history of the log: **zero out of 152**.
 
-**[И]** Полный прогон eval по времени (из `logs/eval.jsonl`): 3 сценария, 3 модели, `plain`, с судьёй — **7,0 мин**;
-3 сценария скрытого набора, 1 модель, только память — **6,1–9,4 мин**, 9 запросов сжатия, ≈50 тыс. вход + 14 тыс.
-выход.
+**[M]** Time of a full eval run (from `logs/eval.jsonl`): 3 scenarios, 3 models, `plain`, with the judge: **7.0 min**;
+3 scenarios of the holdout pack, 1 model, memory only: **6.1–9.4 min**, 9 compaction requests, ≈50 thousand input + 14 thousand
+output tokens.
 
 ---
 
-## 1. Где сейчас теряются время, деньги и точность
+## 1. Where time, money and precision are lost today
 
-### 1.1 Слоты сервера недоиспользуются на 40 % — самая дешёвая потеря
+### 1.1 Server slots are 40 % underused: the cheapest loss to fix
 
-**[В]** Как показано выше, при `samples: 3, parallel: 5` работают три слота из пяти. Цена ошибки: 8 с на сцену
-вместо ожидаемых 5–6. На пачке из 300 сцен это **10–15 оплаченных минут**, то есть примерно $0,12 за пачку —
-почти цена входа в саму аренду.
+**[D]** As shown above, with `samples: 3, parallel: 5` three slots out of five are working. The cost of the mistake: 8 s per scene
+instead of the expected 5–6. On a batch of 300 scenes this is **10–15 paid minutes**, which is about $0.12 per batch,
+almost the entry cost of the rental itself.
 
-Причина архитектурная: цепочки нарезаны по вариантам, чтобы «беречь кэш префикса». Но беречь нечего:
-**у всех вариантов-хвостов префикс совпадает целиком**, различие только в последних ~100 токенах последнего
-сообщения (`local/memory-probe.ts:167`). Значит внутри одной ловушки можно сложить все пары «вариант × сэмпл» в
-один плоский список и держать в полёте ровно `parallel` запросов. Локальность кэша от этого не страдает.
+The cause is architectural: the chains are split by variant in order to "protect the prefix cache". But there is nothing to protect:
+**all tail variants have exactly the same prefix**; the only difference is in the last ~100 tokens of the last
+message (`local/memory-probe.ts:167`). So inside one trap all "variant × sample" pairs can be put into
+one flat list, with exactly `parallel` requests kept in flight. Cache locality does not suffer from this.
 
-### 1.2 Варианты SYSTEM гоняются полным eval из отдельного git-worktree — потеря в разы
+### 1.2 SYSTEM variants are run as a full eval from a separate git worktree: a loss of several times
 
-**[И]** Сжатие памяти не зависит от `SYSTEM` рассказчика: `summaryRequest` в `local/memory.ts:29` строит свой
-системный промпт `SUMMARY_RULES`, а `SYSTEM` из `local/prompt.ts:56` попадает только в запрос сцены. То есть
-**правка `SYSTEM` не может изменить память**, и пересжимать её на каждый вариант незачем.
+**[M]** Memory compaction does not depend on the narrator's `SYSTEM`: `summaryRequest` in `local/memory.ts:29` builds its own
+system prompt `SUMMARY_RULES`, and `SYSTEM` from `local/prompt.ts:56` goes only into the scene request. So
+**an edit to `SYSTEM` cannot change memory**, and there is no reason to compact memory again for every variant.
 
-**[В]** Цена варианта SYSTEM относительно варианта-хвоста — один лишний префилл на сцену:
-6000 / 2300 ≈ **+2,6 с** к 15–20 с декода, то есть **×1,15**, а не ×2 и тем более не полный eval.
-Сегодня же вариант SYSTEM стоит: 9 сжатий (≈4,5 мин GPU) + все сцены заново + весь суд заново + потеря парности,
-потому что у каждого worktree своя выборка памяти. Разница между «×1,15» и «полный прогон на вариант» — это
-и есть главная находка по скорости.
+**[D]** The cost of a SYSTEM variant relative to a tail variant is one extra prefill per scene:
+6000 / 2300 ≈ **+2.6 s** on top of 15–20 s of decode, which is **×1.15**, not ×2 and certainly not a full eval.
+Today, however, a SYSTEM variant costs: 9 compactions (≈4.5 min of GPU) + all scenes again + all judging again + the loss of pairing,
+because each worktree has its own memory sample. The difference between "×1.15" and "a full run per variant" is
+the main finding about speed.
 
-Лечится одним полем `system` в файле `--lab` (это `local/memory-probe.ts`, файл **не** входит в список
-неприкосновенного в `improve-loop.md`, там перечислены `eval.ts`, `scene-judge.ts`, `scenarios.ts`, `pack-hf.ts`,
+The fix is one `system` field in the `--lab` file (this is `local/memory-probe.ts`; the file is **not** on the list of
+untouchable files in `improve-loop.md`, which names `eval.ts`, `scene-judge.ts`, `scenarios.ts`, `pack-hf.ts`,
 `budget.ts`).
 
-### 1.3 Память пересчитывается там, где её можно заморозить
+### 1.3 Memory is recomputed where it could be frozen
 
-**[И]** Сам повтор замороженных сцен модель не трогает вовсе: `memory-probe` лишь мутирует локальное хранилище.
-Платными остаются только **3 сжатия на сценарий и режим** плюс один вопрос о памяти.
+**[M]** The replay of frozen scenes does not call the model at all: `memory-probe` only mutates the local storage.
+Only **3 compactions per scenario and mode** plus one memory question remain paid.
 
-**[В]** На GPU это 9 сжатий × ≈29 с = **4,4 мин** на пачку из трёх сценариев, около $0,04. Выигрыш времени
-умеренный. Но выигрыш **точности** больше: сегодня сравнения разных дней идут на разных выборках памяти, и журнал
-сам это отмечает как ограничение замера 19 сентября («парное сравнение шло на разных прогонах памяти»).
-Замороженный банк памяти с ключом `sha256(frozen.json) + хэш кода памяти + модель + режим` убирает целую компоненту
-дисперсии из всех промптовых сравнений.
+**[D]** On the GPU this is 9 compactions × ≈29 s = **4.4 min** per batch of three scenarios, about $0.04. The time gain
+is moderate. But the **precision** gain is larger: today, comparisons from different days use different memory samples, and the log
+itself notes this as a limitation of the 19 September measurement ("the paired comparison ran on different memory runs").
+A frozen memory bank with the key `sha256(frozen.json) + hash of the memory code + model + mode` removes a whole component
+of variance from all prompt comparisons.
 
-Техническая база уже есть: `report.json` хранит `state` (весь `Library`) и список `compactions` для каждого режима,
-а `--resume` их подхватывает. Нужен только флаг, который берёт `state` из чужого отчёта-банка.
+The technical base already exists: `report.json` stores `state` (the whole `Library`) and the list of `compactions` for each mode,
+and `--resume` picks them up. Only a flag is needed that takes `state` from another report used as the bank.
 
-### 1.4 Судья стоит ноль денег, но может держать GPU
+### 1.4 The judge costs no money but can hold the GPU
 
-**[В]** Пачка из 300–500 сцен требует 300–500 вызовов судьи. При последовательном `scene-judge.ts` и даже
-10 с на вызов это 50–80 минут — больше, чем сама генерация. Оплата посекундная, поэтому цена ясная: каждая минута,
-которую карта ждёт судью, стоит ≈$0,01. Если суд вклинивается между пачками, он обходится в $0,5–0,8 за сеанс —
-вдвое дороже всей подготовки машины.
+**[D]** A batch of 300–500 scenes needs 300–500 judge calls. With a sequential `scene-judge.ts` and even
+10 s per call this is 50–80 minutes, more than the generation itself. Billing is per second, so the cost is clear: every minute
+that the card waits for the judge costs ≈$0.01. If judging is placed between batches, it costs $0.5–0.8 per session,
+twice the cost of the whole machine preparation.
 
-Хорошая новость: **распараллелить суд можно без единой правки измерителя**. Lab уже пишет отдельный
-`lab/<вариант>-<сэмпл>/report.json` в том виде, который читает `scene-judge.ts` (`local/memory-probe.ts:147`).
-Значит достаточно запускать N процессов `node local/scene-judge.ts --report lab/<имя> --mode plain` параллельно.
-Предел — лимиты подписки Claude, они **не измерены**.
+The good news: **judging can be parallelized without a single edit to the eval**. Lab already writes a separate
+`lab/<variant>-<sample>/report.json` in the form that `scene-judge.ts` reads (`local/memory-probe.ts:147`).
+So it is enough to run N processes of `node local/scene-judge.ts --report lab/<name> --mode plain` in parallel.
+The limit is the Claude subscription limits, which are **not measured**.
 
-### 1.5 Мера «105 вопросов» переоценивает точность втрое
+### 1.5 The "105 questions" measure overstates precision by a factor of three
 
-**[И]** Разбор чисел журнала: скрытый набор — 33 + 36 + 36 = 105 при трёх сэмплах, то есть **35 вопросов
-(примерно 30 ловушек) × 3 сэмпла**. Открытая пачка 1: 75 = 25 вопросов × 3. Пачка 3: 45 = 9 вопросов × 5.
+**[M]** A breakdown of the log numbers: the holdout pack is 33 + 36 + 36 = 105 with three samples, which is **35 questions
+(about 30 traps) × 3 samples**. Open batch 1: 75 = 25 questions × 3. Batch 3: 45 = 9 questions × 5.
 
-**[В]** Сэмплы одной ловушки — не независимые наблюдения. В наблюдаемых данных ловушка почти всегда даёт 0/3 или
-3/3 (внутриловушечная корреляция близка к 1), значит эффективный размер выборки равен **числу вопросов, а не числу
-вопросов, умноженному на число сэмплов**: 35, а не 105. Доверительный интервал, посчитанный как биномиальный по
-105, уже настоящего примерно в √3 ≈ 1,7 раза.
+**[D]** The samples of one trap are not independent observations. In the observed data a trap almost always gives 0/3 or
+3/3 (the within-trap correlation is close to 1), so the effective sample size equals **the number of questions, not the number
+of questions multiplied by the number of samples**: 35, not 105. A confidence interval computed as binomial over
+105 is narrower than the true one by about √3 ≈ 1.7 times.
 
-### 1.6 Судейский шум не сокращается парностью
+### 1.6 Pairing does not reduce judge noise
 
-**[И]** Согласие Opus и `gpt-5.4` измерено: 36 из 40. Согласие **Opus с самим собой на тех же сценах не измерялось
-никогда**.
+**[M]** The agreement between Opus and `gpt-5.4` is measured: 36 out of 40. The agreement **of Opus with itself on the same scenes has never
+been measured**.
 
-**[В]** Парность спасает от шума памяти и от разницы ловушек, но не от судейского шума: у каждого варианта свои
-сцены, значит свои судейские решения. При доле переобдумываний f = 5 % вклад судьи в разность двух рук составляет
-примерно 3 п.п. — величина того же порядка, что и сэмплирующий шум при n = 3. Пока f не измерена, любая правка
-величиной 5 п.п. недоказуема в принципе.
+**[D]** Pairing protects against memory noise and against differences between traps, but not against judge noise: each variant has its own
+scenes, and so its own judge decisions. With a share of changed verdicts f = 5 %, the judge's contribution to the difference between two arms is
+about 3 pp, the same order of magnitude as the sampling noise at n = 3. Until f is measured, any edit
+with an effect of 5 pp cannot be proven at all.
 
-### 1.7 Хостинговый полигон дороже, чем кажется, но не по деньгам — по пропускной способности
+### 1.7 The hosted test ground costs more than it seems, not in money but in throughput
 
-**[В]** Платный канал Gemma на OpenRouter — 600 тыс. токенов в сутки. Одна сцена-ловушка стоит ≈5–7 тыс. вход +
-≈0,7 тыс. выход ≈ 6,5 тыс. токенов. Значит **потолок полигона — примерно 90 сцен-ловушек в сутки**. Те же 90 сцен
-на арендованной карте стоят около двух центов сверх входа и занимают двенадцать минут.
+**[D]** The paid Gemma channel on OpenRouter is 600 thousand tokens per day. One trap scene costs ≈5–7 thousand input +
+≈0.7 thousand output ≈ 6.5 thousand tokens. So **the ceiling of the test ground is about 90 trap scenes per day**. The same 90 scenes
+on a rented card cost about two cents on top of the entry cost and take twelve minutes.
 
-Вывод против исходной постановки: **размещённая Gemma не «дешёвый полигон» для сравнения вариантов сцен**.
-Её ценность в другом — в проверке, что правило не ломает другие модели (`ministral`, `gpt-5.4-mini`, Haiku), и в
-дешёвых проверках памяти (один прогон памяти по трём сценариям = ≈64 тыс. токенов, то есть 9 прогонов в сутки).
-Для вопросов вида «какой из пяти вариантов правила лучше» полигоном служит сам GPU, а хостинг — контролем
-переносимости уже после.
+A conclusion against the original framing of the task: **hosted Gemma is not a "cheap test ground" for comparing scene variants**.
+Its value is elsewhere: in checking that a rule does not break other models (`ministral`, `gpt-5.4-mini`, Haiku), and in
+cheap memory checks (one memory run over three scenarios = ≈64 thousand tokens, which is 9 runs per day).
+For questions like "which of five rule variants is better", the GPU itself is the test ground, and hosting is a portability
+check afterwards.
 
-Самый вместительный бесплатный канал — `openai-small` (2,25 млн токенов в сутки, ≈340 сцен), но `gpt-5.4-mini`
-шумит на 3 вопроса из 8 и не является боевой моделью.
+The largest free channel is `openai-small` (2.25 million tokens per day, ≈340 scenes), but `gpt-5.4-mini`
+is noisy on 3 questions out of 8 and is not the production model.
 
-### 1.8 Сводка потерь в числах
+### 1.8 Summary of losses in numbers
 
-| Потеря | Оценка | Тип |
+| Loss | Estimate | Type |
 |---|---|---|
-| Незанятые слоты (3 из 5) | 30–40 % времени генерации, ≈$0,10 на пачку из 300 сцен | [В] |
-| Вариант SYSTEM через полный eval вместо lab | ×4–6 по стоимости варианта | [В] |
-| Пересжатие памяти на каждый вариант/прогон | 4,4 мин (≈$0,04) на пачку + лишняя компонента дисперсии | [В] |
-| Карта ждёт судью между пачками | $0,01 за минуту ожидания, $0,5–0,8 за сеанс | [В] |
-| Счёт точности по 105 вместо 35 | интервалы у́же истинных в 1,7 раза | [В] |
-| Неизмеренный шум судьи | ±3 п.п. неучтённой дисперсии | [В] |
+| Idle slots (3 of 5) | 30–40 % of generation time, ≈$0.10 per batch of 300 scenes | [D] |
+| A SYSTEM variant through a full eval instead of lab | ×4–6 in the cost of a variant | [D] |
+| Compacting memory again for every variant/run | 4.4 min (≈$0.04) per batch + an extra component of variance | [D] |
+| The card waits for the judge between batches | $0.01 per minute of waiting, $0.5–0.8 per session | [D] |
+| Counting precision over 105 instead of 35 | intervals 1.7 times narrower than the true ones | [D] |
+| Unmeasured judge noise | ±3 pp of unaccounted variance | [D] |
 
 ---
 
-## 2. Сколько сэмплов нужно и какой протокол сравнения
+## 2. How many samples are needed and which comparison protocol to use
 
-### 2.1 Единица парности — ловушка, не вопрос и не сцена
+### 2.1 The unit of pairing is the trap, not the question and not the scene
 
-Правильная схема: для каждого варианта пишется `n` сцен на **ту же ловушку**, из **той же памяти**, с тем же
-судьёй. Сравниваются доли по ловушкам. Ресемплируемая единица бутстрэпа и перестановочного теста — **ловушка**
-(вопросы внутри неё делят одну сцену и коррелированы).
+The correct design: for each variant, `n` scenes are written for **the same trap**, from **the same memory**, with the same
+judge. Pass rates are compared per trap. The unit resampled by the bootstrap and by the permutation test is the **trap**
+(the questions inside a trap share one scene and are correlated).
 
-Соответственно McNemar по 105 «вопросам» применять нельзя: он считает их независимыми и завышает значимость.
-Верный тест — **перестановочный тест по ловушкам**: для каждой ловушки берётся разность долей
-(доля прошедших у варианта B минус у A), метка варианта случайно переставляется внутри ловушки, сравнивается
-среднее. Он не требует предположений и учитывает кластеризацию.
+Accordingly, McNemar over 105 "questions" must not be used: it treats them as independent and overstates significance.
+The correct test is a **permutation test over traps**: for each trap take the difference of pass rates
+(the pass rate of variant B minus that of A), randomly swap the variant label inside the trap, and compare
+the mean. It needs no assumptions and accounts for clustering.
 
-### 2.2 Расчёт мощности
+### 2.2 Power calculation
 
-Симуляция (4000 повторов, односторонний α = 0,05; скрипт разовый, в scratchpad). K — число вопросов-ловушек,
-n — сэмплов на ловушку на вариант.
+A simulation (4000 repetitions, one-sided α = 0.05; a one-off script in the scratchpad). K is the number of trap questions,
+n is the number of samples per trap per variant.
 
-**Случай A, «сконцентрированный эффект»** (именно так выглядел принятый шаг 19 сентября: d ловушек переходят из
-≈0,1 в ≈0,9, остальные стоят на 0,97 у обеих рук). Мощность перестановочного теста:
+**Case A, "concentrated effect"** (this is exactly what the step accepted on 19 September looked like: d traps move from
+≈0.1 to ≈0.9, the rest stay at 0.97 in both arms). Power of the permutation test:
 
-| K | d ловушек переключилось | эффект | n=1 | n=3 | n=5 |
+| K | d traps switched | effect | n=1 | n=3 | n=5 |
 |---|---|---|---|---|---|
-| 35 | 3 | +7 п.п. | 0,09 | 0,20 | 0,28 |
-| 35 | 4 | +9 п.п. | 0,17 | 0,46 | 0,58 |
-| 35 | 5 | +11 п.п. | 0,32 | 0,68 | 0,89 |
-| 35 | 6 | +14 п.п. | 0,49 | 0,86 | 0,98 |
-| 35 | 8 | +18 п.п. | 0,71 | 0,99 | 1,00 |
+| 35 | 3 | +7 pp | 0.09 | 0.20 | 0.28 |
+| 35 | 4 | +9 pp | 0.17 | 0.46 | 0.58 |
+| 35 | 5 | +11 pp | 0.32 | 0.68 | 0.89 |
+| 35 | 6 | +14 pp | 0.49 | 0.86 | 0.98 |
+| 35 | 8 | +18 pp | 0.71 | 0.99 | 1.00 |
 
-Отсюда два следствия. Первое: **n = 3 — разумный минимум, n = 5 — точка насыщения**; дальше сэмплы почти не
-покупают мощность, потому что переключение ловушки и так почти детерминировано. Второе: **мощность покупается
-числом различающих ловушек, а не сэмплов**. Три переключённые ловушки из 35 не докажет никакой бюджет сэмплов;
-пять-шесть доказываются тремя сэмплами.
+Two consequences follow. First: **n = 3 is a reasonable minimum, n = 5 is the saturation point**; beyond that, samples buy almost no
+power, because the switch of a trap is almost deterministic anyway. Second: **power is bought with
+the number of discriminating traps, not with samples**. No sample budget will prove three switched traps out of 35;
+five or six are proven with three samples.
 
-Знаковый тест (по числу ловушек, улучшившихся против ухудшившихся) заметно слабее перестановочного: при K=35,
-d=5, n=3 он даёт 0,29 против 0,68. Использовать перестановочный.
+The sign test (on the number of traps that improved against those that got worse) is clearly weaker than the permutation test: at K=35,
+d=5, n=3 it gives 0.29 against 0.68. Use the permutation test.
 
-**Случай B, «размазанный эффект»** — тот самый вопрос «различить 80 % и 88 %», если прирост идёт понемногу у всех
-ловушек:
+**Case B, "spread effect"**: the very question "tell 80 % from 88 %", if the gain comes a little from every
+trap:
 
-| K | n | всего сцен на вариант | мощность |
+| K | n | total scenes per variant | power |
 |---|---|---|---|
-| 35 | 3 | 105 | 0,43 |
-| 35 | 5 | 175 | 0,63 |
-| 35 | 8 | 280 | 0,78 |
-| 35 | 12 | 420 | 0,94 |
-| 50 | 5 | 250 | 0,75 |
-| 70 | 5 | 350 | 0,89 |
+| 35 | 3 | 105 | 0.43 |
+| 35 | 5 | 175 | 0.63 |
+| 35 | 8 | 280 | 0.78 |
+| 35 | 12 | 420 | 0.94 |
+| 50 | 5 | 250 | 0.75 |
+| 70 | 5 | 350 | 0.89 |
 
-Для сравнения: если бы 105 вопросов были независимыми наблюдениями, для 0,80 против 0,88 при мощности 0,8
-хватило бы **259 наблюдений на сторону** — то есть даже в идеальном мире 105 недостаточно.
+For comparison: if the 105 questions were independent observations, 0.80 against 0.88 at power 0.8
+would need **259 observations per side**, so even in an ideal world 105 is not enough.
 
-**Прямой ответ на вопрос постановки.** Чтобы уверенно (мощность 0,8) различить 80 % и 88 % на скрытом наборе:
-при сконцентрированном эффекте — **n = 3 и не менее 5–6 различающих ловушек**, это 105 сцен на вариант;
-при размазанном — **n = 8 при нынешних 35 вопросах** (280 сцен на вариант) либо **n = 5, если довести число
-вопросов до 50** (250 сцен). Сегодняшняя конфигурация (35 вопросов × 3 сэмпла) надёжно ловит только
-сконцентрированные эффекты величиной от +10 п.п. Это ровно то, что она и поймала 19 сентября, и это надо
-понимать как границу метода, а не как случайность.
+**A direct answer to the question of the task.** To tell 80 % from 88 % on the holdout pack with confidence (power 0.8):
+with a concentrated effect, **n = 3 and at least 5–6 discriminating traps**, which is 105 scenes per variant;
+with a spread effect, **n = 8 with the current 35 questions** (280 scenes per variant) or **n = 5 if the number of
+questions is raised to 50** (250 scenes). Today's configuration (35 questions × 3 samples) reliably catches only
+concentrated effects of +10 pp and more. That is exactly what it caught on 19 September, and this must be
+understood as the limit of the method, not as an accident.
 
-### 2.3 Рекомендуемый протокол
+### 2.3 Recommended protocol
 
-1. **Парность по трём осям сразу**: один и тот же банк памяти, один и тот же список ловушек, один и тот же судья
-   для обеих рук. Различаться должен только текст варианта.
-2. **Фиксировать сид сэмплера.** Сейчас `local/llama.ts` не передаёт `seed` вообще, сервер берёт случайный.
-   Передача `seed = f(ключ ловушки, номер сэмпла)`, **одинакового для всех вариантов**, даёт общие случайные числа:
-   расхождение вариантов перестаёт зависеть от случайного розыгрыша начала сцены. По опыту метода общих случайных
-   чисел это снимает заметную часть дисперсии разности бесплатно. **[П]** величина выигрыша здесь не измерена, её
-   надо мерить первым же прогоном (две руки с одинаковым текстом, с сидом и без).
-3. **Двухступенчатая воронка с честной остановкой.**
-   - Ступень 1, отсев: только различающие ловушки (`lab.only` уже это умеет), все варианты, n = 3. Это поиск,
-     p-значения здесь не объявляются. Отбрасываются варианты, не обогнавшие базу.
-   - Ступень 2, подтверждение: один победитель против базы, все ловушки, n = 5, перестановочный тест.
-   - Ступень 3, скрытый набор: один заранее объявленный односторонний тест. Множественность закрыта тем, что на
-     скрытый набор выходит ровно один вариант после ступени 2 (замкнутая процедура), а не тем, что делается поправка.
-4. **Контроль отдельным числом.** Ловушки с разрешённым действием (`seal_allowed`, `count10`, `colors`) сейчас
-   растворены в общем `sceneScore`. Правило-победитель обязано не уронить их: это защита от рассказчика, который
-   просто начал отказывать. В lab это считается из `report.json` по ключам вопросов, без правки `eval.ts`.
-5. **Разложить дисперсию один раз** и потом пользоваться числами:
-   - судья: пересудить один готовый каталог дважды (`eval judge --resume`, бесплатно) и посчитать долю
-     переобдумываний f;
-   - сцена: n сэмплов внутри ячейки, это уже есть;
-   - память: 2 разные выборки памяти как блокирующий фактор в одной пачке.
-   Пока эти три числа не известны, любое «улучшение на 4 п.п.» — разговор, а не результат.
+1. **Pairing on three axes at once**: the same memory bank, the same list of traps, the same judge
+   for both arms. Only the text of the variant may differ.
+2. **Fix the sampler seed.** Right now `local/llama.ts` does not pass `seed` at all; the server picks a random one.
+   Passing `seed = f(trap key, sample number)`, **the same for all variants**, gives common random numbers:
+   the difference between variants stops depending on the random draw of the start of the scene. From experience with the common random
+   numbers method, this removes a noticeable part of the variance of the difference for free. **[A]** the size of the gain here is not measured; it
+   must be measured in the very first run (two arms with the same text, with the seed and without it).
+3. **A two-stage funnel with an honest stop.**
+   - Stage 1, screening: only the discriminating traps (`lab.only` can already do this), all variants, n = 3. This is a search;
+     no p-values are declared here. Variants that did not beat the baseline are dropped.
+   - Stage 2, confirmation: one winner against the baseline, all traps, n = 5, permutation test.
+   - Stage 3, the holdout pack: one one-sided test declared in advance. Multiplicity is closed by the fact that
+     exactly one variant reaches the holdout pack after stage 2 (a closed procedure), not by applying a correction.
+4. **Controls as a separate number.** Traps with an allowed action (`seal_allowed`, `count10`, `colors`) are now
+   dissolved in the overall `sceneScore`. The winning rule must not lower them: this is protection against a narrator that
+   simply started refusing. In lab this is computed from `report.json` by question keys, without editing `eval.ts`.
+5. **Decompose the variance once** and then use the numbers:
+   - judge: judge one finished directory twice (`eval judge --resume`, free) and compute the share of
+     changed verdicts f;
+   - scene: n samples inside a cell, this already exists;
+   - memory: 2 different memory samples as a blocking factor in one batch.
+   Until these three numbers are known, any "improvement of 4 pp" is talk, not a result.
 
-### 2.4 Как не сжечь скрытый набор
+### 2.4 How not to burn the holdout pack
 
-- Число заглядываний в скрытый набор записывать в `improve-log.md` явной строкой. При α = 0,05 и восьми
-  заглядываниях вероятность хотя бы одной ложной победы — 0,34.
-- Скрытый набор служит подтверждением, а не поиском: на него выходит один вариант, уже победивший на открытых.
-  Это сегодняшнее правило `improve-loop.md`, его достаточно, нужно лишь его соблюдать и считать заглядывания.
-- Если скрытый набор придётся расширять (а по расчёту мощности 50 вопросов вместо 35 стоят дешевле, чем
-  удвоение сэмплов), это **решение владельца**: состав скрытого набора и сценарии — из раздела «Что менять нельзя».
-
----
-
-## 3. Ранжированный список изменений
-
-Оценки трудоёмкости: S — до получаса, M — полдня, L — день и больше.
-
-### ★ 1. Плоский пул запросов внутри ловушки (сделать первым)
-
-**Что.** В `local/memory-probe.ts` заменить «цепочки по вариантам» на пул: сложить пары «вариант × сэмпл» одной
-ловушки в список и держать в полёте ровно `lab.parallel` запросов. Префикс у всех этих запросов одинаковый,
-поэтому перемешивание вариантов кэшу не вредит.
-
-**Выигрыш.** [В] с 3 занятых слотов до 5: 8 с → 5–6 с на сцену, то есть **+35–45 % сцен в час**.
-**Труд.** S. **Риск.** Низкий; поведение измерителя не меняется, меняется порядок запросов.
-**Как проверить.** Та же пачка до и после: секунды на сцену в `lab_scene` и `nvidia-smi` во время прогона.
-
-### ★ 2. Логировать `inputTokens` и `cachedInputTokens` в строке `lab_scene` (сделать первым)
-
-**Что.** Одна строка в `local/memory-probe.ts:173`: добавить в `progress` поля из `result.usage`. Эти поля уже
-приходят от `local/llama.ts` и уже разрешены белым списком (числа, не текст).
-
-**Выигрыш.** Это единственный способ узнать, **работает ли вообще общий префикс между слотами**. Сегодня вся
-конструкция lab построена на допущении «варианты делят KV-префикс», и оно не проверено ни разу: `--kv-unified`
-делает общий пул ячеек, но llama.cpp не обязан дедуплицировать одинаковые префиксы **параллельных**
-последовательностей. Если `cachedInputTokens` окажется нулём при одновременных запросах, вся раскладка пачки
-должна быть другой (последовательно по ловушке, а не параллельно).
-
-**Труд.** S. **Риск.** Нулевой. **Как проверить.** Само поле и есть проверка.
-
-### ★ 3. Поле `system` в файле `--lab` и банк замороженной памяти (сделать первым)
-
-**Что.** Два связанных изменения `local/memory-probe.ts`:
-- `variants[].system` — переопределяет `request.system` для этого варианта;
-- `--memory <путь к report.json>` — берёт готовые `state`, `compactions`, `through` из банка вместо своих сжатий;
-  ключ банка пишется в отчёт как `sha256(frozen.json)` + хэш `local/memory.ts` + модель + режим, и при
-  несовпадении банк отвергается.
-
-**Выигрыш.** [В] Вариант SYSTEM перестаёт требовать git-worktree и полный eval: его цена падает до ×1,15 от цены
-варианта-хвоста. Плюс исчезает компонента дисперсии «разная память у разных рук», которую журнал 19 сентября уже
-записал как ограничение замера. Для идущего сейчас эксперимента про длину сцен это прямая замена трёх worktree
-одной пачкой.
-
-**Труд.** M. **Риск.** Средний: банк памяти, привязанный к чужому коду памяти, даст бесшумно неверное сравнение.
-Отсюда обязательная проверка хэшей и отказ при несовпадении.
-**Как проверить.** Прогнать вариант «пустой хвост» из банка и из своих сжатий: `score` и распределение
-`sceneScore` должны совпадать в пределах шума.
-
-### 4. Параллельный суд, вынесенный за пределы аренды
-
-**Что.** Обёртка (скрипт, не правка измерителя): по завершении каталога `lab/<имя>` ставить в очередь
-`node local/scene-judge.ts --report lab/<имя> --mode plain`, держать 4–8 процессов, писать сводку. GPU при этом
-не ждёт никого; остаток суда доделывается после выключения машины.
-
-**Выигрыш.** [В] 15–25 минут карты за сеанс, то есть $0,15–0,25 — столько же, сколько стоит вся подготовка машины.
-**Труд.** S–M. **Риск.** Лимиты подписки Claude не измерены: начать с 4 процессов и посмотреть на коды ошибок.
-**Как проверить.** Время от последней сцены до последнего вердикта; доля `rate_limited` в `logs/eval.jsonl`.
-
-### 5. `llama-batched-bench` один раз, результат записать в манифест
-
-**Что.** Один раз прогнать матрицу: батч 1/3/5/8 × KV `q8_0` и `f16` × ubatch 128 и 512, на `pp 6000, tg 600`;
-выбранную конфигурацию записать в `gpu/manifest.env` или в журнал и больше не перемерять. Только `serve.sh`,
-измерителя не касается.
-
-**Когда.** Шесть минут стоят $0,06. Они окупаются ускорением k на сеансе длиной T: выгода T(1−1/k) минут.
-При k = 1,2 порог — T ≈ 40 минут генерации. Поэтому bench уместен один раз, на первом же сеансе, где генерации
-не меньше сорока минут, и никогда после: ответ про конфигурацию сервера долговечен, его надо записать, а не
-покупать заново каждую аренду.
-
-**Обоснование.** [В] Совокупная скорость декода при батче 3 — 66 ток/с при идеале 105 и потолке карты ≈71 на
-поток. Находка прошлого скаута про деквантизацию `q8_0` в f16 на каждом шаге при ≥3 слотах бьёт ровно в декод,
-то есть в 85 % стоимости. Память позволяет: при ctx 65536 KV с SWA (10 слоёв полного внимания + 50 с окном 1024)
-занимает **[В]** ≈1,5 ГБ в `q8_0` и ≈2,9 ГБ в `f16`, а по замеру `docs/gpu.md` свободно ≈4,2 ГБ.
-`--ubatch-size 512` трогает только префилл, то есть 10–15 % стоимости, — это не первый кандидат, вопреки тому,
-как он звучит.
-
-**Выигрыш.** [П] 1,3–2× на декоде, если гипотеза про деквантизацию верна. Стоит $0,07 проверки.
-**Труд.** S. **Риск.** Низкий; при провале возвращается прежняя строка запуска.
-**Как проверить.** Сам bench и затем секунды на сцену в пачке.
-
-Не трогать (по прямому слову владельца): `--cache-reuse`, `--swa-full`, `--ctx-checkpoints 0`.
-Не возвращать `n>1` (`generateMany`): поломка сервера воспроизведена на синтетике.
-
-### 6. Детерминированные меры сцены без судьи
-
-**Что.** В `lab_scene` и в `traps[]` добавить числа, которые считаются кодом: число абзацев, число знаков,
-`finishReason`, доля повторяющихся 5-грамм внутри сцены и с предыдущей сценой. Всё — целые числа и перечисления,
-белый список `local/model-error.ts` расширяется без риска приватности.
-
-**Выигрыш.** Три из четырёх неизмеряемых сегодня вещей, важных тестеру (длина и темп, обрывы по лимиту, повторы),
-становятся измеримыми **без единого вызова судьи и без чтения текста человеком**. Идущий сейчас эксперимент про
-«не более 12 абзацев» получает основную меру бесплатно: его вопрос — распределение числа абзацев, а не вердикт
-судьи. Заодно: обрывов по лимиту в журнале **ноль из 152** — значит эта боль, если тестер о ней говорит,
-приходит не из eval-сценариев, и её надо ловить в живом журнале (пункт 7).
-
-**Труд.** S. **Риск.** Нулевой.
-**Как проверить.** Посчитать эти числа по уже сохранённым `report.json` прошлых пачек — данные для сравнения
-появятся сразу, без новых прогонов.
-
-### 7. Числовой сигнал от живой игры
-
-**Что.** В журнал бота к событию `scene_saved_and_sent` добавить `elapsedMs`, `inputTokens`, `outputTokens`,
-`paragraphs`, `finishReason` (перечисление) и признак `branchedFromSameNode` — игрок сразу перегенерировал или
-ушёл на ветку от того же узла. Всё это неотрицательные целые, булевы и перечисления; `actor` уже отличает
-владельца от остальных, идентификаторов нет.
-
-**Выигрыш.** `branchedFromSameNode` — самый честный дешёвый прокси недовольства сценой, который можно получить,
-не читая ни строчки истории. Сегодня о качестве живой игры мы знаем ровно ноль: у `scene_saved_and_sent` нет ни
-одного числового поля.
-
-**Труд.** M. **Риск.** Приватность: новые поля добавляются в белый список `safeErrorDetails` как числа и
-перечисления, никаких строк.
-**Как проверить.** Неделя журнала: распределение `paragraphs`, доля `length`, доля перегенераций.
-
-### 8. Один раз измерить, насколько полигон предсказывает боевую модель
-
-**Что.** Взять пачку 3 (8 ловушек, 9 вопросов), те же 3–5 вариантов, n = 2, прогнать на размещённой Gemma тем же
-lab-кодом и сравнить **порядок вариантов и знак разностей** с уже имеющимися числами GPU.
-
-**Стоимость.** [В] 8 × 5 × 2 = 80 сцен ≈ 520 тыс. токенов — ровно один дневной лимит платного канала.
-**Выигрыш.** После этого можно либо доверять полигону как фильтру (и экономить часы GPU), либо перестать делать
-вид, что он фильтр. Сейчас это допущение ничем не подкреплено; `improve-loop.md` прямо называет размещённую
-Gemma «оптимистичной заменой», но насколько — не измерено.
-**Труд.** S (прогон), M (нужен работающий lab на `openai-compatible`: сейчас `llamaLab` создаётся только при
-`provider === 'llama-cpp'`, `local/memory-probe.ts:84`; для хостинга путь `provider.generate` работает, но
-`lab.parallel` не применяется).
-**Как проверить.** Совпадение знака разности по ловушкам и ранговая корреляция вариантов.
+- Record the number of looks at the holdout pack in `improve-log.md` as an explicit line. At α = 0.05 and eight
+  looks, the probability of at least one false win is 0.34.
+- The holdout pack serves for confirmation, not for search: one variant reaches it, one that has already won on the open packs.
+  This is today's rule in `improve-loop.md`; it is enough, it only has to be followed, and the looks have to be counted.
+- If the holdout pack has to be extended (and by the power calculation 50 questions instead of 35 cost less than
+  doubling the samples), this is **the owner's decision**: the content of the holdout pack and the scenarios are in the section "What may not change".
 
 ---
 
-## 4. Шаблон GPU-сессии
+## 3. Ranked list of changes
 
-Оплата посекундная, поэтому «час» — неверная единица. Единица — **сеанс произвольной длины с фиксированной ценой
-входа**, и оптимизируется не заполнение часа, а полезные сцены на доллар.
+Effort estimates: S is up to half an hour, M is half a day, L is a day or more.
 
-### 4.1 Арифметика входа
+### ★ 1. A flat request pool inside a trap (do first)
 
-**[И]** Вход: либо подготовка с нуля ≈15 мин ≈ **$0,15** (плюс трафик на 25 ГБ весов, от $0,07 до $1 в
-зависимости от машины), либо диск остановленного экземпляра **$0,017/час** — но остановленную машину может занять
-другой арендатор.
+**What.** In `local/memory-probe.ts`, replace the "chains by variant" with a pool: put the "variant × sample" pairs of one
+trap into a list and keep exactly `lab.parallel` requests in flight. All these requests have the same prefix,
+so mixing the variants does not harm the cache.
 
-**[В]** При ставке ≈$0,6/час (=$0,01/мин) и нынешних 8 с на сцену (7,5 сцен/мин) предельная цена одной сцены
-внутри сеанса — **$0,0013**. Значит вход в $0,15 равен примерно **115 сценам**. Доля полезной работы в счёте
-равна `T / (T + 15 мин)`:
+**Gain.** [D] from 3 busy slots to 5: 8 s → 5–6 s per scene, which is **+35–45 % scenes per hour**.
+**Effort.** S. **Risk.** Low; the behaviour of the eval does not change, only the order of requests changes.
+**How to check.** The same batch before and after: seconds per scene in `lab_scene` and `nvidia-smi` during the run.
 
-| длина сеанса | сцен | счёт | сцен на доллар | доля входа в счёте |
+### ★ 2. Log `inputTokens` and `cachedInputTokens` in the `lab_scene` row (do first)
+
+**What.** One line at `local/memory-probe.ts:173`: add the fields from `result.usage` to `progress`. These fields already
+come from `local/llama.ts` and are already allowed by the whitelist (numbers, not text).
+
+**Gain.** This is the only way to find out **whether the shared prefix between slots works at all**. Today the whole
+lab design is built on the assumption "variants share a KV prefix", and it has never been checked: `--kv-unified`
+makes a shared pool of cells, but llama.cpp is not required to deduplicate identical prefixes of **parallel**
+sequences. If `cachedInputTokens` turns out to be zero for simultaneous requests, the whole layout of a batch
+must be different (sequential within a trap, not parallel).
+
+**Effort.** S. **Risk.** Zero. **How to check.** The field itself is the check.
+
+### ★ 3. A `system` field in the `--lab` file and a bank of frozen memory (do first)
+
+**What.** Two related changes to `local/memory-probe.ts`:
+- `variants[].system` overrides `request.system` for this variant;
+- `--memory <path to report.json>` takes the ready `state`, `compactions`, `through` from the bank instead of doing its own compactions;
+  the bank key is written to the report as `sha256(frozen.json)` + hash of `local/memory.ts` + model + mode, and on
+  a mismatch the bank is rejected.
+
+**Gain.** [D] A SYSTEM variant no longer needs a git worktree and a full eval: its cost drops to ×1.15 of the cost
+of a tail variant. In addition, the variance component "different memory in different arms" disappears, which the 19 September log entry already
+recorded as a limitation of the measurement. For the experiment on scene length that is running now, this directly replaces three worktrees
+with one batch.
+
+**Effort.** M. **Risk.** Medium: a memory bank tied to a different version of the memory code will silently give a wrong comparison.
+Hence the mandatory hash check and the rejection on a mismatch.
+**How to check.** Run the "empty tail" variant from the bank and from its own compactions: `score` and the distribution of
+`sceneScore` must match within noise.
+
+### 4. Parallel judging, moved outside the rental
+
+**What.** A wrapper (a script, not an edit to the eval): when a `lab/<name>` directory is complete, queue
+`node local/scene-judge.ts --report lab/<name> --mode plain`, keep 4–8 processes, write a summary. The GPU then
+waits for nobody; the rest of the judging is finished after the machine is switched off.
+
+**Gain.** [D] 15–25 minutes of the card per session, which is $0.15–0.25, the same as the whole machine preparation costs.
+**Effort.** S–M. **Risk.** The Claude subscription limits are not measured: start with 4 processes and look at the error codes.
+**How to check.** The time from the last scene to the last verdict; the share of `rate_limited` in `logs/eval.jsonl`.
+
+### 5. `llama-batched-bench` once, with the result written to the manifest
+
+**What.** Run the matrix once: batch 1/3/5/8 × KV `q8_0` and `f16` × ubatch 128 and 512, at `pp 6000, tg 600`;
+write the chosen configuration to `gpu/manifest.env` or to the log and do not measure it again. Only `serve.sh`;
+the eval is not touched.
+
+**When.** Six minutes cost $0.06. They pay off through a speed-up of k on a session of length T: the benefit is T(1−1/k) minutes.
+At k = 1.2 the threshold is T ≈ 40 minutes of generation. So the bench is appropriate once, in the first session that has
+at least forty minutes of generation, and never after: the answer about the server configuration is long-lived; it must be written down, not
+bought again with every rental.
+
+**Rationale.** [D] The aggregate decode speed at batch 3 is 66 tok/s, with an ideal of 105 and a card ceiling of ≈71 per
+stream. The previous scout's finding about dequantizing `q8_0` to f16 on every step at ≥3 slots hits exactly decode,
+which is 85 % of the cost. Memory allows it: at ctx 65536 the KV with SWA (10 full-attention layers + 50 with a 1024 window)
+takes **[D]** ≈1.5 GB in `q8_0` and ≈2.9 GB in `f16`, and by the measurement in `docs/gpu.md` ≈4.2 GB is free.
+`--ubatch-size 512` affects only prefill, which is 10–15 % of the cost, so it is not the first candidate, contrary to
+how it sounds.
+
+**Gain.** [A] 1.3–2× on decode, if the dequantization hypothesis is true. Checking it costs $0.07.
+**Effort.** S. **Risk.** Low; on failure the previous launch line is restored.
+**How to check.** The bench itself and then seconds per scene in a batch.
+
+Do not touch (by the owner's direct word): `--cache-reuse`, `--swa-full`, `--ctx-checkpoints 0`.
+Do not bring back `n>1` (`generateMany`): the server failure was reproduced on synthetic data.
+
+### 6. Deterministic scene measures without the judge
+
+**What.** Add numbers computed by code to `lab_scene` and to `traps[]`: the number of paragraphs, the number of characters,
+`finishReason`, the share of repeated 5-grams inside the scene and with the previous scene. All of them are integers and enums;
+the whitelist in `local/model-error.ts` is extended with no privacy risk.
+
+**Gain.** Three of the four things that matter to the tester and cannot be measured today (length and pace, cut-offs at the limit, repetitions)
+become measurable **without a single judge call and without a human reading the text**. The experiment on
+"no more than 12 paragraphs" that is running now gets its main measure for free: its question is the distribution of the number of paragraphs, not the judge's
+verdict. Also: cut-offs at the limit in the log are **zero out of 152**, so this pain, if the tester speaks about it,
+does not come from the eval scenarios, and it has to be caught in the live log (item 7).
+
+**Effort.** S. **Risk.** Zero.
+**How to check.** Compute these numbers over the already saved `report.json` files of past batches: the data for comparison
+appear at once, without new runs.
+
+### 7. A numeric signal from live play
+
+**What.** In the bot log, add to the `scene_saved_and_sent` event `elapsedMs`, `inputTokens`, `outputTokens`,
+`paragraphs`, `finishReason` (an enum) and the flag `branchedFromSameNode`: the player regenerated at once or
+left on a branch from the same node. All of these are non-negative integers, booleans and enums; `actor` already tells
+the owner from the others, and there are no identifiers.
+
+**Gain.** `branchedFromSameNode` is the most honest cheap proxy for dissatisfaction with a scene that can be obtained
+without reading a single line of a story. Today we know exactly nothing about the quality of live play: `scene_saved_and_sent` has not
+a single numeric field.
+
+**Effort.** M. **Risk.** Privacy: the new fields are added to the `safeErrorDetails` whitelist as numbers and
+enums, no strings.
+**How to check.** A week of the log: the distribution of `paragraphs`, the share of `length`, the share of regenerations.
+
+### 8. Measure once how well the test ground predicts the production model
+
+**What.** Take batch 3 (8 traps, 9 questions), the same 3–5 variants, n = 2, run it on hosted Gemma with the same
+lab code and compare **the order of the variants and the sign of the differences** with the GPU numbers we already have.
+
+**Cost.** [D] 8 × 5 × 2 = 80 scenes ≈ 520 thousand tokens, exactly one daily limit of the paid channel.
+**Gain.** After this we can either trust the test ground as a filter (and save GPU hours) or stop pretending
+that it is a filter. Right now this assumption is supported by nothing; `improve-loop.md` directly calls hosted
+Gemma an "optimistic substitute", but by how much is not measured.
+**Effort.** S (the run), M (a working lab on `openai-compatible` is needed: right now `llamaLab` is created only when
+`provider === 'llama-cpp'`, `local/memory-probe.ts:84`; for hosting the `provider.generate` path works, but
+`lab.parallel` is not applied).
+**How to check.** Agreement of the sign of the difference per trap and the rank correlation of the variants.
+
+---
+
+## 4. A GPU session template
+
+Billing is per second, so the "hour" is the wrong unit. The unit is **a session of any length with a fixed entry
+cost**, and what is optimized is not filling the hour but useful scenes per dollar.
+
+### 4.1 Entry arithmetic
+
+**[M]** Entry: either preparation from scratch ≈15 min ≈ **$0.15** (plus traffic for 25 GB of weights, from $0.07 to $1
+depending on the machine), or the disk of a stopped instance at **$0.017/hour**, but a stopped machine can be taken by
+another renter.
+
+**[D]** At a rate of ≈$0.6/hour (=$0.01/min) and the current 8 s per scene (7.5 scenes/min), the marginal cost of one scene
+inside a session is **$0.0013**. So the $0.15 entry equals about **115 scenes**. The share of useful work in the bill
+equals `T / (T + 15 min)`:
+
+| session length | scenes | bill | scenes per dollar | share of entry in the bill |
 |---|---|---|---|---|
-| 15 мин | 110 | $0,30 | 370 | 50 % |
-| 30 мин | 225 | $0,45 | 500 | 33 % |
-| 45 мин | 340 | $0,60 | 565 | 25 % |
-| 90 мин | 675 | $1,05 | 640 | 14 % |
+| 15 min | 110 | $0.30 | 370 | 50 % |
+| 30 min | 225 | $0.45 | 500 | 33 % |
+| 45 min | 340 | $0.60 | 565 | 25 % |
+| 90 min | 675 | $1.05 | 640 | 14 % |
 | ∞ | — | — | 750 | 0 % |
 
-Кривая пологая и без порогов: никакого смысла «дотягивать до часа» нет. Практическое правило:
-**сеанс оправдан, если в очереди не меньше ≈115 сцен работы** (тогда вход не больше половины счёта), и хорош при
-≈340 (вход не больше четверти). Сеанс ради тридцати сцен стоит $0,20 и даёт 150 сцен на доллар — впятеро хуже
-предельной цены; такие вопросы надо копить.
+The curve is flat and has no thresholds: there is no point in "stretching to a full hour". The practical rule:
+**a session is justified if the queue holds at least ≈115 scenes of work** (then the entry is at most half of the bill), and it is good at
+≈340 (the entry is at most a quarter). A session for thirty scenes costs $0.20 and gives 150 scenes per dollar, five times worse
+than the marginal cost; such questions must be accumulated.
 
-После исправлений §3.1 и §3.5 (5–6 с на сцену) те же числа сдвигаются: вход становится равен ≈165 сценам,
-а предельная цена падает до $0,0009.
+After the fixes of §3.1 and §3.5 (5–6 s per scene) the same numbers shift: the entry becomes equal to ≈165 scenes,
+and the marginal cost drops to $0.0009.
 
-### 4.2 Три решения, которые теперь считаются, а не угадываются
+### 4.2 Three decisions that are now computed, not guessed
 
-1. **Простой против остановки.** Простой стоит $0,01/мин, остановленная машина — $0,00028/мин. Даже с двумя
-   минутами на перезапуск остановка выгоднее уже при паузе **больше ≈3 минут**. Значит: очередь опустела и надо
-   подумать — машину остановить, а не гонять наполнитель «раз уж час оплачен». Цена решения — риск, что машину
-   займут.
-2. **Остановить против удалить.** Холодный вход стоит $0,15, тёплый — ≈$0,03. Разница $0,12 окупает диск
-   остановленной машины в течение **≈7 часов**. До семи часов — держать остановленной, дольше — удалять.
-   Ночь простоя стоит $0,20, выходные — около $1, то есть треть остатка кредита.
-3. **Наполнитель.** Лишние сэмплы базового варианта стоят $0,0013 за сцену и прямо покупают мощность теста
-   (§2.2). Их стоит ставить в очередь не «чтобы час не пропал», а потому что это самый дешёвый способ сузить
-   интервал. Но только пока очередь идёт: держать карту включённой ради наполнителя, когда есть что обдумать, —
-   уже не выгодно (пункт 1).
+1. **Idle against stop.** Idling costs $0.01/min, a stopped machine costs $0.00028/min. Even with two
+   minutes for a restart, stopping is cheaper as soon as the pause is **longer than ≈3 minutes**. So: if the queue is empty and you need
+   to think, stop the machine, and do not run filler "because the hour is paid anyway". The price of this decision is the risk that the machine
+   will be taken.
+2. **Stop against delete.** A cold entry costs $0.15, a warm one ≈$0.03. The $0.12 difference pays for the disk
+   of a stopped machine for **≈7 hours**. Up to seven hours, keep it stopped; longer, delete it.
+   A night of being stopped costs $0.20, a weekend about $1, which is a third of the remaining credit.
+3. **Filler.** Extra samples of the baseline variant cost $0.0013 per scene and directly buy test power
+   (§2.2). They should be queued not "so that the hour is not wasted" but because this is the cheapest way to narrow
+   the interval. But only while the queue is running: keeping the card on for the sake of filler when there is something to think about
+   is no longer worth it (item 1).
 
-### 4.3 Форма сеанса
+### 4.3 The shape of a session
 
-Генерация и суд разнесены не по параллельности, а по оплате: судья бесплатен и не требует карты, поэтому
-естественная форма — **пила**.
+Generation and judging are separated not by parallelism but by billing: the judge is free and does not need the card, so
+the natural shape is a **sawtooth**.
 
 ```
-[вход] → пачка отсева → стоп машины → суд и разбор (20–40 мин, $0,01) → старт → пачка подтверждения → стоп/удалить
+[entry] → screening batch → stop the machine → judging and analysis (20–40 min, $0.01) → start → confirmation batch → stop/delete
 ```
 
-Пауза между пачками через остановку стоит около одного цента вместо $0,20–0,40 простоя и вместо $0,12 нового
-холодного входа. Суд готовых каталогов при этом всё равно запускается параллельно с генерацией (§3.4) — тогда к
-моменту остановки судить остаётся немного.
+A pause between batches through a stop costs about one cent instead of $0.20–0.40 of idling and instead of $0.12 for a new
+cold entry. Judging of finished directories is still started in parallel with generation (§3.4), so that by
+the time of the stop little remains to judge.
 
-### До сеанса (бесплатно, на машине бота)
+### Before the session (free, on the bot machine)
 
-1. Собрать файлы пачек заранее: `screen.json` (все варианты, `only` — различающие ловушки, `samples: 3`) и
-   `confirm.json` (победитель против базы, все ловушки, `samples: 5`). Второй файл правится на одну строку, когда
-   известен победитель.
-2. Прогнать `npm test` и `npm run check`.
-3. **Сухой прогон.** Самая дорогая ошибка аренды — опечатка в JSON пачки, найденная на десятой минуте. Стоит
-   добавить в `memory-probe` режим, который повторяет сцены, строит запросы и печатает их размеры в байтах, **не
-   вызывая модель**. Труд S, окупается с первого раза.
-4. Написать очередь одним файлом `queue.sh`, чтобы сеанс начинался с `bash queue.sh`, а не с раздумий:
-   раздумья у включённой карты стоят $0,01 в минуту.
-5. Посчитать, сколько сцен в очереди. Меньше ≈115 — сеанс не оправдан, вопрос откладывается до следующего.
-6. Положить в конец очереди лишние сэмплы базового варианта: по §4.2 это самая дешёвая мощность, какая бывает.
+1. Build the batch files in advance: `screen.json` (all variants, `only` is the discriminating traps, `samples: 3`) and
+   `confirm.json` (the winner against the baseline, all traps, `samples: 5`). One line of the second file is edited when
+   the winner is known.
+2. Run `npm test` and `npm run check`.
+3. **Dry run.** The most expensive rental mistake is a typo in the batch JSON found in the tenth minute. It is worth
+   adding a mode to `memory-probe` that replays the scenes, builds the requests and prints their sizes in bytes **without
+   calling the model**. Effort S, pays off the first time.
+4. Write the queue as one file `queue.sh`, so that the session starts with `bash queue.sh` and not with thinking:
+   thinking next to a running card costs $0.01 per minute.
+5. Count how many scenes are in the queue. Fewer than ≈115 means the session is not justified, and the question waits for the next one.
+6. Put extra samples of the baseline variant at the end of the queue: by §4.2 this is the cheapest power there is.
 
-### Сеанс
+### The session
 
-| Минуты | Что идёт на GPU | Что идёт параллельно на машине бота |
+| Minutes | What runs on the GPU | What runs in parallel on the bot machine |
 |---|---|---|
-| −15…0 (холодный вход) | bootstrap: сборка и загрузка весов идут одновременно, смотреть `progress.sh` | проверка скорости загрузки на первой минуте (см. §5) |
-| 0…2 | `model:probe` (санитарная проверка), `gpu:diagnose --watch 30` в отдельном терминале | — |
-| 2…8 | только на первом длинном сеансе: `llama-batched-bench`, результат записать навсегда | выбор конфигурации сервера |
-| 8…12 | 9 сжатий, запись банка памяти (один раз на ревизию кода памяти) | — |
-| 12…30 | пачка отсева: различающие ловушки × все варианты × 3 сэмпла | суд готовых каталогов, 4–8 процессов |
-| 30 | **остановка машины**, если разбор займёт больше трёх минут | досуд, перестановочный тест, выбор победителя |
-| +0…25 | старт из остановки (≈2 мин), пачка подтверждения: победитель против базы, все ловушки × 5 сэмплов | суд |
-| конец | `gpu:diagnose --pull`, затем остановка (вернусь в течение 7 часов) или удаление | — |
+| −15…0 (cold entry) | bootstrap: the build and the weights download run at the same time, watch `progress.sh` | download speed check in the first minute (see §5) |
+| 0…2 | `model:probe` (sanity check), `gpu:diagnose --watch 30` in a separate terminal | — |
+| 2…8 | only in the first long session: `llama-batched-bench`, write the result down for good | choice of the server configuration |
+| 8…12 | 9 compactions, writing the memory bank (once per revision of the memory code) | — |
+| 12…30 | screening batch: discriminating traps × all variants × 3 samples | judging of finished directories, 4–8 processes |
+| 30 | **stop the machine** if the analysis will take more than three minutes | remaining judging, permutation test, choice of the winner |
+| +0…25 | start from the stopped state (≈2 min), confirmation batch: the winner against the baseline, all traps × 5 samples | judging |
+| end | `gpu:diagnose --pull`, then stop (I will return within 7 hours) or delete | — |
 
-Правило сеанса: **на GPU идёт только то, что нельзя сделать без GPU, и ровно столько времени, сколько идёт
-очередь**. Суд, разбор, статистика, запись журнала — на машине бота, при остановленной или удалённой аренде.
+The rule of the session: **only what cannot be done without the GPU runs on the GPU, and only for as long as the queue
+runs**. Judging, analysis, statistics and writing the log happen on the bot machine, with the rental stopped or deleted.
 
-### После сеанса (бесплатно)
+### After the session (free)
 
-1. Досудить остаток.
-2. Перестановочный тест по ловушкам, отдельно общий счёт и отдельно контрольные ловушки.
-3. Детерминированные меры (абзацы, обрывы, повторы) по тем же `report.json`.
-4. Запись в `improve-log.md`: гипотеза, числа, решение, **сколько заглядываний в скрытый набор израсходовано**.
-
----
-
-## 5. Экономика аренды
-
-**[И]** Оплата посекундная, а не по часам. Ставка $0,5–0,7 в час. Цена входа: подготовка с нуля ≈15 мин ≈$0,15
-либо диск остановленного экземпляра $0,017/час, но остановленную машину может занять другой арендатор. Остаток
-кредита ≈$2,7. Загрузка весов 25 ГБ наблюдалась и за 6 минут (850 Мбит/с), и за полчаса (115 Мбит/с при
-заявленных 1171).
-
-**[В]** Остатка хватает примерно на 4 часа карты. Вся оптимизация сводится к четырём числам: вход $0,15,
-минута работы $0,01, минута простоя $0,01, минута остановки $0,00028.
-
-1. **Мерить сцены на доллар, а не заполнение часа.** Таблица в §4.1: доля входа в счёте равна `15/(T+15)`.
-   Порог окупаемости сеанса — ≈115 сцен в очереди; комфортный режим — от ≈340. Дотягивать сеанс до круглого
-   часа незачем, обрывать его на середине очереди — тоже.
-2. **Копить вопросы в пачки.** Каждый дополнительный сеанс стоит $0,15 входа, это 5,5 % остатка кредита. Три
-   сеанса вместо одного — $0,30 лишних, то есть 230 сцен, которых не будет. Отсюда же ценность сухого прогона
-   (§4, п. 3): опечатка в файле пачки, найденная на карте, стоит не «десять минут», а реальные $0,10 и, если
-   пачка была единственной причиной аренды, ещё один вход.
-3. **Пауза больше трёх минут — остановка, а не простой.** Считано в §4.2. Это единственное изменение привычки,
-   которое ничего не стоит и сразу возвращает $0,20–0,40 за сеанс с разбором посередине.
-4. **Остановленная машина окупается семь часов.** Разница холодного и тёплого входа $0,12 при цене хранения
-   $0,017/час. Возвращаюсь сегодня — останавливать; завтра — удалять (ночь простоя $0,20, выходные ≈$1).
-   При остановке учитывать риск: машину могут занять, и тогда тёплый вход всё равно превращается в холодный.
-5. **Проверка канала на первой минуте — лучшая оптимизация входа.** `progress.sh` уже показывает скорость за
-   последние полминуты. Ниже ~300 Мбит/с — удалить и взять другую машину: тест стоит $0,01, экономит до 25 минут
-   и до $0,25. Кода не требует, только правило.
-6. **Готовый бинарник вместо сборки** (выложить `llama-server` и нужные `.so` в приватный репозиторий HF, как уже
-   делается для скрытого набора через `local/pack-hf.ts`) режет вход примерно вдвое: с $0,15 до $0,07–0,08.
-   Риск: несовпадение glibc и CUDA между образами; страхуется тем, что образ уже закреплён по digest в
-   `docs/gpu.md`. После этого полюсом подготовки становится загрузка весов, и дальше режет уже только пункт 5.
-   Ценность зависит от числа **холодных** входов: при трёх это ≈$0,22, при одном — ничего.
-   Поскольку пункты 3 и 4 как раз сокращают число холодных входов, этот пункт стоит делать последним из шести.
-7. Не забывать про цену трафика: `docs/gpu.md` фиксирует разброс от $2,6 до $52 за ТБ, то есть от $0,07 до $1 за
-   одну загрузку весов — от половины до семи цен всей подготовки. Сравнивать предложения по сумме
-   «ставка + загрузка», как там и написано.
+1. Finish judging the rest.
+2. Permutation test over traps, separately for the overall score and separately for the control traps.
+3. Deterministic measures (paragraphs, cut-offs, repetitions) over the same `report.json` files.
+4. An entry in `improve-log.md`: hypothesis, numbers, decision, **how many looks at the holdout pack were spent**.
 
 ---
 
-## 6. Какие эксперименты вообще стоит ставить
+## 5. Rental economics
 
-**[И]** Из журнала: на открытых сценариях принятое правило даёт 74 из 75, на скрытом наборе 94 из 105. Не
-закрываются ничем: `turn15_crates_35` (сумма счётчика через сжатия), `turn9_agata_in_dark`, `turn12_from_workshop`,
-`debt_remainder`. Все четыре — числа и «кто что знает».
+**[M]** Billing is per second, not per hour. The rate is $0.5–0.7 per hour. Entry cost: preparation from scratch ≈15 min ≈$0.15,
+or the disk of a stopped instance at $0.017/hour, but a stopped machine can be taken by another renter. The remaining
+credit is ≈$2.7. The download of the 25 GB of weights has been observed to take both 6 minutes (850 Mbit/s) and half an hour (115 Mbit/s against
+an advertised 1171).
 
-**Вывод.** Промптовый рычаг почти выбран: остаточный запас — 11 вопросов, примерно 4 ловушки, и они не про
-формулировку правила, а про память. Значит ранжировать гипотезы надо так:
+**[D]** The remaining credit is enough for about 4 hours of the card. The whole optimization comes down to four numbers: entry $0.15,
+a minute of work $0.01, a minute of idling $0.01, a minute of being stopped $0.00028.
 
-1. **Счётчики и суммы через сжатия** (идеи C, J, I из `storyworm-ideas.md`). Самый большой измеренный резерв:
-   22 из 26 провалов Gemma на скрытом наборе — накопленные суммы. Цена варианта: полный повтор (9 сжатий +
-   T × n сцен), **[В]** ≈18 минут на вариант при нынешней скорости, ≈9 после исправлений §3.
-2. **Время доступности считает код** (идея B): чистая правка `prompt.ts`, память не пересжимается, банк памяти
-   работает. **[В]** ≈14 минут на вариант, ≈7 после исправлений. Бьёт в класс ошибок 3.
-3. **Место предмета** (идея C в части `key` без `counters`): ловушки `turn14_dagger_with_tarek`,
+1. **Measure scenes per dollar, not how full the hour is.** The table in §4.1: the share of entry in the bill equals `15/(T+15)`.
+   The break-even threshold of a session is ≈115 scenes in the queue; the comfortable mode starts at ≈340. There is no reason to stretch a session to a round
+   hour, and no reason to cut it off in the middle of the queue.
+2. **Accumulate questions into batches.** Each additional session costs $0.15 of entry, which is 5.5 % of the remaining credit. Three
+   sessions instead of one are $0.30 extra, which is 230 scenes that will not exist. This is also the value of the dry run
+   (§4, item 3): a typo in a batch file found on the card costs not "ten minutes" but a real $0.10 and, if
+   the batch was the only reason for the rental, one more entry.
+3. **A pause longer than three minutes means a stop, not idling.** Computed in §4.2. This is the only change of habit
+   that costs nothing and at once returns $0.20–0.40 per session with an analysis in the middle.
+4. **A stopped machine pays off for seven hours.** The difference between a cold and a warm entry is $0.12, at a storage price of
+   $0.017/hour. If I return today, stop it; if tomorrow, delete it (a night of being stopped $0.20, a weekend ≈$1).
+   When stopping, account for the risk: the machine can be taken, and then the warm entry becomes a cold one anyway.
+5. **Checking the channel in the first minute is the best entry optimization.** `progress.sh` already shows the speed over
+   the last half minute. Below ~300 Mbit/s, delete the machine and take another one: the test costs $0.01, saves up to 25 minutes
+   and up to $0.25. It needs no code, only a rule.
+6. **A ready binary instead of a build** (upload `llama-server` and the needed `.so` files to a private HF repository, as is already
+   done for the holdout pack through `local/pack-hf.ts`) cuts the entry roughly in half: from $0.15 to $0.07–0.08.
+   Risk: a glibc and CUDA mismatch between images; this is covered by the image already being pinned by digest in
+   `docs/gpu.md`. After this, the weights download becomes the dominant part of the preparation, and from then on only item 5 cuts it further.
+   The value depends on the number of **cold** entries: with three it is ≈$0.22, with one it is nothing.
+   Since items 3 and 4 reduce the number of cold entries, this item should be done last of the six.
+7. Do not forget the price of traffic: `docs/gpu.md` records a spread from $2.6 to $52 per TB, which is from $0.07 to $1 for
+   one download of the weights, from half to seven times the cost of the whole preparation. Compare offers by the sum
+   "rate + download", as it says there.
+
+---
+
+## 6. Which experiments are worth running at all
+
+**[M]** From the log: on the open scenarios the accepted rule gives 74 out of 75, on the holdout pack 94 out of 105. These are
+not fixed by anything: `turn15_crates_35` (a counter sum across compactions), `turn9_agata_in_dark`, `turn12_from_workshop`,
+`debt_remainder`. All four are about numbers and "who knows what".
+
+**Conclusion.** The prompt lever is almost used up: the remaining headroom is 11 questions, about 4 traps, and they are not about
+the wording of the rule but about memory. So the hypotheses must be ranked like this:
+
+1. **Counters and sums across compactions** (ideas C, J, I from `storyworm-ideas.md`). The largest measured reserve:
+   22 of Gemma's 26 failures on the holdout pack are accumulated sums. Cost of a variant: a full replay (9 compactions +
+   T × n scenes), **[D]** ≈18 minutes per variant at the current speed, ≈9 after the fixes of §3.
+2. **Code computes the availability time** (idea B): a pure `prompt.ts` edit, memory is not compacted again, the memory bank
+   works. **[D]** ≈14 minutes per variant, ≈7 after the fixes. It targets error class 3.
+3. **The place of an object** (idea C, the `key` part without `counters`): the traps `turn14_dagger_with_tarek`,
    `turn12_from_workshop`.
-4. Чисто промптовые варианты порядка и формулировок (идея K) — только как дешёвый довесок к пачке, не как
-   повод для отдельного сеанса: по §4.1 повод стоит $0,15 входа.
+4. Pure prompt variants of order and wording (idea K): only as a cheap add-on to a batch, not as
+   a reason for a separate session: by §4.1 a reason costs $0.15 of entry.
 
-Правило отбора гипотезы: прежде чем ставить эксперимент, посчитать по уже имеющимся `report.json`,
-**сколько ловушек она физически может переключить**. Если меньше пяти — по расчёту §2.2 эксперимент недоказуем
-при любом бюджете сэмплов, и его надо либо расширять (больше ловушек того же класса — решение владельца), либо
-не ставить.
-
----
-
-## 7. Что требует слова владельца
-
-Перечисленное ниже упирается в раздел «Что менять нельзя» из `improve-loop.md` и в моё ограничение не заглядывать
-в скрытый набор. Помечаю явно, исполнитель цикла этого сам не делает.
-
-1. **Отдельное число для контрольных ловушек** в `eval.ts` (`controlScore` рядом со `sceneScore`). В lab считается
-   без правок, но в основном измерителе — это правка измерителя.
-2. **Расширение набора ловушек с 35 до ~50 вопросов**, желательно в классах «счётчики» и «кто что знает».
-   По расчёту мощности это дешевле, чем удвоение сэмплов, и даёт то, чего сэмплы не дают вовсе.
-3. **Разделение вопроса `draw_corrected` на два** — уже записано в журнале 18 сентября как долг, ждёт пересъёмки
-   базовой линии.
-4. **Дешёвый предварительный судья** (Haiku как фильтр, Opus только на спорных) — правка `scene-judge.ts`.
-   Я бы этого не делал: судья не стоит денег, а сравнимость чисел разных судей потеряется.
-5. **Передача `seed` в `local/llama.ts`** — файл не в списке неприкосновенного, но это изменение боевого адаптера,
-   а не измерителя; стоит согласовать, потому что оно меняет поведение бота у тестера.
+The rule for selecting a hypothesis: before running an experiment, compute from the `report.json` files we already have
+**how many traps it can physically switch**. If fewer than five, then by the calculation in §2.2 the experiment cannot be proven
+with any sample budget, and it must either be extended (more traps of the same class, which is the owner's decision) or
+not be run.
 
 ---
 
-## 8. Три вещи, если времени нет совсем
+## 7. What needs the owner's word
 
-1. Плоский пул запросов в lab (§3.1) — полчаса работы, +35–45 % сцен за оплаченную минуту.
-2. `cachedInputTokens` в строке `lab_scene` (§3.2) — пять минут работы, проверяет допущение, на котором стоит
-   весь метод lab.
-3. Поле `system` в файле пачки плюс банк памяти (§3.3) — полдня, убирает git-worktree-на-вариант и целую
-   компоненту дисперсии; идущий сейчас эксперимент про длину сцен переводится на него сразу.
+The items below touch the section "What may not change" of `improve-loop.md` and my own restriction not to look
+into the holdout pack. I mark this explicitly; the executor of the loop does not do these on its own.
 
-И одно правило без кода: считать точность по числу ловушек, а не по числу «вопросов × сэмплов», и сравнивать
-перестановочным тестом по ловушкам. Это не стоит ничего и сразу убирает самый дорогой вид ошибки — уверенность
-в улучшении, которого нет.
+1. **A separate number for the control traps** in `eval.ts` (`controlScore` next to `sceneScore`). In lab it is computed
+   without edits, but in the main eval this is an edit to the eval.
+2. **Extending the trap set from 35 to ~50 questions**, preferably in the classes "counters" and "who knows what".
+   By the power calculation this is cheaper than doubling the samples, and it gives what samples do not give at all.
+3. **Splitting the `draw_corrected` question into two**: already recorded in the log on 18 September as a debt; it waits for the baseline
+   to be measured again.
+4. **A cheap preliminary judge** (Haiku as a filter, Opus only on disputed cases): an edit to `scene-judge.ts`.
+   I would not do this: the judge costs no money, and the numbers of different judges would stop being comparable.
+5. **Passing `seed` in `local/llama.ts`**: the file is not on the untouchable list, but this is a change to the production adapter,
+   not to the eval; it should be agreed, because it changes the behaviour of the bot for the tester.
+
+---
+
+## 8. Three things if there is no time at all
+
+1. A flat request pool in lab (§3.1): half an hour of work, +35–45 % scenes per paid minute.
+2. `cachedInputTokens` in the `lab_scene` row (§3.2): five minutes of work; it checks the assumption that
+   the whole lab method rests on.
+3. A `system` field in the batch file plus the memory bank (§3.3): half a day; it removes the git worktree per variant and a whole
+   component of variance; the experiment on scene length that is running now moves to it at once.
+
+And one rule with no code: count precision by the number of traps, not by the number of "questions × samples", and compare
+with a permutation test over traps. This costs nothing and at once removes the most expensive kind of mistake: confidence
+in an improvement that does not exist.
