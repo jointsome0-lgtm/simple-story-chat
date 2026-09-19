@@ -42,7 +42,7 @@ export type Provider = {
 export function createModel(config: ModelConfig & { dbPath: string }): Provider {
   if (config.provider === 'claude-code') return createClaude(config);
   if (config.provider === 'codex-cli') return createCodex(config);
-  if (config.provider === 'llama-cpp') return createLlama(config, { slots: config.slots, poolTokens: config.poolTokens });
+  if (config.provider === 'llama-cpp') return createLlama(config, { slots: config.slots });
   if (config.provider === 'openai-compatible') {
     const channel = channelFor(config.baseUrl!, config.model);
     return createOpenAI(config, { budget: createBudget(BUDGET_PATH, channel, capsFor(channel, config.budget)) });

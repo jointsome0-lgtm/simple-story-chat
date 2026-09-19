@@ -182,8 +182,10 @@ test('a pool names the slot of each call and checks the shared cache it was size
   assert.equal(f.calls.at(-1)!.body!.id_slot, 2);
   await f.provider.generate(request());
   assert.equal('id_slot' in f.calls.at(-1)!.body!, false);
-  for (const [n_ctx, code] of [[65536, 'context_limit'], [98304, null]] as const) {
-    const provider = createLlama(config, { slots: 3, poolTokens: 98304, fetch: async url => new URL(url).pathname === '/v1/models'
+  // A slot must hold one whole request. A shared pool is larger than that and the API does not report it, so a server
+  // that reports only one slot's room is accepted.
+  for (const [n_ctx, code] of [[32768, 'context_limit'], [65536, null], [98304, null]] as const) {
+    const provider = createLlama(config, { slots: 3, fetch: async url => new URL(url).pathname === '/v1/models'
       ? json({ data: [{ id: 'test-model' }] }) : json({ default_generation_settings: { n_ctx }, total_slots: 3 }) });
     if (code) await assert.rejects(provider.check(), { code });
     else assert.equal((await provider.check()).slots, 3);
@@ -203,10 +205,14 @@ test('configuration allows tunnel or authenticated HTTPS, rejects unsafe/ambiguo
   assert.throws(() => loadModelConfig('/nonexistent-simple-chat-config', { ...env, SIMPLE_CHAT_MEMORY_MODE: 'other' }));
   assert.throws(() => loadModelConfig('/nonexistent-simple-chat-config', { ...env, SIMPLE_CHAT_BASE_URL: 'https://example.com' }));
   assert.equal(loadModelConfig('/nonexistent-simple-chat-config', { ...env, SIMPLE_CHAT_BASE_URL: 'https://example.com', SIMPLE_CHAT_API_KEY: 'synthetic-key' }).apiKey, 'synthetic-key');
-  // One slot unless a pool is named; a pool's shared cache is at least one request's context.
-  assert.deepEqual([c.slots, c.poolTokens], [1, 65536]);
-  const pooled = loadModelConfig('/nonexistent-simple-chat-config', { ...env, SIMPLE_CHAT_GPU_SLOTS: '3', SIMPLE_CHAT_POOL_TOKENS: '98304' });
-  assert.deepEqual([pooled.slots, pooled.poolTokens], [3, 98304]);
-  assert.throws(() => loadModelConfig('/nonexistent-simple-chat-config', { ...env, SIMPLE_CHAT_GPU_SLOTS: '3', SIMPLE_CHAT_POOL_TOKENS: '32768' }));
+  // One slot unless a pool is named, and isolated slots by default: each holds one request's context.
+  assert.deepEqual([c.slots, c.poolTokens, c.sharedCache], [1, 65536, false]);
+  const isolated = loadModelConfig('/nonexistent-simple-chat-config', { ...env, SIMPLE_CHAT_GPU_SLOTS: '3', SIMPLE_CHAT_POOL_TOKENS: '98304' });
+  assert.deepEqual([isolated.slots, isolated.poolTokens, isolated.sharedCache], [3, 65536, false]);
+  // A shared cache (`--kv-unified`) is at least one request's context, and the bot must ask for it in so many words.
+  const pooled = loadModelConfig('/nonexistent-simple-chat-config', { ...env, SIMPLE_CHAT_GPU_SLOTS: '3', SIMPLE_CHAT_GPU_KV_UNIFIED: 'true', SIMPLE_CHAT_POOL_TOKENS: '98304' });
+  assert.deepEqual([pooled.slots, pooled.poolTokens, pooled.sharedCache], [3, 98304, true]);
+  assert.throws(() => loadModelConfig('/nonexistent-simple-chat-config', { ...env, SIMPLE_CHAT_GPU_SLOTS: '3', SIMPLE_CHAT_GPU_KV_UNIFIED: 'true', SIMPLE_CHAT_POOL_TOKENS: '32768' }));
+  assert.throws(() => loadModelConfig('/nonexistent-simple-chat-config', { ...env, SIMPLE_CHAT_GPU_KV_UNIFIED: 'yes' }));
   assert.throws(() => loadModelConfig('/nonexistent-simple-chat-config', { ...env, SIMPLE_CHAT_GPU_SLOTS: '9' }));
 });

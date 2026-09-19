@@ -516,6 +516,37 @@ test('a yielding turn waiting for room in a pool keeps nobody behind it', async 
   await f.started(4);
   f.calls[3].finish(); await next; prepared.end();
 });
+test('isolated slots run side by side without counting tokens or dividing a cache', async t => {
+  // Each slot holds its own request, so a call the shared-cache arithmetic would never admit runs at once.
+  const f = poolFixture(t, { sharedCache: false, poolTokens: 1000 });
+  const tester = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const scene = tester.generate('tester scene:60000');
+  const agentTurn = f.scheduler.agent.openTurn({ holder: 'agent' });
+  const agentScene = agentTurn.generate('agent scene:60000');
+  const probe = f.scheduler.background.generate('probe:60000');
+  await f.started(3);
+  assert.deepEqual(f.calls.map(call => [call.name, call.slot]), [['tester scene', 2], ['agent scene', 0], ['probe', 1]]);
+  // Nothing was sized: an isolated slot asks the server for no count before the call.
+  assert.deepEqual(f.counted, []);
+  f.calls[0].finish(); await scene; tester.end();
+  f.calls[1].finish(); await agentScene; agentTurn.end();
+  f.calls[2].finish(); await probe;
+});
+test('a person waiting for an isolated slot still stops a probe holding it', async t => {
+  const f = poolFixture(t, { sharedCache: false, slots: 2 });
+  const probe = f.scheduler.background.generate('probe');
+  const owner = f.scheduler.foreground.openTurn({ holder: 'owner' });
+  const first = owner.generate('owner:100');
+  await f.started(2);
+  // Both slots are busy, so the next person has nowhere to go until the probe gives way.
+  const preempted = assert.rejects(probe, { code: 'background_preempted' });
+  const tester = f.scheduler.foreground.generate('tester:100');
+  await preempted;
+  await f.started(3);
+  assert.equal(f.calls[2].name, 'tester');
+  f.calls[2].finish(); await tester;
+  f.calls[1].finish(); await first; owner.end();
+});
 test('cancelling a queued call in a pool ends the token count it started', async t => {
   let release: ((value: number) => void) | undefined;
   const aborted: string[] = [];

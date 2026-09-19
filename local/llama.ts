@@ -79,8 +79,8 @@ async function* events(body: Response['body']) {
 
 // `budget` caps a hosted API; llama.cpp on our own server has none.
 // The bot expects one slot, so that a scene never shares the card with an unknown request, unless it runs a pool
-// (scheduler.ts): then `slots` share one cache of `poolTokens` cells. A research batch also names its slot count here.
-type Options = { fetch?: (url: string, init: RequestInit) => Promise<Response>; budget?: Budget; slots?: number; poolTokens?: number };
+// (scheduler.ts). A research batch also names its slot count here.
+type Options = { fetch?: (url: string, init: RequestInit) => Promise<Response>; budget?: Budget; slots?: number };
 
 export function createLlama(config: LlamaConfig, options: Options = {}) {
   return createChat(config, options, false);
@@ -94,7 +94,7 @@ export function createOpenAI(config: LlamaConfig, options: Options = {}) {
   return { generate, check };
 }
 
-function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, budget, slots = 1, poolTokens = 0 }: Options, hosted: boolean) {
+function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, budget, slots = 1 }: Options, hosted: boolean) {
   const origin = hosted ? '' : modelBaseUrl(config.baseUrl);
   const baseUrl = hosted ? apiBaseUrl(config.baseUrl) : origin + '/v1';
   const openai = hosted && new URL(baseUrl).hostname === OPENAI_HOST;
@@ -200,9 +200,11 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
         if (!models.data?.some(model => model.id === config.model)) throw new ModelError('unexpected_model');
         if (hosted) return { model: config.model };
         const props = await json('/props', null, current) as Props;
-        // With `--kv-unified` every slot reports the whole shared cache.
+        // The server reports what one slot may use: its own cells, or the limit a shared cache puts on a slot
+        // (`--kv-unified-per-slot`, else the whole cache). The size of a shared pool is not in the API at all, so
+        // only one request's room is verified here; the pool is the operator's to match (docs/gpu.md).
         const contextTokens = count(props.default_generation_settings?.n_ctx);
-        if (contextTokens === null || contextTokens < Math.max(config.contextTokens, poolTokens)) throw new ModelError('context_limit');
+        if (contextTokens === null || contextTokens < config.contextTokens) throw new ModelError('context_limit');
         if (props.total_slots !== slots) throw new ModelError('unexpected_slots');
         return { model: config.model, contextTokens, slots: props.total_slots };
       });

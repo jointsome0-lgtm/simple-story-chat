@@ -181,7 +181,7 @@ async function main(args: string[]) {
   }
   const config = loadModelConfig();
   if (config.provider !== 'llama-cpp') throw new Error('gpu_config_required');
-  const provider = createLlama(config, { slots: config.slots, poolTokens: config.poolTokens });
+  const provider = createLlama(config, { slots: config.slots });
   const server = await provider.check() as { slots?: number; contextTokens?: number };
   const directory = resolve(values.out ?? `measurements/${values.profile}`);
   mkdirSync(directory, { recursive: true, mode: 0o700 });

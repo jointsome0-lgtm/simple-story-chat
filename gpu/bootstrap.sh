@@ -64,6 +64,22 @@ connections="${SIMPLE_CHAT_DOWNLOAD_CONNECTIONS:-16}"
 [[ "$connections" =~ ^([1-9]|1[0-6])$ ]] || { echo 'Use SIMPLE_CHAT_DOWNLOAD_CONNECTIONS from 1 to 16.' >&2; exit 1; }
 fetch_model &
 fetch_pid=$!
+# The draft model for speculative decoding is half a gigabyte, so it arrives over one connection beside the weights.
+# Without SIMPLE_CHAT_GPU_DRAFT=true nothing uses it and it is not fetched.
+draft_path="$gpu_dir/models/$DRAFT_FILE"
+if [[ "${SIMPLE_CHAT_GPU_DRAFT:-false}" = true && ! -f "$draft_path" ]]; then
+  curl --fail --location --silent --show-error --retry 2 --continue-at - \
+    "https://huggingface.co/$DRAFT_REPO/resolve/$DRAFT_REVISION/$DRAFT_FILE" -o "$draft_path.part"
+  python3 - "$draft_path" "$DRAFT_SHA256" "$DRAFT_BYTES" <<'PY'
+import hashlib,pathlib,sys
+target=pathlib.Path(sys.argv[1]); current=pathlib.Path(str(target)+'.part')
+if current.stat().st_size != int(sys.argv[3]): current.unlink(); raise SystemExit('Draft model size mismatch.')
+with current.open('rb') as f: digest=hashlib.file_digest(f,'sha256').hexdigest()
+if digest != sys.argv[2]: current.unlink(); raise SystemExit('Draft model SHA256 mismatch.')
+current.rename(target)
+print('Draft model SHA256 verified.')
+PY
+fi
 source_dir="$gpu_dir/llama.cpp"
 if [[ ! -d "$source_dir/.git" ]]; then
   git init -q "$source_dir"

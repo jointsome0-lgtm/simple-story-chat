@@ -7,8 +7,9 @@ export type ModelConfig = {
   provider: 'claude-code' | 'codex-cli' | 'llama-cpp' | 'openai-compatible'; model: string; baseUrl: string | undefined; apiKey: string; temperature: number;
   memoryMode: 'plain' | 'sgr'; repairCoverage: boolean; timeoutMs: number; contextTokens: number; maxOutputTokens: number;
   compactAtTokens: number; keepScenes: number;
-  // llama.cpp: the server's slots and the cache they share; one slot holds one request of `contextTokens`.
-  slots: number; poolTokens: number;
+  // llama.cpp: the server's slots, whether they share one KV cache (`--kv-unified`) and how many cells that is.
+  // With isolated slots `poolTokens` is `contextTokens`: one slot holds one request.
+  slots: number; poolTokens: number; sharedCache: boolean;
   // Overrides of the daily cap of a hosted API's channel; see budget.ts.
   budget: { requests: number | undefined; tokens: number | undefined };
 };
@@ -75,11 +76,16 @@ function modelConfig(env: Env): ModelConfig {
   const maxOutputTokens = integer('SIMPLE_CHAT_MAX_OUTPUT_TOKENS', 4096, 256, 8192);
   const maxInput = contextTokens - Math.max(maxOutputTokens, memoryMode === 'sgr' ? 8192 : 4096);
   if (maxInput < 2048) throw new Error('Output reserve leaves too little input context');
-  // A pool (scheduler.ts) needs a server started with the same slots and a shared cache of this size (gpu/serve.sh).
+  // A pool (scheduler.ts) needs a server started with the same slots (gpu/serve.sh). By default each slot holds its own
+  // request of `contextTokens` and nothing is divided. `SIMPLE_CHAT_GPU_KV_UNIFIED=true` is llama.cpp's `--kv-unified`:
+  // the slots then share `SIMPLE_CHAT_POOL_TOKENS` cells and the scheduler admits calls by size.
   const slots = provider === 'llama-cpp' ? integer('SIMPLE_CHAT_GPU_SLOTS', 1, 1, 8) : 1;
-  const poolTokens = slots > 1 ? integer('SIMPLE_CHAT_POOL_TOKENS', contextTokens, contextTokens, 131072) : contextTokens;
+  const unified = env.SIMPLE_CHAT_GPU_KV_UNIFIED || 'false';
+  if (!['true', 'false'].includes(unified)) throw new Error('Invalid SIMPLE_CHAT_GPU_KV_UNIFIED');
+  const sharedCache = unified === 'true';
+  const poolTokens = slots > 1 && sharedCache ? integer('SIMPLE_CHAT_POOL_TOKENS', contextTokens, contextTokens, 131072) : contextTokens;
   return {
-    slots, poolTokens,
+    slots, poolTokens, sharedCache,
     provider, model, baseUrl, apiKey, temperature, memoryMode, repairCoverage: repairCoverage === 'true',
     timeoutMs: integer('SIMPLE_CHAT_MODEL_TIMEOUT_MS', 300000, 1000, 1800000),
     contextTokens, maxOutputTokens,

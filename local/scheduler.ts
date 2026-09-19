@@ -21,9 +21,10 @@ export type SchedulerOptions<Request = unknown> = {
   // A turn that holds a slot without calling the model this long is taken as lost: an emergency, never a normal end.
   turnIdleMs?: number;
   quietMs?: number; backgroundTimeoutMs?: number; now?: () => number; pollMs?: number; log?: Log;
-  // A pool: the server's slot count and the size of the KV cache they share (`--kv-unified`), and the output limit of a
-  // request, which the pool reserves in full. One slot (the default) is the plain queue.
-  slots?: number; poolTokens?: number; outputTokens?: (request: Request) => number;
+  // A pool: the server's slot count and the output limit of a request, which a shared cache reserves in full. One slot
+  // (the default) is the plain queue. `sharedCache` is llama.cpp's `--kv-unified`: the slots share `poolTokens` cells
+  // and the scheduler admits calls by size. Isolated slots hold one request each and need no admission.
+  slots?: number; poolTokens?: number; sharedCache?: boolean; outputTokens?: (request: Request) => number;
 };
 export type Scheduler<Request, Result> = ReturnType<typeof createScheduler<Request, Result>>;
 type Item<Request> = {
@@ -62,8 +63,11 @@ export function createScheduler<Request, Result>(provider: {
 }, { backgroundAllowed = () => true, agentCanStart = backgroundAllowed, agentCanRun = () => true,
   holdAgentTurn = () => () => {}, turnIdleMs = 60000, quietMs = 60000,
   backgroundTimeoutMs = 90000, now = Date.now, pollMs = 1000, log = () => {},
-  slots = 1, poolTokens = 0, outputTokens = () => 0 }: SchedulerOptions<Request> = {}) {
+  slots = 1, poolTokens = 0, sharedCache = true, outputTokens = () => 0 }: SchedulerOptions<Request> = {}) {
   const pool = slots > 1;
+  // Only a shared cache has to be divided. With isolated slots a call that fits one request fits its own slot, so
+  // nothing is admitted by size and no token count is asked for before the call.
+  const admits = pool && sharedCache;
   const foreground: Item<Request>[] = [];
   const agent: Item<Request>[] = [];
   const background: Item<Request>[] = [];
@@ -148,8 +152,8 @@ export function createScheduler<Request, Result>(provider: {
       queue.push(item);
       // Optional observers cannot affect inference or receive request contents.
       try { controls.onQueued?.(); } catch {}
-      // A pool admits a call by its size, which the server counts first.
-      if (pool) {
+      // A shared cache admits a call by its size, which the server counts first.
+      if (admits) {
         if (!provider.countInput) item.inputTokens = 0;
         else provider.countInput(request, { signal: item.controller.signal }).then(tokens => {
           item.inputTokens = tokens;
@@ -174,7 +178,7 @@ export function createScheduler<Request, Result>(provider: {
   // must not wait for each other, and the server evicts an idle cache rather than fail a running call. It still leaves
   // people their room: an agent must not grow into a person's cache between its own calls either.
   function admit(item: Item<Request>, lane: Lane<Request>) {
-    if (!pool) return true;
+    if (!admits) return true;
     if (item.inputTokens === undefined) return false;
     const continuing = !!item.turn && lane.reserved?.turn === item.turn;
     let used = POOL_MARGIN + item.inputTokens + outputTokens(item.request);
@@ -210,6 +214,9 @@ export function createScheduler<Request, Result>(provider: {
     step();
     notify();
   }
+  // A call a shared cache has not sized yet is waiting for its own count, not for anybody else. Isolated slots ask
+  // for no count, so there is nothing to wait for.
+  const counted = (item: Item<Request>) => !admits || item.inputTokens !== undefined;
   function step() {
     if (closed) return;
     const waiting = (turn: Turn) => foreground.find(item => item.turn === turn) ?? agent.find(item => item.turn === turn);
@@ -249,7 +256,7 @@ export function createScheduler<Request, Result>(provider: {
     if (kept) {
       // A person kept from the model stops the probes and the yielding turns of others that stand in the way; one whose
       // input is still being counted is not kept by them yet.
-      if (pool && kept.inputTokens !== undefined) {
+      if (pool && counted(kept)) {
         stop('background', 'background_preempted');
         yieldTo(kept.turn);
       }
@@ -258,7 +265,7 @@ export function createScheduler<Request, Result>(provider: {
     // An agent kept from the model by a probe stops it: a probe is disposable, an agent turn is not. A started turn
     // waiting for its own next call counts here too, and no longer asks whether an agent may start.
     const keptAgent = heldAgent ?? place(agent, () => quiet && agentCanStart());
-    if (pool && keptAgent?.inputTokens !== undefined) stop('background', 'background_preempted');
+    if (pool && keptAgent && counted(keptAgent)) stop('background', 'background_preempted');
     place(background, () => quiet && backgroundAllowed());
   }
   function start(item: Item<Request>, lane: Lane<Request>) {

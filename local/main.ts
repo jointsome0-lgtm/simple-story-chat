@@ -53,7 +53,8 @@ try {
   } else await rawProvider.check?.();
   const pool = config.slots > 1;
   scheduler = createScheduler(rawProvider, { log,
-    slots: config.slots, poolTokens: config.poolTokens, outputTokens: request => request.maxOutputTokens,
+    slots: config.slots, poolTokens: config.poolTokens, sharedCache: config.sharedCache,
+    outputTokens: request => request.maxOutputTokens,
     backgroundAllowed: () => {
       const state = gpu?.snapshot();
       // Without an idle deadline (null) background work is not allowed.

@@ -54,7 +54,7 @@ bash /workspace/simple-chat/gpu/ensure-server.sh
 
 It is convenient to watch the preparation from the bot's computer: `ssh -t simple-chat-vast bash /workspace/simple-chat/gpu/progress.sh`. The screen refreshes once every three seconds and shows the downloaded amount of weights, the speed over the last half minute and the remaining time, and for the build it shows the completed steps out of the total number and the remaining time. The script only reads, and it exits by itself when the weights are verified and `llama-server` is built. The link speed stated in the offer promises nothing: on a machine with "1171 Mbit/s" the weights came from Hugging Face at 115 Mbit/s, about half an hour.
 
-The bot writes one scene at a time, and the server starts with one slot by default; the bot's client checks this. The research batch (`memory-probe.ts --lab`) starts the server with `SIMPLE_CHAT_GPU_SLOTS=2..8`: the slots share one KV cache of the same size (`--kv-unified`) for the full-attention layers, but each slot adds its own sliding-window cache, about 425 MiB at q8 (an estimate from the model's layers, not measured). With 5 slots the batch took 8 s per scene against 15 s with one slot; about three requests were in flight at a time, so this is a 1.9x gain rather than 5x. Before the bot returns to the GPU, the server is restarted without this variable.
+The bot writes one scene at a time, and the server starts with one slot by default; the bot's client checks this. The research batch (`memory-probe.ts --lab`) starts the server with `SIMPLE_CHAT_GPU_SLOTS=2..8`: by default each slot gets its own `SIMPLE_CHAT_GPU_CONTEXT` cells for the full-attention layers, and each adds its own sliding-window cache, about 425 MiB at q8 (an estimate from the model's layers, not measured). `SIMPLE_CHAT_GPU_KV_UNIFIED=true` with `SIMPLE_CHAT_GPU_POOL` makes them share one cache instead, which fits more slots into the same memory. With 5 slots the batch took 8 s per scene against 15 s with one slot; about three requests were in flight at a time, so this is a 1.9x gain rather than 5x. Before the bot returns to the GPU, the server is restarted without this variable.
 
 The server listens only on `127.0.0.1:8080`. You do not need to publish this HTTP port on the internet. Slot snapshots to disk and the additional RAM cache of snapshots are disabled; the ordinary KV cache of the current slot stays in memory.
 
@@ -129,7 +129,16 @@ One background call is limited to 90 seconds. It is allowed only when the GPU is
 
 ### Slot pool (off by default)
 
-`SIMPLE_CHAT_GPU_SLOTS=3` and `SIMPLE_CHAT_POOL_TOKENS=98304` in the bot's `.env`, with the server started by `serve.sh` with the same `SIMPLE_CHAT_GPU_SLOTS` and `SIMPLE_CHAT_GPU_CONTEXT=98304`, turn the queue into a pool: one call runs in each slot at once, and the bot's check refuses a server with other slots or a smaller cache. With `--kv-unified` every slot reports the whole shared cache as its context, so the server itself does not stop several requests from overfilling it; the scheduler admits calls instead. `SIMPLE_CHAT_CONTEXT_TOKENS` stays the limit of one request.
+`SIMPLE_CHAT_GPU_SLOTS=3` in the bot's `.env`, with the server started by `serve.sh` with the same `SIMPLE_CHAT_GPU_SLOTS`, turns the queue into a pool: one call runs in each slot at once. `SIMPLE_CHAT_CONTEXT_TOKENS` stays the limit of one request, and `SIMPLE_CHAT_GPU_CONTEXT` must match it.
+
+The slots divide the card's cache in one of two ways, and the bot and the server must be told the same one:
+
+- **Isolated** (the default, `SIMPLE_CHAT_GPU_KV_UNIFIED` unset or `false`): each slot owns `SIMPLE_CHAT_GPU_CONTEXT` cells, the server is given `slots x context` in all, and nothing can evict anything. The scheduler admits every call that fits one request, because it does.
+- **Shared** (`SIMPLE_CHAT_GPU_KV_UNIFIED=true` in both, `SIMPLE_CHAT_POOL_TOKENS` and `SIMPLE_CHAT_GPU_POOL` the same number): the slots share that many cells, `--kv-unified-per-slot` stops one slot from taking more than one request's worth, and the scheduler admits calls by size as described below. Fewer cells buy the same slots, and a short story leaves its room to the others.
+
+**`--no-cache-idle-slots` is what makes either of them work**, and `serve.sh` always passes it. Without it llama.cpp saves an idle slot's cells to the RAM prompt cache on every new task and clears them from the card; with `--cache-ram 0` they are simply gone, and a person loses their whole story cache while they read. This is not a subtlety: on the RX 580 the same load kept the cache with the flag and re-read the history from nothing without it.
+
+The bot's check refuses a server with other slots, or one whose slot cannot hold a whole request. The size of a shared pool is not in the server's API at all, so nothing verifies it: the two numbers are the operator's to match.
 
 - A turn's calls go to one slot (`id_slot`), and a holder's next turn goes back to its slot. People take the highest free slot that holds no other person's cache; agents and probes take the lowest and never the highest one. When the cache overflows, llama.cpp evicts idle slots from slot 0 up, so people's caches go last.
 - Each call reserves its input, counted by the server beforehand outside the slots, plus its whole output limit, and 2048 cells stay free. A call starts only if its reservation fits beside every running call and every other turn between its calls. An agent's or a probe's call must also leave room for every person's cache with its output limit and 1024 more cells for the next action, so agents never push a person's cache out, between their own calls no more than at their start. A person's call does not count idle caches: the server evicts them. The next call of a started turn does not count the idle caches of other turns, so two turns between their calls never wait for each other; a call larger than the whole pool runs only when the pool holds nothing else.
@@ -159,6 +168,16 @@ The owner's thresholds, agreed on 20 September 2026 and encoded in `THRESHOLDS` 
 | 5 | The tester's longest wait for the queue | 120 seconds |
 | 6 | The draft model (MTP) | at least 1.2×, without a format regression |
 | 7 | The pool and the draft model do not fit together | keep the pool, drop the draft model |
+
+On the RX 580 with Gemma 3 1B, three slots and the same load in each run, the script answered the question the flags raise:
+
+| Server | The tester's cache | Useful work per hour | The tester's scene |
+|--------|--------------------|----------------------|--------------------|
+| Shared cache, idle slots cleared (llama.cpp's default) | lost, the whole history re-read | 52 300 | 4.6x slower |
+| Isolated slots | kept | 87 000 | 1.4x slower |
+| Shared cache, `--no-cache-idle-slots` | kept | 91 150 | 1.0x |
+
+The numbers are a small old card's and mean nothing for the 5090; the order between the three does. The measurement that mattered was the first one: without that flag a pool is worse than no pool at all.
 
 Checks 1 to 5 are answered by one profile's two phases. Checks 6 and 7 compare profiles, so they need a pair that differs only by the draft model. Video memory is read on the instance over SSH (`SIMPLE_CHAT_GPU_SSH_HOST`); without it check 1 stays `unknown` and never becomes a pass. Check 6 verifies the scene format, the way `model:probe` does; it does not judge the prose, which is what `npm run eval` is for. A profile whose own checks did not all pass is not taken, however much work it does.
 
