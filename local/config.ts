@@ -12,6 +12,8 @@ export type ModelConfig = {
 };
 export type GpuConfig = { instanceId: string; apiKey: string; sshHost: string; idleMinutes: number };
 export type Config = ModelConfig & { gpu: GpuConfig | undefined; token: string; allowedUsers: Set<string>; ownerId: string; dbPath: string };
+// The agent interface (docs/agent-interface.md): its own library file, and the bot's model queue if the bot serves one.
+export type AgentConfig = ModelConfig & { dbPath: string; modelSocket: string; waitSeconds: number };
 
 function environment(directory: string, inherited: Env): Env {
   let file: Env = {};
@@ -99,6 +101,29 @@ export function gpuConfig(env: Env, provider: string): GpuConfig | undefined {
   return { instanceId, apiKey, sshHost, idleMinutes };
 }
 
+// A hosted API or a consumer Codex account may log requests and train on them. By default they serve synthetic probes
+// and never the bot's real stories; the one who runs the bot may accept that for their own stories in so many words.
+// The agent interface asks the same: an agent co-author may be given real text as easily as a Telegram user.
+function requireHostedConsent(model: ModelConfig, env: Env) {
+  if ((model.provider === 'openai-compatible' || model.provider === 'codex-cli') && env.SIMPLE_CHAT_ALLOW_HOSTED !== 'stories-leave-this-computer') {
+    throw new Error(`The ${model.provider} provider is for synthetic probes only; SIMPLE_CHAT_ALLOW_HOSTED=stories-leave-this-computer lets the bot use it`);
+  }
+}
+
+// No Telegram token or access list: the agent interface never opens the bot's database. It only needs the bot's
+// database path to find the model queue the bot serves next to it (local/background.ts).
+export function loadAgentConfig(directory = process.cwd(), inherited: Env = process.env): AgentConfig {
+  const env = environment(directory, inherited);
+  const model = modelConfig(env);
+  requireHostedConsent(model, env);
+  const waitSeconds = Number(env.SIMPLE_CHAT_AGENT_WAIT_SECONDS || 20);
+  if (!Number.isSafeInteger(waitSeconds) || waitSeconds < 0 || waitSeconds > 600) throw new Error('Invalid SIMPLE_CHAT_AGENT_WAIT_SECONDS');
+  const botDb = resolve(directory, env.SIMPLE_CHAT_DB_PATH || 'data/simple-chat.sqlite');
+  const dbPath = resolve(directory, env.SIMPLE_CHAT_AGENT_DB_PATH || 'data/agents.sqlite');
+  if (dbPath === botDb) throw new Error('SIMPLE_CHAT_AGENT_DB_PATH must not be the bot database');
+  return { ...model, dbPath, modelSocket: botDb + '.model.sock', waitSeconds };
+}
+
 export function loadConfig(directory = process.cwd(), inherited: Env = process.env): Config {
   const env = environment(directory, inherited);
   const token = env.TELEGRAM_BOT_TOKEN?.trim();
@@ -106,11 +131,7 @@ export function loadConfig(directory = process.cwd(), inherited: Env = process.e
   const allowedUsers = new Set((env.SIMPLE_CHAT_ALLOWED_USER_IDS || '').split(',').map(s => s.trim()).filter(Boolean));
   if (!allowedUsers.size || [...allowedUsers].some(id => !/^\d+$/.test(id))) throw new Error('Set numeric SIMPLE_CHAT_ALLOWED_USER_IDS in .env');
   const model = modelConfig(env);
-  // A hosted API or a consumer Codex account may log requests and train on them. By default they serve synthetic probes
-  // and never the bot's real stories; the one who runs the bot may accept that for their own stories in so many words.
-  if ((model.provider === 'openai-compatible' || model.provider === 'codex-cli') && env.SIMPLE_CHAT_ALLOW_HOSTED !== 'stories-leave-this-computer') {
-    throw new Error(`The ${model.provider} provider is for synthetic probes only; SIMPLE_CHAT_ALLOW_HOSTED=stories-leave-this-computer lets the bot use it`);
-  }
+  requireHostedConsent(model, env);
   const gpu = gpuConfig(env, model.provider);
   if (gpu && model.baseUrl !== 'http://127.0.0.1:8080') throw new Error('Managed GPU requires the local SSH tunnel on port 8080');
   // The bot log marks the owner's rows with this ID. A mistyped one would mark them as someone else's without a word.

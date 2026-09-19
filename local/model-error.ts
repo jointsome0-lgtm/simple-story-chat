@@ -6,7 +6,10 @@ const TRANSPORT_CODES = ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EPIPE', 'EN
   'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT'] as const;
 const SIGNALS = ['SIGTERM', 'SIGKILL', 'SIGINT', 'SIGHUP', 'SIGABRT', 'SIGSEGV', 'SIGPIPE'] as const;
 const SSH_REASONS = ['authentication', 'host_key', 'port_in_use', 'connect_timeout', 'connection_refused', 'connection_lost', 'keepalive_timeout', 'network_unreachable', 'other'] as const;
-const ACTORS = ['owner', 'other'] as const;
+// `agent`: a request through the agent interface (local/agent-api.ts), which has its own library.
+const ACTORS = ['owner', 'other', 'agent'] as const;
+// Calls of the agent interface, for its log rows.
+const AGENT_CALLS = ['create_seed', 'start_story', 'act', 'fork'] as const;
 // Sizes, counts and durations. Each is kept only as a non-negative safe integer, so none can carry text.
 const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'repairSceneCount', 'requestBytes',
   'inputBytesBefore', 'inputBytesAfter', 'outputCharacters', 'inputTokens', 'outputTokens', 'elapsedMs',
@@ -18,7 +21,7 @@ export type ErrorDetails = {
   memoryReason?: typeof MEMORY_REASONS[number]; transportCode?: typeof TRANSPORT_CODES[number] | 'other';
   exitCode?: number; signal?: typeof SIGNALS[number]; sshReason?: typeof SSH_REASONS[number];
   // Whose request a bot log row belongs to. Only the owner allowed reading the owner's own stories for debugging.
-  actor?: typeof ACTORS[number]; automatic?: boolean;
+  actor?: typeof ACTORS[number]; automatic?: boolean; agentCall?: typeof AGENT_CALLS[number];
 } & { [Key in typeof COUNTS[number]]?: number };
 export type Log = (event: string, code?: string | number, details?: unknown) => void;
 
@@ -44,6 +47,7 @@ export function safeErrorDetails(value: unknown = {}): ErrorDetails {
   if (member(SSH_REASONS, input?.sshReason)) result.sshReason = input.sshReason;
   if (member(ACTORS, input?.actor)) result.actor = input.actor;
   if (typeof input?.automatic === 'boolean') result.automatic = input.automatic;
+  if (member(AGENT_CALLS, input?.agentCall)) result.agentCall = input.agentCall;
   for (const key of COUNTS) {
     const count = input?.[key];
     if (typeof count === 'number' && Number.isSafeInteger(count) && count >= 0) result[key] = count;
@@ -61,6 +65,22 @@ export class ModelError extends Error {
   declare inputBytesAfter?: number; declare outputCharacters?: number; declare elapsedMs?: number;
   constructor(code: string, details?: unknown) { super(code); this.code = code; Object.assign(this, safeErrorDetails(details)); }
 }
+
+// The `reason` of an agent interface response. Model and transport failures keep their ModelError code; the rest
+// belong to the interface itself. Anything else becomes `internal_error`, so no provider text can reach a client.
+export const REASONS = ['cancelled', 'context_limit', 'timeout', 'provider_failed', 'unauthorized', 'model_unavailable',
+  'unexpected_model', 'rate_limited', 'budget_exceeded', 'queue_full', 'nothing_to_compact', 'invalid_memory', 'memory_not_smaller',
+  'output_limit', 'empty_response', 'invalid_response', 'invalid_stream', 'incomplete_stream', 'usage_unavailable', 'unexpected_tools',
+  'process_exit', 'network', 'gpu_not_ready', 'background_preempted', 'background_unavailable', 'background_timeout',
+  'background_invalid_request', 'background_request_too_large',
+  // The agent interface's own reasons.
+  'invalid_request', 'seed_format', 'not_found', 'unknown_request', 'request_id_reused', 'job_running', 'library_locked',
+  'process_exited', 'shutdown', 'internal_error'] as const;
+export type Reason = typeof REASONS[number];
+export const reasonCode = (error: unknown): Reason => {
+  const code = (error as { code?: unknown } | null | undefined)?.code;
+  return member(REASONS, code) ? code : 'internal_error';
+};
 
 // Thrown values are not checked. ModelError and Node system errors carry string codes;
 // TelegramError carries an HTTP-like number or a string. Callers compare or sanitize the code.

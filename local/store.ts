@@ -10,7 +10,13 @@ type AccessRequest = { userId: string; at: number };
 export class Store {
   declare db: DatabaseSync;
 
-  constructor(path: string) {
+  // A read-only store serves a process that only looks while another one writes: it creates nothing and takes no lock.
+  constructor(path: string, { readOnly = false }: { readOnly?: boolean } = {}) {
+    if (readOnly) {
+      this.db = new DatabaseSync(path, { readOnly: true });
+      this.db.exec('PRAGMA busy_timeout=5000');
+      return;
+    }
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(path);
     if (path !== ':memory:') chmodSync(path, 0o600);
