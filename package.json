@@ -1,6 +1,7 @@
 {
   "name": "simple-story-chat",
   "private": true,
+  "license": "MIT",
   "devDependencies": {
     "@tgcloud/cli": "0.1.2",
     "@types/node": "24.9.2",
