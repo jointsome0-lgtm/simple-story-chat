@@ -381,8 +381,8 @@ export type AgentApi = ReturnType<typeof createAgentApi>;
 
 // The model: the bot's queue when the bot serves one (a GPU run), so its humans keep priority; otherwise the provider
 // the bot would use, directly. The model configuration comes from loadAgentConfig, which keeps the hosted consent gate.
-// The route is chosen again before every model call: a long-lived MCP server may start before the bot, and once the bot
-// serves its queue the agent must go through it. A call that has started is never retried through the other route.
+// The route is chosen at the first model call of a turn and kept to its end; the next turn checks the queue again, so a
+// long-lived MCP server started before the bot goes through its queue once the bot serves one.
 export async function agentProvider(config: AgentConfig): Promise<{ provider: Provider; queue: boolean }> {
   let direct: Provider | undefined;
   const directModel = () => direct ??= createModel(config);

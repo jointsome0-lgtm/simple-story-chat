@@ -54,8 +54,9 @@ disposable probes:
 
 The queue checks that it serves the configured model, so start the agent with the bot's model configuration
 (`npm run agent:gpu`, `npm run mcp:gpu`). Without the socket the agent calls the configured provider directly. The
-route is chosen again before every model call, so an MCP server started before the bot switches to its queue once the
-bot is up; a call already sent is never repeated through the other route.
+route is chosen at the first model call of a turn and kept to the turn's end; the next turn checks the queue again, so
+an MCP server started before the bot switches to its queue once the bot is up. A turn never changes route midway: if
+its queue goes away, it ends `preempted` (`background_unavailable`) rather than go on as a new direct request.
 
 ## The contract
 
