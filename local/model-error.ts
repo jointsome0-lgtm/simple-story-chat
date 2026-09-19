@@ -8,6 +8,8 @@ const SIGNALS = ['SIGTERM', 'SIGKILL', 'SIGINT', 'SIGHUP', 'SIGABRT', 'SIGSEGV',
 const SSH_REASONS = ['authentication', 'host_key', 'port_in_use', 'connect_timeout', 'connection_refused', 'connection_lost', 'keepalive_timeout', 'network_unreachable', 'other'] as const;
 // `agent`: a request through the agent interface (local/agent-api.ts), which has its own library.
 const ACTORS = ['owner', 'other', 'agent'] as const;
+// Stages of a compaction, as generation.ts reports them.
+const STAGES = ['queued', 'extracting', 'validating', 'saving', 'done', 'failed', 'cancelled'] as const;
 // Calls of the agent interface, for its log rows.
 const AGENT_CALLS = ['create_seed', 'start_story', 'act', 'fork'] as const;
 // Sizes, counts and durations. Each is kept only as a non-negative safe integer, so none can carry text.
@@ -21,7 +23,7 @@ export type ErrorDetails = {
   memoryReason?: typeof MEMORY_REASONS[number]; transportCode?: typeof TRANSPORT_CODES[number] | 'other';
   exitCode?: number; signal?: typeof SIGNALS[number]; sshReason?: typeof SSH_REASONS[number];
   // Whose request a bot log row belongs to. Only the owner allowed reading the owner's own stories for debugging.
-  actor?: typeof ACTORS[number]; automatic?: boolean; agentCall?: typeof AGENT_CALLS[number];
+  actor?: typeof ACTORS[number]; automatic?: boolean; agentCall?: typeof AGENT_CALLS[number]; stage?: typeof STAGES[number];
 } & { [Key in typeof COUNTS[number]]?: number };
 export type Log = (event: string, code?: string | number, details?: unknown) => void;
 
@@ -48,6 +50,7 @@ export function safeErrorDetails(value: unknown = {}): ErrorDetails {
   if (member(ACTORS, input?.actor)) result.actor = input.actor;
   if (typeof input?.automatic === 'boolean') result.automatic = input.automatic;
   if (member(AGENT_CALLS, input?.agentCall)) result.agentCall = input.agentCall;
+  if (member(STAGES, input?.stage)) result.stage = input.stage;
   for (const key of COUNTS) {
     const count = input?.[key];
     if (typeof count === 'number' && Number.isSafeInteger(count) && count >= 0) result[key] = count;

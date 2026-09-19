@@ -16,13 +16,14 @@ function cli(t: TestContext) {
   const directory = mkdtempSync(join(tmpdir(), 'simple-chat-agent-cli-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const env = { PATH: process.env.PATH, HOME: directory, SIMPLE_CHAT_AGENT_DB_PATH: join(directory, 'agents.sqlite') };
-  const run = (...args: string[]) => {
-    const result = spawnSync(process.execPath, [CLI, ...args], { cwd: directory, env, encoding: 'utf8' });
+  const run = (...args: string[]) => runWith({}, ...args);
+  const runWith = (options: { input?: string; env?: object }, ...args: string[]) => {
+    const result = spawnSync(process.execPath, [CLI, ...args], { cwd: directory, env: { ...env, ...options.env }, input: options.input, encoding: 'utf8' });
     const lines = result.stdout.trim().split('\n');
     assert.equal(lines.length, 1, 'one JSON object per call');
     return { response: JSON.parse(lines[0]), code: result.status, stderr: result.stderr };
   };
-  return { directory, run };
+  return { directory, run, runWith };
 }
 
 test('the CLI prints one JSON object per call; writers lock the library, readers do not', async t => {
@@ -47,4 +48,16 @@ test('the CLI prints one JSON object per call; writers lock the library, readers
   assert.deepEqual(locked.response, { status: 'busy', reason: 'library_locked' });
   assert.equal(locked.code, 1);
   assert.equal(run('status', '--json', '{"requestId":"seed-1"}').response.status, 'done');
+});
+
+test('a writer reads JSON from stdin under the lock, and SIMPLE_CHAT_AGENT_ID picks the library', t => {
+  const { run, runWith } = cli(t);
+  const piped = runWith({ input: JSON.stringify({ requestId: 'seed-1', text: SEED }) }, 'create_seed', '--json', '-');
+  assert.equal(piped.response.status, 'done');
+  // Another agent id is another library: the default one does not see alice's seed, and alice's does.
+  assert.equal(runWith({ env: { SIMPLE_CHAT_AGENT_ID: 'alice' } }, 'create_seed', '--json', JSON.stringify({ requestId: 'seed-a', text: SEED })).response.status, 'done');
+  assert.equal(run('status', '--json', '{"requestId":"seed-a"}').response.reason, 'unknown_request');
+  assert.equal(runWith({ env: { SIMPLE_CHAT_AGENT_ID: 'alice' } }, 'status', '--json', '{"requestId":"seed-a"}').response.status, 'done');
+  assert.equal(run('status', '--json', '{"requestId":"seed-a"}', '--agent', 'alice').response.status, 'done');
+  assert.equal(runWith({ input: 'not json' }, 'create_seed', '--json', '-').code, 2);
 });

@@ -1,6 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { parseEnv } from 'node:util';
-import { resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 
 export type Env = NodeJS.Dict<string>;
 export type ModelConfig = {
@@ -13,7 +13,8 @@ export type ModelConfig = {
 export type GpuConfig = { instanceId: string; apiKey: string; sshHost: string; idleMinutes: number };
 export type Config = ModelConfig & { gpu: GpuConfig | undefined; token: string; allowedUsers: Set<string>; ownerId: string; dbPath: string };
 // The agent interface (docs/agent-interface.md): its own library file, and the bot's model queue if the bot serves one.
-export type AgentConfig = ModelConfig & { dbPath: string; modelSocket: string; waitSeconds: number };
+// `agentId` names the library inside that file when the client does not pass one.
+export type AgentConfig = ModelConfig & { dbPath: string; modelSocket: string; waitSeconds: number; agentId: string | undefined };
 
 function environment(directory: string, inherited: Env): Env {
   let file: Env = {};
@@ -110,6 +111,21 @@ function requireHostedConsent(model: ModelConfig, env: Env) {
   }
 }
 
+// The path with every symlink resolved, for the part of it that exists.
+function canonical(path: string): string {
+  try { return realpathSync(path); } catch {}
+  const parent = dirname(path);
+  return parent === path ? path : join(canonical(parent), basename(path));
+}
+// One file under two names: a symlink, a symlinked directory or a hard link. Only metadata is read, never the file.
+function sameFile(a: string, b: string) {
+  if (canonical(a) === canonical(b)) return true;
+  try {
+    const [x, y] = [statSync(a), statSync(b)];
+    return x.dev === y.dev && x.ino === y.ino;
+  } catch { return false; }
+}
+
 // No Telegram token or access list: the agent interface never opens the bot's database. It only needs the bot's
 // database path to find the model queue the bot serves next to it (local/background.ts).
 export function loadAgentConfig(directory = process.cwd(), inherited: Env = process.env): AgentConfig {
@@ -120,8 +136,8 @@ export function loadAgentConfig(directory = process.cwd(), inherited: Env = proc
   if (!Number.isSafeInteger(waitSeconds) || waitSeconds < 0 || waitSeconds > 600) throw new Error('Invalid SIMPLE_CHAT_AGENT_WAIT_SECONDS');
   const botDb = resolve(directory, env.SIMPLE_CHAT_DB_PATH || 'data/simple-chat.sqlite');
   const dbPath = resolve(directory, env.SIMPLE_CHAT_AGENT_DB_PATH || 'data/agents.sqlite');
-  if (dbPath === botDb) throw new Error('SIMPLE_CHAT_AGENT_DB_PATH must not be the bot database');
-  return { ...model, dbPath, modelSocket: botDb + '.model.sock', waitSeconds };
+  if (sameFile(dbPath, botDb)) throw new Error('SIMPLE_CHAT_AGENT_DB_PATH must not be the bot database');
+  return { ...model, dbPath, modelSocket: botDb + '.model.sock', waitSeconds, agentId: env.SIMPLE_CHAT_AGENT_ID || undefined };
 }
 
 export function loadConfig(directory = process.cwd(), inherited: Env = process.env): Config {

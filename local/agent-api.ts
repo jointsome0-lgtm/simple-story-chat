@@ -10,7 +10,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { UserError, addSeed, newStory, fork as forkBranch, history, memoryChain, setLanguage } from '../lib/library.ts';
 import type { Branch, Job, Library, SceneNode, Story } from '../lib/library.ts';
 import { storyNarration } from './prompt.ts';
-import { continueInput } from './context.ts';
+import { continueInput, requestBudget } from './context.ts';
 import { seedInput } from './incoming.ts';
 import { SEED_BYTES } from './seed-file.ts';
 import { beginTurn, runTurn } from './turn.ts';
@@ -380,22 +380,33 @@ export type AgentApi = ReturnType<typeof createAgentApi>;
 
 // The model: the bot's queue when the bot serves one (a GPU run), so its humans keep priority; otherwise the provider
 // the bot would use, directly. The model configuration comes from loadAgentConfig, which keeps the hosted consent gate.
+// The route is chosen again before every model call: a long-lived MCP server may start before the bot, and once the bot
+// serves its queue the agent must go through it. A call that has started is never retried through the other route.
 export async function agentProvider(config: AgentConfig): Promise<{ provider: Provider; queue: boolean }> {
-  if (existsSync(config.modelSocket) && lstatSync(config.modelSocket).isSocket()) {
+  let direct: Provider | undefined;
+  const directModel = () => direct ??= createModel(config);
+  async function queued(): Promise<Provider | null> {
+    if (!existsSync(config.modelSocket) || !lstatSync(config.modelSocket).isSocket()) return null;
     const client = createBackgroundClient({ socketPath: config.modelSocket, model: config.model, timeoutMs: config.timeoutMs });
     const live = await client.status().then(() => true, (error: unknown) => errorCode(error) !== 'background_unavailable');
-    if (live) {
-      return { queue: true, provider: {
-        async generate(request, controls = {}) {
-          // Background work never wakes a stopped GPU and must not wait in the queue for one.
-          const state = await client.check(controls) as { gpu?: { status?: unknown } };
-          if (state.gpu?.status !== 'ready') throw new ModelError('gpu_not_ready');
-          return client.generate(request, controls);
-        },
-      } };
-    }
+    return live ? {
+      async generate(request, controls = {}) {
+        // Background work never wakes a stopped GPU and must not wait in the queue for one.
+        const state = await client.check(controls) as { gpu?: { status?: unknown } };
+        if (state.gpu?.status !== 'ready') throw new ModelError('gpu_not_ready');
+        return client.generate(request, controls);
+      },
+    } : null;
   }
-  return { queue: false, provider: createModel(config) };
+  const provider: Provider = {
+    async generate(request, controls) { return ((await queued()) ?? directModel()).generate(request, controls); },
+    // The queue does not count input; the estimate the request already carries stands in for it.
+    async countInput(request, controls) {
+      const model = (await queued()) ? null : directModel();
+      return model?.countInput ? model.countInput(request, controls) : request.estimatedInputTokens ?? requestBudget(request, config.contextTokens).inputTokens;
+    },
+  };
+  return { provider, queue: (await queued()) !== null };
 }
 
 export async function openAgent(config: AgentConfig, { userId, readOnly = false, log, onProgress }: {
@@ -410,13 +421,15 @@ export async function openAgent(config: AgentConfig, { userId, readOnly = false,
   } catch (error) { store.close(); throw error; }
 }
 
-// One process writes one agent library. The command runs again as a child of flock(1), which holds the lock until the
-// child exits, crash included; returns true in that child. `onConflict` runs when another process holds the lock.
+// One process writes one agent library. The command runs again under flock(1), which holds the lock until the command
+// exits, crash included; returns true in that command. `onConflict` runs when another process holds the lock.
+// --no-fork makes flock exec the command, so a forwarded signal reaches the writer itself and it records the interruption.
+// The caller must leave stdin unread: the command reads it.
 export function underLock(dbPath: string, script: string, onConflict: () => void): boolean {
   const lock = dbPath + '.lock';
   if (process.env.SIMPLE_CHAT_AGENT_LOCK === lock) return true;
   mkdirSync(dirname(dbPath), { recursive: true, mode: 0o700 });
-  const child = spawn('flock', ['--nonblock', '--conflict-exit-code', '75', lock, process.execPath, script, ...process.argv.slice(2)],
+  const child = spawn('flock', ['--nonblock', '--no-fork', '--conflict-exit-code', '75', lock, process.execPath, script, ...process.argv.slice(2)],
     { stdio: 'inherit', env: { ...process.env, SIMPLE_CHAT_AGENT_LOCK: lock } });
   child.once('error', () => { console.error('flock is required'); process.exitCode = 1; });
   child.once('exit', code => {

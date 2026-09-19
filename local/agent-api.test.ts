@@ -1,11 +1,12 @@
 import test from 'node:test';
 import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import http from 'node:http';
+import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { Store } from './store.ts';
-import { createAgentApi } from './agent-api.ts';
+import { agentProvider, createAgentApi } from './agent-api.ts';
 import type { AgentApi, AgentOptions, AgentResponse } from './agent-api.ts';
 import { loadAgentConfig } from './config.ts';
 import { ModelError, safeErrorDetails } from './model-error.ts';
@@ -307,6 +308,36 @@ test('the agent interface keeps the hosted-provider consent gate and never share
   assert.equal(local.dbPath, join(directory, 'data/agents.sqlite'));
   assert.equal(local.modelSocket, join(directory, 'data/simple-chat.sqlite.model.sock'));
   assert.throws(() => loadAgentConfig(directory, { SIMPLE_CHAT_AGENT_DB_PATH: 'data/simple-chat.sqlite' }), /must not be the bot database/);
+  // The same file under another name: a symlinked directory, and a hard link to an existing (empty, synthetic) file.
+  mkdirSync(join(directory, 'data'));
+  symlinkSync(join(directory, 'data'), join(directory, 'alias'));
+  assert.throws(() => loadAgentConfig(directory, { SIMPLE_CHAT_AGENT_DB_PATH: 'alias/simple-chat.sqlite' }), /must not be the bot database/);
+  writeFileSync(join(directory, 'data/simple-chat.sqlite'), '');
+  linkSync(join(directory, 'data/simple-chat.sqlite'), join(directory, 'data/other.sqlite'));
+  assert.throws(() => loadAgentConfig(directory, { SIMPLE_CHAT_AGENT_DB_PATH: 'data/other.sqlite' }), /must not be the bot database/);
+  assert.equal(loadAgentConfig(directory, { SIMPLE_CHAT_AGENT_ID: 'alice' }).agentId, 'alice');
+  assert.equal(local.agentId, undefined);
+});
+
+test('the model route is chosen before every call, so a bot started later gets its queue', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'simple-chat-agent-route-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const config = loadAgentConfig(directory, {});
+  mkdirSync(dirname(config.modelSocket), { recursive: true });
+  // No socket yet: the direct provider is chosen but not created, so nothing is launched.
+  const { provider, queue } = await agentProvider(config);
+  assert.equal(queue, false);
+  // The bot starts and serves its queue; a synthetic stand-in answers its two routes.
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(req.url === '/status' ? { model: config.model, gpu: { status: 'ready' } }
+      : { text: 'queued scene', finishReason: 'stop', usage: null }));
+  });
+  await new Promise<void>(resolve => server.listen(config.modelSocket, resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const request: ModelRequest = { system: 's', messages: [{ role: 'user', content: 'u' }], maxOutputTokens: 16, estimatedInputTokens: 7 };
+  assert.equal((await provider.generate(request)).text, 'queued scene');
+  assert.equal(await provider.countInput!(request), 7);
 });
 
 test('a clean stop ends a running turn as interrupted, and the next process starts nothing', async t => {
@@ -323,4 +354,9 @@ test('a clean stop ends a running turn as interrupted, and the next process star
   const next = f.open();
   assert.equal(next.api.status({ requestId: 'start-1' }).reason, 'shutdown');
   assert.equal(f.requests.length, 1);
+});
+
+test('a compaction stage passes the log whitelist only as a known value', () => {
+  assert.deepEqual(safeErrorDetails({ actor: 'agent', stage: 'extracting' }), { actor: 'agent', stage: 'extracting' });
+  assert.deepEqual(safeErrorDetails({ stage: 'a line of the story' }), {});
 });

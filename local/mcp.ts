@@ -9,6 +9,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { openAgent, underLock } from './agent-api.ts';
 import type { AgentApi, AgentResponse } from './agent-api.ts';
 import { loadAgentConfig } from './config.ts';
+import type { AgentConfig } from './config.ts';
 import type { Log } from './model-error.ts';
 import { safeErrorDetails } from './model-error.ts';
 
@@ -69,22 +70,32 @@ if (import.meta.main) {
   // stdout is the protocol; technical rows go to stderr and carry no story text.
   const log: Log = (event, code, details) => process.stderr.write(JSON.stringify({ at: new Date().toISOString(), event,
     ...(typeof code === 'string' && /^[a-z_]{1,40}$/.test(code) ? { code } : {}), ...safeErrorDetails(details) }) + '\n');
+  let config: AgentConfig | null = null;
+  let agentId: string | undefined;
   try {
-    const { values } = parseArgs({ options: { agent: { type: 'string' } } });
-    const config = loadAgentConfig();
-    if (underLock(config.dbPath, fileURLToPath(import.meta.url), () => console.error('Another process is writing this agent library.'))) {
-      const agent = await openAgent(config, { userId: values.agent ?? process.env.SIMPLE_CHAT_AGENT_ID, log });
-      log(agent.queue ? 'agent_model_queue' : 'agent_model_direct');
-      const server = createMcpServer(agent.api);
-      // Running turns end as interrupted, with the point they saved.
-      const stop = async () => { await agent.close(); process.exit(0); };
-      for (const signal of ['SIGTERM', 'SIGINT'] as const) process.on(signal, () => { void stop(); });
-      process.stdin.once('end', () => { void stop(); });
-      await server.connect(new StdioServerTransport());
-    }
+    agentId = parseArgs({ options: { agent: { type: 'string' } } }).values.agent;
+    config = loadAgentConfig();
   } catch (error) {
-    // Configuration and startup errors are this project's own messages, never provider output.
+    // Argument and configuration errors are this project's own messages and name no path or value.
     console.error((error as Error).message);
     process.exitCode = 1;
+  }
+  if (config) {
+    try {
+      if (underLock(config.dbPath, fileURLToPath(import.meta.url), () => console.error('Another process is writing this agent library.'))) {
+        const agent = await openAgent(config, { userId: agentId ?? config.agentId, log });
+        log(agent.queue ? 'agent_model_queue' : 'agent_model_direct');
+        const server = createMcpServer(agent.api);
+        // Running turns end as interrupted, with the point they saved.
+        const stop = async () => { await agent.close(); process.exit(0); };
+        for (const signal of ['SIGTERM', 'SIGINT'] as const) process.on(signal, () => { void stop(); });
+        process.stdin.once('end', () => { void stop(); });
+        await server.connect(new StdioServerTransport());
+      }
+    } catch {
+      // A system error may name a path; only its code is shown.
+      log('agent_failed', 'internal_error', { actor: 'agent' });
+      process.exitCode = 1;
+    }
   }
 }

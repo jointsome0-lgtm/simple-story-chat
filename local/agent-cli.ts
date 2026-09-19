@@ -6,6 +6,7 @@ import { parseArgs } from 'node:util';
 import { loadAgentConfig } from './config.ts';
 import { openAgent, underLock } from './agent-api.ts';
 import type { AgentApi, AgentResponse } from './agent-api.ts';
+import type { AgentConfig } from './config.ts';
 import type { Log } from './model-error.ts';
 import { safeErrorDetails } from './model-error.ts';
 
@@ -32,6 +33,19 @@ const print = (response: AgentResponse) => process.stdout.write(JSON.stringify(r
 const log: Log = (event, code, details) => process.stderr.write(JSON.stringify({ at: new Date().toISOString(), event,
   ...(typeof code === 'string' && /^[a-z_]{1,40}$/.test(code) ? { code } : {}), ...safeErrorDetails(details) }) + '\n');
 
+// A JSON object from --json, or from stdin with `--json -`; null if it is not one.
+function readArgs(json: string | undefined): Args | null {
+  try {
+    const value: unknown = JSON.parse(json === '-' ? readFileSync(0, 'utf8') : json ?? '{}');
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Args : null;
+  } catch { return null; }
+}
+function invalid() {
+  console.error(USAGE);
+  print({ status: 'failed', reason: 'invalid_request' });
+  process.exitCode = 2;
+}
+
 process.umask(0o077);
 let parsed;
 try {
@@ -39,34 +53,38 @@ try {
 } catch { parsed = null; }
 const command = parsed?.positionals.length === 1 ? parsed.positionals[0] : '';
 const writer = Object.hasOwn(WRITERS, command);
-let args: Args | null = null;
-try {
-  const text = parsed?.values.json === '-' ? readFileSync(0, 'utf8') : parsed?.values.json ?? '{}';
-  const value: unknown = JSON.parse(text);
-  if (value && typeof value === 'object' && !Array.isArray(value)) args = value as Args;
-} catch {}
-if (!parsed || (!writer && !Object.hasOwn(READERS, command)) || !args) {
-  console.error(USAGE);
-  print({ status: 'failed', reason: 'invalid_request' });
-  process.exitCode = 2;
-} else {
-  try {
-    const config = loadAgentConfig();
-    if (!writer && !existsSync(config.dbPath)) print({ status: 'failed', reason: 'not_found' });
-    else if (!writer || underLock(config.dbPath, fileURLToPath(import.meta.url), () => print({ status: 'busy', reason: 'library_locked' }))) {
-      const agent = await openAgent(config, { userId: parsed.values.agent, readOnly: !writer, log,
-        onProgress: (requestId, status) => process.stderr.write(JSON.stringify({ event: 'compaction', stage: status.stage }) + '\n') });
-      // A signal ends the turn as interrupted, with the point it saved; the pending wait then returns that receipt.
-      for (const signal of ['SIGTERM', 'SIGINT'] as const) process.on(signal, () => { void agent.api.close(); });
-      try {
-        const response = await (writer ? WRITERS : READERS)[command](agent.api, args);
-        print(response);
-        process.exitCode = response.status === 'done' || response.status === 'running' ? 0 : 1;
-      } finally { await agent.close(); }
-    }
-  } catch (error) {
-    // Configuration and startup errors are this project's own messages, never provider output.
+let config: AgentConfig | null = null;
+if (!parsed || (!writer && !Object.hasOwn(READERS, command))) invalid();
+else {
+  // Configuration errors are this project's own messages and name no path or value.
+  try { config = loadAgentConfig(); } catch (error) {
     console.error((error as Error).message);
+    print({ status: 'failed', reason: 'internal_error' });
+    process.exitCode = 1;
+  }
+}
+if (parsed && config) {
+  try {
+    if (!writer && !existsSync(config.dbPath)) print({ status: 'failed', reason: 'not_found' });
+    // A writer reads its arguments only under the lock: the locked run inherits stdin, so the first run leaves it unread.
+    else if (!writer || underLock(config.dbPath, fileURLToPath(import.meta.url), () => print({ status: 'busy', reason: 'library_locked' }))) {
+      const args = readArgs(parsed.values.json);
+      if (!args) invalid();
+      else {
+        const agent = await openAgent(config, { userId: parsed.values.agent ?? config.agentId, readOnly: !writer, log,
+          onProgress: (requestId, status) => log('agent_compaction', undefined, { actor: 'agent', stage: status.stage }) });
+        // A signal ends the turn as interrupted, with the point it saved; the pending wait then returns that receipt.
+        for (const signal of ['SIGTERM', 'SIGINT'] as const) process.on(signal, () => { void agent.api.close(); });
+        try {
+          const response = await (writer ? WRITERS : READERS)[command](agent.api, args);
+          print(response);
+          process.exitCode = response.status === 'done' || response.status === 'running' ? 0 : 1;
+        } finally { await agent.close(); }
+      }
+    }
+  } catch {
+    // A system error may name a path; only its code is shown.
+    log('agent_failed', 'internal_error', { actor: 'agent' });
     print({ status: 'failed', reason: 'internal_error' });
     process.exitCode = 1;
   }

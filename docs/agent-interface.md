@@ -43,7 +43,9 @@ If that socket answers, agent turns go through it as background work, so people 
 - the bot's scheduler gives one background request at most 90 seconds (`background_timeout`).
 
 The queue checks that it serves the configured model, so start the agent with the bot's model configuration
-(`npm run agent:gpu`, `npm run mcp:gpu`). Without the socket the agent calls the configured provider directly.
+(`npm run agent:gpu`, `npm run mcp:gpu`). Without the socket the agent calls the configured provider directly. The
+route is chosen again before every model call, so an MCP server started before the bot switches to its queue once the
+bot is up; a call already sent is never repeated through the other route.
 
 ## The contract
 
