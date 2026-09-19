@@ -279,3 +279,26 @@ test('a waiting call hears how many calls are ahead of it, each time the number 
   owner.end(); await turn();
   f.calls[5].finish(); await other;
 });
+test('a yielding turn ends when anybody but its holder calls, and its holder waits for it', async t => {
+  const f = fixture(t);
+  const prepared = f.scheduler.foreground.openTurn({ holder: 'tester', yields: true });
+  const first = prepared.generate('prepared extraction');
+  // Its holder's own turn waits behind it.
+  const tester = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const count = tester.generate('tester count');
+  await turn();
+  assert.equal(f.calls[0].signal.aborted, false);
+  f.calls[0].finish(); await first; await turn();
+  const repair = prepared.generate('prepared repair');
+  await turn();
+  assert.deepEqual(f.calls.map(call => call.name), ['prepared extraction', 'prepared repair']);
+  // Another person's call ends it at once.
+  const stopped = assert.rejects(repair, { code: 'background_preempted' });
+  const owner = f.scheduler.foreground.generate('owner scene');
+  await stopped; await turn();
+  assert.equal(f.calls[2].name, 'tester count');
+  f.calls[2].finish(); await count; tester.end(); await turn();
+  assert.equal(f.calls[3].name, 'owner scene');
+  f.calls[3].finish(); await owner;
+  prepared.end();
+});

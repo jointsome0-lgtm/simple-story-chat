@@ -6,7 +6,7 @@ import { generateScene } from './generation.ts';
 import type { CompactionLabels, GenerationConfig } from './generation.ts';
 import type { CompactionStatus } from './compact-view.ts';
 import type { Log } from './model-error.ts';
-import type { GenerateControls, GenerationResult, ModelRequest, Provider } from './model.ts';
+import type { GenerateControls, GenerationResult, ModelRequest, Provider, TurnOptions } from './model.ts';
 import type { Store } from './store.ts';
 import type { Prepared } from './prepare.ts';
 import { texts } from './text.ts';
@@ -33,8 +33,8 @@ export function beginTurn(state: Library, input: string, now: number, operation?
 }
 
 // Runs one scene or compaction operation as a turn of the provider, if it has turns; `end` runs however it finishes.
-export async function inTurn<T>(provider: Provider, operation: (provider: Provider) => Promise<T>): Promise<T> {
-  const turn = provider.openTurn?.();
+export async function inTurn<T>(provider: Provider, operation: (provider: Provider) => Promise<T>, options?: TurnOptions): Promise<T> {
+  const turn = provider.openTurn?.(options);
   try { return await operation(turn ?? provider); } finally { turn?.end(); }
 }
 
@@ -48,7 +48,8 @@ export async function runTurn({ store, userId, job, provider, config, signal, pr
   try {
     // The model calls of the turn end with the scene; saving it needs no model.
     const { result, request } = await inTurn(provider, provider =>
-      generateScene({ store, userId, jobId: job.id, provider, config, signal, prepared, onProgress, log, labels, preview, waiting }));
+      generateScene({ store, userId, jobId: job.id, provider, config, signal, prepared, onProgress, log, labels, preview, waiting }),
+      { holder: userId });
     if (signal.aborted) return { status: 'gone' };
     onGenerated?.(result);
     const ref = store.mutate(userId, state => {

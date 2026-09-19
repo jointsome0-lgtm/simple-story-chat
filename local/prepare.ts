@@ -3,6 +3,7 @@ import type { Library } from '../lib/library.ts';
 import { active, context } from '../lib/library.ts';
 import { inspectMemory, parseMemory, summaryRequest, supplementRequest } from './memory.ts';
 import type { GenerationResult, ModelRequest, Provider } from './model.ts';
+import type { Log } from './model-error.ts';
 import { seedLanguage } from './story-text.ts';
 
 // A compaction computed ahead, while a person reads the last scene: the extraction the next turn would ask for depends
@@ -13,7 +14,8 @@ type Config = { keepScenes?: number; memoryMode?: 'plain' | 'sgr'; repairCoverag
 // The branch state a run reads: a turn from any other point cannot use it.
 type Point = { storyId: string; branchId: string; head: string | null; memory: string | null };
 const POINT = ['storyId', 'branchId', 'head', 'memory'] as const;
-type Run = { controller: AbortController; started: boolean; point: Point; entries: Map<string, Promise<GenerationResult>> };
+// Each entry settles with a result that passed its check, or null: the turn then asks the model itself.
+type Run = { controller: AbortController; started: boolean; point: Point; entries: Map<string, Promise<GenerationResult | null>> };
 export type Prepared = ReturnType<typeof createPrepared>;
 
 const keyOf = (request: ModelRequest) => createHash('sha256').update(JSON.stringify(request)).digest('hex');
@@ -34,7 +36,7 @@ export function createPrepared() {
     // The result prepared for this exact request. A run that has not yet reached the model is stopped instead: the
     // caller's own turn may be holding the model, and the run would wait behind it for ever. So is a run for any other
     // request: the branch has changed and it can no longer be used.
-    take(request: ModelRequest): Promise<GenerationResult> | undefined {
+    take(request: ModelRequest): Promise<GenerationResult | null> | undefined {
       const key = keyOf(request);
       const result = run?.entries.get(key);
       if (!run || !result || !run.started) {
@@ -45,44 +47,46 @@ export function createPrepared() {
       return result;
     },
     // Runs the extraction of the active branch and, if its result misses scenes, the supplement for them, as
-    // generation.ts extractAndSave would. The provider is the shared model: the run is one turn of it.
-    async run(state: Library, provider: Provider, config: Config) {
+    // generation.ts extractAndSave would. The provider is the shared model: the run is one turn of it that yields to
+    // anybody but `holder`, whose next turn waits for it. Each request writes its own row with its counts and timings.
+    async run(state: Library, provider: Provider, config: Config, { holder, log = () => {} }: { holder?: string; log?: Log } = {}) {
       stop();
       const { story, branch, seed } = active(state);
       const nodes = context(story, branch).recent.slice(0, -(config.keepScenes ?? 4));
       if (!nodes.length) return;
-      const turn = provider.openTurn?.();
+      const turn = provider.openTurn?.({ holder, yields: true });
       // Without a shared model there is no turn to wait behind.
       const current: Run = { controller: new AbortController(), started: !turn, entries: new Map(),
         point: { storyId: story.id, branchId: branch.id, head: branch.head, memory: branch.memory } };
       run = current;
       const target = { seed, story, branch };
       const lang = seedLanguage(seed);
-      const ask = (request: ModelRequest) => {
-        const key = keyOf(request);
-        const result = (turn ?? provider).generate(request, { signal: current.controller.signal,
-          onStart: () => { current.started = true; } });
-        current.entries.set(key, result);
-        // A result that would fail its check is dropped, so the turn asks the model again rather than fail.
-        return { result: result.catch(() => null), drop: () => current.entries.delete(key) };
+      const mode = config.memoryMode ?? 'plain';
+      const repairs = !!config.repairCoverage && mode === 'plain';
+      // A result that would fail its check settles as null, so the turn asks the model again rather than fail.
+      const ask = (request: ModelRequest, check: (result: GenerationResult) => void) => {
+        const asked = Date.now();
+        let waitMs: number | undefined;
+        const checked = (turn ?? provider).generate(request, { signal: current.controller.signal,
+          onStart: () => { current.started = true; waitMs = Date.now() - asked; } })
+          .then(result => {
+            log('compaction_prepare_request_completed', undefined, { ...result.timings, waitMs, elapsedMs: Date.now() - asked,
+              inputTokens: result.usage?.inputTokens ?? undefined, outputTokens: result.usage?.outputTokens ?? undefined });
+            try { check(result); return result; } catch { return null; }
+          }, () => null);
+        current.entries.set(keyOf(request), checked);
+        return checked;
       };
       try {
-        const first = ask(summaryRequest(target, nodes, config.memoryMode));
-        const result = await first.result;
-        if (!result) return;
-        if (!config.repairCoverage || (config.memoryMode ?? 'plain') !== 'plain') {
-          try { parseMemory(result, nodes, config.memoryMode ?? 'plain', lang); } catch { first.drop(); }
-          return;
-        }
-        let draft: ReturnType<typeof inspectMemory>;
-        try { draft = inspectMemory(result, nodes, 'plain', lang); } catch { first.drop(); return; }
+        const result = await ask(summaryRequest(target, nodes, mode), result => {
+          if (repairs) inspectMemory(result, nodes, 'plain', lang); else parseMemory(result, nodes, mode, lang);
+        });
+        if (!result || !repairs) return;
+        const draft = inspectMemory(result, nodes, 'plain', lang);
         if (!draft.missingSceneIds.length) return;
         const missing = new Set(draft.missingSceneIds);
         const subset = nodes.filter(node => missing.has(node.id));
-        const repair = ask(supplementRequest(target, nodes, draft));
-        const extra = await repair.result;
-        if (!extra) return;
-        try { parseMemory(extra, subset, 'plain', lang); } catch { repair.drop(); }
+        await ask(supplementRequest(target, nodes, draft), extra => { parseMemory(extra, subset, 'plain', lang); });
       } finally {
         turn?.end();
       }

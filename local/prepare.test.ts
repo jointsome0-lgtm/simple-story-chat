@@ -3,7 +3,7 @@ import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { Store } from './store.ts';
 import type { GenerationConfig } from './generation.ts';
-import { generateScene } from './generation.ts';
+import { compactBranch, generateScene } from './generation.ts';
 import { createPrepared } from './prepare.ts';
 import { createScheduler } from './scheduler.ts';
 import { makeRequest } from './prompt.ts';
@@ -149,4 +149,59 @@ test('a run still waiting for the model is stopped by the turn it would block; a
   await next;
   assert.ok(g.rows.some(row => row.event === 'compaction_request_prepared'));
   assert.equal(g.calls.filter(call => isExtraction(call.request)).length, 1);
+});
+
+test('an invalid prepared answer still in flight when a manual compaction takes it is asked again live', async t => {
+  const f = fixture(t);
+  const releases: (() => void)[] = [];
+  let invalid = true;
+  const scheduler = createScheduler({ async generate(request: ModelRequest, controls: GenerateControls) {
+    await new Promise<void>(resolve => releases.push(resolve));
+    if (invalid) { invalid = false; return { text: 'not json', finishReason: 'stop' as const }; }
+    return f.provider.generate(request, controls);
+  } }, { quietMs: 0, pollMs: 100000 });
+  t.after(() => scheduler.close());
+  const model = scheduler.foreground;
+  const prepared = createPrepared();
+  const run = prepared.run(f.store.read('1'), model, f.config, { holder: '1' });
+  while (!releases.length) await turn();
+  const job = f.store.mutate('1', state => { const job = beginJob(state, '', 20); job.kind = 'compact'; return job; });
+  const compaction = compactBranch({ store: f.store, userId: '1', jobId: job.id, provider: model, config: f.config, prepared });
+  await turn();
+  releases.shift()!(); await run;
+  while (releases.length) { releases.shift()!(); await turn(); }
+  const saved = await compaction;
+  assert.ok(saved);
+  assert.equal(f.calls.filter(call => isExtraction(call.request)).length, 1);
+});
+
+test('each prepared request writes its own row with its counts and timings', async t => {
+  const f = fixture(t);
+  const rows: { event: string; promptMs?: number; predictedMs?: number }[] = [];
+  const timed: Provider = { async generate(request, controls) {
+    return { ...await f.provider.generate(request, controls), timings: { promptMs: 40, predictedMs: 60 } };
+  } };
+  await createPrepared().run(f.store.read('1'), timed, f.config,
+    { log: (event, code, details) => { rows.push({ event, ...safeErrorDetails(details) }); } });
+  assert.deepEqual(rows.map(row => [row.event, row.promptMs, row.predictedMs]), [['compaction_prepare_request_completed', 40, 60]]);
+});
+
+test('a scene row separates the queue from the token count', async t => {
+  const f = fixture(t);
+  let release: (() => void) | undefined;
+  const scheduler = createScheduler({
+    async generate(request: ModelRequest, controls: GenerateControls) {
+      if (request.system === 'Синтетика') await new Promise<void>(resolve => { release = resolve; });
+      return f.provider.generate(request, controls);
+    },
+    async countInput() { return 10; },
+  }, { quietMs: 0, pollMs: 100000 });
+  t.after(() => scheduler.close());
+  const other = scheduler.foreground.generate({ system: 'Синтетика', messages: [{ role: 'user', content: 'Синтетика' }], maxOutputTokens: 16 });
+  const scene = f.scene(createPrepared(), scheduler.foreground);
+  await new Promise(resolve => setTimeout(resolve, 60));
+  release!(); await other; await scene;
+  const row = f.rows.find(row => row.event === 'scene_request_completed') as { waitMs?: number; countMs?: number };
+  assert.ok(row.waitMs! >= 50, `waitMs ${row.waitMs}`);
+  assert.ok(row.countMs! < 50, `countMs ${row.countMs}`);
 });

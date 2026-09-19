@@ -15,9 +15,10 @@ export type ModelRequest = {
   purpose?: 'memory'; outputSchema?: object; estimatedInputTokens?: number;
 };
 // `onWait`: a shared model's queue reports how many calls are ahead of this one, each time the number changes.
-export type Controls = { signal?: AbortSignal; onWait?: (ahead: number) => void };
+// `onStart`: the call has left a shared model's queue and runs.
+export type Controls = { signal?: AbortSignal; onWait?: (ahead: number) => void; onStart?: () => void };
 export type GenerateControls = Controls & {
-  onText?: (delta: string) => unknown; inputLimitTokens?: number; onQueued?: () => void; onStart?: () => void;
+  onText?: (delta: string) => unknown; inputLimitTokens?: number; onQueued?: () => void;
 };
 // Server-side counts and durations of one request, as llama-server reports them. For logs only; never stored.
 export type Timings = Partial<Record<'cacheTokens' | 'promptTokens' | 'promptMs' | 'predictedTokens' | 'predictedMs'
@@ -25,13 +26,16 @@ export type Timings = Partial<Record<'cacheTokens' | 'promptTokens' | 'promptMs'
 export type GenerationResult = {
   text: string; finishReason: 'stop' | 'length'; usage?: Usage | null; timings?: Timings; streamResultMismatch?: boolean;
 };
+// `holder`: whose work the turn is (a user id). `yields`: work done ahead of need (local/prepare.ts), which ends as soon as
+// anybody else's call arrives, but which its holder's own turns wait for.
+export type TurnOptions = { holder?: string; yields?: boolean };
 export type Provider = {
   generate(request: ModelRequest, controls?: GenerateControls): Promise<GenerationResult>;
   countInput?(request: ModelRequest, controls?: Controls): Promise<number>;
   // Only a provider that can verify its server has `check`; the CLI providers have none.
   check?(controls?: Controls): Promise<unknown>;
   // A shared model (local/scheduler.ts) keeps its slot for one operation's calls until `end`.
-  openTurn?(): Provider & { end(): void };
+  openTurn?(options?: TurnOptions): Provider & { end(): void };
 };
 
 export function createModel(config: ModelConfig & { dbPath: string }): Provider {

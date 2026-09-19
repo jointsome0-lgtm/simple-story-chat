@@ -1,6 +1,6 @@
 import type { Log } from './model-error.ts';
 import { ModelError } from './model-error.ts';
-import type { Controls, GenerateControls, Provider } from './model.ts';
+import type { Controls, GenerateControls, Provider, TurnOptions } from './model.ts';
 
 // `foreground`: a person in Telegram. `agent`: a turn of the agent interface (local/agent-api.ts), real work that fills
 // the GPU while people read and yields to them. `background`: disposable probes that yield to anyone.
@@ -12,7 +12,7 @@ type Slot = { signal: AbortSignal };
 // One turn: the model calls from the first of a scene or compaction operation to its end (compaction steps, token
 // counting, the scene). Opened by `openTurn`, closed by `end` in the caller's finally. `ended` is the code later calls
 // are refused with.
-type Turn = { priority: Priority; ended: AbortCode | null; idleSince: number };
+type Turn = { priority: Priority; ended: AbortCode | null; idleSince: number; holder?: string; yields?: boolean };
 export type SchedulerOptions = {
   // Agent work starts under `agentCanStart` and is stopped when a person calls or `agentCanRun` turns false.
   backgroundAllowed?: () => boolean; agentCanStart?: () => boolean; agentCanRun?: () => boolean;
@@ -47,6 +47,8 @@ export function createScheduler<Request, Result>(provider: {
   const agent: Item<Request>[] = [];
   const background: Item<Request>[] = [];
   const queues = { foreground, agent, background };
+  // Open turns that yield to anybody but their holder.
+  const yielding = new Set<Turn>();
   let active: Item<Request> | null | undefined;
   // The turn that holds the slot, from the actual start of its first call.
   let reserved: { turn: Turn; release: () => void } | null = null;
@@ -66,6 +68,7 @@ export function createScheduler<Request, Result>(provider: {
   function endTurn(turn: Turn, code: AbortCode) {
     if (turn.ended) return;
     turn.ended = code;
+    yielding.delete(turn);
     for (const item of [...foreground, ...agent].filter(item => item.turn === turn)) rejectQueued(item, fail(code));
     if (active?.turn === turn && !active.controller.signal.aborted) active.controller.abort(fail(code));
     if (reserved?.turn === turn) {
@@ -98,7 +101,13 @@ export function createScheduler<Request, Result>(provider: {
     if (queue.length >= (priority === 'foreground' ? 32 : 4)) return Promise.reject(fail('queue_full'));
     if (priority === 'foreground') lastForeground = now();
     if (priority !== 'background') stop('background', 'background_preempted');
-    if (priority === 'foreground') preemptAgent();
+    if (priority === 'foreground') {
+      preemptAgent();
+      for (const other of [...yielding]) if (other !== turn && (!turn || other.holder !== turn.holder)) {
+        log('background_preempted');
+        endTurn(other, 'background_preempted');
+      }
+    }
     return new Promise((resolve, reject) => {
       const item: Item<Request> = { priority, method, request, controls, resolve, reject,
         turn,
@@ -195,8 +204,9 @@ export function createScheduler<Request, Result>(provider: {
   const wrap = (priority: 'foreground' | 'agent') => ({ ...calls(priority, null),
     // The calls of one turn, until `end`. `end` after a normal finish frees the slot; after a lost owner it also stops
     // the turn's running call.
-    openTurn() {
-      const turn: Turn = { priority, ended: null, idleSince: Infinity };
+    openTurn({ holder, yields = false }: TurnOptions = {}) {
+      const turn: Turn = { priority, ended: null, idleSince: Infinity, holder, yields };
+      if (yields) yielding.add(turn);
       return { ...calls(priority, turn), end: () => endTurn(turn, 'cancelled') };
     },
   });

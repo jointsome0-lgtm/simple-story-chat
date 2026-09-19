@@ -99,9 +99,10 @@ async function extractAndSave({ store, userId, jobId, provider, config, signal, 
       progress('extracting');
       // A result prepared while the person read; if its run failed, the model is asked now.
       const ready = prepared?.take(request);
-      const early = ready && await until(ready.catch(() => null), signal);
+      const early = ready && await until(ready, signal);
       if (early) {
         numbers.outputCharacters = early.text.length;
+        // Its counts and timings were logged when it was computed; this row only says it was used.
         record('compaction_request_prepared', { inputTokens: early.usage?.inputTokens ?? undefined, outputTokens: early.usage?.outputTokens ?? undefined });
         return early;
       }
@@ -203,9 +204,12 @@ export async function generateScene({ store, userId, jobId, provider, config, si
   for (let pass = 0; pass <= 4; pass++) {
     const target = load();
     const request = storyRequest(target);
+    // The token count's time in the queue goes to `waitMs`, only its own run to `countMs`.
     const counting = Date.now();
-    if (provider.countInput) request.estimatedInputTokens = await provider.countInput(request, { signal, onWait: waiting });
-    const countMs = provider.countInput ? Date.now() - counting : undefined;
+    let countStart = counting;
+    if (provider.countInput) request.estimatedInputTokens = await provider.countInput(request, { signal, onWait: waiting, onStart: () => { countStart = Date.now(); } });
+    const countMs = provider.countInput ? Date.now() - countStart : undefined;
+    const countWaitMs = countStart - counting;
     const threshold = compactionThreshold(config);
     // storyRequest has set the estimate.
     if (request.estimatedInputTokens! < threshold) {
@@ -217,7 +221,7 @@ export async function generateScene({ store, userId, jobId, provider, config, si
           onWait: waiting, onStart: () => { waitMs = Date.now() - asked; waiting(null); },
         });
         // Counts and durations only: where the time of a scene went (queue, token count, prefill, decoding).
-        log?.('scene_request_completed', undefined, { ...result.timings, waitMs, countMs, elapsedMs: Date.now() - asked,
+        log?.('scene_request_completed', undefined, { ...result.timings, waitMs: waitMs === undefined ? undefined : countWaitMs + waitMs, countMs, elapsedMs: Date.now() - asked,
           inputTokens: result.usage?.inputTokens ?? undefined, outputTokens: result.usage?.outputTokens ?? undefined });
         load();
         // The threshold is above a non-negative estimate here, so a missing count never reaches it.

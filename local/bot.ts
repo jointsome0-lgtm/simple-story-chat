@@ -241,7 +241,7 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
     } catch { return; }
     const started = Date.now();
     log('compaction_prepare_started');
-    const done = preparedFor(userId).run(store.read(userId), provider, contextConfig)
+    const done = preparedFor(userId).run(store.read(userId), provider, contextConfig, { holder: userId, log })
       .then(() => log('compaction_prepare_finished', undefined, { elapsedMs: Date.now() - started }),
         error => log('compaction_prepare_failed', errorCode(error), { elapsedMs: Date.now() - started }))
       .finally(() => { release?.(); preparing.delete(done); });
@@ -285,7 +285,7 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
       if (job.kind === 'compact') {
         // compactBranch writes the log rows of a compaction, manual or automatic, with its sizes and counts.
         const result = await inTurn(provider, provider => compactBranch({ store, userId, jobId: job.id, provider,
-          config: contextConfig, signal: controller.signal, prepared: preparedFor(userId), onProgress, log, labels }));
+          config: contextConfig, signal: controller.signal, prepared: preparedFor(userId), onProgress, log, labels }), { holder: userId });
         const completed = store.mutate(userId, state => {
           if (controller.signal.aborted || !jobTarget(state, job.id)) return false;
           state.job = null;
