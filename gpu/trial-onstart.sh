@@ -4,11 +4,8 @@
 # Does not provide a platform-enforced dollar cap; verify deletion externally.
 set -euo pipefail
 umask 077
-[[ "${CONTAINER_ID:-}" =~ ^[1-9][0-9]*$ && -n "${CONTAINER_API_KEY:-}" ]] || exit 1
-command -v curl >/dev/null
-command -v flock >/dev/null
-
-# A dedicated public key may be supplied for this instance, never the account.
+# A dedicated public key may be supplied for this instance, never the account. It goes in before the trial guard's
+# own preconditions are checked: an instance Vast gave no API key to still has to be one its owner can log into.
 if [[ -n "${SIMPLE_CHAT_SSH_PUBLIC_KEY:-}" ]]; then
   [[ "$SIMPLE_CHAT_SSH_PUBLIC_KEY" = ssh-ed25519\ * && "$SIMPLE_CHAT_SSH_PUBLIC_KEY" != *$'\n'* ]] || exit 1
   mkdir -p /root/.ssh
@@ -17,6 +14,10 @@ if [[ -n "${SIMPLE_CHAT_SSH_PUBLIC_KEY:-}" ]]; then
   grep -Fqx -- "$SIMPLE_CHAT_SSH_PUBLIC_KEY" /root/.ssh/authorized_keys || printf '%s\n' "$SIMPLE_CHAT_SSH_PUBLIC_KEY" >> /root/.ssh/authorized_keys
   chmod 600 /root/.ssh/authorized_keys
 fi
+
+[[ "${CONTAINER_ID:-}" =~ ^[1-9][0-9]*$ && -n "${CONTAINER_API_KEY:-}" ]] || exit 1
+command -v curl >/dev/null
+command -v flock >/dev/null
 
 # Used only by the trial guard and the owner's SSH setup; never echo it.
 printf '%s' "$CONTAINER_API_KEY" > /root/.simple-chat-instance-api-key

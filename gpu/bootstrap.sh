@@ -97,10 +97,32 @@ cmake -S "$source_dir" -B "$source_dir/build" -G Ninja \
 # the smaller of the cores and what memory allows; SIMPLE_CHAT_BUILD_JOBS still overrides it.
 jobs="${SIMPLE_CHAT_BUILD_JOBS:-}"
 if [[ -z "$jobs" ]]; then
+  # `nproc` and /proc/meminfo describe the whole machine, and a rented container is a slice of one: on the measured
+  # 5090 host they said 256 cores and 454 GiB while the container held 30.72 cores and 183 GB. Building to the
+  # machine's size asks for hundreds of jobs, which the 1..99 check below then refuses outright. Ask the cgroup.
   cores="$(nproc)"
-  by_memory="$(awk '/MemAvailable/ {print int($2 / 1024 / 1024 / 2)}' /proc/meminfo)"
+  if [[ -r /sys/fs/cgroup/cpu.max ]]; then
+    read -r quota period < /sys/fs/cgroup/cpu.max || true
+    [[ "$quota" = max ]] || { [[ "$quota$period" =~ ^[0-9]+$ ]] && (( period > 0 )) && cores=$(( quota / period )); }
+  elif [[ -r /sys/fs/cgroup/cpu/cpu.cfs_quota_us && -r /sys/fs/cgroup/cpu/cpu.cfs_period_us ]]; then
+    quota="$(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us)"
+    period="$(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us)"
+    (( quota > 0 && period > 0 )) && cores=$(( quota / period ))
+  fi
+  # Memory the same way: the container's limit when it is lower than what the machine reports free.
+  by_memory="$(awk '/MemAvailable/ {print int($2 * 1024)}' /proc/meminfo)"
+  for limit in /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory/memory.limit_in_bytes; do
+    if [[ -r "$limit" ]]; then
+      value="$(cat "$limit")"
+      [[ "$value" =~ ^[0-9]+$ ]] && (( value < by_memory )) && by_memory="$value"
+      break
+    fi
+  done
+  # CUDA compilation takes about 2 GiB per job.
+  by_memory=$(( by_memory / 2147483648 ))
   jobs=$(( cores < by_memory ? cores : by_memory ))
   (( jobs >= 1 )) || jobs=1
+  (( jobs <= 99 )) || jobs=99
 fi
 [[ "$jobs" =~ ^[1-9][0-9]?$ ]] || { echo 'Use SIMPLE_CHAT_BUILD_JOBS from 1 to 99.' >&2; exit 1; }
 echo "Building llama-server with $jobs jobs."
