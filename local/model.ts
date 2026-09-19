@@ -22,8 +22,8 @@ export type GenerationResult = { text: string; finishReason: 'stop' | 'length'; 
 export type Provider = {
   generate(request: ModelRequest, controls?: GenerateControls): Promise<GenerationResult>;
   countInput?(request: ModelRequest, controls?: Controls): Promise<number>;
-  // A scheduled provider always has `check`, which returns undefined if the provider has none.
-  check?(controls?: Controls): Promise<unknown> | undefined;
+  // Only a provider that can verify its server has `check`; the CLI providers have none.
+  check?(controls?: Controls): Promise<unknown>;
 };
 
 export function createModel(config: ModelConfig & { dbPath: string }): Provider {

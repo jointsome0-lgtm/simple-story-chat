@@ -113,3 +113,12 @@ test('real GPU idle countdown expires even while background work is running', as
   time = 900000; await gpu.tick();
   assert.deepEqual(stops, ['stopped']);
 });
+
+test('a provider without a check gets none from the scheduler', async t => {
+  const bare = createScheduler({ generate: async () => 'done' });
+  t.after(() => bare.close());
+  assert.equal('check' in bare.foreground, false);
+  const server = createScheduler({ generate: async () => 'done', check: async () => ({ model: 'test-model' }) });
+  t.after(() => server.close());
+  assert.deepEqual(await server.foreground.check!(), { model: 'test-model' });
+});

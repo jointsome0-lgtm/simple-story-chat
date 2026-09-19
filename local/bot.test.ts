@@ -704,3 +704,12 @@ test('paused GPU accepts seed drafts and model controls but never creates an unw
   assert.deepEqual(writes, ['running']);
   assert.deepEqual(f.store.read(1).ui, before);
 });
+
+test('the model screen does not call a provider verified when it has no check', async t => {
+  const cli = fixture(t);
+  await cli.bot.handle(cli.click('view:model'));
+  assert.match(cli.sent.at(-1)!.payload.text, /ещё не проверена/);
+  const server = fixture(t, { check: async () => ({ model: 'test-model' }), providerName: 'llama-cpp' });
+  await server.bot.handle(server.click('view:model'));
+  assert.match(server.sent.at(-1)!.payload.text, /Последняя успешная проверка/);
+});

@@ -104,7 +104,8 @@ export function createScheduler<Request, Result>(provider: {
   timer.unref();
   // A queued call settles with the result of the provider method it names.
   const wrap = (priority: Priority) => ({
-    check: (controls?: Controls) => provider.check?.(controls),
+    // A provider without a check (a CLI) gets none here either: the bot must not report a check that verified nothing.
+    ...(provider.check ? { check: (controls?: Controls) => provider.check!(controls) } : {}),
     ...(provider.countInput ? { countInput: (request: Request, controls?: Controls) => enqueue(priority, 'countInput', request, controls) as Promise<number> } : {}),
     generate: (request: Request, controls?: GenerateControls) => enqueue(priority, 'generate', request, controls) as Promise<Result>,
   });
