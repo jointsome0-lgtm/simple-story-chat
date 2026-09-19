@@ -1,5 +1,5 @@
 import { UserError, id, active, addSeed, newStory, fork, beginJob, commitTurn, saveCheckpoint,
-  deleteSeed, deleteBranch, history, context, jobTarget } from '../lib/library.ts';
+  deleteSeed, deleteBranch, history, context, jobTarget, setLanguage } from '../lib/library.ts';
 import type { Job, Library, SceneNode } from '../lib/library.ts';
 import { normalizeScene } from './prompt.ts';
 import { createChat } from './telegram.ts';
@@ -20,12 +20,14 @@ import { errorCode, member, safeErrorDetails } from './model-error.ts';
 import type { Provider } from './model.ts';
 import type { Store } from './store.ts';
 import type { GpuInfo, ModelInfo, RenderDetails } from './ui.ts';
+import { isRegistered, langFromTelegram, texts } from './text.ts';
+import type { Messages } from './text.ts';
 
 export type BotOptions = {
   store: Store; api: TelegramApi; provider: Provider; gpu?: GpuController;
   readSeedFile?: (document: TelegramDocument) => Promise<string>;
   render: (state: Library, route: string, details: RenderDetails) => Screen;
-  scenePrefix?: (stats: ContextStats | null, provenance: ModelInfo | undefined) => string;
+  scenePrefix?: (stats: ContextStats | null, provenance: ModelInfo | undefined, lang?: unknown) => string;
   sceneKeyboard: (state: Library) => InlineKeyboard | undefined;
   allowedUsers: Set<string>; ownerId?: string; maxOutputTokens: number; contextTokens?: number; compactAtTokens?: number; keepScenes?: number;
   memoryMode?: 'plain' | 'sgr'; repairCoverage?: boolean; model?: string; providerName?: string; log?: Log;
@@ -33,9 +35,10 @@ export type BotOptions = {
 // Bot API updates are not validated in advance; these are the fields the bot reads.
 export type Update = {
   update_id: number;
-  message?: IncomingMessage & { from?: { id: number; is_bot?: boolean }; chat?: { id: number; type: string }; document?: TelegramDocument };
-  callback_query?: { id?: string; data?: string; from?: { id: number; is_bot?: boolean }; message?: { chat?: { id: number; type: string } } };
+  message?: IncomingMessage & { from?: Sender; chat?: { id: number; type: string }; document?: TelegramDocument };
+  callback_query?: { id?: string; data?: string; from?: Sender; message?: { chat?: { id: number; type: string } } };
 };
+type Sender = { id: number; is_bot?: boolean; language_code?: string };
 // A seed file read before the library write: its text for the draft, or the error to show instead.
 type FileInput = { draftId: string; text: string; error?: undefined } | { error: UserError; draftId?: undefined; text?: undefined };
 // What to do after the library write; handle acts on each field that is set.
@@ -47,6 +50,11 @@ type Plan = {
 type Running = { controller: AbortController; promise?: Promise<void> };
 // Library IDs are a prefix and a sequence number, as id() in lib/library.ts creates them.
 const ID = { seed: /^s\d+$/, story: /^h\d+$/, branch: /^b\d+$/, checkpoint: /^c\d+$/ };
+// A refusal in the user's language. The key stays on the error, so it can still be shown in another language.
+const refuse = (t: Messages, key: keyof Messages['errors']) => new UserError(t.errors[key], key);
+// Errors thrown below the bot (library, seed files, incoming messages) carry Russian text and a catalog key.
+const errorText = (t: Messages, error: UserError) =>
+  (error.key !== undefined && Object.hasOwn(t.errors, error.key) ? t.errors[error.key as keyof Messages['errors']] : error.message);
 
 export function createBot({ store, api, provider, gpu, readSeedFile, render: renderUi, scenePrefix = () => '', sceneKeyboard, allowedUsers, ownerId = '', maxOutputTokens,
   contextTokens = 65536, compactAtTokens = 54000, keepScenes = 4, memoryMode = 'plain', repairCoverage = false, model = 'unknown', providerName = 'claude-code', log = () => {} }: BotOptions) {
@@ -55,10 +63,10 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
   // The GPU snapshot must provide every field the renderer reads.
   const render = (state: Library, route: string, details: RenderDetails = {}) =>
     renderUi(state, route, { ...details, modelInfo: { ...modelInfo }, gpuInfo: gpu?.snapshot() satisfies Required<GpuInfo> | undefined });
-  const requireGpu = () => {
+  const requireGpu = (t: Messages) => {
     if (!gpu) return;
     try { gpu.assertReady(); }
-    catch { throw new UserError('GPU сейчас не готова. Открой /model: там можно запустить её или проверить состояние. Затем отправь действие снова.'); }
+    catch { throw refuse(t, 'gpuNotReady'); }
   };
   const modelResponded = () => Object.assign(modelInfo, { status: 'ready', checkedAt: new Date().toISOString() });
   const contextConfig = { maxOutputTokens, contextTokens, compactAtTokens, keepScenes, memoryMode, repairCoverage, model, provider: providerName };
@@ -86,10 +94,9 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
   };
   function prepare(state: Library, update: Update, fileInput: FileInput | undefined): Plan {
     let action = update.callback_query?.data;
+    const t = texts(state.language);
     if (fileInput?.error) throw fileInput.error;
-    if (fileInput && (state.ui?.input !== 'seed' || state.ui.draftId !== fileInput.draftId)) {
-      throw new UserError('Черновик изменился во время загрузки. Файл не добавлен; открой /new и отправь его снова.');
-    }
+    if (fileInput && (state.ui?.input !== 'seed' || state.ui.draftId !== fileInput.draftId)) throw refuse(t, 'draftChanged');
     const text = fileInput ? fileInput.text : messageText(update.message);
     if (!action && !fileInput) {
       const command = text?.split(/[\s@]/)[0];
@@ -97,23 +104,33 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
       const commands: Record<string, string> = {
         '/start': 'view:home', '/menu': 'view:home', '/seeds': 'view:seeds:0',
         '/new': 'new-seed', '/continue': 'continue', '/cancel': 'cancel', '/last': 'last',
-        '/context': 'view:context', '/compact': 'compact', '/model': 'view:model',
+        '/context': 'view:context', '/compact': 'compact', '/model': 'view:model', '/language': 'view:language',
         '/gpu': 'view:model', '/gpu_pause': 'gpu:pause', '/gpu_start': 'gpu:start',
         '/checkpoints': current ? `view:checkpoints:${current.storyId}:${current.branchId}:0` : 'view:seeds:0',
       };
       // Only the listed commands: ordinary text may start with an Object.prototype name such as `constructor`.
       action = command !== undefined && Object.hasOwn(commands, command) ? commands[command] : undefined;
-      if (!action && text?.startsWith('/') && state.ui?.input !== 'seed') return { screen: { text: 'Не знаю такой команды. Открой /menu.' } };
+      if (!action && text?.startsWith('/') && state.ui?.input !== 'seed') return { screen: { text: t.notices.unknownCommand } };
     }
     if (action === 'cancel') {
       const hadJob = !!state.job;
       state.job = null;
       state.ui = null;
-      return { cancel: true, screen: { ...render(state, 'home'), text: (hadJob ? 'Операция отменена. Готовые сцены и чекпоинты сохранены.\n\n' : '') + render(state, 'home').text } };
+      return { cancel: true, screen: { ...render(state, 'home'), text: (hadJob ? t.notices.cancelled + '\n\n' : '') + render(state, 'home').text } };
     }
     // Power controls remain available during a seed draft or a model job.
     if (action === 'gpu:pause' || action === 'gpu:start') return { gpuAction: action.slice(4) };
     if (action === 'view:model') return { modelStatus: true };
+    // The language can be changed at any moment, also from a draft: a user who cannot read the screen has to get out.
+    if (action === 'view:language' || action?.startsWith('lang:')) {
+      const draft = state.ui?.input === 'seed';
+      if (!draft) state.ui = null;
+      if (action === 'view:language') return { screen: render(state, 'language') };
+      const lang = action.slice(5);
+      if (!isRegistered(lang)) throw refuse(t, 'staleButton');
+      setLanguage(state, lang);
+      return { screen: render(state, draft ? 'new-seed' : 'home') };
+    }
     // A paste may arrive as many ordinary Telegram messages. Keep the draft
     // open until an explicit, draft-specific save; navigation must not turn
     // later fragments into instructions for a previously active story.
@@ -122,7 +139,7 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
       draft.draftId ??= id(state, 'd');
       draft.parts ??= [];
       if (action?.startsWith('save-seed:')) {
-        if (action !== `save-seed:${draft.draftId}`) throw new UserError('Эта кнопка относится к другому черновику. Используй «Сохранить сид» под последней принятой частью.');
+        if (action !== `save-seed:${draft.draftId}`) throw refuse(t, 'otherDraft');
         try {
           const seed = addSeed(state, seedInput(draft.parts.join('\n\n')));
           state.ui = null;
@@ -130,19 +147,17 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
         } catch (error) {
           if (!(error instanceof UserError)) throw error;
           const view = render(state, 'new-seed');
-          return { screen: { ...view, text: error.message + '\n\n' + view.text } };
+          return { screen: { ...view, text: errorText(t, error) + '\n\n' + view.text } };
         }
       }
       if (!action) {
-        if (!text) throw new UserError('Пришли следующую часть сида текстом. Когда закончишь, нажми «Сохранить сид». /cancel отменит ввод.');
-        if (Buffer.byteLength([...draft.parts, text].join('\n\n'), 'utf8') > SEED_BYTES) {
-          throw new UserError('Эта часть превышает общий предел черновика — 256 КиБ текста. Она не добавлена; предыдущие части остаются в черновике. /cancel отменит ввод.');
-        }
+        if (!text) throw refuse(t, 'draftNeedsText');
+        if (Buffer.byteLength([...draft.parts, text].join('\n\n'), 'utf8') > SEED_BYTES) throw refuse(t, 'draftTooLarge');
         draft.parts.push(text);
       }
       return { screen: render(state, 'new-seed') };
     }
-    if (action?.startsWith('save-seed:')) throw new UserError('Этот черновик уже сохранён или отменён. Новый сид можно создать через /new.');
+    if (action?.startsWith('save-seed:')) throw refuse(t, 'draftClosed');
     if (action?.startsWith('view:')) {
       const route = action.slice(5);
       state.ui = route.startsWith('delete-seed:') ? { confirm: route.replace('delete-seed:', 'remove-seed:') }
@@ -151,17 +166,17 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
     }
     if (action === 'last') return { savedText: last(state) };
     if (action === 'new-seed') {
-      if (state.job) throw new UserError('Сцена уже пишется. Дождись ответа или нажми /cancel, затем создай сид.');
+      if (state.job) throw refuse(t, 'busyNewSeed');
       state.ui = { input: 'seed', draftId: id(state, 'd'), parts: [] };
       return { screen: render(state, 'new-seed') };
     }
-    if (state.job) throw new UserError('Уже выполняется генерация или сжатие. Дождись ответа или нажми /cancel, затем отправь сообщение снова.');
+    if (state.job) throw refuse(t, 'busy');
     if (action === 'compact') {
       const { story, branch } = active(state);
       if (context(story, branch).recent.length <= keepScenes) {
-        return { screen: { text: `Пока нечего сжимать: последние ${keepScenes} сцены оставляем целиком. Новая сцена не создаётся.` } };
+        return { screen: { text: t.notices.nothingToCompact(keepScenes) } };
       }
-      requireGpu();
+      requireGpu(t);
       state.ui = null;
       const job = beginJob(state, CONTINUE, Date.now());
       job.kind = 'compact';
@@ -173,35 +188,36 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
     const validIds = verb === 'start' || verb === 'remove-seed' ? ID.seed.test(a)
       : verb === 'use' || verb === 'remove-branch' ? ID.story.test(a) && ID.branch.test(b)
       : verb === 'fork' ? ID.story.test(a) && ID.checkpoint.test(b) : true;
-    if (!validIds) throw new UserError('Кнопка устарела. Открой /menu.');
+    if (!validIds) throw refuse(t, 'staleButton');
     if (verb === 'remove-seed' || verb === 'remove-branch') {
-      if (state.ui?.confirm !== action) throw new UserError('Это подтверждение устарело. Открой удаление заново через /seeds.');
+      if (state.ui?.confirm !== action) throw refuse(t, 'staleConfirmation');
       if (verb === 'remove-seed') deleteSeed(state, a);
       else deleteBranch(state, a, b);
       return { screen: render(state, 'seeds:0') };
     }
     if (verb === 'use') {
       const story = state.stories[a];
-      if (!story?.branches[b]) throw new UserError('Эта ветка уже удалена. Открой /seeds.');
+      if (!story?.branches[b]) throw refuse(t, 'branchGoneOpenSeeds');
       state.active = { storyId: a, branchId: b };
       state.ui = null;
       return { savedText: last(state), screen: render(state, `branch:${a}:${b}`) };
     }
     if (verb === 'fork') {
-      const branch = fork(state, a, b);
+      const branch = fork(state, a, b, t.labels);
       state.ui = null;
       return { savedText: last(state), screen: render(state, `branch:${a}:${branch.id}`) };
     }
     let input = text;
     if (verb === 'start') {
-      requireGpu();
-      newStory(state, a);
+      requireGpu(t);
+      newStory(state, a, t.labels);
+      // Sent to the model and kept as the scene's input, so it is not part of the interface catalogs.
       input = 'Начни историю из сида. Покажи первую сцену.';
     } else if (action === 'continue') input = CONTINUE;
-    else if (action) throw new UserError('Кнопка устарела. Открой /menu.');
-    if (!input) return { screen: { text: 'Пока поддерживаются текстовые сообщения. Открой /menu или напиши действие персонажа.' } };
+    else if (action) throw refuse(t, 'staleButton');
+    if (!input) return { screen: { text: t.notices.textOnly } };
     if (!state.active) return { screen: render(state, 'home') };
-    requireGpu();
+    requireGpu(t);
     state.ui = null;
     state.interrupted = false;
     const job = beginJob(state, input, Date.now());
@@ -210,7 +226,11 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
 
   async function generate(userId: string, chat: Chat, job: Job, controller: AbortController, releaseGpu: (() => void) | undefined) {
     const log = logFor(userId);
-    const progress = createProgress({ chat, render: renderCompaction, signal: controller.signal, log });
+    // The language at the start of the job serves its status message and the labels it stores; later messages read it again.
+    const language = store.read(userId).language;
+    const labels = texts(language).labels;
+    const notices = () => texts(store.read(userId).language).notices;
+    const progress = createProgress({ chat, render: status => renderCompaction(status, language), signal: controller.signal, log });
     let compactionStatus: CompactionStatus | undefined;
     const onProgress = (event: CompactionStatus) => {
       compactionStatus = { ...compactionStatus, ...event, automatic: job.kind !== 'compact' };
@@ -220,7 +240,7 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
       if (job.kind === 'compact') {
         // compactBranch writes the log rows of a compaction, manual or automatic, with its sizes and counts.
         const result = await compactBranch({ store, userId, jobId: job.id, provider,
-          config: contextConfig, signal: controller.signal, onProgress, log });
+          config: contextConfig, signal: controller.signal, onProgress, log, labels });
         const completed = store.mutate(userId, state => {
           if (controller.signal.aborted || !jobTarget(state, job.id)) return false;
           state.job = null;
@@ -228,16 +248,16 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
         });
         if (!completed) return;
         modelResponded();
-        if (!await progress.finish()) await safeSend(chat, renderCompaction({ ...compactionStatus, stage: 'done', ...result }), log);
+        if (!await progress.finish()) await safeSend(chat, renderCompaction({ ...compactionStatus, stage: 'done', ...result }, language), log);
         return;
       }
       const { result, request } = await generateScene({ store, userId, jobId: job.id, provider,
-        config: contextConfig, signal: controller.signal, onProgress, log,
+        config: contextConfig, signal: controller.signal, onProgress, log, labels,
         preview: (state, current, request) => {
           const measured = stats(state);
           // generateScene sets the estimate before it asks for a preview.
           if (measured) measured.request.estimatedTokens = request.estimatedInputTokens!;
-          return chat.preview(current.id, scenePrefix(measured, modelInfo));
+          return chat.preview(current.id, scenePrefix(measured, modelInfo, state.language));
         },
       });
       if (controller.signal.aborted) return;
@@ -256,7 +276,7 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
         story.nodes[committed.nodeId].streamResultMismatch = result.streamResultMismatch ?? false;
         story.nodes[committed.nodeId].modelInfo = { provider: providerName, model };
         const branch = story.branches[job.branchId];
-        const checkpoint = saveCheckpoint(state, story, branch, `Сцена ${history(story, branch.head).length}`, 'scene');
+        const checkpoint = saveCheckpoint(state, story, branch, texts(state.language).labels.scene(history(story, branch.head).length), 'scene');
         return { ...committed, checkpointId: checkpoint.id };
       });
       if (!ref) return;
@@ -264,7 +284,7 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
       const node = snapshot.stories[ref.storyId].nodes[ref.nodeId];
       try {
         // Persisted above. An ambiguous response must never trigger a new model run.
-        const prefix = scenePrefix(stats(snapshot, { storyId: ref.storyId, checkpointId: ref.checkpointId }), node.modelInfo);
+        const prefix = scenePrefix(stats(snapshot, { storyId: ref.storyId, checkpointId: ref.checkpointId }), node.modelInfo, snapshot.language);
         // Bot API results are not validated; the id of the sent message is stored as returned.
         const sent = await chat.final(prefix + node.text, sceneKeyboard(snapshot)) as { message_id: number };
         store.mutate(userId, state => {
@@ -272,10 +292,10 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
           if (saved) { saved.delivery = 'sent'; saved.messageId = sent.message_id; }
         });
         log('scene_saved_and_sent');
-        if (node.truncated) await safeSend(chat, { text: 'Ответ достиг лимита выходных токенов и мог оборваться. Полученный текст сохранён. /continue продолжит историю.' }, log);
+        if (node.truncated) await safeSend(chat, { text: notices().truncated }, log);
       } catch (error) {
         log('scene_delivery_unconfirmed', errorCode(error));
-        await safeSend(chat, { text: 'Сцена сохранена, но доставка не подтверждена. /last покажет её без новой генерации.' }, log);
+        await safeSend(chat, { text: notices().deliveryUnconfirmed }, log);
       }
     } catch (error) {
       const stillCurrent = store.mutate(userId, state => {
@@ -291,17 +311,17 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
       }
       log('generation_failed', failure.code, error);
       const retry = job.kind === 'compact' ? '/compact' : '/continue';
-      const text = failure.code === 'nothing_to_compact' ? `Пока нечего сжимать: последние ${keepScenes} сцены оставляем целиком.`
-        : failure.code === 'context_limit'
-        ? 'Сид, накопленная память, последние сцены или новый ввод не помещаются в выбранный порог контекста. Все исходные сцены и чекпоинты сохранены. Можно сократить ввод или открыть другую точку через /checkpoints.'
-        : failure.code === 'invalid_memory' || failure.code === 'memory_not_smaller'
-          ? `Сжатие не удалось проверить. Исходные сцены и готовые чекпоинты сохранены. Повторить: ${retry}.`
-          : `Не получилось завершить операцию. Готовые сцены и чекпоинты сохранены. Повторить: ${retry}.`;
       if (failure.operation === 'compact' && compactionStatus?.stage === 'failed') {
-        if (!await progress.finish()) await safeSend(chat, renderCompaction(compactionStatus), log);
+        if (!await progress.finish()) await safeSend(chat, renderCompaction(compactionStatus, language), log);
         return;
       }
-      await safeSend(chat, { text, reply_markup: sceneKeyboard(store.read(userId)) }, log);
+      const snapshot = store.read(userId);
+      const t = texts(snapshot.language);
+      const text = failure.code === 'nothing_to_compact' ? t.notices.nothingToCompactYet(keepScenes)
+        : failure.code === 'context_limit' ? t.notices.contextLimit
+        : failure.code === 'invalid_memory' || failure.code === 'memory_not_smaller' ? t.notices.compactionUnverified(retry)
+        : t.notices.failed(retry);
+      await safeSend(chat, { text, reply_markup: sceneKeyboard(snapshot) }, log);
     } finally {
       await progress.finish();
       releaseGpu?.();
@@ -331,30 +351,34 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
       if (update.message?.document) {
         const state = store.read(userId);
         if (state.seen.includes(update.update_id)) return;
+        const t = texts(state.language);
         if (state.ui?.input !== 'seed') {
-          fileInput = { error: new UserError('Чтобы загрузить сид файлом, сначала открой /new. Файл не добавлен в историю.') };
+          fileInput = { error: refuse(t, 'fileNeedsDraft') };
         } else {
           const draftId = state.ui.draftId;
           try {
             if (!readSeedFile) throw new Error('file_reader_unavailable');
             fileInput = { draftId, text: await readSeedFile(update.message.document) };
           } catch (error) {
-            fileInput = { error: error instanceof UserError ? error : new UserError('Не удалось прочитать файл. Черновик не изменён; отправь файл ещё раз.') };
+            fileInput = { error: error instanceof UserError ? error : refuse(t, 'fileFailed') };
           }
         }
       }
       const plan = store.mutate(userId, state => {
         if (state.seen.includes(update.update_id)) return null;
+        // First contact: nothing was handled or created yet, so Telegram's language is the best guess. A library that
+        // already exists keeps what it has; without a stored language it stays Russian (text.ts).
+        if (state.language === undefined && !state.seen.length && !state.seq) setLanguage(state, langFromTelegram(from?.language_code));
         state.seen = [...state.seen.slice(-511), update.update_id];
         try { return prepare(state, update, fileInput); }
         catch (error) {
-          if (error instanceof UserError) return { screen: { text: error.message } };
+          if (error instanceof UserError) return { screen: { text: errorText(texts(state.language), error) } };
           throw error;
         }
       });
       if (!plan) return;
       if (plan.gpuAction) {
-        if (!gpu) await safeSend(chat, { text: 'Управление арендой GPU пока не настроено. /model покажет текущую модель.' }, log);
+        if (!gpu) await safeSend(chat, { text: texts(store.read(userId).language).notices.gpuNotConfigured }, log);
         else {
           try {
             if (plan.gpuAction === 'pause') gpu.pause(); else gpu.resume();
@@ -381,7 +405,7 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
       if (plan.cancel) running.get(userId)?.controller.abort();
       if (plan.savedText) {
         const snapshot = store.read(userId);
-        try { await chat.final(scenePrefix(stats(snapshot), plan.savedText.modelInfo) + plan.savedText.text, sceneKeyboard(snapshot)); }
+        try { await chat.final(scenePrefix(stats(snapshot), plan.savedText.modelInfo, snapshot.language) + plan.savedText.text, sceneKeyboard(snapshot)); }
         catch (error) { log('saved_scene_delivery_unconfirmed', errorCode(error)); }
       }
       if (plan.screen) await safeSend(chat, plan.screen, log);
@@ -391,7 +415,7 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
         catch {
           // The plan is not changed after the write, so its job is still set.
           store.mutate(userId, state => { if (state.job?.id === plan.job!.id) state.job = null; });
-          await safeSend(chat, { text: 'GPU перешла на паузу. Открой /model и запусти её; затем отправь действие снова.' }, log);
+          await safeSend(chat, { text: texts(store.read(userId).language).notices.gpuPaused }, log);
           return;
         }
         const controller = new AbortController();

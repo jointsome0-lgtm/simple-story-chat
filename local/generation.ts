@@ -16,6 +16,10 @@ export type GenerationConfig = ContextConfig & { memoryMode?: 'plain' | 'sgr'; r
 type CompactionConfig = Omit<GenerationConfig, 'model' | 'provider'>;
 type Operation<Config = GenerationConfig> = { store: Store; userId: string; jobId: string; provider: Provider; config: Config; signal?: AbortSignal };
 type Report = (status: CompactionStatus) => void;
+// Checkpoint labels a compaction writes into the library. The bot passes them in the user's interface language;
+// probes and the eval keep the Russian defaults.
+export type CompactionLabels = { beforeCompaction: string; afterCompaction: string };
+const LABELS: CompactionLabels = { beforeCompaction: 'До сжатия', afterCompaction: 'После сжатия' };
 // Sizes and counts of a compaction and of its current model request. They go to the technical log; none is text.
 type Numbers = Required<Pick<ErrorDetails, 'sceneCount' | 'repairSceneCount' | 'requestBytes' | 'outputCharacters'>>
   & Pick<ErrorDetails, 'inputBytesBefore' | 'inputBytesAfter'>;
@@ -32,7 +36,7 @@ function loadTarget(store: Store, userId: string, jobId: string, signal: AbortSi
   return { state, ...target };
 }
 
-export async function compactBranch(options: Operation<CompactionConfig> & { onProgress?: Report; log?: Log; automatic?: boolean }) {
+export async function compactBranch(options: Operation<CompactionConfig> & { onProgress?: Report; log?: Log; automatic?: boolean; labels?: CompactionLabels }) {
   const { signal, onProgress = () => {}, log = () => {}, automatic = false } = options;
   const report = (progress: CompactionStatus) => {
     if (!signal?.aborted) { try { onProgress(progress); } catch {} }
@@ -54,8 +58,8 @@ export async function compactBranch(options: Operation<CompactionConfig> & { onP
   }
 }
 
-async function extractAndSave({ store, userId, jobId, provider, config, signal, report, numbers, record }: Operation<CompactionConfig> & {
-  report: Report; numbers: Numbers; record: RecordEvent;
+async function extractAndSave({ store, userId, jobId, provider, config, signal, report, numbers, record, labels = LABELS }: Operation<CompactionConfig> & {
+  report: Report; numbers: Numbers; record: RecordEvent; labels?: CompactionLabels;
 }) {
   const load = () => loadTarget(store, userId, jobId, signal);
   const target = load();
@@ -126,8 +130,8 @@ async function extractAndSave({ store, userId, jobId, provider, config, signal, 
       const after = requestBudget(makeRequest(trial, trial.job!, config.maxOutputTokens), config.contextTokens).inputBytes;
       Object.assign(numbers, { inputBytesBefore: before, inputBytesAfter: after });
       if (after >= before) throw new ModelError('memory_not_smaller');
-      saveCheckpoint(state, current.story, current.branch, 'До сжатия', 'pre-compaction');
-      commitMemory(state, jobId, covered, delta);
+      saveCheckpoint(state, current.story, current.branch, labels.beforeCompaction, 'pre-compaction');
+      commitMemory(state, jobId, covered, delta, labels.afterCompaction);
       // commitMemory has just set the branch memory.
       const memory = current.story.memories[current.branch.memory!];
       memory.method = config.memoryMode ?? 'plain';
@@ -151,8 +155,8 @@ function combinedUsage(first: Usage | null | undefined, second: Usage | null | u
 }
 
 // A cancelled or replaced job cannot commit a late scene or memory increment.
-export async function generateScene({ store, userId, jobId, provider, config, signal, preview = () => async () => {}, onProgress, log }: Operation & {
-  preview?: (state: Library, job: Job, request: ModelRequest) => GenerateControls['onText']; onProgress?: Report; log?: Log;
+export async function generateScene({ store, userId, jobId, provider, config, signal, preview = () => async () => {}, onProgress, log, labels }: Operation & {
+  preview?: (state: Library, job: Job, request: ModelRequest) => GenerateControls['onText']; onProgress?: Report; log?: Log; labels?: CompactionLabels;
 }) {
   const load = () => loadTarget(store, userId, jobId, signal);
   const storyRequest = (target: ReturnType<typeof load>) => {
@@ -181,7 +185,7 @@ export async function generateScene({ store, userId, jobId, provider, config, si
       }
     }
     if (pass === 4) throw new ModelError('context_limit');
-    try { await compactBranch({ store, userId, jobId, provider, config, signal, onProgress, log, automatic: true }); }
+    try { await compactBranch({ store, userId, jobId, provider, config, signal, onProgress, log, labels, automatic: true }); }
     catch (error) {
       if (errorCode(error) === 'nothing_to_compact') throw new ModelError('context_limit');
       throw error;

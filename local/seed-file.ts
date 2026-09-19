@@ -15,15 +15,16 @@ export type HttpsGet = (options: { hostname: string; family: number; path: strin
   onResponse: (response: FileResponse) => void) => { destroy(): void; on(event: 'timeout' | 'error' | 'close', listener: () => void): unknown };
 
 export const SEED_BYTES = 256 * 1024;
-const tooLarge = () => new UserError('Файл слишком большой. Предел файла и всего черновика — 256 КиБ текста.');
-const failed = () => new UserError('Не удалось прочитать файл целиком. Черновик не изменён; отправь файл ещё раз.');
+// The second argument names the message in the interface catalogs (local/text/), where the bot finds its translation.
+const tooLarge = () => new UserError('Файл слишком большой. Предел файла и всего черновика — 256 КиБ текста.', 'fileTooLarge');
+const failed = () => new UserError('Не удалось прочитать файл целиком. Черновик не изменён; отправь файл ещё раз.', 'fileIncomplete');
 
 // Fixed Telegram origin; never follow a redirect carrying the bot credential.
 // Files stay in memory, and only decoded text is persisted in the user's draft.
 export function createSeedFileReader(token: string, api: TelegramApi, { get = https.get }: { get?: HttpsGet } = {}) {
   return async (document: TelegramDocument) => {
     if (!/\.(txt|md)$/i.test(document?.file_name || '')) {
-      throw new UserError('Пришли текстовый файл .txt или .md в кодировке UTF-8. PDF и DOCX пока не поддерживаются.');
+      throw new UserError('Пришли текстовый файл .txt или .md в кодировке UTF-8. PDF и DOCX пока не поддерживаются.', 'fileType');
     }
     if ((document.file_size ?? 0) > SEED_BYTES) throw tooLarge();
     if (typeof document.file_id !== 'string' || !document.file_id) throw failed();
@@ -61,9 +62,9 @@ export function createSeedFileReader(token: string, api: TelegramApi, { get = ht
       });
       let text: string;
       try { text = new TextDecoder('utf-8', { fatal: true }).decode(data).replace(/\r\n?/g, '\n').trim(); }
-      catch { throw new UserError('Не удалось прочитать UTF-8. Сохрани файл как UTF-8 и отправь снова; черновик не изменён.'); }
+      catch { throw new UserError('Не удалось прочитать UTF-8. Сохрани файл как UTF-8 и отправь снова; черновик не изменён.', 'fileEncoding'); }
       if (!text || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(text)) {
-        throw new UserError('Нужен непустой текстовый файл .txt или .md без двоичных данных. Черновик не изменён.');
+        throw new UserError('Нужен непустой текстовый файл .txt или .md без двоичных данных. Черновик не изменён.', 'fileBinary');
       }
       return text;
     } catch (error) {

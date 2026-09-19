@@ -20,6 +20,18 @@
 
 Stories made from the same seed share its title, so they are called «История N» (by creation order) within that seed.
 
+## Interface language
+
+What the bot itself says (screens, buttons, refusals, the compaction status, the command menu) comes from a catalog per language in `local/text/`. The button labels quoted in this document are the Russian ones. Stories are not affected: prompts, memory, the eval and the language a story is written in stay as they were, and the language of a story still comes from its seed and the author's messages.
+
+- `local/text/ru.ts` is the Russian catalog and defines the shape, `Messages`: nested groups by screen, where a value is a string or a function of typed arguments. Plural forms and word order live inside those functions, so the code never glues a sentence from fragments. Comments above the entries tell a translator where a text appears and what it must keep (an emoji at the start, a length, a date format). `local/text/en.ts` is `const en: Messages`.
+- `local/text.ts` holds `Lang` (`ru`, `en`, `zh`, `ko`, `ja`), the languages' own names for the picker, `texts(lang)`, `langFromTelegram(code)` and the command lists for `setMyCommands` (English by default, plus one per registered language).
+- **To add a language:** write `local/text/<lang>.ts` as `export const <lang>: Messages = { … }` from `ru.ts` and `en.ts`, then import it in `local/text.ts` and add it to `CATALOGS`. A missing or extra key fails `npm run check`; `text.test.ts` renders every screen in every registered language and compares the catalogs' keys, value kinds and function arities.
+- The choice is stored as `language` in the user's library. `render`, `sceneKeyboard` read it from the state; `renderContext`, `scenePrefix` and `renderCompaction` take it as an argument. Errors thrown below the bot (library, seed files, incoming messages) carry a catalog key next to their Russian text, and the bot shows `errors[key]` in the user's language.
+- **Fallbacks:** a library without `language` predates the choice and is shown in Russian, whatever Telegram reports. A new user (nothing handled and nothing created yet) gets `langFromTelegram(from.language_code)`: `ru`, `zh`, `ko`, `ja` by prefix, anything else or nothing → `en`. A stored language that has no catalog yet is shown in English and switches by itself once its catalog is registered.
+- The menu has «🌐 Language», the same label in every language, and `/language` opens the same picker (`view:language`). It lists the registered languages by their own names and marks the one shown; `lang:<code>` stores the choice and shows the menu in it. The picker also works during a seed draft and a model job.
+- Stored names are not translated: the labels of checkpoints and branches the bot creates («Сцена 3», “Scene 3”) are written in the interface language of that moment and stay as stored.
+
 ## Model and manual compaction
 
 `render(state, route, {modelInfo})` accepts public metadata only: `{provider, model, status, checkedAt}`. Home and `sceneKeyboard` link to `view:model`. The backend refreshes the server check before rendering that screen. The screen shows the selected provider, model, status and check time in UTC; it does not change the deployment. Configured, a past successful check and an unavailable server have distinct labels.
@@ -53,4 +65,5 @@ Navigation, previews and «Последняя сцена» stay available. Butto
 - Unknown routes show the menu with a note. Missing seeds, stories, branches or checkpoints show «⚠️ … не найден(а)» ("… not found") with «Сиды / Меню» ("Seeds / Menu") buttons. `render` never throws.
 - Texts are capped at 4000 characters. A checkpoint preview trims the scene so the fork explanation still fits. A button whose callback would exceed 64 bytes is dropped rather than sent broken; with library-generated ids this does not happen.
 - Items are sorted by the numeric suffix of their ids, which is creation order.
+- `text.test.ts` does the same crawl for every registered language, see "Interface language".
 - `ui.test.ts` (node:test) crawls every screen reachable through `view:` buttons in normal, empty, busy and large libraries. It checks payload limits, the callback protocol, delete scope, stale routes and pagination.

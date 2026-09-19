@@ -17,7 +17,7 @@ const isNode = (value: unknown): value is Node => !!value && typeof value === 'o
 export function messageText(message: IncomingMessage | null | undefined): string {
   if (!message?.rich_message) return typeof message?.text === 'string' ? message.text.trim() : '';
   let visited = 0;
-  const unsupported: () => never = () => { throw new UserError('В сообщении есть неподдерживаемое содержимое. Пришли сид или продолжение текстом без вложений. Ничего не сохранено.'); };
+  const unsupported: () => never = () => { throw new UserError('В сообщении есть неподдерживаемое содержимое. Пришли сид или продолжение текстом без вложений. Ничего не сохранено.', 'unsupportedContent'); };
   const visit = (depth: number) => { if (++visited > 20000 || depth > 48) unsupported(); };
   const list = (value: unknown): unknown[] => { if (!Array.isArray(value)) unsupported(); return value; };
   const text = (value: unknown, depth = 0): string => {

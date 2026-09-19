@@ -37,18 +37,31 @@ export type Job = {
 // keep those fallbacks for older or incomplete v1 data.
 export type SeedDraft = { input: 'seed'; draftId: string; parts: string[]; confirm?: undefined };
 export type DeleteConfirmation = { confirm: string; input?: undefined };
+// Interface language of the bot, never of the stories. A library without it predates the choice and is shown in Russian.
+export type Language = 'ru' | 'en' | 'zh' | 'ko' | 'ja';
 export type Library = {
   version: 1; seq: number; seeds: Record<string, Seed>; stories: Record<string, Story>;
   active: { storyId: string; branchId: string } | null; job: Job | null; ui: SeedDraft | DeleteConfirmation | null; seen: number[];
-  interrupted?: boolean;
+  interrupted?: boolean; language?: Language;
 };
+// Names the library gives to what it creates. They are stored as written and never translated afterwards.
+export type Labels = { firstBranch: string; seedCheckpoint: string; forkBranch: (from: string) => string; forkCheckpoint: string; afterCompaction: string };
+const LABELS: Labels = { firstBranch: 'Начало', seedCheckpoint: 'Сид', forkBranch: from => `От ${from}`, forkCheckpoint: 'Точка развилки', afterCompaction: 'После сжатия' };
 /** A timeline position: a branch or checkpoint head with its memory version. */
 export type Point = { head: string | null; memory: string | null };
 
-export class UserError extends Error {}
+// `key` names the message for a caller that shows it in another language; the message itself stays Russian.
+export class UserError extends Error {
+  declare key: string | undefined;
+  constructor(message: string, key?: string) { super(message); this.key = key; }
+}
 
 export function emptyLibrary(): Library {
   return { version: 1, seq: 0, seeds: {}, stories: {}, active: null, job: null, ui: null, seen: [] };
+}
+
+export function setLanguage(state: Library, language: Language): void {
+  state.language = language;
 }
 
 export function id(state: Library, prefix: string): string {
@@ -68,29 +81,29 @@ export function validTime(text: string): boolean {
 export function addSeed(state: Library, text: string): Seed {
   const [title, startTime, ...body] = text.trim().split('\n');
   if (!title || title.length > 100 || !validTime(startTime?.trim() ?? '') || !body.join('\n').trim()) {
-    throw new UserError('Нужны название (до 100 знаков), дата в формате 2026-08-02 20:00 и описание мира, каждое с новой строки.');
+    throw new UserError('Нужны название (до 100 знаков), дата в формате 2026-08-02 20:00 и описание мира, каждое с новой строки.', 'seedFormat');
   }
   const seed = { id: id(state, 's'), title, startTime: startTime.trim(), text: body.join('\n').trim() };
   state.seeds[seed.id] = seed;
   return seed;
 }
 
-export function newStory(state: Library, seedId: string): { story: Story; branch: Branch } {
+export function newStory(state: Library, seedId: string, labels: Labels = LABELS): { story: Story; branch: Branch } {
   const seed = state.seeds[seedId];
-  if (!seed) throw new UserError('Сид уже удалён.');
+  if (!seed) throw new UserError('Сид уже удалён.', 'seedGone');
   const story: Story = { id: id(state, 'h'), seedId, title: seed.title, branches: {}, checkpoints: {}, nodes: {}, memories: {} };
-  const branch: Branch = { id: id(state, 'b'), name: 'Начало', head: null, memory: null };
+  const branch: Branch = { id: id(state, 'b'), name: labels.firstBranch, head: null, memory: null };
   story.branches[branch.id] = branch;
   state.stories[story.id] = story;
   state.active = { storyId: story.id, branchId: branch.id };
-  saveCheckpoint(state, story, branch, 'Сид', 'start');
+  saveCheckpoint(state, story, branch, labels.seedCheckpoint, 'start');
   return { story, branch };
 }
 
 export function active(state: Library): { story: Story; branch: Branch; seed: Seed } {
   const story = state.stories[state.active?.storyId as string];
   const branch = story?.branches[state.active?.branchId as string];
-  if (!branch) throw new UserError('Выбери ветку истории через /seeds.');
+  if (!branch) throw new UserError('Выбери ветку истории через /seeds.', 'pickBranch');
   return { story, branch, seed: state.seeds[story.seedId] };
 }
 
@@ -100,14 +113,14 @@ export function saveCheckpoint(state: Library, story: Story, branch: Branch, lab
   return cp;
 }
 
-export function fork(state: Library, storyId: string, checkpointId: string): Branch {
+export function fork(state: Library, storyId: string, checkpointId: string, labels: Labels = LABELS): Branch {
   const story = state.stories[storyId];
   const cp = story?.checkpoints[checkpointId];
-  if (!cp) throw new UserError('Чекпоинт уже удалён.');
-  const branch = { id: id(state, 'b'), name: `От ${cp.label}`, head: cp.head, memory: cp.memory };
+  if (!cp) throw new UserError('Чекпоинт уже удалён.', 'checkpointGone');
+  const branch = { id: id(state, 'b'), name: labels.forkBranch(cp.label), head: cp.head, memory: cp.memory };
   story.branches[branch.id] = branch;
   state.active = { storyId, branchId: branch.id };
-  saveCheckpoint(state, story, branch, 'Точка развилки', 'fork');
+  saveCheckpoint(state, story, branch, labels.forkCheckpoint, 'fork');
   return branch;
 }
 
@@ -143,7 +156,7 @@ export function context(story: Story, branch: Point): { memories: MemoryVersion[
 }
 
 export function beginJob(state: Library, input: string, now: number): Job {
-  if (state.job) throw new UserError('Продолжение уже готовится. /cancel отменит его, если запрос завис.');
+  if (state.job) throw new UserError('Продолжение уже готовится. /cancel отменит его, если запрос завис.', 'jobRunning');
   const { story, branch } = active(state);
   const job = { id: id(state, 'j'), storyId: story.id, branchId: branch.id, head: branch.head, memory: branch.memory, input, started: now };
   state.job = job;
@@ -159,7 +172,7 @@ export function jobTarget(state: Library, jobId: string) {
   return { job, story, branch, seed: state.seeds[story.seedId] };
 }
 
-export function commitMemory(state: Library, jobId: string, covered: string[], delta: MemoryVersion['delta']): boolean {
+export function commitMemory(state: Library, jobId: string, covered: string[], delta: MemoryVersion['delta'], label = LABELS.afterCompaction): boolean {
   const target = jobTarget(state, jobId);
   if (!target) return false;
   const { story, branch, job } = target;
@@ -169,7 +182,7 @@ export function commitMemory(state: Library, jobId: string, covered: string[], d
   story.memories[memory.id] = memory;
   branch.memory = memory.id;
   job.memory = memory.id;
-  saveCheckpoint(state, story, branch, 'После сжатия', 'compaction');
+  saveCheckpoint(state, story, branch, label, 'compaction');
   return true;
 }
 
@@ -178,7 +191,7 @@ export function commitTurn(state: Library, jobId: string, text: string, truncate
   if (!target) return null;
   const { story, branch, job } = target;
   const time = text.split('\n')[0].trim();
-  if (!validTime(time)) throw new UserError('Модель не указала корректные дату и время. Ответ не записан; отправь продолжение ещё раз.');
+  if (!validTime(time)) throw new UserError('Модель не указала корректные дату и время. Ответ не записан; отправь продолжение ещё раз.', 'sceneTime');
   const node: SceneNode = { id: id(state, 'n'), parent: branch.head, input: job.input, text, time, truncated, delivery: 'pending' };
   story.nodes[node.id] = node;
   branch.head = node.id;
@@ -199,7 +212,7 @@ function collect(story: Story): void {
 
 export function deleteBranch(state: Library, storyId: string, branchId: string): void {
   const story = state.stories[storyId];
-  if (!story?.branches[branchId]) throw new UserError('Ветка уже удалена.');
+  if (!story?.branches[branchId]) throw new UserError('Ветка уже удалена.', 'branchGone');
   delete story.branches[branchId];
   for (const cp of Object.values(story.checkpoints)) if (cp.branchId === branchId) delete story.checkpoints[cp.id];
   collect(story);
@@ -210,7 +223,7 @@ export function deleteBranch(state: Library, storyId: string, branchId: string):
 }
 
 export function deleteSeed(state: Library, seedId: string): void {
-  if (!state.seeds[seedId]) throw new UserError('Сид уже удалён.');
+  if (!state.seeds[seedId]) throw new UserError('Сид уже удалён.', 'seedGone');
   for (const story of Object.values(state.stories)) {
     if (story.seedId !== seedId) continue;
     if (state.active?.storyId === story.id) state.active = null;

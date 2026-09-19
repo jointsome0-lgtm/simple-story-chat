@@ -15,7 +15,8 @@ import { ModelError, safeErrorDetails } from './model-error.ts';
 import type { Controls, GenerateControls, GenerationResult, ModelRequest, Provider } from './model.ts';
 import type { TelegramPayload } from './telegram.ts';
 import { render, scenePrefix, sceneKeyboard } from './ui.ts';
-import { UserError, history, newStory, beginJob, commitTurn, context } from '../lib/library.ts';
+import { texts } from './text.ts';
+import { UserError, addSeed, history, newStory, beginJob, commitTurn, context } from '../lib/library.ts';
 import type { Job, SeedDraft } from '../lib/library.ts';
 
 // Scene and memory requests from the bot always pass a text callback.
@@ -73,9 +74,9 @@ function fixture(t: TestContext, options: FixtureOptions = {}) {
     providerName: options.providerName ?? 'claude-code', compactAtTokens: options.compactAtTokens ?? 54000, ownerId: options.ownerId,
     log: (event, code, details) => { rows.push({ event, ...(code === undefined ? {} : { code }), ...safeErrorDetails(details) }); } });
   const message = (text: string | undefined, user = 1, updateId = ++sequence): MessageUpdate => ({ update_id: updateId,
-    message: { from: { id: user }, chat: { id: user, type: 'private' }, text } });
+    message: { from: { id: user, language_code: 'ru' }, chat: { id: user, type: 'private' }, text } });
   const click = (data: string, user = 1) => ({ update_id: ++sequence,
-    callback_query: { id: `q${sequence}`, from: { id: user }, message: { chat: { id: user, type: 'private' } }, data } });
+    callback_query: { id: `q${sequence}`, from: { id: user, language_code: 'ru' }, message: { chat: { id: user, type: 'private' } }, data } });
   async function seed(user = 1) {
     await bot.handle(click('new-seed', user));
     await bot.handle(message(seedText, user));
@@ -712,4 +713,90 @@ test('the model screen does not call a provider verified when it has no check', 
   const server = fixture(t, { check: async () => ({ model: 'test-model' }), providerName: 'llama-cpp' });
   await server.bot.handle(server.click('view:model'));
   assert.match(server.sent.at(-1)!.payload.text, /Последняя успешная проверка/);
+});
+
+// The fixture's updates come from a Russian Telegram app; these come from an app in the given language.
+function speaking<T extends Update>(update: T, languageCode: string | undefined): T {
+  const from = update.message?.from ?? update.callback_query?.from;
+  if (from) from.language_code = languageCode;
+  return update;
+}
+
+test('a new user gets the language of their Telegram app, /language changes it and the choice survives a reload', async t => {
+  const f = fixture(t);
+  const shown = () => f.sent.filter(item => item.method === 'sendMessage').map(item => item.payload.text);
+  await f.bot.handle(speaking(f.message('/start'), 'en-GB'));
+  assert.equal(f.store.read(1).language, 'en');
+  assert.match(shown().at(-1)!, /^🏠 Menu\n\n[^]*Nothing here yet/);
+  assert.doesNotMatch(shown().at(-1)!, /[А-Яа-яЁё]/);
+  await f.bot.handle(speaking(f.message('/nope'), 'en'));
+  assert.equal(shown().at(-1), texts('en').notices.unknownCommand);
+  // A refusal thrown by the library carries a key and is shown in the user's language.
+  await f.bot.handle(speaking(f.click('start:s999'), 'en'));
+  assert.equal(shown().at(-1), texts('en').errors.seedGone);
+
+  // The interface language names what the bot creates, and never reaches the model.
+  await f.start();
+  const story = Object.values(f.store.read(1).stories)[0];
+  assert.deepEqual(Object.values(story.branches).map(branch => branch.name), ['Start']);
+  assert.deepEqual(Object.values(story.checkpoints).map(cp => cp.label), ['Seed', 'Scene 1']);
+  assert.equal(f.requests.length, 1);
+  assert.match(f.requests[0].messages.at(-1)!.content, /Начни историю из сида\. Покажи первую сцену\./);
+  assert.doesNotMatch(JSON.stringify(f.requests[0]), /Scene 1|"Start"|Menu/);
+  assert.match(f.sent.findLast(item => item.method === 'sendRichMessage')!.payload.rich_message.markdown, /^_🤖 Claude Code · test‐model · 📏 Context /);
+
+  await f.bot.handle(speaking(f.message('/language'), 'en'));
+  assert.match(shown().at(-1)!, /^🌐 Interface language/);
+  const picker = f.sent.at(-1)!.payload as unknown as { reply_markup: { inline_keyboard: { text: string; callback_data: string }[][] } };
+  assert.deepEqual(picker.reply_markup.inline_keyboard.flat().map(button => button.callback_data).slice(0, 2), ['lang:ru', 'lang:en']);
+  for (const stale of ['lang:xx', 'lang:constructor', 'lang:']) {
+    await f.bot.handle(speaking(f.click(stale), 'en'));
+    assert.equal(shown().at(-1), texts('en').errors.staleButton);
+    assert.equal(f.store.read(1).language, 'en');
+  }
+  await f.bot.handle(speaking(f.click('lang:ru'), 'en'));
+  assert.equal(f.store.read(1).language, 'ru');
+  assert.match(shown().at(-1)!, /^🏠 Меню\n\n[^]*📖 Сейчас: «Маяк» · история 1/);
+  // Stored names keep the language they were written in.
+  assert.match(shown().at(-1)!, /🌿 Ветка «Start» · 1 сцена/);
+
+  const reopened = new Store(f.path);
+  try { assert.equal(reopened.read(1).language, 'ru'); } finally { reopened.close(); }
+  await f.bot.handle(speaking(f.message('/menu'), 'en'));
+  assert.match(shown().at(-1)!, /^🏠 Меню/);
+  assert.equal(f.store.read(1).language, 'ru');
+});
+
+test('a library from before the language choice stays Russian whatever the Telegram app says', async t => {
+  const f = fixture(t);
+  f.store.mutate(2, state => { addSeed(state, seedText); });
+  assert.equal(f.store.read(2).language, undefined);
+  await f.bot.handle(speaking(f.message('/start', 2), 'en'));
+  assert.match(f.sent.at(-1)!.payload.text, /^🏠 Меню\n\n[^]*История не выбрана/);
+  await f.bot.handle(speaking(f.click('view:language', 2), 'en'));
+  assert.match(f.sent.at(-1)!.payload.text, /^🌐 Язык интерфейса/);
+  assert.equal(f.store.read(2).language, undefined);
+  await f.bot.handle(speaking(f.click('lang:en', 2), 'en'));
+  assert.equal(f.store.read(2).language, 'en');
+  assert.match(f.sent.at(-1)!.payload.text, /^🏠 Menu/);
+});
+
+test('a first contact without a language code is English, and a language with no catalog yet is kept for later', async t => {
+  const f = fixture(t);
+  await f.bot.handle(speaking(f.message('/start'), undefined));
+  assert.equal(f.store.read(1).language, 'en');
+  await f.bot.handle(speaking(f.message('/start', 2), 'ja-JP'));
+  assert.equal(f.store.read(2).language, 'ja');
+  assert.ok(f.sent.at(-1)!.payload.text.startsWith(texts('ja').home.title));
+});
+
+test('the language can be changed from inside a seed draft without losing it', async t => {
+  const f = fixture(t);
+  await f.bot.handle(f.click('new-seed'));
+  await f.bot.handle(f.message(seedText));
+  await f.bot.handle(f.message('/language'));
+  assert.match(f.sent.at(-1)!.payload.text, /^🌐 Язык интерфейса/);
+  await f.bot.handle(f.click('lang:en'));
+  assert.match(f.sent.at(-1)!.payload.text, /^📝 Seed draft, not saved yet\nReceived: 1 part · /);
+  assert.deepEqual((f.store.read(1).ui as SeedDraft).parts, [seedText]);
 });

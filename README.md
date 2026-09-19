@@ -4,7 +4,7 @@ Interactive stories in Telegram. A seed sets the world and the character, the mo
 
 The project provides the interface and the generation mechanics: seeds, a tree of branches with checkpoints, continuing from any scene, compaction of old scenes into memory, and an eval that measures whether the system keeps the world consistent. The model is brought by whoever runs the bot: a Claude Code subscription, their own llama.cpp server with any GGUF model (including one on a rented GPU) or, with explicit consent, a hosted API. What to write and how is decided by that person and their model. The bot adds no content filters of its own and does not weaken the ones the model has.
 
-The bot runs locally on Node 24 and SQLite through the ordinary Bot API. The default model is Haiku through an installed Claude Code. The bot's interface is in Russian; button names below are quoted as they appear, with a translation. Opus 5 designed and wrote the Telegram interface; the concept was discussed earlier with Fable 5.1.
+The bot runs locally on Node 24 and SQLite through the ordinary Bot API. The default model is Haiku through an installed Claude Code. The bot's interface is in Russian or English, chosen under «🌐 Language» in the menu or with `/language` ([how to add a language](docs/telegram-ui.md#interface-language)); the language of a story is up to its author. Button names below are quoted from the Russian interface, with a translation. Opus 5 designed and wrote the Telegram interface; the concept was discussed earlier with Fable 5.1.
 
 ## How to try it
 

@@ -5,6 +5,8 @@ import type { Branch, Checkpoint, Library, SceneNode, Story } from '../lib/libra
 import type { ContextStats } from './context.ts';
 import type { GpuStatus } from './gpu.ts';
 import type { InlineButton, InlineKeyboard, Screen } from './telegram.ts';
+import { LANGS, LANGUAGE_BUTTON, REGISTERED, shownLang, texts } from './text.ts';
+import type { Messages } from './text.ts';
 
 // Model metadata or scene provenance. Old scenes may lack it and stored values are not trusted.
 export type ModelInfo = { provider?: string; model?: string; status?: string; checkedAt?: string | null };
@@ -19,55 +21,49 @@ type State = Partial<Library>;
 type Row = (InlineButton | null)[];
 type Page<T> = { page: number; pages: number; start: number; items: T[] };
 
-const LIMIT = 4000; // Telegram allows 4096 characters; keep headroom
+export const LIMIT = 4000; // Telegram allows 4096 characters; keep headroom
 const PAGE = 8;
 const encoder = new TextEncoder();
 const ICON: Record<string, string> = { start: '🌱', fork: '🌿', scene: '🎬', manual: '📌', compaction: '🗜' };
 
-const EXAMPLE = [
-  'Маяк на краю света',
-  '2026-08-02 20:00',
-  'Северный остров, конец лета. Мира, 27 лет, первый вечер работает смотрительницей маяка. К причалу прибивает пустую лодку с зажжённым фонарём.',
-].join('\n');
-
-const DELETE_NOTE = 'Удаляется из сохранённой библиотеки бота, восстановить будет нельзя. Уже отправленные сообщения в этом чате останутся.';
-
+// The interface language is state.language (lib/library.ts); functions that get no state take it as `lang`.
 export function render(state?: Library | null, route: string | null = 'home', details: RenderDetails | null = {}): Screen {
   try {
     return screen(state ?? {}, String(route ?? 'home'), details ?? {});
   } catch {
-    return failure();
+    return failure(texts(state?.language));
   }
 }
 
 // Detailed context screen, shown only on request (/context or a Context button).
-export function renderContext(stats: ContextStats | null | undefined): Screen {
+export function renderContext(stats: ContextStats | null | undefined, lang?: unknown): Screen {
+  const t = texts(lang);
   try {
     if (!stats || typeof stats !== 'object') {
-      return payload(['📏 Контекст: данных пока нет.'], [[btn('🏠 Меню', 'view:home')]]);
+      return payload([t.context.none], [[btn(t.buttons.menu, 'view:home')]]);
     }
-    return contextView(stats);
+    return contextView(t, stats);
   } catch {
-    return failure();
+    return failure(t);
   }
 }
 
 // One-line Markdown header above a scene in Telegram. Never saved as narrative or sent to the model.
 // `provenance` is the scene's own {provider, model}; without it the scene is not labelled.
 // Uses only characters that need no escaping in Markdown flavours.
-export function scenePrefix(stats: ContextStats | null | undefined, provenance?: ModelInfo | null): string {
+export function scenePrefix(stats: ContextStats | null | undefined, provenance?: ModelInfo | null, lang?: unknown): string {
   try {
+    const t = texts(lang);
     const parts = [];
     if (modelKnown(provenance)) {
-      parts.push(`🤖 ${PROVIDER[provenance.provider].short} · ${markdownSafe(line(provenance.model, 60))}`);
+      parts.push(`🤖 ${t.model.providers[provenance.provider].short} · ${markdownSafe(line(provenance.model, 60))}`);
     }
     const request = stats?.request?.estimatedTokens;
     const limit = stats?.limitTokens;
     if (known(request) && known(limit) && request >= 0 && limit > 0) {
       const percent = (request / limit) * 100;
-      const shown = percent > 0 && percent < 1 ? 'менее 1%' : `≈ ${Math.round(percent)}%`;
-      const rough = stats?.request?.estimateSource === 'usage' ? '' : ', грубая оценка';
-      parts.push(`📏 Контекст ${shown}${rough}`);
+      const rough = stats?.request?.estimateSource !== 'usage';
+      parts.push(percent > 0 && percent < 1 ? t.scenePrefix.contextBelowOne(rough) : t.scenePrefix.context(Math.round(percent), rough));
     }
     return parts.length ? `_${parts.join(' · ')}_\n\n` : '';
   } catch {
@@ -77,30 +73,32 @@ export function scenePrefix(stats: ContextStats | null | undefined, provenance?:
 
 export function sceneKeyboard(state: Library | null | undefined): InlineKeyboard | undefined {
   if (!state) return undefined;
+  const b = texts(state.language).buttons;
   if (state.job) {
     return keyboard([
-      [btn('✖️ Остановить', 'cancel')],
-      [btn('📏 Контекст', 'view:context'), btn('🤖 Модель', 'view:model'), btn('🏠 Меню', 'view:home')],
+      [btn(b.stop, 'cancel')],
+      [btn(b.context, 'view:context'), btn(b.model, 'view:model'), btn(b.menu, 'view:home')],
     ]);
   }
   const ref = activeRef(state);
   if (!ref) return undefined;
   const { story, branch } = ref;
   return keyboard([
-    [btn('▶️ Продолжить', 'continue'), btn('📏 Контекст', 'view:context'), btn('🤖 Модель', 'view:model')],
-    [btn('🔖 Чекпоинты', `view:checkpoints:${story.id}:${branch.id}:0`), btn('🌿 Ветки', `view:story:${story.id}`), btn('🏠 Меню', 'view:home')],
+    [btn(b.continue, 'continue'), btn(b.context, 'view:context'), btn(b.model, 'view:model')],
+    [btn(b.checkpoints, `view:checkpoints:${story.id}:${branch.id}:0`), btn(b.branches, `view:story:${story.id}`), btn(b.menu, 'view:home')],
   ]);
 }
 
-function failure() {
-  return payload(['⚠️ Не получилось показать этот экран.', 'Вернись в меню и попробуй ещё раз.'], [[btn('🏠 Меню', 'view:home')]]);
+function failure(t: Messages) {
+  return payload([t.common.failure, t.common.failureHint], [[btn(t.buttons.menu, 'view:home')]]);
 }
 
 function screen(state: State, route: string, details: RenderDetails) {
   const [name, ...args] = route.split(':');
   switch (name) {
     case 'home': return home(state, null, details.modelInfo, gpuFor(details));
-    case 'model': return modelScreen(details.modelInfo, gpuFor(details));
+    case 'model': return modelScreen(texts(state.language), details.modelInfo, gpuFor(details));
+    case 'language': return languageScreen(state);
     case 'seeds': return seedList(state, args[0]);
     case 'seed': return seedScreen(state, args[0], args[1]);
     case 'story': return storyScreen(state, args[0], args[1]);
@@ -113,168 +111,127 @@ function screen(state: State, route: string, details: RenderDetails) {
     case 'delete-seed': return deleteSeedScreen(state, args[0]);
     case 'delete-branch': return deleteBranchScreen(state, args[0], args[1]);
     case 'new-seed': return newSeedScreen(state);
-    default: return home(state, '⚠️ Этот экран больше недоступен. Вот меню.', details.modelInfo, gpuFor(details));
+    default: return home(state, texts(state.language).home.unknownRoute, details.modelInfo, gpuFor(details));
   }
 }
 
 // Screens
 
 function home(state: State, note: string | null, modelInfo: ModelInfo | null | undefined, gpu: GpuInfo | null) {
+  const t = texts(state.language);
   const seedCount = values(state.seeds).length;
   const ref = activeRef(state);
   const lines = note ? [note, ''] : [];
   const rows: Row[] = [];
-  lines.push('🏠 Меню', '');
+  lines.push(t.home.title, '');
   if (modelKnown(modelInfo)) {
-    lines.push(`🤖 ${PROVIDER[modelInfo.provider].short} · ${line(modelInfo.model, 60)} · ${statusShort(modelInfo)}`);
+    lines.push(`🤖 ${t.model.providers[modelInfo.provider].short} · ${line(modelInfo.model, 60)} · ${statusShort(t, modelInfo)}`);
   }
-  if (gpu) lines.push(`🖥 GPU: ${gpuShort(gpu)}`);
+  if (gpu) lines.push(t.home.gpu(gpuShort(t, gpu)));
   if (modelKnown(modelInfo) || gpu) lines.push('');
   if (state.job) {
     const jobStory = own(state.stories, state.job.storyId);
-    const job = jobLabel(state);
-    lines.push(
-      `⏳ ${job.title}${jobStory ? ` в истории ${storyName(state, jobStory)}` : ''}.`,
-      `Меню можно листать; удалять, переключать ветки и запускать новые сцены — ${job.after}.`,
-      '',
-    );
+    const name = jobStory ? storyName(state, jobStory) : null;
+    const compact = state.job.kind === 'compact';
+    lines.push(compact ? t.home.compactJob(name) : t.home.sceneJob(name), compact ? t.home.compactJobNote : t.home.sceneJobNote, '');
     rows.push(cancelRow(state));
   }
   if (ref) {
     const { story, branch } = ref;
-    lines.push(`📖 Сейчас: ${storyName(state, story)}`, `🌿 Ветка ${quote(branch.name)} · ${progress(story, branch)}`);
+    lines.push(t.home.current(storyName(state, story)), t.home.branch(quote(t, branch.name), progress(t, story, branch)));
     if (!state.job) {
-      lines.push('', 'Чтобы продолжить, просто напиши сообщение: реплику, действие героя или указание автора. «Продолжить» — следующая сцена без указаний.');
-      rows.push([btn('▶️ Продолжить', 'continue'), branch.head ? btn('📄 Последняя сцена', 'last') : null]);
+      lines.push('', t.home.howToContinue);
+      rows.push([btn(t.buttons.continue, 'continue'), branch.head ? btn(t.buttons.lastScene, 'last') : null]);
     } else if (branch.head) {
-      rows.push([btn('📄 Последняя сцена', 'last')]);
+      rows.push([btn(t.buttons.lastScene, 'last')]);
     }
     rows.push([
-      btn('🔖 Чекпоинты', `view:checkpoints:${story.id}:${branch.id}:0`),
-      btn('🌿 Ветки', `view:story:${story.id}`),
-      btn('📏 Контекст', 'view:context'),
+      btn(t.buttons.checkpoints, `view:checkpoints:${story.id}:${branch.id}:0`),
+      btn(t.buttons.branches, `view:story:${story.id}`),
+      btn(t.buttons.context, 'view:context'),
     ]);
   } else if (seedCount) {
-    lines.push('История не выбрана.', 'Открой сид, чтобы начать новую историю или вернуться к начатой.');
+    lines.push(t.home.noStory, t.home.noStoryHint);
   } else {
-    lines.push(
-      'Здесь пока пусто.',
-      'Сид — это мир, персонаж и стартовая ситуация. Из одного сида можно начать сколько угодно историй.',
-      '',
-      'Создай первый сид: пришли описание одним или несколькими сообщениями и сохрани.',
-    );
+    lines.push(t.home.empty, t.common.whatIsSeed, '', t.home.createFirst);
   }
-  rows.push([seedCount ? btn(`📚 Сиды (${seedCount})`, 'view:seeds:0') : null, btn('➕ Новый сид', 'new-seed'), btn('🤖 Модель', 'view:model')]);
+  rows.push([seedCount ? btn(t.buttons.seedsCount(seedCount), 'view:seeds:0') : null, btn(t.buttons.newSeed, 'new-seed'), btn(t.buttons.model, 'view:model')]);
+  rows.push([btn(LANGUAGE_BUTTON, 'view:language')]);
   return payload(lines, rows);
+}
+
+// Languages under their own names, so the screen can be read in any of them.
+function languageScreen(state: State) {
+  const t = texts(state.language);
+  const current = shownLang(state.language);
+  return payload([t.language.title, '', t.language.note], [
+    ...REGISTERED.map(lang => [btn(`${lang === current ? '✅ ' : ''}${LANGS[lang]}`, `lang:${lang}`)]),
+    [btn(t.buttons.menu, 'view:home')],
+  ]);
 }
 
 // Deployment is chosen by the owner in the bot's config, so there is no switch here.
 // GPU start/pause is power control for the configured server, not provider selection.
-function modelScreen(info: ModelInfo | null | undefined, gpu: GpuInfo | null) {
+function modelScreen(t: Messages, info: ModelInfo | null | undefined, gpu: GpuInfo | null) {
   const rows: Row[] = [];
-  const lines = ['🤖 Модель', ''];
+  const lines = [t.model.title, ''];
   if (!modelKnown(info)) {
-    lines.push('Данных о модели пока нет.');
+    lines.push(t.model.noData);
   } else {
-    const llama = info.provider === 'llama-cpp';
     const time = checkedTime(info.checkedAt);
-    lines.push(
-      `Провайдер: ${PROVIDER[info.provider].full}`,
-      `Модель: ${line(info.model, 100)}`,
-      llama
-        ? 'Это наш сервер модели. Его проверка не измеряет видеокарту, память GPU, скорость и качество текста.'
-        : info.provider === 'claude-code' ? 'Модель работает по подписке Claude, а не на нашем арендованном GPU.'
-          : info.provider === 'codex-cli' ? 'Модель работает по подписке ChatGPT, а не на нашем арендованном GPU. Текст истории уходит стороннему сервису.'
-            : 'Модель работает у стороннего провайдера, а не на нашем арендованном GPU. Текст истории уходит стороннему сервису.',
-      '',
-    );
-    if (info.status === 'ready') {
-      lines.push(
-        `✅ Последняя успешная проверка или ответ: ${time ?? 'время неизвестно'}.`,
-        'Это было верно на тот момент, а не постоянное наблюдение: сейчас модель может уже не отвечать.',
-      );
-    } else if (info.status === 'unavailable') {
-      lines.push(
-        `⛔ Недоступна при проверке: ${time ?? 'время неизвестно'}.`,
-        'Пока так, новые сцены могут не получиться.',
-      );
-    } else if (info.status === 'configured') {
-      lines.push('⚪ Настроена, но ещё не проверена — готова ли она, неизвестно.');
-    } else {
-      lines.push('❔ Статус неизвестен.');
-    }
+    lines.push(t.model.provider(t.model.providers[info.provider].full), t.model.name(line(info.model, 100)), t.model.notes[info.provider], '');
+    if (info.status === 'ready') lines.push(t.model.ready(time), t.model.readyNote);
+    else if (info.status === 'unavailable') lines.push(t.model.unavailable(time), t.model.unavailableNote);
+    else if (info.status === 'configured') lines.push(t.model.configured);
+    else lines.push(t.model.unknown);
   }
   if (gpu) {
-    lines.push('', ...gpuLines(gpu));
+    lines.push('', ...gpuLines(t, gpu));
     rows.push([
-      gpu.canStart === true ? btn('▶️ Запустить GPU', 'gpu:start') : null,
-      gpu.canPause === true ? btn('⏸ Пауза GPU', 'gpu:pause') : null,
+      gpu.canStart === true ? btn(t.gpu.start, 'gpu:start') : null,
+      gpu.canPause === true ? btn(t.gpu.pause, 'gpu:pause') : null,
     ]);
   }
-  lines.push('', 'Модель выбирается в настройках бота, не в чате.');
-  rows.push([btn('🔄 Обновить', 'view:model'), btn('🏠 Меню', 'view:home')]);
+  lines.push('', t.model.footer);
+  rows.push([btn(t.buttons.refresh, 'view:model'), btn(t.buttons.menu, 'view:home')]);
   return payload(lines, rows);
 }
 
-function gpuLines(gpu: GpuInfo) {
+function gpuLines(t: Messages, gpu: GpuInfo) {
   const jobs = jobCount(gpu.activeJobs);
-  const lines = ['🖥 GPU — общий для всех пользователей бота'];
+  const lines = [t.gpu.title];
   switch (gpu.status) {
     case 'ready': {
-      lines.push(`🟢 Работает. Задач модели сейчас: ${jobs ?? 'неизвестно'}.`);
-      const idle = known(gpu.idleMinutes) && gpu.idleMinutes > 0 ? `${Math.round(gpu.idleMinutes)} мин` : null;
-      if (idle) {
-        lines.push(`Автопауза — после ${idle} без задач модели, считая от конца последней сцены или сжатия. Просмотр меню этот отсчёт не сбрасывает.`);
-      }
+      lines.push(t.gpu.ready(jobs));
+      if (known(gpu.idleMinutes) && gpu.idleMinutes > 0) lines.push(t.gpu.autoPause(Math.round(gpu.idleMinutes)));
       if (jobs === 0 && known(gpu.idleRemainingSeconds) && gpu.idleRemainingSeconds >= 0) {
-        lines.push(`До автопаузы ≈${remaining(gpu.idleRemainingSeconds)}.`);
+        lines.push(gpu.idleRemainingSeconds < 60 ? t.gpu.untilPauseSoon : t.gpu.untilPause(Math.ceil(gpu.idleRemainingSeconds / 60)));
       }
       break;
     }
-    case 'draining':
-      lines.push(
-        `⏳ Ставится на паузу: ждём, пока закончатся все задачи модели (сейчас: ${jobs ?? 'неизвестно'}).`,
-        'Новые сцены и сжатия до паузы не начинаются.',
-      );
-      break;
-    case 'stopping':
-      lines.push('⏳ Останавливается. Новые сцены и сжатия пока не начинаются.');
-      break;
-    case 'paused':
-      lines.push(
-        '⏸ На паузе: Vast подтвердил остановку.',
-        'Работа GPU там больше не оплачивается, но диск оплачивается и дальше.',
-      );
-      break;
-    case 'starting':
-      lines.push('⏳ Запускается. Это может занять время: ждём свободную видеокарту на Vast и прогрев модели.');
-      break;
-    case 'error':
-      lines.push('⚠️ Ошибка управления GPU. Это не значит, что он на паузе: он может работать и оплачиваться. Нажми «Обновить».');
-      break;
-    default:
-      lines.push('❔ Состояние GPU неизвестно. Это не значит, что он на паузе или бесплатен. Нажми «Обновить».');
+    case 'draining': lines.push(t.gpu.draining(jobs), t.gpu.drainingNote); break;
+    case 'stopping': lines.push(t.gpu.stopping); break;
+    case 'paused': lines.push(t.gpu.paused, t.gpu.pausedNote); break;
+    case 'starting': lines.push(t.gpu.starting); break;
+    case 'error': lines.push(t.gpu.error); break;
+    default: lines.push(t.gpu.unknown);
   }
-  if (gpu.canPause === true) {
-    lines.push('«Пауза GPU» остановит его для всех. Если модель сейчас работает, пауза дождётся конца всех сцен и сжатий.');
-  }
-  if (gpu.canStart === true) {
-    lines.push('«Запустить GPU» тоже может занять время: свободная видеокарта и прогрев модели.');
-  }
-  lines.push('Истории и чекпоинты хранятся у бота и при паузе не пропадают.');
+  if (gpu.canPause === true) lines.push(t.gpu.pauseHint);
+  if (gpu.canStart === true) lines.push(t.gpu.startHint);
+  lines.push(t.gpu.storageNote);
   return lines;
 }
 
-function gpuShort(gpu: GpuInfo) {
+function gpuShort(t: Messages, gpu: GpuInfo) {
   const jobs = jobCount(gpu.activeJobs);
   switch (gpu.status) {
-    case 'ready': return `работает · задач: ${jobs ?? 'неизвестно'}`;
-    case 'draining': return `ставится на паузу, ждёт задач: ${jobs ?? 'неизвестно'}`;
-    case 'stopping': return 'останавливается';
-    case 'paused': return 'на паузе';
-    case 'starting': return 'запускается';
-    case 'error': return 'ошибка, открой «Модель» и обнови';
-    default: return 'состояние неизвестно, открой «Модель» и обнови';
+    case 'ready': return t.gpu.short.ready(jobs);
+    case 'draining': return t.gpu.short.draining(jobs);
+    case 'stopping': return t.gpu.short.stopping;
+    case 'paused': return t.gpu.short.paused;
+    case 'starting': return t.gpu.short.starting;
+    case 'error': return t.gpu.short.error;
+    default: return t.gpu.short.unknown;
   }
 }
 
@@ -290,86 +247,85 @@ function jobCount(value: unknown) {
   return known(value) && value >= 0 ? Math.round(value) : null;
 }
 
-function remaining(seconds: number) {
-  return seconds < 60 ? 'меньше минуты' : `${Math.ceil(seconds / 60)} мин`;
-}
-
 function seedList(state: State, rawPage: string | undefined) {
+  const t = texts(state.language);
   const seeds = ordered(values(state.seeds));
   if (!seeds.length) {
     return payload(
-      ['📚 Сиды', '', 'Сидов пока нет.', 'Сид — это мир, персонаж и стартовая ситуация. Из одного сида можно начать сколько угодно историй.'],
-      [[btn('➕ Новый сид', 'new-seed')], [btn('🏠 Меню', 'view:home')]],
+      [t.seeds.title, '', t.seeds.none, t.common.whatIsSeed],
+      [[btn(t.buttons.newSeed, 'new-seed')], [btn(t.buttons.menu, 'view:home')]],
     );
   }
   const p = paginate(seeds, rawPage);
   const activeSeed = own(state.stories, state.active?.storyId)?.seedId;
-  const lines = [`📚 Сиды: ${seeds.length}`, pageNote(p), ''];
+  const lines = [t.seeds.titleCount(seeds.length), pageNote(t, p), ''];
   const rows: Row[] = [];
   p.items.forEach((seed, i) => {
     const n = p.start + i + 1;
     const stories = storiesOf(state, seed.id).length;
-    const summary = stories ? count(stories, 'история', 'истории', 'историй') : 'историй нет';
-    lines.push(`${n}. ${quote(seed.title, 60)} · ${summary}${seed.id === activeSeed ? ' · ✅ сейчас' : ''}`);
-    rows.push([btn(`${n}. ${line(seed.title, 40) || 'Без названия'}`, `view:seed:${seed.id}`)]);
+    const summary = stories ? t.count.stories(stories) : t.seeds.noStories;
+    lines.push(`${n}. ${quote(t, seed.title, 60)} · ${summary}${seed.id === activeSeed ? ` · ${t.common.current}` : ''}`);
+    rows.push([btn(`${n}. ${line(seed.title, 40) || t.format.untitledButton}`, `view:seed:${seed.id}`)]);
   });
-  lines.push('', 'Выбери сид, чтобы начать историю или открыть начатую.');
-  rows.push(pager(p, 'seeds', '⬅️ Предыдущие', 'Следующие ➡️'));
-  rows.push([btn('➕ Новый сид', 'new-seed'), btn('🏠 Меню', 'view:home')]);
+  lines.push('', t.seeds.hint);
+  rows.push(pager(p, 'seeds', t.buttons.previous, t.buttons.next));
+  rows.push([btn(t.buttons.newSeed, 'new-seed'), btn(t.buttons.menu, 'view:home')]);
   return payload(lines, rows);
 }
 
 function seedScreen(state: State, seedId: string | undefined, rawPage: string | undefined) {
+  const t = texts(state.language);
   const seed = own(state.seeds, seedId);
-  if (!seed) return stale('Сид не найден.');
+  if (!seed) return stale(t, t.seed.notFound);
   const stories = storiesOf(state, seed.id);
   const p = paginate(stories, rawPage);
-  const lines: (string | null)[] = [`🌱 Сид ${quote(seed.title, 100)}`, `Начало в мире: ${seed.startTime ?? '—'}`, '', clip(seed.text, 1200), ''];
+  const lines: (string | null)[] = [t.seed.title(quote(t, seed.title, 100)), t.seed.start(seed.startTime ?? '—'), '', clip(seed.text, 1200), ''];
   const rows: Row[] = [];
   if (state.job) {
-    lines.push(busyNote(state, 'начать историю или удалить сид'), '');
+    lines.push(busyNote(state, 'startOrDeleteSeed'), '');
     rows.push(cancelRow(state));
   } else {
-    rows.push([btn('▶️ Начать новую историю', `start:${seed.id}`)]);
+    rows.push([btn(t.seed.startStory, `start:${seed.id}`)]);
   }
   if (stories.length) {
-    lines.push(`📖 Истории из этого сида: ${stories.length}`, pageNote(p));
+    lines.push(t.seed.stories(stories.length), pageNote(t, p));
     p.items.forEach((story, i) => {
       const n = p.start + i + 1;
-      const current = story.id === state.active?.storyId ? ' · ✅ сейчас' : '';
-      const branches = count(values(story.branches).length, 'ветка', 'ветки', 'веток');
-      const scenes = count(Object.keys(story.nodes ?? {}).length, 'сцена', 'сцены', 'сцен');
-      lines.push(`${n}. История ${n} · ${branches} · ${scenes}${current}`);
-      rows.push([btn(`📖 История ${n}`, `view:story:${story.id}`)]);
+      const current = story.id === state.active?.storyId ? ` · ${t.common.current}` : '';
+      const branches = t.count.branches(values(story.branches).length);
+      const scenes = t.count.scenes(Object.keys(story.nodes ?? {}).length);
+      lines.push(`${n}. ${t.seed.story(n)} · ${branches} · ${scenes}${current}`);
+      rows.push([btn(t.seed.storyButton(n), `view:story:${story.id}`)]);
     });
   } else {
-    lines.push('Историй пока нет. «Начать новую историю» создаст её и сразу напишет первую сцену.');
+    lines.push(t.seed.noStories);
   }
-  rows.push(pager(p, `seed:${seed.id}`, '⬅️ Предыдущие', 'Следующие ➡️'));
-  if (!state.job) rows.push([btn('🗑 Удалить сид', `view:delete-seed:${seed.id}`)]);
-  rows.push([btn('📚 Все сиды', 'view:seeds:0'), btn('🏠 Меню', 'view:home')]);
+  rows.push(pager(p, `seed:${seed.id}`, t.buttons.previous, t.buttons.next));
+  if (!state.job) rows.push([btn(t.seed.delete, `view:delete-seed:${seed.id}`)]);
+  rows.push([btn(t.seed.all, 'view:seeds:0'), btn(t.buttons.menu, 'view:home')]);
   return payload(lines, rows);
 }
 
 function storyScreen(state: State, storyId: string | undefined, rawPage: string | undefined) {
+  const t = texts(state.language);
   const story = own(state.stories, storyId);
-  if (!story) return stale('История не найдена.');
+  if (!story) return stale(t, t.story.notFound);
   const seed = own(state.seeds, story.seedId);
   const branches = ordered(values(story.branches));
   const p = paginate(branches, rawPage);
-  const lines = [`📖 ${storyName(state, story)}`, `🌿 Ветки: ${branches.length}`, pageNote(p), ''];
+  const lines = [`📖 ${storyName(state, story)}`, t.story.branches(branches.length), pageNote(t, p), ''];
   const rows: Row[] = [];
   p.items.forEach((branch, i) => {
     const n = p.start + i + 1;
-    const current = isActive(state, story, branch) ? ' · ✅ сейчас' : '';
-    lines.push(`${n}. ${quote(branch.name)} · ${progress(story, branch)}${current}`);
-    rows.push([btn(`🌿 ${n}. ${line(branch.name, 40) || 'Без названия'}`, `view:branch:${story.id}:${branch.id}`)]);
+    const current = isActive(state, story, branch) ? ` · ${t.common.current}` : '';
+    lines.push(`${n}. ${quote(t, branch.name)} · ${progress(t, story, branch)}${current}`);
+    rows.push([btn(`🌿 ${n}. ${line(branch.name, 40) || t.format.untitledButton}`, `view:branch:${story.id}:${branch.id}`)]);
   });
-  if (!branches.length) lines.push('Веток нет.');
-  lines.push('', 'Ветка — отдельная линия событий. Новая появляется, когда продолжаешь историю с чекпоинта; старая остаётся как была.');
-  rows.push(pager(p, `story:${story.id}`, '⬅️ Предыдущие', 'Следующие ➡️'));
-  rows.push([btn('🌳 Дерево истории', `view:tree:${story.id}`)]);
-  rows.push([seed ? btn('🌱 К сиду', `view:seed:${seed.id}`) : null, btn('🏠 Меню', 'view:home')]);
+  if (!branches.length) lines.push(t.story.none);
+  lines.push('', t.story.hint);
+  rows.push(pager(p, `story:${story.id}`, t.buttons.previous, t.buttons.next));
+  rows.push([btn(t.story.tree, `view:tree:${story.id}`)]);
+  rows.push([seed ? btn(t.story.toSeed, `view:seed:${seed.id}`) : null, btn(t.buttons.menu, 'view:home')]);
   return payload(lines, rows);
 }
 
@@ -377,19 +333,20 @@ function storyScreen(state: State, storyId: string | undefined, rawPage: string 
 // is one line, so the drawing shows only where the story forks and what stands at each place.
 const TREE_LINES = 40;
 function treeScreen(state: State, storyId: string | undefined) {
+  const t = texts(state.language);
   const story = own(state.stories, storyId);
-  if (!story) return stale('История не найдена.');
+  if (!story) return stale(t, t.story.notFound);
   const children = new Map<string | null, SceneNode[]>();
   for (const node of ordered(values(story.nodes))) {
     const parent = node.parent && own(story.nodes, node.parent) ? node.parent : null;
     children.set(parent, [...children.get(parent) ?? [], node]);
   }
   const marks = (head: string | null) => [
-    ...ordered(values(story.branches)).filter(branch => (branch.head ?? null) === head).map(branch => `🌿 ${line(branch.name, 18) || 'ветка'}${isActive(state, story, branch) ? ' ✅' : ''}`),
+    ...ordered(values(story.branches)).filter(branch => (branch.head ?? null) === head).map(branch => `🌿 ${line(branch.name, 18) || t.tree.branch}${isActive(state, story, branch) ? ' ✅' : ''}`),
     // Every scene gets an automatic checkpoint. The drawing names the places that mean something: where memory was
     // compacted and what the author saved. A fork needs no mark, the drawing shows it.
-    ...(values(story.checkpoints).some(cp => cp.kind === 'compaction' && (cp.head ?? null) === head) ? ['🗜 сжатие памяти'] : []),
-    ...ordered(values(story.checkpoints)).filter(cp => cp.kind === 'manual' && (cp.head ?? null) === head).map(cp => `📍 ${line(cp.label, 18) || 'чекпоинт'}`),
+    ...(values(story.checkpoints).some(cp => cp.kind === 'compaction' && (cp.head ?? null) === head) ? [t.tree.compaction] : []),
+    ...ordered(values(story.checkpoints)).filter(cp => cp.kind === 'manual' && (cp.head ?? null) === head).map(cp => `📍 ${line(cp.label, 18) || t.tree.checkpoint}`),
   ];
   const drawn: string[] = [];
   const seen = new Set<string>();
@@ -407,16 +364,16 @@ function treeScreen(state: State, storyId: string | undefined) {
         scenes++;
       }
       const time = /^\d{4}-(\d\d)-(\d\d) (\d\d:\d\d)$/.exec(node.time);
-      drawn.push(`${prefix}${lastChild ? '└─' : '├─'} ${count(scenes, 'сцена', 'сцены', 'сцен')}${time ? ` до ${time[2]}.${time[1]} ${time[3]}` : ''}${marks(node.id).map(mark => ` · ${mark}`).join('')}`);
+      drawn.push(`${prefix}${lastChild ? '└─' : '├─'} ${t.tree.run(scenes, time ? `${time[2]}.${time[1]} ${time[3]}` : null)}${marks(node.id).map(mark => ` · ${mark}`).join('')}`);
       draw(node.id, `${prefix}${lastChild ? '  ' : '│ '}`);
     });
   };
   draw(null, '');
-  const shown = drawn.length > TREE_LINES ? [...drawn.slice(0, TREE_LINES), `… и ещё ${drawn.length - TREE_LINES}`] : drawn;
-  const tree = [`🌱 начало${marks(null).map(mark => ` · ${mark}`).join('')}`, ...shown].join('\n');
-  const result: Screen = payload([`🌳 ${storyName(state, story)}`, '', tree, '', '🌿 ветка · 🗜 сжатие памяти · 📍 твой чекпоинт · ✅ здесь ты сейчас. Участок без развилок и отметок свёрнут в одну строку; время — в мире истории. Каждая сцена участка — в журнале ветки ниже.'],
-    [...ordered(values(story.branches)).slice(0, PAGE).map(branch => [btn(`📜 Сцены: ${line(branch.name, 30) || 'ветка'}${isActive(state, story, branch) ? ' ✅' : ''}`, `view:log:${story.id}:${branch.id}:0`)]),
-      [btn('📖 К истории', `view:story:${story.id}`), btn('🏠 Меню', 'view:home')]]);
+  const shown = drawn.length > TREE_LINES ? [...drawn.slice(0, TREE_LINES), t.tree.more(drawn.length - TREE_LINES)] : drawn;
+  const tree = [`${t.tree.root}${marks(null).map(mark => ` · ${mark}`).join('')}`, ...shown].join('\n');
+  const result: Screen = payload([`🌳 ${storyName(state, story)}`, '', tree, '', t.tree.legend],
+    [...ordered(values(story.branches)).slice(0, PAGE).map(branch => [btn(`${t.tree.scenes(line(branch.name, 30) || t.tree.branch)}${isActive(state, story, branch) ? ' ✅' : ''}`, `view:log:${story.id}:${branch.id}:0`)]),
+      [btn(t.tree.toStory, `view:story:${story.id}`), btn(t.buttons.menu, 'view:home')]]);
   // A pre entity keeps the drawing monospaced without parse_mode escaping. Offsets are UTF-16 units, as in a JS string.
   const offset = result.text.indexOf(tree);
   if (offset >= 0) result.entities = [{ type: 'pre', offset, length: tree.length }];
@@ -426,9 +383,10 @@ function treeScreen(state: State, storyId: string | undefined) {
 // The scenes of one branch, newest first, the way a commit log reads: a scene is a commit, and branches, compactions and
 // saved checkpoints are the names that point at it. Every scene has its automatic checkpoint, so every line opens.
 function logScreen(state: State, storyId: string | undefined, branchId: string | undefined, rawPage: string | undefined) {
+  const t = texts(state.language);
   const story = own(state.stories, storyId);
   const branch = own(story?.branches, branchId);
-  if (!story || !branch) return stale('Ветка не найдена.');
+  if (!story || !branch) return stale(t, t.branch.notFound);
   const scenes = chain(story, branch.head).map((node, index) => ({ node, number: index + 1 })).reverse();
   const p = paginate(scenes, rawPage);
   const checkpoints = ordered(values(story.checkpoints));
@@ -441,99 +399,98 @@ function logScreen(state: State, storyId: string | undefined, branchId: string |
     for (const scene of chain(story, other.head)) { if (!onLine.has(scene.id)) break; last = scene.id; }
     if (last && last !== branch.head) forks.set(last, [...forks.get(last) ?? [], other.name]);
   }
-  const lines: (string | null)[] = [`📜 Сцены ветки ${quote(branch.name)}${isActive(state, story, branch) ? ' · ✅ сейчас' : ''}`, storyName(state, story),
-    `${count(scenes.length, 'сцена', 'сцены', 'сцен')}, новые сверху`, pageNote(p), ''];
+  const lines: (string | null)[] = [`${t.log.title(quote(t, branch.name))}${isActive(state, story, branch) ? ` · ${t.common.current}` : ''}`, storyName(state, story),
+    t.log.summary(scenes.length), pageNote(t, p), ''];
   const rows: Row[] = [];
   for (const { node, number } of p.items) {
     const here = checkpoints.filter(cp => cp.head === node.id);
     const names = [
       node.id === branch.head ? `🌿 ${line(branch.name, 18)}` : null,
       ...(forks.get(node.id) ?? []).map(name => `⑂ ${line(name, 18)}`),
-      here.some(cp => cp.kind === 'compaction') ? '🗜 сжатие' : null,
+      here.some(cp => cp.kind === 'compaction') ? t.log.compaction : null,
       ...here.filter(cp => cp.kind === 'manual').map(cp => `📍 ${line(cp.label, 18)}`),
-      node.truncated ? '⚠️ обрыв' : null,
+      node.truncated ? t.log.truncated : null,
     ].filter(Boolean);
     const words = line(node.input, 48) || line(sceneBody(node.text), 48);
     lines.push(`${number}. ${node.time}${names.length ? ` · ${names.join(' · ')}` : ''}`, `   ✍️ ${words || '—'}`);
     const cp = here.find(item => item.kind === 'manual') ?? here.find(item => item.kind === 'scene') ?? here[0];
-    if (cp) rows.push([btn(`${number}. ${line(node.input, 28) || 'сцена'}`, `view:checkpoint:${story.id}:${cp.id}`)]);
+    if (cp) rows.push([btn(`${number}. ${line(node.input, 28) || t.log.scene}`, `view:checkpoint:${story.id}:${cp.id}`)]);
   }
-  if (!scenes.length) lines.push('Сцен пока нет.');
-  lines.push('', 'Открой сцену, чтобы прочитать её или продолжить с неё новой веткой.');
-  rows.push(pager(p, `log:${story.id}:${branch.id}`, '⬆️ Новее', 'Старше ⬇️'));
-  rows.push([btn('🌳 Дерево', `view:tree:${story.id}`), btn('🌿 К ветке', `view:branch:${story.id}:${branch.id}`), btn('🏠 Меню', 'view:home')]);
+  if (!scenes.length) lines.push(t.log.none);
+  lines.push('', t.log.hint);
+  rows.push(pager(p, `log:${story.id}:${branch.id}`, t.log.newer, t.log.older));
+  rows.push([btn(t.log.tree, `view:tree:${story.id}`), btn(t.log.toBranch, `view:branch:${story.id}:${branch.id}`), btn(t.buttons.menu, 'view:home')]);
   return payload(lines, rows);
 }
 
 function branchScreen(state: State, storyId: string | undefined, branchId: string | undefined) {
+  const t = texts(state.language);
   const story = own(state.stories, storyId);
   const branch = own(story?.branches, branchId);
-  if (!story || !branch) return stale('Ветка не найдена.');
+  if (!story || !branch) return stale(t, t.branch.notFound);
   const current = isActive(state, story, branch);
   const last = own(story.nodes, branch.head);
   const checkpoints = checkpointsOf(story, branch.id).length;
-  const lines = [`🌿 Ветка ${quote(branch.name, 60)}`, `📖 ${storyName(state, story)}`, `🎬 ${progress(story, branch)}`];
-  if (current) lines.push('✅ Это текущая ветка.');
-  if (last) lines.push('', 'Последняя сцена:', clip(sceneBody(last.text), 600));
+  const lines = [t.branch.title(quote(t, branch.name, 60)), `📖 ${storyName(state, story)}`, `🎬 ${progress(t, story, branch)}`];
+  if (current) lines.push(t.branch.isCurrent);
+  if (last) lines.push('', t.branch.lastScene, clip(sceneBody(last.text), 600));
   const rows: Row[] = [];
   if (state.job) {
-    lines.push('', busyNote(state, 'переключать и удалять ветки'));
+    lines.push('', busyNote(state, 'switchOrDeleteBranch'));
     rows.push(cancelRow(state));
-    if (current && last) rows.push([btn('📄 Последняя сцена', 'last')]);
+    if (current && last) rows.push([btn(t.buttons.lastScene, 'last')]);
   } else if (current) {
-    rows.push([btn('▶️ Продолжить', 'continue'), last ? btn('📄 Последняя сцена', 'last') : null]);
+    rows.push([btn(t.buttons.continue, 'continue'), last ? btn(t.buttons.lastScene, 'last') : null]);
   } else {
-    lines.push('', 'Выбери ветку, чтобы играть в ней, — покажу её последнюю сцену.');
-    rows.push([btn('✅ Играть в этой ветке', `use:${story.id}:${branch.id}`)]);
+    lines.push('', t.branch.pickHint);
+    rows.push([btn(t.branch.play, `use:${story.id}:${branch.id}`)]);
   }
-  rows.push([btn('📜 Сцены ветки', `view:log:${story.id}:${branch.id}:0`), btn(`🔖 Чекпоинты (${checkpoints})`, `view:checkpoints:${story.id}:${branch.id}:0`)]);
-  if (!state.job) rows.push([btn('🗑 Удалить ветку', `view:delete-branch:${story.id}:${branch.id}`)]);
-  rows.push([btn('◀️ Все ветки', `view:story:${story.id}`), btn('🏠 Меню', 'view:home')]);
+  rows.push([btn(t.branch.scenes, `view:log:${story.id}:${branch.id}:0`), btn(t.branch.checkpoints(checkpoints), `view:checkpoints:${story.id}:${branch.id}:0`)]);
+  if (!state.job) rows.push([btn(t.branch.delete, `view:delete-branch:${story.id}:${branch.id}`)]);
+  rows.push([btn(t.branch.all, `view:story:${story.id}`), btn(t.buttons.menu, 'view:home')]);
   return payload(lines, rows);
 }
 
 function checkpointList(state: State, storyId: string | undefined, branchId: string | undefined, rawPage: string | undefined) {
+  const t = texts(state.language);
   const story = own(state.stories, storyId);
   const branch = own(story?.branches, branchId);
-  if (!story || !branch) return stale('Ветка не найдена.');
+  if (!story || !branch) return stale(t, t.branch.notFound);
   const newest = checkpointsOf(story, branch.id).reverse();
   const p = paginate(newest, rawPage);
-  const lines = [`🔖 Чекпоинты ветки ${quote(branch.name)}: ${newest.length}`, `📖 ${storyName(state, story)}`, pageNote(p), ''];
-  if (newest.length) {
-    lines.push('Открой чекпоинт, чтобы перечитать сцену и при желании продолжить с неё в новой ветке. Сверху — самые новые.');
-  } else {
-    lines.push('Чекпоинтов пока нет — они появляются после каждой сцены.');
-  }
+  const lines = [t.checkpoints.title(quote(t, branch.name), newest.length), `📖 ${storyName(state, story)}`, pageNote(t, p), ''];
+  lines.push(newest.length ? t.checkpoints.hint : t.checkpoints.none);
   const rows: Row[] = p.items.map(cp => {
     const time = checkpointTime(state, story, cp);
-    return [btn(`${checkpointTitle(cp)}${time ? ` · ${time}` : ''}`, `view:checkpoint:${story.id}:${cp.id}`)];
+    return [btn(`${checkpointTitle(t, cp)}${time ? ` · ${time}` : ''}`, `view:checkpoint:${story.id}:${cp.id}`)];
   });
-  rows.push(pager(p, `checkpoints:${story.id}:${branch.id}`, '⬅️ Новее', 'Старше ➡️'));
-  rows.push([btn('◀️ К ветке', `view:branch:${story.id}:${branch.id}`), btn('🏠 Меню', 'view:home')]);
+  rows.push(pager(p, `checkpoints:${story.id}:${branch.id}`, t.checkpoints.newer, t.checkpoints.older));
+  rows.push([btn(t.checkpoints.toBranch, `view:branch:${story.id}:${branch.id}`), btn(t.buttons.menu, 'view:home')]);
   return payload(lines, rows);
 }
 
 function checkpointScreen(state: State, storyId: string | undefined, checkpointId: string | undefined) {
+  const t = texts(state.language);
   const story = own(state.stories, storyId);
   const cp = own(story?.checkpoints, checkpointId);
   const branch = own(story?.branches, cp?.branchId);
-  if (!story || !cp || !branch) return stale('Чекпоинт не найден.');
+  if (!story || !cp || !branch) return stale(t, t.checkpoint.notFound);
   const seed = own(state.seeds, story.seedId);
   const node = cp.head ? own(story.nodes, cp.head) : null;
 
-  const header = [checkpointTitle(cp), `🌿 Ветка ${quote(branch.name)} · ${storyName(state, story)}`];
-  if (cp.head && cp.head === branch.head && isActive(state, story, branch)) header.push('✅ Это последняя сцена текущей ветки.');
+  const header = [checkpointTitle(t, cp), t.checkpoint.branch(quote(t, branch.name), storyName(state, story))];
+  if (cp.head && cp.head === branch.head && isActive(state, story, branch)) header.push(t.checkpoint.isHead);
 
   let body: (string | null)[];
   if (!cp.head) {
-    body = ['', '🌱 Начало истории, сцен ещё нет.', seed ? `Старт в мире: ${seed.startTime}` : null, '', seed ? seed.text : 'Сид недоступен.'];
+    body = ['', t.checkpoint.atStart, seed ? t.checkpoint.start(seed.startTime) : null, '', seed ? seed.text : t.checkpoint.seedMissing];
   } else if (!node) {
-    body = ['', 'Текст сцены недоступен.'];
+    body = ['', t.checkpoint.textMissing];
   } else {
     body = [
       '',
-      node.input ? `✍️ Ввод: ${line(node.input, 400)}` : null,
-      node.truncated ? '⚠️ Сцена оборвалась при генерации.' : null,
+      node.input ? t.checkpoint.input(line(node.input, 400)) : null,
+      node.truncated ? t.checkpoint.truncated : null,
       '',
       node.text ?? '',
     ];
@@ -542,18 +499,18 @@ function checkpointScreen(state: State, storyId: string | undefined, checkpointI
   const rows: Row[] = [];
   const footer = [''];
   if (state.job) {
-    footer.push(busyNote(state, 'продолжить с чекпоинта'));
+    footer.push(busyNote(state, 'fork'));
     rows.push(cancelRow(state));
   } else {
-    footer.push(`«Продолжить отсюда» создаст новую ветку с этого момента. Ветка ${quote(branch.name)} останется как есть.`);
-    rows.push([btn('🌿 Продолжить отсюда', `fork:${story.id}:${cp.id}`)]);
+    footer.push(t.checkpoint.forkNote(quote(t, branch.name)));
+    rows.push([btn(t.checkpoint.fork, `fork:${story.id}:${cp.id}`)]);
   }
   const newest = checkpointsOf(story, branch.id).reverse();
   const page = Math.max(0, Math.floor(newest.indexOf(cp) / PAGE));
   rows.push([
-    btn('◀️ Чекпоинты', `view:checkpoints:${story.id}:${branch.id}:${page}`),
-    btn('📏 Контекст', `view:context:${story.id}:${cp.id}`),
-    btn('🏠 Меню', 'view:home'),
+    btn(t.checkpoint.back, `view:checkpoints:${story.id}:${branch.id}:${page}`),
+    btn(t.buttons.context, `view:context:${story.id}:${cp.id}`),
+    btn(t.buttons.menu, 'view:home'),
   ]);
 
   // Fit the long scene/seed text into what remains of the message limit.
@@ -564,41 +521,38 @@ function checkpointScreen(state: State, storyId: string | undefined, checkpointI
 }
 
 function currentContextScreen(state: State, stats: ContextStats | null | undefined) {
+  const t = texts(state.language);
   const ref = activeRef(state);
   if (!ref) {
     return payload(
-      ['📏 Контекст', '', 'История не выбрана. Открой сид и выбери ветку.'],
-      [[btn('📚 Сиды', 'view:seeds:0'), btn('🏠 Меню', 'view:home')]],
+      [t.context.title, '', t.context.noStory],
+      [[btn(t.buttons.seeds, 'view:seeds:0'), btn(t.buttons.menu, 'view:home')]],
     );
   }
   const { story, branch } = ref;
   const valid = stats && stats.scope !== 'checkpoint' && stats.storyId === story.id && stats.branchId === branch.id;
-  if (valid) return contextView(stats, { state, canCompact: !state.job });
-  const lines = ['📏 Контекст текущей ветки', `🌿 ${quote(branch.name)} · ${storyName(state, story)}`, '', 'Данных о размере контекста пока нет.'];
+  if (valid) return contextView(t, stats, { state, canCompact: !state.job });
+  const lines = [t.context.currentBranch, `🌿 ${quote(t, branch.name)} · ${storyName(state, story)}`, '', t.context.noData];
   const rows: Row[] = [];
   if (state.job) {
-    lines.push('', busyNote(state, 'сжать историю'));
+    lines.push('', busyNote(state, 'compact'));
   } else {
-    lines.push('', compactNote(null));
-    rows.push([btn('🗜 Сжать сейчас', 'compact')]);
+    lines.push('', t.context.compactNote(null));
+    rows.push([btn(t.buttons.compactNow, 'compact')]);
   }
-  rows.push([btn('🔖 Чекпоинты', `view:checkpoints:${story.id}:${branch.id}:0`), btn('🏠 Меню', 'view:home')]);
+  rows.push([btn(t.buttons.checkpoints, `view:checkpoints:${story.id}:${branch.id}:0`), btn(t.buttons.menu, 'view:home')]);
   return payload(lines, rows);
 }
 
-function compactNote(keepScenes: unknown) {
-  const keep = known(keepScenes) ? `Последние ${count(keepScenes, 'сцена', 'сцены', 'сцен')}` : 'Последние сцены';
-  return `🗜 «Сжать сейчас» перескажет старые сцены в память, не дожидаясь порога. ${keep} останутся целиком, исходные сцены сохранятся в архиве, до и после сжатия будут чекпоинты. Новую сцену сжатие не пишет.`;
-}
-
 function checkpointContextScreen(state: State, storyId: string | undefined, checkpointId: string | undefined, stats: ContextStats | null | undefined) {
+  const t = texts(state.language);
   const story = own(state.stories, storyId);
   const cp = own(story?.checkpoints, checkpointId);
-  if (!story || !cp) return stale('Чекпоинт не найден.');
-  if (statsFor(stats, story.id, cp.id)) return contextView(stats);
+  if (!story || !cp) return stale(t, t.checkpoint.notFound);
+  if (statsFor(stats, story.id, cp.id)) return contextView(t, stats);
   return payload(
-    [`📏 Контекст: ${checkpointTitle(cp)}`, '', 'Данных о размере этого чекпоинта пока нет.'],
-    [[btn('◀️ К чекпоинту', `view:checkpoint:${story.id}:${cp.id}`), btn('🏠 Меню', 'view:home')]],
+    [t.context.titleOf(checkpointTitle(t, cp)), '', t.context.noCheckpointData],
+    [[btn(t.buttons.toCheckpoint, `view:checkpoint:${story.id}:${cp.id}`), btn(t.buttons.menu, 'view:home')]],
   );
 }
 
@@ -607,226 +561,172 @@ function statsFor(stats: ContextStats | null | undefined, storyId: string, check
   return !!stats && stats.scope === 'checkpoint' && stats.storyId === storyId && stats.checkpointId === checkpointId;
 }
 
-function contextView(stats: ContextStats, { state = null, canCompact = false }: { state?: State | null; canCompact?: boolean } = {}) {
+function contextView(t: Messages, stats: ContextStats, { state = null, canCompact = false }: { state?: State | null; canCompact?: boolean } = {}) {
+  const c = t.context;
+  const num = t.format.number;
+  const size = (part: { bytes?: unknown; estimatedTokens?: unknown } | null | undefined) =>
+    `${known(part?.bytes) ? c.bytes(num(part.bytes)) : c.bytesUnknown} · ${known(part?.estimatedTokens) ? c.tokens(num(part.estimatedTokens)) : c.tokensUnknown}`;
   const checkpoint = stats.scope === 'checkpoint';
   const lines = [
-    `📏 Контекст: ${line(stats.label, 60) || (checkpoint ? 'чекпоинт' : 'текущая ветка')}`,
-    checkpoint ? 'Размер на момент этого чекпоинта.' : 'Текущая ветка, последнее сохранённое состояние.',
+    c.titleOf(line(stats.label, 60) || (checkpoint ? c.checkpoint : c.branch)),
+    checkpoint ? c.atCheckpoint : c.atBranch,
   ];
-  if (state?.job && !checkpoint) {
-    lines.push(state.job.kind === 'compact'
-      ? '⏳ Идёт сжатие памяти — здесь состояние до него.'
-      : '⏳ Сцена, которая сейчас пишется, здесь не учтена.');
-  }
+  if (state?.job && !checkpoint) lines.push(state.job.kind === 'compact' ? c.duringCompaction : c.duringScene);
 
   lines.push('', known(stats.limitTokens)
-    ? `Окно: ${num(stats.limitTokens)} ток. вместе с ответом${known(stats.reserveTokens) ? `; резерв на ответ ${num(stats.reserveTokens)}` : ''}.`
-    : 'Окно: размер неизвестен.');
+    ? c.window(num(stats.limitTokens), known(stats.reserveTokens) ? num(stats.reserveTokens) : null)
+    : c.windowUnknown);
 
   const request = stats.request?.estimatedTokens;
   lines.push('');
   if (known(request)) {
-    const part = share(request, stats.limitTokens);
-    lines.push(`Следующий запрос ≈${num(request)} ток.${part ? ` (≈${part} окна)` : ''}: снимок, правила бота и обычное «Продолжить». Длинный ввод добавит своё.`);
+    lines.push(c.nextRequest(num(request), share(request, stats.limitTokens)));
     const source = stats.request.estimateSource;
-    if (source === 'usage') lines.push('Оценка сверена с последним измеренным запросом этой линии.');
-    else if (source === 'bytes') lines.push('Грубая оценка: байты UTF-8 ÷ 4 плюс запас на служебную часть.');
+    if (source === 'usage') lines.push(c.estimateFromUsage);
+    else if (source === 'bytes') lines.push(c.estimateFromBytes);
   } else {
-    lines.push('Следующий запрос: оценки нет.');
+    lines.push(c.nextRequestUnknown);
   }
 
   const budget = stats.budget;
   if (budget && known(budget.limitTokens)) {
-    lines.push(`Бюджет ввода (окно минус резерв): ${known(budget.inputTokens) ? `≈${num(budget.inputTokens)}` : 'неизвестно'} из ${num(budget.limitTokens)} ток.`);
-    if (known(budget.remainingTokens)) {
-      lines.push(budget.remainingTokens > 0
-        ? `Осталось ≈${num(budget.remainingTokens)} ток.`
-        : '⚠️ По оценке бюджет ввода уже исчерпан.');
-    }
+    lines.push(c.budget(known(budget.inputTokens) ? num(budget.inputTokens) : null, num(budget.limitTokens)));
+    if (known(budget.remainingTokens)) lines.push(budget.remainingTokens > 0 ? c.remaining(num(budget.remainingTokens)) : c.exhausted);
   }
-  if (known(request) || known(budget?.limitTokens)) {
-    lines.push('Это прогноз, а не точный подсчёт: фактический вход ещё раз проверяется в начале ответа модели, до показа текста.');
-  }
+  if (known(request) || known(budget?.limitTokens)) lines.push(c.forecastNote);
 
   const compaction = stats.compaction;
   if (compaction && known(compaction.thresholdTokens)) {
-    const keep = known(compaction.keepScenes)
-      ? `; последние ${count(compaction.keepScenes, 'сцена остаётся', 'сцены остаются', 'сцен остаются')} целиком`
-      : '';
-    lines.push(
-      '',
-      `Автосжатие: когда вход достигает ≈${num(compaction.thresholdTokens)} ток.${keep}.`,
-      'Измеренные токены могут поправить предварительную оценку. До и после сжатия сохраняются чекпоинты, исходные сцены остаются в архиве.',
-    );
+    lines.push('', c.autoCompaction(num(compaction.thresholdTokens), known(compaction.keepScenes) ? compaction.keepScenes : null), c.autoCompactionNote);
   }
 
   const memory = stats.memory;
-  const memoryText = known(memory?.count) && memory.count === 0 ? 'пусто, сжатий ещё не было'
-    : `${known(memory?.count) ? `${count(memory.count, 'часть', 'части', 'частей')} · ` : ''}${size(memory)}`;
+  const memoryText = known(memory?.count) && memory.count === 0 ? c.memoryEmpty
+    : `${known(memory?.count) ? `${t.count.parts(memory.count)} · ` : ''}${size(memory)}`;
   lines.push(
     '',
-    'Снимок (Б — точно; ≈ — байты UTF-8 ÷ 4, не точный подсчёт токенов):',
-    `• Сид: ${size(stats.seed)}`,
-    `• Память: ${memoryText}`,
-    `= Сид + память: ${size(stats.prefix)}`,
-    `• Несжатые сцены${known(stats.tail?.count) ? ` (${stats.tail.count})` : ''}: ${size(stats.tail)}`,
-    `= Весь снимок: ${size(stats.snapshot)}`,
+    c.snapshot,
+    c.seed(size(stats.seed)),
+    c.memory(memoryText),
+    c.prefix(size(stats.prefix)),
+    c.tail(known(stats.tail?.count) ? stats.tail.count : null, size(stats.tail)),
+    c.whole(size(stats.snapshot)),
   );
 
-  lines.push(
-    '',
-    `Последний запрос (измерено): ${lastRequestText(stats.lastRequest)}`,
-    'Вход считается вместе с кэшем; выход может включать скрытые рассуждения модели. Это один запрос, а не расход за всё время и не прогноз следующего.',
-  );
+  const last = stats.lastRequest;
+  if (!last || ![last.inputTokens, last.outputTokens, last.totalTokens].some(known)) lines.push('', c.lastRequestNone, c.lastRequestNote);
+  else {
+    const total = known(last.totalTokens) ? last.totalTokens
+      : known(last.inputTokens) && known(last.outputTokens) ? last.inputTokens + last.outputTokens : null;
+    const measured = (value: unknown) => (known(value) ? num(value) : t.format.unknown);
+    lines.push('', c.lastRequest(measured(last.inputTokens), measured(last.outputTokens), measured(total)), c.lastRequestNote);
+  }
 
   // Compaction is offered only for the live branch while idle, never for a historical checkpoint.
   const compact = canCompact && !checkpoint;
-  if (compact) lines.push('', compactNote(stats.compaction?.keepScenes));
+  if (compact) lines.push('', c.compactNote(known(stats.compaction?.keepScenes) ? stats.compaction.keepScenes : null));
 
   const rows: (Row | null)[] = checkpoint
-    ? [[stats.storyId && stats.checkpointId ? btn('◀️ К чекпоинту', `view:checkpoint:${stats.storyId}:${stats.checkpointId}`) : null, btn('🏠 Меню', 'view:home')]]
+    ? [[stats.storyId && stats.checkpointId ? btn(t.buttons.toCheckpoint, `view:checkpoint:${stats.storyId}:${stats.checkpointId}`) : null, btn(t.buttons.menu, 'view:home')]]
     : [
-      compact ? [btn('🗜 Сжать сейчас', 'compact')] : null,
-      [btn('🔄 Обновить', 'view:context'), stats.storyId && stats.branchId ? btn('🔖 Чекпоинты', `view:checkpoints:${stats.storyId}:${stats.branchId}:0`) : null],
-      [btn('🏠 Меню', 'view:home')],
+      compact ? [btn(t.buttons.compactNow, 'compact')] : null,
+      [btn(t.buttons.refresh, 'view:context'), stats.storyId && stats.branchId ? btn(t.buttons.checkpoints, `view:checkpoints:${stats.storyId}:${stats.branchId}:0`) : null],
+      [btn(t.buttons.menu, 'view:home')],
     ];
   return payload(lines, rows);
 }
 
-function lastRequestText(last: ContextStats['lastRequest']) {
-  if (!last || ![last.inputTokens, last.outputTokens, last.totalTokens].some(known)) return 'нет измерений';
-  const total = known(last.totalTokens) ? last.totalTokens
-    : known(last.inputTokens) && known(last.outputTokens) ? last.inputTokens + last.outputTokens : null;
-  const measured = (value: unknown) => (known(value) ? num(value) : 'неизвестно');
-  return `вход ${measured(last.inputTokens)} · выход ${measured(last.outputTokens)} · всего ${measured(total)}`;
-}
-
 function deleteSeedScreen(state: State, seedId: string | undefined) {
+  const t = texts(state.language);
+  const d = t.deletion;
   const seed = own(state.seeds, seedId);
-  if (!seed) return stale('Сид не найден.');
+  if (!seed) return stale(t, t.seed.notFound);
   const stories = storiesOf(state, seed.id);
   const branches = stories.reduce((sum, story) => sum + values(story.branches).length, 0);
   const scenes = stories.reduce((sum, story) => sum + Object.keys(story.nodes ?? {}).length, 0);
-  const lines = [`🗑 Удалить сид ${quote(seed.title, 60)}?`, ''];
+  const lines = [d.seedTitle(quote(t, seed.title, 60)), ''];
   if (stories.length) {
-    lines.push(
-      'Вместе с ним навсегда удалятся:',
-      `• ${count(stories.length, 'история', 'истории', 'историй')}`,
-      `• ${count(branches, 'ветка', 'ветки', 'веток')}`,
-      `• ${count(scenes, 'сцена', 'сцены', 'сцен')} и все чекпоинты`,
-    );
-    if (stories.some(story => story.id === state.active?.storyId)) lines.push('• в том числе текущая история');
+    lines.push(d.withSeed, `• ${t.count.stories(stories.length)}`, `• ${t.count.branches(branches)}`, `• ${d.scenesAndCheckpoints(scenes)}`);
+    if (stories.some(story => story.id === state.active?.storyId)) lines.push(`• ${d.includesCurrent}`);
   } else {
-    lines.push('Историй из этого сида нет — удалится только сам сид.');
+    lines.push(d.onlySeed);
   }
-  lines.push('', DELETE_NOTE);
+  lines.push('', d.note);
   const rows: Row[] = [];
   if (state.job) {
-    lines.push('', busyNote(state, 'удалить сид'));
+    lines.push('', busyNote(state, 'deleteSeed'));
     rows.push(cancelRow(state));
   } else {
-    rows.push([btn(stories.length ? '🗑 Да, удалить всё' : '🗑 Да, удалить сид', `remove-seed:${seed.id}`)]);
+    rows.push([btn(stories.length ? d.confirmAll : d.confirmSeed, `remove-seed:${seed.id}`)]);
   }
-  rows.push([btn('↩️ Не удалять', `view:seed:${seed.id}`)]);
+  rows.push([btn(t.buttons.keep, `view:seed:${seed.id}`)]);
   return payload(lines, rows);
 }
 
 function deleteBranchScreen(state: State, storyId: string | undefined, branchId: string | undefined) {
+  const t = texts(state.language);
+  const d = t.deletion;
   const story = own(state.stories, storyId);
   const branch = own(story?.branches, branchId);
-  if (!story || !branch) return stale('Ветка не найдена.');
+  if (!story || !branch) return stale(t, t.branch.notFound);
   const seed = own(state.seeds, story.seedId);
   const others = values(story.branches).filter(b => b !== branch);
   const checkpoints = checkpointsOf(story, branch.id);
   const kept = reach(story, [...others, ...values(story.checkpoints).filter(cp => cp?.branchId !== branch.id)]);
   const lost = [...reach(story, [branch, ...checkpoints])].filter(nodeId => !kept.has(nodeId)).length;
-  const scenes = count(lost, 'сцена', 'сцены', 'сцен');
-  const cps = count(checkpoints.length, 'чекпоинт', 'чекпоинта', 'чекпоинтов');
 
-  const lines: (string | null)[] = [`🗑 Удалить ветку ${quote(branch.name, 60)}?`, `📖 ${storyName(state, story)}`, ''];
+  const lines: (string | null)[] = [d.branchTitle(quote(t, branch.name, 60)), `📖 ${storyName(state, story)}`, ''];
   if (!others.length) {
-    lines.push(
-      'Это единственная ветка, поэтому история удалится целиком:',
-      `• ${scenes}`,
-      `• ${cps}`,
-      '',
-      seed ? `Сид ${quote(seed.title)} останется — из него можно начать новую историю.` : null,
-    );
+    lines.push(d.onlyBranch, `• ${t.count.scenes(lost)}`, `• ${t.count.checkpoints(checkpoints.length)}`, '',
+      seed ? d.seedStays(quote(t, seed.title)) : null);
   } else {
-    const which = lost % 10 === 1 && lost % 100 !== 11 ? 'которой' : 'которых';
-    lines.push(
-      'Навсегда удалятся:',
-      `• ${cps} этой ветки`,
-      lost ? `• ${scenes}, ${which} нет в других ветках` : '• сцены останутся: все они есть в других ветках',
-      '',
-      `Сохранятся: ${count(others.length, 'другая ветка', 'другие ветки', 'других веток')} этой истории.`,
-    );
+    lines.push(d.forever, `• ${d.checkpointsOfBranch(checkpoints.length)}`, `• ${lost ? d.scenesOnlyHere(lost) : d.scenesStay}`, '', d.kept(others.length));
   }
-  if (isActive(state, story, branch)) lines.push('', '⚠️ Это текущая ветка — после удаления выбери другую.');
-  lines.push('', DELETE_NOTE);
+  if (isActive(state, story, branch)) lines.push('', d.isCurrent);
+  lines.push('', d.note);
   const rows: Row[] = [];
   if (state.job) {
-    lines.push('', busyNote(state, 'удалить ветку'));
+    lines.push('', busyNote(state, 'deleteBranch'));
     rows.push(cancelRow(state));
   } else {
-    rows.push([btn(others.length ? '🗑 Да, удалить ветку' : '🗑 Да, удалить историю', `remove-branch:${story.id}:${branch.id}`)]);
+    rows.push([btn(others.length ? d.confirmBranch : d.confirmStory, `remove-branch:${story.id}:${branch.id}`)]);
   }
-  rows.push([btn('↩️ Не удалять', `view:branch:${story.id}:${branch.id}`)]);
+  rows.push([btn(t.buttons.keep, `view:branch:${story.id}:${branch.id}`)]);
   return payload(lines, rows);
 }
 
 function newSeedScreen(state: State) {
+  const t = texts(state.language);
   const ui = state.ui;
   if (ui?.input === 'seed' && Array.isArray(ui.parts)) {
     const draft = ui.parts.filter(part => typeof part === 'string' && part.trim());
-    if (draft.length) return seedDraftScreen(ui.draftId, draft);
+    if (draft.length) return seedDraftScreen(t, ui.draftId, draft);
   }
 
-  const lines = [
-    '➕ Новый сид',
-    '',
-    'Пришли описание одним или несколькими сообщениями:',
-    '1) первая строка — название, до 100 знаков;',
-    '2) вторая — дата и время начала в мире: ГГГГ-ММ-ДД ЧЧ:ММ;',
-    '3) дальше — мир, персонаж и стартовая ситуация.',
-    '',
-    'Длинный текст можно разбить на несколько сообщений: всё соберётся в один черновик.',
-    '📎 Или приложи файл .txt / .md (UTF-8, до 256 КиБ на весь черновик): целиком, с названием и датой в первых строках, или только описание — тогда название и дату пришли сообщением перед файлом. Подпись к файлу не учитывается, PDF и DOCX не подходят.',
-    'Когда отправишь всё, нажми «💾 Сохранить сид». До этого сид не сохраняется и сцены не пишутся.',
-    '',
-    'Пример:',
-    EXAMPLE,
-  ];
-  if (state.job) lines.push('', state.job.kind === 'compact' ? '⏳ Сжатие памяти, начатое раньше, ещё идёт.' : '⏳ Сцена, начатая раньше, ещё пишется.');
-  const result = payload(lines, [[btn('✖️ Отмена', 'cancel')]]);
+  const example = t.newSeed.example;
+  const lines = [t.newSeed.title, '', t.newSeed.steps, '', t.newSeed.exampleLabel, example];
+  if (state.job) lines.push('', state.job.kind === 'compact' ? t.newSeed.compactRunning : t.newSeed.sceneRunning);
+  const result = payload(lines, [[btn(t.newSeed.cancel, 'cancel')]]);
   // A pre entity makes the example tap-to-copy without parse_mode escaping.
-  const offset = result.text.indexOf(EXAMPLE);
-  if (offset >= 0) result.entities = [{ type: 'pre', offset, length: EXAMPLE.length }];
+  const offset = result.text.indexOf(example);
+  if (offset >= 0) result.entities = [{ type: 'pre', offset, length: example.length }];
   return result;
 }
 
 // Receipt after each collected part (message or file): counts only, never any text or filename.
 // Format is checked by the backend on Save.
-function seedDraftScreen(draftId: string, parts: string[]) {
+function seedDraftScreen(t: Messages, draftId: string, parts: string[]) {
   const chars = [...parts.join('\n\n')].length;
-  return payload([
-    '📝 Черновик сида — ещё не сохранён',
-    `Получено: ${count(parts.length, 'часть', 'части', 'частей')} · ${count(chars, 'знак', 'знака', 'знаков')}`,
-    '',
-    'Можно прислать ещё сообщения или файлы .txt / .md — они добавятся к описанию.',
-    'Когда отправишь всё, нажми «💾 Сохранить сид». Сцены не пишутся ни сейчас, ни при сохранении — историю можно будет начать отдельно.',
-    '',
-    'Меню и остальные кнопки снова заработают после сохранения или отмены черновика.',
-  ], [
-    [draftId ? btn('💾 Сохранить сид', `save-seed:${draftId}`) : null],
-    [btn('🗑 Отменить черновик', 'cancel')],
+  return payload([t.draft.title, t.draft.received(parts.length, chars), '', t.draft.more, t.draft.saveHint, '', t.draft.menuNote], [
+    [draftId ? btn(t.draft.save, `save-seed:${draftId}`) : null],
+    [btn(t.draft.discard, 'cancel')],
   ]);
 }
 
-function stale(message: string) {
+function stale(t: Messages, message: string) {
   return payload(
-    [`⚠️ ${message}`, 'Возможно, это уже удалено или экран устарел.'],
-    [[btn('📚 Сиды', 'view:seeds:0'), btn('🏠 Меню', 'view:home')]],
+    [`⚠️ ${message}`, t.common.staleHint],
+    [[btn(t.buttons.seeds, 'view:seeds:0'), btn(t.buttons.menu, 'view:home')]],
   );
 }
 
@@ -861,8 +761,9 @@ function storiesOf(state: State, seedId: string) {
 }
 
 function storyName(state: State, story: Story) {
+  const t = texts(state.language);
   const n = storiesOf(state, story.seedId).indexOf(story) + 1;
-  return `${quote(story.title)}${n ? ` · история ${n}` : ''}`;
+  return n ? t.common.storyName(quote(t, story.title), n) : quote(t, story.title);
 }
 
 function chain(story: Story, head: string | null | undefined) {
@@ -884,19 +785,19 @@ function reach(story: Story, refs: (Branch | Checkpoint)[]) {
   return ids;
 }
 
-function progress(story: Story, branch: Branch) {
+function progress(t: Messages, story: Story, branch: Branch) {
   const scenes = chain(story, branch.head).length;
-  if (!scenes) return 'сцен пока нет';
+  if (!scenes) return t.common.noScenes;
   const time = own(story.nodes, branch.head)?.time;
-  return `${count(scenes, 'сцена', 'сцены', 'сцен')}${time ? ` · ${time}` : ''}`;
+  return `${t.count.scenes(scenes)}${time ? ` · ${time}` : ''}`;
 }
 
 function checkpointsOf(story: Story, branchId: string) {
   return ordered(values(story.checkpoints).filter(cp => cp?.branchId === branchId));
 }
 
-function checkpointTitle(cp: Checkpoint) {
-  return `${ICON[cp.kind] ?? '📌'} ${line(cp.label, 40) || 'Чекпоинт'}`;
+function checkpointTitle(t: Messages, cp: Checkpoint) {
+  return `${ICON[cp.kind] ?? '📌'} ${line(cp.label, 40) || t.checkpoint.untitled}`;
 }
 
 function checkpointTime(state: State, story: Story, cp: Checkpoint) {
@@ -922,36 +823,13 @@ function line(value: unknown, max = 40) {
   return clip(String(value ?? '').replace(/\s+/g, ' ').trim(), max);
 }
 
-function quote(value: unknown, max = 40) {
-  return `«${line(value, max) || 'без названия'}»`;
-}
-
-function count(n: number, one: string, few: string, many: string) {
-  const tens = n % 100;
-  const ones = n % 10;
-  const word = tens >= 11 && tens <= 14 ? many : ones === 1 ? one : ones >= 2 && ones <= 4 ? few : many;
-  return `${n} ${word}`;
+function quote(t: Messages, value: unknown, max = 40) {
+  return t.format.quote(line(value, max) || t.format.untitled);
 }
 
 // Missing measurements are shown as unknown, never as 0.
 function known(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
-}
-
-function num(value: number) {
-  return String(Math.round(value)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-}
-
-function tokens(value: unknown) {
-  return known(value) ? `≈${num(value)} ток.` : 'токены неизвестны';
-}
-
-function bytes(value: unknown) {
-  return known(value) ? `${num(value)} Б` : 'размер неизвестен';
-}
-
-function size(part: { bytes?: unknown; estimatedTokens?: unknown } | null | undefined) {
-  return `${bytes(part?.bytes)} · ${tokens(part?.estimatedTokens)}`;
 }
 
 function share(part: unknown, whole: unknown) {
@@ -960,39 +838,28 @@ function share(part: unknown, whole: unknown) {
   return percent > 0 && percent < 1 ? '<1%' : `${Math.round(percent)}%`;
 }
 
-function jobLabel(state: State) {
-  return state.job?.kind === 'compact'
-    ? { title: 'Идёт сжатие памяти', after: 'после него', cancel: '✖️ Отменить сжатие' }
-    : { title: 'Пишется сцена', after: 'после неё', cancel: '✖️ Отменить генерацию' };
-}
-
-function busyNote(state: State, what: string) {
-  const job = jobLabel(state);
-  return `⏳ Сейчас ${job.title.toLowerCase()}: ${what} можно будет ${job.after}.`;
+function busyNote(state: State, action: keyof Messages['busy']['scene']) {
+  return texts(state.language).busy[state.job?.kind === 'compact' ? 'compact' : 'scene'][action];
 }
 
 function cancelRow(state: State): Row {
-  return [btn(jobLabel(state).cancel, 'cancel')];
+  const b = texts(state.language).buttons;
+  return [btn(state.job?.kind === 'compact' ? b.cancelCompaction : b.cancelScene, 'cancel')];
 }
 
 // Model metadata: {provider, model, status, checkedAt}. Scene provenance carries only {provider, model}.
-const PROVIDER = {
-  'claude-code': { short: 'Claude Code', full: 'Claude Code по подписке Claude (не наш GPU-сервер)' },
-  'llama-cpp': { short: 'наш сервер', full: 'наш сервер модели (llama.cpp)' },
-  'codex-cli': { short: 'Codex', full: 'Codex CLI по подписке ChatGPT (не наш GPU-сервер)' },
-  'openai-compatible': { short: 'размещённый API', full: 'размещённый API в формате OpenAI (не наш GPU-сервер)' },
-};
+// Provider names are in the catalog; its keys are the providers the interface knows.
+type ProviderId = keyof Messages['model']['providers'];
 
-function modelKnown(info: ModelInfo | null | undefined): info is ModelInfo & { provider: keyof typeof PROVIDER; model: string } {
-  return !!info && info.provider !== undefined && Object.hasOwn(PROVIDER, info.provider) && typeof info.model === 'string' && info.model.trim() !== '';
+function modelKnown(info: ModelInfo | null | undefined): info is ModelInfo & { provider: ProviderId; model: string } {
+  return !!info && info.provider !== undefined && Object.hasOwn(texts('ru').model.providers, info.provider) && typeof info.model === 'string' && info.model.trim() !== '';
 }
 
-function statusShort(info: ModelInfo) {
-  const time = checkedTime(info.checkedAt);
-  if (info.status === 'ready') return time ? `отвечала ${time}` : 'отвечала';
-  if (info.status === 'unavailable') return 'недоступна при проверке';
-  if (info.status === 'configured') return 'не проверена';
-  return 'статус неизвестен';
+function statusShort(t: Messages, info: ModelInfo) {
+  if (info.status === 'ready') return t.model.short.ready(checkedTime(info.checkedAt));
+  if (info.status === 'unavailable') return t.model.short.unavailable;
+  if (info.status === 'configured') return t.model.short.configured;
+  return t.model.short.unknown;
 }
 
 function checkedTime(iso: unknown) {
@@ -1016,8 +883,8 @@ function paginate<T>(items: T[], raw: unknown): Page<T> {
   return { page, pages, start, items: items.slice(start, start + PAGE) };
 }
 
-function pageNote(p: Page<unknown>) {
-  return p.pages > 1 ? `Стр. ${p.page + 1} из ${p.pages}` : null;
+function pageNote(t: Messages, p: Page<unknown>) {
+  return p.pages > 1 ? t.common.page(p.page + 1, p.pages) : null;
 }
 
 function pager(p: Page<unknown>, route: string, previous: string, next: string): Row {

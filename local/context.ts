@@ -61,7 +61,7 @@ export function contextStats(state: Library, config: ContextConfig, selection: C
   const checkpoint = checkpointId ? own(story?.checkpoints, checkpointId) : null;
   const branchId = checkpoint ? checkpoint.branchId : selection.branchId ?? state.active?.branchId;
   const point = checkpoint || own(story?.branches, branchId);
-  if (storyId === undefined || !story || !point || (checkpointId && !checkpoint)) throw new UserError('Выбери историю или чекпоинт через /seeds.');
+  if (storyId === undefined || !story || !point || (checkpointId && !checkpoint)) throw new UserError('Выбери историю или чекпоинт через /seeds.', 'pickStory');
   const ref = { storyId, head: point.head, memory: point.memory };
   const parts = contextParts(state, ref);
   const seed = measure(parts.seed);

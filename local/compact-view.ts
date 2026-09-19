@@ -3,6 +3,8 @@
 // memory text, fact preview, raw error or an unrecognised stage/reason value.
 
 import type { InlineButton, Screen } from './telegram.ts';
+import { texts } from './text.ts';
+import type { Messages } from './text.ts';
 
 // Stages and counters reported by generation.ts, plus `automatic` from the bot and `elapsedMs` from progress.ts.
 // Fields are optional because the renderer also accepts partial or unexpected statuses.
@@ -12,127 +14,87 @@ export type CompactionStatus = {
   outputCharacters?: number; repairScenes?: number; facts?: number; reason?: string | number;
 };
 
-const STEPS = [
-  ['queued', 'очередь'],
-  ['extracting', 'извлечение'],
-  ['validating', 'проверка'],
-  ['saving', 'сохранение'],
-];
+const STEPS = ['queued', 'extracting', 'validating', 'saving'] as const;
+type Step = typeof STEPS[number];
+const isStep = (stage: unknown): stage is Step => (STEPS as readonly unknown[]).includes(stage);
 
-const NOW: Record<string, string> = {
-  queued: 'ждёт своей очереди',
-  extracting: 'модель извлекает память из сцен',
-  validating: 'проверяем структуру памяти и ссылки на сцены',
-  saving: 'сохраняем память и чекпоинт',
-};
-
-const REASON: Record<string, string> = {
-  output_limit: 'пересказ не уместился в лимит ответа модели',
-  finish_reason: 'модель оборвала ответ',
-  json: 'модель ответила не в нужном формате',
-  shape: 'ответ модели не прошёл проверку структуры',
-  fact: 'один из фактов не прошёл проверку',
-  source: 'факт сослался на сцену не из этого сжатия',
-  coverage: 'пересказ охватил не все сцены',
-  evidence: 'ссылки на свидетельства не прошли проверку',
-  quote: 'цитата не нашлась в исходной сцене',
-  conflict: 'обнаруженное противоречие не оформлено по схеме',
-  memory_not_smaller: 'память получилась не короче исходных сцен',
-  provider_failed: 'модель недоступна или вернула ошибку',
-  timeout: 'модель не ответила вовремя',
-  context_limit: 'сцены не поместились в контекст модели',
-};
-
-const SAFE = 'Память из этой попытки не сохранена. Исходные сцены и чекпоинты целы.';
-
-export function renderCompaction(progress: CompactionStatus | null | undefined): Screen {
+// `lang` is the interface language stored in the user's library (text.ts decides what a missing one means).
+export function renderCompaction(progress: CompactionStatus | null | undefined, lang?: unknown): Screen {
+  const t = texts(lang);
   try {
-    return view(progress && typeof progress === 'object' ? progress : {});
+    return view(t, progress && typeof progress === 'object' ? progress : {});
   } catch {
-    return payload(['🗜 Сжатие памяти', 'Не получилось показать статус. Проверь «Контекст».'], [[btn('📏 Контекст', 'view:context')]]);
+    return payload([t.compact.title, t.compact.failure], [[btn(t.buttons.context, 'view:context')]]);
   }
 }
 
-function view(p: CompactionStatus) {
+function view(t: Messages, p: CompactionStatus) {
+  const c = t.compact;
+  const b = t.buttons;
   const automatic = p.automatic === true;
-  const elapsed = duration(p.elapsedMs);
+  const elapsed = duration(t, p.elapsedMs);
   const scenes = whole(p.scenes);
   const kept = whole(p.keptScenes);
-  const keptText = kept != null ? `последние ${count(kept, 'сцена', 'сцены', 'сцен')}` : 'последние сцены';
-  const retry = automatic ? 'Повторить: /continue' : 'Повторить: /compact';
+  const retry = c.retry(automatic ? '/continue' : '/compact');
 
-  if (p.stage !== undefined && Object.hasOwn(NOW, p.stage)) {
+  if (isStep(p.stage)) {
     const lines = [
-      automatic ? '🗜 Сжатие памяти перед новой сценой' : '🗜 Сжатие памяти',
-      `⏳ Сейчас: ${NOW[p.stage]}`,
-      steps(p.stage),
-      elapsed ? `Прошло: ${elapsed}` : null,
+      automatic ? c.titleAutomatic : c.title,
+      c.now[p.stage],
+      steps(t, p.stage),
+      elapsed ? c.elapsed(elapsed) : null,
     ];
-    if (scenes != null) lines.push(`Сцен в этом сжатии: ${scenes}; ${keptText} не трогаем.`);
-    const repair = whole(p.repairScenes);
-    if ((repair ?? 0) > 0) lines.push(`↩️ Дополнительное извлечение пропущенных сцен: ${repair}.`);
+    if (scenes != null) lines.push(c.scope(scenes, kept));
+    const repair = whole(p.repairScenes) ?? 0;
+    if (repair > 0) lines.push(c.repair(repair));
     const chars = whole(p.outputCharacters);
-    if (chars != null && chars > 0 && p.stage !== 'queued') lines.push(`${(repair ?? 0) > 0 ? 'Дополнительный JSON' : 'JSON памяти'}: ${count(chars, 'символ', 'символа', 'символов')}`);
-    lines.push('', 'Сообщение обновляется по ходу работы.');
+    if (chars != null && chars > 0 && p.stage !== 'queued') lines.push(repair > 0 ? c.extraJson(chars) : c.memoryJson(chars));
+    lines.push('', c.live);
     return payload(lines, [
-      [btn(automatic ? '✖️ Отменить' : '✖️ Отменить сжатие', 'cancel')],
-      [btn('📏 Контекст', 'view:context'), btn('🤖 Модель', 'view:model')],
+      [btn(automatic ? c.cancelAutomatic : b.cancelCompaction, 'cancel')],
+      [btn(b.context, 'view:context'), btn(b.model, 'view:model')],
     ]);
   }
 
   if (p.stage === 'done') {
     const facts = whole(p.facts);
-    const summary = [
-      scenes != null ? `Пересказано сцен: ${scenes}` : null,
-      facts != null ? `фактов в памяти: ${facts}` : null,
-    ].filter(Boolean).join(', ');
+    const repaired = whole(p.repairScenes) ?? 0;
     const lines = [
-      `✅ Сжатие готово${elapsed ? ` · ${elapsed}` : ''}`,
-      summary ? `${summary}.` : null,
-      (whole(p.repairScenes) ?? 0) > 0 ? `Пропущенные сцены (${whole(p.repairScenes)}) дополнены; проверка ссылок пройдена.` : null,
-      `${capital(keptText)} остались как были. Исходные сцены сохранены, до и после сжатия есть чекпоинты.`,
+      c.done(elapsed),
+      scenes != null && facts != null ? c.summary(scenes, facts) : scenes != null ? c.summaryScenes(scenes) : facts != null ? c.summaryFacts(facts) : null,
+      repaired > 0 ? c.repaired(repaired) : null,
+      c.kept(kept),
     ];
-    if (automatic) lines.push('', 'История продолжается: дальше пишется новая сцена.');
-    return payload(lines, [[btn('📏 Контекст', 'view:context'), btn('🏠 Меню', 'view:home')]]);
+    if (automatic) lines.push('', c.continues);
+    return payload(lines, [[btn(b.context, 'view:context'), btn(b.menu, 'view:home')]]);
   }
 
   if (p.stage === 'failed') {
-    const reason = p.reason !== undefined && Object.hasOwn(REASON, p.reason) ? REASON[p.reason] : null;
-    return payload([
-      `⚠️ Сжатие не получилось${elapsed ? ` · ${elapsed}` : ''}`,
-      reason ? `Причина: ${reason}.` : null,
-      SAFE,
-      retry,
-    ], [[btn('📏 Контекст', 'view:context'), btn('🤖 Модель', 'view:model')]]);
+    const reason = p.reason !== undefined && Object.hasOwn(c.reasons, p.reason) ? c.reasons[p.reason as keyof typeof c.reasons] : null;
+    return payload([c.failed(elapsed), reason ? c.reason(reason) : null, c.safe, retry],
+      [[btn(b.context, 'view:context'), btn(b.model, 'view:model')]]);
   }
 
   if (p.stage === 'cancelled') {
-    return payload([
-      `✖️ Сжатие отменено${elapsed ? ` · ${elapsed}` : ''}`,
-      SAFE,
-      retry,
-    ], [[btn('📏 Контекст', 'view:context'), btn('🏠 Меню', 'view:home')]]);
+    return payload([c.cancelled(elapsed), c.safe, retry], [[btn(b.context, 'view:context'), btn(b.menu, 'view:home')]]);
   }
 
   // Unrecognised or missing stage: say nothing about progress and offer no cancel.
-  return payload(
-    ['🗜 Сжатие памяти', 'Состояние сжатия неизвестно. Проверь «Контекст».'],
-    [[btn('📏 Контекст', 'view:context'), btn('🏠 Меню', 'view:home')]],
-  );
+  return payload([c.title, c.unknown], [[btn(b.context, 'view:context'), btn(b.menu, 'view:home')]]);
 }
 
-function steps(stage: string) {
-  const current = STEPS.findIndex(([id]) => id === stage);
-  return STEPS.map(([, label], i) => `${i < current ? '✅' : i === current ? '⏳' : '▫️'} ${label}`).join(' → ');
+function steps(t: Messages, stage: Step) {
+  const current = STEPS.indexOf(stage);
+  return STEPS.map((step, i) => `${i < current ? '✅' : i === current ? '⏳' : '▫️'} ${t.compact.steps[step]}`).join(' → ');
 }
 
-function duration(ms: unknown) {
+function duration(t: Messages, ms: unknown) {
   if (!known(ms) || ms < 0) return null;
   const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s} с`;
+  if (s < 60) return t.duration.seconds(s);
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m} мин ${String(s % 60).padStart(2, '0')} с`;
-  return `${Math.floor(m / 60)} ч ${String(m % 60).padStart(2, '0')} мин`;
+  if (m < 60) return t.duration.minutes(m, String(s % 60).padStart(2, '0'));
+  return t.duration.hours(Math.floor(m / 60), String(m % 60).padStart(2, '0'));
 }
 
 function known(value: unknown): value is number {
@@ -141,17 +103,6 @@ function known(value: unknown): value is number {
 
 function whole(value: unknown) {
   return known(value) && value >= 0 ? Math.round(value) : null;
-}
-
-function count(n: number, one: string, few: string, many: string) {
-  const tens = n % 100;
-  const ones = n % 10;
-  const word = tens >= 11 && tens <= 14 ? many : ones === 1 ? one : ones >= 2 && ones <= 4 ? few : many;
-  return `${String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')} ${word}`;
-}
-
-function capital(text: string) {
-  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 function btn(text: string, data: string): InlineButton {

@@ -51,6 +51,16 @@ test('a stored v1 library is read and saved unchanged, and recovery only marks i
   assert.deepEqual(store.read('1'), { ...structuredClone(stored), job: null, interrupted: true });
 });
 
+test('a library written before the language choice has no language, and a chosen one is stored with the library', t => {
+  const store = new Store(':memory:');
+  t.after(() => store.close());
+  store.db.prepare('INSERT INTO libraries VALUES (?, ?)').run('1', payload);
+  assert.equal(store.read('1').language, undefined);
+  assert.equal(store.read('2').language, undefined);
+  store.mutate('1', state => source.setLanguage(state, 'ja'));
+  assert.deepEqual(store.read('1'), { ...structuredClone(stored), language: 'ja' });
+});
+
 // The same operations on a copy of the stored library: scenes, a checkpoint, compaction, a fork and deletions.
 // Each result or expected rejection is recorded with the state after it.
 function exercise(domain: typeof source) {
@@ -58,7 +68,7 @@ function exercise(domain: typeof source) {
   const results: unknown[] = [];
   const keep = (value: unknown) => { results.push(structuredClone({ value, state })); };
   const reject = (operation: () => unknown) => {
-    try { operation(); } catch (error) { keep({ userError: error instanceof domain.UserError, error: String(error) }); return; }
+    try { operation(); } catch (error) { keep({ userError: error instanceof domain.UserError, error: String(error), key: (error as { key?: string }).key }); return; }
     assert.fail('the operation should be rejected');
   };
   const { story, branch, seed } = domain.active(state);
@@ -83,6 +93,11 @@ function exercise(domain: typeof source) {
   reject(() => domain.deleteBranch(state, story.id, branch.id));
   keep(domain.deleteSeed(state, seed.id));
   reject(() => domain.deleteSeed(state, seed.id));
+  // Names in another interface language are stored as given; the defaults above are the Russian ones.
+  const labels = { firstBranch: 'Start', seedCheckpoint: 'Seed', forkBranch: (from: string) => `From ${from}`, forkCheckpoint: 'Fork point', afterCompaction: 'After' };
+  const harbour = domain.newStory(state, domain.addSeed(state, 'Harbour\n2026-08-03 09:00\nA synthetic harbour.').id, labels);
+  keep(domain.fork(state, harbour.story.id, Object.keys(harbour.story.checkpoints)[0], labels));
+  keep(domain.setLanguage(state, 'en'));
   keep([domain.emptyLibrary(), domain.id(state, 'x')]);
   return { results, state };
 }

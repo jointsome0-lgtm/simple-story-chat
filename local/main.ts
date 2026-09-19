@@ -7,6 +7,7 @@ import type { GenerationResult, ModelRequest } from './model.ts';
 import { createBot } from './bot.ts';
 import type { Update } from './bot.ts';
 import { render, scenePrefix, sceneKeyboard } from './ui.ts';
+import { commandSets } from './text.ts';
 import { createSeedFileReader } from './seed-file.ts';
 import { createVast } from './vast.ts';
 import { createGpu } from './gpu.ts';
@@ -65,17 +66,8 @@ try {
     allowedUsers: config.allowedUsers, ownerId: config.ownerId, maxOutputTokens: config.maxOutputTokens,
     contextTokens: config.contextTokens, compactAtTokens: config.compactAtTokens,
     keepScenes: config.keepScenes, memoryMode: config.memoryMode, repairCoverage: config.repairCoverage, model: config.model, log });
-  await api('setMyCommands', { commands: [
-    { command: 'menu', description: 'Меню историй' }, { command: 'seeds', description: 'Мои сиды' },
-    { command: 'new', description: 'Создать сид' }, { command: 'checkpoints', description: 'Сцены и чекпоинты' },
-    { command: 'continue', description: 'Продолжить историю' }, { command: 'last', description: 'Показать последнюю сцену' },
-    { command: 'context', description: 'Размер контекста и счётчики токенов' },
-    { command: 'compact', description: 'Сжать ранние сцены в память сейчас' },
-    { command: 'model', description: 'Текущая модель и подключение' },
-    ...(gpu ? [{ command: 'gpu_pause', description: 'Пауза GPU после завершения работы' },
-      { command: 'gpu_start', description: 'Запустить арендованную GPU' }] : []),
-    { command: 'cancel', description: 'Отменить ввод или генерацию' },
-  ] });
+  // Telegram shows the list that matches the language of the user's app, and the first, English one to everyone else.
+  for (const commands of commandSets(!!gpu)) await api('setMyCommands', commands);
   log('bot_ready');
   // This is bot processing, not a developer transcript export. Only authorized
   // private chats reach storage; no incoming text is printed or logged.

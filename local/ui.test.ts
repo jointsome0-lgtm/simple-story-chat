@@ -6,7 +6,7 @@ import type { Screen } from './telegram.ts';
 import type { GpuInfo, ModelInfo, RenderDetails } from './ui.ts';
 import { render, renderContext, scenePrefix, sceneKeyboard } from './ui.ts';
 
-const ACTION = /^(view:.+|new-seed|save-seed:[^:]+|start:[^:]+|use:[^:]+:[^:]+|fork:[^:]+:[^:]+|remove-seed:[^:]+|remove-branch:[^:]+:[^:]+|continue|cancel|last|compact|gpu:start|gpu:pause)$/;
+const ACTION = /^(view:.+|new-seed|save-seed:[^:]+|start:[^:]+|use:[^:]+:[^:]+|fork:[^:]+:[^:]+|remove-seed:[^:]+|remove-branch:[^:]+:[^:]+|continue|cancel|last|compact|gpu:start|gpu:pause|lang:[a-z]{2})$/;
 
 function node(id: string, parent: string | null, time: string, body: string, input = 'Ввод'): SceneNode {
   return { id, parent, input, text: `${time}\n\n${body}`, time, truncated: false, delivery: 'sent' };
@@ -96,7 +96,7 @@ test('every reachable screen is a valid payload', () => {
 test('empty library guides to seed creation', () => {
   const state: Library = { version: 1, seq: 0, seeds: {}, stories: {}, active: null, job: null, ui: null, seen: [] };
   const home = render(state);
-  assert.deepEqual(callbacks(home), ['new-seed', 'view:model']);
+  assert.deepEqual(callbacks(home), ['new-seed', 'view:model', 'view:language']);
   assert.deepEqual(callbacks(render(state, 'seeds:0')), ['new-seed', 'view:home']);
   crawl(state);
 });
