@@ -78,9 +78,9 @@ async function* events(body: Response['body']) {
 }
 
 // `budget` caps a hosted API; llama.cpp on our own server has none.
-// The bot expects one slot, so that a scene never shares the card with an unknown request. Only a research batch that
-// started the server with more slots names their count here.
-type Options = { fetch?: (url: string, init: RequestInit) => Promise<Response>; budget?: Budget; slots?: number };
+// The bot expects one slot, so that a scene never shares the card with an unknown request, unless it runs a pool
+// (scheduler.ts): then `slots` share one cache of `poolTokens` cells. A research batch also names its slot count here.
+type Options = { fetch?: (url: string, init: RequestInit) => Promise<Response>; budget?: Budget; slots?: number; poolTokens?: number };
 
 export function createLlama(config: LlamaConfig, options: Options = {}) {
   return createChat(config, options, false);
@@ -94,7 +94,7 @@ export function createOpenAI(config: LlamaConfig, options: Options = {}) {
   return { generate, check };
 }
 
-function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, budget, slots = 1 }: Options, hosted: boolean) {
+function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, budget, slots = 1, poolTokens = 0 }: Options, hosted: boolean) {
   const origin = hosted ? '' : modelBaseUrl(config.baseUrl);
   const baseUrl = hosted ? apiBaseUrl(config.baseUrl) : origin + '/v1';
   const openai = hosted && new URL(baseUrl).hostname === OPENAI_HOST;
@@ -200,13 +200,14 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
         if (!models.data?.some(model => model.id === config.model)) throw new ModelError('unexpected_model');
         if (hosted) return { model: config.model };
         const props = await json('/props', null, current) as Props;
+        // With `--kv-unified` every slot reports the whole shared cache.
         const contextTokens = count(props.default_generation_settings?.n_ctx);
-        if (contextTokens === null || contextTokens < config.contextTokens) throw new ModelError('context_limit');
+        if (contextTokens === null || contextTokens < Math.max(config.contextTokens, poolTokens)) throw new ModelError('context_limit');
         if (props.total_slots !== slots) throw new ModelError('unexpected_slots');
         return { model: config.model, contextTokens, slots: props.total_slots };
       });
     },
-    generate(request: ModelRequest, { onText = async () => {}, signal, inputLimitTokens }: GenerateControls = {}) {
+    generate(request: ModelRequest, { onText = async () => {}, signal, inputLimitTokens, slot }: GenerateControls = {}) {
       return operation(signal, 'generate', async (current): Promise<GenerationResult> => {
         const { body, inputTokens: preparedTokens } = await prepare(request, current);
         let inputTokens = preparedTokens;
@@ -214,7 +215,7 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
         const limit = Math.min(config.contextTokens - request.maxOutputTokens, inputLimitTokens ?? Infinity);
         if (inputTokens > limit) throw new ModelError('context_limit');
         const spend = hosted ? budget?.begin(inputTokens + request.maxOutputTokens) : undefined;
-        const response = await http('/chat/completions', body, current);
+        const response = await http('/chat/completions', !hosted && slot !== undefined ? { ...body, id_slot: slot } : body, current);
         if (!response.headers.get('content-type')?.includes('text/event-stream')) {
           await response.body?.cancel();
           throw new ModelError('invalid_stream');

@@ -17,8 +17,9 @@ export type ModelRequest = {
 // `onWait`: a shared model's queue reports how many calls are ahead of this one, each time the number changes.
 // `onStart`: the call has left a shared model's queue and runs.
 export type Controls = { signal?: AbortSignal; onWait?: (ahead: number) => void; onStart?: () => void };
+// `slot`: the llama.cpp slot a pooled scheduler places the call in (`id_slot`), so its cache stays with its owner.
 export type GenerateControls = Controls & {
-  onText?: (delta: string) => unknown; inputLimitTokens?: number; onQueued?: () => void;
+  onText?: (delta: string) => unknown; inputLimitTokens?: number; onQueued?: () => void; slot?: number;
 };
 // Server-side counts and durations of one request, as llama-server reports them. For logs only; never stored.
 export type Timings = Partial<Record<'cacheTokens' | 'promptTokens' | 'promptMs' | 'predictedTokens' | 'predictedMs'
@@ -41,7 +42,7 @@ export type Provider = {
 export function createModel(config: ModelConfig & { dbPath: string }): Provider {
   if (config.provider === 'claude-code') return createClaude(config);
   if (config.provider === 'codex-cli') return createCodex(config);
-  if (config.provider === 'llama-cpp') return createLlama(config);
+  if (config.provider === 'llama-cpp') return createLlama(config, { slots: config.slots, poolTokens: config.poolTokens });
   if (config.provider === 'openai-compatible') {
     const channel = channelFor(config.baseUrl!, config.model);
     return createOpenAI(config, { budget: createBudget(BUDGET_PATH, channel, capsFor(channel, config.budget)) });

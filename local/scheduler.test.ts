@@ -312,3 +312,114 @@ test('a yielding turn ends when anybody but its holder calls, and its holder wai
   f.calls[3].finish(); await owner;
   prepared.end();
 });
+
+// A pool of slots: requests are `name:inputTokens`, and each call records the slot it ran in.
+function poolFixture(t: TestContext, options: SchedulerOptions<string> = {}) {
+  const calls: { name: string; slot?: number; finish: () => void; signal: AbortSignal }[] = [];
+  const counted: string[] = [];
+  const provider = {
+    generate(request: string, { signal, slot }: { signal: AbortSignal; slot?: number }) {
+      return new Promise<string>((resolve, reject) => {
+        calls.push({ name: request.split(':')[0], slot, finish: () => resolve(request), signal });
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    },
+    async countInput(request: string) { counted.push(request.split(':')[0]); return Number(request.split(':')[1] ?? 100); },
+  };
+  const scheduler = createScheduler(provider, { quietMs: 60000, pollMs: 100000, slots: 3, poolTokens: 100000,
+    outputTokens: () => 1000, ...options });
+  t.after(() => scheduler.close());
+  const started = async (count: number) => { while (calls.length < count) await turn(); };
+  return { scheduler, calls, counted, started };
+}
+test('a pool runs calls side by side, gives a person the highest slot and keeps a holder in its slot', async t => {
+  const f = poolFixture(t);
+  const tester = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const scene = tester.generate('tester scene');
+  const agentTurn = f.scheduler.agent.openTurn({ holder: 'agent' });
+  // No quiet window: an agent and a probe run beside the person at once.
+  const agentScene = agentTurn.generate('agent scene');
+  const probe = f.scheduler.background.generate('probe');
+  await f.started(3);
+  assert.deepEqual(f.calls.map(call => [call.name, call.slot]), [['tester scene', 2], ['agent scene', 0], ['probe', 1]]);
+  assert.equal(f.scheduler.snapshot().activeCount, 3);
+  f.calls[0].finish(); await scene; tester.end();
+  f.calls[1].finish(); await agentScene; agentTurn.end();
+  f.calls[2].finish(); await probe;
+  // The next turns go back to the same slots, where their caches are.
+  const again = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const next = again.generate('tester next');
+  await f.started(4);
+  assert.equal(f.calls[3].slot, 2);
+  f.calls[3].finish(); await next; again.end();
+});
+test('an agent waits while its claim would crowd out a person\'s cache; a person is admitted beside it', async t => {
+  const f = poolFixture(t, { poolTokens: 20000 });
+  const tester = f.scheduler.foreground.generate('tester:10000');
+  await f.started(1);
+  f.calls[0].finish(); await tester;
+  // 2048 margin + 7000 claim + the tester's 11000 cache, 1000 output and 1024 of growth exceed 20000.
+  const agent = f.scheduler.agent.generate('agent:6000');
+  await turn(); await turn();
+  assert.equal(f.calls.length, 1);
+  // Another person does not count idle caches: llama.cpp evicts them for a running call. It spares the tester's slot.
+  const owner = f.scheduler.foreground.openTurn({ holder: 'owner' });
+  const scene = owner.generate('owner:5000');
+  await f.started(2);
+  assert.deepEqual([f.calls[1].name, f.calls[1].slot], ['owner', 1]);
+  f.calls[1].finish(); await scene; owner.end();
+  // After a server restart the caches are gone and the agent fits.
+  f.scheduler.forget();
+  f.scheduler.tick();
+  await f.started(3);
+  assert.equal(f.calls[2].name, 'agent');
+  f.calls[2].finish(); await agent;
+});
+test('a person kept from a pool stops probes and another person\'s yielding turn; with room nobody yields', async t => {
+  const f = poolFixture(t, { slots: 2 });
+  const probe = f.scheduler.background.generate('probe');
+  const prepared = f.scheduler.foreground.openTurn({ holder: 'owner', yields: true });
+  const extraction = prepared.generate('prepared');
+  await f.started(2);
+  assert.deepEqual(f.calls.map(call => [call.name, call.slot]), [['probe', 0], ['prepared', 1]]);
+  const stopped = [assert.rejects(probe, { code: 'background_preempted' }), assert.rejects(extraction, { code: 'background_preempted' })];
+  const tester = f.scheduler.foreground.generate('tester');
+  await Promise.all(stopped);
+  await f.started(3);
+  assert.equal(f.calls[2].name, 'tester');
+  f.calls[2].finish(); await tester;
+  prepared.end();
+
+  const g = poolFixture(t);
+  const ahead = g.scheduler.foreground.openTurn({ holder: 'owner', yields: true });
+  const kept = ahead.generate('prepared');
+  const person = g.scheduler.foreground.generate('tester');
+  await g.started(2);
+  assert.equal(g.calls[0].signal.aborted, false);
+  g.calls[1].finish(); await person;
+  g.calls[0].finish(); await kept; ahead.end();
+});
+test('a pool counts tokens outside its slots, even while every slot is busy', async t => {
+  const f = poolFixture(t, { slots: 2 });
+  const agent = f.scheduler.agent.generate('agent');
+  const tester = f.scheduler.foreground.generate('tester');
+  await f.started(2);
+  assert.equal(await f.scheduler.foreground.countInput!('count:4321'), 4321);
+  assert.ok(f.counted.includes('count'));
+  f.calls[0].finish(); f.calls[1].finish(); await agent; await tester;
+});
+test('two turns between their calls in a pool do not wait for each other\'s room', async t => {
+  const f = poolFixture(t, { poolTokens: 12000 });
+  const a = f.scheduler.agent.openTurn({ holder: 'a' });
+  const b = f.scheduler.agent.openTurn({ holder: 'b' });
+  const first = [a.generate('a compaction:3000'), b.generate('b compaction:3000')];
+  await f.started(2);
+  f.calls[0].finish(); f.calls[1].finish(); await Promise.all(first);
+  // Each scene with the other's cache would exceed 12000; running calls alone do not.
+  const scenes = [a.generate('a scene:4000'), b.generate('b scene:4000')];
+  await f.started(3);
+  assert.deepEqual(f.calls.slice(2).map(call => call.name), ['a scene']);
+  f.calls[2].finish(); await scenes[0]; a.end();
+  await f.started(4);
+  f.calls[3].finish(); await scenes[1]; b.end();
+});

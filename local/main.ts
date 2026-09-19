@@ -43,18 +43,28 @@ try {
     gpu = createGpu({ api: createVast(config.gpu), connection: createGpuConnection(config.gpu.sshHost, { log }),
       check: controls => rawProvider.check!(controls), idleMinutes: config.gpu.idleMinutes, log });
     await gpu.tick();
-    gpuTimer = setInterval(() => { void gpu!.tick(); }, 10000);
+    // A server that became ready again has restarted with empty caches, which a pool must stop reserving room for.
+    let ready = gpu.snapshot().status === 'ready';
+    gpuTimer = setInterval(() => { void gpu!.tick().then(() => {
+      const now = gpu!.snapshot().status === 'ready';
+      if (now && !ready) scheduler?.forget();
+      ready = now;
+    }); }, 10000);
   } else await rawProvider.check?.();
+  const pool = config.slots > 1;
   scheduler = createScheduler(rawProvider, { log,
+    slots: config.slots, poolTokens: config.poolTokens, outputTokens: request => request.maxOutputTokens,
     backgroundAllowed: () => {
       const state = gpu?.snapshot();
       // Without an idle deadline (null) background work is not allowed.
       return state?.status === 'ready' && state.activeJobs === 0 && (state.idleRemainingSeconds ?? 0) > 100;
     },
     // An agent turn holds the GPU through the idle countdown, so it starts only if it can end before it, and never extends it.
+    // In a pool it also starts beside people's jobs, which keep the GPU up anyway.
     agentCanStart: () => {
       const state = gpu?.snapshot();
-      return state?.status === 'ready' && state.activeJobs === 0 && (state.idleRemainingSeconds ?? 0) > config.timeoutMs / 1000 + 100;
+      return state?.status === 'ready' && (pool && state.activeJobs > 0
+        || state.activeJobs === 0 && (state.idleRemainingSeconds ?? 0) > config.timeoutMs / 1000 + 100);
     },
     // Without GPU control there is no socket and no agent work here. A started agent turn holds the GPU, which then
     // drains instead of pausing under it; a stopped or failing GPU stops the turn.
