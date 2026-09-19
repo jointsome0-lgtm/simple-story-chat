@@ -499,11 +499,13 @@ test('a turn cancelled while its status is in flight sends no late scene text', 
       // The person cancels while the status is still in flight, then the status goes out.
       setTimeout(async () => { await f.bot.handle(f.message('/cancel')); release!(); }, 10);
       await controls.onText('2026-08-02 20:00\n\nПоздний текст.');
+      // A delta the provider had already received goes to the callback before it checks the signal.
+      await controls.onText(' Ещё поздний текст.');
       throw new ModelError('cancelled');
     },
   });
   await f.start();
-  assert.ok(!f.sent.some(m => m.method === 'sendRichMessageDraft' && m.payload.rich_message.markdown.includes('Поздний текст')));
+  assert.ok(!f.sent.some(m => m.method === 'sendRichMessageDraft' && /оздний текст/.test(m.payload.rich_message.markdown)));
 });
 
 test('model and percentage stay above Markdown; full context is on demand and never enters narrative', async t => {

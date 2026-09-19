@@ -324,9 +324,11 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
           return async delta => {
             if (!over) {
               await endStatus();
-              // The turn may have been cancelled or replaced while the status was in flight.
-              if (controller.signal.aborted || store.read(userId).job?.id !== job.id) return;
+              // The turn may have been replaced while the status was in flight.
+              if (store.read(userId).job?.id !== job.id) controller.abort();
             }
+            // A cancelled turn shows no more text, even from deltas the provider has already received.
+            if (controller.signal.aborted) return;
             return onText(delta);
           };
         },
