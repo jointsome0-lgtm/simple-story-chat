@@ -90,6 +90,8 @@ export function createScheduler<Request, Result>(provider: {
     const index = queue.indexOf(item);
     if (index >= 0) queue.splice(index, 1);
     item.signal?.removeEventListener('abort', item.cancel);
+    // The call never ran, but a pool may already be counting its input: that count ends with it.
+    if (!item.controller.signal.aborted) item.controller.abort(error);
     item.reject(error);
   }
   // Ends a turn: its waiting calls are refused, its running call is stopped, and its slot is free.
@@ -168,22 +170,24 @@ export function createScheduler<Request, Result>(provider: {
   }
   // Whether the pool has room for the call's claim beside every running call, every other turn between its calls and,
   // unless the call is a person's, every person's cache with room for its next request. llama.cpp evicts the other idle
-  // caches. The next call of a started turn counts only running calls: two turns between their calls must not wait for
-  // each other, and the server evicts an idle cache rather than fail a running call.
+  // caches. The next call of a started turn does not count the idle caches of other turns: two turns between their calls
+  // must not wait for each other, and the server evicts an idle cache rather than fail a running call. It still leaves
+  // people their room: an agent must not grow into a person's cache between its own calls either.
   function admit(item: Item<Request>, lane: Lane<Request>) {
     if (!pool) return true;
     if (item.inputTokens === undefined) return false;
     const continuing = !!item.turn && lane.reserved?.turn === item.turn;
     let used = POOL_MARGIN + item.inputTokens + outputTokens(item.request);
-    let busy = false;
+    let alone = true;
     for (const other of lanes) if (other !== lane) {
-      if (other.active) { used += other.active.claim ?? 0; busy = true; }
-      else if (continuing) continue;
-      else if (other.reserved) { used += other.claim; busy = true; }
+      if (other.active) used += other.active.claim ?? 0;
       else if (item.priority !== 'foreground' && other.person) used += other.claim + other.output + PERSON_GROWTH;
+      else if (other.reserved && !continuing) used += other.claim;
+      else continue;
+      alone = false;
     }
-    // A call too large for the pool runs when nothing else does, rather than wait for ever.
-    return used <= poolTokens || !busy && (item.priority === 'foreground' || continuing);
+    // A call too large for the pool runs when the pool holds nothing else, rather than wait for ever.
+    return used <= poolTokens || alone;
   }
   // Tells every waiting call how many calls go before it: the queues of higher priority, the calls ahead in its own,
   // and the work holding the slots it may use. A turn's own next call goes first while the turn holds its slot.
@@ -208,15 +212,21 @@ export function createScheduler<Request, Result>(provider: {
   }
   function step() {
     if (closed) return;
-    for (const lane of lanes) if (!lane.active && lane.reserved && now() - lane.reserved.turn.idleSince >= turnIdleMs) {
+    const waiting = (turn: Turn) => foreground.find(item => item.turn === turn) ?? agent.find(item => item.turn === turn);
+    // A turn whose owner is gone holds its slot without calling; one waiting for room in the pool is not lost.
+    for (const lane of lanes) if (!lane.active && lane.reserved && now() - lane.reserved.turn.idleSince >= turnIdleMs
+      && !waiting(lane.reserved.turn)) {
       log('turn_lost');
       return endTurn(lane.reserved.turn, 'background_unavailable');
     }
     // A reserved slot runs only the next call of its turn; an agent's is not held back by the quiet window.
+    let held: Item<Request> | undefined;
     for (const lane of lanes) if (!lane.active && lane.reserved) {
       const turn = lane.reserved.turn;
-      const item = foreground.find(item => item.turn === turn) ?? (agentCanRun() ? agent.find(item => item.turn === turn) : undefined);
-      if (item && admit(item, lane)) start(item, lane);
+      const item = turn.priority === 'agent' && !agentCanRun() ? undefined : waiting(turn);
+      if (!item) continue;
+      if (admit(item, lane)) start(item, lane);
+      else if (item.priority === 'foreground') held ??= item;
     }
     const quiet = pool || now() - lastForeground >= quietMs;
     // Calls of turns that hold a slot wait for it above; the rest go in order while a slot has room for them. A yielding
@@ -231,7 +241,7 @@ export function createScheduler<Request, Result>(provider: {
       }
       return undefined;
     };
-    const kept = place(foreground, () => true);
+    const kept = held ?? place(foreground, () => true);
     if (kept) {
       // A person kept from the model stops the probes and the yielding turns of others that stand in the way; one whose
       // input is still being counted is not kept by them yet.
@@ -241,7 +251,9 @@ export function createScheduler<Request, Result>(provider: {
       }
       return;
     }
-    place(agent, () => quiet && agentCanStart());
+    // An agent kept from the model by a probe stops it: a probe is disposable, an agent turn is not.
+    const keptAgent = place(agent, () => quiet && agentCanStart());
+    if (pool && keptAgent?.inputTokens !== undefined) stop('background', 'background_preempted');
     place(background, () => quiet && backgroundAllowed());
   }
   function start(item: Item<Request>, lane: Lane<Request>) {

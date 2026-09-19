@@ -14,6 +14,9 @@ export type GpuStatus = 'unknown' | 'paused' | 'starting' | 'ready' | 'draining'
 export type GpuSnapshot = {
   status: GpuStatus; activeJobs: number; idleMinutes: number; checkDegraded: boolean;
   idleRemainingSeconds: number | null; canStart: boolean; canPause: boolean;
+  // How many times the instance came back up, so a slot pool knows the model server's caches are empty again. A failing
+  // control API ('error') says nothing about the server and does not count.
+  starts: number;
 };
 export type GpuController = ReturnType<typeof createGpu>;
 // A pause (from the owner or the idle deadline) or a start (from the owner) until the instance is confirmed
@@ -46,7 +49,18 @@ export function createGpu({ api, connection, check, idleMinutes = 15, now = Date
   const idleExpired = () => !activeJobs && idleSince !== null && now() - idleSince >= idleMs;
   const stopped = (remote: RemoteState) => member(['stopped', 'exited'], remote.actual) && remote.intended === 'stopped';
   const currentStatus = () => status === 'ready' && checkDegraded && now() - lastReadyAt >= readyGraceMs ? 'error' : status;
-  const snapshot = (): GpuSnapshot => ({ status: currentStatus(), activeJobs, idleMinutes,
+  // The instance was down (or not yet known) since the last time a tick saw it ready.
+  let down = true;
+  let starts = 0;
+  // Counted once per tick, so a state the bot never observed still counts.
+  function count() {
+    const current = currentStatus();
+    if (current === 'ready') {
+      if (down) starts++;
+      down = false;
+    } else if (current !== 'error') down = true;
+  }
+  const snapshot = (): GpuSnapshot => ({ status: currentStatus(), starts, activeJobs, idleMinutes,
     checkDegraded: checkDegraded && currentStatus() === 'ready',
     idleRemainingSeconds: idleSince === null || activeJobs ? null : Math.max(0, Math.ceil((idleSince + idleMs - now()) / 1000)),
     canStart: !closed && status === 'paused' && now() < resumeUntil,
@@ -150,7 +164,7 @@ export function createGpu({ api, connection, check, idleMinutes = 15, now = Date
     },
     tick(): Promise<GpuSnapshot> {
       if (closed) return Promise.resolve(snapshot());
-      pending ??= reconcile().finally(() => { pending = undefined; });
+      pending ??= reconcile().then(() => { count(); return snapshot(); }).finally(() => { pending = undefined; });
       return pending;
     },
     async close() {

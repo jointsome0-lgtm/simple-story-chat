@@ -43,12 +43,12 @@ try {
     gpu = createGpu({ api: createVast(config.gpu), connection: createGpuConnection(config.gpu.sshHost, { log }),
       check: controls => rawProvider.check!(controls), idleMinutes: config.gpu.idleMinutes, log });
     await gpu.tick();
-    // A server that became ready again has restarted with empty caches, which a pool must stop reserving room for.
-    let ready = gpu.snapshot().status === 'ready';
-    gpuTimer = setInterval(() => { void gpu!.tick().then(() => {
-      const now = gpu!.snapshot().status === 'ready';
-      if (now && !ready) scheduler?.forget();
-      ready = now;
+    // An instance that came back up runs a server with empty caches, which a pool must stop reserving room for.
+    let starts = gpu.snapshot().starts;
+    gpuTimer = setInterval(() => { void gpu!.tick().then(state => {
+      if (state.starts === starts) return;
+      starts = state.starts;
+      scheduler?.forget();
     }); }, 10000);
   } else await rawProvider.check?.();
   const pool = config.slots > 1;

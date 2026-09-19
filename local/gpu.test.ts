@@ -297,3 +297,24 @@ test('Vast HTTP errors expose only status and read/write phase', async () => {
   await assert.rejects(api.read(), { code: 'gpu_api_failed', phase: 'gpu_read', httpStatus: 502 });
   await assert.rejects(api.setState('stopped'), { code: 'gpu_api_failed', phase: 'gpu_write', httpStatus: 502 });
 });
+
+test('a start counter separates a real restart from a failing control API', async () => {
+  let time = 0, apiFails = false, state = { actual: 'running', intended: 'running' };
+  const gpu = createGpu({ now: () => time, idleMinutes: 15,
+    api: { read: async () => { if (apiFails) throw new ModelError('gpu_api_failed'); return state; },
+      setState: async next => { state = { actual: next === 'running' ? 'running' : 'stopped', intended: next }; } },
+    connection: { ensure: async () => {}, close() {} }, check: async () => {} });
+  assert.equal((await gpu.tick()).starts, 1);
+  // A control API that fails and recovers says nothing about the model server.
+  time = 40000; apiFails = true; await gpu.tick();
+  assert.equal(gpu.snapshot().status, 'error');
+  time = 50000; apiFails = false;
+  assert.equal((await gpu.tick()).starts, 1);
+  // A pause and a resume start a server with empty caches.
+  gpu.pause();
+  time = 60000; await gpu.tick();
+  assert.equal((await gpu.tick()).status, 'paused');
+  gpu.resume();
+  time = 70000; await gpu.tick();
+  assert.equal((await gpu.tick()).starts, 2);
+});

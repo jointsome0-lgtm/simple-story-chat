@@ -423,3 +423,78 @@ test('two turns between their calls in a pool do not wait for each other\'s room
   await f.started(4);
   f.calls[3].finish(); await scenes[1]; b.end();
 });
+test('a pool keeps a person\'s room from an agent between its own calls', async t => {
+  const f = poolFixture(t, { poolTokens: 98304 });
+  const person = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const scene = person.generate('tester:48000');
+  await f.started(1);
+  f.calls[0].finish(); await scene; person.end();
+  const agentTurn = f.scheduler.agent.openTurn({ holder: 'agent' });
+  const small = agentTurn.generate('agent small:1000');
+  await f.started(2);
+  f.calls[1].finish(); await small;
+  // Between its calls the agent asks for a request that would leave the tester's cache no room.
+  const big = agentTurn.generate('agent big:54000');
+  await turn(); await turn();
+  assert.equal(f.calls.length, 2);
+  agentTurn.end();
+  await assert.rejects(big, { code: 'cancelled' });
+});
+test('a person waiting for room in a pool ends another\'s yielding turn between its own calls', async t => {
+  const f = poolFixture(t, { poolTokens: 65536 });
+  const prepared = f.scheduler.foreground.openTurn({ holder: 'owner', yields: true });
+  const extraction = prepared.generate('prepared:41000');
+  const tester = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const count = tester.generate('tester count:1000');
+  await f.started(2);
+  f.calls[1].finish(); await count;
+  const stopped = assert.rejects(extraction, { code: 'background_preempted' });
+  const scene = tester.generate('tester scene:31000');
+  await stopped;
+  await f.started(3);
+  assert.equal(f.calls[2].name, 'tester scene');
+  f.calls[2].finish(); await scene; tester.end(); prepared.end();
+});
+test('an agent kept by a probe in a pool stops it, and a turn waiting for room is not lost', async t => {
+  let time = 0;
+  const f = poolFixture(t, { slots: 2, now: () => time, turnIdleMs: 60000 });
+  const probe = f.scheduler.background.generate('probe');
+  await f.started(1);
+  const preempted = assert.rejects(probe, { code: 'background_preempted' });
+  const agentTurn = f.scheduler.agent.openTurn({ holder: 'agent' });
+  const call = agentTurn.generate('agent call');
+  await preempted;
+  await f.started(2);
+  assert.equal(f.calls[1].name, 'agent call');
+  f.calls[1].finish(); await call;
+  // A turn whose next call waits for a busy pool keeps its slot; only a silent one is lost.
+  const person = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const scene = person.generate('tester:100');
+  await f.started(3);
+  const next = agentTurn.generate('agent next:99000');
+  time = 120000; f.scheduler.tick(); await turn();
+  assert.equal(f.calls.length, 3);
+  f.calls[2].finish(); await scene; person.end();
+  agentTurn.end();
+  await assert.rejects(next, { code: 'cancelled' });
+});
+test('cancelling a queued call in a pool ends the token count it started', async t => {
+  let release: ((value: number) => void) | undefined;
+  const aborted: string[] = [];
+  const scheduler = createScheduler({
+    generate: (request: string) => new Promise<string>(() => {}),
+    countInput: (request: string, { signal }: { signal: AbortSignal }) => new Promise<number>((resolve, reject) => {
+      if (request.startsWith('slow')) { release = resolve; signal.addEventListener('abort', () => { aborted.push(request); reject(signal.reason); }, { once: true }); }
+      else resolve(100);
+    }),
+  }, { slots: 2, poolTokens: 100000, outputTokens: () => 100, pollMs: 100000 });
+  t.after(() => scheduler.close());
+  const controller = new AbortController();
+  const pending = scheduler.foreground.generate('slow request', { signal: controller.signal });
+  await turn();
+  controller.abort();
+  await assert.rejects(pending, { code: 'cancelled' });
+  assert.deepEqual(aborted, ['slow request']);
+  // The count was under way and was stopped, not left to finish on its own.
+  assert.equal(typeof release, 'function');
+});
