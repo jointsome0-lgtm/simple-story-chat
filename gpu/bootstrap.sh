@@ -92,7 +92,19 @@ git -C "$source_dir" checkout --detach "$LLAMA_CPP_REVISION"
 cmake -S "$source_dir" -B "$source_dir/build" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="$cuda_arch" \
   -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=ON
-cmake --build "$source_dir/build" --target llama-server -j "${SIMPLE_CHAT_BUILD_JOBS:-4}"
+# The build runs beside the download, so only a build longer than it costs rented minutes. Four jobs left a rented
+# machine mostly idle and put the build on that path. CUDA compilation takes about 2 GiB per job, so the default is
+# the smaller of the cores and what memory allows; SIMPLE_CHAT_BUILD_JOBS still overrides it.
+jobs="${SIMPLE_CHAT_BUILD_JOBS:-}"
+if [[ -z "$jobs" ]]; then
+  cores="$(nproc)"
+  by_memory="$(awk '/MemAvailable/ {print int($2 / 1024 / 1024 / 2)}' /proc/meminfo)"
+  jobs=$(( cores < by_memory ? cores : by_memory ))
+  (( jobs >= 1 )) || jobs=1
+fi
+[[ "$jobs" =~ ^[1-9][0-9]?$ ]] || { echo 'Use SIMPLE_CHAT_BUILD_JOBS from 1 to 99.' >&2; exit 1; }
+echo "Building llama-server with $jobs jobs."
+cmake --build "$source_dir/build" --target llama-server -j "$jobs"
 wait "$fetch_pid" || { echo 'Model download failed.' >&2; exit 1; }
 python3 - "$model_path" "$MODEL_SHA256" "$MODEL_BYTES" <<'PY'
 import hashlib,pathlib,sys
