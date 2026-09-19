@@ -65,9 +65,12 @@ connections="${SIMPLE_CHAT_DOWNLOAD_CONNECTIONS:-16}"
 fetch_model &
 fetch_pid=$!
 # The draft model for speculative decoding is half a gigabyte, so it arrives over one connection beside the weights.
-# Without SIMPLE_CHAT_GPU_DRAFT=true nothing uses it and it is not fetched.
+# Without SIMPLE_CHAT_GPU_DRAFT=true nothing uses it and it is not fetched. Like the weights it is fetched in the
+# background: run in the foreground it shared the throttled link with the weights, crawled at 1 MiB/s and held the
+# clone and the build behind it for the five minutes it took.
 draft_path="$gpu_dir/models/$DRAFT_FILE"
-if [[ "${SIMPLE_CHAT_GPU_DRAFT:-false}" = true && ! -f "$draft_path" ]]; then
+# The here-document inside ends at the start of a line, so its own body stays unindented.
+fetch_draft() {
   curl --fail --location --silent --show-error --retry 2 --continue-at - \
     "https://huggingface.co/$DRAFT_REPO/resolve/$DRAFT_REVISION/$DRAFT_FILE" -o "$draft_path.part"
   python3 - "$draft_path" "$DRAFT_SHA256" "$DRAFT_BYTES" <<'PY'
@@ -79,6 +82,11 @@ if digest != sys.argv[2]: current.unlink(); raise SystemExit('Draft model SHA256
 current.rename(target)
 print('Draft model SHA256 verified.')
 PY
+}
+draft_pid=''
+if [[ "${SIMPLE_CHAT_GPU_DRAFT:-false}" = true && ! -f "$draft_path" ]]; then
+  fetch_draft &
+  draft_pid=$!
 fi
 source_dir="$gpu_dir/llama.cpp"
 if [[ ! -d "$source_dir/.git" ]]; then
@@ -128,6 +136,7 @@ fi
 echo "Building llama-server with $jobs jobs."
 cmake --build "$source_dir/build" --target llama-server -j "$jobs"
 wait "$fetch_pid" || { echo 'Model download failed.' >&2; exit 1; }
+[[ -z "$draft_pid" ]] || wait "$draft_pid" || { echo 'Draft model download failed.' >&2; exit 1; }
 python3 - "$model_path" "$MODEL_SHA256" "$MODEL_BYTES" <<'PY'
 import hashlib,pathlib,sys
 target=pathlib.Path(sys.argv[1]); current=target if target.exists() else pathlib.Path(str(target)+'.part')

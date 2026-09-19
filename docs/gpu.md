@@ -33,13 +33,17 @@ Host simple-chat-vast
 
 On the first `ssh simple-chat-vast` verify the host key. After that the tunnel requires the already known key and does not accept a replaced key automatically.
 
-From the project root upload only the scripts:
+The public key must be on the Vast **account**, under Account → SSH Keys, before the instance is created. Many machines offer no direct ports (`direct_port_start` 65535 with `direct_port_end` -1), and then the only route is Vast's proxy, `sshN.vast.ai`. The proxy admits account keys alone, so a key placed only inside the container, by an onstart script or by hand, never gets the chance to be used: the connection is closed before the container's own sshd sees it. The symptom is `Connection closed by <address> port <port>` on every attempt, with no mention of authentication. Adding the key to the account fixes a running instance without recreating it.
+
+From the project root upload only the scripts. `/workspace` is a convention of some Vast images, not of all of them: the verified CUDA 13 image has one 60 GB overlay on `/` and no `/workspace` at all, so create the directory rather than assume it.
 
 ```sh
 ssh simple-chat-vast 'mkdir -p /workspace/simple-chat/gpu'
-scp gpu/*.sh gpu/server-log.py gpu/manifest.env simple-chat-vast:/workspace/simple-chat/gpu/
+tar -cf - -C gpu . | ssh simple-chat-vast 'tar -xf - -C /workspace/simple-chat/gpu'
 ssh simple-chat-vast
 ```
+
+`scp` through the proxy hung with no output and had to be killed; one `tar` over the same SSH session copied the scripts at once.
 
 The container needs `git`, `cmake`, `ninja`, `curl`, `python3`, a C++ toolchain and a CUDA compiler. For an Ubuntu image you can install the missing packages like this:
 
@@ -50,7 +54,7 @@ bash /workspace/simple-chat/gpu/bootstrap.sh
 bash /workspace/simple-chat/gpu/ensure-server.sh
 ```
 
-`nvcc` must be part of the chosen development image. The host driver is not installed this way. The preparation downloads about 25.2 GB of weights and builds `llama-server`. By default the weights go through `aria2c` with 16 connections (if the image does not have it, the script installs it through `apt-get`; if that fails, the script downloads with a single `curl`). The download runs in the background while `llama-server` is built, and the script waits for it after the build; on an 850 Mbit/s link the weights arrived in six minutes, before the end of the build. `SIMPLE_CHAT_BUILD_JOBS` sets the number of build threads; by default it is the machine's cores, or fewer if memory is short (CUDA compilation takes about 2 GiB per job). The build is worth no rented minutes of its own as long as it ends before the weights arrive, which is what that default is for. `SIMPLE_CHAT_DOWNLOAD_CONNECTIONS=1..16` changes the number of connections, and `1` brings back the single download. An interrupted parallel download continues from the place where it stopped; SHA256 is verified as before. By default the files are in `/workspace/simple-chat-gpu`; `ensure-server.sh` leaves one process under `flock` after SSH disconnects. In the verified image we had to restore the missing `libisl.so.23` by reinstalling `libisl23 libmpc3 libmpfr6 libgmp10 gcc-13 g++-13 build-essential`, and then configure CMake again with `--fresh`.
+`nvcc` must be part of the chosen development image. The host driver is not installed this way. The preparation downloads about 25.2 GB of weights and builds `llama-server`. By default the weights go through `aria2c` with 16 connections (if the image does not have it, the script installs it through `apt-get`; if that fails, the script downloads with a single `curl`). The download runs in the background while `llama-server` is built, and the script waits for it after the build; on an 850 Mbit/s link the weights arrived in six minutes, before the end of the build. `SIMPLE_CHAT_BUILD_JOBS` sets the number of build threads; by default it is the container's share of the cores, or fewer if its memory is short (CUDA compilation takes about 2 GiB per job). The share is read from the cgroup, because a container sees the whole machine otherwise: the measured 5090 host reported 256 cores and 454 GiB of free memory to a container that held 30.72 cores and 183 GB. The build is worth no rented minutes of its own as long as it ends before the weights arrive, which is what that default is for. `SIMPLE_CHAT_DOWNLOAD_CONNECTIONS=1..16` changes the number of connections, and `1` brings back the single download. An interrupted parallel download continues from the place where it stopped; SHA256 is verified as before. By default the files are in `/workspace/simple-chat-gpu`; `ensure-server.sh` leaves one process under `flock` after SSH disconnects. In the verified image we had to restore the missing `libisl.so.23` by reinstalling `libisl23 libmpc3 libmpfr6 libgmp10 gcc-13 g++-13 build-essential`, and then configure CMake again with `--fresh`.
 
 It is convenient to watch the preparation from the bot's computer: `ssh -t simple-chat-vast bash /workspace/simple-chat/gpu/progress.sh`. The screen refreshes once every three seconds and shows the downloaded amount of weights, the speed over the last half minute and the remaining time, and for the build it shows the completed steps out of the total number and the remaining time. The script only reads, and it exits by itself when the weights are verified and `llama-server` is built. The link speed stated in the offer promises nothing: on a machine with "1171 Mbit/s" the weights came from Hugging Face at 115 Mbit/s, about half an hour.
 
