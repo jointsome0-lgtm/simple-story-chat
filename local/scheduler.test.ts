@@ -122,7 +122,7 @@ test('a provider without a check gets none from the scheduler', async t => {
   t.after(() => server.close());
   assert.deepEqual(await server.foreground.check!(), { model: 'test-model' });
 });
-test('an agent call waits for people and the quiet window, and a person arriving stops it', async t => {
+test('an agent call waits for people and the quiet window, then runs to its end while a person waits', async t => {
   let time = 0;
   const f = fixture(t, { now: () => time, quietMs: 60000 });
   const user = f.scheduler.foreground.generate('user one');
@@ -130,10 +130,14 @@ test('an agent call waits for people and the quiet window, and a person arriving
   time = 1000; f.calls[0].finish(); await user; await turn();
   time = 60999; f.scheduler.tick(); assert.equal(f.calls.length, 1);
   time = 61000; f.scheduler.tick(); assert.equal(f.calls[1].name, 'agent call');
-  // A person arrives mid-call: the agent call is stopped and the person goes at once.
-  const stopped = assert.rejects(agent, { code: 'background_preempted' });
-  const next = f.scheduler.foreground.generate('user two');
-  await stopped; await turn();
+  // A person arrives mid-call: the agent call is not aborted, the person is next.
+  const waits: number[] = [];
+  const next = f.scheduler.foreground.generate('user two', { onWait: ahead => { waits.push(ahead); } });
+  await turn();
+  assert.equal(f.calls[1].signal.aborted, false);
+  assert.equal(f.calls.length, 2);
+  assert.deepEqual(waits, [1]);
+  f.calls[1].finish(); assert.equal(await agent, 'agent call'); await turn();
   assert.equal(f.calls[2].name, 'user two');
   f.calls[2].finish(); await next;
 });
@@ -171,7 +175,7 @@ test('a turn keeps the slot from its first call until it ends, however long it p
   // An ended turn takes no more calls.
   await assert.rejects(owner.generate('late'), { code: 'cancelled' });
 });
-test('an agent turn holds the slot and the GPU between its calls, and a person ends the whole turn', async t => {
+test('an agent turn holds the slot and the GPU between its calls, and a person waits for its end', async t => {
   let time = 0, holds = 0, released = 0;
   const events: string[] = [];
   const f = fixture(t, { now: () => time, quietMs: 60000, log: event => { events.push(event); },
@@ -190,31 +194,37 @@ test('an agent turn holds the slot and the GPU between its calls, and a person e
   await turn();
   assert.deepEqual(f.calls.map(c => c.name), ['agent compaction', 'agent scene']);
   assert.deepEqual([holds, released], [1, 0]);
-  // A person arrives: the running call stops, the turn ends and the GPU hold goes.
-  const stopped = assert.rejects(scene, { code: 'background_preempted' });
+  // A person arrives: the quiet window restarts, yet the running call goes on and the turn keeps the slot.
   const user = f.scheduler.foreground.generate('user');
-  await stopped; await turn();
+  await turn();
+  assert.equal(f.calls[1].signal.aborted, false);
+  f.calls[1].finish(); await scene; await turn();
+  assert.equal(f.calls.length, 2);
+  agentTurn.end(); await turn();
   assert.deepEqual([holds, released], [1, 1]);
   assert.equal(f.calls[2].name, 'user');
-  assert.equal(events.filter(event => event === 'background_preempted').length, 1);
-  // The rest of the turn is refused with the same code, and the probe stays behind the person.
-  await assert.rejects(agentTurn.generate('agent retry'), { code: 'background_preempted' });
+  assert.equal(events.filter(event => event === 'background_preempted').length, 0);
+  // The probe stays behind the person.
   f.calls[2].finish(); await user;
-  agentTurn.end();
   time = 200000; f.scheduler.tick(); await turn();
   assert.equal(f.calls[3].name, 'probe');
   f.calls[3].finish(); await probe;
 });
-test('a person preempts an agent turn that is between its calls', async t => {
+test('a person waits for an agent turn that is between its calls', async t => {
   const f = fixture(t);
   const agentTurn = f.scheduler.agent.openTurn();
   const first = agentTurn.generate('agent compaction');
   f.calls[0].finish(); await first; await turn();
   const user = f.scheduler.foreground.generate('user');
   await turn();
-  assert.equal(f.calls[1].name, 'user');
-  await assert.rejects(agentTurn.generate('agent scene'), { code: 'background_preempted' });
-  f.calls[1].finish(); await user;
+  assert.equal(f.calls.length, 1);
+  const scene = agentTurn.generate('agent scene');
+  await turn();
+  assert.equal(f.calls[1].name, 'agent scene');
+  f.calls[1].finish(); await scene;
+  agentTurn.end(); await turn();
+  assert.equal(f.calls[2].name, 'user');
+  f.calls[2].finish(); await user;
 });
 test('ending a turn between its calls frees the slot at once; ending it during a call stops the call', async t => {
   const f = fixture(t);

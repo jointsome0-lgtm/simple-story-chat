@@ -75,7 +75,7 @@ export async function serveBackground({ socketPath, scheduler, status }: {
       if (req.method === 'GET' && req.url === '/status') body = { ...status(), queue: scheduler.snapshot() };
       else if (req.method === 'POST' && (req.url === '/generate' || req.url === '/agent/generate')) {
         const request = validateRequest(await jsonBody(req));
-        // An agent turn is real work with no time limit of its own; both it and a probe yield to people (local/scheduler.ts).
+        // An agent turn is real work and is not cut off by people; a probe is disposable (local/scheduler.ts).
         const agent = req.url === '/agent/generate';
         const id = req.headers['x-turn'];
         // A call for a turn that has ended or was never opened is refused: it must not continue under an old key.

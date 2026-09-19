@@ -44,8 +44,8 @@ const CHECK = { story: /^h\d+$/, branch: /^b\d+$/, checkpoint: /^c\d+$/, seed: /
 const REQUEST_ID = /^[\x21-\x7e]{1,128}$/;
 const INPUT_BYTES = 32 * 1024;
 const LABELS = texts('en').labels;
-// The bot's model queue ends an agent turn when a person calls (`background_preempted`) or its GPU is paused
-// (`background_unavailable`); the client decides whether to ask again.
+// The bot's model queue ends an agent turn only when its GPU is paused (`background_unavailable`); the client decides
+// whether to ask again. `background_preempted` is the probe's code and stays here for a bot that predates the agent queue.
 const PREEMPTED = ['background_preempted', 'background_unavailable'] as const;
 
 class Journal {

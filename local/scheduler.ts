@@ -3,7 +3,7 @@ import { ModelError } from './model-error.ts';
 import type { Controls, GenerateControls, Provider, TurnOptions } from './model.ts';
 
 // `foreground`: a person in Telegram. `agent`: a turn of the agent interface (local/agent-api.ts), real work that fills
-// the GPU while people read and yields to them. `background`: disposable probes that yield to anyone.
+// the GPU while people read and, once started, is not cut off by them. `background`: disposable probes that yield to anyone.
 type Priority = 'foreground' | 'agent' | 'background';
 // Reasons the scheduler aborts a running call with. The call rejects with the reason, whatever the provider throws.
 type AbortCode = 'cancelled' | 'background_preempted' | 'background_timeout' | 'background_unavailable';
@@ -14,7 +14,7 @@ type Slot = { signal: AbortSignal };
 // are refused with.
 type Turn = { priority: Priority; ended: AbortCode | null; idleSince: number; holder?: string; yields?: boolean };
 export type SchedulerOptions = {
-  // Agent work starts under `agentCanStart` and is stopped when a person calls or `agentCanRun` turns false.
+  // Agent work starts under `agentCanStart` and is stopped only when `agentCanRun` turns false (the GPU is paused).
   backgroundAllowed?: () => boolean; agentCanStart?: () => boolean; agentCanRun?: () => boolean;
   // Called when an agent turn takes the slot; the returned function when the turn lets it go (gpu.ts `hold`).
   holdAgentTurn?: () => () => void;
@@ -31,10 +31,11 @@ type Item<Request> = {
 
 // One inference slot. Foreground calls are FIFO; disposable background work
 // yields on the first foreground or agent call, including token counting. An agent call waits for the same quiet window
-// and yields to the first foreground call: a person never waits for an agent. It has no time limit of its own.
+// but, once started, runs to its end under the provider's own timeout: the GPU does not idle while people read, and a
+// person may wait for the rest of an agent's turn. A turn that yields (a compaction prepared ahead) ends as a whole with
+// `background_preempted` when anyone but its holder calls.
 // A turn keeps the slot from the start of its first call until it ends: nobody else's work runs between its compaction
-// steps and its scene, and another's prompt never evicts its cache. A person's turn is never cut off; an agent's turn
-// ends as a whole with `background_preempted` when a person calls. An ended turn takes no more calls.
+// steps and its scene, and another's prompt never evicts its cache. An ended turn takes no more calls.
 // Requests and results pass through unread, so their types come from the provider.
 export function createScheduler<Request, Result>(provider: {
   generate(request: Request, controls: GenerateControls & Slot): Promise<Result>;
@@ -87,13 +88,6 @@ export function createScheduler<Request, Result>(provider: {
       log(code);
     }
   }
-  // A person's call ends the agent turn that holds the slot and stops a running agent call outside a turn.
-  function preemptAgent() {
-    if (reserved?.turn.priority === 'agent') {
-      log('background_preempted');
-      endTurn(reserved.turn, 'background_preempted');
-    } else stop('agent', 'background_preempted');
-  }
   function enqueue(priority: Priority, method: Item<Request>['method'], request: Request, controls: GenerateControls = {}, turn: Turn | null = null): Promise<unknown> {
     if (turn?.ended) return Promise.reject(fail(turn.ended));
     if (closed || controls.signal?.aborted) return Promise.reject(fail('cancelled'));
@@ -102,7 +96,6 @@ export function createScheduler<Request, Result>(provider: {
     if (priority === 'foreground') lastForeground = now();
     if (priority !== 'background') stop('background', 'background_preempted');
     if (priority === 'foreground') {
-      preemptAgent();
       for (const other of [...yielding]) if (other !== turn && (!turn || other.holder !== turn.holder)) {
         log('background_preempted');
         endTurn(other, 'background_preempted');

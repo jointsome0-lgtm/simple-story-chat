@@ -44,19 +44,27 @@ test('foreground work preempts a real socket request; only synthetic background 
   assert.equal(await f.scheduler.foreground.generate('foreground'), 'user result');
   await rejection;
 });
-test('an agent request over the socket goes to the agent queue and yields to a person', async t => {
+test('an agent request over the socket goes to the agent queue and a person does not cut it off', async t => {
+  let finish: ((value: unknown) => void) | undefined;
   const calls: unknown[] = [];
   const f = await fixture(t, (req, { signal }) => {
     calls.push(req === 'foreground' ? 'foreground' : 'agent');
     if (req === 'foreground') return Promise.resolve('user result');
-    return new Promise((resolve, reject) => { signal.addEventListener('abort', () => reject(signal.reason), { once: true }); });
+    return new Promise((resolve, reject) => {
+      finish = resolve;
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    });
   });
   const agent = createBackgroundClient({ socketPath: f.socketPath, model: 'synthetic-model', timeoutMs: 2000, work: 'agent' });
   const scene = agent.generate(request);
-  while (f.scheduler.snapshot().active !== 'agent') await turn();
-  const stopped = assert.rejects(scene, { code: 'background_preempted' });
-  assert.equal(await f.scheduler.foreground.generate('foreground'), 'user result');
-  await stopped;
+  while (!finish) await turn();
+  assert.equal(f.scheduler.snapshot().active, 'agent');
+  const user = f.scheduler.foreground.generate('foreground');
+  await turn();
+  assert.deepEqual(calls, ['agent']);
+  finish({ text: 'Agent scene', finishReason: 'stop' });
+  assert.equal((await scene).text, 'Agent scene');
+  assert.equal(await user, 'user result');
   assert.deepEqual(calls, ['agent', 'foreground']);
 });
 test('disconnecting a background client cancels its request; no other process can steal a live socket', async t => {
@@ -104,18 +112,30 @@ test('an agent turn over the socket holds the slot until its control request clo
   finishes[2]('probe result'); await probe;
   await assert.rejects(agent.generate(request, { turn: turnChannel.id }), { code: 'background_unavailable' });
 });
-test('a person ends an agent turn over the socket, and its later calls are refused as preempted', async t => {
+test('a person waits for an agent turn over the socket until its control request closes', async t => {
+  const finishes: ((value: unknown) => void)[] = [];
   const f = await fixture(t, (req, { signal }) => req === 'foreground' ? Promise.resolve('user result')
-    : new Promise((resolve, reject) => { signal.addEventListener('abort', () => reject(signal.reason), { once: true }); }));
+    : new Promise((resolve, reject) => {
+      finishes.push(resolve);
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }));
   const agent = createBackgroundClient({ socketPath: f.socketPath, model: 'synthetic-model', timeoutMs: 2000, work: 'agent' });
   const turnChannel = await agent.openTurn();
-  t.after(() => turnChannel.close());
   const compaction = agent.generate(request, { turn: turnChannel.id });
-  while (f.scheduler.snapshot().active !== 'agent') await turn();
-  const stopped = assert.rejects(compaction, { code: 'background_preempted' });
-  assert.equal(await f.scheduler.foreground.generate('foreground'), 'user result');
-  await stopped;
-  await assert.rejects(agent.generate(request, { turn: turnChannel.id }), { code: 'background_preempted' });
+  while (!finishes.length) await turn();
+  let served = false;
+  const user = f.scheduler.foreground.generate('foreground').then(result => { served = true; return result; });
+  finishes[0]({ text: 'Memory', finishReason: 'stop' });
+  await compaction;
+  // Between the turn's calls the person still waits.
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(served, false);
+  const scene = agent.generate(request, { turn: turnChannel.id });
+  while (finishes.length < 2) await turn();
+  finishes[1]({ text: 'Scene', finishReason: 'stop' });
+  await scene;
+  turnChannel.close();
+  assert.equal(await user, 'user result');
 });
 test('a lost agent process ends its turn and stops its running call', async t => {
   let aborted = false;
