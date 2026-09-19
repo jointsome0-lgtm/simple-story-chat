@@ -47,8 +47,8 @@ export type Vram = { samples: number; totalMiB: number | null; usedMiBMax: numbe
 export type Report = {
   profile: string; startedAt: string; completedAt?: string; model: string; temperature: number;
   server: { slots: number | null; contextTokens: number | null }; draft: boolean;
-  bot: { slots: number; poolTokens: number; contextTokens: number; maxOutputTokens: number; quietMs: number;
-    readSeconds: number; historyTokens: number | null };
+  bot: { slots: number; poolTokens: number; sharedCache: boolean; contextTokens: number; maxOutputTokens: number;
+    quietMs: number; readSeconds: number; historyTokens: number | null };
   phases: { solo?: Phase; loaded?: Phase }; vram: Vram; error?: string;
 };
 // `unknown` when a run did not produce the number: a missing VRAM reading or a profile the comparison needs a pair for.
@@ -189,12 +189,16 @@ async function main(args: string[]) {
   const run: Report = { profile: values.profile, startedAt: new Date().toISOString(), model: config.model,
     temperature: config.temperature, draft: values.draft,
     server: { slots: server.slots ?? null, contextTokens: server.contextTokens ?? null },
-    bot: { slots: config.slots, poolTokens: config.poolTokens, contextTokens: config.contextTokens,
+    bot: { slots: config.slots, poolTokens: config.poolTokens, sharedCache: config.sharedCache,
+      contextTokens: config.contextTokens,
       maxOutputTokens: config.maxOutputTokens, quietMs: 60000, readSeconds, historyTokens: asked },
     phases: {}, vram: { samples: 0, totalMiB: null, usedMiBMax: null, freeMiBMin: null } };
   const save = () => writeFileSync(join(directory, 'report.json'), JSON.stringify(run, null, 2));
 
+  // `sharedCache` must match the server's own mode: with isolated slots nobody divides a pool, so admitting calls by
+  // size would measure a queue the running server does not have.
   const scheduler = createScheduler(provider, { slots: config.slots, poolTokens: config.poolTokens,
+    sharedCache: config.sharedCache,
     outputTokens: (request: ModelRequest) => request.maxOutputTokens,
     log: (event, code) => report({ event, ...(code ? { code } : {}) }) });
   const sampler = values['no-vram'] ? undefined : watchVram(run, save);

@@ -14,7 +14,8 @@ const phase = (over: Partial<Phase> = {}): Phase => ({ seconds: 100, tester: [ca
   usefulOutputTokens: 1000, usefulTokensPerHour: 36000, ...over });
 const make = (over: Partial<Report> = {}): Report => ({ profile: '96k-3', startedAt: '2026-09-20T18:00:00.000Z',
   model: 'synthetic', temperature: 0.8, draft: false, server: { slots: 3, contextTokens: 98304 },
-  bot: { slots: 3, poolTokens: 98304, contextTokens: 65536, maxOutputTokens: 4096, quietMs: 60000, readSeconds: 30, historyTokens: null },
+  bot: { slots: 3, poolTokens: 98304, sharedCache: true, contextTokens: 65536, maxOutputTokens: 4096,
+    quietMs: 60000, readSeconds: 30, historyTokens: null },
   phases: { solo: phase(), loaded: phase({ usefulTokensPerHour: 90000 }) },
   vram: { samples: 3, totalMiB: 32768, usedMiBMax: 30000, freeMiBMin: 2768 }, ...over });
 const of = (run: Report, id: number) => verdictOf(run).find(check => check.id === id)!;
