@@ -6,7 +6,9 @@ import { createChat } from './telegram.ts';
 import type { Chat, InlineKeyboard, Screen, TelegramApi } from './telegram.ts';
 import { continueInput, contextStats } from './context.ts';
 import type { ContextSelection, ContextStats } from './context.ts';
-import { compactBranch } from './generation.ts';
+import { compactBranch, compactionThreshold } from './generation.ts';
+import type { Prepared } from './prepare.ts';
+import { createPrepared } from './prepare.ts';
 import { beginTurn, inTurn, runTurn } from './turn.ts';
 import { messageText, seedInput } from './incoming.ts';
 import type { IncomingMessage } from './incoming.ts';
@@ -18,7 +20,7 @@ import type { CompactionStatus } from './compact-view.ts';
 import type { GpuController } from './gpu.ts';
 import type { Log } from './model-error.ts';
 import { errorCode, member, safeErrorDetails } from './model-error.ts';
-import type { Provider } from './model.ts';
+import type { GenerationResult, Provider } from './model.ts';
 import type { Store } from './store.ts';
 import type { GpuInfo, ModelInfo, RenderDetails } from './ui.ts';
 import { isRegistered, langFromTelegram, texts } from './text.ts';
@@ -60,6 +62,9 @@ const errorText = (t: Messages, error: UserError) =>
 export function createBot({ store, api, provider, gpu, readSeedFile, render: renderUi, scenePrefix = () => '', sceneKeyboard, allowedUsers, ownerId = '', maxOutputTokens,
   contextTokens = 65536, compactAtTokens = 54000, keepScenes = 4, memoryMode = 'plain', repairCoverage = false, model = 'unknown', providerName = 'claude-code', log = () => {} }: BotOptions) {
   const running = new Map<string, Running>();
+  const prepared = new Map<string, Prepared>();
+  const preparing = new Set<Promise<void>>();
+  const preparedFor = (userId: string) => prepared.get(userId) ?? prepared.set(userId, createPrepared()).get(userId)!;
   const modelInfo: Required<ModelInfo> = { provider: providerName, model, status: 'configured', checkedAt: null };
   // The GPU snapshot must provide every field the renderer reads.
   const render = (state: Library, route: string, details: RenderDetails = {}) =>
@@ -225,8 +230,27 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
     return { job };
   }
 
+  // Prepares the compaction of this person's active branch while they read (local/prepare.ts). Their own work: it keeps
+  // the GPU like a job, and runs only on a GPU that is already up.
+  function prepareNext(userId: string) {
+    const log = logFor(userId);
+    let release: (() => void) | undefined;
+    try {
+      if (gpu && gpu.snapshot().status !== 'ready') return;
+      release = gpu?.acquire();
+    } catch { return; }
+    const started = Date.now();
+    log('compaction_prepare_started');
+    const done = preparedFor(userId).run(store.read(userId), provider, contextConfig)
+      .then(() => log('compaction_prepare_finished', undefined, { elapsedMs: Date.now() - started }),
+        error => log('compaction_prepare_failed', errorCode(error), { elapsedMs: Date.now() - started }))
+      .finally(() => { release?.(); preparing.delete(done); });
+    preparing.add(done);
+  }
+
   async function generate(userId: string, chat: Chat, job: Job, controller: AbortController, releaseGpu: (() => void) | undefined) {
     const log = logFor(userId);
+    let prepare = false;
     // The language at the start of the job serves its status message and the labels it stores; later messages read it again.
     const language = store.read(userId).language;
     const labels = texts(language).labels;
@@ -261,7 +285,7 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
       if (job.kind === 'compact') {
         // compactBranch writes the log rows of a compaction, manual or automatic, with its sizes and counts.
         const result = await inTurn(provider, provider => compactBranch({ store, userId, jobId: job.id, provider,
-          config: contextConfig, signal: controller.signal, onProgress, log, labels }));
+          config: contextConfig, signal: controller.signal, prepared: preparedFor(userId), onProgress, log, labels }));
         const completed = store.mutate(userId, state => {
           if (controller.signal.aborted || !jobTarget(state, job.id)) return false;
           state.job = null;
@@ -272,7 +296,9 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
         if (!await progress.finish()) await safeSend(chat, renderCompaction({ ...compactionStatus, stage: 'done', ...result }, language), log);
         return;
       }
-      const outcome = await runTurn({ store, userId, job, provider, config: contextConfig, signal: controller.signal, onProgress, log, labels,
+      let usage: GenerationResult['usage'];
+      const outcome = await runTurn({ store, userId, job, provider, config: contextConfig, signal: controller.signal,
+        prepared: preparedFor(userId), onProgress, log, labels,
         preview: (state, current, request) => {
           const measured = stats(state);
           // generateScene sets the estimate before it asks for a preview.
@@ -280,6 +306,7 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
           return chat.preview(current.id, scenePrefix(measured, modelInfo, state.language));
         },
         onGenerated: result => {
+          usage = result.usage;
           modelResponded();
           if (result.streamResultMismatch) log('model_result_differs_from_stream');
         },
@@ -287,6 +314,8 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
       if (outcome.status === 'gone') return;
       if (outcome.status === 'failed') { await reportFailure(outcome.error); return; }
       const ref = outcome.ref;
+      // The next request carries this one's input, its scene and the person's action, so from here it compacts first.
+      prepare = (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0) >= compactionThreshold(contextConfig);
       const snapshot = store.read(userId);
       const node = snapshot.stories[ref.storyId].nodes[ref.nodeId];
       try {
@@ -316,6 +345,7 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
     } finally {
       await progress.finish();
       releaseGpu?.();
+      if (prepare && !controller.signal.aborted) prepareNext(userId);
     }
   }
 
@@ -417,8 +447,9 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
         });
       }
     },
-    async idle() { await Promise.all([...running.values()].map(entry => entry.promise)); },
+    async idle() { await Promise.all([...[...running.values()].map(entry => entry.promise), ...preparing]); },
     async stop() {
+      for (const entry of prepared.values()) entry.stop();
       for (const entry of running.values()) entry.controller.abort();
       await this.idle();
     },

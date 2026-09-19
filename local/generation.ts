@@ -10,12 +10,16 @@ import type { GenerateControls, GenerationResult, ModelRequest, Provider } from 
 import { summaryRequest, supplementRequest, parseMemory, inspectMemory } from './memory.ts';
 import { seedLanguage } from './story-text.ts';
 import type { Store } from './store.ts';
+import type { Prepared } from './prepare.ts';
 
 // Only the configuration fields generation reads; the bot and probes pass their full configuration.
 export type GenerationConfig = ContextConfig & { memoryMode?: 'plain' | 'sgr'; repairCoverage?: boolean };
 // Compaction does not read the model or provider name.
 type CompactionConfig = Omit<GenerationConfig, 'model' | 'provider'>;
-type Operation<Config = GenerationConfig> = { store: Store; userId: string; jobId: string; provider: Provider; config: Config; signal?: AbortSignal };
+// `prepared`: extraction results computed ahead (local/prepare.ts), taken for an identical request.
+type Operation<Config = GenerationConfig> = {
+  store: Store; userId: string; jobId: string; provider: Provider; config: Config; signal?: AbortSignal; prepared?: Prepared;
+};
 type Report = (status: CompactionStatus) => void;
 // Checkpoint labels a compaction writes into the library. The bot passes them in the user's interface language;
 // probes and the eval keep the Russian defaults.
@@ -27,6 +31,20 @@ type Numbers = Required<Pick<ErrorDetails, 'sceneCount' | 'repairSceneCount' | '
 type RecordEvent = (event: string, details?: ErrorDetails) => void;
 // Thrown values are not checked: ModelError carries these fields, other errors lack them.
 type Failure = { operation?: string; code?: string | number; memoryReason?: string };
+
+// The input size from which a scene request compacts the branch first.
+export const compactionThreshold = (config: ContextConfig) => Math.min(config.compactAtTokens ?? 54000, config.contextTokens - config.maxOutputTokens);
+
+// A promise that rejects with `cancelled` as soon as the signal aborts, whether or not the promise settles.
+function until<T>(promise: Promise<T>, signal: AbortSignal | undefined) {
+  if (!signal) return promise;
+  return new Promise<T>((resolve, reject) => {
+    const stop = () => reject(new ModelError('cancelled'));
+    if (signal.aborted) return stop();
+    signal.addEventListener('abort', stop, { once: true });
+    promise.then(value => { signal.removeEventListener('abort', stop); resolve(value); }, reject);
+  });
+}
 
 // Both automatic and explicit compaction use the same persisted job lock.
 function loadTarget(store: Store, userId: string, jobId: string, signal: AbortSignal | undefined) {
@@ -59,7 +77,7 @@ export async function compactBranch(options: Operation<CompactionConfig> & { onP
   }
 }
 
-async function extractAndSave({ store, userId, jobId, provider, config, signal, report, numbers, record, labels = LABELS }: Operation<CompactionConfig> & {
+async function extractAndSave({ store, userId, jobId, provider, config, signal, prepared, report, numbers, record, labels = LABELS }: Operation<CompactionConfig> & {
   report: Report; numbers: Numbers; record: RecordEvent; labels?: CompactionLabels;
 }) {
   const load = () => loadTarget(store, userId, jobId, signal);
@@ -78,6 +96,14 @@ async function extractAndSave({ store, userId, jobId, provider, config, signal, 
       // One row before each model request and one after it. A request that fails has its row written by the caller.
       record('compaction_request_started');
       progress('extracting');
+      // A result prepared while the person read; if its run failed, the model is asked now.
+      const ahead = prepared?.take(request);
+      const early = ahead && await until(ahead.catch(() => null), signal);
+      if (early) {
+        numbers.outputCharacters = early.text.length;
+        record('compaction_request_prepared', { inputTokens: early.usage?.inputTokens ?? undefined, outputTokens: early.usage?.outputTokens ?? undefined });
+        return early;
+      }
       const asked = Date.now();
       let waitMs: number | undefined;
       const result = await provider.generate(request, { signal,
@@ -161,7 +187,7 @@ function combinedUsage(first: Usage | null | undefined, second: Usage | null | u
 }
 
 // A cancelled or replaced job cannot commit a late scene or memory increment.
-export async function generateScene({ store, userId, jobId, provider, config, signal, preview = () => async () => {}, onProgress, log, labels }: Operation & {
+export async function generateScene({ store, userId, jobId, provider, config, signal, prepared, preview = () => async () => {}, onProgress, log, labels }: Operation & {
   preview?: (state: Library, job: Job, request: ModelRequest) => GenerateControls['onText']; onProgress?: Report; log?: Log; labels?: CompactionLabels;
 }) {
   const load = () => loadTarget(store, userId, jobId, signal);
@@ -170,13 +196,14 @@ export async function generateScene({ store, userId, jobId, provider, config, si
     request.estimatedInputTokens = estimateRequest(target.state, target.job, request, config).tokens;
     return request;
   };
+  prepared?.keep(load().job);
   for (let pass = 0; pass <= 4; pass++) {
     const target = load();
     const request = storyRequest(target);
     const counting = Date.now();
     if (provider.countInput) request.estimatedInputTokens = await provider.countInput(request, { signal });
     const countMs = provider.countInput ? Date.now() - counting : undefined;
-    const threshold = Math.min(config.compactAtTokens ?? 54000, config.contextTokens - config.maxOutputTokens);
+    const threshold = compactionThreshold(config);
     // storyRequest has set the estimate.
     if (request.estimatedInputTokens! < threshold) {
       try {
@@ -199,7 +226,7 @@ export async function generateScene({ store, userId, jobId, provider, config, si
       }
     }
     if (pass === 4) throw new ModelError('context_limit');
-    try { await compactBranch({ store, userId, jobId, provider, config, signal, onProgress, log, labels, automatic: true }); }
+    try { await compactBranch({ store, userId, jobId, provider, config, signal, prepared, onProgress, log, labels, automatic: true }); }
     catch (error) {
       if (errorCode(error) === 'nothing_to_compact') throw new ModelError('context_limit');
       throw error;

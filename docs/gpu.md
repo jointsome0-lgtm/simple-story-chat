@@ -167,7 +167,8 @@ Manual and automatic compaction write the same events:
 | Event | When |
 | --- | --- |
 | `compaction_request_started` | Before every request to the model. This is an extraction, a retry with half of the scenes after `context_limit`, or a repair request for missed scenes. |
-| `compaction_request_completed` | The model answered. The row has the `inputTokens` and `outputTokens` of this request. |
+| `compaction_request_completed` | The model answered. The row has the `inputTokens` and `outputTokens` of this request, `waitMs` in the queue and llama-server's timings (below). |
+| `compaction_request_prepared` | Instead of `completed`: the answer was prepared while the person read (below). |
 | `memory_compacted` | The memory is saved. The row has `factCount`, `inputBytesBefore` and `inputBytesAfter`. |
 
 Earlier a successful automatic compaction left no row in the log. A failure still writes one `generation_failed` row with `operation: compact`, and now it has the same numbers.
@@ -178,6 +179,14 @@ Earlier a successful automatic compaction left no row in the log. A failure stil
 - `requestBytes` contains the size of the request to the model in bytes.
 - `outputCharacters` shows how many characters of the answer had arrived when the row was written.
 - `elapsedMs` is counted from the start of the compaction. The duration of one request equals the time difference between its `started` and `completed` rows.
+
+### Where the time of a request goes
+
+`compaction_request_completed` and `scene_request_completed` carry numbers only: `waitMs` in the model queue, `countMs` spent counting the scene's tokens (scene rows), `elapsedMs` of the scene request, and llama-server's own timings from the last stream chunk: `cacheTokens` taken from the cache, `promptTokens` and `promptMs` of the prefill, `predictedTokens` and `predictedMs` of the decoding, `draftTokens` and `draftAcceptedTokens` with speculative decoding. A hosted provider sends no timings.
+
+### Compaction prepared while the person reads
+
+The extraction a compaction sends depends only on the branch, not on the person's next action. So when a scene's input and output together reach the compaction threshold, the bot asks the model for the next turn's extraction (and repair, if scenes are missed) right after sending the scene, while the person reads (`local/prepare.ts`). Nothing is saved then: the next turn takes a prepared answer only for an identical request and checks and saves it as usual, so a changed branch simply asks the model again. The rows are `compaction_prepare_started` and `compaction_prepare_finished` / `compaction_prepare_failed` with `elapsedMs`. The run is the person's own work: it holds the GPU like a job, runs only on a GPU that is ready, and a turn from another branch point stops it. A run still waiting in the queue when the turn arrives is stopped; a started one is awaited. The answers stay in the bot's memory, never on disk.
 - `inputBytesBefore` and `inputBytesAfter` contain the size of the request for the next scene before and after compaction. The `memory_not_smaller` error comes with them too.
 
 The failure row tells where the request broke. `provider_failed` with `outputCharacters: 0` means that the connection was lost before the first character of the answer, while the server processed the input. A non-zero value means a break in the middle of the answer. `memoryReason: coverage` comes with `sceneCount` and `missingCount`, that is, with the number of requested and missed scenes. If `repairSceneCount` is greater than zero in that row, it was the repair request that failed, and `sceneCount` counts only its scenes.
