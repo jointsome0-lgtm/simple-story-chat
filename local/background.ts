@@ -139,15 +139,19 @@ export function createBackgroundClient({ socketPath, model, timeoutMs = 600000, 
       if (state.model !== model) throw new ModelError('unexpected_model');
       return state;
     },
-    // Opens an agent turn: the bot keeps its model slot for the turn's calls until `close` (local/scheduler.ts).
-    openTurn: () => new Promise<{ id: string; close(): void }>((resolve, reject) => {
-      const req = http.request({ socketPath, path: '/agent/turn', method: 'POST' }, res => {
+    // Opens an agent turn: the bot keeps its model slot for the turn's calls until `close` (local/scheduler.ts). The
+    // turn's signal also closes it; the bot must answer within `openMs`.
+    openTurn: (signal?: AbortSignal, openMs = 10_000) => new Promise<{ id: string; close(): void }>((resolve, reject) => {
+      if (signal?.aborted) { reject(new ModelError('cancelled')); return; }
+      const req = http.request({ socketPath, path: '/agent/turn', method: 'POST', signal }, res => {
+        clearTimeout(timer);
         res.on('error', () => {});
         const id = res.headers['x-turn'];
         if (res.statusCode !== 200 || typeof id !== 'string') { req.destroy(); reject(new ModelError('background_unavailable')); return; }
         resolve({ id, close: () => req.destroy() });
       });
-      req.once('error', () => reject(new ModelError('background_unavailable')));
+      const timer = setTimeout(() => req.destroy(), openMs);
+      req.once('error', () => { clearTimeout(timer); reject(new ModelError(signal?.aborted ? 'cancelled' : 'background_unavailable')); });
       req.end();
     }),
     // `turn` is the id from openTurn. The input limit goes with the call, so the model server refuses an input over it

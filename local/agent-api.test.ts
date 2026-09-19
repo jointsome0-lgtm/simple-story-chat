@@ -6,6 +6,8 @@ import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Store } from './store.ts';
+import { createScheduler } from './scheduler.ts';
+import { serveBackground } from './background.ts';
 import { agentProvider, createAgentApi } from './agent-api.ts';
 import type { AgentApi, AgentOptions, AgentResponse } from './agent-api.ts';
 import { loadAgentConfig } from './config.ts';
@@ -359,4 +361,48 @@ test('a clean stop ends a running turn as interrupted, and the next process star
 test('a compaction stage passes the log whitelist only as a known value', () => {
   assert.deepEqual(safeErrorDetails({ actor: 'agent', stage: 'extracting' }), { actor: 'agent', stage: 'extracting' });
   assert.deepEqual(safeErrorDetails({ stage: 'a line of the story' }), {});
+});
+
+// A llama.cpp connection to a closed local port: a direct call, if one were made, would fail without reaching a model.
+function queueFixture(t: TestContext) {
+  const directory = mkdtempSync(join(tmpdir(), 'simple-chat-agent-turn-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const config = loadAgentConfig(directory, { SIMPLE_CHAT_PROVIDER: 'llama-cpp', SIMPLE_CHAT_BASE_URL: 'http://127.0.0.1:9' });
+  mkdirSync(dirname(config.modelSocket), { recursive: true });
+  return config;
+}
+const synthetic: ModelRequest = { system: 's', messages: [{ role: 'user', content: 'u' }], maxOutputTokens: 16, estimatedInputTokens: 7 };
+
+test('a turn that began in the bot queue ends when the queue goes away and never goes on directly', async t => {
+  const config = queueFixture(t);
+  const scheduler = createScheduler({ generate: async () => ({ text: 'queued scene', finishReason: 'stop' }) }, { quietMs: 0 });
+  t.after(() => scheduler.close());
+  const server = await serveBackground({ socketPath: config.modelSocket, scheduler,
+    status: () => ({ model: config.model, gpu: { status: 'ready' } }) });
+  const { provider } = await agentProvider(config);
+  const turn = provider.openTurn!();
+  assert.equal((await turn.generate(synthetic)).text, 'queued scene');
+  await server.close();
+  await assert.rejects(turn.generate(synthetic), { code: 'background_unavailable' });
+  await assert.rejects(turn.countInput!(synthetic), { code: 'background_unavailable' });
+  turn.end();
+  await assert.rejects(turn.generate(synthetic), { code: 'cancelled' });
+});
+
+test('cancelling a turn while its control request opens settles at once', async t => {
+  const config = queueFixture(t);
+  // A bot that answers its status but never its turn request.
+  const server = http.createServer((req, res) => {
+    if (req.url === '/status') { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ model: config.model, gpu: { status: 'ready' } })); }
+  });
+  await new Promise<void>(resolve => server.listen(config.modelSocket, resolve));
+  t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
+  const { provider } = await agentProvider(config);
+  const turn = provider.openTurn!();
+  const controller = new AbortController();
+  const pending = turn.generate(synthetic, { signal: controller.signal });
+  await new Promise(resolve => setTimeout(resolve, 50));
+  controller.abort();
+  await assert.rejects(pending, { code: 'cancelled' });
+  turn.end();
 });

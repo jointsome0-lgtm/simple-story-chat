@@ -395,21 +395,32 @@ export async function agentProvider(config: AgentConfig): Promise<{ provider: Pr
     return live ? client : null;
   }
   type Client = NonNullable<Awaited<ReturnType<typeof queue>>>;
-  // A turn opens its control request on its first queued call and holds the bot's slot until `end` closes it.
-  type Turn = { started: () => boolean; open: (client: Client) => Promise<string> };
+  // A turn keeps the route of its first call: a turn that began in the bot's queue ends if the queue goes away, and never
+  // goes on as a new direct request; one that began directly stays direct. It opens its control request on its first
+  // queued call and holds the bot's slot until `end` closes it.
+  type Turn = { ended: () => boolean; route: 'queue' | 'direct' | null; started: () => boolean;
+    open: (client: Client, signal?: AbortSignal) => Promise<string> };
+  async function route(turn?: Turn) {
+    if (turn?.ended()) throw new ModelError('cancelled');
+    if (turn?.route === 'direct') return null;
+    const client = await queue();
+    if (turn?.route === 'queue' && !client) throw new ModelError('background_unavailable');
+    if (turn) turn.route = client ? 'queue' : 'direct';
+    return client;
+  }
   const calls = (turn?: Turn): Provider => ({
     async generate(request, controls = {}) {
-      const client = await queue();
+      const client = await route(turn);
       if (!client) return directModel().generate(request, controls);
       // Agent work never wakes a stopped GPU and must not wait in the queue for one. A turn that holds the slot keeps
       // the GPU through a pause, which the bot then reports as draining.
       const state = await client.check(controls) as { gpu?: { status?: unknown } };
       if (state.gpu?.status !== 'ready' && !(turn?.started() && state.gpu?.status === 'draining')) throw new ModelError('gpu_not_ready');
-      return client.generate(request, { ...controls, turn: turn && await turn.open(client) });
+      return client.generate(request, { ...controls, turn: turn && await turn.open(client, controls.signal) });
     },
     // The queue does not count input; the estimate the request already carries stands in for it.
     async countInput(request, controls) {
-      const model = (await queue()) ? null : directModel();
+      const model = (await route(turn)) ? null : directModel();
       return model?.countInput ? model.countInput(request, controls) : request.estimatedInputTokens ?? requestBudget(request, config.contextTokens).inputTokens;
     },
   });
@@ -418,10 +429,11 @@ export async function agentProvider(config: AgentConfig): Promise<{ provider: Pr
       let channel: ReturnType<Client['openTurn']> | undefined;
       let ended = false;
       const turn: Turn = {
+        ended: () => ended, route: null,
         started: () => channel !== undefined,
-        async open(client) {
+        async open(client, signal) {
           if (ended) throw new ModelError('cancelled');
-          channel ??= client.openTurn();
+          channel ??= client.openTurn(signal);
           return (await channel).id;
         },
       };

@@ -2,6 +2,7 @@ import test from 'node:test';
 import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, statSync, rmSync } from 'node:fs';
+import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createScheduler } from './scheduler.ts';
@@ -134,4 +135,16 @@ test('the input limit of an agent call reaches the model through the socket', as
   const agent = createBackgroundClient({ socketPath: f.socketPath, model: 'synthetic-model', timeoutMs: 2000, work: 'agent' });
   await agent.generate(request, { inputLimitTokens: 43999 });
   assert.equal(limit, 43999);
+});
+test('opening an agent turn gives up when the bot does not answer in time', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'simple-chat-silent-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const socketPath = join(directory, 'model.sock');
+  // Accepts the connection and never answers.
+  const sockets = new Set<net.Socket>();
+  const silent = net.createServer(socket => { sockets.add(socket); });
+  await new Promise<void>(resolve => silent.listen(socketPath, resolve));
+  t.after(() => { for (const socket of sockets) socket.destroy(); return new Promise(resolve => silent.close(resolve)); });
+  const agent = createBackgroundClient({ socketPath, model: 'synthetic-model', work: 'agent' });
+  await assert.rejects(agent.openTurn(undefined, 100), { code: 'background_unavailable' });
 });
