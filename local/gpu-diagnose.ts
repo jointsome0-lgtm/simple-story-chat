@@ -36,7 +36,7 @@ export type Remote = {
   sockets: { established?: number; synRecv?: number; closeWait?: number; listen?: number };
   processes: { llamaServer: { pid?: number; ageSeconds?: number; state?: string }[];
     sshd: { sessions?: number; unauthenticated?: number; startups?: number; dropFrom?: number; dropAllAt?: number } };
-  gpus: { memoryUsedMiB?: number; memoryTotalMiB?: number; utilizationPercent?: number; temperatureC?: number }[];
+  gpus: { memoryUsedMiB?: number; memoryFreeMiB?: number; memoryTotalMiB?: number; utilizationPercent?: number; temperatureC?: number }[];
   machine: { load1?: number; cpus?: number; memoryAvailableMiB?: number };
   // `pressure.scope` is `machine` when the kernel offers the numbers only for the whole machine, other tenants included.
   container: { throttledPeriods?: number; throttledSeconds?: number; memoryMiB?: number; memoryLimitMiB?: number;
@@ -99,7 +99,8 @@ export function remoteOf(value: unknown): Remote {
         ({ pid: count(server.pid), ageSeconds: count(server.ageSeconds), state: text(server.state, /^[A-Za-z]$/) })),
       sshd: { sessions: count(sshd.sessions), unauthenticated: count(sshd.unauthenticated), startups: count(sshd.startups),
         dropFrom: count(sshd.dropFrom), dropAllAt: count(sshd.dropAllAt) } },
-    gpus: list(report.gpus).slice(0, 16).map(fields).map(gpu => ({ memoryUsedMiB: count(gpu.memoryUsedMiB), memoryTotalMiB: count(gpu.memoryTotalMiB),
+    gpus: list(report.gpus).slice(0, 16).map(fields).map(gpu => ({ memoryUsedMiB: count(gpu.memoryUsedMiB),
+      memoryFreeMiB: count(gpu.memoryFreeMiB), memoryTotalMiB: count(gpu.memoryTotalMiB),
       utilizationPercent: count(gpu.utilizationPercent), temperatureC: count(gpu.temperatureC) })),
     machine: { load1: amount(machine.load1), cpus: count(machine.cpus), memoryAvailableMiB: count(machine.memoryAvailableMiB) },
     container: { throttledPeriods: count(container.throttledPeriods), throttledSeconds: count(container.throttledSeconds),

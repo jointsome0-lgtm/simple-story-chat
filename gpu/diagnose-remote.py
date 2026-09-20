@@ -149,8 +149,11 @@ def processes():
 
 def gpus():
     """One entry per GPU. A value the driver does not report, printed as [N/A], is left out."""
-    keys = ('memoryUsedMiB', 'memoryTotalMiB', 'utilizationPercent', 'temperatureC')
-    result = subprocess.run(['nvidia-smi', '--query-gpu=memory.used,memory.total,utilization.gpu,temperature.gpu',
+    # memory.free is asked for rather than derived: in this output the driver's own reserve is a third number beside
+    # used and total, so total minus used overstates what is left by that reserve. On the measured 5090 the reserve is
+    # 498 MiB, and the headroom threshold is 1024 - large enough to turn a fail into a pass.
+    keys = ('memoryUsedMiB', 'memoryFreeMiB', 'memoryTotalMiB', 'utilizationPercent', 'temperatureC')
+    result = subprocess.run(['nvidia-smi', '--query-gpu=memory.used,memory.free,memory.total,utilization.gpu,temperature.gpu',
                              '--format=csv,noheader,nounits'], capture_output=True, text=True, timeout=5)
     cards = []
     for line in result.stdout.strip().splitlines()[:16]:

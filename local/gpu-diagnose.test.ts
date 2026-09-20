@@ -20,7 +20,8 @@ const remote = (models: object = { httpStatus: 200, seconds: 0.01, modelId: 'syn
   sockets: { established: 3, synRecv: 0, closeWait: 1, listen: 1 },
   processes: { llamaServer: [{ pid: 108, ageSeconds: 5321, state: 'S', cmdline: 'PRIVATE_ARGUMENTS' }],
     sshd: { sessions: 2, unauthenticated: 4, startups: 4, dropFrom: 10, dropAllAt: 100 } },
-  gpus: [{ memoryUsedMiB: 28394, memoryTotalMiB: 32607, utilizationPercent: 97, temperatureC: 61, name: 'PRIVATE_NAME' }, { memoryUsedMiB: 1000 }],
+  // The free memory is its own number here, not total minus used: the driver's reserve is counted in neither.
+  gpus: [{ memoryUsedMiB: 28394, memoryFreeMiB: 3715, memoryTotalMiB: 32607, utilizationPercent: 97, temperatureC: 61, name: 'PRIVATE_NAME' }, { memoryUsedMiB: 1000 }],
   machine: { load1: 1.5, cpus: 16, memoryAvailableMiB: 50000, kernel: 'PRIVATE_KERNEL' },
   container: { throttledPeriods: 12, throttledSeconds: 3, memoryMiB: 30000, memoryLimitMiB: 64000, pressure: { scope: 'machine', cpu: 41.5, io: 0, memory: 'PRIVATE' } },
   serverEvents: { mode: '0o600', total: 3, rows: [
@@ -67,7 +68,7 @@ test('a snapshot compares the forwarded port with the server loopback and keeps 
   assert.deepEqual(report.remote!.processes, { llamaServer: [{ pid: 108, ageSeconds: 5321, state: 'S' }],
     sshd: { sessions: 2, unauthenticated: 4, startups: 4, dropFrom: 10, dropAllAt: 100 } });
   assert.deepEqual([report.remote!.failed, report.remote!.http.models.modelId], [['gpus'], 'synthetic-model']);
-  assert.deepEqual(JSON.parse(JSON.stringify(report.remote!.gpus)), [{ memoryUsedMiB: 28394, memoryTotalMiB: 32607, utilizationPercent: 97, temperatureC: 61 }, { memoryUsedMiB: 1000 }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(report.remote!.gpus)), [{ memoryUsedMiB: 28394, memoryFreeMiB: 3715, memoryTotalMiB: 32607, utilizationPercent: 97, temperatureC: 61 }, { memoryUsedMiB: 1000 }]);
   assert.deepEqual(report.remote!.http.props, { httpStatus: 200, failure: undefined, seconds: 0.01, contextTokens: 65536, slots: 1 });
   assert.deepEqual(JSON.parse(JSON.stringify([report.remote!.machine, report.remote!.container])), [{ load1: 1.5, cpus: 16, memoryAvailableMiB: 50000 },
     { throttledPeriods: 12, throttledSeconds: 3, memoryMiB: 30000, memoryLimitMiB: 64000, pressure: { scope: 'machine', cpu: 41.5, io: 0 } }]);
