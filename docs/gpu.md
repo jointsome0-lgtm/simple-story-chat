@@ -18,6 +18,19 @@ The configuration of the parent model has 60 layers: 50 with a local window of 1
 
 With microbatch 128, Q4 used about 22206 MiB of VRAM and Q6 used 28394 MiB; Q6 had about 4213 MiB left. For an input of 59097 tokens the first text arrived after 33.8 s on Q4 and 38.4 s on Q6. The repeated request used 59093 cached tokens and gave the first text after 5.1 and 4.4 s respectively. These are single measurements, not a guaranteed speed. The long probe found a violation of the instruction about the fixed scene time on the repeated request; the whole run cannot be counted as free of errors.
 
+## Renting
+
+[rent.mjs](../gpu/rent.mjs) takes one offer that matches the paragraph above. It exists because an offer id on Vast lives only a few minutes: a price read out of a list, agreed to, and then used is a price for an offer that no longer exists, so the script searches live and tries its candidates in order until one is taken. `SIMPLE_CHAT_VAST_API_KEY` comes from the environment and is never printed; the public key named in the script is installed by [trial-onstart.sh](../gpu/trial-onstart.sh), which also arms a three-hour guard that deletes the instance.
+
+Run it dry first. That names the offers it would take at their present prices, which is the thing worth agreeing to, and it spends nothing.
+
+```sh
+SIMPLE_CHAT_RENT_DRY_RUN=1 node --env-file-if-exists=.env.gpu gpu/rent.mjs
+node --env-file-if-exists=.env.gpu gpu/rent.mjs
+```
+
+Offers are sorted by `hour * 0.75 + download`, the cost of a 45-minute session, with the measured host first. Offers with fewer than two direct ports are dropped and the count of them is reported: an offer with no ports can only be reached through Vast's proxy. That rule has never yet excluded anything — every 5090 within this price has had ports — so treat it as a guard, not as an explanation of any failure.
+
 ## Preparing the server
 
 After you create the instance, take the address, the SSH port and the user from Vast. Add a local entry to `~/.ssh/config`; the values below are a sample:
