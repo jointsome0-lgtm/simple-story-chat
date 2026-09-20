@@ -89,6 +89,22 @@ if [[ "${SIMPLE_CHAT_GPU_DRAFT:-false}" = true && ! -f "$draft_path" ]]; then
   draft_pid=$!
 fi
 source_dir="$gpu_dir/llama.cpp"
+# The verified CUDA image ships a gcc whose cc1 cannot start: libisl.so.23 is absent, so every compilation fails and
+# CMake reports only that the C compiler "is not able to compile a simple test program". Repairing it by hand has now
+# cost two rentals, so test the compiler first and reinstall the packages that carry the missing libraries. A working
+# image skips this in the time of one empty compile.
+printf 'int main(void){return 0;}\n' > "$gpu_dir/.cc-probe.c"
+if ! cc "$gpu_dir/.cc-probe.c" -o "$gpu_dir/.cc-probe" 2>/dev/null; then
+  echo 'The C compiler is broken; reinstalling the toolchain packages.'
+  DEBIAN_FRONTEND=noninteractive apt-get update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --reinstall -qq \
+    libisl23 libmpc3 libmpfr6 libgmp10 gcc-13 g++-13 build-essential
+  cc "$gpu_dir/.cc-probe.c" -o "$gpu_dir/.cc-probe" \
+    || { echo 'The C compiler is still broken after the reinstall.' >&2; exit 1; }
+  # A configure that already failed leaves a cache saying so, and CMake trusts it over the repaired compiler.
+  rm -rf "$source_dir/build"
+fi
+rm -f "$gpu_dir/.cc-probe.c" "$gpu_dir/.cc-probe"
 if [[ ! -d "$source_dir/.git" ]]; then
   git init -q "$source_dir"
   git -C "$source_dir" remote add origin https://github.com/ggml-org/llama.cpp.git
