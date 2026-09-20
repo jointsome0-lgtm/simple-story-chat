@@ -21,6 +21,7 @@ logs/
 *.db-*
 
 # Dependencies and generated reports
+__pycache__/
 node_modules/
 coverage/
 measurements/
