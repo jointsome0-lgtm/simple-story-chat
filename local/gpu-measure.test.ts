@@ -114,3 +114,32 @@ test('when the pool and the draft model do not fit together, the pool is kept', 
   assert.equal(decision.pool.take, '96k-3');
   assert.equal(decision.pool.note, 'take the pool without the draft model');
 });
+
+test('a configuration whose server never started answers threshold 7 instead of leaving it unmeasured', () => {
+  const plain = make({ profile: '96k-3' });
+  // The measured 5090 case: the pool with the draft model asked for more memory than the card had, and llama-server
+  // died with out_of_memory twelve seconds after each start. No phase ever ran, so only the error is there to read.
+  const refused = make({ profile: '96k-3-mtp', draft: true, error: 'gpu_server_unreachable',
+    phases: {}, vram: { samples: 0, totalMiB: null, usedMiBMax: null, freeMiBMin: null } });
+  const decision = decide([plain, refused]);
+  assert.equal(decision.together.verdict, 'fail');
+  assert.equal(decision.together.measured, 'the server did not start (gpu_server_unreachable)');
+  assert.equal(decision.pool.take, '96k-3');
+  assert.equal(decision.pool.note, 'take the pool without the draft model');
+});
+
+test('a draft run that never started does not stand in for one that was measured', () => {
+  // Both draft profiles are in the same directory, and the one that crashed sorts first. Check 6 is about how fast
+  // the card writes with a draft model, and only the single slot ever answered that.
+  const refused = make({ profile: '96k-3-mtp', draft: true, error: 'gpu_server_unreachable',
+    phases: {}, vram: { samples: 0, totalMiB: null, usedMiBMax: null, freeMiBMin: null } });
+  const one = make({ profile: '96k-1', bot: { ...make().bot, slots: 1 } });
+  const oneWithDraft = make({ profile: '96k-1-mtp', draft: true, bot: { ...make().bot, slots: 1 },
+    phases: { solo: phase({ tester: [call({ timings: { cacheTokens: 39990, promptTokens: 10, promptMs: 100,
+      predictedTokens: 500, predictedMs: 5000 } })] }), loaded: phase() } });
+  const decision = decide([refused, one, oneWithDraft, make({ profile: '96k-3' })]);
+  assert.equal(decision.draft.verdict, 'pass');
+  assert.equal(decision.draft.measured, '2x');
+  // And the crash still answers threshold 7, rather than being quietly dropped along with its speed.
+  assert.equal(decision.together.verdict, 'fail');
+});

@@ -142,8 +142,11 @@ export function decide(runs: Report[]): Decision {
 
   // The draft model: the same slot count with and without it, on the tester's own scenes.
   const withDraft = runs.filter(run => run.draft);
+  // A draft run whose server never started has no scenes to time, and it must not stand in for one that does: the
+  // pool with the draft model sorts before the single slot, and taking it left this check unanswered while the
+  // measurement that answered it sat in the same directory. What that run knows is threshold 7's business, below.
   const pair = withDraft.map(run => ({ run, plain: runs.find(other => !other.draft && other.bot.slots === run.bot.slots) }))
-    .find(entry => entry.plain);
+    .find(entry => entry.plain && testerSpeed(entry.run) !== null && testerSpeed(entry.plain) !== null);
   const speedup = pair?.plain && testerSpeed(pair.run) && testerSpeed(pair.plain)
     ? testerSpeed(pair.run)! / testerSpeed(pair.plain)! : null;
   const broke = pair ? formatFailures(pair.run) > 0 : false;
@@ -155,9 +158,11 @@ export function decide(runs: Report[]): Decision {
   // Both at once: a profile that is pooled and has the draft model must still leave the memory headroom.
   const both = runs.find(run => run.draft && run.bot.slots > 1);
   const bothFree = both?.vram.freeMiBMin ?? null;
+  // A server that refused to start under this configuration has answered the question in the hardest way there is.
+  const bothFailed = both?.error ?? null;
   const together: Check = { id: 7, name: 'the pool and the draft model together',
-    verdict: bothFree === null ? 'unknown' : bothFree >= THRESHOLDS.freeVramMiB ? 'pass' : 'fail',
-    measured: bothFree === null ? 'not measured' : `${bothFree} MiB free`,
+    verdict: bothFailed ? 'fail' : bothFree === null ? 'unknown' : bothFree >= THRESHOLDS.freeVramMiB ? 'pass' : 'fail',
+    measured: bothFailed ? `the server did not start (${bothFailed})` : bothFree === null ? 'not measured' : `${bothFree} MiB free`,
     threshold: `>= ${THRESHOLDS.freeVramMiB} MiB, else the pool is kept and the draft model dropped` };
 
   return { profiles, draft, together,
@@ -195,18 +200,32 @@ async function main(args: string[]) {
   const config = loadModelConfig();
   if (config.provider !== 'llama-cpp') throw new Error('gpu_config_required');
   const provider = createLlama(config, { slots: config.slots });
-  const server = await provider.check() as { slots?: number; contextTokens?: number };
   const directory = resolve(values.out ?? `measurements/${values.profile}`);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
 
   const run: Report = { profile: values.profile, startedAt: new Date().toISOString(), model: config.model,
     temperature: config.temperature, draft: values.draft,
-    server: { slots: server.slots ?? null, contextTokens: server.contextTokens ?? null },
+    server: { slots: null, contextTokens: null },
     bot: { slots: config.slots, poolTokens: config.poolTokens, sharedCache: config.sharedCache,
       contextTokens: config.contextTokens,
       maxOutputTokens: config.maxOutputTokens, quietMs: 60000, readSeconds, historyTokens: asked },
     phases: {}, vram: { samples: 0, totalMiB: null, usedMiBMax: null, freeMiBMin: null } };
   const save = () => writeFileSync(join(directory, 'report.json'), JSON.stringify(run, null, 2));
+
+  // A configuration the server cannot start under is an answer, not a missing measurement: the pool with the draft
+  // model asked for more memory than the card has, and the first attempt left nothing behind but a crash on the
+  // instance. The report is written before the run gives up, so the comparison can read it.
+  let server: { slots?: number; contextTokens?: number };
+  try {
+    server = await provider.check() as { slots?: number; contextTokens?: number };
+  } catch (error) {
+    run.error = errorCode(error) ? String(errorCode(error)) : 'gpu_server_unreachable';
+    run.completedAt = new Date().toISOString();
+    save();
+    report({ event: 'measurement_written', directory, profile: run.profile, error: run.error });
+    throw error;
+  }
+  run.server = { slots: server.slots ?? null, contextTokens: server.contextTokens ?? null };
 
   // `sharedCache` must match the server's own mode: with isolated slots nobody divides a pool, so admitting calls by
   // size would measure a queue the running server does not have.
@@ -368,7 +387,11 @@ function watchVram(run: Report, save: () => void) {
           run.vram.samples++;
           run.vram.totalMiB = card.memoryTotalMiB;
           run.vram.usedMiBMax = Math.max(run.vram.usedMiBMax ?? 0, card.memoryUsedMiB);
-          const free = card.memoryTotalMiB - card.memoryUsedMiB;
+          // The driver keeps a reserve of its own, and this output counts it in neither used nor free: subtracting
+          // used from total hands that reserve back as headroom we do not have. It was 498 MiB on the measured 5090,
+          // against a threshold of 1024. An older report, written before the card reported its free memory, is read
+          // the old way rather than silently gaining half a gigabyte.
+          const free = card.memoryFreeMiB ?? card.memoryTotalMiB - card.memoryUsedMiB;
           run.vram.freeMiBMin = Math.min(run.vram.freeMiBMin ?? free, free);
         }
         save();
