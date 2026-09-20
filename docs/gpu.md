@@ -180,6 +180,36 @@ history: that is the template boundary moving under load, not a cache being lost
 "no more than 1.5× slower", a ratio; a person waits in seconds, and a ratio tightens by itself every time the card
 gets faster, so the same experience would fail the check on better hardware.
 
+#### Measured on a rented RTX 5090, 2026-09-20
+
+One 32607 MiB card, Gemma 4 31B heretic Q6_K, context 65536, pool 98304 cells, `--kv-unified`. The decision was
+`pool-3` over `single`, "take the pool without the draft model".
+
+| Profile | Slots | Draft | Useful tokens/hour | 1: free | 2: cache | 3: gain | 4: scene | 5: wait |
+|---------|-------|-------|--------------------|---------|----------|---------|----------|---------|
+| pool-3  | 3 | no  | 22215 | 1717 MiB | 223 tokens of margin | 2.52× | 6.5 s | 2.5 s |
+| pool-2  | 2 | no  | 18690 | 2141 MiB | 123 tokens of margin | 2.27× | 9.5 s | 6.6 s |
+| single  | 1 | no  | 9065  | 4191 MiB | — | — | — | 0 s |
+| single-mtp | 1 | yes | 11805 | 3157 MiB | — | — | — | 0 s |
+| pool-3-mtp | 3 | yes | — | the server did not start | — | — | — | — |
+
+Fewer slots did not mean a calmer card: `pool-2` was worse than `pool-3` on every axis, waits included. The draft
+model doubled the writing speed on one slot (40.5 → 80.8 tokens a second by the server's own timings, 49 to 70 per
+cent of draft tokens accepted, no format failures), which is threshold 6; with three slots llama-server died with
+`out_of_memory` twelve seconds after each start, which is threshold 7 and why the draft model is off.
+
+Two numbers in this table are read with care. `single`'s throughput carries the SSH proxy inside it — the tunnel was
+measured at 1.4 ms one hour and 1.5 s the next, against 1.4 ms for the same call on the instance — so wall-clock
+speed compares the tunnel's mood and threshold 6 is judged on the server's timings instead. And the free memory was
+computed as total minus used, which hands back the driver's own 498 MiB reserve as headroom that does not exist:
+`pool-3`'s 1717 MiB was really about 1219. The harness now asks the card for `memory.free`.
+
+The card is also not always the whole card. Later the same session, with the identical profile running, 1035 MiB were
+held by something outside the container: no process in the container had `/dev/nvidia*` open, `--query-compute-apps`
+listed only llama-server's 30858 MiB, and the memory survived llama-server exiting. The headroom fell from 1219 MiB
+to 217. Whatever a rented GPU reports as total, a profile measured with a gigabyte to spare can lose it to a
+neighbour.
+
 On the RX 580 with Gemma 3 1B, three slots and the same load in each run, the script answered the question the flags raise:
 
 | Server | The tester's cache | Useful work per hour | The tester's scene |
