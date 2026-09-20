@@ -57,16 +57,33 @@ export function createChat(api: TelegramApi, chatId: number | string) {
       try { await api('sendRichMessageDraft', { chat_id: chatId, draft_id: Number(jobId.slice(1)), rich_message: { markdown: text } }); }
       catch {}
     },
+    // The draft travels beside the scene, never in front of it. Awaiting the round-trip inside the stream loop
+    // (`local/llama.ts`) stopped the bot from reading the model's output, the socket filled and the slot on the card
+    // stood still: a tester's 750-token scene took 45 s where the decoding itself was 19, and the harness never saw
+    // it because a synthetic scene is 55 tokens and finishes before the first draft is due. The handler returns at
+    // once now; one request is in flight at a time and a draft superseded while another was flying is dropped, since
+    // only the newest text is worth showing. The scene's real text arrives as the final message either way.
     preview(jobId: string, prefix = '') {
       let text = prefix;
       let next = 0;
-      return async (delta: string) => {
-        text += delta;
-        if (Date.now() < next) return;
-        next = Date.now() + 1200;
+      let sending = false;
+      let again = false;
+      const flush = async (): Promise<void> => {
+        if (sending) { again = true; return; }
+        sending = true;
         try {
           await api('sendRichMessageDraft', { chat_id: chatId, draft_id: Number(jobId.slice(1)), rich_message: { markdown: text } });
         } catch (error) { next = Date.now() + ((error as { retryAfter?: number }).retryAfter || 5) * 1000; }
+        finally {
+          sending = false;
+          if (again) { again = false; void flush(); }
+        }
+      };
+      return (delta: string) => {
+        text += delta;
+        if (Date.now() < next) return;
+        next = Date.now() + 1200;
+        void flush();
       };
     },
   };
