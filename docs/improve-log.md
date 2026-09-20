@@ -2,6 +2,64 @@
 
 Every step of the loop from [improve-loop.md](improve-loop.md): date, hypothesis, change, numbers before and after per model, decision. Rejected hypotheses are recorded too. New entries go on top.
 
+## 2026-09-20 · Opus 5 · Qwen3.8-27B as a replacement for Gemma 4 31B (decision open)
+
+Not a step of the loop: nothing in `local/` was changed and the main group was not run. The tester proposed the
+model and this is the measurement that answers whether it is worth a rental. What draws us to it is not its
+scores: Qwen3.8-27B is a hybrid, `full_attention_interval: 4`, so only 16 of its 65 blocks carry a KV cache, and
+its Q6_K weights are 22.1 GB against Gemma's 25.2. That is the shortage that fails threshold 7 in
+[gpu.md](gpu.md). Its GGUF declares the architecture `qwen35`, which the pinned llama.cpp revision already knows.
+
+Run: `--models openrouter:qwen/qwen3.8-27b,openrouter:google/gemma-4-31b-it --judge claude:claude-opus-5`, the
+three open scenarios, both modes, both paid channels. One run per cell.
+
+Recall, per cell. The ceiling of `chess` is 6/7 for every model (see improve-loop.md), so both models are **at the
+ceiling** there:
+
+| scenario | ceiling | Qwen3.8-27B | Gemma 4 31B |
+| --- | --- | --- | --- |
+| battle `plain` | 8/8 | 8/8 | 7/8 |
+| chess `plain` | 6/7 | 6/7 | 6/7 |
+| dance `plain` | 13/13 | 13/13 | 12/13 |
+| total `plain` | 27/28 | **27/28** | **25/28** |
+
+Qwen reached the ceiling in all three; Gemma missed by one in two of them. The known spread for Gemma on `battle`
+is one question, and it showed itself inside this day: an earlier run of the same cell gave 8/8 and this one 7/8.
+Two questions out of 28 is therefore **not a difference**.
+
+`sgr` carries no information here. Both models failed two cells of three, in different places — Qwen `battle` and
+`chess`, Gemma `battle` and `dance` — with `invalid_memory` and one Gemma timeout. A failed cell counts as 0/N, so
+the aggregate 0.46 against 0.21 is a count of failures. `sgr` fails for every model on the `quote` check, which is
+already in this log; decisions stay on `plain`.
+
+What did repeat in every single cell is the size of what Qwen writes:
+
+| | Qwen | Gemma | |
+| --- | --- | --- | --- |
+| facts stored | 199 | 149 | +34% |
+| memory bytes | 55 028 | 36 762 | **+50%** |
+| output tokens | 32 672 | 19 900 | +64% |
+| cost of the compactions | $0.065 | $0.012 | ×5.4 |
+
+This is not noise, and it works against the reason we looked at the model at all: memory is re-sent with every
+request, so a memory half again as large eats the cells that the hybrid cache was supposed to free. How much of
+the saving it eats is arithmetic we cannot do from here.
+
+Decision: **open**. Nothing here argues for a switch, and nothing here argues against one. What would close it is a
+rental: the measured cost of a cell, whether a prefix is reused at all in a hybrid model — the scheduler, the slot
+pool and compaction-ahead all rest on that — and speed. A quality result cannot close it, because the two models
+are indistinguishable on the measure.
+
+Limitations:
+- One run per cell. The loop asks for at least three per side on one scenario; this is below that bar.
+- OpenRouter routes freely and we do not pin quantization. A model served at fp4 against one served at bf16 would
+  show a difference that is not the model's.
+- Both models here are the **official** ones. Production runs an uncensored Gemma, and the tester's candidate is an
+  abliterated Heretic build of Qwen. Bases were compared, not the builds that would be deployed.
+- `sceneScore` is reported only over the worst model, so scene quality could not be split between them. Its value,
+  0.36 on `plain`, says something about our prompts rather than about either model.
+- 887 808 tokens on `openrouter-paid`, about $0.29.
+
 ## 2026-09-19 · Opus 5 · the story system in the language of the seed
 
 The owner's task: a user who writes a seed and turns in English, Chinese, Korean or Japanese gets scenes and memory in that language with the same continuity discipline, and Russian gets no worse. Until now the narrator's rules, the memory rules, the headers around the seed and memory, and the two messages the code writes («Начни историю из сида…», «Продолжай историю…») were Russian for every story. The only language rule was «Пиши по-русски, если сид не задаёт другой язык» ("write in Russian unless the seed sets another language").
