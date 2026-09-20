@@ -3,10 +3,55 @@
 import datetime
 import json
 import os
+import re
 from pathlib import Path
 import signal
 import subprocess
 import sys
+
+
+# At start the server prints its own memory layout: the size of every cache, how many cells and layers it holds, and
+# what each buffer costs. Those numbers settle the arguments this project keeps having about where the video memory
+# goes -- twice a rented card was measured by subtraction because they were thrown away with everything else. Only
+# the numbers are kept, never the line: whole MiB and counts, plus a cache type from a fixed set. A line that does not
+# match one of these exactly is not a measurement and falls through to `category` as before.
+# Searched, not anchored: the server is started with --log-prefix --log-timestamps, so every line begins with a
+# timestamp and a level, and an anchored pattern matched nothing at all on the first run that needed it. Searching is
+# safe here because every group is an integer or a word from MEASUREMENT_WORDS; nothing is taken off the line as-is.
+MEASUREMENTS = (
+    re.compile(r'\bllama_kv_cache[a-z_:]*:\s+size\s*=\s*(?P<sizeMiB>\d{1,7})\.\d+ MiB'
+               r'\s*\(\s*(?P<cells>\d{1,8}) cells,\s*(?P<layers>\d{1,4}) layers'
+               r'(?:,\s*(?P<seqs>\d{1,4})/\d{1,4} seqs)?\)'
+               r'(?:.*?\bK \((?P<keyType>[a-z0-9_]{1,8})\):\s*(?P<keyMiB>\d{1,7})\.\d+ MiB)?'
+               r'(?:.*?\bV \((?P<valueType>[a-z0-9_]{1,8})\):\s*(?P<valueMiB>\d{1,7})\.\d+ MiB)?'),
+    re.compile(r'\b[a-z_]{1,32}:\s+(?P<device>[A-Za-z0-9_]{1,16})\s+(?P<kind>compute|model|KV|KV self|output)'
+               r'\s+buffer size\s*=\s*(?P<sizeMiB>\d{1,7})\.\d+ MiB'),
+)
+# The only words any of the patterns above may hand over verbatim; anything else is dropped rather than written.
+MEASUREMENT_WORDS = {'f32', 'f16', 'bf16', 'q8_0', 'q4_0', 'q4_1', 'q5_0', 'q5_1', 'iq4_nl',
+                     'compute', 'model', 'KV', 'KV self', 'output',
+                     'CPU', 'CUDA0', 'CUDA1', 'CUDA2', 'CUDA3', 'CUDA_Host', 'Metal', 'Vulkan0', 'SYCL0'}
+
+
+def measurement(line):
+    """Integers and fixed words from a memory line, or None. Never returns anything read off the line verbatim
+    that is not in MEASUREMENT_WORDS."""
+    for pattern in MEASUREMENTS:
+        found = pattern.search(line)
+        if not found:
+            continue
+        fields = {}
+        for name, value in found.groupdict().items():
+            if value is None:
+                continue
+            if value.isdigit():
+                fields[name] = int(value)
+            elif value in MEASUREMENT_WORDS:
+                fields[name] = value
+            else:
+                return None
+        return fields or None
+    return None
 
 
 def category(line):
@@ -71,7 +116,11 @@ def run(log, command):
         while chunk := child.stdout.readline(8192):
             if not chunk.strip(): continue
             line = chunk.decode('utf-8', errors='replace')
-            log.event('server_diagnostic', category=category(line))
+            sizes = measurement(line)
+            if sizes is not None:
+                log.event('server_memory', **sizes)
+            else:
+                log.event('server_diagnostic', category=category(line))
         code = child.wait()
         log.event('server_exit', **({'exitCode': code} if code >= 0 else {'signal': signal.Signals(-code).name}))
         return code if code >= 0 else 128 - code

@@ -38,8 +38,15 @@ draft="${SIMPLE_CHAT_GPU_DRAFT:-false}"
 speculative=()
 if [[ "$draft" = true ]]; then
   [[ -f "$gpu_dir/models/$DRAFT_FILE" ]] || { echo 'Draft model missing; rerun bootstrap.' >&2; exit 1; }
+  # The draft's own cache defaults to f16 and does not follow --cache-type-k/v, while its context is stretched to the
+  # whole pool: on the measured 5090 that was about 816 MiB, and the pool with the draft model missed fitting by
+  # roughly 90. Give it the same q8_0 the target uses. SIMPLE_CHAT_GPU_DRAFT_CACHE=f16 restores the old behaviour.
+  draft_cache="${SIMPLE_CHAT_GPU_DRAFT_CACHE:-q8_0}"
+  [[ "$draft_cache" =~ ^(f32|f16|bf16|q8_0|q4_0|q4_1|q5_0|q5_1|iq4_nl)$ ]] \
+    || { echo 'Use a cache type llama.cpp accepts for SIMPLE_CHAT_GPU_DRAFT_CACHE.' >&2; exit 1; }
   speculative=(--spec-draft-model "$gpu_dir/models/$DRAFT_FILE" --spec-type draft-mtp
-    --spec-draft-n-max "${SIMPLE_CHAT_GPU_DRAFT_MAX:-3}" --spec-draft-ngl 99)
+    --spec-draft-n-max "${SIMPLE_CHAT_GPU_DRAFT_MAX:-3}" --spec-draft-ngl 99
+    --spec-draft-type-k "$draft_cache" --spec-draft-type-v "$draft_cache")
 fi
 [[ "$(git -C "$gpu_dir/llama.cpp" rev-parse HEAD)" = "$LLAMA_CPP_REVISION" ]] || { echo 'Unexpected llama.cpp revision; rerun bootstrap.' >&2; exit 1; }
 [[ -f "$gpu_dir/models/$MODEL_FILE" ]] || { echo 'Run bootstrap first.' >&2; exit 1; }
@@ -48,6 +55,19 @@ fi
 # The optional RAM snapshot cache is off. `--no-cache-idle-slots` is what keeps a pool working: with a shared cache
 # llama.cpp otherwise clears an idle slot's cells on every new task, and a person loses their whole story cache while
 # they read. Measured on an RX 580: the same load kept the cache with the flag and re-read the history without it.
+# The default of 1 passes only errors (common/log.h: LOG_LEVEL_ERROR 1), and the server's own account of its memory --
+# the size of each cache, its cells, layers and buffers -- is INFO, which is 3. Two rentals were spent deducing those
+# numbers by subtraction while the server was willing to state them. Raise this to 3 for a start whose numbers you want
+# in `server-events.jsonl`. No level writes a raw line: server-log.py persists categories and whole numbers only.
+verbosity="${SIMPLE_CHAT_GPU_LOG_VERBOSITY:-1}"
+[[ "$verbosity" =~ ^[1-5]$ ]] || { echo 'Use SIMPLE_CHAT_GPU_LOG_VERBOSITY from 1 to 5.' >&2; exit 1; }
+# Host RAM the server may keep slot snapshots in, in MiB. Zero is the old behaviour and the default until the gain is
+# measured: with the cache off, a slot that alternates between two prompts -- a person's scene and the compaction of
+# their memory -- re-reads the whole history each time. On the measured 5090 that was 41 of the 49 seconds the agent
+# spent in prefill. A snapshot holds the KV of somebody's story, so this stays a deliberate number and not -1; the
+# server keeps it in memory and writes nothing, since --slot-save-path is never set.
+cache_ram="${SIMPLE_CHAT_GPU_CACHE_RAM:-0}"
+[[ "$cache_ram" =~ ^[0-9]{1,6}$ ]] || { echo 'Use SIMPLE_CHAT_GPU_CACHE_RAM in whole MiB, 0 to 999999.' >&2; exit 1; }
 ulimit -c 0
 echo "Starting $MODEL_ALIAS; context=$context, slots=$slots, cells=$ctx_size, unified=$unified, draft=$draft, loopback port=$port."
 exec python3 "$task_dir/server-log.py" "$gpu_dir/server-events.jsonl" -- \
@@ -57,5 +77,5 @@ exec python3 "$task_dir/server-log.py" "$gpu_dir/server-events.jsonl" -- \
   --gpu-layers 99 --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 \
   --batch-size 512 --ubatch-size "$ubatch" --jinja --reasoning-format deepseek \
   --chat-template-kwargs '{"enable_thinking":false}' \
-  --no-context-shift --cache-ram 0 --no-cache-idle-slots --no-slots \
-  --log-verbosity 1 --log-prefix --log-timestamps --log-colors off --no-log-jsonl
+  --no-context-shift --cache-ram "$cache_ram" --no-cache-idle-slots --no-slots \
+  --log-verbosity "$verbosity" --log-prefix --log-timestamps --log-colors off --no-log-jsonl
