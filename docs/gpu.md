@@ -207,8 +207,18 @@ computed as total minus used, which hands back the driver's own 498 MiB reserve 
 The card is also not always the whole card. Later the same session, with the identical profile running, 1035 MiB were
 held by something outside the container: no process in the container had `/dev/nvidia*` open, `--query-compute-apps`
 listed only llama-server's 30858 MiB, and the memory survived llama-server exiting. The headroom fell from 1219 MiB
-to 217. Whatever a rented GPU reports as total, a profile measured with a gigabyte to spare can lose it to a
-neighbour.
+to 217. Who owns that gigabyte was not established — `/proc/driver/nvidia/clients` is absent inside the container and
+`dmesg` is unreadable, so neither a driver leak nor a neighbour is proven, and from inside there is no way to take it
+back. Whatever a rented GPU reports as total, a profile measured with a gigabyte to spare can lose it.
+
+#### The pool has a floor, and it is the scheduler's
+
+Shrinking the pool is the obvious answer to a card that lost memory, and it is bounded from below: the scheduler
+admits a call only if the pool can hold it, so the pool must cover the tester's history, the output cap and the
+margin. For the measured run — 39815 tokens for the tester, 23795 for the agent, a 4096 output cap and 2048 of
+margin — that is 73850 cells while the tester is working and 78970 to keep its cache alive while it reads. A pool of
+73728 buys video memory with exactly the eviction threshold 2 exists to prevent. Below 78970 the pool is not a
+smaller pool, it is a different bargain, and thresholds 2 and 3 have to be measured again to know what it cost.
 
 On the RX 580 with Gemma 3 1B, three slots and the same load in each run, the script answered the question the flags raise:
 
