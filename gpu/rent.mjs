@@ -15,6 +15,10 @@ import { fileURLToPath } from 'node:url';
 import { MAX_DPH_BY_GPUS, chooseOffers, createBody, emptyReason, offerQuery, redactedBody, rentPlan } from '../local/rent-plan.ts';
 
 const ATTEMPTS = 4;
+// Every request carries a deadline. A search that never answers would hang with the owner watching; a create
+// request that never answers is worse, because the machine it asked for may be billing already.
+const SEARCH_TIMEOUT_MS = 30000;
+const RENT_TIMEOUT_MS = 60000;
 
 const args = process.argv.slice(2);
 const printBody = args.includes('--print-body');
@@ -56,17 +60,29 @@ if (printBody) {
   if (!key) process.exit(0);
 }
 
-const search = await fetch('https://console.vast.ai/api/v0/bundles/?q=' + encodeURIComponent(JSON.stringify(offerQuery(plan))), { headers });
-if (!search.ok) { console.log(JSON.stringify({ event: 'search_failed', status: search.status })); process.exit(1); }
+// `status: 0` is no answer at all: a timeout, a refused connection, or a body that is not the JSON it claims.
+let offers = null, searchStatus = 0;
+try {
+  const search = await fetch('https://console.vast.ai/api/v0/bundles/?q=' + encodeURIComponent(JSON.stringify(offerQuery(plan))),
+    { headers, signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS) });
+  searchStatus = search.status;
+  if (search.ok) offers = (await search.json()).offers ?? [];
+} catch { /* offers stays null; nothing was rented, so the search can simply be reported and repeated */ }
+if (offers === null) { console.log(JSON.stringify({ event: 'search_failed', status: searchStatus })); process.exit(1); }
 
 // The port count and the container's share of the machine's RAM are checked here too: a query field the API does not
 // know is ignored silently, and those two rules are each worth more than a rental.
-const choice = chooseOffers((await search.json()).offers ?? [], plan);
-const { candidates, withinPrice, droppedForUnknownPrice, droppedForProxyOnly, droppedForRam } = choice;
-// A rule that drops offers says so: silence would read as "nothing was excluded".
-console.log(JSON.stringify({ event: 'candidates', withinPrice, maxHour: plan.maxHour, gpus: plan.gpus,
-  droppedForUnknownPrice, droppedForProxyOnly, minDirectPorts: plan.minDirectPorts, droppedForRam, minRamGb: plan.minRamGb }));
-// Which rule emptied the list, so that a session lost to ports or to RAM is not read as a price to raise.
+const choice = chooseOffers(offers, plan);
+const { candidates, offered, withinPrice, droppedForUnknownPrice, droppedForFewCores,
+  droppedForProxyOnly, droppedForRam } = choice;
+// A rule that drops offers says so: silence would read as "nothing was excluded". The counts are a chain -- what
+// the search returned, what the price left, then each later rule -- and `chosen` is what is left to try, which is
+// not `withinPrice`: the price is only the first rule of four.
+console.log(JSON.stringify({ event: 'candidates', offered, withinPrice, chosen: candidates.length,
+  maxHour: plan.maxHour, gpus: plan.gpus, droppedForUnknownPrice, droppedForFewCores, droppedForProxyOnly,
+  minDirectPorts: plan.minDirectPorts, droppedForRam, minRamGb: plan.minRamGb }));
+// Which rule emptied the list, so that a session lost to an empty search, to cores, to ports or to RAM is not read
+// as a price to raise.
 if (!candidates.length) { console.log(JSON.stringify({ event: emptyReason(choice) })); process.exit(1); }
 
 // SIMPLE_CHAT_RENT_DRY_RUN=1 shows what would be taken and spends nothing. Checking a change to this script by
@@ -78,23 +94,39 @@ if (process.env.SIMPLE_CHAT_RENT_DRY_RUN === '1' || printBody) {
 }
 
 for (const offer of candidates.slice(0, ATTEMPTS)) {
-  const response = await fetch(`https://console.vast.ai/api/v0/asks/${offer.id}/`, {
-    method: 'PUT',
-    headers: { ...headers, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const text = await response.text();
-  let parsed = null;
-  try { parsed = JSON.parse(text); } catch { /* status alone describes a non-JSON body */ }
-  const ok = response.ok && parsed?.success !== false && parsed?.new_contract;
-  console.log(JSON.stringify({
-    event: ok ? 'rented' : 'attempt_failed', offer: offer.id, host: offer.host, geo: offer.geo,
-    hour: offer.hour, download: offer.download, driver: offer.driver, cpus: offer.cpus, ramGb: offer.ramGb,
-    inetDownMbps: offer.inetDownMbps, reliability: offer.reliability, directPorts: offer.directPorts,
-    instance: parsed?.new_contract ?? null,
-    reason: ok ? null : typeof parsed?.msg === 'string' && parsed.msg.length <= 200 ? parsed.msg : `status ${response.status}`,
-  }));
-  if (ok) process.exit(0);
+  const machine = {
+    offer: offer.id, host: offer.host, geo: offer.geo, hour: offer.hour, download: offer.download,
+    driver: offer.driver, cpus: offer.cpus, ramGb: offer.ramGb, inetDownMbps: offer.inetDownMbps,
+    reliability: offer.reliability, directPorts: offer.directPorts,
+  };
+  let status = 0, parsed = null;
+  try {
+    const response = await fetch(`https://console.vast.ai/api/v0/asks/${offer.id}/`, {
+      method: 'PUT',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(RENT_TIMEOUT_MS),
+    });
+    status = response.status;
+    const text = await response.text();
+    try { parsed = JSON.parse(text); } catch { /* status alone describes a non-JSON body */ }
+  } catch { /* status stays 0: the request may have reached Vast all the same */ }
+  const rented = status >= 200 && status < 300 && parsed?.success !== false && parsed?.new_contract;
+  if (rented) {
+    console.log(JSON.stringify({ event: 'rented', ...machine, instance: parsed.new_contract, reason: null }));
+    process.exit(0);
+  }
+  // A refusal is a status outside 2xx or Vast's own `success: false`, and only a refusal is safe to answer by
+  // renting the next offer. Anything else -- no answer at all, or an answer that names no contract -- may have
+  // created an instance that is billing now, and a second PUT would leave it running unwatched.
+  const refused = (status !== 0 && (status < 200 || status >= 300)) || parsed?.success === false;
+  if (!refused) {
+    console.log(JSON.stringify({ event: 'attempt_uncertain', ...machine, status,
+      reason: status === 0 ? 'no answer' : 'no instance named', check: 'the instance list on console.vast.ai' }));
+    process.exit(1);
+  }
+  console.log(JSON.stringify({ event: 'attempt_failed', ...machine, instance: null,
+    reason: typeof parsed?.msg === 'string' && parsed.msg.length <= 200 ? parsed.msg : `status ${status}` }));
 }
 console.log(JSON.stringify({ event: 'all_attempts_failed' }));
 process.exit(1);

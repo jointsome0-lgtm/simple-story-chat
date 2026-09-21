@@ -14,30 +14,35 @@
 export const MAX_DPH_BY_GPUS: Record<number, number> = { 1: 0.55, 2: 1.0 };
 // Vast bills the disk by the hour beside the machine and offers are judged on the two together, so the ceiling has
 // to carry the disk too. Otherwise growing DISK_GB quietly lowers the card price allowed: at 60 GB the old flat
-// $0.55 left room for a $0.541 card, at 150 GB the same number refuses the $0.53 top of the quoted range. $0.10 per
-// GB per month is the common storage rate; an offer that charges more spends the rest of its own allowance on disk,
-// which is the right way round.
-const STORAGE_PER_GB_MONTH = 0.1;
+// $0.55 left room for a $0.541 card, at 150 GB the same number refuses the $0.53 top of the quoted range. The rate
+// budgeted is the one this repo has actually seen, not the $0.10 per GB per month commonly quoted: the 60 GB
+// rental in docs/gpu.md was billed $0.017 an hour for its disk, which is $0.207 per GB per month. At the cheaper
+// rate that same $0.53 card is refused again as soon as the host charges what the measured one did.
+const STORAGE_PER_GB_MONTH = 0.207;
 // The machine measured in docs/gpu.md ($0.519/h) is tried first when it is in the list and still fits the ceiling.
 const PREFERRED_HOST = 402342;
 const IMAGE = 'vastai/base-image:cuda-13.0.3-cudnn-devel-ubuntu24.04-py312-2026-09-07';
-// Gemma Q6 (25.2 GB) and its draft (0.5 GB) from gpu/manifest.env, the image lane's checkpoint (12.5 GB), text
-// encoder (8.9 GB) and VAE (0.5 GB), the build tree and about 8 GB of wheels and packages, with room for a second
-// checkpoint. A single-card session downloads the same files and only runs the two lanes one after the other.
+// The pinned files below (57.2 GB), the build tree, about 6 GB of wheels and packages, and room for the pictures
+// and logs the session writes beside them. A single-card session downloads the same files and only runs the two
+// lanes one after the other.
 const DISK_GB = 150;
-// Every byte the session pulls over the host's link, priced at its traffic rate: the two model sets above plus the
-// wheels, about 54 GB. The checkpoint is the fp8 one the tester runs, "roughly 26 GB at bf16 or 13 at fp8"
-// (docs/illustrations-plan.md, step 4); official bf16 is out of this session's scope. Counting Gemma alone
-// under-stated the traffic term by roughly half, and on Vast the traffic price differs between machines by a factor
-// of twenty, so that term decides between offers.
-const SESSION_BYTES = 25201484928 + 514687200 + 21900000000 + 6000000000;
+// Every byte the session pulls over the host's link, priced at its traffic rate. The summands are the exact sizes
+// pinned in gpu/manifest.env (Gemma Q6 and its draft) and gpu/image-manifest.env (the fine-tune, the ComfyUI-native
+// text encoder, the VAE and the comparison Turbo checkpoint), plus the wheels; a test reads both manifests so the
+// two cannot drift apart. What a default run downloads is what is counted: gpu/image-bootstrap.sh fetches Turbo
+// unless SIMPLE_CHAT_IMAGE_TURBO=false and the ComfyUI-native encoder and VAE unless
+// SIMPLE_CHAT_IMAGE_SOURCE=official, so the gated bf16 originals are not in the sum and Turbo is. On Vast the
+// traffic price differs between machines by a factor of twenty, so this term decides between offers.
+const SESSION_BYTES = 25201484928 + 514687200 + 12821743396 + 5242467968 + 253806246 + 13141730784 + 6000000000;
 // docs/gpu.md asks for at least 32 GB of RAM for the language lane; the image lane wants its own. This is the
 // container's share, not the machine's: a container on the measured 256-core host held 30.72 cores of it. Without a
 // floor there is no guarantee that SIMPLE_CHAT_GPU_CACHE_RAM has memory to live in.
 const RAM_GB_PER_GPU = 32;
-// Two hours and a quarter of instance life, which is what the runbook plans for; the hourly price is weighted by it
-// against the one-off traffic cost when offers are ordered.
-const SESSION_HOURS = 2.25;
+// Two hours and a half: the instance life the session is billed for, not the work window. Work stops about a
+// quarter of an hour before teardown and Vast bills until the instance is deleted, so the shorter figure would
+// weight the hourly price too lightly. The hourly price is weighted by it against the one-off traffic cost when
+// offers are ordered.
+const SESSION_HOURS = 2.5;
 // A machine without direct ports is reachable only through Vast's proxy, and on 2026-09-20 one such rental refused
 // the account's own key for its whole life. Two is the least that is useful: one carries ssh, one is spare.
 const MIN_DIRECT_PORTS = 2;
@@ -83,7 +88,7 @@ export type Offer = {
   hour: number; download: number;
 };
 
-const price = (dph: unknown): number => typeof dph === 'number' && Number.isFinite(dph) && dph >= 0 ? dph : NaN;
+const price = (rate: unknown): number => typeof rate === 'number' && Number.isFinite(rate) && rate >= 0 ? rate : NaN;
 
 // `storage_cost` is dollars per GB per month, `inet_down_cost` dollars per GB, so both are priced for this session's
 // disk and this session's downloads rather than for a constant that no longer describes either.
@@ -99,40 +104,51 @@ export function describeOffer(offer: RawOffer, plan: RentPlan): Offer {
     // so an offer that states no share is kept below; rounded down, because a floor is a floor.
     ramGb: typeof offer.cpu_ram === 'number' && frac !== null ? Math.floor(offer.cpu_ram * frac / 1000) : null,
     inetDownMbps: Math.round(offer.inet_down ?? 0), reliability: Math.round((offer.reliability2 ?? 0) * 1000) / 1000,
-    // A missing or non-numeric `dph_total` prices the offer as NaN, which no ceiling admits. Reading it as zero
-    // would have sorted the one offer whose cost is unknown to the front of the queue and rented it first.
-    hour: Math.round((price(offer.dph_total) + (offer.storage_cost ?? 0) * plan.diskGb / 730) * 1000) / 1000,
-    download: Math.round((offer.inet_down_cost ?? 0) * (plan.sessionBytes / 1e12) * 1000 * 100) / 100,
+    // A missing or non-numeric price -- for the machine, for the disk or for the link -- makes the whole offer NaN,
+    // which no ceiling admits and chooseOffers counts. Read as zero, the one offer whose cost is unknown would look
+    // like the cheapest in the list, sort to the front of the queue and be the first thing rented.
+    hour: Math.round((price(offer.dph_total) + price(offer.storage_cost) * plan.diskGb / 730) * 1000) / 1000,
+    download: Math.round(price(offer.inet_down_cost) * (plan.sessionBytes / 1e12) * 1000 * 100) / 100,
   };
 }
 
 export type Choice = {
-  candidates: Offer[]; withinPrice: number;
-  droppedForUnknownPrice: number; droppedForProxyOnly: number; droppedForRam: number;
+  candidates: Offer[]; offered: number; withinPrice: number; droppedForUnknownPrice: number;
+  droppedForFewCores: number; droppedForProxyOnly: number; droppedForRam: number;
 };
 
-// A rule that drops offers reports how many it dropped: silence would read as "nothing was excluded". An unknown
-// core count or container RAM is not a reason to drop an offer, only a known-too-small one is.
+// Every rule that drops offers reports how many it dropped, and each rule is its own step: a rule folded into
+// another one has no count and cannot be named as the reason the list is empty. An unknown core count or container
+// RAM is not a reason to drop an offer, only a known-too-small one is.
 export function chooseOffers(offers: RawOffer[], plan: RentPlan): Choice {
   const described = offers.map(offer => describeOffer(offer, plan));
-  const affordable = described.filter(o => o.hour <= plan.maxHour && (o.cpus === null || o.cpus >= 4));
-  const withPorts = affordable.filter(o => o.directPorts >= plan.minDirectPorts);
+  const priced = described.filter(o => Number.isFinite(o.hour) && Number.isFinite(o.download));
+  const affordable = priced.filter(o => o.hour <= plan.maxHour);
+  const withCores = affordable.filter(o => o.cpus === null || o.cpus >= 4);
+  const withPorts = withCores.filter(o => o.directPorts >= plan.minDirectPorts);
   const candidates = withPorts.filter(o => o.ramGb === null || o.ramGb >= plan.minRamGb)
     // The owner's machine first; then cheapest for this session, hours and traffic together.
     .sort((a, b) => Number(b.host === plan.preferredHost) - Number(a.host === plan.preferredHost)
       || (a.hour * plan.sessionHours + a.download) - (b.hour * plan.sessionHours + b.download));
   return {
-    candidates, withinPrice: affordable.length,
-    droppedForUnknownPrice: described.filter(o => Number.isNaN(o.hour)).length,
-    droppedForProxyOnly: affordable.length - withPorts.length, droppedForRam: withPorts.length - candidates.length,
+    candidates, offered: described.length, withinPrice: affordable.length,
+    droppedForUnknownPrice: described.length - priced.length, droppedForFewCores: affordable.length - withCores.length,
+    droppedForProxyOnly: withCores.length - withPorts.length, droppedForRam: withPorts.length - candidates.length,
   };
 }
 
-// Which rule emptied the list, for the one line the owner is left with. The port and the RAM rule drop offers the
-// price accepted, and reporting that as a price failure sends the next attempt to change the wrong number.
-export function emptyReason(choice: Choice): 'none_within_price' | 'none_with_direct_ports' | 'none_with_enough_ram' {
+export type EmptyReason =
+  'none_offered' | 'none_within_price' | 'none_with_enough_cores' | 'none_with_direct_ports' | 'none_with_enough_ram';
+
+// Which rule emptied the list, for the one line the owner is left with. A search that answered with nothing at all,
+// and the rules on cores, ports and RAM, all drop offers the price never judged; reporting any of them as a price
+// failure sends the next attempt to change the wrong number.
+export function emptyReason(choice: Choice): EmptyReason {
+  if (choice.offered === 0) return 'none_offered';
   if (choice.withinPrice === 0) return 'none_within_price';
-  if (choice.withinPrice === choice.droppedForProxyOnly) return 'none_with_direct_ports';
+  const withCores = choice.withinPrice - choice.droppedForFewCores;
+  if (withCores === 0) return 'none_with_enough_cores';
+  if (withCores === choice.droppedForProxyOnly) return 'none_with_direct_ports';
   return 'none_with_enough_ram';
 }
 
