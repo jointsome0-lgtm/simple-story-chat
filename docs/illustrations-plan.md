@@ -1,8 +1,8 @@
 # Plan for illustrated scenes (text to image)
 
-2026-09-20 · Opus 5, corrected and step 1 measured 2026-09-21 · Fable 5.1 · no image was generated, no GPU was
-rented, no code was changed. Markers as in [eval-experiments-plan.md](eval-experiments-plan.md): **[M]** measured
-here, **[D]** derived from measured values, **[A]** an assumption that a measurement must close.
+2026-09-20 · Opus 5, corrected and measured 2026-09-21 · Fable 5.1 · three images were generated on a hosted API,
+no GPU was rented, no code was changed. Markers as in [eval-experiments-plan.md](eval-experiments-plan.md): **[M]**
+measured here, **[D]** derived from measured values, **[A]** an assumption that a measurement must close.
 
 The tester asked for it and offered to fund the Vast budget. What he wants first is modest and worth keeping in
 mind: to see **how text to image fits in at all**, not to ship a finished visual novel.
@@ -92,6 +92,43 @@ in the repository. One run per scene, one model, read by one reader: a first loo
 
 What this does not show: whether these prompts make good pictures, anything about the uncensored build the bot runs,
 or anything about adult scenes, which are never sent to a hosted API.
+
+## Step 2, first pictures, 2026-09-21
+
+The instruction was revised on what step 1 showed: no style, technique or quality words; age in words, not numbers;
+nothing unreadable to the eye such as board positions; a `worth_drawing` boolean; one retry on a reply that does not
+parse. Same model, same twelve scenes.
+
+- **12 of 12 parsed**, one after its retry [M]. No style word and no number in any prompt, 60–74 words [M].
+- **`worth_drawing` was true twelve times** [M], the four near-identical chess scenes included. As asked, the field
+  separates nothing. It needs the earlier descriptions to compare with, or a rule in code, not the model's opinion.
+- **The text drifts on what it was not told to hold** [M]: the commander is "a young woman" in one description and
+  "a middle-aged woman commander" in another. Objects the story fixes stay fixed; an age nobody stated does not.
+
+Three of the prompts were drawn by `krea/krea-2-medium-turbo` through OpenRouter's Image API (`POST /api/v1/images`),
+16:9, seed 7, with one style sentence appended to every prompt by us. $0.015 and 18.5 s each [M]; $0.045 in all.
+The pictures are not in the repository.
+
+- **They belong to their scenes** [M, one reader]. The gate, the cart braced by a shield, the bandaged left forearm,
+  the blue-hilted dagger in a machine's joint, salt pouring from torn sacks; five people holding a door while one
+  kneels at its lock; two women at a monitor showing dancers, the couple in costume in a lit doorway behind them,
+  cold screen light against warm hall light. Every element named in a prompt is in its picture but one bystander.
+- **One appended sentence held the style** across all three [M]. This is the fix for the defect of step 1.
+- **Left and right are lost** [M]: the description puts the bandage on the left wrist and the bracelet on the right,
+  the picture puts both on one arm.
+- The commander looks like the same person in both battle pictures. With one seed and two samples that is luck
+  until shown otherwise [A].
+
+OpenRouter lists Krea 2 as `large` ($0.06 an image), `medium` ($0.03) and `medium-turbo` ($0.015) [M, its pages];
+the general `/api/v1/models` list omits image models, which are under `/api/v1/images/models`. Each takes a `seed`
+and one reference image. The open weights are `krea/Krea-2-Turbo` and `krea/Krea-2-Raw`: a 26.3 GB transformer in
+bf16, an 8.9 GB text encoder and a 0.5 GB VAE [M, HuggingFace file sizes], 35.7 GB together, so a 32 GB card needs
+fp8 or the encoder offloaded. Which hosted name the open weights correspond to is not known. Their licence is
+`krea-2-community-license` and has not been read.
+
+**On price the owner was right and the first estimate here was wrong.** A second card at $0.52/h pays for itself
+against `medium` from 17 pictures an hour and against `medium-turbo` from 35 [D]; one active reader with a picture
+per scene is already there. Hosted is for looking, not for running.
 
 ## The model, if it gets that far
 
