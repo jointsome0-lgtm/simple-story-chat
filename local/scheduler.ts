@@ -150,13 +150,12 @@ export function createScheduler<Request, Result>(provider: {
   function enqueue(priority: Priority, method: Item<Request>['method'], request: Request, controls: GenerateControls = {}, turn: Turn | null = null): Promise<unknown> {
     if (turn?.ended) return Promise.reject(fail(turn.ended));
     if (closed || controls.signal?.aborted) return Promise.reject(fail('cancelled'));
-    // A pool counts tokens beside the running calls: the count reads no cache and fills none.
-    if (pool && method === 'countInput') {
-      try { controls.onStart?.(); } catch {}
-      return provider.countInput!(request, { ...controls, signal: controls.signal ?? new AbortController().signal });
-    }
+    // A pool counts tokens beside the running calls: the count reads no cache and fills none, so it waits for no slot
+    // and for no queue. It is a call of its turn all the same: a person's scene is counted before it is generated, and
+    // the picture in the slot that scene wants ends for the count, as it does with one slot.
+    const counting = pool && method === 'countInput';
     const queue = queues[priority];
-    if (queue.length >= (priority === 'foreground' ? 32 : 4)) return Promise.reject(fail('queue_full'));
+    if (!counting && queue.length >= (priority === 'foreground' ? 32 : 4)) return Promise.reject(fail('queue_full'));
     if (priority === 'foreground') {
       lastForeground = now();
       // A picture prepared in this caller's own slot stands in the way of their next call wherever the pool stands.
@@ -165,6 +164,14 @@ export function createScheduler<Request, Result>(provider: {
     if (!pool) {
       if (priority !== 'background') stop('background', 'background_preempted');
       if (priority === 'foreground') yieldTo(turn);
+    }
+    // Ending a picture above runs the queues, where a person kept from the model ends every picture but their own —
+    // this turn's own included, when another picture of the same holder was the one ended here. An ended turn takes no
+    // more calls: queued behind its own end, this call would be refused by nobody and would stop every step after it.
+    if (turn?.ended) return Promise.reject(fail(turn.ended));
+    if (counting) {
+      try { controls.onStart?.(); } catch {}
+      return provider.countInput!(request, { ...controls, signal: controls.signal ?? new AbortController().signal });
     }
     return new Promise((resolve, reject) => {
       const item: Item<Request> = { priority, method, request, controls, resolve, reject,
@@ -198,7 +205,9 @@ export function createScheduler<Request, Result>(provider: {
     const open = (item.priority === 'foreground' ? lanes : shared).filter(free);
     const holder = item.turn?.holder;
     const own = open.find(lane => holder !== undefined && lane.holder === holder);
-    if (item.turn?.sharesPrefix) return own;
+    // The agent interface opens turns with the same options, and an agent takes no person's slot: a prefix-sharing
+    // turn of its own has nowhere to run, in the lower slots as in the highest, and `hopeless` ends it below.
+    if (item.turn?.sharesPrefix) return item.priority === 'foreground' ? own : undefined;
     if (item.turn?.yields) return open.find(lane => !lane.person) ?? own ?? open[0];
     // A picture of this caller's own, stopped for this very call, is leaving their slot: no other slot is worth the
     // prefill it saves them, so they take none.
@@ -281,8 +290,8 @@ export function createScheduler<Request, Result>(provider: {
       return endTurn(lane.reserved.turn, 'background_unavailable');
     }
     // Work done ahead of need that can never be admitted ends here, so that its owner lets the GPU go. The agent
-    // interface opens turns with the same options, and one of its prefix-sharing turns can never run at all: agents
-    // take no person's slot, and a person's slot is the only one such a turn may have.
+    // interface opens turns with the same options, and one of its prefix-sharing turns can never run at all: a
+    // person's slot is the only one such a turn may have, and `pick` gives an agent no person's slot, free or not.
     const stuck = foreground.find(hopeless) ?? agent.find(hopeless);
     if (stuck) {
       log('background_unavailable');
@@ -310,7 +319,9 @@ export function createScheduler<Request, Result>(provider: {
         if (!allowed()) return item;
         const lane = pick(item);
         if (lane && admit(item, lane)) start(item, lane);
-        else if (!item.turn?.yields) return item;
+        // A call waiting for the slot its own picture is leaving is kept from the model by nobody else: it waits those
+        // moments out without holding up the queue, so the free slots stay open and nobody else's prepared work ends.
+        else if (!item.turn?.yields && !leaving(item.turn?.holder)) return item;
       }
       return undefined;
     };

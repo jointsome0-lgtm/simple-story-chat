@@ -515,6 +515,27 @@ test('a picture ends the moment its holder calls again, however much room the po
   assert.deepEqual([f.calls[2].name, f.calls[2].slot], ['tester next', 2]);
   f.calls[2].finish(); await next; again.end(); picture.end();
 });
+test('a person\'s token count in a pool ends the picture in their slot, as their scene does', async t => {
+  const f = poolFixture(t);
+  const tester = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const scene = tester.generate('tester scene');
+  await f.started(1);
+  f.calls[0].finish(); await scene; tester.end();
+  const picture = f.scheduler.foreground.openTurn({ holder: 'tester', yields: true, sharesPrefix: true });
+  const described = picture.generate('picture');
+  await f.started(2);
+  assert.equal(f.calls[1].slot, 2);
+  // A scene's input is counted before the scene is generated (generation.ts), and a pool counts it outside the slots.
+  // The picture standing in that scene's way ends for the count all the same, as it does with a single slot.
+  const stopped = assert.rejects(described, { code: 'background_preempted' });
+  const again = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  assert.equal(await again.countInput!('tester next:9000'), 9000);
+  await stopped;
+  const next = again.generate('tester next:9000');
+  await f.started(3);
+  assert.deepEqual([f.calls[2].name, f.calls[2].slot], ['tester next', 2]);
+  f.calls[2].finish(); await next; again.end(); picture.end();
+});
 test('the holder waits for the slot a picture is still leaving, rather than take a free one', async t => {
   // A stopped call does not let its slot go the instant it is told to; the next scene is sized before that, in a
   // microtask. Going to another slot then would cost the whole prefill the picture stayed in this one to save.
@@ -557,6 +578,57 @@ test('a picture leaves its holder one slot in the pool, not two', async t => {
   await turn(); await turn();
   assert.deepEqual(f.calls.slice(3).map(call => call.name), ['agent']);
   f.calls[3].finish(); await agent;
+});
+test('a holder waiting for the slot its picture is leaving keeps nobody behind it', async t => {
+  const f = poolFixture(t, {}, 2);
+  const tester = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const scene = tester.generate('tester scene');
+  await f.started(1);
+  f.calls[0].finish(); await scene; tester.end();
+  // Another person's compaction, prepared while they read, in a slot the tester does not want.
+  const prepared = f.scheduler.foreground.openTurn({ holder: 'owner', yields: true });
+  const extraction = prepared.generate('prepared extraction');
+  await f.started(2);
+  assert.equal(f.calls[1].slot, 0);
+  const picture = f.scheduler.foreground.openTurn({ holder: 'tester', yields: true, sharesPrefix: true });
+  const described = picture.generate('picture');
+  await f.started(3);
+  assert.equal(f.calls[2].slot, 2);
+  const stopped = assert.rejects(described, { code: 'background_preempted' });
+  const again = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const next = again.generate('tester next');
+  // The tester waits for one slot of the three, and holds up nothing while they wait: a person behind them runs in a
+  // free slot, and the compaction prepared for a third person is in nobody's way, so it is not ended for them.
+  const guest = f.scheduler.foreground.generate('guest scene');
+  await stopped;
+  await f.started(5);
+  assert.deepEqual(f.calls.slice(3).map(call => [call.name, call.slot]), [['guest scene', 1], ['tester next', 2]]);
+  assert.equal(f.calls[1].signal.aborted, false);
+  f.calls[1].finish(); await extraction; prepared.end();
+  f.calls[3].finish(); await guest;
+  f.calls[4].finish(); await next; again.end(); picture.end();
+});
+test('a picture ended while its own call is still being enqueued takes no place in the queue', async t => {
+  const f = poolFixture(t, { slots: 2 });
+  const one = f.scheduler.foreground.generate('one');
+  const two = f.scheduler.foreground.generate('two');
+  await f.started(2);
+  const three = f.scheduler.foreground.generate('three');
+  await turn(); await turn();
+  assert.equal(f.scheduler.snapshot().foregroundQueued, 1);
+  // Opening a second picture for the same holder ends the first one, and the person waiting for a slot ends this one
+  // in the same breath, before its call is even queued. The call is refused, rather than left waiting for a turn that
+  // is over and that nothing would end a second time.
+  const first = f.scheduler.foreground.openTurn({ holder: 'tester', yields: true, sharesPrefix: true });
+  const second = f.scheduler.foreground.openTurn({ holder: 'tester', yields: true, sharesPrefix: true });
+  await assert.rejects(second.generate('picture'), { code: 'background_preempted' });
+  first.end(); second.end();
+  // The queues run on: the person who was waiting takes the first slot to come free.
+  f.calls[0].finish(); await one;
+  await f.started(3);
+  assert.equal(f.calls[2].name, 'three');
+  f.calls[1].finish(); await two;
+  f.calls[2].finish(); await three;
 });
 test('a picture stays while another person has room and gives way to the one who has none', async t => {
   const f = poolFixture(t, { slots: 2 });
@@ -606,12 +678,36 @@ test('a prefix-sharing turn of the agent interface gives up at once instead of h
   await f.started(1);
   assert.equal(f.calls[0].slot, 2);
   f.calls[0].finish(); await scene; tester.end();
+  const owner = f.scheduler.foreground.openTurn({ holder: 'owner' });
+  const other = owner.generate('owner scene');
+  await f.started(2);
+  assert.equal(f.calls[1].slot, 1);
+  f.calls[1].finish(); await other; owner.end();
   // The agent interface opens turns with the same options, but agents take no person's slot, and the tester's prefix
   // is in one: this turn could only wait for ever, keeping the GPU from idling (bot.ts `prepareNext`).
   const picture = f.scheduler.agent.openTurn({ holder: 'tester', sharesPrefix: true });
   await assert.rejects(picture.generate('picture'), { code: 'background_unavailable' });
-  assert.equal(f.calls.length, 1);
+  // The owner's cache is in a slot agents do use, and it is still the owner's: a turn of theirs is refused there too,
+  // rather than run where it would cost the owner their reserve.
+  const lower = f.scheduler.agent.openTurn({ holder: 'owner', sharesPrefix: true });
+  await assert.rejects(lower.generate('owner picture'), { code: 'background_unavailable' });
+  assert.equal(f.calls.length, 2);
   assert.equal(f.scheduler.snapshot().agentQueued, 0);
+  // It is refused while agents may not start at all, where nothing else would ever look at it again, and in a slot
+  // agents do choose from: `place` never reaches it, and no reservation makes it late enough to be taken as lost.
+  const g = poolFixture(t, { agentCanStart: () => false });
+  const first = g.scheduler.foreground.openTurn({ holder: 'first' });
+  const ahead = first.generate('first scene');
+  await g.started(1);
+  const guest = g.scheduler.foreground.openTurn({ holder: 'guest' });
+  const read = guest.generate('guest scene');
+  await g.started(2);
+  assert.deepEqual(g.calls.map(call => call.slot), [2, 1]);
+  g.calls[0].finish(); await ahead; first.end();
+  g.calls[1].finish(); await read; guest.end();
+  const shut = g.scheduler.agent.openTurn({ holder: 'guest', sharesPrefix: true });
+  await assert.rejects(shut.generate('guest picture'), { code: 'background_unavailable' });
+  assert.equal(g.calls.length, 2);
 });
 test('a picture is admitted beside the cache it fills again, and refused beside another reader\'s', async t => {
   const f = poolFixture(t, { poolTokens: 30000 });
