@@ -6,8 +6,8 @@ import { deflateSync, inflateSync, crc32 } from 'node:zlib';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { draw, buildBundles, bundlesOf, applyToWorkflow, defaultWorkflow, latentSizeOf, parseSeeds, stripPngMetadata, taskMarkdown, REVIEW } from './image-batch.ts';
-import type { Graph, Picture } from './image-batch.ts';
+import { draw, buildBundles, bundlesOf, applyToWorkflow, defaultWorkflow, latentSizeOf, parseSeeds, portraitsFor, referenceSlots, samplerSettingsOf, stripPngMetadata, taskMarkdown, REVIEW } from './image-batch.ts';
+import type { Graph, Picture, References } from './image-batch.ts';
 import type { Case } from './illustrate-probe.ts';
 
 // A real 2x2 PNG, written here the way ComfyUI writes one: the workflow and the prompt in text chunks beside the pixels.
@@ -41,12 +41,18 @@ function chunksOf(bytes: Uint8Array) {
   return found;
 }
 
-// The fake ComfyUI: /prompt, /history, /view, /system_stats, and POST /history to forget a job. A job finishes on the
-// third poll, so the video-memory sampling inside the wait runs too.
-function fakeComfy(options: { failCase?: string; refuse?: number } = {}) {
+// Whatever text this graph carries, whichever node holds it: Krea has one `text` per CLIPTextEncode, Qwen Image
+// 2.1 has `prompt` and `negative_prompt` on one encode node.
+const textOf = (graph: Graph) => Object.values(graph)
+  .flatMap(node => [node.inputs.text, node.inputs.prompt]).filter(value => typeof value === 'string').join(' ');
+
+// The fake ComfyUI: /prompt, /history, /view, /system_stats, POST /upload/image for reference pictures, and POST
+// /history to forget a job. A job finishes on the third poll, so the video-memory sampling inside the wait runs too.
+function fakeComfy(options: { failCase?: string; refuse?: number; refuseUpload?: boolean } = {}) {
   const submitted: Graph[] = [];
   const cleared: string[] = [];
   const viewed: string[] = [];
+  const uploads: { name: string; type: string; overwrite: string; bytes: Buffer }[] = [];
   const attempts = { prompt: 0 };
   const polls = new Map<string, number>();
   const server = createServer((request, response) => {
@@ -66,6 +72,18 @@ function fakeComfy(options: { failCase?: string; refuse?: number } = {}) {
         cleared.push(...((await body()).delete as string[] ?? []));
         return json({});
       }
+      // As ComfyUI's own route: a multipart form with the picture, the target directory and the overwrite flag,
+      // answered with the name LoadImage will read it by.
+      if (request.method === 'POST' && url.pathname === '/upload/image') {
+        if (options.refuseUpload) { response.statusCode = 200; return json({}); }
+        const parts: Buffer[] = [];
+        for await (const part of request) parts.push(part as Buffer);
+        const form = await new Response(Buffer.concat(parts), { headers: { 'content-type': request.headers['content-type']! } }).formData();
+        const file = form.get('image') as File;
+        uploads.push({ name: file.name, type: String(form.get('type')), overwrite: String(form.get('overwrite')),
+          bytes: Buffer.from(await file.arrayBuffer()) });
+        return json({ name: file.name, subfolder: '', type: 'input' });
+      }
       if (url.pathname === '/system_stats') return json({ devices: [{ index: 0, vram_total: 32 * 1024 * 1024 * 1024, vram_free: 2 * 1024 * 1024 * 1024 }] });
       if (url.pathname.startsWith('/history/')) {
         const id = url.pathname.slice('/history/'.length);
@@ -73,7 +91,7 @@ function fakeComfy(options: { failCase?: string; refuse?: number } = {}) {
         polls.set(id, seen);
         if (seen < 3) return json({});
         const graph = submitted[Number(id.slice(1)) - 1];
-        const prompt = String(graph['2'].inputs.text);
+        const prompt = textOf(graph);
         if (options.failCase && prompt.includes(options.failCase)) return json({ [id]: { status: { completed: false, status_str: 'error' } } });
         // As ComfyUI answers for a PreviewImage node: the picture is in the server's temp area, not its output one.
         return json({ [id]: { status: { completed: true, status_str: 'success' }, outputs: { 7: { images: [{ filename: `${id}.png`, subfolder: '', type: 'temp' }] } } } });
@@ -90,7 +108,7 @@ function fakeComfy(options: { failCase?: string; refuse?: number } = {}) {
       response.end();
     })();
   });
-  return { server, submitted, cleared, viewed, attempts, listen: () => new Promise<string>(done => server.listen(0, '127.0.0.1', () => done(`http://127.0.0.1:${(server.address() as AddressInfo).port}`))) };
+  return { server, submitted, cleared, viewed, uploads, attempts, listen: () => new Promise<string>(done => server.listen(0, '127.0.0.1', () => done(`http://127.0.0.1:${(server.address() as AddressInfo).port}`))) };
 }
 
 // The same server with the queue ComfyUI really has: one job at a time, in submit order, and a history entry — the
@@ -253,6 +271,167 @@ test('the pinned workflow of the picture lane is filled, and keeps the size it w
   assert.deepEqual(index.pictures.map(picture => [picture.width, picture.height]), [[1280, 720], [1280, 720]]);
   const latent = Object.values(comfy.submitted[0]).find(one => one.class_type === 'EmptyLatentImage')!;
   assert.deepEqual([latent.inputs.width, latent.inputs.height], [1280, 720], 'the card drew another size than the graph pins');
+});
+
+// Qwen Image 2.1 is the same harness against a different shape of graph: both conditionings come from one node,
+// through two inputs, and the settings are the template's own rather than the tester's Krea eight.
+test('the pinned Qwen graph takes its prompt and its negative on one node, and is drawn with its own settings', async t => {
+  const graph: Graph = JSON.parse(readFileSync(resolve('gpu/image-workflow-qwen.json'), 'utf8'));
+  assert.deepEqual(latentSizeOf(graph), { width: 1280, height: 720 });
+  assert.deepEqual(samplerSettingsOf(graph), { steps: 25, sampler: 'euler', scheduler: 'simple', cfg: 1 });
+  const filled = applyToWorkflow(graph, { checkpoint: 'qwen_image_2.1_int8_convrot.safetensors', prompt: 'a picture',
+    negative: 'blurry', seed: 7, steps: 25, sampler: 'euler', scheduler: 'simple', width: 1280, height: 720, cfg: 1 });
+  const encode = Object.values(filled).find(node => node.class_type === 'TextEncodeQwenImage21')!;
+  // The Krea rule — never write the negative over the node the positive is on — is about the input, not the node:
+  // here one node holds both, and skipping it would have drawn every Qwen picture from an empty prompt.
+  assert.equal(encode.inputs.prompt, 'a picture');
+  assert.equal(encode.inputs.negative_prompt, 'blurry');
+  assert.equal(Object.values(filled).find(node => node.class_type === 'UNETLoader')!.inputs.unet_name, 'qwen_image_2.1_int8_convrot.safetensors');
+
+  // And the run: with no --steps and no --sampler the graph's 25 euler steps are drawn and written down. The
+  // harness defaults are 8 er_sde, which is a different picture and a different number of rented seconds.
+  const comfy = fakeComfy();
+  const url = await comfy.listen();
+  const root = corpus();
+  t.after(() => { comfy.server.close(); rmSync(root, { recursive: true, force: true }); });
+  const index = await draw({ ...options(root, url), width: undefined, height: undefined, steps: undefined,
+    sampler: undefined, scheduler: undefined, cfg: undefined, checkpoints: ['qwen_image_2.1_int8_convrot.safetensors'],
+    workflow: resolve('gpu/image-workflow-qwen.json') });
+  assert.equal(index.failures.length, 0, JSON.stringify(index.failures));
+  assert.deepEqual(index.comfy, { steps: 25, sampler: 'euler', scheduler: 'simple', cfg: 1, width: 1280, height: 720 });
+  assert.equal(index.workflow!.file, 'image-workflow-qwen.json');
+  assert.deepEqual(index.pictures.map(picture => picture.steps), [25, 25]);
+  const sampler = Object.values(comfy.submitted[0]).find(node => node.class_type === 'KSampler')!;
+  assert.deepEqual([sampler.inputs.steps, sampler.inputs.sampler_name], [25, 'euler']);
+});
+
+// One run has one workflow, and a resume into a directory drawn by another one would leave half a comparison under
+// one name, with an index.json describing whichever graph ran last.
+test('a run directory holds one graph, and a resume with another one is refused by the graph\'s own hash', async t => {
+  const comfy = fakeComfy();
+  const url = await comfy.listen();
+  const root = corpus();
+  t.after(() => { comfy.server.close(); rmSync(root, { recursive: true, force: true }); });
+  const first = await draw({ ...options(root, url), checkpoints: ['a.safetensors'] });
+  assert.equal(first.workflow!.file, '(built-in)');
+  await assert.rejects(draw({ ...options(root, url), checkpoints: ['a.safetensors'], width: undefined,
+    height: undefined, workflow: resolve('gpu/image-workflow-qwen.json') }), /one run directory holds one graph/);
+});
+
+// The identity test: the people of a frame bring their portraits with them. The sheet name picks the file and
+// stops there — what reaches the card is a hash, because a portrait is somebody's face.
+const identityCases: Case[] = [
+  { id: 'battle-2', scenario: 'battle', index: 2, scene: 'Сцена про телегу.', sheet: [{ name: 'Элин', look: 'A middle-aged woman in grey' }],
+    description: { moment: 'At a cart', shot: 'Medium shot', setting: 'A salt road', objects: '', props: '', light: 'Morning light',
+      people: [{ who: 'Элину', look: '', state: '', action: 'lifts a crate' }] },
+    prompt: 'Medium shot. A salt road. At a cart.', namesStripped: 0, fromSheet: 1, withoutLook: 0 },
+  { id: 'battle-5', scenario: 'battle', index: 5, scene: 'Сцена про шину.', sheet: [{ name: 'Элин', look: 'A middle-aged woman in grey' }],
+    description: { moment: 'At a wheel', shot: 'Wide shot', setting: 'A salt road', objects: '', props: '', light: 'Noon light',
+      people: [{ who: 'Элин', look: '', state: '', action: 'kneels at the wheel' },
+        { who: 'salt worker', look: 'A young man', state: '', action: 'holds the axle' }] },
+    prompt: 'Wide shot. A salt road. At a wheel.', namesStripped: 0, fromSheet: 1, withoutLook: 0 },
+];
+
+test('a frame is drawn with the portraits of its own people, each face uploaded once and the empty slots removed', async t => {
+  const comfy = fakeComfy();
+  const url = await comfy.listen();
+  const root = mkdtempSync(join(tmpdir(), 'simple-chat-image-identity-'));
+  t.after(() => { comfy.server.close(); rmSync(root, { recursive: true, force: true }); });
+  mkdirSync(join(root, 'prompts'), { recursive: true });
+  writeFileSync(join(root, 'prompts', 'prompts.json'), JSON.stringify(identityCases));
+  // A portrait as it comes off the card: a real PNG with ComfyUI's own text chunks in it.
+  writeFileSync(join(root, 'elin.png'), pngWithMetadata('{"prompt":"PORTRAIT_PROMPT"}'));
+  writeFileSync(join(root, 'references.json'), JSON.stringify({ battle: { 'Элин': 'elin.png' } } satisfies References));
+
+  const index = await draw({ ...options(root, url), checkpoints: ['qwen_image_2.1_int8_convrot.safetensors'],
+    width: undefined, height: undefined, steps: undefined, sampler: undefined, scheduler: undefined, cfg: undefined,
+    workflow: resolve('gpu/image-workflow-qwen-edit.json'), references: join(root, 'references.json') });
+  assert.equal(index.failures.length, 0, JSON.stringify(index.failures));
+  // One portrait, two frames: the same face is not paid for twice on a card billed by the minute.
+  assert.equal(comfy.uploads.length, 1);
+  const [upload] = comfy.uploads;
+  assert.deepEqual([upload.type, upload.overwrite], ['input', 'true']);
+  // The name is the hash of the bytes. Neither the sheet name nor the story is written onto the rented disk.
+  assert.match(upload.name, /^ref-[0-9a-f]{16}\.png$/);
+  assert.ok(!upload.name.includes('lin') && !upload.name.includes('battle'));
+  // And the bytes are stripped like every other picture here: the prompt that drew the portrait does not travel.
+  assert.deepEqual(chunksOf(upload.bytes).map(one => one.type), ['IHDR', 'IDAT', 'IEND']);
+  assert.ok(!upload.bytes.includes('PORTRAIT_PROMPT'));
+
+  // Both frames name one person the sheet covers; the salt worker has no portrait and takes no slot.
+  assert.deepEqual(index.pictures.map(picture => picture.references), [1, 1]);
+  for (const graph of comfy.submitted) {
+    const encode = Object.values(graph).find(node => node.class_type === 'TextEncodeQwenImage21')!;
+    assert.deepEqual(Object.keys(encode.inputs).filter(name => name.startsWith('images.')), ['images.image_1']);
+    const loader = (encode.inputs['images.image_1'] as [string, number])[0];
+    assert.equal(graph[loader].inputs.image, upload.name);
+    // The three slots this frame does not use are gone, loader and input together: a LoadImage left pointing at
+    // `reference-2.png`, which nobody uploaded, fails the whole prompt rather than one picture.
+    assert.equal(Object.values(graph).filter(node => node.class_type === 'LoadImage').length, 1);
+  }
+});
+
+test('a frame that needs more reference slots than the graph has stops the run instead of dropping a person', async t => {
+  const comfy = fakeComfy();
+  const url = await comfy.listen();
+  const root = mkdtempSync(join(tmpdir(), 'simple-chat-image-identity-'));
+  t.after(() => { comfy.server.close(); rmSync(root, { recursive: true, force: true }); });
+  mkdirSync(join(root, 'prompts'), { recursive: true });
+  writeFileSync(join(root, 'prompts', 'prompts.json'), JSON.stringify(identityCases));
+  writeFileSync(join(root, 'elin.png'), pngWithMetadata('{}'));
+  writeFileSync(join(root, 'references.json'), JSON.stringify({ battle: { 'Элин': 'elin.png' } }));
+  // The text-to-image graph has no reference slots at all, and a references run pointed at it would otherwise be
+  // an ordinary run whose index claimed portraits it never sent.
+  const index = await draw({ ...options(root, url), checkpoints: ['qwen_image_2.1_int8_convrot.safetensors'],
+    width: undefined, height: undefined, steps: undefined, sampler: undefined, scheduler: undefined, cfg: undefined,
+    workflow: resolve('gpu/image-workflow-qwen.json'), references: join(root, 'references.json') });
+  assert.equal(index.error, 'workflow_too_few_reference_slots');
+  assert.equal(index.pictures.length, 0);
+  assert.equal(comfy.submitted.length, 0, 'the card is not paid for a graph that cannot carry the references');
+});
+
+test('an upload the server accepts without naming a file stops the run rather than draw without the face', async t => {
+  const comfy = fakeComfy({ refuseUpload: true });
+  const url = await comfy.listen();
+  const root = mkdtempSync(join(tmpdir(), 'simple-chat-image-identity-'));
+  t.after(() => { comfy.server.close(); rmSync(root, { recursive: true, force: true }); });
+  mkdirSync(join(root, 'prompts'), { recursive: true });
+  writeFileSync(join(root, 'prompts', 'prompts.json'), JSON.stringify(identityCases));
+  writeFileSync(join(root, 'elin.png'), pngWithMetadata('{}'));
+  writeFileSync(join(root, 'references.json'), JSON.stringify({ battle: { 'Элин': 'elin.png' } }));
+  const index = await draw({ ...options(root, url), checkpoints: ['q.safetensors'], width: undefined, height: undefined,
+    steps: undefined, sampler: undefined, scheduler: undefined, cfg: undefined,
+    workflow: resolve('gpu/image-workflow-qwen-edit.json'), references: join(root, 'references.json') });
+  // It fails the same way for every cell after it, and a picture drawn without its reference is not the identity
+  // test at all — it is an ordinary picture recorded as one that had a face to keep.
+  assert.equal(index.error, 'comfy_upload_failed');
+  assert.equal(comfy.submitted.length, 0);
+});
+
+test('a person the sheet does not cover, or covers without a portrait, is left out rather than given another face', async t => {
+  const references: References = { battle: { 'Элин': 'elin.png' } };
+  // `who` comes back inflected, and the same matching as the appearance line has to find it.
+  assert.deepEqual(portraitsFor(identityCases[0], references), ['elin.png']);
+  // Two people, one portrait: the salt worker is not on the sheet and takes no slot.
+  assert.deepEqual(portraitsFor(identityCases[1], references), ['elin.png']);
+  assert.deepEqual(portraitsFor(identityCases[0], { dance: { 'Элин': 'elin.png' } }), [], 'another story\'s sheet');
+  assert.deepEqual(portraitsFor(identityCases[0], {}), []);
+  // A references file naming a portrait that is not there fails the whole run before the first cell, and says so
+  // without naming the person: inside the loop it would be an unreadable `image_failed` once per frame.
+  const root = mkdtempSync(join(tmpdir(), 'simple-chat-image-identity-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, 'prompts'), { recursive: true });
+  writeFileSync(join(root, 'prompts', 'prompts.json'), JSON.stringify(identityCases));
+  writeFileSync(join(root, 'references.json'), JSON.stringify({ battle: { 'Элин': 'gone.png' } }));
+  await assert.rejects(draw({ ...options(root, 'http://127.0.0.1:1'), width: undefined, height: undefined, steps: undefined,
+    sampler: undefined, scheduler: undefined, cfg: undefined, checkpoints: ['q.safetensors'],
+    workflow: resolve('gpu/image-workflow-qwen-edit.json'), references: join(root, 'references.json') }),
+    /portrait for a person of "battle"/);
+  // A graph without reference slots has none to find, and the edit graph's four are in slot order.
+  assert.deepEqual(referenceSlots(defaultWorkflow()), []);
+  const edit: Graph = JSON.parse(readFileSync(resolve('gpu/image-workflow-qwen-edit.json'), 'utf8'));
+  assert.deepEqual(referenceSlots(edit).map(slot => slot.key),
+    ['images.image_1', 'images.image_2', 'images.image_3', 'images.image_4']);
 });
 
 // ComfyUI draws one job at a time. A picture abandoned when the wait runs out keeps the card: the next cell queues

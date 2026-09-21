@@ -27,6 +27,7 @@
     "judge:extract": "node local/judge-extract-probe.ts",
     "illustrate:probe": "node local/illustrate-probe.ts",
     "image:batch": "node local/image-batch.ts",
+    "image:portraits": "node local/image-portraits.ts",
     "image:blind": "node local/blind-review.ts",
     "agent": "node local/agent-cli.ts",
     "agent:gpu": "node --env-file=.env.gpu local/agent-cli.ts",

@@ -6,15 +6,18 @@
 //     cleared. What this harness can reach it clears; what it cannot is named at `drawOne` and must be wiped with
 //     the card.
 //   - a review bundle never names the checkpoint that drew a picture; the key stays on our side of the bundle.
-// The prompts of the frozen synthetic stories are the only input; no reader's story is drawn here.
+// The prompts of the frozen synthetic stories are the only input; no reader's story is drawn here. `--references`
+// adds reference portraits for a model that keeps a face across frames (Qwen Image 2.1): they are uploaded under
+// the hash of their bytes, so no name reaches the card, and they are stripped on the way like every other picture.
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, copyFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
-import { join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { safeErrorDetails } from './model-error.ts';
+import { matchSheet } from './illustrate-probe.ts';
 import type { Case } from './illustrate-probe.ts';
 
 // A checkpoint's place in the comparison. The bot logs this role, never the file name (local/model-error.ts).
@@ -24,6 +27,9 @@ export type Cell = { caseId: string; checkpoint: string; role: Role; seed: numbe
 export type Vram = { index: number; totalMiB: number; usedMiBMax: number };
 export type Picture = Cell & {
   steps: number; sampler: string; scheduler: string; width: number; height: number;
+  // How many reference portraits this frame was drawn with, on a run that has them. A count, not a name: which
+  // person it was stays on our side of the card, as `who` does in local/illustrate-probe.ts.
+  references?: number;
   // The seconds the rental asks for: submit to file. `viewMs` is the download through the tunnel, apart from the card.
   totalMs: number; viewMs: number; vram: Vram[]; bytes: number; sha256: string; file: string;
 };
@@ -33,9 +39,16 @@ export type Picture = Cell & {
 export type Failure = Cell & { code: string; httpStatus?: number };
 export type BatchIndex = {
   startedAt: string; completedAt?: string; comfy: { steps: number; sampler: string; scheduler: string; cfg: number; width: number; height: number };
+  // The graph this run posted, by name and by its own hash. One run has one workflow, so the Qwen comparison is a
+  // second run directory; without this row two directories of one comparison differ in nothing a reader can check,
+  // and `comfy` above says which settings that graph was actually filled with.
+  workflow?: { file: string; sha256: string };
   pictures: Picture[]; failures: Failure[]; error?: string;
 };
 export type Graph = Record<string, { class_type: string; inputs: Record<string, unknown> }>;
+// A portrait per person, by story and by the name on that story's character sheet: what `--references` holds. The
+// name selects a file here and goes no further, exactly as `who` selects an appearance line in illustrate-probe.ts.
+export type References = Record<string, Record<string, string>>;
 
 const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
 // Everything an image needs to be decoded, and nothing that carries text. Colour-management chunks (gAMA, sRGB,
@@ -88,6 +101,9 @@ export function defaultWorkflow(): Graph {
 export type WorkflowValues = {
   checkpoint: string; prompt: string; negative: string; seed: number; steps: number;
   sampler: string; scheduler: string; width: number; height: number; cfg: number;
+  // The reference pictures of this frame, as ComfyUI's own input directory names them. Absent on a run without
+  // references, which leaves a pinned graph's reference slots exactly as they were pinned.
+  references?: string[];
 };
 // A failure of the graph itself, told apart from a failure of the server or of the picture: it repeats for every
 // cell, so `draw` stops the run on it instead of writing `image_failed` once for each.
@@ -126,6 +142,42 @@ export function latentSizeOf(graph: Graph): { width: number; height: number } | 
   return typeof width === 'number' && typeof height === 'number' ? { width, height } : null;
 }
 
+// The rest of what a pinned graph carries, for the same reason and with the same rule: a graph that says 25 euler
+// steps is a graph somebody chose 25 euler steps for. `--steps`, `--sampler`, `--scheduler` and `--cfg` override it;
+// a graph that pins none of them falls back to the eight-step Krea settings below, which is what it did before.
+const DEFAULTS = { steps: 8, sampler: 'er_sde', scheduler: 'simple', cfg: 1 };
+export function samplerSettingsOf(graph: Graph): { steps?: number; sampler?: string; scheduler?: string; cfg?: number } {
+  const inputs = samplerOf(graph)?.[1].inputs ?? {};
+  const count = (value: unknown) => typeof value === 'number' ? value : undefined;
+  const name = (value: unknown) => typeof value === 'string' ? value : undefined;
+  return { steps: count(inputs.steps), sampler: name(inputs.sampler_name), scheduler: name(inputs.scheduler), cfg: count(inputs.cfg) };
+}
+
+// The input a conditioning node takes its words in. Krea's `CLIPTextEncode` has one `text` per conditioning;
+// Qwen Image 2.1 encodes both in one node, from `prompt` and `negative_prompt`, and hands out two conditionings.
+// Which is which still follows from the sampler input the link arrived on, not from the node's type.
+const promptKey = (node: Graph[string], role: 'positive' | 'negative') => {
+  const own = role === 'positive' ? 'prompt' : 'negative_prompt';
+  return own in node.inputs ? own : 'text' in node.inputs ? 'text' : null;
+};
+
+// The reference-picture inputs of an edit graph, in slot order. Qwen Image 2.1 takes each reference on its own
+// `images.image_N` input of the encode node (ComfyUI's autogrow inputs), and each of those is wired to a LoadImage
+// that names a file in the server's input directory, which is what `--references` uploads.
+export function referenceSlots(graph: Graph): { node: string; key: string; loader: string }[] {
+  const found: { node: string; key: string; order: number; loader: string }[] = [];
+  for (const [node, { inputs }] of Object.entries(graph)) {
+    for (const [key, value] of Object.entries(inputs)) {
+      const slot = /^images\.image_(\d+)$/.exec(key);
+      const loader = Array.isArray(value) ? String(value[0]) : null;
+      if (slot && loader && graph[loader] && 'image' in graph[loader].inputs) {
+        found.push({ node, key, order: Number(slot[1]), loader });
+      }
+    }
+  }
+  return found.sort((a, b) => a.order - b.order).map(({ node, key, loader }) => ({ node, key, loader }));
+}
+
 // Fills a graph by the role of each node rather than by its id, so a workflow pinned on the card keeps working as
 // long as it samples, loads a checkpoint and encodes text. It throws rather than draw with the wrong seed or prompt.
 export function applyToWorkflow(graph: Graph, values: WorkflowValues): Graph {
@@ -142,14 +194,18 @@ export function applyToWorkflow(graph: Graph, values: WorkflowValues): Graph {
   if ('cfg' in inputs) inputs.cfg = values.cfg;
   loader[1].inputs['ckpt_name' in loader[1].inputs ? 'ckpt_name' : 'unet_name'] = values.checkpoint;
   const linked = (key: string) => linkedTo(filled, inputs, key);
-  const text = (key: string) => { const node = linked(key); return node && 'text' in node.inputs ? node : null; };
-  const positive = text('positive');
-  if (!positive) throw workflowError('workflow_no_positive_prompt', 'The workflow needs a text node on the sampler\'s positive input');
-  positive.inputs.text = values.prompt;
-  const negative = text('negative');
-  // One text node wired to both conditionings: writing the negative over it would send the card an empty prompt
-  // while the index and the bundle still showed the assembled one.
-  if (negative && negative !== positive) negative.inputs.text = values.negative;
+  const positive = linked('positive');
+  const positiveKey = positive && promptKey(positive, 'positive');
+  if (!positive || !positiveKey) throw workflowError('workflow_no_positive_prompt', 'The workflow needs a text node on the sampler\'s positive input');
+  positive.inputs[positiveKey] = values.prompt;
+  const negative = linked('negative');
+  const negativeKey = negative && promptKey(negative, 'negative');
+  // One *input* wired to both conditionings: writing the negative over it would send the card an empty prompt while
+  // the index and the bundle still showed the assembled one. Qwen's single encode node is not that case — its two
+  // conditionings come from two inputs — which is why the same node is only skipped when the input is the same too.
+  if (negative && negativeKey && !(negative === positive && negativeKey === positiveKey)) {
+    negative.inputs[negativeKey] = values.negative;
+  }
   // Only the latent the sampler starts from: a pinned workflow's upscale or pad node has a size of its own, and
   // writing the base size into it would quietly undo what it is there for.
   const latent = linked('latent_image');
@@ -158,10 +214,25 @@ export function applyToWorkflow(graph: Graph, values: WorkflowValues): Graph {
   }
   latent.inputs.width = values.width;
   latent.inputs.height = values.height;
+  // The reference portraits of this frame. The first slots take the uploaded names; the rest leave the graph, input
+  // and LoadImage together, because a slot left pointing at a file nobody uploaded fails the whole prompt, and a
+  // frame with two people in it is not a frame with four. A run without references leaves a graph as it was pinned.
+  const references = values.references;
+  if (references) {
+    const slots = referenceSlots(filled);
+    if (references.length > slots.length) {
+      throw workflowError('workflow_too_few_reference_slots',
+        `The workflow has ${slots.length} reference slots and a frame of this batch needs ${references.length}`);
+    }
+    slots.forEach((slot, order) => {
+      if (order < references.length) filled[slot.loader].inputs.image = references[order];
+      else { delete filled[slot.node].inputs[slot.key]; delete filled[slot.loader]; }
+    });
+  }
   return filled;
 }
 
-type Comfy = { baseUrl: string; timeoutMs: number };
+export type Comfy = { baseUrl: string; timeoutMs: number };
 type HistoryEntry = { status?: { completed?: boolean; status_str?: string }; outputs?: Record<string, { images?: { filename: string; subfolder: string; type: string }[] }> };
 
 const call = async (comfy: Comfy, path: string, init?: RequestInit) => {
@@ -193,6 +264,39 @@ const mergeVram = (into: Vram[], seen: Vram[]) => {
 
 const post = (comfy: Comfy, path: string, body?: object) => call(comfy, path, { method: 'POST',
   headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}) });
+
+// A reference picture into the server's input directory, where LoadImage reads it by name. The name is the hash of
+// the bytes and nothing else: a portrait is a face, and the sheet name it was drawn for must not be written onto
+// the rented disk. The bytes are stripped like every other picture here — a portrait comes off this same card and
+// carries the prompt that drew it in its text chunks — and the file stays until the card is destroyed.
+export async function uploadReference(comfy: Comfy, bytes: Uint8Array): Promise<string> {
+  const stripped = stripPngMetadata(bytes);
+  const name = `ref-${createHash('sha256').update(stripped).digest('hex').slice(0, 16)}.png`;
+  const form = new FormData();
+  form.append('image', new Blob([stripped], { type: 'image/png' }), name);
+  form.append('overwrite', 'true');
+  form.append('type', 'input');
+  const answer = await (await call(comfy, '/upload/image', { method: 'POST', body: form }))
+    .json() as { name?: string; subfolder?: string };
+  if (!answer.name) throw Object.assign(new Error('comfy_upload_failed'), { code: 'comfy_upload_failed' });
+  return answer.subfolder ? `${answer.subfolder}/${answer.name}` : answer.name;
+}
+
+// The portraits of the people in this frame, in the order the prompt names them. `who` is the only described field
+// that carries a name; here it picks a file, the way it picks an appearance line in local/illustrate-probe.ts, and
+// goes no further. Somebody the sheet does not cover, or covers without a portrait, is left out rather than given
+// another person's face; one portrait is never sent twice, because two slots of one face is not what the slot means.
+export function portraitsFor(one: Case, references: References): string[] {
+  const story = references[one.scenario] ?? {};
+  const names = (one.sheet ?? []).map(character => character.name);
+  const found: string[] = [];
+  for (const person of one.description?.people ?? []) {
+    const matched = matchSheet(person.who ?? '', names);
+    const file = matched === null ? undefined : story[matched];
+    if (file && !found.includes(file)) found.push(file);
+  }
+  return found;
+}
 
 // A picture that outlives the wait is still the card's. ComfyUI runs one job at a time, so the next cell would
 // queue behind the abandoned one and inherit its seconds — and the seconds are what the rental is decided on — and
@@ -255,13 +359,14 @@ export async function drawOne(comfy: Comfy, graph: Graph, options: { pollMs?: nu
 
 export type DrawOptions = {
   prompts: string; out: string; comfy: string; checkpoints: string[]; seeds: number[];
-  // Without a size the graph's own latent size is drawn and recorded: a workflow pinned on the card carries the
-  // resolution it was tested at, and the harness's default is not that resolution.
-  steps: number; sampler: string; scheduler: string; cfg: number; width?: number; height?: number;
+  // Without a size, or without sampler settings, the graph's own are drawn and recorded: a workflow pinned on the
+  // card carries the resolution and the steps it was tested at, and the harness's defaults are not those.
+  steps?: number; sampler?: string; scheduler?: string; cfg?: number; width?: number; height?: number;
   // `timeoutMs` is one HTTP request's own timeout; `waitMs` is how long a picture may take, which is a different
   // number by two orders of magnitude and used to be the same one.
   negative: string; minutes: number; timeoutMs: number; waitMs: number; pollMs?: number; workflow?: string;
-  log?: (event: object) => void;
+  // The portraits file of the identity run, read for the paths it names; see `portraitsFor`.
+  references?: string; log?: (event: object) => void;
 };
 
 // A checkpoint name and a case id both become one path component and nothing else: they name a file on our disk, and
@@ -284,7 +389,8 @@ const isCell = (one: Cell, other: Cell) => one.caseId === other.caseId && one.ch
 
 // Codes that say the graph or the server is wrong rather than this picture: every cell after them fails in the same
 // way, and on a rental each of those failures is paid for.
-const stopsTheRun = (code: string) => code === 'comfy_http_error' || code === 'comfy_rejected_prompt' || code.startsWith('workflow_');
+const stopsTheRun = (code: string) => code === 'comfy_http_error' || code === 'comfy_rejected_prompt'
+  || code === 'comfy_upload_failed' || code.startsWith('workflow_');
 
 // Checkpoint-major order: a switch reloads the whole checkpoint, and an early stop then leaves whole comparable
 // blocks rather than a little of each.
@@ -311,10 +417,29 @@ export async function draw(options: DrawOptions): Promise<BatchIndex> {
   if (width === undefined || height === undefined) {
     throw workflowError('workflow_no_latent_size', 'The sampler\'s latent_image must come from a node with a width and a height, or give --size');
   }
+  // The same rule for the sampler: the flag, then the graph, then the harness's own eight-step settings.
+  const settings = samplerSettingsOf(graph);
+  const steps = options.steps ?? settings.steps ?? DEFAULTS.steps;
+  const sampler = options.sampler ?? settings.sampler ?? DEFAULTS.sampler;
+  const scheduler = options.scheduler ?? settings.scheduler ?? DEFAULTS.scheduler;
+  const cfg = options.cfg ?? settings.cfg ?? DEFAULTS.cfg;
+  const workflow = { file: options.workflow ? basename(resolve(options.workflow)) : '(built-in)',
+    sha256: createHash('sha256').update(JSON.stringify(graph)).digest('hex') };
+  // The portraits, read where the file that names them is, so that the file and the pictures move together.
+  const referenceRoot = options.references ? dirname(resolve(options.references)) : '';
+  const references: References | null = options.references
+    ? JSON.parse(readFileSync(resolve(options.references), 'utf8')) : null;
+  const uploaded = new Map<string, string>();
   const indexPath = join(directory, 'index.json');
   const index: BatchIndex = existsSync(indexPath) ? JSON.parse(readFileSync(indexPath, 'utf8'))
-    : { startedAt: new Date().toISOString(), comfy: { steps: options.steps, sampler: options.sampler, scheduler: options.scheduler,
-      cfg: options.cfg, width, height }, pictures: [], failures: [] };
+    : { startedAt: new Date().toISOString(), comfy: { steps, sampler, scheduler, cfg, width, height }, workflow,
+      pictures: [], failures: [] };
+  // A resume into a directory drawn by another graph would leave half a comparison under one name. The graph's own
+  // hash is what says so: the file can be renamed, and the same name can hold a different graph tomorrow.
+  if (index.workflow && index.workflow.sha256 !== workflow.sha256) {
+    throw new Error(`${indexPath} was drawn with another workflow (${index.workflow.file}); one run directory holds one graph`);
+  }
+  index.workflow = workflow;
   const save = () => writeFileSync(indexPath, JSON.stringify(index, null, 2));
   const deadline = performance.now() + options.minutes * 60000;
 
@@ -326,6 +451,16 @@ export async function draw(options: DrawOptions): Promise<BatchIndex> {
   const paths = plan.map(fileOf);
   const shared = paths.find((path, order) => paths.indexOf(path) !== order);
   if (shared) throw new Error(`Two cells would write ${shared}: a scene is in prompts.json twice, or a checkpoint or seed is repeated`);
+  // And every portrait the references file names, here rather than at the cell that wanted it: a path that is
+  // wrong is wrong for the whole run, and a missing file inside the loop is an unreadable `image_failed` per cell.
+  // The story is named because it is a synthetic scenario; the person is not, because the person is a name.
+  for (const [story, people] of Object.entries(references ?? {})) {
+    for (const portrait of Object.values(people ?? {})) {
+      if (typeof portrait !== 'string' || !existsSync(resolve(referenceRoot, portrait))) {
+        throw new Error(`The references file names a portrait for a person of "${story}" that is not a file beside it`);
+      }
+    }
+  }
 
   for (const cell of plan) {
     const file = fileOf(cell);
@@ -334,13 +469,28 @@ export async function draw(options: DrawOptions): Promise<BatchIndex> {
     if (performance.now() > deadline) { log({ event: 'budget_spent', drawn: index.pictures.length }); break; }
     const one = cases.find(entry => entry.id === cell.caseId)!;
     try {
+      // One upload per portrait, not per cell: the same face comes back in every frame of its story, and the card
+      // is billed by the minute. A cell whose people have no portraits is drawn without any, from the prompt alone.
+      let bound: string[] | undefined;
+      if (references) {
+        bound = [];
+        for (const portrait of portraitsFor(one, references)) {
+          let name = uploaded.get(portrait);
+          if (name === undefined) {
+            name = await uploadReference(comfy, readFileSync(resolve(referenceRoot, portrait)));
+            uploaded.set(portrait, name);
+            log({ event: 'reference_uploaded', uploaded: uploaded.size });
+          }
+          bound.push(name);
+        }
+      }
       const filled = applyToWorkflow(graph, { checkpoint: cell.checkpoint, prompt: one.prompt, negative: options.negative,
-        seed: cell.seed, steps: options.steps, sampler: options.sampler, scheduler: options.scheduler,
-        width, height, cfg: options.cfg });
+        seed: cell.seed, steps, sampler, scheduler, width, height, cfg, references: bound });
       const drawn = await drawOne(comfy, filled, { pollMs: options.pollMs, waitMs: options.waitMs });
       mkdirSync(join(directory, 'pictures', safeName(cell.checkpoint)), { recursive: true, mode: 0o700 });
       writeFileSync(join(directory, file), drawn.bytes, { mode: 0o600 });
-      const picture: Picture = { ...cell, steps: options.steps, sampler: options.sampler, scheduler: options.scheduler,
+      const picture: Picture = { ...cell, steps, sampler, scheduler,
+        ...(bound === undefined ? {} : { references: bound.length }),
         width, height, totalMs: drawn.totalMs, viewMs: drawn.viewMs, vram: drawn.vram,
         bytes: drawn.bytes.length, sha256: createHash('sha256').update(drawn.bytes).digest('hex'), file };
       // The index records cells, not attempts: this cell's earlier failure is off the list now that it has its
@@ -350,7 +500,7 @@ export async function draw(options: DrawOptions): Promise<BatchIndex> {
       index.pictures.push(picture);
       save();
       log({ event: 'picture_drawn', caseId: cell.caseId, role: cell.role, totalMs: picture.totalMs, viewMs: picture.viewMs,
-        vramUsedMiBMax: Math.max(0, ...drawn.vram.map(device => device.usedMiBMax)) });
+        references: picture.references, vramUsedMiBMax: Math.max(0, ...drawn.vram.map(device => device.usedMiBMax)) });
     } catch (error) {
       const raw = String((error as { code?: string }).code ?? '');
       const code = /^[a-z_]{1,50}$/.test(raw) ? raw : 'image_failed';
@@ -455,11 +605,11 @@ const report = (value: object) => console.log(JSON.stringify(value)); // counts,
 async function main(args: string[]) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     prompts: { type: 'string' }, out: { type: 'string' }, comfy: { type: 'string', default: 'http://127.0.0.1:8188' },
-    checkpoints: { type: 'string' }, seeds: { type: 'string', default: '7' }, steps: { type: 'string', default: '8' },
-    sampler: { type: 'string', default: 'er_sde' }, scheduler: { type: 'string', default: 'simple' },
-    cfg: { type: 'string', default: '1' }, size: { type: 'string' }, negative: { type: 'string', default: '' },
+    checkpoints: { type: 'string' }, seeds: { type: 'string', default: '7' }, steps: { type: 'string' },
+    sampler: { type: 'string' }, scheduler: { type: 'string' },
+    cfg: { type: 'string' }, size: { type: 'string' }, negative: { type: 'string', default: '' },
     minutes: { type: 'string', default: '30' }, timeout: { type: 'string', default: '60' }, wait: { type: 'string', default: '300' },
-    workflow: { type: 'string' }, bundles: { type: 'string', default: '3' },
+    workflow: { type: 'string' }, references: { type: 'string' }, bundles: { type: 'string', default: '3' },
   } });
   const command = positionals[0] ?? 'draw';
   // A picture is the reader's scene in another form, so both defaults sit under the directory .gitignore keeps for
@@ -469,31 +619,34 @@ async function main(args: string[]) {
   const prompts = values.prompts ? resolve(values.prompts) : join(root, 'illustrations', 'prompts');
   const bundles = Number(values.bundles);
   if (!['draw', 'bundles'].includes(command) || !Number.isInteger(bundles) || bundles < 1 || bundles > 12) {
-    throw new Error('Use: draw --checkpoints a.safetensors,b.safetensors [--prompts directory] [--out directory] [--seeds 7] [--steps 8] [--sampler er_sde] [--scheduler simple] [--size 1280x720] [--cfg 1] [--minutes 30] [--wait 300] [--timeout 60] [--workflow file.json] [--comfy http://127.0.0.1:8188]; or: bundles [--out directory] [--bundles 3]. --wait is the seconds one picture may take and --timeout the seconds one HTTP request may take. Without --size the workflow is drawn at its own latent size. The built-in workflow fits an all-in-one checkpoint; a model in separate files (Krea 2 Turbo: transformer, text encoder, VAE) needs --workflow, pinned on the card and exported in API format.');
+    throw new Error('Use: draw --checkpoints a.safetensors,b.safetensors [--prompts directory] [--out directory] [--seeds 7] [--steps 8] [--sampler er_sde] [--scheduler simple] [--size 1280x720] [--cfg 1] [--minutes 30] [--wait 300] [--timeout 60] [--workflow file.json] [--references portraits.json] [--comfy http://127.0.0.1:8188]; or: bundles [--out directory] [--bundles 3]. --wait is the seconds one picture may take and --timeout the seconds one HTTP request may take. Without --size, --steps, --sampler, --scheduler or --cfg the workflow is drawn with its own. The built-in workflow fits an all-in-one checkpoint; a model in separate files (Krea 2 Turbo: transformer, text encoder, VAE) needs --workflow, pinned on the card and exported in API format. --references binds a portrait per person to the reference slots of an edit workflow (gpu/image-workflow-qwen-edit.json); local/image-portraits.ts writes both the portrait prompts and that file.');
   }
   if (command === 'bundles') { buildBundles(directory, bundles, report); return; }
   // No --size means the workflow's own size, so nothing is validated and nothing is passed on: `draw` reads it from
-  // the graph. A size that is given is still checked here, before the run opens a directory on the rented card.
+  // the graph. A size that is given is still checked here, before the run opens a directory on the rented card. The
+  // sampler settings work the same way, which is why each of them is checked only when it was given.
   const [width, height] = values.size === undefined ? [undefined, undefined] : values.size.split('x').map(Number);
   const seeds = parseSeeds(values.seeds ?? '');
   const checkpoints = (values.checkpoints ?? '').split(',').map(name => name.trim()).filter(Boolean);
-  const numbers = { steps: Number(values.steps), cfg: Number(values.cfg), minutes: Number(values.minutes),
+  const given = (value: string | undefined) => value === undefined ? undefined : Number(value);
+  const numbers = { steps: given(values.steps), cfg: given(values.cfg), minutes: Number(values.minutes),
     timeout: Number(values.timeout), wait: Number(values.wait) };
+  const named = (value: string | undefined) => value === undefined || /^[a-z0-9_]{1,40}$/.test(value);
   if (!checkpoints.length || checkpoints.length > 6
     || !seeds.every(seed => seed <= Number.MAX_SAFE_INTEGER) || !seeds.length
     || (values.size !== undefined && ![width, height].every(size => Number.isInteger(size) && size! >= 256 && size! <= 4096))
-    || !Number.isInteger(numbers.steps) || numbers.steps < 1 || numbers.steps > 100
-    || !Number.isFinite(numbers.cfg) || numbers.cfg < 0 || numbers.cfg > 30
+    || (numbers.steps !== undefined && (!Number.isInteger(numbers.steps) || numbers.steps < 1 || numbers.steps > 100))
+    || (numbers.cfg !== undefined && (!Number.isFinite(numbers.cfg) || numbers.cfg < 0 || numbers.cfg > 30))
     || !Number.isInteger(numbers.minutes) || numbers.minutes < 1 || numbers.minutes > 240
     || !Number.isInteger(numbers.timeout) || numbers.timeout < 10 || numbers.timeout > 1800
     || !Number.isInteger(numbers.wait) || numbers.wait < 10 || numbers.wait > 3600
-    || !/^[a-z0-9_]{1,40}$/.test(values.sampler ?? '') || !/^[a-z0-9_]{1,40}$/.test(values.scheduler ?? '')) {
+    || !named(values.sampler) || !named(values.scheduler)) {
     throw new Error('Invalid batch options');
   }
   const index = await draw({ prompts, out: directory, comfy: comfyUrl(values.comfy!),
-    checkpoints, seeds, steps: numbers.steps, sampler: values.sampler!, scheduler: values.scheduler!, cfg: numbers.cfg,
+    checkpoints, seeds, steps: numbers.steps, sampler: values.sampler, scheduler: values.scheduler, cfg: numbers.cfg,
     width, height, negative: values.negative ?? '', minutes: numbers.minutes, timeoutMs: numbers.timeout * 1000,
-    waitMs: numbers.wait * 1000, workflow: values.workflow, log: report });
+    waitMs: numbers.wait * 1000, workflow: values.workflow, references: values.references, log: report });
   report({ event: 'batch_written', directory, drawn: index.pictures.length, failed: index.failures.length });
   if (index.failures.length) process.exitCode = 1;
 }
