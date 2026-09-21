@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, readFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -11,8 +11,9 @@ import type { Library } from '../lib/library.ts';
 import { makeRequest } from './prompt.ts';
 import type { GenerationResult, ModelRequest, Provider } from './model.ts';
 import { THRESHOLDS, verdictOf, decide, measureCall, cacheState, withoutPromptCache, buildWorkload,
-  summaries, measureAgentTurn, closePhase, measurementPlan, smokeOutcome, expectCache } from './gpu-measure.ts';
-import type { Call, Phase, Report, WorkCase } from './gpu-measure.ts';
+  summaries, measureAgentTurn, closePhase, measurementPlan, smokeOutcome, expectCache, recordCards, serverCard } from './gpu-measure.ts';
+import type { Call, Phase, Report, Vram, WorkCase } from './gpu-measure.ts';
+import { startFakeLlama } from './fake-llama.ts';
 
 const request: ModelRequest = { system: 'Synthetic timing test.', messages: [{ role: 'user', content: 'Continue.' }], maxOutputTokens: 1000 };
 const result = (over: Partial<GenerationResult> = {}): GenerationResult => ({ text: '2026-09-20 21:00\n\nSynthetic scene.', finishReason: 'stop',
@@ -211,7 +212,7 @@ const make = (over: Partial<Report> = {}): Report => ({ profile: '96k-3', starte
   workload: { version: 3, fingerprint: 'same-work', cases: [cell], coldRuns: 1, warmRuns: 1, nextTurns: false,
     compactAtTokens: 44000, keepScenes: 4, memoryMode: 'plain' },
   phases: { solo: phase(), loaded: phase({ usefulTokensPerHour: 90000 }) },
-  vram: { samples: 3, totalMiB: 32768, usedMiBMax: 30000, freeMiBMin: 2768 }, ...over });
+  vram: { samples: 3, card: 0, cards: [{ index: 0, totalMiB: 32768, usedMiBMax: 30000, freeMiBMin: 2768 }] }, ...over });
 const of = (run: Report, id: number) => verdictOf(run).find(check => check.id === id)!;
 
 test('a complete representative workload passes the agreed thresholds without adding latency or decode budgets', () => {
@@ -259,8 +260,8 @@ test('queue, useful throughput and memory thresholds still reject their own fail
   const waited = make({ phases: { solo: phase(), loaded: phase({ tester: [coldCall(), call({ queueMs: 121000 })] }) } });
   assert.equal(of(waited, 5).verdict, 'fail');
   assert.equal(of(make({ phases: { solo: phase(), loaded: phase({ usefulTokensPerHour: 39600 }) } }), 3).verdict, 'fail');
-  assert.equal(of(make({ vram: { samples: 1, totalMiB: 32768, usedMiBMax: 32000, freeMiBMin: 768 } }), 1).verdict, 'fail');
-  assert.equal(of(make({ vram: { samples: 0, totalMiB: null, usedMiBMax: null, freeMiBMin: null } }), 1).verdict, 'unknown');
+  assert.equal(of(make({ vram: { samples: 1, card: 0, cards: [{ index: 0, totalMiB: 32768, usedMiBMax: 32000, freeMiBMin: 768 }] } }), 1).verdict, 'fail');
+  assert.equal(of(make({ vram: { samples: 0, card: null, cards: [] } }), 1).verdict, 'unknown');
   const idle = make({ phases: { solo: phase(), loaded: phase({ agent: [], probes: { completed: 0, preempted: 3 } }) } });
   assert.deepEqual(verdictOf(idle).slice(1, 4).map(check => check.verdict), ['unknown', 'unknown', 'unknown']);
 });
@@ -294,7 +295,7 @@ test('the failed combined profile remains visible without replacing a measured d
   const fast = make({ profile: 'one-mtp', draft: true, bot: { ...make().bot, slots: 1 }, phases: {
     solo: phase({ tester: [{ ...coldCall(), decodeTokensPerSecond: 100 }, call({ decodeTokensPerSecond: 100 })] }), loaded: phase() } });
   const failed = make({ profile: 'pool-mtp', draft: true, error: 'gpu_server_unreachable', phases: {},
-    vram: { samples: 0, totalMiB: null, usedMiBMax: null, freeMiBMin: null } });
+    vram: { samples: 0, card: null, cards: [] } });
   const answer = decide([failed, plain, fast, make()]);
   assert.equal(answer.draft.verdict, 'pass');
   assert.equal(answer.draft.measured, '2x');
@@ -306,7 +307,7 @@ test('the failed combined profile remains visible without replacing a measured d
 test('a measured memory shortage rejects the combined profile; an incomplete warm series decides no speed-up', () => {
   const plain = make();
   const short = make({ profile: 'pool-mtp', draft: true,
-    vram: { samples: 2, totalMiB: 32768, usedMiBMax: 32100, freeMiBMin: 668 } });
+    vram: { samples: 2, card: 0, cards: [{ index: 0, totalMiB: 32768, usedMiBMax: 32100, freeMiBMin: 668 }] } });
   assert.equal(decide([plain, short]).together.verdict, 'fail');
   assert.equal(decide([plain, short]).pool.note, 'take the pool without the draft model');
   const series = (draft: boolean): Report => make({ draft, profile: draft ? 'mtp' : 'plain',
@@ -434,4 +435,146 @@ for (const [smoke, reuse] of [[true, true], [true, false], [false, true]]) test(
     }
     assert.equal(of(saved, 2).verdict, 'unknown');
   }
+});
+
+const snapshot = (used: [number, number], pids: [number[], number[]] = [[], []]) => ({
+  gpus: [0, 1].map(index => ({ index, pids: pids[index], memoryUsedMiB: used[index],
+    memoryFreeMiB: 32607 - used[index] - 498, memoryTotalMiB: 32607 })),
+  processes: { llamaServer: [{ pid: 108 }], sshd: {} } });
+
+test('each card keeps its own memory, read as free rather than derived, and llama-server names the card', () => {
+  const vram: Vram = { samples: 0, card: null, cards: [] };
+  recordCards(vram, snapshot([28394, 12000], [[7000], [108]]));
+  recordCards(vram, snapshot([30000, 11000], [[7000], [108]]));
+  // The driver's reserve is in neither used nor total: 32607 - 30000 = 2607, while the card reports 2109 free.
+  assert.deepEqual(vram.cards, [
+    { index: 0, totalMiB: 32607, usedMiBMax: 30000, freeMiBMin: 2109 },
+    { index: 1, totalMiB: 32607, usedMiBMax: 12000, freeMiBMin: 20109 }]);
+  assert.equal(vram.samples, 2);
+  // The card the verdicts are about is the one llama-server computes on, not the first one read.
+  assert.equal(vram.card, 1);
+  assert.equal(serverCard({ vram } as Report)!.freeMiBMin, 20109);
+
+  // A driver too old to report free memory is still read; an operator who named a card keeps it.
+  const old: Vram = { samples: 0, card: 0, cards: [] };
+  const seen = snapshot([28394, 12000], [[7000], [108]]);
+  recordCards(old, { gpus: seen.gpus.map(gpu => ({ ...gpu, memoryFreeMiB: undefined })), processes: seen.processes });
+  assert.deepEqual([old.card, old.cards[0].freeMiBMin], [0, 32607 - 28394]);
+
+  // Several cards and no process attributed to any of them: no card is named, and check 1 says so rather than
+  // reporting about whichever card was read first.
+  const unattributed: Vram = { samples: 0, card: null, cards: [] };
+  recordCards(unattributed, snapshot([28394, 12000]));
+  assert.equal(unattributed.card, null);
+  assert.equal(serverCard({ vram: unattributed } as Report), null);
+  // One card leaves nothing to choose between, even before the server appears on it.
+  const single: Vram = { samples: 0, card: null, cards: [] };
+  const one = snapshot([28394, 12000]);
+  recordCards(single, { gpus: one.gpus.slice(0, 1), processes: { llamaServer: [], sshd: {} } });
+  assert.equal(single.card, 0);
+});
+
+test('a report written before memory was recorded per card is still judged, without a card number', () => {
+  // The owner's `measurements/` holds these, and docs/gpu.md tells the operator to run `--decide` over them.
+  const legacy = make({ vram: { samples: 4, totalMiB: 32768, usedMiBMax: 32000, freeMiBMin: 768 } as unknown as Vram });
+  assert.deepEqual(serverCard(legacy), { index: null, freeMiBMin: 768 });
+  assert.deepEqual([of(legacy, 1).verdict, of(legacy, 1).measured], ['fail', '768 MiB free']);
+  assert.equal(of(make({ vram: { samples: 0 } as unknown as Vram }), 1).verdict, 'unknown');
+  assert.deepEqual(decide([legacy]).profiles[0].checks[0].verdict, 'fail');
+  // The new shape names the card it read.
+  assert.equal(of(make(), 1).measured, '2768 MiB free on card 0');
+});
+
+// A whole measurement against local/fake-llama.ts: a loopback server with a real per-slot prefix cache, a slot that
+// serves one request at a time and generation that takes the time it reports. This is the rehearsal the rented card
+// does not pay for; the inline fake above answers about `cache_prompt` alone and cannot confirm a next-turn prefix.
+const measurer = fileURLToPath(new URL('./gpu-measure.ts', import.meta.url));
+const runMeasurer = (args: string[], environment: NodeJS.ProcessEnv, directory: string) => {
+  const child = spawn(process.execPath, [measurer, ...args, '--out', directory],
+    { cwd: directory, env: { PATH: dirname(process.execPath), ...environment }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = '', stderr = '';
+  child.stdout.on('data', chunk => { stdout += chunk; });
+  child.stderr.on('data', chunk => { stderr += chunk; });
+  return { child, ended: new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', code => resolve({ code, stdout, stderr }));
+  }) };
+};
+
+test('the whole plan runs against a fake server whose cache is real, and its cache verdicts follow it', { timeout: 60000 }, async t => {
+  // An answer at least as long as the shortest frozen scene, or the replay is not representative and decides nothing.
+  const fake = await startFakeLlama({ model: 'synthetic', slots: 3, contextTokens: 65536, outputTokens: 520,
+    promptMsPerToken: 0.02, predictMsPerToken: 1, realTime: true });
+  t.after(() => fake.close());
+  const directory = mkdtempSync(join(tmpdir(), 'gpu-measure-fake-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const environment = { SIMPLE_CHAT_PROVIDER: 'llama-cpp', SIMPLE_CHAT_MODEL: 'synthetic',
+    SIMPLE_CHAT_BASE_URL: fake.baseUrl, SIMPLE_CHAT_GPU_SLOTS: '3', SIMPLE_CHAT_MODEL_TIMEOUT_MS: '30000' };
+
+  const smoke = runMeasurer(['--smoke', '--no-vram'], environment, directory);
+  t.after(() => smoke.child.kill());
+  const first = await smoke.ended;
+  assert.equal(first.code, 0, first.stderr);
+  const smoked = JSON.parse(readFileSync(join(directory, 'report.json'), 'utf8')) as Report;
+  assert.deepEqual(smoked.smoke, { passed: true, cold: 'cold', warm: 'warm' });
+
+  const plan = runMeasurer(['--profile', 'fake-pool', '--history-tokens', '4000', '--cold-runs', '1', '--scenes', '1',
+    '--read-seconds', '0', '--minutes', '2', '--no-vram'], environment, directory);
+  t.after(() => plan.child.kill());
+  const second = await plan.ended;
+  assert.equal(second.code, 0, second.stderr);
+  const saved = JSON.parse(readFileSync(join(directory, 'report.json'), 'utf8')) as Report;
+  assert.equal(saved.error, undefined);
+  for (const phase of [saved.phases.solo!, saved.phases.loaded!]) {
+    assert.equal(phase.complete, true);
+    assert.deepEqual(phase.tester.map(call => call.cacheIntent), ['cold', 'warm', 'next']);
+    // Every intent is confirmed against a cache that really behaves that way, prefix by prefix. The next turn
+    // re-reads its new action and scene and keeps the rest, which is what the counted prefix predicted.
+    assert.deepEqual(phase.tester.map(call => call.cacheObserved), ['cold', 'warm', 'mixed']);
+    assert.deepEqual(phase.tester.map(call => call.cacheMatched), [true, true, true]);
+    assert.ok(phase.tester[2].timings!.promptTokens! > THRESHOLDS.cacheToleranceTokens, 'the next turn pre-fills');
+    assert.ok(phase.tester.every(call => call.representative), 'scenes as long as the frozen fixture');
+  }
+  // The loaded phase really had work beside the tester, so its four verdicts are answers rather than 'unknown'.
+  assert.ok(saved.phases.loaded!.agent.length > 0 && saved.phases.loaded!.probes.completed > 0);
+  const checks = verdictOf(saved);
+  assert.equal(checks.find(check => check.id === 2)!.verdict, 'pass');
+  assert.ok(checks.slice(1).every(check => check.verdict !== 'unknown'), JSON.stringify(checks));
+  assert.equal(checks.find(check => check.id === 1)!.measured, 'not read');
+});
+
+test('video memory is sampled per card through one SSH session, and the card is the one llama-server holds', { timeout: 60000 }, async t => {
+  const fake = await startFakeLlama({ model: 'synthetic', slots: 1, contextTokens: 65536, outputTokens: 520,
+    promptMsPerToken: 0.02, predictMsPerToken: 1, realTime: true });
+  t.after(() => fake.close());
+  const directory = mkdtempSync(join(tmpdir(), 'gpu-measure-vram-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  // A stand-in for ssh that records every session it is asked for and prints what the remote script prints. Card 0
+  // is nearly full and card 1 holds llama-server: a measurer that kept one number for the machine, or defaulted to
+  // card 0, would report the other card's shortage as this server's.
+  const sessions = join(directory, 'sessions');
+  const line = JSON.stringify({ at: '2026-09-21T10:00:00+00:00',
+    gpus: [{ index: 0, pids: [7000], memoryUsedMiB: 31000, memoryFreeMiB: 700, memoryTotalMiB: 32607 },
+      { index: 1, pids: [108], memoryUsedMiB: 12000, memoryFreeMiB: 20000, memoryTotalMiB: 32607 }],
+    processes: { llamaServer: [{ pid: 108 }], sshd: {} } });
+  writeFileSync(join(directory, 'ssh'), ['#!/bin/sh', 'echo session >> "$SESSIONS"', 'cat > /dev/null &',
+    'i=0', 'while [ $i -lt 40 ]; do', `  printf '%s\\n' '${line}'`, '  i=$((i+1))', '  sleep 0.3', 'done', ''].join('\n'));
+  chmodSync(join(directory, 'ssh'), 0o700);
+
+  const run = runMeasurer(['--smoke', '--vram-seconds', '1'], { SIMPLE_CHAT_PROVIDER: 'llama-cpp',
+    SIMPLE_CHAT_MODEL: 'synthetic', SIMPLE_CHAT_BASE_URL: fake.baseUrl, SIMPLE_CHAT_MODEL_TIMEOUT_MS: '30000',
+    SIMPLE_CHAT_GPU_SSH_HOST: 'synthetic-host', SESSIONS: sessions, PATH: `${directory}:${dirname(process.execPath)}` }, directory);
+  t.after(() => run.child.kill());
+  const { code, stderr } = await run.ended;
+  assert.equal(code, 0, stderr);
+  const saved = JSON.parse(readFileSync(join(directory, 'report.json'), 'utf8')) as Report;
+  assert.ok(saved.vram.samples > 0, 'the cards were read');
+  assert.equal(saved.vram.card, 1);
+  assert.deepEqual(saved.vram.cards, [
+    { index: 0, totalMiB: 32607, usedMiBMax: 31000, freeMiBMin: 700 },
+    { index: 1, totalMiB: 32607, usedMiBMax: 12000, freeMiBMin: 20000 }]);
+  assert.deepEqual(verdictOf(saved)[0], { id: 1, name: 'video memory at the peak', verdict: 'pass',
+    measured: '20000 MiB free on card 1', threshold: '>= 1024 MiB' });
+  // One login for the whole run: a session per sample was what the bot was backed off from (docs/gpu.md).
+  assert.equal(readFileSync(sessions, 'utf8').trim().split('\n').length, 1);
 });

@@ -12,7 +12,8 @@ import { join, resolve } from 'node:path';
 import { loadModelConfig } from './config.ts';
 import { createLlama } from './llama.ts';
 import { createScheduler } from './scheduler.ts';
-import { diagnose } from './gpu-diagnose.ts';
+import { watch } from './gpu-diagnose.ts';
+import type { Remote } from './gpu-diagnose.ts';
 import { errorCode, ModelError } from './model-error.ts';
 import type { ModelRequest, Provider, Timings } from './model.ts';
 import { makeRequest } from './prompt.ts';
@@ -67,7 +68,15 @@ export type WorkCase = { id: string; fixture: string; fixtureSha256: string; req
   previousInputTokens?: number; prefixTokens?: number; previousRequestSha256?: string };
 export type Workload = { version: 3; fingerprint: string; cases: WorkCase[]; coldRuns: number; warmRuns: number; nextTurns: boolean;
   compactAtTokens: number; keepScenes: number; memoryMode: 'plain' | 'sgr' };
-export type Vram = { samples: number; totalMiB: number | null; usedMiBMax: number | null; freeMiBMin: number | null };
+// Memory of one card, by the driver's own index. A box with two cards runs llama-server on one of them and, this
+// session, an image model on the other: one number per card, never one across all of them.
+export type Card = { index: number; totalMiB: number | null; usedMiBMax: number | null; freeMiBMin: number | null };
+// `card` is the index llama-server was seen on, from `--card` or from the pids the driver reports per card. It stays
+// null while no card has been established, and the memory verdicts then have nothing to be about.
+export type Vram = { samples: number; card: number | null; cards: Card[] };
+// The shape written before memory was recorded per card: one set of numbers for the whole machine. `--decide` still
+// reads those reports, so the fields survive as optional ones rather than as a second type to branch on.
+type StoredVram = Vram & Partial<Omit<Card, 'index'>>;
 export type Report = {
   profile: string; startedAt: string; completedAt?: string; model: string; temperature: number;
   server: { slots: number | null; contextTokens: number | null }; draft: boolean;
@@ -89,6 +98,21 @@ const median = (values: number[]) => {
 
 const number = (value: number | null | undefined): value is number => typeof value === 'number' && Number.isFinite(value);
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
+
+// The card llama-server ran on: the only one the memory verdicts are about. A run that never established which card
+// that is answers nothing, rather than answering about whichever card happened to be read. Reports from before the
+// per-card change carry one reading for the machine and are read as that one card, unnumbered.
+export function serverCard(run: Report): { index: number | null; freeMiBMin: number | null } | null {
+  const vram = run.vram as StoredVram | undefined;
+  if (!vram) return null;
+  if (!Array.isArray(vram.cards)) return vram.freeMiBMin === undefined ? null : { index: null, freeMiBMin: vram.freeMiBMin };
+  return vram.card === null || vram.card === undefined ? null : vram.cards.find(card => card.index === vram.card) ?? null;
+}
+// How the measurement reads in a check: `on card N` only once a card was established.
+const freeMemory = (run: Report) => {
+  const card = serverCard(run);
+  return { free: card?.freeMiBMin ?? null, where: card && card.index !== null ? ` on card ${card.index}` : '' };
+};
 const validScene = (text: string) => validTime(text.split('\n')[0].trim())
   && !/<\/?think>|<\|(?:channel|im_start|im_end)|\[start_header_id\]/i.test(text);
 
@@ -284,8 +308,8 @@ export function verdictOf(run: Report): Check[] {
   const checks: Check[] = [];
   const add = (id: number, name: string, measured: string, threshold: string, verdict: Check['verdict']) =>
     checks.push({ id, name, verdict, measured, threshold });
-  const free = run.vram.freeMiBMin;
-  add(1, 'video memory at the peak', free === null ? 'not read' : `${free} MiB free`,
+  const { free, where } = freeMemory(run);
+  add(1, 'video memory at the peak', free === null ? 'not read' : `${free} MiB free${where}`,
     `>= ${THRESHOLDS.freeVramMiB} MiB`, free === null ? 'unknown' : free >= THRESHOLDS.freeVramMiB ? 'pass' : 'fail');
 
   const problem = sampleProblem(run, solo) ?? sampleProblem(run, loaded);
@@ -384,14 +408,14 @@ export function decide(runs: Report[]): Decision {
 
   // Both at once: a profile that is pooled and has the draft model must still leave the memory headroom.
   const both = runs.find(run => run.draft && run.bot.slots > 1);
-  const bothFree = both?.vram.freeMiBMin ?? null;
+  const { free: bothFree, where: bothWhere } = both ? freeMemory(both) : { free: null, where: '' };
   // Failure to reach the server is not evidence of exhausted memory. A partial run may establish a shortage,
   // but it cannot establish sufficient headroom at a peak it never reached.
   const bothFailed = both?.error ?? null;
   const together: Check = { id: 7, name: 'the pool and the draft model together',
     verdict: bothFree !== null && bothFree < THRESHOLDS.freeVramMiB ? 'fail'
       : bothFailed || !both || sampleProblem(both, both.phases.loaded) || bothFree === null ? 'unknown' : 'pass',
-    measured: bothFailed ? `measurement incomplete (${bothFailed})` : bothFree === null ? 'not measured' : `${bothFree} MiB free`,
+    measured: bothFailed ? `measurement incomplete (${bothFailed})` : bothFree === null ? 'not measured' : `${bothFree} MiB free${bothWhere}`,
     threshold: `>= ${THRESHOLDS.freeVramMiB} MiB, else the pool is kept and the draft model dropped` };
 
   return { profiles, draft, together,
@@ -443,18 +467,25 @@ async function main(args: string[]) {
     fixture: { type: 'string', default: 'battle' }, 'read-seconds': { type: 'string', default: '15' },
     'history-tokens': { type: 'string' }, minutes: { type: 'string', default: '30' },
     draft: { type: 'boolean', default: false }, 'no-vram': { type: 'boolean', default: false }, smoke: { type: 'boolean', default: false },
+    // Which card the memory verdicts are about, and how often it is read. Without `--card` the card llama-server
+    // was seen on is used, and on a one-card box that is the only one there is. The sampler is fast by default: a
+    // recorded out-of-memory arrived twelve seconds after a start (docs/gpu.md), which a slow one misses entirely.
+    card: { type: 'string' }, 'vram-seconds': { type: 'string', default: '2' },
   } });
   if (values.decide) return void printDecision(resolve(values.decide));
   const profile = values.profile ?? (values.smoke ? 'smoke' : undefined);
   const warmRuns = values.smoke ? 1 : Number(values.scenes), coldRuns = values.smoke ? 1 : Number(values['cold-runs']);
   const readSeconds = values.smoke ? 0 : Number(values['read-seconds']), minutes = values.smoke ? 2 : Number(values.minutes);
   const asked = values['history-tokens'] === undefined ? null : Number(values['history-tokens']);
+  const card = values.card === undefined ? null : Number(values.card);
+  const vramSeconds = Number(values['vram-seconds']);
   const bounded = (n: number, lo: number, hi: number) => Number.isInteger(n) && n >= lo && n <= hi;
   if (!profile || !/^[a-z0-9][a-z0-9-]{0,30}$/.test(profile)
     || !bounded(warmRuns, 1, 12) || !bounded(coldRuns, 1, 12) || !bounded(readSeconds, 0, 600)
     || !bounded(minutes, 2, 60) || (asked !== null && !bounded(asked, 512, 131072))
+    || (card !== null && !bounded(card, 0, 15)) || !bounded(vramSeconds, 1, 120)
     || !['battle', 'chess', 'dance', 'all'].includes(values.fixture)) {
-    throw new Error('Use --smoke, or --profile <name> [--fixture battle|chess|dance|all] [--cold-runs 1..12] [--scenes 1..12] [--read-seconds 0..600] [--history-tokens N] [--minutes 2..60] [--draft] [--no-vram], or --decide <directory>');
+    throw new Error('Use --smoke, or --profile <name> [--fixture battle|chess|dance|all] [--cold-runs 1..12] [--scenes 1..12] [--read-seconds 0..600] [--history-tokens N] [--minutes 2..60] [--draft] [--card 0..15] [--vram-seconds 1..120] [--no-vram], or --decide <directory>');
   }
   if (values.smoke && (values.fixture === 'all' || (asked !== null && asked > 4000))) throw new Error('smoke_requires_one_small_case');
   const targets = asked !== null ? [asked] : values.smoke ? [4000] : [4000, 24000, 43000];
@@ -483,7 +514,7 @@ async function main(args: string[]) {
     bot: { slots: config.slots, poolTokens: config.poolTokens, sharedCache: config.sharedCache,
       contextTokens: config.contextTokens, maxOutputTokens: config.maxOutputTokens,
       quietMs: 60000, readSeconds, historyTokens: asked },
-    phases: {}, vram: { samples: 0, totalMiB: null, usedMiBMax: null, freeMiBMin: null } };
+    phases: {}, vram: { samples: 0, card, cards: [] } };
   const save = () => writeFileSync(join(directory, 'report.json'), JSON.stringify(run, null, 2));
   const budget = new AbortController();
   const budgetTimer = setTimeout(() => budget.abort(new ModelError('budget_exceeded')), minutes * 60000);
@@ -491,7 +522,7 @@ async function main(args: string[]) {
   const scheduler = createScheduler(provider, { slots: config.slots, poolTokens: config.poolTokens,
     sharedCache: config.sharedCache, outputTokens: (request: ModelRequest) => request.maxOutputTokens,
     log: (event, code) => report({ event, ...(code ? { code } : {}) }) });
-  const sampler = values['no-vram'] ? undefined : watchVram(run, save);
+  const sampler = values['no-vram'] ? undefined : watchVram(run, save, vramSeconds);
   try {
     const server = await warm.check({ signal });
     run.server = { slots: server.slots ?? null, contextTokens: server.contextTokens ?? null };
@@ -623,36 +654,61 @@ async function main(args: string[]) {
   }
 }
 
+// One snapshot of the cards folded into the run: each card keeps its own peak and its own minimum, and a snapshot
+// that read at least one card counts as one sample. A card the driver numbers itself is kept under that number; an
+// older driver query without one is taken in the order it came.
+export function recordCards(vram: Vram, remote: { gpus: Remote['gpus']; processes?: Remote['processes'] } | undefined) {
+  if (!remote) return vram;
+  let read = false;
+  remote.gpus.forEach((seen, position) => {
+    if (seen.memoryUsedMiB === undefined || seen.memoryTotalMiB === undefined) return;
+    read = true;
+    const index = seen.index ?? position;
+    let card = vram.cards.find(entry => entry.index === index);
+    if (!card) {
+      card = { index, totalMiB: null, usedMiBMax: null, freeMiBMin: null };
+      vram.cards.push(card);
+      vram.cards.sort((a, b) => a.index - b.index);
+    }
+    card.totalMiB = seen.memoryTotalMiB;
+    card.usedMiBMax = Math.max(card.usedMiBMax ?? 0, seen.memoryUsedMiB);
+    // The driver keeps a reserve of its own, and this output counts it in neither used nor free: subtracting used
+    // from total hands that reserve back as headroom we do not have. It was 498 MiB on the measured 5090, against a
+    // threshold of 1024. A driver too old to report free memory is read the old way rather than not at all.
+    const free = seen.memoryFreeMiB ?? seen.memoryTotalMiB - seen.memoryUsedMiB;
+    card.freeMiBMin = Math.min(card.freeMiBMin ?? free, free);
+  });
+  // Which card the verdicts are about, when the operator did not name one: the card llama-server was seen computing
+  // on. A box with one card leaves no room for doubt even before the server appears on it; a box with several and no
+  // attributed process names none, and check 1 stays unknown rather than reporting about the image model's card.
+  if (vram.card === null) {
+    const pids = new Set((remote.processes?.llamaServer ?? []).map(process => process.pid).filter(number));
+    const found = remote.gpus.findIndex(gpu => gpu.pids.some(pid => pids.has(pid)));
+    if (found >= 0) vram.card = remote.gpus[found].index ?? found;
+    else if (vram.cards.length === 1) vram.card = vram.cards[0].index;
+  }
+  if (read) vram.samples++;
+  return vram;
+}
+
 // Video memory is read on the instance itself; only counters come back (local/gpu-diagnose.ts). Without an SSH host
 // there is nothing to read, and check 1 stays unknown rather than becoming a pass.
-function watchVram(run: Report, save: () => void) {
+// The interval is the operator's (`--vram-seconds`) and a couple of seconds by default: memory runs out in seconds
+// under load, and a slow sampler leaves a fatal peak unread. That cadence is affordable only through the watcher's
+// one long-lived session: a login per sample would be thirty a minute, and the bot was backed off from far fewer
+// because they piled up on sshd (docs/gpu.md). The window before a profile starts — the server's own start — still
+// belongs to `npm run gpu:diagnose -- --watch`.
+function watchVram(run: Report, save: () => void, seconds: number) {
   const configured = process.env.SIMPLE_CHAT_GPU_SSH_HOST;
   const host = configured && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(configured) ? configured : undefined;
-  let stopped = false;
+  if (!host) return undefined;
   const stopping = new AbortController();
-  const loop = (async () => {
-    while (!stopped && host) {
-      try {
-        const seen = await diagnose({ host, events: 1 });
-        if (stopped) break;
-        for (const card of seen.remote?.gpus ?? []) {
-          if (card.memoryUsedMiB === undefined || card.memoryTotalMiB === undefined) continue;
-          run.vram.samples++;
-          run.vram.totalMiB = card.memoryTotalMiB;
-          run.vram.usedMiBMax = Math.max(run.vram.usedMiBMax ?? 0, card.memoryUsedMiB);
-          // The driver keeps a reserve of its own, and this output counts it in neither used nor free: subtracting
-          // used from total hands that reserve back as headroom we do not have. It was 498 MiB on the measured 5090,
-          // against a threshold of 1024. An older report, written before the card reported its free memory, is read
-          // the old way rather than silently gaining half a gigabyte.
-          const free = card.memoryFreeMiB ?? card.memoryTotalMiB - card.memoryUsedMiB;
-          run.vram.freeMiBMin = Math.min(run.vram.freeMiBMin ?? free, free);
-        }
-        save();
-      } catch (error) { report({ event: 'vram_sample_failed', code: errorCode(error) }); }
-      try { await delay(20000, undefined, { signal: stopping.signal }); } catch { break; }
-    }
-  })();
-  return { stop() { stopped = true; stopping.abort(); return loop; } };
+  // No retained server events: this watcher only asks the cards how much memory is in use.
+  const loop = watch({ host, every: seconds, events: 0, signal: stopping.signal }, snapshot => {
+    recordCards(run.vram, snapshot.remote);
+    save();
+  }).catch(error => { report({ event: 'vram_sample_failed', code: errorCode(error) }); });
+  return { stop() { stopping.abort(); return loop; } };
 }
 
 function printDecision(directory: string) {

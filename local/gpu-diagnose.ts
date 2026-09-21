@@ -1,6 +1,7 @@
 // Read-only diagnostics for the rented GPU, run on the bot host while a problem is happening:
 //   npm run gpu:diagnose                 one snapshot through a new SSH session
 //   npm run gpu:diagnose -- --watch 30   a snapshot every 30 seconds through one SSH session that stays open, until Ctrl+C
+//                                        (down to --watch 1, for the seconds in which a starting server runs out of memory)
 //   npm run gpu:diagnose -- --pull       also save every retained server event under logs/
 // It asks the same question twice at the same moment: through the bot's forwarded port, and on the server's own
 // loopback through a separate SSH session. No Telegram, story DB, prompts or server output are read. Hosts, raw
@@ -36,7 +37,10 @@ export type Remote = {
   sockets: { established?: number; synRecv?: number; closeWait?: number; listen?: number };
   processes: { llamaServer: { pid?: number; ageSeconds?: number; state?: string }[];
     sshd: { sessions?: number; unauthenticated?: number; startups?: number; dropFrom?: number; dropAllAt?: number } };
-  gpus: { memoryUsedMiB?: number; memoryFreeMiB?: number; memoryTotalMiB?: number; utilizationPercent?: number; temperatureC?: number }[];
+  // `index` is the driver's own card number and `pids` the compute processes on it: a reading from a box with
+  // several cards belongs to one of them, and only the pids say which card llama-server occupies.
+  gpus: { index?: number; pids: number[]; memoryUsedMiB?: number; memoryFreeMiB?: number; memoryTotalMiB?: number;
+    utilizationPercent?: number; temperatureC?: number }[];
   machine: { load1?: number; cpus?: number; memoryAvailableMiB?: number };
   // `pressure.scope` is `machine` when the kernel offers the numbers only for the whole machine, other tenants included.
   container: { throttledPeriods?: number; throttledSeconds?: number; memoryMiB?: number; memoryLimitMiB?: number;
@@ -61,7 +65,8 @@ export type Options = {
 // `every` is in seconds. A lost session is reopened after `retryMs`. A session gets `startMs` to deliver its first
 // line; after that a line later than `silenceMs` counts as missing.
 export type WatchOptions = Pick<Options, 'host' | 'script' | 'spawn' | 'request' | 'now'> &
-  { every: number; signal: AbortSignal; retryMs?: number; startMs?: number; silenceMs?: number };
+// `events` is how many retained server events each line carries; a watcher that only wants counters asks for none.
+  { every: number; signal: AbortSignal; retryMs?: number; startMs?: number; silenceMs?: number; events?: number };
 
 const script = () => readFileSync(new URL('../gpu/diagnose-remote.py', import.meta.url), 'utf8');
 
@@ -99,7 +104,9 @@ export function remoteOf(value: unknown): Remote {
         ({ pid: count(server.pid), ageSeconds: count(server.ageSeconds), state: text(server.state, /^[A-Za-z]$/) })),
       sshd: { sessions: count(sshd.sessions), unauthenticated: count(sshd.unauthenticated), startups: count(sshd.startups),
         dropFrom: count(sshd.dropFrom), dropAllAt: count(sshd.dropAllAt) } },
-    gpus: list(report.gpus).slice(0, 16).map(fields).map(gpu => ({ memoryUsedMiB: count(gpu.memoryUsedMiB),
+    gpus: list(report.gpus).slice(0, 16).map(fields).map(gpu => ({ index: count(gpu.index),
+      pids: list(gpu.pids).slice(0, 64).map(count).filter((pid): pid is number => pid !== undefined),
+      memoryUsedMiB: count(gpu.memoryUsedMiB),
       memoryFreeMiB: count(gpu.memoryFreeMiB), memoryTotalMiB: count(gpu.memoryTotalMiB),
       utilizationPercent: count(gpu.utilizationPercent), temperatureC: count(gpu.temperatureC) })),
     machine: { load1: amount(machine.load1), cpus: count(machine.cpus), memoryAvailableMiB: count(machine.memoryAvailableMiB) },
@@ -202,16 +209,19 @@ export async function diagnose({ host = 'simple-chat-vast', events = 25, script:
 // On 17 September sessions that were already open kept working while new ones hung. A watcher therefore keeps one
 // session open and the remote script reports through it, so a failure that starts later can still be seen from the
 // server's side. Every line is paired with a probe of the forwarded port made on its arrival.
-export async function watch({ host = 'simple-chat-vast', every, script: source = script(), retryMs = every * 1000, startMs = 30000, silenceMs = every * 1000 + 20000,
-  spawn: spawnChild = spawn, request = fetch, now = () => new Date(), signal: stopped }: WatchOptions, emit: (report: Report) => void): Promise<void> {
+export async function watch({ host = 'simple-chat-vast', every, script: source = script(), retryMs = Math.max(5000, every * 1000), startMs = 30000, silenceMs = every * 1000 + 20000,
+  spawn: spawnChild = spawn, request = fetch, now = () => new Date(), signal: stopped, events = 5 }: WatchOptions, emit: (report: Report) => void): Promise<void> {
   if (!HOST.test(host)) throw new Error('invalid_host');
-  if (!(Number.isSafeInteger(every) && every >= 10 && every <= 3600)) throw new Error('invalid_interval');
+  // A second between lines is allowed: a server that runs out of memory does it within seconds of its start, and a
+  // slower watch reports nothing but the exit. A lost session is still reopened no faster than every five seconds.
+  if (!(Number.isSafeInteger(every) && every >= 1 && every <= 3600)) throw new Error('invalid_interval');
+  if (!(Number.isSafeInteger(events) && events >= 0 && events <= 9999)) throw new Error('invalid_events');
   const session = () => new Promise<void>((resolve, reject) => {
     const started = performance.now();
     const age = () => Math.round(performance.now() - started) / 1000;
     // Keepalives end a session whose path is dead, as they do for the bot's tunnel; the exit is then reported.
     const child = spawnChild('ssh', [...SSH, '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3', host,
-      `python3 - --events 5 --every ${every}`], { stdio: ['pipe', 'pipe', 'pipe'], env: sshEnvironment() });
+      `python3 - --events ${events} --every ${every}`], { stdio: ['pipe', 'pipe', 'pipe'], env: sshEnvironment() });
     let pending = '';
     let diagnostic = '';
     let sshReason: SshReason | undefined;
@@ -297,8 +307,8 @@ async function main(args: string[]) {
     const arg = args.shift();
     if (arg === '--pull') pull = true;
     else if (arg === '--host' && args.length) host = args.shift();
-    else if (arg === '--watch' && /^\d{2,4}$/.test(args[0] ?? '') && Number(args[0]) >= 10 && Number(args[0]) <= 3600) every = Number(args.shift());
-    else throw new Error('Usage: npm run gpu:diagnose -- [--host SSH_ALIAS] [--watch SECONDS(10-3600)] [--pull]');
+    else if (arg === '--watch' && /^\d{1,4}$/.test(args[0] ?? '') && Number(args[0]) >= 1 && Number(args[0]) <= 3600) every = Number(args.shift());
+    else throw new Error('Usage: npm run gpu:diagnose -- [--host SSH_ALIAS] [--watch SECONDS(1-3600)] [--pull]');
   }
   if (pull && every) throw new Error('Use --pull for a single snapshot, not with --watch');
   const directory = fileURLToPath(new URL('../logs', import.meta.url));

@@ -147,18 +147,41 @@ def processes():
     return {'llamaServer': sorted(servers, key=lambda server: server['pid']), 'sshd': ssh}
 
 
+def compute_pids():
+    """Which processes hold memory on which card, keyed by the card's UUID. The UUID identifies a rented machine's
+    hardware and stays here; only the driver's index and the pids leave."""
+    result = subprocess.run(['nvidia-smi', '--query-compute-apps=gpu_uuid,pid', '--format=csv,noheader,nounits'],
+                            capture_output=True, text=True, timeout=5)
+    by_uuid = {}
+    for line in result.stdout.strip().splitlines()[:256]:
+        values = [value.strip() for value in line.split(',')]
+        if len(values) == 2 and values[1].isdigit():
+            by_uuid.setdefault(values[0], []).append(int(values[1]))
+    return by_uuid
+
+
 def gpus():
-    """One entry per GPU. A value the driver does not report, printed as [N/A], is left out."""
+    """One entry per GPU, carrying the driver's own index and the pids computing on it: on a two-card box one card
+    runs the model server and the other something else, and a reading without an index cannot say which, nor which
+    of them llama-server sits on. A value the driver does not report, printed as [N/A], is left out."""
     # memory.free is asked for rather than derived: in this output the driver's own reserve is a third number beside
     # used and total, so total minus used overstates what is left by that reserve. On the measured 5090 the reserve is
     # 498 MiB, and the headroom threshold is 1024 - large enough to turn a fail into a pass.
-    keys = ('memoryUsedMiB', 'memoryFreeMiB', 'memoryTotalMiB', 'utilizationPercent', 'temperatureC')
-    result = subprocess.run(['nvidia-smi', '--query-gpu=memory.used,memory.free,memory.total,utilization.gpu,temperature.gpu',
+    keys = ('index', 'memoryUsedMiB', 'memoryFreeMiB', 'memoryTotalMiB', 'utilizationPercent', 'temperatureC')
+    result = subprocess.run(['nvidia-smi', '--query-gpu=uuid,index,memory.used,memory.free,memory.total,utilization.gpu,temperature.gpu',
                              '--format=csv,noheader,nounits'], capture_output=True, text=True, timeout=5)
+    # A driver that cannot list the compute processes (an old one, or a container without the privilege) still
+    # reports memory; the cards then carry no pids and the card in use has to be named by hand.
+    try:
+        by_uuid = compute_pids()
+    except Exception:
+        by_uuid = {}
     cards = []
     for line in result.stdout.strip().splitlines()[:16]:
-        values = [value.strip() for value in line.split(',')]
-        cards.append({key: int(value) for key, value in zip(keys, values) if value.isdigit()})
+        uuid, *values = [value.strip() for value in line.split(',')]
+        card = {key: int(value) for key, value in zip(keys, values) if value.isdigit()}
+        card['pids'] = sorted(by_uuid.get(uuid, []))
+        cards.append(card)
     return cards
 
 

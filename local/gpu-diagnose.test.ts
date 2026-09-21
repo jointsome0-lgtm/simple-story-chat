@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, wr
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { diagnose, save, watch } from './gpu-diagnose.ts';
+import { diagnose, remoteOf, save, watch } from './gpu-diagnose.ts';
 import type { Options, Report } from './gpu-diagnose.ts';
 
 // What a healthy instance reports, with fields a changed or hostile remote side could add.
@@ -68,7 +68,7 @@ test('a snapshot compares the forwarded port with the server loopback and keeps 
   assert.deepEqual(report.remote!.processes, { llamaServer: [{ pid: 108, ageSeconds: 5321, state: 'S' }],
     sshd: { sessions: 2, unauthenticated: 4, startups: 4, dropFrom: 10, dropAllAt: 100 } });
   assert.deepEqual([report.remote!.failed, report.remote!.http.models.modelId], [['gpus'], 'synthetic-model']);
-  assert.deepEqual(JSON.parse(JSON.stringify(report.remote!.gpus)), [{ memoryUsedMiB: 28394, memoryFreeMiB: 3715, memoryTotalMiB: 32607, utilizationPercent: 97, temperatureC: 61 }, { memoryUsedMiB: 1000 }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(report.remote!.gpus)), [{ pids: [], memoryUsedMiB: 28394, memoryFreeMiB: 3715, memoryTotalMiB: 32607, utilizationPercent: 97, temperatureC: 61 }, { pids: [], memoryUsedMiB: 1000 }]);
   assert.deepEqual(report.remote!.http.props, { httpStatus: 200, failure: undefined, seconds: 0.01, contextTokens: 65536, slots: 1 });
   assert.deepEqual(JSON.parse(JSON.stringify([report.remote!.machine, report.remote!.container])), [{ load1: 1.5, cpus: 16, memoryAvailableMiB: 50000 },
     { throttledPeriods: 12, throttledSeconds: 3, memoryMiB: 30000, memoryLimitMiB: 64000, pressure: { scope: 'machine', cpu: 41.5, io: 0 } }]);
@@ -192,7 +192,8 @@ test('a watching session that goes quiet is reported as stalled; stopping the wa
   await assert.rejects(watch({ every: 30, retryMs: 1, script: '', spawn: unsaved.spawn, request: answers, signal: new AbortController().signal },
     () => { throw new Error('synthetic_disk_full'); }), { message: 'synthetic_disk_full' });
   assert.deepEqual(unsaved.calls.map(call => call.killed), [true]);
-  await assert.rejects(watch({ every: 5, spawn: f.spawn, request: answers, signal: stopped.signal }, () => {}), { message: 'invalid_interval' });
+  // A second is the shortest watch, for the seconds after a server starts; less is no interval at all.
+  await assert.rejects(watch({ every: 0, spawn: f.spawn, request: answers, signal: stopped.signal }, () => {}), { message: 'invalid_interval' });
   await assert.rejects(watch({ host: '-oProxyCommand=synthetic', every: 30, spawn: f.spawn, request: answers, signal: stopped.signal }, () => {}), { message: 'invalid_host' });
 });
 
@@ -272,4 +273,30 @@ test('the remote script reports a synthetic server and retained events without a
   // A watcher prints a line per interval and ends by itself at its time limit.
   const lines = await run('0', '--every', '1', '--limit', '2');
   assert.deepEqual(lines.map(line => line.http.health.httpStatus), [200, 200]);
+});
+
+test('every card is reported under the driver\'s own index, so two cards can be told apart', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'simple-chat-diagnose-cards-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  // A stand-in for the driver's own tool, printing the queried columns in the order they were asked for. A value
+  // the driver does not report comes as [N/A] and is left out of the reading. The card UUIDs join the two queries
+  // and must not leave the machine themselves.
+  writeFileSync(join(directory, 'nvidia-smi'), ['#!/bin/sh',
+    'case "$1" in',
+    '  --query-compute-apps=*) printf "GPU-bbbb, 8801\\nGPU-aaaa, 108\\n" ;;',
+    '  *) printf "GPU-aaaa, 0, 28394, 3715, 32607, 97, 61\\nGPU-bbbb, 1, 12500, 20000, 32607, [N/A], 44\\n" ;;',
+    'esac', ''].join('\n'), { mode: 0o700 });
+  const child = spawn('python3', ['-', '--dir', directory, '--port', '1', '--events', '0'],
+    { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, PATH: `${directory}:${process.env.PATH}` } });
+  let output = '', errors = '';
+  child.stdout.on('data', chunk => { output += chunk; });
+  child.stderr.on('data', chunk => { errors += chunk; });
+  child.stdin.end(readFileSync(fileURLToPath(new URL('../gpu/diagnose-remote.py', import.meta.url)), 'utf8'));
+  const [status] = await once(child, 'close');
+  assert.deepEqual([status, errors], [0, '']);
+  const remote = remoteOf(JSON.parse(output.trim().split('\n').at(-1)!));
+  assert.deepEqual(JSON.parse(JSON.stringify(remote.gpus)), [
+    { index: 0, pids: [108], memoryUsedMiB: 28394, memoryFreeMiB: 3715, memoryTotalMiB: 32607, utilizationPercent: 97, temperatureC: 61 },
+    { index: 1, pids: [8801], memoryUsedMiB: 12500, memoryFreeMiB: 20000, memoryTotalMiB: 32607, temperatureC: 44 }]);
+  assert.doesNotMatch(output, /GPU-[ab]/);
 });
