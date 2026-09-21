@@ -321,6 +321,84 @@ and HuggingFace. Any such checkpoint must be pinned the way the language model i
 [gpu/manifest.env](../gpu/manifest.env) — repository, revision, SHA256, size. A community checkpoint on a community
 host is exactly the kind of file that changes underneath a project.
 
+## Qwen-Image 2.1, a third checkpoint, prepared 2026-09-21
+
+Krea and its fine-tune answer "how good is this picture". Qwen-Image 2.1 is on the box to answer a second question
+the six steps above kept running into: **does the same person come back the same in the next frame.** Step 6 got
+the best identity reading so far out of a fixed appearance line alone — "the commander, confidently" — and that is
+a sheet of words, redescribed from nothing every time. Qwen Image 2.1 takes reference pictures through its edit
+path and is built to keep the people in them — its card claims ten, the node carries sixteen slots, and
+[image-workflow-qwen-edit.json](../gpu/image-workflow-qwen-edit.json) wires four, which is more people than a frame
+of these stories has. A different mechanism for the same goal, and the only one on the list that can be tried in
+the same rented hour.
+
+It is **opt-in**: `SIMPLE_CHAT_IMAGE_QWEN=true`, 17.28 GB on top of the session's download. Off by default because
+[rent-plan.ts](../local/rent-plan.ts) prices an offer's traffic from what a default run pulls, and a comparison
+nobody asked for should not be in that number. The bytes and the minutes are in [gpu.md](gpu.md).
+
+**Licence.** Qwen Research License (the repository's own `license_name: qwen-research`), non-commercial, read as
+what it says on the card and not verified clause by clause here [A]. The owner accepted it on 2026-09-21 for as
+long as the bot is used by the owner and one tester. That is a narrower permission than Krea's, which allows
+commercial use below $1M: if this feature ever reaches people who are not those two, Qwen has to be re-decided,
+and it is a comparison checkpoint rather than a candidate for the deployed bot until then.
+
+**The "Uncensored GGUF" reuploads are not used, and not because of the name.** Checked 2026-09-21 on
+`KasugaiSakura/Qwen-Image-2.1-Uncensored-GGUF`: its own card says `base_model_relation: quantized` and "GGUF
+quantizations of Qwen/Qwen-Image-2.1 using the original upstream base weights", and its text encoder and VAE are
+byte-identical to the ones we pin — same SHA256, all three files. So it is the same model at Q4 to Q8, with a word
+added to the title; there is no second, freer set of weights to choose. It would also need the ComfyUI-GGUF custom
+node, and [image-serve.sh](../gpu/image-serve.sh) starts the server with `--disable-all-custom-nodes` so that a
+stray clone cannot change a measurement. Two reasons, either one enough.
+
+**int8, not bf16.** ComfyUI's two official templates ship with the int8 transformer and the int8 encoder as their
+own widget values, the three files in bf16 are 32.4 GB of weights on a 32 GB card before a single activation, and
+the download is 17.28 GB against 32.4. The full reasoning, including why the w4a8 encoder and the two prompt-enhancer
+encoders are refused, is written beside the pins in [image-manifest.env](../gpu/image-manifest.env). The graphs keep
+the templates' 25 steps, cfg 1, euler and simple; the upstream card's 40 steps are `--steps 40` away, and the frame
+is 1280x720 like Krea's, because a blind bundle holding one square picture and one wide one has already told the
+rater which model drew which.
+
+**The identity runbook, two steps.** The portraits are drawn on the card first, by the same text-to-image graph, so
+that the references are the model's own faces and not photographs of anybody:
+
+```sh
+npm run image:portraits -- prompts --prompts illustrations/prompts --out illustrations/portrait-prompts
+npm run image:batch -- draw --prompts illustrations/portrait-prompts --out illustrations/portraits \
+  --checkpoints qwen_image_2.1_int8_convrot.safetensors --workflow gpu/image-workflow-qwen.json
+npm run image:portraits -- references --run illustrations/portraits --out illustrations/references.json
+npm run image:batch -- draw --out illustrations/qwen-identity \
+  --checkpoints qwen_image_2.1_int8_convrot.safetensors --workflow gpu/image-workflow-qwen-edit.json \
+  --references illustrations/references.json
+npm run image:batch -- bundles --out illustrations/qwen-identity
+```
+
+`--workflow` is read on this computer, not on the card. For Krea that file has to come off the box, because the
+bootstrap renders it with whichever source installed the encoder; the Qwen graphs have one source and one set of
+names, so the repository's copy and the box's are the same file and `gpu/…` is the honest path.
+
+One portrait per person per story, from that story's character sheet line and nothing else. The frame run binds only
+the people who are in that frame: a face reaches the card once, under the hash of its own bytes, and the sheet name
+picks the file and goes no further — the rule that no name reaches the image model is unchanged. Portraits pass
+through `stripPngMetadata` on the way up like every picture here passes through it on the way down.
+
+Judge it by its own bundle, not by the blind page: `image:blind` keeps one picture per checkpoint per scene, so the
+Qwen frames with references and the Qwen frames without would collapse into one. `npm run image:batch -- bundles`
+over each run asks question 5 — "where several pictures share a person with the same appearance line, is he
+recognised as the same person" — which is exactly the difference being measured. Krea against Qwen is the blind
+page's job, and for that the two run directories go in together: `image:blind -- build --run a,b --out <directory>`.
+
+**Timebox: one hour of the session, and it ends on the clock rather than on a result.** Twelve minutes of it are
+the download, which happens beside the other lane's. If the frames are not drawn and bundled within the hour, the
+run stops where it is — the run directory resumes, and what was drawn is still comparable, because a cell is
+recorded with the settings it was drawn at.
+
+**Not verified without a card**, in the order it would bite: that the int8 transformer and the int8 encoder load
+through `UNETLoader` with `weight_dtype: default` and `CLIPLoader` with `type: qwen_image` (read from the pinned
+source, never run); how long one 25-step 1280x720 picture takes, which decides whether the comparison fits the
+hour at all; whether four reference latents plus the encoder plus the transformer stay inside 32 GB, and whether
+`QwenImage21Cache` has to be moved off `auto` if they do not; and whether references at `resolution: 1024` help
+identity at a 1280x720 frame or fight it.
+
 ## Two constraints that do not bend
 
 **It does not share our card.** The language model holds 22–25 GB of the 32 GB, and the pool floor already fails

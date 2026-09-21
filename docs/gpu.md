@@ -343,6 +343,37 @@ npm run memory:probe -- --source /path/to/synthetic/dance/evidence.json --resume
 
 The probe is limited to the given time, from 1 to 30 minutes. A busy or stopped GPU can leave it unfinished. This is not a result of a quality check. A comparison needs both modes completed on one source file and one model. Such a run evaluates the whole compaction scheme, including the different output budget; it does not isolate the effect of one SGR instruction and does not check quality at 44K.
 
+## The picture card
+
+The second card of a two-card rental runs ComfyUI instead of llama.cpp: [image-bootstrap.sh](../gpu/image-bootstrap.sh) prepares it from [image-manifest.env](../gpu/image-manifest.env), [image-serve.sh](../gpu/image-serve.sh) starts it on loopback with `CUDA_VISIBLE_DEVICES=1`, and `npm run image:batch` draws the frames of the synthetic stories through the tunnel. Why any of this exists is in [illustrations-plan.md](illustrations-plan.md); what follows is only what a rental has to know.
+
+A default run downloads the two Krea checkpoints, the encoder and the VAE: 31.46 GB, about 21 minutes at the 200 Mbit/s floor the bootstrap enforces and 4 minutes at 1 Gbit/s. With Gemma's 25.72 GB on the other lane that is 57.18 GB of weights over one shared link, and with the wheels beside them 63.18 GB, which is the number [rent-plan.ts](../local/rent-plan.ts) prices an offer's traffic by: 42 minutes at the floor, 8 at 1 Gbit/s.
+
+### Qwen-Image 2.1, opt-in
+
+`SIMPLE_CHAT_IMAGE_QWEN=true` adds a third checkpoint, pinned in the same manifest and verified by the same code path. It is off by default because the traffic term above is the default run's, and a session that has not asked for this comparison should not pay for it.
+
+```sh
+SIMPLE_CHAT_IMAGE_QWEN=true bash /workspace/simple-chat/gpu/image-bootstrap.sh --dry-run   # names the files, downloads nothing
+SIMPLE_CHAT_IMAGE_QWEN=true bash /workspace/simple-chat/gpu/image-bootstrap.sh
+SIMPLE_CHAT_IMAGE_QWEN=true bash /workspace/simple-chat/gpu/image-serve.sh
+```
+
+What it adds:
+
+| | bytes | at 200 Mbit/s | at 1 Gbit/s |
+|---|---|---|---|
+| `qwen_image_2.1_int8_convrot.safetensors` | 7 256 783 064 | 4.8 min | 58 s |
+| `qwen3vl_8b_int8_convrot.safetensors` | 9 350 798 360 | 6.2 min | 75 s |
+| `qwen_image_2.1_vae_bf16.safetensors` | 675 509 688 | 27 s | 5 s |
+| **together** | **17 283 091 112** (17.28 GB) | **11.5 min** | **2.3 min** |
+
+The session's whole download becomes 80.46 GB, about 54 minutes at 200 Mbit/s and 11 at 1 Gbit/s, and the 150 GB disk the plan rents still holds it with room for torch and the pictures. The link is measured once while the downloads run, and a machine below 200 Mbit/s is meant to be destroyed rather than waited for — with the opt-in on, that decision is worth twelve more minutes than without it.
+
+The same three files in bf16 would be 32.44 GB, which does not fit one 32 GB card anyway; the reasoning is written out in the manifest beside the pins. Nothing of Krea's is replaced, so one prepared box draws both and the blind comparison has something to compare.
+
+The bootstrap writes two graphs beside the Krea one: `image-workflow-qwen.json` draws frames, `image-workflow-qwen-edit.json` takes reference portraits. One run has one workflow, so Qwen is its own `image:batch` run directory, and `npm run image:blind -- build --run a,b --out <directory>` reads several of them.
+
 ## Diagnosing connection failures
 
 In the night before 17 September the model checks and two compactions failed because of SSH. The model server worked without restarts, and the GPU memory was used as usual. New connections through the tunnel hung, and the already open ones continued to pass data. The cause of the hangs was not found at that time. The server log stayed on the instance and was lost together with it. So start the next rental with the logs.
