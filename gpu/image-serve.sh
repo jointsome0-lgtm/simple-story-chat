@@ -9,8 +9,8 @@ comfy_dir="$gpu_dir/ComfyUI"
 port="${SIMPLE_CHAT_IMAGE_PORT:-8188}"
 # Which card the pictures use. The language server takes the whole of its own card (gpu/serve.sh --gpu-layers 99),
 # so a picture that lands there means an OOM in the middle of somebody's scene. CUDA_VISIBLE_DEVICES is the only
-# switch used here: ComfyUI's --cuda-device sets the same variable, and passing both would renumber twice and send
-# the run to the wrong card.
+# switch used here: at the pinned revision `--cuda-device N` is a plain assignment to that same variable
+# (main.py:99), so passing both would say the same thing twice, and the choice stays in one place, the environment.
 device="${SIMPLE_CHAT_IMAGE_GPU:-1}"
 [[ "$port" =~ ^[0-9]+$ && "$device" =~ ^[0-9]$ ]] || { echo 'Use a numeric SIMPLE_CHAT_IMAGE_PORT and a single-digit SIMPLE_CHAT_IMAGE_GPU index.' >&2; exit 1; }
 (( port > 0 && port <= 65535 )) || exit 1

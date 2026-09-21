@@ -71,7 +71,8 @@ fetch_pid=$!
 draft_path="$gpu_dir/models/$DRAFT_FILE"
 # The here-document inside ends at the start of a line, so its own body stays unindented.
 # A file already in place is checked like a fresh one, as the weights are: a file left by an earlier attempt is not
-# evidence of its content, and threshold 6 is a claim about these weights.
+# evidence of its content, and threshold 6 is a claim about these weights. Only a .part is thrown away when the
+# check fails — deleting the file that is already there would turn a wrong pin into a second download.
 fetch_draft() {
   if [[ ! -f "$draft_path" ]]; then
     curl --fail --location --silent --show-error --retry 2 --continue-at - \
@@ -80,9 +81,12 @@ fetch_draft() {
   python3 - "$draft_path" "$DRAFT_SHA256" "$DRAFT_BYTES" <<'PY'
 import hashlib,pathlib,sys
 target=pathlib.Path(sys.argv[1]); current=target if target.exists() else pathlib.Path(str(target)+'.part')
-if current.stat().st_size != int(sys.argv[3]): current.unlink(); raise SystemExit('Draft model size mismatch.')
+def mismatch(message):
+    if current != target: current.unlink()
+    raise SystemExit(message)
+if current.stat().st_size != int(sys.argv[3]): mismatch('Draft model size mismatch.')
 with current.open('rb') as f: digest=hashlib.file_digest(f,'sha256').hexdigest()
-if digest != sys.argv[2]: current.unlink(); raise SystemExit('Draft model SHA256 mismatch.')
+if digest != sys.argv[2]: mismatch('Draft model SHA256 mismatch.')
 if current != target: current.rename(target)
 print('Draft model SHA256 verified.')
 PY
@@ -156,7 +160,7 @@ fi
 echo "Building llama-server with $jobs jobs."
 cmake --build "$source_dir/build" --target llama-server -j "$jobs"
 wait "$fetch_pid" || { echo 'Model download failed.' >&2; exit 1; }
-[[ -z "$draft_pid" ]] || wait "$draft_pid" || { echo 'Draft model download failed.' >&2; exit 1; }
+[[ -z "$draft_pid" ]] || wait "$draft_pid" || { echo 'The draft model did not download or did not verify.' >&2; exit 1; }
 python3 - "$model_path" "$MODEL_SHA256" "$MODEL_BYTES" <<'PY'
 import hashlib,pathlib,sys
 target=pathlib.Path(sys.argv[1]); current=target if target.exists() else pathlib.Path(str(target)+'.part')

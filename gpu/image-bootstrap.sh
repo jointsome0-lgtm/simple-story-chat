@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Prepare the picture card inside the rented CUDA container, never on the bot host: pinned ComfyUI, pinned torch,
 # weights verified by size and SHA256. Meant to run beside bootstrap.sh, which builds llama.cpp on the language
-# card; both lanes share one link, so the speed floor below is read once, here, while the compiler is busy.
+# card; both lanes share one link, so the speed floor below reads that link's own byte counter once, here, while
+# the compiler and the other lane's download are busy on it.
 #
 # Tokens: the CivitAI file and the gated Krea repository need one each. They arrive in SIMPLE_CHAT_CIVITAI_TOKEN /
 # SIMPLE_CHAT_HF_TOKEN, or as `civitai=...` / `hf=...` lines on stdin with --tokens-stdin. They are never written to
@@ -29,7 +30,15 @@ turbo="${SIMPLE_CHAT_IMAGE_TURBO:-true}"
 min_mbit="${SIMPLE_CHAT_IMAGE_MIN_MBIT:-200}"
 window="${SIMPLE_CHAT_IMAGE_SPEED_WINDOW:-60}"
 [[ "$min_mbit" =~ ^[0-9]+$ && "$window" =~ ^[1-9][0-9]*$ ]] || { echo 'Invalid SIMPLE_CHAT_IMAGE_MIN_MBIT/WINDOW.' >&2; exit 1; }
-for command in git curl python3; do
+# The verdict is about the machine's link, so it is read where the link is: the byte counter of the interface that
+# carries the default route. What lands in models/ is a part of that traffic and often the smaller part — the git
+# fetch and the torch wheels below use the same wire, and bootstrap.sh is pulling ~24 GB over 16 connections beside
+# this run. SIMPLE_CHAT_IMAGE_LINK_IF names another interface when the default route is not the one that matters.
+link_if="${SIMPLE_CHAT_IMAGE_LINK_IF:-}"
+if [[ -z "$link_if" ]]; then
+  link_if="$(awk '$2 == "00000000" && $8 == "00000000" { print $1; exit }' /proc/net/route 2>/dev/null || true)"
+fi
+for command in git curl python3 flock; do
   command -v "$command" >/dev/null || { echo "Missing dependency: $command (use a CUDA development image)." >&2; exit 1; }
 done
 
@@ -104,16 +113,25 @@ PY
 }
 [[ "$print_workflow" = false ]] || { render_workflow; exit 0; }
 
+# One run at a time on this machine. Two would resume the same .part from two ends and the corruption would only
+# show in the SHA256, after the whole file has been paid for; a dry run would meanwhile throw away a leftover the
+# other run is writing. gpu/measure-profile.sh holds its lock on a file descriptor the same way.
+mkdir -p "$gpu_dir" || { echo "Cannot create $gpu_dir; set SIMPLE_CHAT_GPU_DIR to a directory this user owns." >&2; exit 1; }
+exec 9>"$gpu_dir/image-bootstrap.lock"
+flock -n 9 || { echo "Another image-bootstrap.sh is working in $gpu_dir; this run did nothing." >&2; exit 1; }
+# The lock belongs to this shell alone: the background fetchers and the guard are started with `9>&-`, or a curl or
+# a sleep of a run that has just ended would hold it for as long as it takes to die and refuse the operator's rerun.
+
 total_bytes=0
+pending=0
 for record in "${records[@]}"; do
   IFS=$'\t' read -r url destination digest size auth <<<"$record"
   [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || { echo "No pinned SHA256 for $(basename -- "$destination"); fill it into image-manifest.env." >&2; exit 1; }
   [[ "$size" =~ ^[1-9][0-9]*$ ]] || { echo "No pinned size for $(basename -- "$destination")." >&2; exit 1; }
   [[ "$auth" != civitai || -n "$civitai_token" ]] || { echo 'A CivitAI API token is required: SIMPLE_CHAT_CIVITAI_TOKEN or --tokens-stdin.' >&2; exit 1; }
   [[ "$auth" != hf || -n "$hf_token" ]] || { echo 'A Hugging Face token with access to the gate is required: SIMPLE_CHAT_HF_TOKEN or --tokens-stdin.' >&2; exit 1; }
-  # A leftover longer than the pinned file is not this file and can only be thrown away. It happens here, before any
-  # download and before the speed guard takes its first sample: deleting it beside the running guard would show the
-  # directory shrinking, and the guard would read that as a negative rate and end every download.
+  # A leftover longer than the pinned file is not this file and can only be thrown away. It happens here, under the
+  # lock and before any fetcher exists, so that nothing is deleted from under a curl that is writing it.
   python3 - "$destination.part" "$size" <<'PY'
 import pathlib,sys
 part=pathlib.Path(sys.argv[1])
@@ -121,7 +139,7 @@ if part.exists() and part.stat().st_size > int(sys.argv[2]):
     part.unlink(); print(f'{part.name}: a leftover longer than the pinned file was discarded.')
 PY
   # A file already on disk needs no room for itself; a partial one is counted whole, on the safe side.
-  [[ -f "$destination" ]] || total_bytes=$(( total_bytes + size ))
+  [[ -f "$destination" ]] || { total_bytes=$(( total_bytes + size )); pending=$(( pending + 1 )); }
 done
 # The tokens travel inside a quoted curl config line; a quote or a backslash in one would end the quoting early.
 for token in "$civitai_token" "$hf_token"; do
@@ -158,11 +176,19 @@ print(total)
 PY
 }
 
+# Everything this machine has pulled over the network, weights and wheels and the language model alike.
+link_bytes() {
+  local counter="/sys/class/net/$link_if/statistics/rx_bytes"
+  [[ -n "$link_if" && -r "$counter" ]] || return 1
+  cat "$counter"
+}
+
 fetch_one() {
   local url="$1" destination="$2" size="$3" auth="$4"
-  local part="$destination.part" token='' needed
+  local part="$destination.part" token='' needed attempt curl_pid status=0
   # A finished download can survive an interrupted verification, and a partial file can only be resumed from its
-  # own end. Nothing is deleted here: an unusable leftover is already gone, discarded before the guard started.
+  # own end. A leftover too long for the pinned file is already gone, discarded in the pre-flight before the guard
+  # started; the only file thrown away here is one this host has just refused to resume.
   needed="$(python3 - "$part" "$destination" "$size" <<'PY'
 import pathlib,sys
 part=pathlib.Path(sys.argv[1]); target=pathlib.Path(sys.argv[2]); expected=int(sys.argv[3])
@@ -172,50 +198,91 @@ PY
 )"
   [[ "$needed" = yes ]] || return 0
   case "$auth" in civitai) token="$civitai_token" ;; hf) token="$hf_token" ;; esac
-  # The URL, the output path and the credential go to curl over stdin, so none of them can be read out of `ps`.
-  {
-    printf 'url = "%s"\n' "$url"
-    printf 'output = "%s"\n' "$part"
-    if [[ -n "$token" ]]; then printf 'header = "Authorization: Bearer %s"\n' "$token"; fi
-    printf '\n'
-  } | curl --config - --continue-at - --fail --location --silent --show-error --retry 5 --retry-delay 5 &
-  local curl_pid=$!
-  # The speed guard kills this subshell; pass that on to curl instead of orphaning a download that keeps the link busy.
-  trap 'kill "$curl_pid" 2>/dev/null || true' TERM
-  wait "$curl_pid"
+  for attempt in 1 2; do
+    # The URL, the output path and the credential go to curl over stdin, so none of them can be read out of `ps`.
+    {
+      printf 'url = "%s"\n' "$url"
+      printf 'output = "%s"\n' "$part"
+      if [[ -n "$token" ]]; then printf 'header = "Authorization: Bearer %s"\n' "$token"; fi
+      printf '\n'
+    } | curl --config - --continue-at - --fail --location --silent --show-error --retry 5 --retry-delay 5 &
+    curl_pid=$!
+    # The speed guard kills this subshell; pass that on to curl instead of orphaning a download that keeps the link busy.
+    trap 'kill "$curl_pid" 2>/dev/null || true' TERM
+    status=0
+    wait "$curl_pid" || status=$?
+    (( status != 0 )) || return 0
+    # curl 33 is a host that answered a ranged request with the whole file: this leftover can never be resumed, and
+    # every later run would ask for the same impossible thing, so the box could not make progress on its own. Start
+    # once from zero instead. Any other failure keeps the partial file — curl has already retried five times, and
+    # throwing away eleven arrived gigabytes because a connection dropped costs more than stopping does.
+    (( attempt == 1 && status == 33 )) || break
+    echo "$(basename -- "$part") cannot be resumed by this host; it was discarded and the download restarted." >&2
+    rm -f -- "$part"
+  done
+  echo "$(basename -- "$destination"): the download failed (curl exit $status)." >&2
+  return "$status"
 }
 
-# Measures the shared link once the downloads are running and ends them if the machine cannot deliver.
+# Measures the shared link once the downloads are running and ends them if the machine cannot deliver. Judging by
+# what reached models/ would condemn a fast machine whose link is busy with the other lane: the floor asks for
+# 1.5 GB a minute, and this script's own pip install can take most of the wire while it is measured.
 speed_guard() {
-  local before after mbit pid alive=false
+  local before after link_before link_after mbit weights pid alive=false
+  link_before="$(link_bytes)" || {
+    echo "No byte counter for this machine's link${link_if:+ ($link_if)}; its speed was not judged." >&2
+    return 0
+  }
   before="$(downloaded_bytes)"
   sleep "$window"
+  link_after="$(link_bytes)"
   after="$(downloaded_bytes)"
-  # While the fetchers run the directory only grows. If it shrank anyway, something outside this script is at work
-  # and the average is not evidence; a negative rate is never a reason to destroy a machine.
-  if (( after < before )); then
-    echo 'The weights directory shrank during the measurement; the link was not judged.' >&2
-    return 0
-  fi
-  mbit=$(( (after - before) * 8 / window / 1000000 ))
   for pid in "${download_pids[@]}"; do kill -0 "$pid" 2>/dev/null && alive=true; done
-  # Everything already arrived inside the window: the average is meaningless and there is nothing left to end.
-  if [[ "$alive" = false ]] || (( mbit >= min_mbit )); then
-    echo "Weights arriving at about ${mbit} Mbit/s."
+  # Everything arrived inside the window: an average over a link that was then idle says nothing, and a printed
+  # "0 Mbit/s" reads exactly like the dead link this guard exists to catch. There is also nothing left to end.
+  if [[ "$alive" = false ]]; then
+    echo 'Every pinned file arrived inside the measurement window; there was nothing left to measure.'
     return 0
   fi
-  echo "Only ${mbit} Mbit/s over ${window}s, below the ${min_mbit} Mbit/s floor: destroy this machine and take the next offer." >&2
+  # A counter that went backwards is an interface that came and went, not a reading, and a negative rate is never a
+  # reason to destroy a machine. The weights' share is read the same way: a discarded leftover can shrink models/.
+  if (( link_after < link_before )); then
+    echo "The byte counter of $link_if went backwards; the link was not judged." >&2
+    return 0
+  fi
+  mbit=$(( (link_after - link_before) * 8 / window / 1000000 ))
+  weights=$(( after > before ? (after - before) * 8 / window / 1000000 : 0 ))
+  if (( mbit >= min_mbit )); then
+    echo "The link is carrying about ${mbit} Mbit/s, ${weights} of it into models/."
+    return 0
+  fi
+  echo "Only ${mbit} Mbit/s over ${window}s on ${link_if}, ${weights} of it weights: below the ${min_mbit} Mbit/s floor, so destroy this machine and take the next offer." >&2
   kill "${download_pids[@]}" 2>/dev/null || true
 }
 
 download_pids=()
+guard_pid=''
+# Whatever ends this run takes the downloads with it: the repository check below, a failing `git fetch` or pip under
+# `set -e`, the sm_120 abort, Ctrl-C. A curl that outlives the script keeps pulling into a .part that the next run
+# then resumes from the wrong end, and that corruption only shows in the SHA256 once the whole file has been paid for.
+cleanup() {
+  [[ ${#download_pids[@]} -eq 0 ]] || kill "${download_pids[@]}" 2>/dev/null || true
+  [[ -z "$guard_pid" ]] || kill "$guard_pid" 2>/dev/null || true
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
 for record in "${records[@]}"; do
   IFS=$'\t' read -r url destination digest size auth <<<"$record"
-  fetch_one "$url" "$destination" "$size" "$auth" &
+  fetch_one "$url" "$destination" "$size" "$auth" 9>&- &
   download_pids+=($!)
 done
-speed_guard &
-guard_pid=$!
+# On a rerun where every pinned file is already here there is nothing to measure, and the guard would hold the run
+# for the whole window to say so.
+if (( pending > 0 )); then
+  speed_guard 9>&- &
+  guard_pid=$!
+fi
 
 # Meanwhile the environment is built, so the link and the installer do not wait for each other.
 if [[ ! -d "$comfy_dir/.git" ]]; then
@@ -249,8 +316,10 @@ fi
 failed=0
 for pid in "${download_pids[@]}"; do wait "$pid" || failed=1; done
 # The guard may still be inside its window; nothing is left for it to measure.
-kill "$guard_pid" 2>/dev/null || true
-wait "$guard_pid" 2>/dev/null || true
+if [[ -n "$guard_pid" ]]; then
+  kill "$guard_pid" 2>/dev/null || true
+  wait "$guard_pid" 2>/dev/null || true
+fi
 (( failed == 0 )) || { echo 'A download failed or was ended; nothing is verified.' >&2; exit 1; }
 
 for record in "${records[@]}"; do

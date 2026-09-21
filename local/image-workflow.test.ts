@@ -125,8 +125,8 @@ test('a leftover longer than the pinned file is discarded before the downloads s
   const file = openSync(part, 'w');
   ftruncateSync(file, Number(manifest.get('IMAGE_VAE_BYTES')) + 1);
   closeSync(file);
-  // The discarding belongs to this pre-flight, which ends before a fetcher or the speed guard exists. Done beside
-  // the guard, it would shrink the directory the guard is measuring, and a negative rate ends every download.
+  // The discarding belongs to this pre-flight, which holds the run's lock and ends before a fetcher exists. Done
+  // later, it would take the .part out from under the curl that is writing it.
   const run = bootstrap(['--dry-run'], { SIMPLE_CHAT_GPU_DIR: directory, SIMPLE_CHAT_CIVITAI_TOKEN: 'synthetic' });
   assert.equal(run.status, 0, run.stderr);
   assert.equal(existsSync(part), false);
