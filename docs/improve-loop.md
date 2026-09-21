@@ -23,6 +23,20 @@ How the evaluation, the adapter and the daily limits work is described in [model
 
 Editing any item from this list makes the comparison of versions meaningless. If it seems that you cannot do without such an edit, stop and write to the owner.
 
+**Owner's word, 2026-09-21: the freeze is lifted for one purpose, building stronger evals.** The present instruments
+saturate: almost every model scores full marks, a constant "yes" outscores the judge, and a change to the prompts
+cannot be seen as progress. `local/eval.ts`, `local/scene-judge.ts`, `local/scenarios.ts`, `local/pack-hf.ts`, the
+probes and new fixtures may change for that work, including an optional seed for `--lab` runs. It is not a licence
+to edit a check because a prompt fails it: within one step of the loop the list below still binds, the old checks
+and traps stay as a separately scored legacy set so the log stays readable, and `local/budget.ts`, the limits in
+`.env.eval`, the holdout and the privacy rules are not part of the lift.
+
+Measured in Russian only for now: the tester reads Russian, and the other four catalogs in `local/story-text/` wait.
+A change to the narrator's rule is made in the catalog, not only in `local/prompt.ts`, which interpolates it.
+
+Who does the work: Opus agents, paired with the local model, for the bulk; Fable and GPT-6 only at the steps that
+decide something — a design, a review of core code, a verdict on pictures — because they cost much more.
+
 - `examples/memory-checks.ts`, `examples/scene-traps.ts`, `examples/*-probe.ts`, `examples/frozen/` — questions, answers, scenarios and frozen scenes. Describe an error in a check to the owner; do not fix it yourself.
 - `local/eval.ts`, `local/scene-judge.ts`, `local/scenarios.ts`, `local/pack-hf.ts`, `local/budget.ts`, the judge model, the limit values in `.env.eval` — the eval and the safety guard.
 - The ban on the providers `openai-compatible` and `codex-cli` for the bot without the explicit consent of the instance owner (`SIMPLE_CHAT_ALLOW_HOSTED`) in `local/config.ts`, and the privacy rules from `AGENTS.md`. Do not open `.env`, `.env.eval`, `data/`, `backups/`; get a needed fact from them with code that prints booleans, numbers and sizes.
