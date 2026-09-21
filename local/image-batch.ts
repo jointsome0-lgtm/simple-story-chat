@@ -106,13 +106,32 @@ export function apiGraph(value: unknown): Graph {
   return value as Graph;
 }
 
+const seedKey = (inputs: Record<string, unknown>) => ('seed' in inputs ? 'seed' : 'noise_seed' in inputs ? 'noise_seed' : null);
+const samplerOf = (graph: Graph) => Object.entries(graph).find(([, node]) => seedKey(node.inputs) && 'steps' in node.inputs);
+// The node an input of the sampler is wired to. The positive text is the one its positive conditioning comes from;
+// the negative one, if any, the other; the size belongs to the latent it starts from.
+const linkedTo = (graph: Graph, inputs: Record<string, unknown>, key: string) => {
+  const link = inputs[key];
+  const id = Array.isArray(link) ? String(link[0]) : null;
+  return id && graph[id] ? graph[id] : null;
+};
+
+// The size a pinned graph was exported at, which is the size it was tested at on the card. `--size` is optional
+// because of this: a workflow that already says 1280x720 must not be redrawn at the harness's own default, which
+// is a different resolution and a different aspect ratio, without anybody asking for it.
+export function latentSizeOf(graph: Graph): { width: number; height: number } | null {
+  const sampler = samplerOf(graph);
+  const latent = sampler ? linkedTo(graph, sampler[1].inputs, 'latent_image') : null;
+  const { width, height } = (latent?.inputs ?? {}) as { width?: unknown; height?: unknown };
+  return typeof width === 'number' && typeof height === 'number' ? { width, height } : null;
+}
+
 // Fills a graph by the role of each node rather than by its id, so a workflow pinned on the card keeps working as
 // long as it samples, loads a checkpoint and encodes text. It throws rather than draw with the wrong seed or prompt.
 export function applyToWorkflow(graph: Graph, values: WorkflowValues): Graph {
   const filled: Graph = JSON.parse(JSON.stringify(graph));
   const nodes = Object.entries(filled);
-  const seedKey = (inputs: Record<string, unknown>) => ('seed' in inputs ? 'seed' : 'noise_seed' in inputs ? 'noise_seed' : null);
-  const sampler = nodes.find(([, node]) => seedKey(node.inputs) && 'steps' in node.inputs);
+  const sampler = samplerOf(filled);
   const loader = nodes.find(([, node]) => 'ckpt_name' in node.inputs || 'unet_name' in node.inputs);
   if (!sampler || !loader) throw workflowError('workflow_no_sampler_or_loader', 'The workflow needs one sampler node and one node that loads the checkpoint');
   const inputs = sampler[1].inputs;
@@ -122,13 +141,7 @@ export function applyToWorkflow(graph: Graph, values: WorkflowValues): Graph {
   if ('scheduler' in inputs) inputs.scheduler = values.scheduler;
   if ('cfg' in inputs) inputs.cfg = values.cfg;
   loader[1].inputs['ckpt_name' in loader[1].inputs ? 'ckpt_name' : 'unet_name'] = values.checkpoint;
-  // The node an input of the sampler is wired to. The positive text is the one its positive conditioning comes
-  // from; the negative one, if any, the other; the size belongs to the latent it starts from.
-  const linked = (key: string) => {
-    const link = inputs[key];
-    const id = Array.isArray(link) ? String(link[0]) : null;
-    return id && filled[id] ? filled[id] : null;
-  };
+  const linked = (key: string) => linkedTo(filled, inputs, key);
   const text = (key: string) => { const node = linked(key); return node && 'text' in node.inputs ? node : null; };
   const positive = text('positive');
   if (!positive) throw workflowError('workflow_no_positive_prompt', 'The workflow needs a text node on the sampler\'s positive input');
@@ -242,7 +255,9 @@ export async function drawOne(comfy: Comfy, graph: Graph, options: { pollMs?: nu
 
 export type DrawOptions = {
   prompts: string; out: string; comfy: string; checkpoints: string[]; seeds: number[];
-  steps: number; sampler: string; scheduler: string; cfg: number; width: number; height: number;
+  // Without a size the graph's own latent size is drawn and recorded: a workflow pinned on the card carries the
+  // resolution it was tested at, and the harness's default is not that resolution.
+  steps: number; sampler: string; scheduler: string; cfg: number; width?: number; height?: number;
   // `timeoutMs` is one HTTP request's own timeout; `waitMs` is how long a picture may take, which is a different
   // number by two orders of magnitude and used to be the same one.
   negative: string; minutes: number; timeoutMs: number; waitMs: number; pollMs?: number; workflow?: string;
@@ -287,12 +302,20 @@ export async function draw(options: DrawOptions): Promise<BatchIndex> {
   mkdirSync(join(directory, 'pictures'), { recursive: true, mode: 0o700 });
   // The bundles are built from this copy, so a review directory needs nothing but the run directory.
   copyFileSync(join(resolve(options.prompts), 'prompts.json'), join(directory, 'prompts.json'));
+  const graph = apiGraph(options.workflow ? JSON.parse(readFileSync(resolve(options.workflow), 'utf8')) : defaultWorkflow());
+  // The size of the run: what `--size` asked for, or what the graph itself says. A workflow pinned on the card was
+  // exported at a resolution somebody chose for this checkpoint, and drawing it at the harness's default instead
+  // would change the picture and the seconds it takes while the index still called it that workflow's run.
+  const pinned = latentSizeOf(graph);
+  const width = options.width ?? pinned?.width, height = options.height ?? pinned?.height;
+  if (width === undefined || height === undefined) {
+    throw workflowError('workflow_no_latent_size', 'The sampler\'s latent_image must come from a node with a width and a height, or give --size');
+  }
   const indexPath = join(directory, 'index.json');
   const index: BatchIndex = existsSync(indexPath) ? JSON.parse(readFileSync(indexPath, 'utf8'))
     : { startedAt: new Date().toISOString(), comfy: { steps: options.steps, sampler: options.sampler, scheduler: options.scheduler,
-      cfg: options.cfg, width: options.width, height: options.height }, pictures: [], failures: [] };
+      cfg: options.cfg, width, height }, pictures: [], failures: [] };
   const save = () => writeFileSync(indexPath, JSON.stringify(index, null, 2));
-  const graph = apiGraph(options.workflow ? JSON.parse(readFileSync(resolve(options.workflow), 'utf8')) : defaultWorkflow());
   const deadline = performance.now() + options.minutes * 60000;
 
   // Two cells that would write one file are a comparison of a checkpoint with itself: the second is read as already
@@ -313,12 +336,12 @@ export async function draw(options: DrawOptions): Promise<BatchIndex> {
     try {
       const filled = applyToWorkflow(graph, { checkpoint: cell.checkpoint, prompt: one.prompt, negative: options.negative,
         seed: cell.seed, steps: options.steps, sampler: options.sampler, scheduler: options.scheduler,
-        width: options.width, height: options.height, cfg: options.cfg });
+        width, height, cfg: options.cfg });
       const drawn = await drawOne(comfy, filled, { pollMs: options.pollMs, waitMs: options.waitMs });
       mkdirSync(join(directory, 'pictures', safeName(cell.checkpoint)), { recursive: true, mode: 0o700 });
       writeFileSync(join(directory, file), drawn.bytes, { mode: 0o600 });
       const picture: Picture = { ...cell, steps: options.steps, sampler: options.sampler, scheduler: options.scheduler,
-        width: options.width, height: options.height, totalMs: drawn.totalMs, viewMs: drawn.viewMs, vram: drawn.vram,
+        width, height, totalMs: drawn.totalMs, viewMs: drawn.viewMs, vram: drawn.vram,
         bytes: drawn.bytes.length, sha256: createHash('sha256').update(drawn.bytes).digest('hex'), file };
       // The index records cells, not attempts: this cell's earlier failure is off the list now that it has its
       // picture, and a cell drawn again (its file lost, say) replaces its own row instead of being dealt twice.
@@ -434,7 +457,7 @@ async function main(args: string[]) {
     prompts: { type: 'string' }, out: { type: 'string' }, comfy: { type: 'string', default: 'http://127.0.0.1:8188' },
     checkpoints: { type: 'string' }, seeds: { type: 'string', default: '7' }, steps: { type: 'string', default: '8' },
     sampler: { type: 'string', default: 'er_sde' }, scheduler: { type: 'string', default: 'simple' },
-    cfg: { type: 'string', default: '1' }, size: { type: 'string', default: '1344x768' }, negative: { type: 'string', default: '' },
+    cfg: { type: 'string', default: '1' }, size: { type: 'string' }, negative: { type: 'string', default: '' },
     minutes: { type: 'string', default: '30' }, timeout: { type: 'string', default: '60' }, wait: { type: 'string', default: '300' },
     workflow: { type: 'string' }, bundles: { type: 'string', default: '3' },
   } });
@@ -446,17 +469,19 @@ async function main(args: string[]) {
   const prompts = values.prompts ? resolve(values.prompts) : join(root, 'illustrations', 'prompts');
   const bundles = Number(values.bundles);
   if (!['draw', 'bundles'].includes(command) || !Number.isInteger(bundles) || bundles < 1 || bundles > 12) {
-    throw new Error('Use: draw --checkpoints a.safetensors,b.safetensors [--prompts directory] [--out directory] [--seeds 7] [--steps 8] [--sampler er_sde] [--scheduler simple] [--size 1344x768] [--cfg 1] [--minutes 30] [--wait 300] [--timeout 60] [--workflow file.json] [--comfy http://127.0.0.1:8188]; or: bundles [--out directory] [--bundles 3]. --wait is the seconds one picture may take and --timeout the seconds one HTTP request may take. The built-in workflow fits an all-in-one checkpoint; a model in separate files (Krea 2 Turbo: transformer, text encoder, VAE) needs --workflow, pinned on the card and exported in API format.');
+    throw new Error('Use: draw --checkpoints a.safetensors,b.safetensors [--prompts directory] [--out directory] [--seeds 7] [--steps 8] [--sampler er_sde] [--scheduler simple] [--size 1280x720] [--cfg 1] [--minutes 30] [--wait 300] [--timeout 60] [--workflow file.json] [--comfy http://127.0.0.1:8188]; or: bundles [--out directory] [--bundles 3]. --wait is the seconds one picture may take and --timeout the seconds one HTTP request may take. Without --size the workflow is drawn at its own latent size. The built-in workflow fits an all-in-one checkpoint; a model in separate files (Krea 2 Turbo: transformer, text encoder, VAE) needs --workflow, pinned on the card and exported in API format.');
   }
   if (command === 'bundles') { buildBundles(directory, bundles, report); return; }
-  const [width, height] = (values.size ?? '').split('x').map(Number);
+  // No --size means the workflow's own size, so nothing is validated and nothing is passed on: `draw` reads it from
+  // the graph. A size that is given is still checked here, before the run opens a directory on the rented card.
+  const [width, height] = values.size === undefined ? [undefined, undefined] : values.size.split('x').map(Number);
   const seeds = parseSeeds(values.seeds ?? '');
   const checkpoints = (values.checkpoints ?? '').split(',').map(name => name.trim()).filter(Boolean);
   const numbers = { steps: Number(values.steps), cfg: Number(values.cfg), minutes: Number(values.minutes),
     timeout: Number(values.timeout), wait: Number(values.wait) };
   if (!checkpoints.length || checkpoints.length > 6
     || !seeds.every(seed => seed <= Number.MAX_SAFE_INTEGER) || !seeds.length
-    || ![width, height].every(size => Number.isInteger(size) && size >= 256 && size <= 4096)
+    || (values.size !== undefined && ![width, height].every(size => Number.isInteger(size) && size! >= 256 && size! <= 4096))
     || !Number.isInteger(numbers.steps) || numbers.steps < 1 || numbers.steps > 100
     || !Number.isFinite(numbers.cfg) || numbers.cfg < 0 || numbers.cfg > 30
     || !Number.isInteger(numbers.minutes) || numbers.minutes < 1 || numbers.minutes > 240

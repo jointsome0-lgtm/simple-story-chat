@@ -50,13 +50,14 @@ function environmentOf(profile: string): NodeJS.ProcessEnv {
 // what the fake does after recording: leave (the flag checks), answer /health on the port serve.sh was given (a whole
 // start), or stay silent (a start that is interrupted). A staying fake kills its own process group on SIGTERM, so
 // `stop_server` leaves no listener on the port behind.
-type Machine = { directory: string; cmdline: string; binary: string; pidFile: string; path: string };
+type Machine = { directory: string; cmdline: string; card: string; binary: string; pidFile: string; path: string };
 
 function fakeMachine(t: { after(action: () => void): void }, { keep = 'exit' }: { keep?: 'exit' | 'serve' | 'sleep' } = {}): Machine {
   const directory = mkdtempSync(join(tmpdir(), 'simple-chat-profile-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const binary = join(directory, 'llama.cpp/build/bin/llama-server');
   const cmdline = join(directory, 'cmdline');
+  const card = join(directory, 'card');
   const pidFile = join(directory, 'server.pid');
   mkdirSync(join(directory, 'llama.cpp/build/bin'), { recursive: true });
   mkdirSync(join(directory, 'models'), { recursive: true });
@@ -72,13 +73,16 @@ server.HTTPServer(("127.0.0.1", int(sys.argv[1])), Health).serve_forever()' "$SI
   const stay = keep === 'exit' ? ''
     : `echo $$ >"${pidFile}"\n${keep === 'serve' ? health : 'sleep 600'} &\nserving=$!\n`
       + `trap 'kill "$serving" 2>/dev/null; exit 143' TERM INT\nwait "$serving"\n`;
-  writeFileSync(binary, `#!/usr/bin/env bash\nprintf '%s\\0' "$0" "$@" >"${cmdline}"\n${stay}`);
+  // The cards the server may use are an environment variable and not an argument, so the fake records that too: the
+  // flags say nothing about which card llama.cpp would have spread itself over.
+  writeFileSync(binary, `#!/usr/bin/env bash\nprintf '%s\\0' "$0" "$@" >"${cmdline}"\n`
+    + `printf '%s' "\${CUDA_VISIBLE_DEVICES-unset}" >"${card}"\n${stay}`);
   chmodSync(binary, 0o755);
   const shim = join(directory, 'shim');
   mkdirSync(shim);
   writeFileSync(join(shim, 'git'), `#!/usr/bin/env bash\necho ${manifest.LLAMA_CPP_REVISION}\n`);
   chmodSync(join(shim, 'git'), 0o755);
-  return { directory, cmdline, binary, pidFile, path: `${shim}:${process.env.PATH}` };
+  return { directory, cmdline, card, binary, pidFile, path: `${shim}:${process.env.PATH}` };
 }
 
 // The scripts as they are shipped to the machine, in a directory of their own so a test may change one of them. The
@@ -115,10 +119,22 @@ test('every profile of a session shares the workload flags and labels its own me
     assert.match(printed, new RegExp(`--profile ${profile} `));
     // The measurer's `--draft` only labels a report, so the label has to come from the same place as the server.
     assert.equal(/--draft/.test(printed), profile.includes('draft'));
+    // The memory verdicts are about one card. On a two-card box nothing attributes llama-server to one by itself —
+    // nvidia-smi reports host pids and gpu/diagnose-remote.py reads the container's own /proc — so a command
+    // without `--card` leaves thresholds 1 and 7 `unknown` for every profile of the session.
+    assert.match(printed, /--card 0(?: |$)/m);
     // Every profile names all three bot variables, because this script runs on the rented machine and cannot see
     // .env.gpu: a line it leaves out is a pool's setting surviving into the next profile's report.
     assert.match(printed, /SIMPLE_CHAT_GPU_SLOTS=\d+\n\s+SIMPLE_CHAT_GPU_KV_UNIFIED=(?:true|false)\n\s+SIMPLE_CHAT_POOL_TOKENS=\d+\n/);
   }
+  // The card is the machine's, not the profile's, so it is named once in the environment and follows into the
+  // printed command; the log level travels the same way, and the record then says which level ran.
+  const named = run(['--print', 'pool-3'], { env: { SIMPLE_CHAT_GPU_CARD: '1', SIMPLE_CHAT_GPU_LOG_VERBOSITY: '3' } });
+  assert.match(named.stdout, /--card 1(?: |$)/m);
+  assert.match(named.stdout, /SIMPLE_CHAT_GPU_LOG_VERBOSITY=3/);
+  const refused = run(['--print', 'pool-3'], { env: { SIMPLE_CHAT_GPU_LOG_VERBOSITY: '9' } });
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /SIMPLE_CHAT_GPU_LOG_VERBOSITY/);
   assert.equal(run(['--print', 'pool-4']).status, 1);
   assert.match(run(['--print', 'pool-4']).stderr, /Unknown profile/);
 });
@@ -171,6 +187,30 @@ test('serve.sh started with a profile environment passes that profile check and 
     assert.equal(rejected.status, 1, `${other} accepted a ${profile} server`);
     assert.match(rejected.stderr, /Missing from the running server|draft model/);
   }
+});
+
+// The two lanes of the session share a box and not a card: gpu/image-serve.sh pins ComfyUI to one, and nothing
+// pinned llama-server, whose `--gpu-layers 99` under llama.cpp's default split mode spreads the layers and the whole
+// KV pool over every visible card. Fourteen GiB of Gemma on the picture card is an out-of-memory in the middle of
+// somebody's scene, and it would be blamed on the checkpoint.
+test('serve.sh takes one card, so the picture lane keeps its own', t => {
+  const machine = fakeMachine(t);
+  const start = (environment: NodeJS.ProcessEnv) => spawnSync('bash', [resolve('gpu/serve.sh')],
+    { encoding: 'utf8', timeout: 30000, env: { PATH: machine.path, SIMPLE_CHAT_GPU_DIR: machine.directory, ...environment } });
+
+  const plain = start({});
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.equal(readFileSync(machine.card, 'utf8'), '0', 'the server was left free to take every card');
+  assert.match(plain.stdout, /card=0/, 'the start line does not say which card it took');
+
+  assert.equal(start({ SIMPLE_CHAT_GPU_CARD: '1' }).status, 0);
+  assert.equal(readFileSync(machine.card, 'utf8'), '1');
+  // A card the container itself chose stays as it is: it may be a list or a UUID, and it is not this script's.
+  assert.equal(start({ CUDA_VISIBLE_DEVICES: 'GPU-0000' }).status, 0);
+  assert.equal(readFileSync(machine.card, 'utf8'), 'GPU-0000');
+  const bad = start({ SIMPLE_CHAT_GPU_CARD: 'all' });
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr, /SIMPLE_CHAT_GPU_CARD/);
 });
 
 test('the default server ensure-server.sh starts is refused under every pooled profile', t => {
@@ -237,6 +277,22 @@ test('a start that takes effect records the server, not its supervisor, and call
   assert.match(readFileSync(markerOf(machine), 'utf8'), /^single\nuntil=\d+\n$/);
 });
 
+// `env -i` keeps the operator's shell from deciding a profile by accident, and it kept out the two variables that
+// are the machine's own: the card the server may use, and how much the server says about its memory. The block that
+// wants llama.cpp's own account of its cache sizes runs at verbosity 3, and no profile started here could ask for it.
+test('a profile start carries the machine card and the log level the block asks for', needsTools, async t => {
+  const port = String(await freePort());
+  const scripts = shippedScripts(t);
+  const machine = fakeMachine(t, { keep: 'serve' });
+  t.after(() => spawnSync('pkill', ['-f', machine.binary]));
+  const started = measure(scripts, ['pool-3'], machine,
+    { SIMPLE_CHAT_GPU_PORT: port, SIMPLE_CHAT_GPU_CARD: '1', SIMPLE_CHAT_GPU_LOG_VERBOSITY: '3' });
+  assert.equal(started.status, 0, started.stderr);
+  assert.equal(readFileSync(machine.card, 'utf8'), '1', 'the profile server was spread over every card');
+  assert.match(readFileSync(machine.cmdline, 'utf8').replaceAll('\0', ' '), /--log-verbosity 3/);
+  assert.match(started.stdout, /--card 1(?: |$)/m);
+});
+
 // Stopping the profile is not handing the server back. The bot runs ensure-server.sh only while it is creating a
 // tunnel — local/gpu-connection.ts keeps a live one and never asks again, and a failing health check does not close
 // it — so a session that ends with an empty machine leaves a bot forwarding the port to nothing until it restarts.
@@ -279,6 +335,25 @@ test('a start whose server answers with another profile flags is refused, and th
   assert.match(String(rows[0].flags), /--parallel 2/);
   assert.equal(existsSync(markerOf(machine)), false, 'a refused start kept holding the bot back');
   assert.equal(spawnSync('pgrep', ['-f', machine.binary]).status, 1, 'the refused server was left running');
+});
+
+// bootstrap.sh fetches the draft weights only when SIMPLE_CHAT_GPU_DRAFT=true was set at bootstrap time, an hour
+// before the draft profile runs; serve.sh then exits with 'Draft model missing'. Finding that out after the
+// measurement server has been stopped costs the running block as well as the draft one.
+test('a draft profile without its weights is refused before the running server is stopped', needsTools, async t => {
+  const port = String(await freePort());
+  const scripts = shippedScripts(t);
+  const machine = fakeMachine(t, { keep: 'serve' });
+  t.after(() => spawnSync('pkill', ['-f', machine.binary]));
+  const serving = measure(scripts, ['pool-3'], machine, { SIMPLE_CHAT_GPU_PORT: port });
+  assert.equal(serving.status, 0, serving.stderr);
+  rmSync(join(machine.directory, 'models', manifest.DRAFT_FILE));
+
+  const started = measure(scripts, ['pool-3-draft'], machine, { SIMPLE_CHAT_GPU_PORT: port });
+  assert.equal(started.status, 1);
+  assert.match(started.stderr, /draft weights; rerun/);
+  assert.equal(spawnSync('pgrep', ['-f', machine.binary]).status, 0, 'the block that was serving was stopped too');
+  assert.match(readFileSync(markerOf(machine), 'utf8'), /^pool-3\n/, 'the running profile lost its marker');
 });
 
 test('an interrupted start gives the server back to the bot', needsTools, async t => {

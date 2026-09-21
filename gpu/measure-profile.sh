@@ -45,6 +45,17 @@ health_timeout="${SIMPLE_CHAT_MEASURE_HEALTH_SECONDS:-600}"
 hold_seconds="${SIMPLE_CHAT_MEASURE_HOLD_SECONDS:-7200}"
 [[ "$hold_seconds" =~ ^[0-9]+$ ]] && (( hold_seconds >= 60 )) \
   || { echo 'Use SIMPLE_CHAT_MEASURE_HOLD_SECONDS in whole seconds, 60 or more.' >&2; exit 1; }
+# How much the server says about itself, passed on to serve.sh: `env -i` there means a level asked for in the
+# operator's shell would otherwise never arrive, and the integration block wants 3, where llama.cpp states its cache
+# sizes, cells, layers and buffers instead of leaving them to be deduced by subtraction. Read here, so a typo is
+# refused now rather than after a profile start has been spent on it, and printed with the profile, so the record
+# says which level ran.
+verbosity="${SIMPLE_CHAT_GPU_LOG_VERBOSITY:-1}"
+[[ "$verbosity" =~ ^[1-5]$ ]] || { echo 'Use SIMPLE_CHAT_GPU_LOG_VERBOSITY from 1 to 5 (3 states the cache sizes).' >&2; exit 1; }
+# The card llama-server takes, and the one the measurer attributes memory to. A machine fact, like the CUDA runtime
+# below and unlike everything else SIMPLE_CHAT_GPU_*: the picture lane holds the other card (gpu/image-serve.sh).
+card="${SIMPLE_CHAT_GPU_CARD:-0}"
+[[ "$card" =~ ^[0-9]$ ]] || { echo 'Use a single-digit SIMPLE_CHAT_GPU_CARD index.' >&2; exit 1; }
 
 # The tools this script decides with. Without pgrep a process list reads as "nothing runs": stop_server would kill
 # nothing and the health wait would give up on a server that is serving. bootstrap.sh and trial-onstart.sh ask for
@@ -115,7 +126,16 @@ profile_flags() {
 profile_command() {
   printf '%s\n' "SIMPLE_CHAT_GPU_SLOTS=$slots" "SIMPLE_CHAT_GPU_KV_UNIFIED=$unified" "SIMPLE_CHAT_GPU_POOL=$pool" \
     "SIMPLE_CHAT_GPU_DRAFT=$draft" "SIMPLE_CHAT_GPU_CACHE_RAM=$cache_ram" "SIMPLE_CHAT_GPU_CONTEXT=$CONTEXT" \
-    "SIMPLE_CHAT_GPU_UBATCH=$UBATCH"
+    "SIMPLE_CHAT_GPU_UBATCH=$UBATCH" "SIMPLE_CHAT_GPU_LOG_VERBOSITY=$verbosity"
+}
+
+# The one command the operator runs for this profile, printed by `--print` and again by a verified start, so the two
+# are the same text. `--card` is not part of the workload fingerprint (`sameWork` in local/gpu-measure.ts), so it may
+# differ between profiles without making their reports incomparable; without it, a two-card box attributes no memory
+# at all, because the pids nvidia-smi reports for compute apps are the host's and diagnose-remote.py reads the
+# container's own /proc, so thresholds 1 and 7 come out `unknown`.
+measurer_command() {
+  echo "npm run gpu:measure -- --profile $profile $MEASURE_FLAGS --card $card$([[ "$draft" = true ]] && echo ' --draft')"
 }
 
 # argv of a process is NUL-separated; joining with the unit separator makes an exact token search a substring search.
@@ -225,11 +245,14 @@ wait_for_health() {
   done
 }
 
-# LD_LIBRARY_PATH and CUDA_VISIBLE_DEVICES carry the CUDA runtime and the card choice of the machine, not the bot's
-# configuration; everything SIMPLE_CHAT_* comes from the profile, or from nowhere when the bot's own server is started.
+# LD_LIBRARY_PATH, CUDA_VISIBLE_DEVICES and SIMPLE_CHAT_GPU_CARD carry the CUDA runtime and the card choice of the
+# machine, not the bot's configuration; everything else SIMPLE_CHAT_* comes from the profile, or from nowhere when
+# the bot's own server is started. The card is the one exception to that rule and has to travel: `env -i` without it
+# leaves serve.sh to llama.cpp's default split mode, which takes the picture lane's card too.
 machine_environment() {
   if [[ -n "${LD_LIBRARY_PATH-}" ]]; then printf '%s\n' "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"; fi
   if [[ -n "${CUDA_VISIBLE_DEVICES-}" ]]; then printf '%s\n' "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"; fi
+  if [[ -n "${SIMPLE_CHAT_GPU_CARD-}" ]]; then printf '%s\n' "SIMPLE_CHAT_GPU_CARD=$SIMPLE_CHAT_GPU_CARD"; fi
 }
 
 start_server() {
@@ -310,7 +333,7 @@ if [[ "$mode" = print ]]; then
   echo '  Server flags:'
   profile_flags | sed 's/^/    /'
   echo '  Measurer (run where the bot runs, through the tunnel):'
-  echo "    npm run gpu:measure -- --profile $profile $MEASURE_FLAGS$([[ "$draft" = true ]] && echo ' --draft')"
+  echo "    $(measurer_command)"
   # All three lines for every profile, the values spelled out: this script runs on the rented machine and cannot see
   # .env.gpu, so the only defence against a pool's variables surviving into the next profile is to say what each one
   # must be now. The bot reads them in loadModelConfig (local/config.ts) and the measurer copies them into its report.
@@ -322,6 +345,15 @@ if [[ "$mode" = print ]]; then
 fi
 
 [[ "$mode" != start ]] || require_tools pgrep pkill setsid flock curl python3 tr
+# The draft weights are fetched by bootstrap.sh only when SIMPLE_CHAT_GPU_DRAFT=true was set at bootstrap time, an
+# hour before this profile runs; serve.sh then exits with 'Draft model missing'. Refuse here, before the marker and
+# before the running server is stopped: the block is lost either way, the bot's server need not be, and 15 seconds
+# of wait_for_health plus a look in serve-$profile.out is a slow way to be told to rerun bootstrap.
+if [[ "$mode" = start && "$draft" = true ]]; then
+  source "$task_dir/manifest.env"  # the same file serve.sh reads, and the only place the draft file is named
+  [[ -f "$gpu_dir/models/$DRAFT_FILE" ]] \
+    || { echo "Profile $profile needs the draft weights; rerun SIMPLE_CHAT_GPU_DRAFT=true bash $task_dir/bootstrap.sh." >&2; exit 1; }
+fi
 cmdline_file="$(mktemp)"
 # Everything between writing the marker and a verified server is a state nobody may be left in: Ctrl-C, a dropped SSH
 # (HUP) or a failure under `set -e` must take the marker away again, or the bot has no server and no way to know why.
@@ -368,4 +400,4 @@ if [[ "$verified" = false ]]; then
 fi
 holding=true
 echo "Profile $profile is serving on 127.0.0.1:$port (pid $pid); flags recorded in $record."
-echo "Measure with: npm run gpu:measure -- --profile $profile $MEASURE_FLAGS$([[ "$draft" = true ]] && echo ' --draft')"
+echo "Measure with: $(measurer_command)"

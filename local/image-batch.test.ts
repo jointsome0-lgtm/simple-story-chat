@@ -4,9 +4,9 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { deflateSync, inflateSync, crc32 } from 'node:zlib';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { draw, buildBundles, bundlesOf, applyToWorkflow, defaultWorkflow, parseSeeds, stripPngMetadata, taskMarkdown, REVIEW } from './image-batch.ts';
+import { draw, buildBundles, bundlesOf, applyToWorkflow, defaultWorkflow, latentSizeOf, parseSeeds, stripPngMetadata, taskMarkdown, REVIEW } from './image-batch.ts';
 import type { Graph, Picture } from './image-batch.ts';
 import type { Case } from './illustrate-probe.ts';
 
@@ -220,6 +220,39 @@ test('the negative text never lands on the positive node, and the size goes on t
   // own failures carry a code, so `draw` records them as themselves and not as a plain `image_failed`.
   const encoded: Graph = { ...defaultWorkflow(), '4': { class_type: 'VAEEncode', inputs: { pixels: ['9', 0], vae: ['1', 2] } } };
   assert.throws(() => applyToWorkflow(encoded, values), { code: 'workflow_no_latent_size' });
+});
+
+// The harness and the graph the rented card is actually posted were written apart, and nothing paired them until
+// here. gpu/image-workflow.json loads a transformer, a text encoder and a VAE separately — the built-in graph's
+// CheckpointLoaderSimple would look for one all-in-one file this stack never installs — and it was exported at the
+// resolution and the settings somebody chose for this checkpoint.
+test('the pinned workflow of the picture lane is filled, and keeps the size it was pinned at', async t => {
+  const graph: Graph = JSON.parse(readFileSync(resolve('gpu/image-workflow.json'), 'utf8'));
+  const pinned = latentSizeOf(graph);
+  assert.deepEqual(pinned, { width: 1280, height: 720 });
+  const filled = applyToWorkflow(graph, { checkpoint: 'kreamania_variant8_fp8.safetensors', prompt: 'a picture',
+    negative: 'blurry', seed: 7, steps: 8, sampler: 'er_sde', scheduler: 'simple', ...pinned!, cfg: 1 });
+  const node = (type: string) => Object.values(filled).filter(one => one.class_type === type);
+  assert.equal(node('UNETLoader')[0].inputs.unet_name, 'kreamania_variant8_fp8.safetensors');
+  assert.equal(node('KSampler')[0].inputs.seed, 7);
+  // One text node, wired to the positive conditioning and, through ConditioningZeroOut, to the negative one. The
+  // assembled prompt has to land on it; a negative written over it would send the card an empty prompt.
+  assert.equal(node('CLIPTextEncode').length, 1);
+  assert.equal(node('CLIPTextEncode')[0].inputs.text, 'a picture');
+
+  // And the run that posts it: without --size the graph's own size is drawn and recorded. The harness default
+  // (1344x768) is a different resolution and a different aspect ratio, and it used to overwrite this one silently.
+  const comfy = fakeComfy();
+  const url = await comfy.listen();
+  const root = corpus();
+  t.after(() => { comfy.server.close(); rmSync(root, { recursive: true, force: true }); });
+  const index = await draw({ ...options(root, url), width: undefined, height: undefined,
+    checkpoints: ['kreamania_variant8_fp8.safetensors'], workflow: resolve('gpu/image-workflow.json') });
+  assert.equal(index.failures.length, 0, JSON.stringify(index.failures));
+  assert.deepEqual([index.comfy.width, index.comfy.height], [1280, 720]);
+  assert.deepEqual(index.pictures.map(picture => [picture.width, picture.height]), [[1280, 720], [1280, 720]]);
+  const latent = Object.values(comfy.submitted[0]).find(one => one.class_type === 'EmptyLatentImage')!;
+  assert.deepEqual([latent.inputs.width, latent.inputs.height], [1280, 720], 'the card drew another size than the graph pins');
 });
 
 // ComfyUI draws one job at a time. A picture abandoned when the wait runs out keeps the card: the next cell queues

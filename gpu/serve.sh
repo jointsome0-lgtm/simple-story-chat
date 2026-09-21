@@ -68,8 +68,17 @@ verbosity="${SIMPLE_CHAT_GPU_LOG_VERBOSITY:-1}"
 # server keeps it in memory and writes nothing, since --slot-save-path is never set.
 cache_ram="${SIMPLE_CHAT_GPU_CACHE_RAM:-0}"
 [[ "$cache_ram" =~ ^[0-9]{1,6}$ ]] || { echo 'Use SIMPLE_CHAT_GPU_CACHE_RAM in whole MiB, 0 to 999999.' >&2; exit 1; }
+# Which card this server takes. --gpu-layers 99 with nothing named leaves llama.cpp's default split mode free to
+# spread the layers and the whole KV pool over every visible card, and on a two-card box the other card is the
+# picture lane's (gpu/image-serve.sh reserves it for ComfyUI's ~18 GB of weights): a language server that helps
+# itself to both turns the next picture into an out-of-memory in the middle of somebody's scene. One card, named
+# the same way image-serve.sh names its own. A CUDA_VISIBLE_DEVICES the machine itself set is left as it is --
+# it may be a list or a UUID and it is the container's business, not this script's.
+card="${SIMPLE_CHAT_GPU_CARD:-}"
+[[ -z "$card" || "$card" =~ ^[0-9]$ ]] || { echo 'Use a single-digit SIMPLE_CHAT_GPU_CARD index.' >&2; exit 1; }
+export CUDA_VISIBLE_DEVICES="${card:-${CUDA_VISIBLE_DEVICES:-0}}"
 ulimit -c 0
-echo "Starting $MODEL_ALIAS; context=$context, slots=$slots, cells=$ctx_size, unified=$unified, draft=$draft, loopback port=$port."
+echo "Starting $MODEL_ALIAS; context=$context, slots=$slots, cells=$ctx_size, unified=$unified, draft=$draft, card=$CUDA_VISIBLE_DEVICES, loopback port=$port."
 exec python3 "$task_dir/server-log.py" "$gpu_dir/server-events.jsonl" -- \
   "$gpu_dir/llama.cpp/build/bin/llama-server" \
   --model "$gpu_dir/models/$MODEL_FILE" --alias "$MODEL_ALIAS" \
