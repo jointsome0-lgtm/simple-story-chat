@@ -238,6 +238,44 @@ models A and B, unnamed, and marked every stated relation for each.
 So four times the price and three times the wait buy nothing here, and the failure is the family's, not the
 distillation's. The way forward is the first of step 4's two: frames chosen for what this model can draw.
 
+## Step 6, frames chosen for what can be drawn, 2026-09-21
+
+The describing call is told what the image model can and cannot draw and chooses accordingly: the people and the
+place just before or after the action, at most four people, whole-body postures, the shared action once in
+`moment`, no door or archway as a source of light, nothing relied on a screen to show. Same sheets, same seed,
+`medium-turbo`, $0.045. A fifth clean-context GPT-6 session was asked a different question — does the picture
+contradict the scene, omission counted apart — and whether a reader who has just read the scene accepts it.
+
+**Verdict: no, with reservations, yes.** The first "yes" of the day.
+
+- **106 stated elements followed, 15 not, 10 not checkable** [M, the reader's count, style included]: 33/6/1,
+  40/7/4 and 33/2/5. No extra limbs, no duplicated shields, the door closed, the injury on the right side.
+- The "no" is one object: the shield-bearer holds the dagger that the scene has just passed to the commander.
+  The description assigned it correctly; the image model moved it. One small object in the wrong hands undoes a
+  picture that is otherwise right, because the hand-over is what the scene is about.
+- The "with reservations": the scout at the lock looks idle, the healer is barefoot again, and four people shown
+  as if they were the whole group of five. The "yes": the monitor seen from behind, the officials inside, the
+  couple at the threshold. Turning the screen away from the viewer is the device to keep.
+- **One style, and both recurring characters recognised**, the commander "confidently" — the best reading of
+  identity so far, with the same sheet as before. Fewer people and calmer poses help identity too.
+- A session that by my mistake got the pictures without the texts said what a stranger sees: the pictures are
+  clean and less eventful, and the dance one does not tell its episode. Under a scene already read that is
+  acceptable; alone it would not be.
+- A fault of mine in the assembly: `moment` carried the characters' names to the image model. Names must be
+  forbidden in every field, and `look` dropped for people the sheet covers, since the unused text contradicts it.
+
+The reader's wording for the next instruction, in short: one moment, and the state of every prop at that moment
+— who holds the weapon, drawn or sheathed, which door is open; each important object one owner and one state,
+repeated in one closing sentence; a person who keeps working is described at the work, hands at its height; a
+tight shot rather than part of a group shown as all of it; a final self-check of injury side, weapon owner, door
+state and counts.
+
+Where this leaves the feature [D]: with the frame chosen this way the pictures stop contradicting the scene in
+most of what they show, and one object in the wrong hand is the kind of fault that remains. That is a rate, and
+three pictures cannot give it. The next measurement is wider, not deeper: twenty to thirty scenes across all the
+synthetic stories, one verdict each, to learn how often a reader would reject the picture. About $0.45 on the
+hosted model, or the same on the rented card where the seconds are measured too.
+
 ## What the reader sees
 
 Settled with the owner 2026-09-21. The tester funds the second card by topping up the vast.ai account, so the card
@@ -263,6 +301,9 @@ in full]. Not legal advice.
 - **A deployer must run content filters** (4.2): "reasonable and appropriate" measures against prohibited output,
   with an image classifier, a moderation API or human review given as examples. Not doing so is a breach, and a
   breach ends the licence at once. A bot that draws from free-form stories is a deployment in this sense.
+  Owner's decision 2026-09-21: while the bot is tested by the owner and the tester, each of whom sees his own
+  pictures, that human review is the measure, and no classifier is added. It comes back when pictures are made
+  for people whose pictures neither of them sees.
 - The policy forbids sexual content with minors, intimate images of real people, deception about real people, and
   content "obscene or otherwise objectionable under applicable law". It does not forbid adult content as such. The
   test-ground rule stays as it is: nothing adult goes to a hosted API.
