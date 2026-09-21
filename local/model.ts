@@ -29,8 +29,10 @@ export type GenerationResult = {
   text: string; finishReason: 'stop' | 'length'; usage?: Usage | null; timings?: Timings; streamResultMismatch?: boolean;
 };
 // `holder`: whose work the turn is (a user id). `yields`: work done ahead of need (local/prepare.ts), which ends as soon as
-// anybody else's call arrives, but which its holder's own turns wait for.
-export type TurnOptions = { holder?: string; yields?: boolean };
+// anybody else's call arrives, but which its holder's own turns wait for. `sharesPrefix`: work done ahead of need that
+// continues its holder's own last request rather than ask with a prompt of its own, so it belongs in the slot where that
+// prefix is cached and gives way to its holder's next turn as well; it yields whether or not `yields` is set.
+export type TurnOptions = { holder?: string; yields?: boolean; sharesPrefix?: boolean };
 export type Provider = {
   generate(request: ModelRequest, controls?: GenerateControls): Promise<GenerationResult>;
   countInput?(request: ModelRequest, controls?: Controls): Promise<number>;

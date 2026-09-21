@@ -12,7 +12,9 @@ type Slot = { signal: AbortSignal; slot?: number };
 // One turn: the model calls from the first of a scene or compaction operation to its end (compaction steps, token
 // counting, the scene). Opened by `openTurn`, closed by `end` in the caller's finally. `ended` is the code later calls
 // are refused with.
-type Turn = { priority: Priority; ended: AbortCode | null; idleSince: number; holder?: string; yields?: boolean };
+// `sharesPrefix`: the turn continues its holder's own last request, so it runs in that holder's slot or nowhere.
+type Turn = { priority: Priority; ended: AbortCode | null; idleSince: number; holder?: string; yields?: boolean;
+  sharesPrefix?: boolean };
 export type SchedulerOptions<Request = unknown> = {
   // Agent work starts under `agentCanStart` and is stopped only when `agentCanRun` turns false (the GPU is paused).
   backgroundAllowed?: () => boolean; agentCanStart?: () => boolean; agentCanRun?: () => boolean;
@@ -53,6 +55,9 @@ const PERSON_GROWTH = 1024;
 // but its holder is kept waiting by it.
 // A turn keeps its slot from the start of its first call until it ends: nobody else's work runs there between its
 // compaction steps and its scene, and another's prompt never evicts its cache. An ended turn takes no more calls.
+// A yielding turn that shares its holder's prompt prefix (a picture described from the scene just read) runs in that
+// holder's own slot, where the prefix is cached, or not at all; its holder's own next call ends it as well, and then
+// waits for the slot it is leaving rather than prefill from nothing in another.
 // With one slot, a person's call stops probes and ends yielding turns at once. A pool runs a call in each slot at once:
 // people take the highest slots, which llama.cpp evicts last; agents and probes never take the highest one and need
 // room for the people's caches as well as for their own claim. Token counting runs outside the slots there.
@@ -83,6 +88,15 @@ export function createScheduler<Request, Result>(provider: {
   const fail = (code: AbortCode | 'queue_full') => new ModelError(code);
   const laneOf = (turn: Turn | null) => turn ? lanes.find(lane => lane.reserved?.turn === turn) : undefined;
   const free = (lane: Lane<Request>) => !lane.active && !lane.reserved;
+  // The one slot a prefix-sharing turn may use: the slot that holds its holder's own last request. Anywhere else it
+  // would prefill from nothing and evict a cache for work nobody is waiting for.
+  const prefixLane = (turn: Turn) =>
+    turn.holder === undefined ? undefined : lanes.find(lane => lane.holder === turn.holder);
+  // A stopped prefix-sharing call still unwinding in its holder's slot: the server finishes the step in flight and
+  // closes the stream before the slot is free, while the holder's next scene is counted in a microtask. That scene
+  // waits those moments out instead of starting elsewhere, which would throw away the cache the picture kept for it.
+  const leaving = (holder: string | undefined) => holder !== undefined && lanes.some(lane =>
+    lane.holder === holder && !!lane.active?.turn?.sharesPrefix && lane.active.controller.signal.aborted);
   const running = () => lanes.flatMap(lane => lane.active ? [lane.active] : []);
   const snapshot = () => {
     const active = running();
@@ -119,13 +133,20 @@ export function createScheduler<Request, Result>(provider: {
       log(code);
     }
   }
-  // A person kept from the model ends the yielding turns of anybody else.
-  function yieldTo(turn: Turn | null) {
-    for (const other of [...yielding]) if (other !== turn && (!turn || other.holder !== turn.holder)) {
+  const preempt = (ends: (other: Turn) => boolean) => {
+    for (const other of [...yielding]) if (ends(other)) {
       log('background_preempted');
       endTurn(other, 'background_preempted');
     }
-  }
+  };
+  // A person kept from the model ends the yielding turns of anybody else, and a prefix-sharing one of their own too:
+  // that turn sits in the very slot their call wants, and its result is nothing they wait for.
+  const yieldTo = (turn: Turn | null) =>
+    preempt(other => other !== turn && (!!other.sharesPrefix || !turn || other.holder !== turn.holder));
+  // A prefix-sharing turn ends as soon as its holder calls again, however free the pool is: their next scene matters
+  // more than the picture, `yieldTo` would reach it only once the pool kept them waiting, and they share a slot.
+  const endSharedSlot = (turn: Turn | null) =>
+    preempt(other => other !== turn && !!other.sharesPrefix && other.holder === turn?.holder);
   function enqueue(priority: Priority, method: Item<Request>['method'], request: Request, controls: GenerateControls = {}, turn: Turn | null = null): Promise<unknown> {
     if (turn?.ended) return Promise.reject(fail(turn.ended));
     if (closed || controls.signal?.aborted) return Promise.reject(fail('cancelled'));
@@ -136,7 +157,11 @@ export function createScheduler<Request, Result>(provider: {
     }
     const queue = queues[priority];
     if (queue.length >= (priority === 'foreground' ? 32 : 4)) return Promise.reject(fail('queue_full'));
-    if (priority === 'foreground') lastForeground = now();
+    if (priority === 'foreground') {
+      lastForeground = now();
+      // A picture prepared in this caller's own slot stands in the way of their next call wherever the pool stands.
+      endSharedSlot(turn);
+    }
     if (!pool) {
       if (priority !== 'background') stop('background', 'background_preempted');
       if (priority === 'foreground') yieldTo(turn);
@@ -167,12 +192,17 @@ export function createScheduler<Request, Result>(provider: {
   // The free slot a call goes to: its holder's last one, else the highest for a person and the lowest for anyone else,
   // sparing slots that keep another person's cache while there are others. A yielding turn (a compaction prepared
   // ahead) asks with another system prompt and would evict its own holder's scenes from their slot, so it takes the
-  // lowest slot that keeps nobody's scenes, and its holder's own only when there is no such slot.
+  // lowest slot that keeps nobody's scenes, and its holder's own only when there is no such slot. One that shares its
+  // holder's prompt prefix has the opposite need: that holder's slot, free, or no slot at all.
   function pick(item: Item<Request>) {
     const open = (item.priority === 'foreground' ? lanes : shared).filter(free);
     const holder = item.turn?.holder;
     const own = open.find(lane => holder !== undefined && lane.holder === holder);
+    if (item.turn?.sharesPrefix) return own;
     if (item.turn?.yields) return open.find(lane => !lane.person) ?? own ?? open[0];
+    // A picture of this caller's own, stopped for this very call, is leaving their slot: no other slot is worth the
+    // prefill it saves them, so they take none.
+    if (!own && leaving(holder)) return undefined;
     const order = item.priority === 'foreground' ? [...open].reverse() : open;
     return own ?? order.find(lane => !lane.person) ?? order[0];
   }
@@ -181,7 +211,8 @@ export function createScheduler<Request, Result>(provider: {
   // is not worth anybody's scenes, its own holder's included. llama.cpp evicts the other idle
   // caches. The next call of a started turn does not count the idle caches of other turns: two turns between their calls
   // must not wait for each other, and the server evicts an idle cache rather than fail a running call. It still leaves
-  // people their room: an agent must not grow into a person's cache between its own calls either.
+  // people their room: an agent must not grow into a person's cache between its own calls either. A prefix-sharing call
+  // runs in its holder's own slot, which `other !== lane` leaves out: it fills those cells again rather than beside them.
   function admit(item: Item<Request>, lane: Lane<Request>) {
     if (!admits) return true;
     if (item.inputTokens === undefined) return false;
@@ -198,13 +229,20 @@ export function createScheduler<Request, Result>(provider: {
     // A call too large for the pool runs when the pool holds nothing else, rather than wait for ever.
     return used <= poolTokens || alone;
   }
-  // A yielding call that the people's idle caches alone leave no room for. Running calls end and turns between their
-  // calls end, but an idle cache stays until its person comes back, so such a call would wait for ever, and whoever
-  // prepared it would keep the GPU from going idle all that time (bot.ts `prepareNext`).
+  // Work prepared ahead that will never run, and would keep the GPU from going idle while it waited (bot.ts
+  // `prepareNext`). A prefix-sharing call is worth nothing outside its holder's slot and must never queue behind its
+  // own holder's next scene there, so anything but a call already stopped in that slot ends it. Otherwise: a yielding
+  // call that the people's idle caches alone leave no room for. Running calls end and turns between their calls end,
+  // but an idle cache stays until its person comes back, so such a call would wait for ever.
   function hopeless(item: Item<Request>) {
-    if (!admits || !item.turn?.yields || item.inputTokens === undefined) return false;
-    const lane = laneOf(item.turn) ?? pick(item);
-    if (!lane) return false;
+    const turn = item.turn;
+    if (!turn?.yields) return false;
+    const lane = laneOf(turn) ?? pick(item);
+    if (!lane && turn.sharesPrefix) {
+      const slot = prefixLane(turn);
+      return !slot || !!slot.reserved || !slot.active?.controller.signal.aborted;
+    }
+    if (!admits || !lane || item.inputTokens === undefined) return false;
     let used = POOL_MARGIN + item.inputTokens + outputTokens(item.request);
     for (const other of lanes) if (other !== lane && !other.active && other.person) used += other.claim + other.output + PERSON_GROWTH;
     return used > poolTokens;
@@ -242,8 +280,10 @@ export function createScheduler<Request, Result>(provider: {
       log('turn_lost');
       return endTurn(lane.reserved.turn, 'background_unavailable');
     }
-    // Work done ahead of need that can never be admitted ends here, so that its owner lets the GPU go.
-    const stuck = foreground.find(hopeless);
+    // Work done ahead of need that can never be admitted ends here, so that its owner lets the GPU go. The agent
+    // interface opens turns with the same options, and one of its prefix-sharing turns can never run at all: agents
+    // take no person's slot, and a person's slot is the only one such a turn may have.
+    const stuck = foreground.find(hopeless) ?? agent.find(hopeless);
     if (stuck) {
       log('background_unavailable');
       return endTurn(stuck.turn!, 'background_unavailable');
@@ -297,12 +337,19 @@ export function createScheduler<Request, Result>(provider: {
       lane.reserved ??= { turn: item.turn, release: item.priority === 'agent' ? holdAgentTurn() : () => {} };
       item.turn.idleSince = Infinity;
     }
+    // Whose prompt the slot holds from now on, with one slot as with a pool: a prefix-sharing call belongs to the
+    // slot its own holder's prefix is in, so the marking has to be there to be found. What a yielding turn leaves is
+    // no use to its holder's next scene, which must not follow it there — unless it shares the prefix: such a call
+    // extends the scenes instead of replacing them, so the slot stays its holder's. A probe leaves nobody's.
+    const shares = !!item.turn?.sharesPrefix;
+    lane.holder = item.turn?.yields && !shares ? undefined : item.turn?.holder;
     if (pool) {
       const output = outputTokens(item.request);
       item.claim = (item.inputTokens ?? 0) + output;
-      // What a yielding turn leaves in a slot is no use to its holder's next scene, which must not follow it there.
-      const scene = item.priority === 'foreground' && !item.turn?.yields;
-      Object.assign(lane, { claim: item.claim, output, person: scene, holder: item.turn?.yields ? undefined : item.turn?.holder });
+      // The room kept in a shared slot for its holder's next output stays the room their own scene asked for: a
+      // description writes a line or two, and their next scene must still fit where the picture ran.
+      const scene = item.priority === 'foreground' && (shares || !item.turn?.yields);
+      Object.assign(lane, { claim: item.claim, output: shares ? lane.output : output, person: scene });
     }
     const timer = item.priority === 'background'
       ? setTimeout(() => item.controller.abort(fail('background_timeout')), backgroundTimeoutMs) : undefined;
@@ -349,9 +396,10 @@ export function createScheduler<Request, Result>(provider: {
   const wrap = (priority: 'foreground' | 'agent') => ({ ...calls(priority, null),
     // The calls of one turn, until `end`. `end` after a normal finish frees the slot; after a lost owner it also stops
     // the turn's running call.
-    openTurn({ holder, yields = false }: TurnOptions = {}) {
-      const turn: Turn = { priority, ended: null, idleSince: Infinity, holder, yields };
-      if (yields) yielding.add(turn);
+    openTurn({ holder, yields = false, sharesPrefix = false }: TurnOptions = {}) {
+      // A call that continues its holder's last request is prepared ahead of need too, so it yields like the rest.
+      const turn: Turn = { priority, ended: null, idleSince: Infinity, holder, yields: yields || sharesPrefix, sharesPrefix };
+      if (turn.yields) yielding.add(turn);
       return { ...calls(priority, turn), end: () => endTurn(turn, 'cancelled') };
     },
   });

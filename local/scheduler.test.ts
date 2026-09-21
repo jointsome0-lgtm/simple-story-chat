@@ -312,16 +312,78 @@ test('a yielding turn ends when anybody but its holder calls, and its holder wai
   f.calls[3].finish(); await owner;
   prepared.end();
 });
+test('a turn that shares its holder\'s prefix yields to that holder too, unlike a prepared compaction', async t => {
+  const f = fixture(t);
+  const tester = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const scene = tester.generate('tester scene');
+  await turn();
+  f.calls[0].finish(); await scene; tester.end();
+  // `sharesPrefix` alone is work prepared ahead as well: no `yields` is needed for it to give way.
+  const picture = f.scheduler.foreground.openTurn({ holder: 'tester', sharesPrefix: true });
+  const described = picture.generate('picture');
+  await turn();
+  assert.equal(f.calls[1].name, 'picture');
+  // Its holder's own next turn does not wait for it and does not take its result: it wants the slot the picture is in.
+  const stopped = assert.rejects(described, { code: 'background_preempted' });
+  const again = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const next = again.generate('tester next');
+  await stopped; await turn();
+  assert.equal(f.calls[2].name, 'tester next');
+  f.calls[2].finish(); await next; again.end();
+  picture.end();
+});
+test('a picture runs on no slot but the one its own holder\'s prefix is in, with a single slot as with a pool', async t => {
+  const f = fixture(t);
+  const owner = f.scheduler.foreground.openTurn({ holder: 'owner' });
+  const scene = owner.generate('owner scene');
+  await turn();
+  f.calls[0].finish(); await scene; owner.end(); await turn();
+  // The one slot holds the owner's prompt now, so there is no prefix of the tester's to continue: the picture would
+  // prefill from nothing and evict the owner's cache for work nobody waits for.
+  const picture = f.scheduler.foreground.openTurn({ holder: 'tester', yields: true, sharesPrefix: true });
+  await assert.rejects(picture.generate('tester picture'), { code: 'background_unavailable' });
+  assert.equal(f.calls.length, 1);
+});
+test('a prefix-sharing call gives up the slot rather than queue for it, and waits only on a call already stopped', async t => {
+  const f = fixture(t);
+  const tester = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const scene = tester.generate('tester scene');
+  await turn();
+  f.calls[0].finish(); await scene; await turn();
+  // Its holder's turn holds the slot between its own calls: waiting there is waiting for the work the picture is for.
+  const behind = f.scheduler.foreground.openTurn({ holder: 'tester', yields: true, sharesPrefix: true });
+  await assert.rejects(behind.generate('picture'), { code: 'background_unavailable' });
+  assert.equal(f.calls.length, 1);
+  tester.end(); await turn();
+  // A call already stopped is on its way out of the slot and leaves the prefix behind it, so the next picture waits
+  // that moment out instead of giving up.
+  const cut = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const dropped = cut.generate('tester scene again');
+  await turn();
+  const cancelled = assert.rejects(dropped, { code: 'cancelled' });
+  cut.end();
+  const picture = f.scheduler.foreground.openTurn({ holder: 'tester', yields: true, sharesPrefix: true });
+  const described = picture.generate('picture again');
+  await cancelled; await turn();
+  assert.equal(f.calls[2].name, 'picture again');
+  f.calls[2].finish(); await described; picture.end();
+});
 
-// A pool of slots: requests are `name:inputTokens`, and each call records the slot it ran in.
-function poolFixture(t: TestContext, options: SchedulerOptions<string> = {}) {
+// A pool of slots: requests are `name:inputTokens`, and each call records the slot it ran in. `abortDelay` is how
+// many turns of the event loop a stopped call takes to let its slot go: a real server finishes the decode step in
+// flight and closes the stream, while a token count the scheduler asked for resolves in a microtask.
+function poolFixture(t: TestContext, options: SchedulerOptions<string> = {}, abortDelay = 0) {
   const calls: { name: string; slot?: number; finish: () => void; signal: AbortSignal }[] = [];
   const counted: string[] = [];
   const provider = {
     generate(request: string, { signal, slot }: { signal: AbortSignal; slot?: number }) {
       return new Promise<string>((resolve, reject) => {
         calls.push({ name: request.split(':')[0], slot, finish: () => resolve(request), signal });
-        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        signal.addEventListener('abort', () => {
+          let left = abortDelay;
+          const unwind = () => (left-- > 0 ? setImmediate(unwind) : reject(signal.reason));
+          unwind();
+        }, { once: true });
       });
     },
     async countInput(request: string) { counted.push(request.split(':')[0]); return Number(request.split(':')[1] ?? 100); },
@@ -411,6 +473,213 @@ test('a compaction prepared ahead that people\'s idle caches leave no room for e
   await g.started(2);
   g.calls[1].finish(); await first;
   await assert.rejects(ahead.generate('prepared supplement:15000'), { code: 'background_unavailable' });
+});
+test('a picture described from the last scene runs in its holder\'s slot and leaves the scenes in it', async t => {
+  const f = poolFixture(t);
+  const tester = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const scene = tester.generate('tester scene');
+  await f.started(1);
+  assert.equal(f.calls[0].slot, 2);
+  f.calls[0].finish(); await scene; tester.end();
+  // It continues that very request, so it belongs where the prefix is cached; a compaction prepared ahead, which asks
+  // with a prompt of its own, takes slot 0 instead.
+  const picture = f.scheduler.foreground.openTurn({ holder: 'tester', yields: true, sharesPrefix: true });
+  const described = picture.generate('picture');
+  await f.started(2);
+  assert.equal(f.calls[1].slot, 2);
+  f.calls[1].finish(); await described; picture.end();
+  // The slot still holds the tester's scenes, with the picture's prompt on top: the next scene goes back to it.
+  const again = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const next = again.generate('tester next');
+  await f.started(3);
+  assert.equal(f.calls[2].slot, 2);
+  f.calls[2].finish(); await next; again.end();
+});
+test('a picture ends the moment its holder calls again, however much room the pool has', async t => {
+  const f = poolFixture(t);
+  const tester = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const scene = tester.generate('tester scene');
+  await f.started(1);
+  f.calls[0].finish(); await scene; tester.end();
+  const picture = f.scheduler.foreground.openTurn({ holder: 'tester', yields: true, sharesPrefix: true });
+  const described = picture.generate('picture');
+  await f.started(2);
+  assert.equal(f.calls[1].slot, 2);
+  // Two slots stand free, so the pool keeps the tester waiting for nothing, and the picture ends all the same: their
+  // next scene matters more than it and wants that slot, which it gets back.
+  const stopped = assert.rejects(described, { code: 'background_preempted' });
+  const again = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const next = again.generate('tester next');
+  await stopped;
+  await f.started(3);
+  assert.deepEqual([f.calls[2].name, f.calls[2].slot], ['tester next', 2]);
+  f.calls[2].finish(); await next; again.end(); picture.end();
+});
+test('the holder waits for the slot a picture is still leaving, rather than take a free one', async t => {
+  // A stopped call does not let its slot go the instant it is told to; the next scene is sized before that, in a
+  // microtask. Going to another slot then would cost the whole prefill the picture stayed in this one to save.
+  const f = poolFixture(t, {}, 2);
+  const tester = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const scene = tester.generate('tester scene');
+  await f.started(1);
+  assert.equal(f.calls[0].slot, 2);
+  f.calls[0].finish(); await scene; tester.end();
+  const picture = f.scheduler.foreground.openTurn({ holder: 'tester', yields: true, sharesPrefix: true });
+  const described = picture.generate('picture');
+  await f.started(2);
+  assert.equal(f.calls[1].slot, 2);
+  const stopped = assert.rejects(described, { code: 'background_preempted' });
+  const again = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const next = again.generate('tester next');
+  await stopped;
+  await f.started(3);
+  assert.deepEqual([f.calls[2].name, f.calls[2].slot], ['tester next', 2]);
+  f.calls[2].finish(); await next; again.end(); picture.end();
+});
+test('a picture leaves its holder one slot in the pool, not two', async t => {
+  const f = poolFixture(t, { poolTokens: 40000 }, 2);
+  const tester = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const scene = tester.generate('tester:9000');
+  await f.started(1);
+  f.calls[0].finish(); await scene; tester.end();
+  const picture = f.scheduler.foreground.openTurn({ holder: 'tester', yields: true, sharesPrefix: true });
+  const described = picture.generate('picture:9000');
+  await f.started(2);
+  const stopped = assert.rejects(described, { code: 'background_preempted' });
+  const again = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const next = again.generate('tester next:9000');
+  await stopped;
+  await f.started(3);
+  f.calls[2].finish(); await next; again.end(); picture.end();
+  // A slot the tester never came back to would still hold a reader's whole reserve: 2048 + 15000 + 10000 + 1000 +
+  // 1024 leave this agent room beside one such cache, and 12024 less than it needs beside two.
+  const agent = f.scheduler.agent.generate('agent:14000');
+  await turn(); await turn();
+  assert.deepEqual(f.calls.slice(3).map(call => call.name), ['agent']);
+  f.calls[3].finish(); await agent;
+});
+test('a picture stays while another person has room and gives way to the one who has none', async t => {
+  const f = poolFixture(t, { slots: 2 });
+  const owner = f.scheduler.foreground.openTurn({ holder: 'owner' });
+  const scene = owner.generate('owner scene');
+  await f.started(1);
+  assert.equal(f.calls[0].slot, 1);
+  f.calls[0].finish(); await scene; owner.end();
+  const picture = f.scheduler.foreground.openTurn({ holder: 'owner', yields: true, sharesPrefix: true });
+  const described = picture.generate('picture');
+  await f.started(2);
+  assert.equal(f.calls[1].slot, 1);
+  // The picture keeps nobody from the model while a slot is free: another person runs beside it.
+  const tester = f.scheduler.foreground.generate('tester');
+  await f.started(3);
+  assert.deepEqual([f.calls[2].name, f.calls[2].slot], ['tester', 0]);
+  assert.equal(f.calls[1].signal.aborted, false);
+  // The next person has nowhere to go, and the picture gives way like any work prepared ahead.
+  const stopped = assert.rejects(described, { code: 'background_preempted' });
+  const guest = f.scheduler.foreground.generate('guest');
+  await stopped;
+  await f.started(4);
+  assert.equal(f.calls[3].name, 'guest');
+  f.calls[2].finish(); await tester;
+  f.calls[3].finish(); await guest; picture.end();
+});
+test('a picture gives up when the slot its prefix is in is not to be had', async t => {
+  const f = poolFixture(t, { slots: 2 });
+  // Nothing of the tester's is cached in any slot: there is no prefix to continue, and waiting for one would only
+  // keep the GPU awake for a picture that would still start from nothing.
+  const nowhere = f.scheduler.foreground.openTurn({ holder: 'tester', yields: true, sharesPrefix: true });
+  await assert.rejects(nowhere.generate('picture'), { code: 'background_unavailable' });
+  assert.equal(f.calls.length, 0);
+  const tester = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const scene = tester.generate('tester scene');
+  await f.started(1);
+  // Now the slot is the tester's own turn's, between its calls: the picture would queue behind the work it is for.
+  const behind = f.scheduler.foreground.openTurn({ holder: 'tester', yields: true, sharesPrefix: true });
+  await assert.rejects(behind.generate('picture'), { code: 'background_unavailable' });
+  assert.equal(f.calls.length, 1);
+  f.calls[0].finish(); await scene; tester.end();
+});
+test('a prefix-sharing turn of the agent interface gives up at once instead of holding the GPU awake', async t => {
+  const f = poolFixture(t);
+  const tester = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const scene = tester.generate('tester scene');
+  await f.started(1);
+  assert.equal(f.calls[0].slot, 2);
+  f.calls[0].finish(); await scene; tester.end();
+  // The agent interface opens turns with the same options, but agents take no person's slot, and the tester's prefix
+  // is in one: this turn could only wait for ever, keeping the GPU from idling (bot.ts `prepareNext`).
+  const picture = f.scheduler.agent.openTurn({ holder: 'tester', sharesPrefix: true });
+  await assert.rejects(picture.generate('picture'), { code: 'background_unavailable' });
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.scheduler.snapshot().agentQueued, 0);
+});
+test('a picture is admitted beside the cache it fills again, and refused beside another reader\'s', async t => {
+  const f = poolFixture(t, { poolTokens: 30000 });
+  const tester = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const scene = tester.generate('tester:12000');
+  await f.started(1);
+  f.calls[0].finish(); await scene; tester.end();
+  // A compaction prepared ahead of this size ends here: 2048 margin + 16000 claim + the tester's 13000 cache, 1000
+  // output and 1024 of growth exceed 30000. The picture fills that cache again, and its own slot is not counted.
+  const picture = f.scheduler.foreground.openTurn({ holder: 'tester', yields: true, sharesPrefix: true });
+  const described = picture.generate('picture:15000');
+  await f.started(2);
+  assert.equal(f.calls[1].slot, 2);
+  f.calls[1].finish(); await described; picture.end();
+  const owner = f.scheduler.foreground.openTurn({ holder: 'owner' });
+  const other = owner.generate('owner:10000');
+  await f.started(3);
+  assert.equal(f.calls[2].slot, 1);
+  f.calls[2].finish(); await other; owner.end();
+  // Another reader's idle cache counts against it as against any work prepared ahead: 2048 + 16000 + 11000 + 1000 +
+  // 1024 exceed 30000, and that cache stays until the owner comes back.
+  const again = f.scheduler.foreground.openTurn({ holder: 'tester', yields: true, sharesPrefix: true });
+  await assert.rejects(again.generate('picture again:15000'), { code: 'background_unavailable' });
+});
+test('a picture leaves its holder\'s next scene the output room that scene asked for', async t => {
+  // `name:inputTokens:outputTokens`, so a description's small output limit tells itself from a scene's.
+  const f = poolFixture(t, { slots: 2, poolTokens: 40000, outputTokens: request => Number(request.split(':')[2] ?? 1000) });
+  const tester = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const scene = tester.generate('tester:10000:4000');
+  await f.started(1);
+  f.calls[0].finish(); await scene; tester.end();
+  const picture = f.scheduler.foreground.openTurn({ holder: 'tester', yields: true, sharesPrefix: true });
+  const described = picture.generate('picture:14000:500');
+  await f.started(2);
+  assert.equal(f.calls[1].slot, 1);
+  f.calls[1].finish(); await described; picture.end();
+  // The slot holds 14500 cells now, and the tester's next scene still wants 4000 of output and 1024 of growth beside
+  // them: 2048 + 20000 + 19524 exceed 40000, however little the description itself asked to write.
+  const agent = f.scheduler.agent.generate('agent:19000:1000');
+  await turn(); await turn();
+  assert.equal(f.calls.length, 2);
+  // With that cache gone the same call fits.
+  f.scheduler.forget();
+  f.scheduler.tick();
+  await f.started(3);
+  assert.equal(f.calls[2].name, 'agent');
+  f.calls[2].finish(); await agent;
+});
+test('a picture still queued gives way to its holder\'s own call waiting for room', async t => {
+  const f = poolFixture(t, { slots: 2, poolTokens: 30000 });
+  const tester = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const scene = tester.generate('tester:2000');
+  await f.started(1);
+  f.calls[0].finish(); await scene; tester.end();
+  const agent = f.scheduler.agent.generate('agent:20000');
+  await f.started(2);
+  // The tester's next scene does not fit beside the agent's 21000 and waits for it.
+  const again = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const next = again.generate('tester next:8000');
+  await turn(); await turn();
+  assert.equal(f.scheduler.snapshot().foregroundQueued, 1);
+  // A picture opened after that call queues behind it and ends for it: the scene is what the tester is waiting for.
+  const picture = f.scheduler.foreground.openTurn({ holder: 'tester', yields: true, sharesPrefix: true });
+  await assert.rejects(picture.generate('picture:100'), { code: 'background_preempted' });
+  f.calls[1].finish(); await agent;
+  await f.started(3);
+  assert.equal(f.calls[2].name, 'tester next');
+  f.calls[2].finish(); await next; again.end();
 });
 test('an agent waits while its claim would crowd out a person\'s cache; a person is admitted beside it', async t => {
   const f = poolFixture(t, { poolTokens: 20000 });
