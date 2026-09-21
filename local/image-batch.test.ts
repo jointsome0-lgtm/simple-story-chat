@@ -6,7 +6,7 @@ import { deflateSync, inflateSync, crc32 } from 'node:zlib';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { draw, buildBundles, bundlesOf, applyToWorkflow, defaultWorkflow, parseSeeds, stripPngMetadata, REVIEW } from './image-batch.ts';
+import { draw, buildBundles, bundlesOf, applyToWorkflow, defaultWorkflow, parseSeeds, stripPngMetadata, taskMarkdown, REVIEW } from './image-batch.ts';
 import type { Graph, Picture } from './image-batch.ts';
 import type { Case } from './illustrate-probe.ts';
 
@@ -43,10 +43,11 @@ function chunksOf(bytes: Uint8Array) {
 
 // The fake ComfyUI: /prompt, /history, /view, /system_stats, and POST /history to forget a job. A job finishes on the
 // third poll, so the video-memory sampling inside the wait runs too.
-function fakeComfy(options: { failCase?: string } = {}) {
+function fakeComfy(options: { failCase?: string; refuse?: number } = {}) {
   const submitted: Graph[] = [];
   const cleared: string[] = [];
   const viewed: string[] = [];
+  const attempts = { prompt: 0 };
   const polls = new Map<string, number>();
   const server = createServer((request, response) => {
     const url = new URL(request.url!, 'http://127.0.0.1');
@@ -54,6 +55,9 @@ function fakeComfy(options: { failCase?: string } = {}) {
     const json = (value: unknown) => { response.setHeader('content-type', 'application/json'); response.end(JSON.stringify(value)); };
     void (async () => {
       if (request.method === 'POST' && url.pathname === '/prompt') {
+        attempts.prompt++;
+        // A graph this build cannot run is refused with a status, and refused again for every cell after it.
+        if (options.refuse) { response.statusCode = options.refuse; return response.end(); }
         const graph = (await body()).prompt as Graph;
         submitted.push(graph);
         return json({ prompt_id: `p${submitted.length}`, number: submitted.length });
@@ -86,7 +90,64 @@ function fakeComfy(options: { failCase?: string } = {}) {
       response.end();
     })();
   });
-  return { server, submitted, cleared, viewed, listen: () => new Promise<string>(done => server.listen(0, '127.0.0.1', () => done(`http://127.0.0.1:${(server.address() as AddressInfo).port}`))) };
+  return { server, submitted, cleared, viewed, attempts, listen: () => new Promise<string>(done => server.listen(0, '127.0.0.1', () => done(`http://127.0.0.1:${(server.address() as AddressInfo).port}`))) };
+}
+
+// The same server with the queue ComfyUI really has: one job at a time, in submit order, and a history entry — the
+// whole graph in it — only once a job is over, so a delete sent while the card is still drawing removes nothing.
+// `/interrupt` stops the job the card is working through and records it, as ComfyUI records an interrupted prompt.
+function serialComfy(jobMs: number) {
+  const prompts = new Map<string, string>();
+  const finishAt = new Map<string, number>();
+  const history = new Map<string, string>();
+  const seen = { submitted: 0, interrupts: 0, queueDeletes: 0 };
+  let busyUntil = 0;
+  const settle = () => { for (const [id, at] of [...finishAt]) if (Date.now() >= at) { finishAt.delete(id); history.set(id, prompts.get(id)!); } };
+  const running = () => [...finishAt.entries()].sort((a, b) => a[1] - b[1])[0]?.[0];
+  const server = createServer((request, response) => {
+    const url = new URL(request.url!, 'http://127.0.0.1');
+    const body = async () => { const parts = []; for await (const part of request) parts.push(part as Buffer); return JSON.parse(Buffer.concat(parts).toString('utf8')); };
+    const json = (value: unknown) => { response.setHeader('content-type', 'application/json'); response.end(JSON.stringify(value)); };
+    void (async () => {
+      settle();
+      if (request.method === 'POST' && url.pathname === '/prompt') {
+        const graph = (await body()).prompt as Graph;
+        const id = `p${++seen.submitted}`;
+        prompts.set(id, JSON.stringify(graph));
+        busyUntil = Math.max(busyUntil, Date.now()) + jobMs;
+        finishAt.set(id, busyUntil);
+        return json({ prompt_id: id });
+      }
+      if (request.method === 'POST' && url.pathname === '/interrupt') {
+        seen.interrupts++;
+        const id = running();
+        // An interrupted prompt lands in the history too, with the whole graph in it.
+        if (id) { finishAt.delete(id); history.set(id, prompts.get(id)!); busyUntil = Date.now(); }
+        return json({});
+      }
+      if (request.method === 'POST' && url.pathname === '/queue') {
+        seen.queueDeletes++;
+        for (const id of ((await body()).delete as string[]) ?? []) if (id !== running()) finishAt.delete(id);
+        return json({});
+      }
+      if (request.method === 'POST' && url.pathname === '/history') {
+        for (const id of ((await body()).delete as string[]) ?? []) history.delete(id);
+        return json({});
+      }
+      if (url.pathname === '/system_stats') return json({ devices: [{ index: 0, vram_total: 32 * 1024 * 1024 * 1024, vram_free: 2 * 1024 * 1024 * 1024 }] });
+      if (url.pathname.startsWith('/history/')) {
+        const id = url.pathname.slice('/history/'.length);
+        if (!history.has(id)) return json({});
+        return json({ [id]: { status: { completed: true, status_str: 'success' }, outputs: { 7: { images: [{ filename: `${id}.png`, subfolder: '', type: 'temp' }] } } } });
+      }
+      if (url.pathname === '/view') { response.setHeader('content-type', 'image/png'); return response.end(pngWithMetadata('{}')); }
+      response.statusCode = 404;
+      response.end();
+    })();
+  });
+  // What the card is still working through, whether or not the harness is waiting for it.
+  const onTheCard = () => finishAt.size;
+  return { server, history, seen, settle, onTheCard, listen: () => new Promise<string>(done => server.listen(0, '127.0.0.1', () => done(`http://127.0.0.1:${(server.address() as AddressInfo).port}`))) };
 }
 
 const cases: Case[] = [
@@ -106,7 +167,7 @@ function corpus() {
 }
 const options = (root: string, comfy: string) => ({ prompts: join(root, 'prompts'), out: join(root, 'run'), comfy,
   checkpoints: ['kreamania-fp8.safetensors', 'krea-2-turbo.safetensors'], seeds: [7], steps: 8, sampler: 'er_sde',
-  scheduler: 'simple', cfg: 1, width: 1344, height: 768, negative: '', minutes: 5, timeoutMs: 10000, pollMs: 1 });
+  scheduler: 'simple', cfg: 1, width: 1344, height: 768, negative: '', minutes: 5, timeoutMs: 10000, waitMs: 10000, pollMs: 1 });
 
 test('a written picture keeps its pixels and nothing that ComfyUI wrote beside them', () => {
   const original = pngWithMetadata('{"prompt":"PRIVATE_SCENE_TEXT"}');
@@ -132,6 +193,102 @@ test('the workflow takes the checkpoint, the prompt and the seed by the role of 
   assert.equal(defaultWorkflow()['5'].inputs.seed, 0);
   assert.throws(() => applyToWorkflow({ '1': { class_type: 'SaveImage', inputs: {} } }, { checkpoint: 'k', prompt: 'p',
     negative: '', seed: 1, steps: 8, sampler: 'er_sde', scheduler: 'simple', width: 512, height: 512, cfg: 1 }), /sampler/);
+});
+
+// A workflow pinned on the card is shaped by whoever pinned it: one text node may feed both conditionings, and a
+// second node may carry a size of its own.
+test('the negative text never lands on the positive node, and the size goes on the sampler\'s own latent', () => {
+  const values = { checkpoint: 'k.safetensors', prompt: 'a picture', negative: 'blurry', seed: 11, steps: 8,
+    sampler: 'er_sde', scheduler: 'simple', width: 1344, height: 768, cfg: 1 };
+  // Both conditionings on one text node: writing the negative over it sent the card an empty prompt, while the
+  // bundle still showed the assembled one, so a judging session would have graded a picture drawn from nothing.
+  const shared: Graph = {
+    '1': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'x.safetensors' } },
+    '2': { class_type: 'CLIPTextEncode', inputs: { text: '', clip: ['1', 1] } },
+    '4': { class_type: 'EmptyLatentImage', inputs: { width: 1024, height: 1024, batch_size: 1 } },
+    '5': { class_type: 'KSampler', inputs: { seed: 0, steps: 8, cfg: 1, sampler_name: 'euler', scheduler: 'simple',
+      denoise: 1, model: ['1', 0], positive: ['2', 0], negative: ['2', 0], latent_image: ['4', 0] } },
+  };
+  assert.equal(applyToWorkflow(shared, values)['2'].inputs.text, 'a picture');
+  // An upscale or pad node keeps the size it was pinned with; only the latent the sampler starts from takes ours.
+  const upscale: Graph = { ...defaultWorkflow(),
+    '8': { class_type: 'ImageScale', inputs: { image: ['6', 0], upscale_method: 'lanczos', width: 2688, height: 1536, crop: 'disabled' } } };
+  const filled = applyToWorkflow(upscale, values);
+  assert.deepEqual([filled['4'].inputs.width, filled['4'].inputs.height], [1344, 768]);
+  assert.deepEqual([filled['8'].inputs.width, filled['8'].inputs.height], [2688, 1536]);
+  // A latent with no size of its own would be drawn at the workflow's size and written down at ours. The graph's
+  // own failures carry a code, so `draw` records them as themselves and not as a plain `image_failed`.
+  const encoded: Graph = { ...defaultWorkflow(), '4': { class_type: 'VAEEncode', inputs: { pixels: ['9', 0], vae: ['1', 2] } } };
+  assert.throws(() => applyToWorkflow(encoded, values), { code: 'workflow_no_latent_size' });
+});
+
+// ComfyUI draws one job at a time. A picture abandoned when the wait runs out keeps the card: the next cell queues
+// behind it and inherits its seconds, and the abandoned job's history entry — the whole prompt and workflow in it —
+// is written when it finishes, which is after the delete of a plain abandon has already run.
+test('a picture that outlives the wait is stopped on the card and leaves no record behind', async t => {
+  const comfy = serialComfy(1500);
+  const url = await comfy.listen();
+  const root = corpus();
+  t.after(() => { comfy.server.close(); rmSync(root, { recursive: true, force: true }); });
+
+  const index = await draw({ ...options(root, url), checkpoints: ['a.safetensors'], waitMs: 150, pollMs: 10 });
+  assert.deepEqual(index.failures.map(failure => failure.code), ['image_timeout', 'image_timeout']);
+  // Each abandoned job was taken out of the queue and interrupted, so the next cell started on a card that was free
+  // and nothing of either is still being drawn now that the run is over.
+  assert.equal(comfy.seen.interrupts, 2);
+  assert.equal(comfy.seen.queueDeletes, 2);
+  assert.equal(comfy.onTheCard(), 0, 'a job the harness gave up on is still the card\'s');
+  comfy.settle();
+  assert.deepEqual([...comfy.history.keys()], [], 'the record of an abandoned job holds the whole prompt');
+});
+
+// The file ComfyUI's Save menu writes is the UI format ({nodes:[...],links:[...]}), not the API format the harness
+// fills. It used to throw a TypeError inside applyToWorkflow and be written down as `image_failed`, once a cell.
+test('a workflow saved in the UI format is refused by name before anything is drawn', async t => {
+  const root = corpus();
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  writeFileSync(join(root, 'ui.json'), JSON.stringify({ last_node_id: 71, version: 0.4, links: [],
+    nodes: [{ id: 55, type: 'UNETLoader', widgets_values: ['krea2_turbo_fp8_scaled.safetensors'] }] }));
+  await assert.rejects(draw({ ...options(root, 'http://127.0.0.1:1'), workflow: join(root, 'ui.json') }), /API format/);
+});
+
+// A graph this build cannot run, or a server that is not answering, fails the same way for every cell after it.
+test('a graph the server refuses stops the run and keeps the status it was refused with', async t => {
+  const comfy = fakeComfy({ refuse: 400 });
+  const url = await comfy.listen();
+  const root = corpus();
+  t.after(() => { comfy.server.close(); rmSync(root, { recursive: true, force: true }); });
+
+  const index = await draw(options(root, url));
+  assert.equal(comfy.attempts.prompt, 1, 'the same refusal is not bought four times');
+  assert.equal(index.failures.length, 1);
+  assert.equal(index.failures[0].code, 'comfy_http_error');
+  assert.equal(index.failures[0].httpStatus, 400);
+  assert.equal(index.error, 'comfy_http_error');
+});
+
+// index.json is the record of the cells, not of the attempts: a cell drawn on the second run is not also a failure,
+// and a cell drawn twice is not two pictures — `bundles` would deal one picture into two neutral names.
+test('a resume forgets the failure of a cell it has drawn, and records no cell twice', async t => {
+  const failing = fakeComfy({ failCase: 'A hall' });
+  const comfy = fakeComfy();
+  const [failingUrl, url] = [await failing.listen(), await comfy.listen()];
+  const root = corpus();
+  t.after(() => { failing.server.close(); comfy.server.close(); rmSync(root, { recursive: true, force: true }); });
+
+  const first = await draw({ ...options(root, failingUrl), checkpoints: ['a.safetensors'] });
+  assert.equal(first.pictures.length, 1);
+  assert.equal(first.failures.length, 1);
+  const second = await draw({ ...options(root, url), checkpoints: ['a.safetensors'] });
+  assert.equal(second.pictures.length, 2);
+  assert.deepEqual(second.failures, [], 'a cell that has its picture is not a failure of the run');
+
+  // A picture lost from the disk while index.json keeps its row: the cell is drawn again and replaces that row.
+  rmSync(join(root, 'run', second.pictures[0].file));
+  const third = await draw({ ...options(root, url), checkpoints: ['a.safetensors'] });
+  assert.equal(third.pictures.length, 2);
+  assert.equal(new Set(third.pictures.map(picture => picture.file)).size, 2);
+  assert.equal(buildBundles(join(root, 'run'), 1)[0].pictures.length, 2);
 });
 
 test('the batch draws every cell, records the seconds and video memory, and clears the server history', async t => {
@@ -182,8 +339,10 @@ test('checkpoints that differ only in their extension are both drawn, and a repe
   assert.equal(new Set(index.pictures.map(picture => picture.file)).size, 4);
   assert.deepEqual(comfy.submitted.map(graph => graph['1'].inputs.ckpt_name),
     ['flux-dev.safetensors', 'flux-dev.safetensors', 'flux-dev.gguf', 'flux-dev.gguf']);
-  // A repeat costs rented card time and records nothing, so it is refused before the first picture.
-  await assert.rejects(draw({ ...options(root, url), out: join(root, 'twice'), seeds: [7, 7] }), /share one file/);
+  // A repeat costs rented card time and records nothing, so it is refused before the first picture, by the file the
+  // two cells would share: a scene named twice in prompts.json reads like a repeated checkpoint or seed otherwise.
+  await assert.rejects(draw({ ...options(root, url), out: join(root, 'twice'), seeds: [7, 7] }),
+    /pictures\/kreamania-fp8\.safetensors\/battle-2-s7\.png/);
   assert.equal(comfy.submitted.length, 4);
 });
 
@@ -205,8 +364,12 @@ test('a cell the server fails is recorded by its code and the batch goes on', as
 
   const index = await draw(options(root, url));
   assert.equal(index.pictures.length, 2);
-  assert.deepEqual(index.failures, [{ caseId: 'dance-12', role: 'primary', code: 'image_failed' },
-    { caseId: 'dance-12', role: 'alternate', code: 'image_failed' }]);
+  // The cell is on the row, so a later run that draws it can take its failure off again.
+  assert.deepEqual(index.failures, [
+    { caseId: 'dance-12', checkpoint: 'kreamania-fp8.safetensors', role: 'primary', seed: 7, code: 'image_failed' },
+    { caseId: 'dance-12', checkpoint: 'krea-2-turbo.safetensors', role: 'alternate', seed: 7, code: 'image_failed' }]);
+  // A picture the server failed to draw is not a reason to stop: the next checkpoint may draw it.
+  assert.equal(index.error, undefined);
   // A failed job is forgotten by the server as well.
   assert.equal(comfy.cleared.length, 4);
 });
@@ -234,6 +397,11 @@ test('a review bundle names no checkpoint, and the key that does stays outside i
     assert.deepEqual(material.map(one => one.picture), ['pic-01.png', 'pic-02.png']);
     assert.ok(material.every(one => one.scene_text_ru.startsWith('Сцена') && one.prompt_sent.endsWith('Hand-painted.')));
     assert.match(readFileSync(join(folder, 'TASK.md'), 'utf8'), /^Ты оцениваешь сгенерированные иллюстрации, их здесь 2\./);
+    // The task states what the assembly does about names, not an absolute the assembly cannot hold, and asks for a
+    // name that got through: a session told names cannot be there is the one reader primed to skip one.
+    const task = readFileSync(join(folder, 'TASK.md'), 'utf8');
+    assert.ok(!task.includes('Имена до модели картинок не доходят'));
+    assert.match(task, /Если в `prompt_sent` осталось имя/);
     // Each session sees both checkpoints, so no bundle is about one of them.
     const key = JSON.parse(readFileSync(join(root, 'run', 'keys', `${bundle.name}.json`), 'utf8')) as { checkpoint: string }[];
     assert.equal(new Set(key.map(one => one.checkpoint)).size, 2);

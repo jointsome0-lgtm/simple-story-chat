@@ -14,6 +14,7 @@ import { createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
 import { join, resolve } from 'node:path';
+import { safeErrorDetails } from './model-error.ts';
 import type { Case } from './illustrate-probe.ts';
 
 // A checkpoint's place in the comparison. The bot logs this role, never the file name (local/model-error.ts).
@@ -26,9 +27,13 @@ export type Picture = Cell & {
   // The seconds the rental asks for: submit to file. `viewMs` is the download through the tunnel, apart from the card.
   totalMs: number; viewMs: number; vram: Vram[]; bytes: number; sha256: string; file: string;
 };
+// A cell that did not become a picture. The whole cell is on the row, so a later run that draws it can take its
+// failure off again; `httpStatus` is the server's own answer, the one thing that tells a refused graph from a
+// tunnel that went down (local/model-error.ts whitelists it).
+export type Failure = Cell & { code: string; httpStatus?: number };
 export type BatchIndex = {
   startedAt: string; completedAt?: string; comfy: { steps: number; sampler: string; scheduler: string; cfg: number; width: number; height: number };
-  pictures: Picture[]; failures: { caseId: string; role: Role; code: string }[]; error?: string;
+  pictures: Picture[]; failures: Failure[]; error?: string;
 };
 export type Graph = Record<string, { class_type: string; inputs: Record<string, unknown> }>;
 
@@ -56,9 +61,13 @@ export function stripPngMetadata(bytes: Uint8Array): Uint8Array {
   return Buffer.concat(kept);
 }
 
-// The plain workflow the plan asks for: no LoRA, no upscaler, so a weak picture means a weak prompt. A pinned
-// workflow exported from the card's own ComfyUI can replace it with --workflow — and then node 7 is that
-// workflow's business, see the note on `PreviewImage` below.
+// The plain workflow the plan asks for: no LoRA, no upscaler, so a weak picture means a weak prompt. It fits an
+// all-in-one checkpoint only — `CheckpointLoaderSimple` reads the `checkpoints` folder and must find the
+// transformer, the text encoder and the VAE in the one file. A model published as separate files, Krea 2 Turbo
+// among them (a transformer, a Qwen3-VL text encoder and a VAE), is loaded by UNETLoader plus CLIPLoader plus
+// VAELoader, and that graph comes from the card: pin it in ComfyUI and pass it with --workflow, exported in API
+// format. A run has one workflow, so one --checkpoints list cannot mix the two kinds. With --workflow, node 7 is
+// that workflow's business, see the note on `PreviewImage` below.
 export function defaultWorkflow(): Graph {
   return {
     '1': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'checkpoint.safetensors' } },
@@ -80,6 +89,23 @@ export type WorkflowValues = {
   checkpoint: string; prompt: string; negative: string; seed: number; steps: number;
   sampler: string; scheduler: string; width: number; height: number; cfg: number;
 };
+// A failure of the graph itself, told apart from a failure of the server or of the picture: it repeats for every
+// cell, so `draw` stops the run on it instead of writing `image_failed` once for each.
+const workflowError = (code: `workflow_${string}`, message: string) => Object.assign(new Error(message), { code });
+
+// The API format is `{ "<id>": { class_type, inputs } }`. The file ComfyUI's Save menu writes is the UI format
+// (`{nodes:[...], links:[...]}`) and would reach `applyToWorkflow` as a TypeError, recorded as a plain
+// `image_failed` once a cell with nothing to say it was the export that was wrong. Checked once, before the loop.
+export function apiGraph(value: unknown): Graph {
+  const nodes = value && typeof value === 'object' && !Array.isArray(value) ? Object.values(value) : [];
+  const shaped = (node: unknown) => typeof (node as Graph[string])?.class_type === 'string'
+    && typeof (node as Graph[string])?.inputs === 'object' && (node as Graph[string])?.inputs !== null;
+  if (!nodes.length || !nodes.every(shaped)) {
+    throw workflowError('workflow_not_api_format', '--workflow must be a ComfyUI graph in API format (Workflow > Export (API)), not the file the Save menu writes');
+  }
+  return value as Graph;
+}
+
 // Fills a graph by the role of each node rather than by its id, so a workflow pinned on the card keeps working as
 // long as it samples, loads a checkpoint and encodes text. It throws rather than draw with the wrong seed or prompt.
 export function applyToWorkflow(graph: Graph, values: WorkflowValues): Graph {
@@ -88,7 +114,7 @@ export function applyToWorkflow(graph: Graph, values: WorkflowValues): Graph {
   const seedKey = (inputs: Record<string, unknown>) => ('seed' in inputs ? 'seed' : 'noise_seed' in inputs ? 'noise_seed' : null);
   const sampler = nodes.find(([, node]) => seedKey(node.inputs) && 'steps' in node.inputs);
   const loader = nodes.find(([, node]) => 'ckpt_name' in node.inputs || 'unet_name' in node.inputs);
-  if (!sampler || !loader) throw new Error('workflow_needs_a_sampler_and_a_checkpoint_loader');
+  if (!sampler || !loader) throw workflowError('workflow_no_sampler_or_loader', 'The workflow needs one sampler node and one node that loads the checkpoint');
   const inputs = sampler[1].inputs;
   inputs[seedKey(inputs)!] = values.seed;
   inputs.steps = values.steps;
@@ -96,20 +122,29 @@ export function applyToWorkflow(graph: Graph, values: WorkflowValues): Graph {
   if ('scheduler' in inputs) inputs.scheduler = values.scheduler;
   if ('cfg' in inputs) inputs.cfg = values.cfg;
   loader[1].inputs['ckpt_name' in loader[1].inputs ? 'ckpt_name' : 'unet_name'] = values.checkpoint;
-  // The positive text is the node the sampler takes its positive conditioning from; the negative one, if any, the other.
+  // The node an input of the sampler is wired to. The positive text is the one its positive conditioning comes
+  // from; the negative one, if any, the other; the size belongs to the latent it starts from.
   const linked = (key: string) => {
     const link = inputs[key];
     const id = Array.isArray(link) ? String(link[0]) : null;
-    return id && filled[id] && 'text' in filled[id].inputs ? filled[id] : null;
+    return id && filled[id] ? filled[id] : null;
   };
-  const positive = linked('positive');
-  if (!positive) throw new Error('workflow_needs_a_positive_prompt');
+  const text = (key: string) => { const node = linked(key); return node && 'text' in node.inputs ? node : null; };
+  const positive = text('positive');
+  if (!positive) throw workflowError('workflow_no_positive_prompt', 'The workflow needs a text node on the sampler\'s positive input');
   positive.inputs.text = values.prompt;
-  const negative = linked('negative');
-  if (negative) negative.inputs.text = values.negative;
-  for (const [, node] of nodes) {
-    if ('width' in node.inputs && 'height' in node.inputs) { node.inputs.width = values.width; node.inputs.height = values.height; }
+  const negative = text('negative');
+  // One text node wired to both conditionings: writing the negative over it would send the card an empty prompt
+  // while the index and the bundle still showed the assembled one.
+  if (negative && negative !== positive) negative.inputs.text = values.negative;
+  // Only the latent the sampler starts from: a pinned workflow's upscale or pad node has a size of its own, and
+  // writing the base size into it would quietly undo what it is there for.
+  const latent = linked('latent_image');
+  if (!latent || !('width' in latent.inputs) || !('height' in latent.inputs)) {
+    throw workflowError('workflow_no_latent_size', 'The sampler\'s latent_image must come from a node with a width and a height, or the picture is drawn at one size and recorded at another');
   }
+  latent.inputs.width = values.width;
+  latent.inputs.height = values.height;
   return filled;
 }
 
@@ -143,6 +178,25 @@ const mergeVram = (into: Vram[], seen: Vram[]) => {
   }
 };
 
+const post = (comfy: Comfy, path: string, body?: object) => call(comfy, path, { method: 'POST',
+  headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}) });
+
+// A picture that outlives the wait is still the card's. ComfyUI runs one job at a time, so the next cell would
+// queue behind the abandoned one and inherit its seconds — and the seconds are what the rental is decided on — and
+// its history entry, which holds the whole prompt and the workflow, is written when it finishes, which is after the
+// delete in `drawOne`'s `finally` has already run. So: out of the queue if it is still waiting, interrupted if it is
+// drawing, and then waited for, so that there is a record for the delete to remove.
+async function stopJob(comfy: Comfy, promptId: string, pollMs: number) {
+  await post(comfy, '/queue', { delete: [promptId] }).catch(() => undefined);
+  await call(comfy, '/interrupt', { method: 'POST' }).catch(() => undefined);
+  for (let poll = 0; poll < 10; poll++) {
+    const seen: Record<string, HistoryEntry> = await call(comfy, `/history/${promptId}`)
+      .then(response => response.json() as Promise<Record<string, HistoryEntry>>).catch(() => ({}));
+    if (seen[promptId]) return;
+    await delay(pollMs);
+  }
+}
+
 // One picture: submit, poll until the server has it, download it, forget the job. The elapsed time is measured from
 // the submit, which is what the reader waits for; never from a timestamp in the server's own reply.
 export async function drawOne(comfy: Comfy, graph: Graph, options: { pollMs?: number; waitMs?: number } = {}) {
@@ -173,20 +227,25 @@ export async function drawOne(comfy: Comfy, graph: Graph, options: { pollMs?: nu
     const viewMs = Math.round(performance.now() - viewStarted);
     mergeVram(vram, await readVram(comfy));
     return { bytes: stripPngMetadata(bytes), totalMs: Math.round(performance.now() - started), viewMs, vram };
+  } catch (error) {
+    // The wait ran out, but the card did not stop by itself: see `stopJob`.
+    if ((error as { code?: string }).code === 'image_timeout') await stopJob(comfy, promptId, pollMs);
+    throw error;
   } finally {
     // The server keeps the prompt, the workflow and the outputs of every job it has run until history is cleared.
     // This clears the job record, and that is all it can clear: the file the saving node wrote stays in ComfyUI's
     // own directory, with its text chunks, and the API has no route that deletes it. The picture on our disk is
     // stripped; the card's copy goes when the card does, which is why only synthetic scenes are drawn on a rental.
-    await call(comfy, '/history', { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ delete: [promptId] }) }).catch(() => undefined);
+    await post(comfy, '/history', { delete: [promptId] }).catch(() => undefined);
   }
 }
 
 export type DrawOptions = {
   prompts: string; out: string; comfy: string; checkpoints: string[]; seeds: number[];
   steps: number; sampler: string; scheduler: string; cfg: number; width: number; height: number;
-  negative: string; minutes: number; timeoutMs: number; pollMs?: number; workflow?: string;
+  // `timeoutMs` is one HTTP request's own timeout; `waitMs` is how long a picture may take, which is a different
+  // number by two orders of magnitude and used to be the same one.
+  negative: string; minutes: number; timeoutMs: number; waitMs: number; pollMs?: number; workflow?: string;
   log?: (event: object) => void;
 };
 
@@ -203,6 +262,14 @@ export function parseSeeds(value: string): number[] {
   const seeds = value.split(',').map(part => part.trim()).filter(Boolean).map(Number);
   return seeds.every(seed => Number.isInteger(seed) && seed >= 0) && seeds.length ? seeds : [];
 }
+
+// One cell of the comparison: this scene, drawn by this checkpoint from this seed. The role is not part of it — it
+// follows from the checkpoint's place in the list.
+const isCell = (one: Cell, other: Cell) => one.caseId === other.caseId && one.checkpoint === other.checkpoint && one.seed === other.seed;
+
+// Codes that say the graph or the server is wrong rather than this picture: every cell after them fails in the same
+// way, and on a rental each of those failures is paid for.
+const stopsTheRun = (code: string) => code === 'comfy_http_error' || code === 'comfy_rejected_prompt' || code.startsWith('workflow_');
 
 // Checkpoint-major order: a switch reloads the whole checkpoint, and an early stop then leaves whole comparable
 // blocks rather than a little of each.
@@ -225,15 +292,17 @@ export async function draw(options: DrawOptions): Promise<BatchIndex> {
     : { startedAt: new Date().toISOString(), comfy: { steps: options.steps, sampler: options.sampler, scheduler: options.scheduler,
       cfg: options.cfg, width: options.width, height: options.height }, pictures: [], failures: [] };
   const save = () => writeFileSync(indexPath, JSON.stringify(index, null, 2));
-  const graph: Graph = options.workflow ? JSON.parse(readFileSync(resolve(options.workflow), 'utf8')) : defaultWorkflow();
+  const graph = apiGraph(options.workflow ? JSON.parse(readFileSync(resolve(options.workflow), 'utf8')) : defaultWorkflow());
   const deadline = performance.now() + options.minutes * 60000;
 
   // Two cells that would write one file are a comparison of a checkpoint with itself: the second is read as already
-  // drawn, skipped, and recorded nowhere. Repeated checkpoints or seeds, and names that collide once `safeName` has
-  // folded or truncated them, all land here — before anything is drawn, not after the card has been paid for.
+  // drawn, skipped, and recorded nowhere. A scene named twice in prompts.json, repeated checkpoints or seeds, and
+  // names that collide once `safeName` has folded or truncated them all land here — before anything is drawn, not
+  // after the card has been paid for — and the file is named, because the cause is not always the obvious one.
   const plan = cells(cases, options.checkpoints, options.seeds);
   const paths = plan.map(fileOf);
-  if (new Set(paths).size !== paths.length) throw new Error('Two cells would share one file: give distinct checkpoints and seeds');
+  const shared = paths.find((path, order) => paths.indexOf(path) !== order);
+  if (shared) throw new Error(`Two cells would write ${shared}: a scene is in prompts.json twice, or a checkpoint or seed is repeated`);
 
   for (const cell of plan) {
     const file = fileOf(cell);
@@ -245,21 +314,31 @@ export async function draw(options: DrawOptions): Promise<BatchIndex> {
       const filled = applyToWorkflow(graph, { checkpoint: cell.checkpoint, prompt: one.prompt, negative: options.negative,
         seed: cell.seed, steps: options.steps, sampler: options.sampler, scheduler: options.scheduler,
         width: options.width, height: options.height, cfg: options.cfg });
-      const drawn = await drawOne(comfy, filled, { pollMs: options.pollMs, waitMs: options.timeoutMs });
+      const drawn = await drawOne(comfy, filled, { pollMs: options.pollMs, waitMs: options.waitMs });
       mkdirSync(join(directory, 'pictures', safeName(cell.checkpoint)), { recursive: true, mode: 0o700 });
       writeFileSync(join(directory, file), drawn.bytes, { mode: 0o600 });
       const picture: Picture = { ...cell, steps: options.steps, sampler: options.sampler, scheduler: options.scheduler,
         width: options.width, height: options.height, totalMs: drawn.totalMs, viewMs: drawn.viewMs, vram: drawn.vram,
         bytes: drawn.bytes.length, sha256: createHash('sha256').update(drawn.bytes).digest('hex'), file };
+      // The index records cells, not attempts: this cell's earlier failure is off the list now that it has its
+      // picture, and a cell drawn again (its file lost, say) replaces its own row instead of being dealt twice.
+      index.failures = index.failures.filter(failure => !isCell(failure, cell));
+      index.pictures = index.pictures.filter(earlier => earlier.file !== file);
       index.pictures.push(picture);
       save();
       log({ event: 'picture_drawn', caseId: cell.caseId, role: cell.role, totalMs: picture.totalMs, viewMs: picture.viewMs,
         vramUsedMiBMax: Math.max(0, ...drawn.vram.map(device => device.usedMiBMax)) });
     } catch (error) {
-      const code = String((error as { code?: string }).code ?? '');
-      index.failures.push({ caseId: cell.caseId, role: cell.role, code: /^[a-z_]{1,50}$/.test(code) ? code : 'image_failed' });
+      const raw = String((error as { code?: string }).code ?? '');
+      const code = /^[a-z_]{1,50}$/.test(raw) ? raw : 'image_failed';
+      const { httpStatus } = safeErrorDetails(error);
+      index.failures = index.failures.filter(failure => !isCell(failure, cell));
+      index.failures.push({ ...cell, code, ...(httpStatus === undefined ? {} : { httpStatus }) });
       save();
-      log({ event: 'picture_failed', caseId: cell.caseId, role: cell.role, code: index.failures.at(-1)!.code });
+      log({ event: 'picture_failed', caseId: cell.caseId, role: cell.role, code, httpStatus });
+      // The graph or the server, not this picture: every cell after it fails the same way, and the rental pays for
+      // each. The run stops and says why; what is drawn stays, and a rerun into the same directory resumes.
+      if (stopsTheRun(code)) { index.error = code; log({ event: 'batch_stopped', code, httpStatus }); break; }
     }
   }
   index.completedAt = new Date().toISOString();
@@ -288,14 +367,14 @@ export function bundlesOf(pictures: Picture[], count: number): Bundle[] {
 export function taskMarkdown(count: number): string {
   return `Ты оцениваешь сгенерированные иллюстрации, их здесь ${count}. Весь материал здесь синтетический, читай и смотри его свободно. Песочница только для чтения: ничего не записывай. Весь отчёт дай последним сообщением, по-русски. Первой строкой отчёта — точное название модели, которой ты работаешь.
 
-Контекст. Телеграм-бот пишет ветвящиеся истории по-русски. После того как сцена написана, второй вызов модели описывает по-английски один кадр этой сцены отдельными полями, а программа собирает из них запрос к модели картинок: план, место, момент, каждый человек (постоянная строка внешности из листа персонажей истории, затем состояние, затем действие), предметы, свет, одно предложение о стиле. Имена до модели картинок не доходят. Про модель картинок известно, что она рисует, кто в кадре, где, в какой позе и с чем в руках, и не справляется с точными контактами, с тем, чья это рука, и с содержимым экранов. Поэтому описывающий вызов выбирает кадр, который на это не опирается: люди и место сразу до или сразу после действия, не больше четырёх человек, позы на уровне тела. Читатель получает сначала текст сцены, а под ним картинку. Вопрос в том, годятся ли такие картинки как иллюстрации.
+Контекст. Телеграм-бот пишет ветвящиеся истории по-русски. После того как сцена написана, второй вызов модели описывает по-английски один кадр этой сцены отдельными полями, а программа собирает из них запрос к модели картинок: план, место, момент, каждый человек (постоянная строка внешности из листа персонажей истории, затем состояние, затем действие), предметы, свет, одно предложение о стиле. Инструкция запрещает имена во всех полях, и программа вырезает из запроса те имена, которые знает по листу персонажей истории; человек, названный только в одной сцене, на лист не попадает, и вырезать его имя нечем. Про модель картинок известно, что она рисует, кто в кадре, где, в какой позе и с чем в руках, и не справляется с точными контактами, с тем, чья это рука, и с содержимым экранов. Поэтому описывающий вызов выбирает кадр, который на это не опирается: люди и место сразу до или сразу после действия, не больше четырёх человек, позы на уровне тела. Читатель получает сначала текст сцены, а под ним картинку. Вопрос в том, годятся ли такие картинки как иллюстрации.
 
 Материал в этом каталоге:
 - PNG-файлы с нейтральными именами \`pic-NN.png\`, числом ${count}; какой моделью нарисован каждый, тебе не сообщают, и угадывать это по картинке не надо;
 - \`cases.json\`: для каждой картинки русский текст сцены (\`scene_text_ru\`), \`character_sheet\`, структурное описание и \`prompt_sent\` — ровно тот текст, который получила модель картинок.
 
 По каждой картинке отдельно:
-1. Против \`prompt_sent\`: каждый названный элемент и каждое отношение — выполнено / не выполнено, несколько слов там, где не выполнено. Итоги числами.
+1. Против \`prompt_sent\`: каждый названный элемент и каждое отношение — выполнено / не выполнено, несколько слов там, где не выполнено. Итоги числами. Если в \`prompt_sent\` осталось имя человека — назови его: это ошибка сборки запроса, а не модели картинок.
 2. Против текста сцены: противоречит ли что-нибудь на картинке сцене (не та сторона травмы, открытая дверь там, где её держат закрытой, не то число щитов, человек делает чужое действие, не то место)? Пропуск — не противоречие: перечисли пропуски отдельно и скажи, важен ли каждый для читателя. Для каждого противоречия: вина описания или вина модели картинок.
 3. Дефекты изображения: руки, лица, лишние конечности, анатомия, перспектива, слипшиеся предметы, случайный текст.
 4. Хорошо ли описание выбрало кадр? Узнаётся ли момент как именно эта сцена, а не любая сцена этой истории? Если в тексте сцены есть кадр лучше и его можно нарисовать, назови его.
@@ -356,8 +435,8 @@ async function main(args: string[]) {
     checkpoints: { type: 'string' }, seeds: { type: 'string', default: '7' }, steps: { type: 'string', default: '8' },
     sampler: { type: 'string', default: 'er_sde' }, scheduler: { type: 'string', default: 'simple' },
     cfg: { type: 'string', default: '1' }, size: { type: 'string', default: '1344x768' }, negative: { type: 'string', default: '' },
-    minutes: { type: 'string', default: '30' }, timeout: { type: 'string', default: '180' }, workflow: { type: 'string' },
-    bundles: { type: 'string', default: '3' },
+    minutes: { type: 'string', default: '30' }, timeout: { type: 'string', default: '60' }, wait: { type: 'string', default: '300' },
+    workflow: { type: 'string' }, bundles: { type: 'string', default: '3' },
   } });
   const command = positionals[0] ?? 'draw';
   // A picture is the reader's scene in another form, so both defaults sit under the directory .gitignore keeps for
@@ -367,13 +446,14 @@ async function main(args: string[]) {
   const prompts = values.prompts ? resolve(values.prompts) : join(root, 'illustrations', 'prompts');
   const bundles = Number(values.bundles);
   if (!['draw', 'bundles'].includes(command) || !Number.isInteger(bundles) || bundles < 1 || bundles > 12) {
-    throw new Error('Use: draw --checkpoints a.safetensors,b.safetensors [--prompts directory] [--out directory] [--seeds 7] [--steps 8] [--sampler er_sde] [--scheduler simple] [--size 1344x768] [--cfg 1] [--minutes 30] [--timeout 180] [--workflow file.json] [--comfy http://127.0.0.1:8188]; or: bundles [--out directory] [--bundles 3]');
+    throw new Error('Use: draw --checkpoints a.safetensors,b.safetensors [--prompts directory] [--out directory] [--seeds 7] [--steps 8] [--sampler er_sde] [--scheduler simple] [--size 1344x768] [--cfg 1] [--minutes 30] [--wait 300] [--timeout 60] [--workflow file.json] [--comfy http://127.0.0.1:8188]; or: bundles [--out directory] [--bundles 3]. --wait is the seconds one picture may take and --timeout the seconds one HTTP request may take. The built-in workflow fits an all-in-one checkpoint; a model in separate files (Krea 2 Turbo: transformer, text encoder, VAE) needs --workflow, pinned on the card and exported in API format.');
   }
   if (command === 'bundles') { buildBundles(directory, bundles, report); return; }
   const [width, height] = (values.size ?? '').split('x').map(Number);
   const seeds = parseSeeds(values.seeds ?? '');
   const checkpoints = (values.checkpoints ?? '').split(',').map(name => name.trim()).filter(Boolean);
-  const numbers = { steps: Number(values.steps), cfg: Number(values.cfg), minutes: Number(values.minutes), timeout: Number(values.timeout) };
+  const numbers = { steps: Number(values.steps), cfg: Number(values.cfg), minutes: Number(values.minutes),
+    timeout: Number(values.timeout), wait: Number(values.wait) };
   if (!checkpoints.length || checkpoints.length > 6
     || !seeds.every(seed => seed <= Number.MAX_SAFE_INTEGER) || !seeds.length
     || ![width, height].every(size => Number.isInteger(size) && size >= 256 && size <= 4096)
@@ -381,13 +461,14 @@ async function main(args: string[]) {
     || !Number.isFinite(numbers.cfg) || numbers.cfg < 0 || numbers.cfg > 30
     || !Number.isInteger(numbers.minutes) || numbers.minutes < 1 || numbers.minutes > 240
     || !Number.isInteger(numbers.timeout) || numbers.timeout < 10 || numbers.timeout > 1800
+    || !Number.isInteger(numbers.wait) || numbers.wait < 10 || numbers.wait > 3600
     || !/^[a-z0-9_]{1,40}$/.test(values.sampler ?? '') || !/^[a-z0-9_]{1,40}$/.test(values.scheduler ?? '')) {
     throw new Error('Invalid batch options');
   }
   const index = await draw({ prompts, out: directory, comfy: comfyUrl(values.comfy!),
     checkpoints, seeds, steps: numbers.steps, sampler: values.sampler!, scheduler: values.scheduler!, cfg: numbers.cfg,
     width, height, negative: values.negative ?? '', minutes: numbers.minutes, timeoutMs: numbers.timeout * 1000,
-    workflow: values.workflow, log: report });
+    waitMs: numbers.wait * 1000, workflow: values.workflow, log: report });
   report({ event: 'batch_written', directory, drawn: index.pictures.length, failed: index.failures.length });
   if (index.failures.length) process.exitCode = 1;
 }

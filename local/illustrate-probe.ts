@@ -58,19 +58,26 @@ const LATIN: { [letter: string]: string } = {
   ь: "'|", э: 'e', ю: 'yu|iu|ju|u', я: 'ya|ia|ja|a',
 };
 // One pattern for every Latin spelling of a Russian name; null when the name is not Cyrillic, and then the name as
-// the sheet writes it is already what the describing model would write.
+// the sheet writes it is already what the describing model would write. The first letter is capitalised and the
+// pattern is used without the `i` flag: in English a name is capitalised and an ordinary word is not, and a name
+// transliterates into an ordinary word often enough to matter (Роан -> roan, Мать -> mat, Ян -> an).
 export function latinPattern(name: string): string | null {
   const letters = [...name.trim().toLowerCase()];
   if (!letters.some(letter => /\p{Script=Cyrillic}/u.test(letter))) return null;
-  return letters.map(letter => (letter in LATIN ? `(?:${LATIN[letter]})` : escape(letter))).join('');
+  const capital = (spelling: string) => (spelling ? spelling[0].toUpperCase() + spelling.slice(1) : spelling);
+  return letters.map((letter, at) => {
+    const start = at === 0;
+    if (!(letter in LATIN)) return escape(start ? letter.toUpperCase() : letter);
+    return `(?:${LATIN[letter].split('|').map(spelling => (start ? capital(spelling) : spelling)).join('|')})`;
+  }).join('');
 }
 
 // Names must not reach the image model: it cannot use them, and in step 6 they arrived through `moment` and put the
 // story's own words on the picture. The instruction forbids them in every field; this is the net under it, and it
-// catches the names the sheet knows in both alphabets. The Cyrillic spelling is matched with up to three letters of
-// a case ending; the transliterated one stands in English text, so only a plural or a possessive may follow it —
-// three free letters there would swallow ordinary words (Элин would eat "eliminate"). Over-stripping is the safe
-// direction, under-stripping is a name on the picture.
+// catches the names the sheet knows in both alphabets. The Cyrillic spelling is matched in any case, with up to
+// three letters of a case ending; the transliterated one stands in English text, so it is matched as English writes
+// a name — capitalised, with at most a plural or a possessive after it. Three free letters there would swallow
+// ordinary words (Элин would eat "eliminate"), and matching in any case would swallow "roan" and "mat".
 export function stripNames(text: string, names: string[]): { text: string; removed: number } {
   let removed = 0;
   let value = text;
@@ -80,7 +87,7 @@ export function stripNames(text: string, names: string[]): { text: string; remov
     if (trimmed.length < 2) continue;
     cut(new RegExp(`(?<!\\p{L})${escape(trimmed)}\\p{L}{0,3}(?!\\p{L})`, 'giu'));
     const latin = latinPattern(trimmed);
-    if (latin) cut(new RegExp(`(?<!\\p{L})${latin}(?:'s|s)?(?!\\p{L})`, 'giu'));
+    if (latin) cut(new RegExp(`(?<!\\p{L})${latin}(?:'s|s)?(?!\\p{L})`, 'gu'));
   }
   return { text: value, removed };
 }
@@ -104,10 +111,12 @@ export function matchSheet(who: string, names: string[]): string | null {
     if (value === trimmed) return name;
     const latin = latinPattern(trimmed);
     if (latin && new RegExp(`^${latin}(?:'s|s)?$`, 'iu').test(value)) return name;
-    // A Russian name arrives inflected: the stem holds and at most two letters differ at either end. A role of
-    // several words ("salt worker") is never stem-matched — it is not a name.
+    // A Russian name arrives inflected: the whole sheet name stands at the front of it and at most two letters of a
+    // case ending follow (Элину -> Элин). The sheet name must be all of the stem, or Марина would be read as Мария
+    // and Элину as Элина — and a person given somebody else's fixed appearance is counted as a correct frame while
+    // their own look is thrown away. A role of several words ("salt worker") is never stem-matched: it is not a name.
     const stem = shared(value, trimmed);
-    if (stem >= 3 && value.length - stem <= 2 && trimmed.length - stem <= 2 && !/\s/.test(value)
+    if (stem === trimmed.length && stem >= 3 && value.length - stem <= 2 && !/\s/.test(value)
       && (!best || stem > best.stem)) best = { name, stem };
   }
   return best ? best.name : null;
@@ -195,6 +204,15 @@ const FRAME_SCHEMA = { type: 'object', additionalProperties: false, required: ['
     properties: { who: str, look: str, state: str, action: str } } } } };
 
 const SCENARIOS = ['battle', 'chess', 'dance'];
+// The frames to describe, in the order they were named and without repeats: `--scenes battle-2,battle-2` paid a
+// hosted call for that frame twice and wrote prompts.json with one id in it twice, which local/image-batch.ts then
+// refuses as a whole run, because two cells would write one file. The default is every other scene of every frozen
+// story: 24 frames, the corpus the rental's image batch draws.
+export function scenesWanted(spec: string | undefined): { id: string; scenario: string; index: number }[] {
+  const named = (spec ?? SCENARIOS.flatMap(name => [1, 3, 5, 7, 9, 11, 13, 15].map(index => `${name}-${index}`)).join(','))
+    .split(',').map(id => id.trim()).filter(Boolean);
+  return [...new Set(named)].map(id => ({ id, scenario: id.slice(0, id.lastIndexOf('-')), index: Number(id.slice(id.lastIndexOf('-') + 1)) }));
+}
 // The hosted APIs are named as in local/eval.ts, and the keys come from the same .env.eval.
 const HOSTS: { [host: string]: { baseUrl: string; key: string } } = {
   openrouter: { baseUrl: 'https://openrouter.ai/api/v1', key: 'OPENROUTER_API_KEY' },
@@ -238,9 +256,7 @@ async function main(args: string[]) {
   const { values } = parseArgs({ args, options: {
     out: { type: 'string' }, model: { type: 'string' }, scenes: { type: 'string' },
   } });
-  // Every other scene of every frozen story: 24 frames, the corpus the rental's image batch draws.
-  const wanted = (values.scenes ?? SCENARIOS.flatMap(name => [1, 3, 5, 7, 9, 11, 13, 15].map(index => `${name}-${index}`)).join(','))
-    .split(',').map(id => ({ id, scenario: id.slice(0, id.lastIndexOf('-')), index: Number(id.slice(id.lastIndexOf('-') + 1)) }));
+  const wanted = scenesWanted(values.scenes);
   if (!wanted.length || wanted.some(scene => !SCENARIOS.includes(scene.scenario) || !Number.isInteger(scene.index) || scene.index < 0 || scene.index > 63)) {
     throw new Error('Use [--out directory] [--model <host>:<id>] [--scenes battle-2,battle-15,dance-12]');
   }

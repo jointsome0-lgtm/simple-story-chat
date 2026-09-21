@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assemblePrompt, matchSheet, sheetLooks, stripAges, stripNames, STYLE } from './illustrate-probe.ts';
+import { assemblePrompt, matchSheet, scenesWanted, sheetLooks, stripAges, stripNames, STYLE } from './illustrate-probe.ts';
 import type { Character, Description } from './illustrate-probe.ts';
 
 // A synthetic sheet and frame in the shape the describing model fills. No reader's story is involved.
@@ -43,6 +43,17 @@ test('a name the describing model transliterated is cut as well, whichever syste
   assert.deepEqual(stripNames('the guard is eliminated', ['Элин']), { text: 'the guard is eliminated', removed: 0 });
 });
 
+// A name transliterates into an ordinary English word often enough to matter: Роан is a name in the frozen battle
+// story and "roan" is the colour of a horse. In English the name is capitalised and the word is not.
+test('an ordinary English word that spells like a transliterated name is left alone', () => {
+  assert.deepEqual(stripNames('a roan mare stands at the rail', ['Роан']), { text: 'a roan mare stands at the rail', removed: 0 });
+  assert.equal(stripNames('Roan holds the gate open', ['Роан']).removed, 1);
+  assert.deepEqual(stripNames('a lantern and a mat lie on the boards', ['Мать']), { text: 'a lantern and a mat lie on the boards', removed: 0 });
+  assert.equal(stripNames('an archway of grey stone', ['Ян']).removed, 0);
+  // The story's own alphabet stays case-insensitive: a Russian sentence may start with a name in any case.
+  assert.equal(stripNames('роан стоит у ворот', ['Роан']).removed, 1);
+});
+
 test('a described person is found on the sheet however the model wrote their name', () => {
   const names = ['Элин', 'Тарек', 'лекарь'];
   assert.equal(matchSheet('Элин', names), 'Элин');
@@ -53,6 +64,37 @@ test('a described person is found on the sheet however the model wrote their nam
   assert.equal(matchSheet('salt worker', names), null);
   assert.equal(matchSheet('the scout', names), null);
   assert.equal(matchSheet('Элеонора', names), null);
+});
+
+// Giving a person another person's fixed appearance is worse than giving them none: the frame is then counted as
+// correct and their own look is thrown away, so no counter shows anything.
+test('a name that only shares a stem with a sheet name is not that person', () => {
+  const names = ['Мария', 'Элина', 'Элин'];
+  // Марина is not Мария, however alike they start.
+  assert.equal(matchSheet('Марина', names), null);
+  // Элину is the dative of Элин, and Элина is somebody else on the same sheet.
+  assert.equal(matchSheet('Элину', names), 'Элин');
+  assert.equal(matchSheet('Элине', names), 'Элин');
+  assert.equal(matchSheet('Тарелка', ['Тарек']), null);
+  const sheetOfThree: Character[] = [{ name: 'Мария', look: 'An elderly woman, stooped, white braid, black mourning dress' },
+    { name: 'Элина', look: 'A young woman, tall, red hair, green riding coat' }];
+  const lifted = assemblePrompt({ moment: 'A woman at a gate.', shot: 'Medium shot', setting: 'A stone gate', objects: '',
+    props: '', light: 'Morning light', people: [{ who: 'Марина', look: 'a young woman in a blue apron, braided dark hair',
+      state: '', action: 'lifts a basket' }] }, sheetOfThree);
+  assert.equal(lifted.fromSheet, 0);
+  assert.equal(lifted.withoutLook, 0);
+  assert.match(lifted.prompt, /a young woman in a blue apron, braided dark hair: lifts a basket\./);
+  assert.doesNotMatch(lifted.prompt, /mourning dress/);
+});
+
+// `--scenes battle-2,battle-2` paid for the frame twice and wrote prompts.json with one id in it twice, which the
+// drawing step then refused as a whole run, naming a cause that was not the one.
+test('a scene named twice on the command line is described once', () => {
+  assert.deepEqual(scenesWanted('battle-2,battle-2, dance-12').map(scene => scene.id), ['battle-2', 'dance-12']);
+  assert.deepEqual(scenesWanted('battle-2'), [{ id: 'battle-2', scenario: 'battle', index: 2 }]);
+  // The default is every other scene of all three frozen stories.
+  assert.equal(scenesWanted(undefined).length, 24);
+  assert.equal(new Set(scenesWanted(undefined).map(scene => scene.id)).size, 24);
 });
 
 test('the sheet line is the only look of a person the sheet covers, and its age is a word', () => {
