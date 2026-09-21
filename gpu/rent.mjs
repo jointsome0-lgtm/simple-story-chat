@@ -23,12 +23,20 @@ const RENT_TIMEOUT_MS = 60000;
 const args = process.argv.slice(2);
 const printBody = args.includes('--print-body');
 const rest = args.filter(argument => argument !== '--print-body');
-const gpus = rest.length === 0 ? 1 : rest.length === 2 && rest[0] === '--gpus' ? Number(rest[1]) : NaN;
-if (!MAX_DPH_BY_GPUS[gpus]) {
-  console.log(JSON.stringify({ event: 'bad_arguments', usage: 'rent.mjs [--gpus 1|2] [--print-body]' }));
+// `--lane text` and `--lane pictures` rent one single-card machine for one lane: a session on two machines runs
+// this script twice. Without it the machine is for both lanes, with one card or two.
+const options = { '--gpus': '1', '--lane': 'both' };
+let known = rest.length % 2 === 0;
+for (let at = 0; known && at < rest.length; at += 2) {
+  if (Object.hasOwn(options, rest[at])) options[rest[at]] = rest[at + 1]; else known = false;
+}
+const gpus = Number(options['--gpus']), lane = options['--lane'];
+let plan = null;
+try { if (known && MAX_DPH_BY_GPUS[gpus]) plan = rentPlan({ gpus, lane }); } catch { /* reported below */ }
+if (!plan) {
+  console.log(JSON.stringify({ event: 'bad_arguments', usage: 'rent.mjs [--gpus 1|2] [--lane both|text|pictures] [--print-body]' }));
   process.exit(1);
 }
-const plan = rentPlan({ gpus });
 // --print-body is reviewed before a rental, so it must not need the API key to be exported.
 const key = process.env.SIMPLE_CHAT_VAST_API_KEY?.trim();
 if (!key && !printBody) { console.log(JSON.stringify({ event: 'no_key' })); process.exit(1); }
@@ -55,7 +63,7 @@ const body = createBody({ plan, onstart });
 // that it can be reviewed even on a day when no offer fits, and the search is skipped without an API key.
 if (printBody) {
   console.log(JSON.stringify({ event: 'create_request', method: 'PUT', url: 'https://console.vast.ai/api/v0/asks/<offer>/',
-    gpus: plan.gpus, maxHour: plan.maxHour, minRamGb: plan.minRamGb, sessionHours: plan.sessionHours,
+    gpus: plan.gpus, lane: plan.lane, maxHour: plan.maxHour, minRamGb: plan.minRamGb, sessionHours: plan.sessionHours,
     sessionGb: Math.round(plan.sessionBytes / 1e9), body: redactedBody(body) }));
   if (!key) process.exit(0);
 }
@@ -73,13 +81,13 @@ if (offers === null) { console.log(JSON.stringify({ event: 'search_failed', stat
 // The port count and the container's share of the machine's RAM are checked here too: a query field the API does not
 // know is ignored silently, and those two rules are each worth more than a rental.
 const choice = chooseOffers(offers, plan);
-const { candidates, offered, withinPrice, droppedForUnknownPrice, droppedForFewCores,
+const { candidates, offered, withinPrice, droppedForUnknownPrice, droppedForCountry, droppedForFewCores,
   droppedForProxyOnly, droppedForRam } = choice;
 // A rule that drops offers says so: silence would read as "nothing was excluded". The counts are a chain -- what
 // the search returned, what the price left, then each later rule -- and `chosen` is what is left to try, which is
 // not `withinPrice`: the price is only the first rule of four.
 console.log(JSON.stringify({ event: 'candidates', offered, withinPrice, chosen: candidates.length,
-  maxHour: plan.maxHour, gpus: plan.gpus, droppedForUnknownPrice, droppedForFewCores, droppedForProxyOnly,
+  maxHour: plan.maxHour, gpus: plan.gpus, lane: plan.lane, droppedForUnknownPrice, droppedForCountry, droppedForFewCores, droppedForProxyOnly,
   minDirectPorts: plan.minDirectPorts, droppedForRam, minRamGb: plan.minRamGb }));
 // Which rule emptied the list, so that a session lost to an empty search, to cores, to ports or to RAM is not read
 // as a price to raise.

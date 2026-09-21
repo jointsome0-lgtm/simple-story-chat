@@ -72,6 +72,43 @@ test('the Qwen comparison is pinned beside the rest and is priced only by the se
   assert.ok((plan.sessionBytes + qwen) / 1e9 + 14 < plan.diskGb, 'the opt-in does not fit the rented disk');
 });
 
+test('a session on two machines rents each lane its own disk and prices it by its own downloads', () => {
+  const both = rentPlan(), text = rentPlan({ lane: 'text' }), pictures = rentPlan({ lane: 'pictures' });
+  // Nothing is counted twice and nothing is lost: the two lanes pull what one machine for both would.
+  assert.equal(text.sessionBytes + pictures.sessionBytes, both.sessionBytes);
+  const language = pinned('manifest.env');
+  assert.equal(text.sessionBytes, Number(language['MODEL_BYTES']) + Number(language['DRAFT_BYTES']) + 1000000000);
+  // The language machine's disk is the measured rental's; the picture machine's holds the Qwen opt-in as well.
+  assert.equal(text.diskGb, 60);
+  const image = pinned('image-manifest.env');
+  const qwen = ['IMAGE_QWEN_MODEL_BYTES', 'IMAGE_QWEN_ENCODER_BYTES', 'IMAGE_QWEN_VAE_BYTES']
+    .reduce((total, key) => total + Number(image[key]), 0);
+  assert.ok((pictures.sessionBytes + qwen) / 1e9 + 14 < pictures.diskGb, 'the opt-in does not fit the picture machine');
+  assert.ok(text.sessionBytes / 1e9 + 14 < text.diskGb);
+  // A smaller disk is a smaller storage term, so the same approved card price gives a lower ceiling.
+  assert.ok(text.maxHour < pictures.maxHour && pictures.maxHour < both.maxHour);
+  assert.equal(offerQuery(pictures).disk_space.gte, 100);
+  assert.equal(createBody({ plan: pictures, onstart: '' }).disk, 100);
+  // One lane is one card, and a lane nobody defined is refused rather than rented as something else.
+  assert.throws(() => rentPlan({ gpus: 2, lane: 'text' }), /one lane has one card/);
+  assert.throws(() => rentPlan({ lane: 'video' as 'text' }), /no such lane/);
+});
+
+test('a machine in a country the weights cannot be fetched from is dropped, and says so', () => {
+  const plan = rentPlan();
+  assert.deepEqual(offerQuery(plan).geolocation, { notin: ['CN'] });
+  const choice = chooseOffers([
+    offer({ id: 1, geolocation: 'Zhejiang, CN', dph_total: 0.3 }), offer({ id: 2, geolocation: ', CN', dph_total: 0.3 }),
+    offer({ id: 3, geolocation: 'Texas, US', dph_total: 0.5 }), offer({ id: 4, geolocation: null, dph_total: 0.5 }),
+  ], plan);
+  // The cheapest two are the blocked ones: the rule runs over the answer too, because a query field the API does
+  // not understand is ignored silently. An offer that names no place is kept, like one that names no RAM.
+  assert.equal(choice.droppedForCountry, 2);
+  assert.deepEqual(choice.candidates.map(one => one.id), [3, 4]);
+  const none = chooseOffers([offer({ geolocation: 'China, CN' })], plan);
+  assert.equal(emptyReason(none), 'none_in_reachable_country');
+});
+
 test('the card count drives the query, the ceiling and the RAM floor, and an unpriced count is refused', () => {
   const one = rentPlan(), two = rentPlan({ gpus: 2 });
   assert.equal(offerQuery(one).num_gpus.eq, 1);

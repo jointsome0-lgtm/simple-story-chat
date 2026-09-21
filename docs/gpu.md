@@ -29,7 +29,16 @@ SIMPLE_CHAT_RENT_DRY_RUN=1 node --env-file-if-exists=.env.gpu gpu/rent.mjs
 node --env-file-if-exists=.env.gpu gpu/rent.mjs
 ```
 
-Offers are sorted by `hour * 0.75 + download`, the cost of a 45-minute session, with the measured host first. Offers with fewer than two direct ports are dropped and the count of them is reported: an offer with no ports can only be reached through Vast's proxy. That rule has never yet excluded anything — every 5090 within this price has had ports — so treat it as a guard, not as an explanation of any failure.
+A session that runs both lanes may be one machine (`--gpus 2`, or one card with the lanes in turn) or two machines with one card each, which is what the owner chose on 2026-09-22: on that day two whole single-card machines cost less than one two-card machine with the same memory, each lane keeps a machine's RAM to itself, and the two downloads run over two links at once. Rent each lane with its own call; the language machine asks for 60 GB of disk and is priced by Gemma's download, the picture machine for 100 GB and by the image files. The two tunnels are `bash gpu/tunnel.sh ALIAS` for the language machine and `bash gpu/tunnel.sh --pictures-only ALIAS` for the other. Each machine arms its own three-hour guard.
+
+```sh
+SIMPLE_CHAT_RENT_DRY_RUN=1 node --env-file-if-exists=.env.gpu gpu/rent.mjs --lane text
+SIMPLE_CHAT_RENT_DRY_RUN=1 node --env-file-if-exists=.env.gpu gpu/rent.mjs --lane pictures
+```
+
+Machines in mainland China are not asked for and are dropped from the answer (`droppedForCountry`): Hugging Face and CivitAI are not reliably reachable from there, and a session is mostly a download.
+
+Offers are sorted by `hour * 2.5 + download`, the cost of the session the instance is billed for, with the measured host first. Offers with fewer than two direct ports are dropped and the count of them is reported: an offer with no ports can only be reached through Vast's proxy. That rule has never yet excluded anything — every 5090 within this price has had ports — so treat it as a guard, not as an explanation of any failure.
 
 ## Preparing the server
 

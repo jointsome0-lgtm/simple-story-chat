@@ -39,11 +39,17 @@ test('the tunnel forwards the model port, and the picture port only when it is a
   // Every forwarding stays on loopback at both ends: the rented machine publishes neither server.
   assert.ok(forwards(fake).every(line => line.startsWith('127.0.0.1:') && line.includes(':127.0.0.1:')));
 
+  // Two rented machines, one lane each: the picture machine's tunnel leaves the model port to the other one.
+  const only = run(fake, ['--pictures-only', 'simple-chat-vast-pictures']);
+  assert.equal(only.status, 0, only.stderr);
+  assert.deepEqual(forwards(fake), ['127.0.0.1:8188:127.0.0.1:8188']);
+
   // An alias is still required, and the flag is not one: a host name that is not a config alias would otherwise
   // reach ssh as an address to connect to.
   assert.equal(run(fake, ['--pictures']).status, 1);
-  assert.match(run(fake, ['--pictures']).stderr, /Usage: bash gpu\/tunnel\.sh \[--pictures\] SSH_CONFIG_ALIAS/);
+  assert.match(run(fake, ['--pictures']).stderr, /Usage: bash gpu\/tunnel\.sh \[--pictures\|--pictures-only\] SSH_CONFIG_ALIAS/);
   assert.equal(run(fake, ['simple-chat-vast', '--pictures']).status, 1);
+  assert.equal(run(fake, ['--pictures', '--pictures-only', 'simple-chat-vast']).status, 1);
   assert.equal(run(fake, ['user@host']).status, 1);
 });
 

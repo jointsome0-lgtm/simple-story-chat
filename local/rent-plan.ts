@@ -35,7 +35,24 @@ const DISK_GB = 150;
 // traffic price differs between machines by a factor of twenty, so this term decides between offers.
 // Qwen-Image 2.1 is not here on purpose: SIMPLE_CHAT_IMAGE_QWEN=true adds its 17.28 GB, and a session that means
 // to run that comparison prices it by hand rather than pay for it on every rental that does not.
-const SESSION_BYTES = 25201484928 + 514687200 + 12821743396 + 5242467968 + 253806246 + 13141730784 + 6000000000;
+const TEXT_BYTES = 25201484928 + 514687200, PICTURE_BYTES = 12821743396 + 5242467968 + 253806246 + 13141730784;
+// A session may also be two rented machines with one card and one lane each (the owner's choice, 2026-09-22):
+// on the day it was priced two whole single-card machines cost less than one two-card machine with the same RAM,
+// each lane keeps a machine's memory to itself, and the two downloads run over two links at once. Each machine is
+// then asked for its own lane's disk and priced by its own lane's downloads. `both` is one machine for both lanes,
+// with one card or two. Of the 6 GB of wheels and packages, torch is five and belongs to the picture lane. The
+// language machine's 60 GB is the disk of the rental measured in docs/gpu.md; the picture machine's 100 GB holds
+// the pinned files (31.5 GB), the Qwen opt-in (17.3 GB), torch and ComfyUI (about 13 GB) and the pictures.
+export type Lane = 'both' | 'text' | 'pictures';
+const LANES: Record<Lane, { diskGb: number; bytes: number }> = {
+  both: { diskGb: DISK_GB, bytes: TEXT_BYTES + PICTURE_BYTES + 6000000000 },
+  text: { diskGb: 60, bytes: TEXT_BYTES + 1000000000 },
+  pictures: { diskGb: 100, bytes: PICTURE_BYTES + 5000000000 },
+};
+// Hugging Face and CivitAI are not reliably reachable from mainland China, and a session is mostly a download: a
+// machine there can pass the speed test and still never fetch the weights. The last part of Vast's `geolocation`
+// ("Zhejiang, CN") is the country code.
+const BLOCKED_COUNTRIES = ['CN'];
 // docs/gpu.md asks for at least 32 GB of RAM for the language lane; the image lane wants its own. This is the
 // container's share, not the machine's: a container on the measured 256-core host held 30.72 cores of it. Without a
 // floor there is no guarantee that SIMPLE_CHAT_GPU_CACHE_RAM has memory to live in.
@@ -50,17 +67,24 @@ const SESSION_HOURS = 2.5;
 const MIN_DIRECT_PORTS = 2;
 
 export type RentPlan = {
-  gpus: number; maxHour: number; diskGb: number; minRamGb: number; minDirectPorts: number;
+  lane: Lane; gpus: number; maxHour: number; diskGb: number; minRamGb: number; minDirectPorts: number;
   sessionHours: number; sessionBytes: number; image: string; preferredHost: number | null;
+  blockedCountries: string[];
 };
 
-export function rentPlan({ gpus = 1, preferredHost = PREFERRED_HOST }: { gpus?: number; preferredHost?: number | null } = {}): RentPlan {
+export function rentPlan({ gpus = 1, lane = 'both', preferredHost = PREFERRED_HOST }:
+  { gpus?: number; lane?: Lane; preferredHost?: number | null } = {}): RentPlan {
   const maxDph = MAX_DPH_BY_GPUS[gpus];
   if (maxDph === undefined) throw new Error(`no approved price ceiling for ${gpus} GPUs`);
-  const maxHour = Math.round((maxDph + STORAGE_PER_GB_MONTH * DISK_GB / 730) * 1000) / 1000;
+  if (!Object.hasOwn(LANES, lane)) throw new Error(`no such lane: ${lane}`);
+  // One lane is one card: a second card on a machine that runs one server is paid for and idle.
+  if (lane !== 'both' && gpus !== 1) throw new Error('a machine for one lane has one card');
+  const { diskGb, bytes } = LANES[lane];
+  const maxHour = Math.round((maxDph + STORAGE_PER_GB_MONTH * diskGb / 730) * 1000) / 1000;
   return {
-    gpus, maxHour, diskGb: DISK_GB, minRamGb: RAM_GB_PER_GPU * gpus, minDirectPorts: MIN_DIRECT_PORTS,
-    sessionHours: SESSION_HOURS, sessionBytes: SESSION_BYTES, image: IMAGE, preferredHost,
+    lane, gpus, maxHour, diskGb, minRamGb: RAM_GB_PER_GPU * gpus, minDirectPorts: MIN_DIRECT_PORTS,
+    sessionHours: SESSION_HOURS, sessionBytes: bytes, image: IMAGE, preferredHost,
+    blockedCountries: BLOCKED_COUNTRIES,
   };
 }
 
@@ -72,7 +96,7 @@ export function offerQuery(plan: RentPlan) {
     disk_space: { gte: plan.diskGb }, cpu_ram: { gte: plan.minRamGb * 1000 },
     cuda_max_good: { gte: 12.8 }, rentable: { eq: true }, verified: { eq: true },
     rented: { eq: false }, reliability2: { gte: 0.97 }, inet_down: { gte: 300 },
-    direct_port_count: { gte: plan.minDirectPorts },
+    direct_port_count: { gte: plan.minDirectPorts }, geolocation: { notin: plan.blockedCountries },
     type: 'on-demand', order: [['dph_total', 'asc']], limit: 60,
   };
 }
@@ -115,17 +139,21 @@ export function describeOffer(offer: RawOffer, plan: RentPlan): Offer {
 }
 
 export type Choice = {
-  candidates: Offer[]; offered: number; withinPrice: number; droppedForUnknownPrice: number;
+  candidates: Offer[]; offered: number; withinPrice: number; droppedForUnknownPrice: number; droppedForCountry: number;
   droppedForFewCores: number; droppedForProxyOnly: number; droppedForRam: number;
 };
 
 // Every rule that drops offers reports how many it dropped, and each rule is its own step: a rule folded into
 // another one has no count and cannot be named as the reason the list is empty. An unknown core count or container
 // RAM is not a reason to drop an offer, only a known-too-small one is.
+const countryOf = (geo: unknown) => typeof geo === 'string' ? geo.slice(geo.lastIndexOf(',') + 1).trim().toUpperCase() : '';
+
 export function chooseOffers(offers: RawOffer[], plan: RentPlan): Choice {
   const described = offers.map(offer => describeOffer(offer, plan));
   const priced = described.filter(o => Number.isFinite(o.hour) && Number.isFinite(o.download));
-  const affordable = priced.filter(o => o.hour <= plan.maxHour);
+  // Before the price, so that `withinPrice` counts machines the session could actually use.
+  const reachable = priced.filter(o => !plan.blockedCountries.includes(countryOf(o.geo)));
+  const affordable = reachable.filter(o => o.hour <= plan.maxHour);
   const withCores = affordable.filter(o => o.cpus === null || o.cpus >= 4);
   const withPorts = withCores.filter(o => o.directPorts >= plan.minDirectPorts);
   const candidates = withPorts.filter(o => o.ramGb === null || o.ramGb >= plan.minRamGb)
@@ -134,19 +162,21 @@ export function chooseOffers(offers: RawOffer[], plan: RentPlan): Choice {
       || (a.hour * plan.sessionHours + a.download) - (b.hour * plan.sessionHours + b.download));
   return {
     candidates, offered: described.length, withinPrice: affordable.length,
-    droppedForUnknownPrice: described.length - priced.length, droppedForFewCores: affordable.length - withCores.length,
+    droppedForUnknownPrice: described.length - priced.length, droppedForCountry: priced.length - reachable.length,
+    droppedForFewCores: affordable.length - withCores.length,
     droppedForProxyOnly: withCores.length - withPorts.length, droppedForRam: withPorts.length - candidates.length,
   };
 }
 
 export type EmptyReason =
-  'none_offered' | 'none_within_price' | 'none_with_enough_cores' | 'none_with_direct_ports' | 'none_with_enough_ram';
+  'none_offered' | 'none_in_reachable_country' | 'none_within_price' | 'none_with_enough_cores' | 'none_with_direct_ports' | 'none_with_enough_ram';
 
 // Which rule emptied the list, for the one line the owner is left with. A search that answered with nothing at all,
 // and the rules on cores, ports and RAM, all drop offers the price never judged; reporting any of them as a price
 // failure sends the next attempt to change the wrong number.
 export function emptyReason(choice: Choice): EmptyReason {
   if (choice.offered === 0) return 'none_offered';
+  if (choice.droppedForCountry > 0 && choice.offered - choice.droppedForUnknownPrice === choice.droppedForCountry) return 'none_in_reachable_country';
   if (choice.withinPrice === 0) return 'none_within_price';
   const withCores = choice.withinPrice - choice.droppedForFewCores;
   if (withCores === 0) return 'none_with_enough_cores';
