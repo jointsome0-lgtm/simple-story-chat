@@ -13,8 +13,13 @@ import { loadModelConfig } from './config.ts';
 import { createLlama } from './llama.ts';
 import { createScheduler } from './scheduler.ts';
 import { diagnose } from './gpu-diagnose.ts';
-import { errorCode } from './model-error.ts';
-import type { GenerationResult, ModelRequest, Timings } from './model.ts';
+import { errorCode, ModelError } from './model-error.ts';
+import type { ModelRequest, Provider, Timings } from './model.ts';
+import { makeRequest } from './prompt.ts';
+import { summaryRequest, parseMemory } from './memory.ts';
+import { seedLanguage, seedNarration } from './story-text.ts';
+import { active, addSeed, beginJob, commitMemory, commitTurn, context, emptyLibrary, history, newStory, validTime } from '../lib/library.ts';
+import type { Library } from '../lib/library.ts';
 
 // The take/drop thresholds for the session, agreed by the owner on 2026-09-20. `--decide` reports every number it
 // measured beside them, so a borderline result stays the owner's call rather than the script's.
@@ -39,22 +44,32 @@ export const THRESHOLDS = {
 } as const;
 
 export type Call = {
-  label: string; waitMs: number; elapsedMs: number; finishReason: string;
+  label: string; waitMs: number | null; elapsedMs: number | null; finishReason: string;
   inputTokens: number | null; cachedInputTokens: number | null; outputTokens: number | null;
-  tokensPerSecond: number | null; transportMs: number | null; formatFailed: boolean; timings?: Timings;
+  tokensPerSecond: number | null; formatFailed: boolean; timings?: Timings;
+  // Optional only so that old reports remain readable. New measurements always write these, with null for missing observations.
+  countMs?: number | null; countQueueMs?: number | null; queueMs?: number | null;
+  firstTextFromStartMs?: number | null; firstTextFromRequestMs?: number | null; totalRequestMs?: number | null;
+  countedInputTokens?: number | null; decodeTokensPerSecond?: number | null; unattributedMs?: number | null;
+  outputCharacters?: number; representative?: boolean; useful?: boolean;
+  caseId?: string; cycle?: number; cacheIntent?: 'cold' | 'warm'; cacheObserved?: 'cold' | 'warm' | 'mixed' | 'unknown';
 };
 export type Phase = {
   seconds: number; tester: Call[]; agent: Call[]; probes: { completed: number; preempted: number };
-  // Work somebody asked for: the tester's scenes and the agent's turns, never the disposable probes.
-  usefulOutputTokens: number; usefulTokensPerHour: number;
+  // A memory increment counts only after a valid scene uses it. Probes and discarded work never count.
+  usefulOutputTokens: number | null; usefulTokensPerHour: number | null; complete?: boolean;
 };
+export type WorkCase = { id: string; fixture: string; fixtureSha256: string; requestSha256: string;
+  targetTokens: number; inputTokens: number; sceneCount: number; outputCharacters: { min: number; max: number } };
+export type Workload = { version: 2; fingerprint: string; cases: WorkCase[]; coldRuns: number; warmRuns: number;
+  compactAtTokens: number; keepScenes: number; memoryMode: 'plain' | 'sgr' };
 export type Vram = { samples: number; totalMiB: number | null; usedMiBMax: number | null; freeMiBMin: number | null };
 export type Report = {
   profile: string; startedAt: string; completedAt?: string; model: string; temperature: number;
   server: { slots: number | null; contextTokens: number | null }; draft: boolean;
   bot: { slots: number; poolTokens: number; sharedCache: boolean; contextTokens: number; maxOutputTokens: number;
     quietMs: number; readSeconds: number; historyTokens: number | null };
-  phases: { solo?: Phase; loaded?: Phase }; vram: Vram; error?: string;
+  phases: { solo?: Phase; loaded?: Phase }; vram: Vram; error?: string; workload?: Workload;
 };
 // `unknown` when a run did not produce the number: a missing VRAM reading or a profile the comparison needs a pair for.
 export type Check = { id: number; name: string; verdict: 'pass' | 'fail' | 'unknown'; measured: string; threshold: string };
@@ -67,7 +82,146 @@ const median = (values: number[]) => {
   return sorted.length % 2 ? sorted[(sorted.length - 1) / 2] : (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2;
 };
 
+const number = (value: number | null | undefined): value is number => typeof value === 'number' && Number.isFinite(value);
+const hash = (value: string) => createHash('sha256').update(value).digest('hex');
+const validScene = (text: string) => validTime(text.split('\n')[0].trim())
+  && !/<\/?think>|<\|(?:channel|im_start|im_end)|\[start_header_id\]/i.test(text);
+const inRange = (n: number, range: WorkCase['outputCharacters']) => n >= range.min && n <= range.max;
+
+// Clock and provider are the whole timing seam. The same request object crosses countInput and generate so the
+// adapter can reuse its prepared body. countMs includes that operation's queue; queueMs adds both queue waits.
+export async function measureCall(provider: Provider, request: ModelRequest, { label, signal, now = () => performance.now(),
+  inputLimitTokens, range }: { label: string; signal?: AbortSignal; now?: () => number;
+    inputLimitTokens?: number; range?: WorkCase['outputCharacters'] }) {
+  const requested = now();
+  let countStarted: number | null = null, started: number | null = null, first: number | null = null;
+  let counted: number | null = null, countMs: number | null = null;
+  if (provider.countInput) {
+    counted = await provider.countInput(request, { signal, onStart: () => { countStarted ??= now(); } });
+    countMs = now() - requested;
+    if (inputLimitTokens !== undefined && counted > inputLimitTokens) throw new ModelError('context_limit');
+  }
+  const queued = now();
+  const result = await provider.generate(request, { signal, inputLimitTokens,
+    onStart: () => { started ??= now(); }, onText: delta => { if (delta.length && first === null) first = now(); } });
+  const finished = now();
+  const span = (end: number | null, start: number | null) => end === null || start === null ? null : round(end - start);
+  const elapsedMs = span(finished, started);
+  const countQueueMs = provider.countInput ? span(countStarted, requested) : 0;
+  const generateQueueMs = span(started, queued);
+  const queueMs = countQueueMs === null || generateQueueMs === null ? null : round(countQueueMs + generateQueueMs);
+  const timing = result.timings;
+  const formatFailed = result.finishReason !== 'stop' || !validScene(result.text);
+  const call: Call = { label, waitMs: queueMs, elapsedMs, countMs, countQueueMs, queueMs,
+    firstTextFromStartMs: span(first, started), firstTextFromRequestMs: span(first, requested),
+    totalRequestMs: span(finished, requested), countedInputTokens: counted, finishReason: result.finishReason,
+    inputTokens: result.usage?.inputTokens ?? null, cachedInputTokens: result.usage?.cachedInputTokens ?? null,
+    outputTokens: result.usage?.outputTokens ?? null, outputCharacters: result.text.length,
+    tokensPerSecond: number(result.usage?.outputTokens) && number(elapsedMs) && elapsedMs > 0
+      ? round(result.usage!.outputTokens! * 1000 / elapsedMs) : null,
+    decodeTokensPerSecond: number(timing?.predictedTokens) && number(timing?.predictedMs) && timing.predictedMs > 0
+      ? round(timing.predictedTokens * 1000 / timing.predictedMs) : null,
+    // This signed residual also includes server work outside these timers. It is not a network measurement.
+    unattributedMs: number(elapsedMs) && number(timing?.promptMs) && number(timing?.predictedMs)
+      ? round(elapsedMs - timing.promptMs - timing.predictedMs) : null,
+    formatFailed, representative: range ? inRange(result.text.length, range) : false, useful: false,
+    cacheObserved: cacheState(timing, counted), ...(timing ? { timings: timing } : {}) };
+  return { call, result };
+}
+
+export function cacheState(timing: Timings | undefined, input: number | null): NonNullable<Call['cacheObserved']> {
+  if (!number(input) || !number(timing?.cacheTokens) || !number(timing?.promptTokens)) return 'unknown';
+  const tolerance = THRESHOLDS.cacheToleranceTokens;
+  if (timing.cacheTokens === 0 && timing.promptTokens >= input - tolerance) return 'cold';
+  if (timing.cacheTokens >= input - tolerance && timing.promptTokens <= tolerance) return 'warm';
+  return 'mixed';
+}
+
+// A second adapter uses this transport for cold calls only. Counting and health requests retain their original bodies.
+export const withoutPromptCache = (fetcher: (url: string, init: RequestInit) => Promise<Response>) =>
+  (url: string, init: RequestInit) => fetcher(url, new URL(url).pathname.endsWith('/chat/completions')
+    && typeof init.body === 'string' ? { ...init, body: JSON.stringify({ ...JSON.parse(init.body), cache_prompt: false }) } : init);
+
+// Repeat whole frozen scenes to control input size. This is a performance replay, not a world-consistency eval.
+// The server counts real makeRequest output; no character/token estimate or filler is used.
+export async function buildWorkload(frozen: Library, targetTokens: number, maxOutputTokens: number,
+  count: (request: ModelRequest) => Promise<number>) {
+  const source = active(frozen);
+  const scenes = history(source.story, source.branch.head);
+  if (!scenes.length) throw new Error('empty_frozen_fixture');
+  const build = (size: number) => {
+    const state = emptyLibrary();
+    const seed = addSeed(state, `${source.seed.title}\n${source.seed.startTime}\n${source.seed.text}`);
+    newStory(state, seed.id);
+    for (let i = 0; i < size; i++) {
+      const scene = scenes[i % scenes.length];
+      const job = beginJob(state, scene.input, i);
+      commitTurn(state, job.id, scene.text);
+    }
+    const job = beginJob(state, seedNarration(seed).continueStory, size);
+    return { state, request: makeRequest(state, job, maxOutputTokens), sceneCount: size };
+  };
+  const sized = async (n: number) => { const value = build(n); return { ...value, inputTokens: await count(value.request) }; };
+  let best = await sized(0), upper = 1;
+  if (best.inputTokens > targetTokens) throw new Error('fixture_seed_exceeds_target');
+  while (upper <= 512) {
+    const candidate = await sized(upper);
+    if (candidate.inputTokens > targetTokens) break;
+    best = candidate; upper *= 2;
+  }
+  if (upper > 512) throw new Error('fixture_target_too_large');
+  let lower = best.sceneCount;
+  while (upper - lower > 1) {
+    const middle = Math.floor((lower + upper) / 2), candidate = await sized(middle);
+    if (candidate.inputTokens <= targetTokens) { lower = middle; best = candidate; } else upper = middle;
+  }
+  if (!best.sceneCount) throw new Error('fixture_scene_exceeds_target');
+  const lengths = scenes.map(scene => scene.text.length);
+  return { ...best, outputCharacters: { min: Math.min(...lengths), max: Math.max(...lengths) } };
+}
+
+// Reports expose small samples honestly: count, median and maximum, grouped by history and requested cache state.
+export function summaries(calls: Call[]) {
+  const groups = new Map<string, Call[]>();
+  for (const call of calls) {
+    const key = `${call.caseId ?? call.label}:${call.cacheIntent ?? 'other'}`;
+    groups.set(key, [...groups.get(key) ?? [], call]);
+  }
+  const metrics = ['countMs', 'queueMs', 'elapsedMs', 'firstTextFromStartMs', 'firstTextFromRequestMs', 'totalRequestMs',
+    'decodeTokensPerSecond', 'unattributedMs', 'inputTokens', 'outputTokens', 'outputCharacters'] as const;
+  return [...groups].map(([group, entries]) => ({ group, n: entries.length,
+    metrics: Object.fromEntries(metrics.map(metric => {
+      const values = entries.map(call => call[metric]).filter(number);
+      return [metric, { n: values.length, median: median(values), max: values.length ? Math.max(...values) : null }];
+    })) }));
+}
+
 // ---- Verdicts -------------------------------------------------------------------------------------------------
+function sampleProblem(run: Report, phase: Phase | undefined, checkFormat = true): string | null {
+  const plan = run.workload;
+  if (plan?.version !== 2) return 'legacy workload; scene length and cache conditions were not controlled';
+  if (!phase?.complete) return 'incomplete phase';
+  if (phase.tester.length !== plan.cases.length * plan.coldRuns * (1 + plan.warmRuns)) return 'incomplete series';
+  for (const cell of plan.cases) for (let cycle = 0; cycle < plan.coldRuns; cycle++) {
+    const calls = phase.tester.filter(call => call.caseId === cell.id && call.cycle === cycle);
+    if (calls.filter(call => call.cacheIntent === 'cold').length !== 1
+      || calls.filter(call => call.cacheIntent === 'warm').length !== plan.warmRuns) return 'incomplete series';
+    for (const call of calls) {
+      if (call.countedInputTokens !== cell.inputTokens) return 'input size changed';
+      if (call.cacheObserved === 'unknown' || !call.cacheObserved) return 'cache timings unavailable';
+      if (call.cacheIntent === 'cold' && call.cacheObserved !== 'cold') return 'cold prefill was not confirmed';
+      if (!call.representative) return 'scene length outside the frozen fixture range';
+      if (checkFormat && call.formatFailed) return 'scene format failed';
+    }
+  }
+  return null;
+}
+
+const sameWork = (a: Report, b: Report) => !!a.workload?.fingerprint && a.workload.version === 2
+  && b.workload?.version === 2 && a.workload.fingerprint === b.workload.fingerprint
+  && a.model === b.model && a.temperature === b.temperature && a.bot.contextTokens === b.bot.contextTokens
+  && a.bot.maxOutputTokens === b.bot.maxOutputTokens && a.bot.readSeconds === b.bot.readSeconds;
+
 // Checks 1 to 5 are answered by one profile's own two phases; 6 and 7 need a pair of profiles and live in `decide`.
 export function verdictOf(run: Report): Check[] {
   const { solo, loaded } = run.phases;
@@ -78,35 +232,36 @@ export function verdictOf(run: Report): Check[] {
   add(1, 'video memory at the peak', free === null ? 'not read' : `${free} MiB free`,
     `>= ${THRESHOLDS.freeVramMiB} MiB`, free === null ? 'unknown' : free >= THRESHOLDS.freeVramMiB ? 'pass' : 'fail');
 
-  // The tester's cache: every scene after the first re-reads the previous one, whatever ran beside it.
-  const kept = (calls: Call[]) => calls.slice(1).map((call, index) => {
-    const previous = calls[index].inputTokens;
-    if (previous === null || call.cachedInputTokens === null) return null;
-    return (call.cachedInputTokens ?? 0) - (previous - THRESHOLDS.cacheToleranceTokens);
-  });
+  const problem = sampleProblem(run, solo) ?? sampleProblem(run, loaded);
   // A loaded phase in which nothing actually ran beside the tester answers none of these: a configuration too tight
   // to admit an agent at all would otherwise pass them all by doing no work.
-  const contested = !!loaded && (loaded.agent.length > 0 || loaded.probes.completed > 0);
-  const margins = loaded ? kept(loaded.tester).filter((value): value is number => value !== null) : [];
+  const contested = !problem && !!loaded && (loaded.agent.length > 0 || loaded.probes.completed > 0);
+  const missing = problem ?? (contested ? 'not measured' : 'nothing ran beside the tester');
+  // Fixed-prefix replay: each warm request must retain the input prepared by its own preceding cold/warm call.
+  const margins = (loaded?.tester ?? []).filter(call => call.cacheIntent === 'warm').map(call =>
+    number(call.timings?.cacheTokens) && number(call.countedInputTokens)
+      ? call.timings.cacheTokens - (call.countedInputTokens - THRESHOLDS.cacheToleranceTokens) : null).filter(number);
   const worst = contested && margins.length ? Math.min(...margins) : null;
-  add(2, 'the tester keeps its cache', worst === null ? (contested ? 'not measured' : 'nothing ran beside the tester') : `${worst} tokens of margin`,
+  add(2, 'the tester keeps its cache', worst === null ? missing : `${worst} tokens of margin`,
     `>= 0 (tolerance ${THRESHOLDS.cacheToleranceTokens})`, worst === null ? 'unknown' : worst >= 0 ? 'pass' : 'fail');
 
-  const gain = contested && solo && loaded && solo.usefulTokensPerHour > 0 ? loaded.usefulTokensPerHour / solo.usefulTokensPerHour : null;
-  add(3, 'useful work per hour beside the tester', gain === null ? (contested ? 'not measured' : 'nothing ran beside the tester') : `${round(gain)}x`,
+  const gain = contested && number(solo?.usefulTokensPerHour) && number(loaded?.usefulTokensPerHour)
+    && solo.usefulTokensPerHour > 0 ? loaded.usefulTokensPerHour / solo.usefulTokensPerHour : null;
+  add(3, 'useful work per hour beside the tester', gain === null ? missing : `${round(gain)}x`,
     `>= ${THRESHOLDS.throughputGain}x`, gain === null ? 'unknown' : gain >= THRESHOLDS.throughputGain ? 'pass' : 'fail');
 
-  // The scene the person waits through, in seconds, not as a share of an idle card: see the threshold's own note.
-  const loadedScene = loaded ? median(loaded.tester.map(call => call.elapsedMs)) : null;
-  const sceneSeconds = contested && loadedScene ? loadedScene / 1000 : null;
+  // Keep history sizes and cold/warm separate: fast small prompts must not hide slow long ones in a pooled median.
+  const durations = summaries(loaded?.tester ?? []).map(group => group.metrics.elapsedMs.median).filter(number);
+  const sceneSeconds = contested && durations.length && loaded?.tester.every(call => number(call.elapsedMs))
+    ? Math.max(...durations) / 1000 : null;
   add(4, 'the tester\'s scene beside other work',
-    sceneSeconds === null ? (contested ? 'not measured' : 'nothing ran beside the tester') : `${round(sceneSeconds, 1)} s`,
-    `<= ${THRESHOLDS.sceneSecondsUnderLoad} s`,
+    sceneSeconds === null ? missing : `${round(sceneSeconds, 1)} s`,
+    `each case/cache median <= ${THRESHOLDS.sceneSecondsUnderLoad} s after generation starts`,
     sceneSeconds === null ? 'unknown' : sceneSeconds <= THRESHOLDS.sceneSecondsUnderLoad ? 'pass' : 'fail');
 
-  const waits = loaded ? loaded.tester.map(call => call.waitMs) : [];
-  const longest = waits.length ? Math.max(...waits) : null;
-  add(5, 'the tester\'s longest wait for the queue', longest === null ? 'not measured' : `${round(longest / 1000, 1)} s`,
+  const waits = loaded?.tester.map(call => call.queueMs).filter(number) ?? [];
+  const longest = !problem && waits.length && waits.length === loaded?.tester.length ? Math.max(...waits) : null;
+  add(5, 'the tester\'s longest wait for the queue', longest === null ? missing : `${round(longest / 1000, 1)} s`,
     `<= ${THRESHOLDS.waitSeconds} s`, longest === null ? 'unknown' : longest / 1000 <= THRESHOLDS.waitSeconds ? 'pass' : 'fail');
   return checks;
 }
@@ -115,10 +270,7 @@ export function verdictOf(run: Report): Check[] {
 // carries the SSH proxy with it, and that proxy was measured at 1.4 ms one hour and 1.4 s the next: a wall-clock
 // speed would compare the tunnel's mood, not the two models.
 const testerSpeed = (run: Report) => {
-  const speeds = (run.phases.solo?.tester ?? []).map(call =>
-    call.timings?.predictedTokens && call.timings.predictedMs
-      ? call.timings.predictedTokens / (call.timings.predictedMs / 1000) : null)
-    .filter((value): value is number => value !== null);
+  const speeds = (run.phases.solo?.tester ?? []).map(call => call.decodeTokensPerSecond).filter(number);
   return median(speeds);
 };
 const formatFailures = (run: Report) => [...run.phases.solo?.tester ?? [], ...run.phases.loaded?.tester ?? [],
@@ -136,236 +288,246 @@ export function decide(runs: Report[]): Decision {
     checks: verdictOf(run), usefulTokensPerHour: run.phases.loaded?.usefulTokensPerHour ?? null,
     testerTokensPerSecond: testerSpeed(run), formatFailures: formatFailures(run) }));
   const sound = (entry: Decision['profiles'][number]) => entry.checks.every(check => check.verdict === 'pass');
-  const pooled = profiles.filter(entry => entry.slots > 1 && sound(entry));
+  const candidates = runs.filter((_, index) => sound(profiles[index]));
+  const compatible = candidates.every(run => sameWork(candidates[0], run));
+  const pooled = profiles.filter(entry => compatible && entry.slots > 1 && sound(entry));
   const best = pooled.sort((a, b) => (b.usefulTokensPerHour ?? 0) - (a.usefulTokensPerHour ?? 0))[0];
-  const single = profiles.find(entry => entry.slots === 1);
+  const single = profiles.find(entry => entry.slots === 1 && (!best
+    || sameWork(runs.find(run => run.profile === best.profile)!, runs.find(run => run.profile === entry.profile)!)));
 
   // The draft model: the same slot count with and without it, on the tester's own scenes.
   const withDraft = runs.filter(run => run.draft);
   // A draft run whose server never started has no scenes to time, and it must not stand in for one that does: the
   // pool with the draft model sorts before the single slot, and taking it left this check unanswered while the
   // measurement that answered it sat in the same directory. What that run knows is threshold 7's business, below.
-  const pair = withDraft.map(run => ({ run, plain: runs.find(other => !other.draft && other.bot.slots === run.bot.slots) }))
-    .find(entry => entry.plain && testerSpeed(entry.run) !== null && testerSpeed(entry.plain) !== null);
-  const speedup = pair?.plain && testerSpeed(pair.run) && testerSpeed(pair.plain)
-    ? testerSpeed(pair.run)! / testerSpeed(pair.plain)! : null;
+  const pair = withDraft.map(run => ({ run, plain: runs.find(other => !other.draft && sameWork(run, other)
+    && other.bot.slots === run.bot.slots && other.bot.poolTokens === run.bot.poolTokens
+    && other.bot.sharedCache === run.bot.sharedCache && other.server.contextTokens === run.server.contextTokens) }))
+    .find(entry => entry.plain && !sampleProblem(entry.run, entry.run.phases.solo, false)
+      && !sampleProblem(entry.plain, entry.plain.phases.solo));
+  const speeds = (run: Report) => summaries(run.phases.solo?.tester ?? [])
+    .map(group => ({ group: group.group, expected: group.n, ...group.metrics.decodeTokensPerSecond }));
+  const ratios = pair?.plain ? speeds(pair.run).map(group => {
+    const plain = speeds(pair.plain!).find(other => other.group === group.group);
+    return number(group.median) && number(plain?.median) && plain.median > 0
+      && group.n === group.expected && plain.n === plain.expected && group.n === plain.n
+      ? group.median / plain.median : null;
+  }) : [];
+  const speedup = ratios.length && ratios.every(number) ? Math.min(...ratios) : null;
   const broke = pair ? formatFailures(pair.run) > 0 : false;
   const draft: Check = { id: 6, name: 'the draft model (MTP)',
-    verdict: speedup === null ? 'unknown' : speedup >= THRESHOLDS.draftSpeedup && !broke ? 'pass' : 'fail',
-    measured: speedup === null ? 'no pair of profiles to compare' : `${round(speedup)}x${broke ? ', format regressed' : ''}`,
+    verdict: broke ? 'fail' : speedup === null ? 'unknown' : speedup >= THRESHOLDS.draftSpeedup ? 'pass' : 'fail',
+    measured: speedup === null ? (broke ? 'format regressed' : 'no pair of profiles to compare') : `${round(speedup)}x${broke ? ', format regressed' : ''}`,
     threshold: `>= ${THRESHOLDS.draftSpeedup}x and no format regression` };
 
   // Both at once: a profile that is pooled and has the draft model must still leave the memory headroom.
   const both = runs.find(run => run.draft && run.bot.slots > 1);
   const bothFree = both?.vram.freeMiBMin ?? null;
-  // A server that refused to start under this configuration has answered the question in the hardest way there is.
+  // Failure to reach the server is not evidence of exhausted memory. A partial run may establish a shortage,
+  // but it cannot establish sufficient headroom at a peak it never reached.
   const bothFailed = both?.error ?? null;
   const together: Check = { id: 7, name: 'the pool and the draft model together',
-    verdict: bothFailed ? 'fail' : bothFree === null ? 'unknown' : bothFree >= THRESHOLDS.freeVramMiB ? 'pass' : 'fail',
-    measured: bothFailed ? `the server did not start (${bothFailed})` : bothFree === null ? 'not measured' : `${bothFree} MiB free`,
+    verdict: bothFree !== null && bothFree < THRESHOLDS.freeVramMiB ? 'fail'
+      : bothFailed || !both || sampleProblem(both, both.phases.loaded) || bothFree === null ? 'unknown' : 'pass',
+    measured: bothFailed ? `measurement incomplete (${bothFailed})` : bothFree === null ? 'not measured' : `${bothFree} MiB free`,
     threshold: `>= ${THRESHOLDS.freeVramMiB} MiB, else the pool is kept and the draft model dropped` };
 
   return { profiles, draft, together,
     pool: { take: best?.profile ?? null, over: single?.profile ?? null,
-      note: best ? (together.verdict === 'fail' ? 'take the pool without the draft model' : 'take the pool')
+      note: !compatible ? 'incompatible workloads; compare reports from the same measurement plan'
+        : best ? (together.verdict === 'fail' ? 'take the pool without the draft model' : 'take the pool')
         : 'no pooled profile passed its own checks; keep one slot' } };
 }
 
-// ---- The live run ---------------------------------------------------------------------------------------------
-// One synthetic story, padded to a realistic history. Nothing here is a real person's text.
-const SYSTEM = 'Это синтетический замер. Пиши кратко по-русски. Начинай ответ с даты 2026-09-20 21:00 на отдельной строке. Не выводи рассуждения или служебные теги.';
-const SEED = 'СИД: Смотритель маяка Павел передал ключ от склада Вере 20 сентября в 21:00. Илья этого не видел.';
-const FILLER = 'В журнале маяка записано: ветер ровный, волна низкая, обычная вахта.\n';
-const NEXT = 'Продолжи сцену одним коротким абзацем, помня, у кого ключ.';
-const formatFailedIn = (text: string) => !/^2026-09-20 21:00\s/.test(text) || /<\/?think>|<\|(?:channel|im_start|im_end)|\[start_header_id\]/i.test(text);
+// One agent turn uses a validated memory increment in its next scene. A failed or interrupted turn earns no
+// useful memory tokens. The state is a private clone of a frozen performance fixture, never a person's library.
+export async function measureAgentTurn(provider: Provider, original: Library,
+  options: { keepScenes: number; memoryMode: 'plain' | 'sgr'; maxOutputTokens: number; contextTokens: number;
+    range: WorkCase['outputCharacters']; signal?: AbortSignal }, record: (call: Call) => void) {
+  const state = structuredClone(original), target = active(state);
+  const nodes = context(target.story, target.branch).recent.slice(0, -options.keepScenes);
+  if (!nodes.length) throw new ModelError('nothing_to_compact');
+  const job = state.job ?? beginJob(state, seedNarration(target.seed).continueStory, 0);
+  const extraction = summaryRequest(target, nodes, options.memoryMode);
+  const memory = await measureCall(provider, extraction, { label: 'agent_compaction', signal: options.signal,
+    inputLimitTokens: options.contextTokens - extraction.maxOutputTokens });
+  record(memory.call);
+  const delta = parseMemory(memory.result, nodes, options.memoryMode, seedLanguage(target.seed));
+  memory.call.formatFailed = false;
+  const before = JSON.stringify(makeRequest(state, job, options.maxOutputTokens)).length;
+  if (!commitMemory(state, job.id, nodes.map(node => node.id), delta)) throw new ModelError('cancelled');
+  const request = makeRequest(state, job, options.maxOutputTokens);
+  if (JSON.stringify(request).length >= before) throw new ModelError('memory_not_smaller');
+  const scene = await measureCall(provider, request, { label: 'agent_scene', signal: options.signal,
+    inputLimitTokens: options.contextTokens - options.maxOutputTokens, range: options.range });
+  record(scene.call);
+  if (!scene.call.formatFailed && scene.call.representative) memory.call.useful = scene.call.useful = true;
+}
 
+export function closePhase(phase: Phase, seconds: number) {
+  phase.seconds = round(seconds, 1);
+  const useful = [...phase.tester, ...phase.agent].filter(call => call.useful);
+  phase.usefulOutputTokens = useful.every(call => number(call.outputTokens))
+    ? useful.reduce((sum, call) => sum + call.outputTokens!, 0) : null;
+  phase.usefulTokensPerHour = seconds > 0 && phase.usefulOutputTokens !== null
+    ? Math.round(phase.usefulOutputTokens * 3600 / seconds) : null;
+}
+
+// ---- The live run ---------------------------------------------------------------------------------------------
 async function main(args: string[]) {
   const { values } = parseArgs({ args, options: {
     profile: { type: 'string' }, out: { type: 'string' }, decide: { type: 'string' },
-    scenes: { type: 'string', default: '4' }, 'read-seconds': { type: 'string', default: '30' },
-    'history-tokens': { type: 'string' }, minutes: { type: 'string', default: '10' },
+    scenes: { type: 'string', default: '3' }, 'cold-runs': { type: 'string', default: '2' },
+    fixture: { type: 'string', default: 'battle' }, 'read-seconds': { type: 'string', default: '30' },
+    'history-tokens': { type: 'string' }, minutes: { type: 'string', default: '30' },
     draft: { type: 'boolean', default: false }, 'no-vram': { type: 'boolean', default: false },
   } });
   if (values.decide) return void printDecision(resolve(values.decide));
-  const scenes = Number(values.scenes), readSeconds = Number(values['read-seconds']), minutes = Number(values.minutes);
-  // The tester's history: by default as long as one request may be, or a smaller size to fit several lanes.
+  const warmRuns = Number(values.scenes), coldRuns = Number(values['cold-runs']);
+  const readSeconds = Number(values['read-seconds']), minutes = Number(values.minutes);
   const asked = values['history-tokens'] === undefined ? null : Number(values['history-tokens']);
-  if (asked !== null && (!Number.isInteger(asked) || asked < 512 || asked > 131072)) throw new Error('Invalid --history-tokens');
+  const bounded = (n: number, lo: number, hi: number) => Number.isInteger(n) && n >= lo && n <= hi;
   if (!values.profile || !/^[a-z0-9][a-z0-9-]{0,30}$/.test(values.profile)
-    || !Number.isInteger(scenes) || scenes < 2 || scenes > 12
-    || !Number.isInteger(readSeconds) || readSeconds < 0 || readSeconds > 600
-    || !Number.isInteger(minutes) || minutes < 2 || minutes > 60) {
-    throw new Error('Use --profile <name> [--out directory] [--scenes 2..12] [--read-seconds 0..600] [--history-tokens N] [--minutes 2..60] [--draft] [--no-vram], or --decide <directory>');
+    || !bounded(warmRuns, 1, 12) || !bounded(coldRuns, 1, 12) || !bounded(readSeconds, 0, 600)
+    || !bounded(minutes, 2, 60) || (asked !== null && !bounded(asked, 512, 131072))
+    || !['battle', 'chess', 'dance', 'all'].includes(values.fixture)) {
+    throw new Error('Use --profile <name> [--fixture battle|chess|dance|all] [--cold-runs 1..12] [--scenes 1..12] [--read-seconds 0..600] [--history-tokens N] [--minutes 2..60] [--draft] [--no-vram], or --decide <directory>');
   }
   const config = loadModelConfig();
   if (config.provider !== 'llama-cpp') throw new Error('gpu_config_required');
-  const provider = createLlama(config, { slots: config.slots });
+  const targets = asked === null ? [4000, 24000, 43000] : [asked];
+  // This fixed-prefix experiment stays below automatic compaction. A lower configured threshold needs an explicit
+  // smaller target; silently clipping it would make the profile incomparable with the other reports.
+  if (targets.some(target => target >= config.compactAtTokens || target > config.contextTokens - config.maxOutputTokens)) {
+    throw new Error('measurement_target_reaches_compaction_threshold');
+  }
+  const warm = createLlama(config, { slots: config.slots });
+  const cold = createLlama(config, { slots: config.slots, fetch: withoutPromptCache(globalThis.fetch) });
+  const coldRequests = new WeakSet<ModelRequest>();
+  const adapter = (request: ModelRequest) => coldRequests.has(request) ? cold : warm;
+  const provider: Provider = { check: controls => warm.check(controls),
+    countInput: (request, controls) => adapter(request).countInput(request, controls),
+    generate: (request, controls) => adapter(request).generate(request, controls) };
   const directory = resolve(values.out ?? `measurements/${values.profile}`);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
-
   const run: Report = { profile: values.profile, startedAt: new Date().toISOString(), model: config.model,
-    temperature: config.temperature, draft: values.draft,
-    server: { slots: null, contextTokens: null },
+    temperature: config.temperature, draft: values.draft, server: { slots: null, contextTokens: null },
     bot: { slots: config.slots, poolTokens: config.poolTokens, sharedCache: config.sharedCache,
-      contextTokens: config.contextTokens,
-      maxOutputTokens: config.maxOutputTokens, quietMs: 60000, readSeconds, historyTokens: asked },
+      contextTokens: config.contextTokens, maxOutputTokens: config.maxOutputTokens,
+      quietMs: 60000, readSeconds, historyTokens: asked },
     phases: {}, vram: { samples: 0, totalMiB: null, usedMiBMax: null, freeMiBMin: null } };
   const save = () => writeFileSync(join(directory, 'report.json'), JSON.stringify(run, null, 2));
-
-  // A configuration the server cannot start under is an answer, not a missing measurement: the pool with the draft
-  // model asked for more memory than the card has, and the first attempt left nothing behind but a crash on the
-  // instance. The report is written before the run gives up, so the comparison can read it.
-  let server: { slots?: number; contextTokens?: number };
-  try {
-    server = await provider.check() as { slots?: number; contextTokens?: number };
-  } catch (error) {
-    run.error = errorCode(error) ? String(errorCode(error)) : 'gpu_server_unreachable';
-    run.completedAt = new Date().toISOString();
-    save();
-    report({ event: 'measurement_written', directory, profile: run.profile, error: run.error });
-    throw error;
-  }
-  run.server = { slots: server.slots ?? null, contextTokens: server.contextTokens ?? null };
-
-  // `sharedCache` must match the server's own mode: with isolated slots nobody divides a pool, so admitting calls by
-  // size would measure a queue the running server does not have.
+  const budget = new AbortController();
+  const budgetTimer = setTimeout(() => budget.abort(new ModelError('budget_exceeded')), minutes * 60000);
+  const signal = budget.signal;
   const scheduler = createScheduler(provider, { slots: config.slots, poolTokens: config.poolTokens,
-    sharedCache: config.sharedCache,
-    outputTokens: (request: ModelRequest) => request.maxOutputTokens,
+    sharedCache: config.sharedCache, outputTokens: (request: ModelRequest) => request.maxOutputTokens,
     log: (event, code) => report({ event, ...(code ? { code } : {}) }) });
   const sampler = values['no-vram'] ? undefined : watchVram(run, save);
-  const deadline = performance.now() + minutes * 60000;
-
-  // One call through the scheduler: the wait for the queue and the generation are timed apart, because the owner's
-  // thresholds ask different questions of them.
-  async function measure(label: string, api: { generate: (request: ModelRequest, controls?: object) => Promise<GenerationResult> }, request: ModelRequest, signal?: AbortSignal) {
-    const queued = performance.now();
-    let startedAt = queued;
-    const result = await api.generate(request, { signal, onStart: () => { startedAt = performance.now(); } });
-    const elapsedMs = Math.round(performance.now() - startedAt);
-    const usage = result.usage ?? null;
-    const call: Call = { label, waitMs: Math.round(startedAt - queued), elapsedMs, finishReason: result.finishReason,
-      inputTokens: usage?.inputTokens ?? null, cachedInputTokens: usage?.cachedInputTokens ?? null,
-      outputTokens: usage?.outputTokens ?? null,
-      tokensPerSecond: usage?.outputTokens && elapsedMs > 0 ? round(usage.outputTokens / (elapsedMs / 1000)) : null,
-      // What the call spent outside the queue and outside the server: the tunnel, and whatever the proxy was doing.
-      // A run where this grows to seconds has measured the network, and its wall-clock numbers say little about the
-      // configuration. Recorded so that such a run is visible instead of merely looking slow.
-      transportMs: result.timings
-        ? Math.max(0, elapsedMs - Math.round((result.timings.promptMs ?? 0) + (result.timings.predictedMs ?? 0)))
-        : null,
-      formatFailed: formatFailedIn(result.text), ...(result.timings ? { timings: result.timings } : {}) };
-    report({ event: 'call_measured', ...call });
-    return { call, text: result.text };
-  }
-
-  // A history the size of a real tester's: padded with filler until the server counts what we asked for.
-  async function history(targetTokens: number): Promise<ModelRequest> {
-    let repeats = Math.max(1, Math.round(targetTokens / 16));
-    let request!: ModelRequest, measured!: number;
-    for (let attempt = 0; attempt < 8; attempt++) {
-      request = { system: SYSTEM, maxOutputTokens: config.maxOutputTokens,
-        messages: [{ role: 'user', content: `${SEED}\n${FILLER.repeat(repeats)}\n${NEXT}` }] };
-      measured = await provider.countInput(request);
-      if (measured >= targetTokens * 0.97 && measured <= targetTokens) break;
-      repeats = Math.max(1, Math.floor(repeats * targetTokens * 0.99 / measured));
-    }
-    if (!(measured >= targetTokens * 0.97 && measured <= targetTokens)) throw new Error('history_size_failed');
-    report({ event: 'history_prepared', inputTokens: measured });
-    return request;
-  }
-
-  // The tester writes a scene, reads it, writes the next: each call re-reads the one before it, which is what the
-  // prefix cache must survive.
-  // A cold server reads the whole history once. That one-off belongs to neither phase: without it the solo phase pays
-  // a prefill the loaded phase inherits warm, and every comparison between them is off by it.
-  async function warmTester() {
-    const base = await history(asked ?? Math.min(40000, config.contextTokens - config.maxOutputTokens - 2048));
-    const turn = scheduler.foreground.openTurn({ holder: 'measure-tester' });
-    try { report({ event: 'warmup_done', ...(await measure('tester_warmup', turn, base)).call }); }
-    finally { turn.end(); }
-    return base;
-  }
-  async function tester(base: ModelRequest, calls: Call[]) {
-    let messages = base.messages;
-    for (let index = 0; index < scenes && performance.now() < deadline; index++) {
-      const turn = scheduler.foreground.openTurn({ holder: 'measure-tester' });
-      try {
-        const { call, text } = await measure(`tester_scene_${index + 1}`, turn, { ...base, messages });
-        calls.push(call);
-        // Written after every scene: a paid session must be readable while it runs, not only when it ends.
-        save();
-        messages = [...messages, { role: 'assistant', content: text }, { role: 'user', content: NEXT }];
-      } finally { turn.end(); }
-      if (index + 1 < scenes) await delay(readSeconds * 1000);
-    }
-  }
-
-  // Everything that fills the card while the tester reads: agent turns (a compaction and a scene, as the agent
-  // interface runs them) and disposable probes.
-  async function load(phase: Phase, stopping: AbortSignal) {
-    const small = await history(2000);
-    const large = await history(asked ?? Math.min(24000, config.contextTokens - config.maxOutputTokens - 2048));
-    const agentWork = (async () => {
-      while (!stopping.aborted && performance.now() < deadline) {
-        const turn = scheduler.agent.openTurn({ holder: 'measure-agent' });
-        try {
-          phase.agent.push((await measure('agent_compaction', turn, { ...small, purpose: 'memory' }, stopping)).call);
-          phase.agent.push((await measure('agent_scene', turn, large, stopping)).call);
-        } catch (error) { if (!stopping.aborted) report({ event: 'agent_call_failed', code: errorCode(error) }); }
-        finally { turn.end(); }
-      }
-    })();
-    const probing = (async () => {
-      while (!stopping.aborted && performance.now() < deadline) {
-        try { await scheduler.background.generate(small, { signal: stopping }); phase.probes.completed++; }
-        catch { phase.probes.preempted++; }
-        await delay(1000);
-      }
-    })();
-    return () => Promise.all([agentWork, probing]);
-  }
-
-  const emptyPhase = (): Phase => ({ seconds: 0, tester: [], agent: [], probes: { completed: 0, preempted: 0 },
-    usefulOutputTokens: 0, usefulTokensPerHour: 0 });
-  const close = (phase: Phase, seconds: number) => {
-    phase.seconds = round(seconds, 1);
-    phase.usefulOutputTokens = [...phase.tester, ...phase.agent].reduce((sum, call) => sum + (call.outputTokens ?? 0), 0);
-    phase.usefulTokensPerHour = seconds > 0 ? Math.round(phase.usefulOutputTokens * 3600 / seconds) : 0;
-  };
-
   try {
-    // Solo: the tester alone, reading between scenes, so the card idles exactly as it does today.
-    report({ event: 'phase_started', phase: 'solo' });
-    const solo = emptyPhase();
-    run.phases.solo = solo;
-    const base = await warmTester();
-    let started = performance.now();
-    await tester(base, solo.tester);
-    close(solo, (performance.now() - started) / 1000);
+    const server = await warm.check({ signal });
+    run.server = { slots: server.slots ?? null, contextTokens: server.contextTokens ?? null };
+    const names = values.fixture === 'all' ? ['battle', 'chess', 'dance'] : [values.fixture];
+    const workloads: (Awaited<ReturnType<typeof buildWorkload>> & { description: WorkCase })[] = [];
+    for (const fixture of names) {
+      const raw = readFileSync(new URL(`../examples/frozen/${fixture}.json`, import.meta.url), 'utf8');
+      const frozen = (JSON.parse(raw) as { state: Library }).state;
+      for (const targetTokens of targets) {
+        signal.throwIfAborted();
+        const work = await buildWorkload(frozen, targetTokens, config.maxOutputTokens,
+          request => warm.countInput(request, { signal }));
+        const description: WorkCase = { id: `${fixture}-${targetTokens}`, fixture, fixtureSha256: hash(raw),
+          requestSha256: hash(JSON.stringify(work.request)), targetTokens, inputTokens: work.inputTokens,
+          sceneCount: work.sceneCount, outputCharacters: work.outputCharacters };
+        workloads.push({ ...work, description });
+        report({ event: 'history_prepared', ...description });
+      }
+    }
+    const plan = { version: 2 as const, cases: workloads.map(work => work.description), coldRuns, warmRuns,
+      compactAtTokens: config.compactAtTokens, keepScenes: config.keepScenes, memoryMode: config.memoryMode };
+    run.workload = { ...plan, fingerprint: hash(JSON.stringify({ ...plan, model: config.model,
+      temperature: config.temperature, contextTokens: config.contextTokens,
+      maxOutputTokens: config.maxOutputTokens, readSeconds })) };
     save();
-
-    // Loaded: the same tester, with agent turns and probes filling the card while it reads. The tester's cache is
-    // warm before the load starts, so the scenes measure what the load does to it.
-    report({ event: 'phase_started', phase: 'loaded' });
-    const loaded = emptyPhase();
-    run.phases.loaded = loaded;
-    await warmTester();
-    const stopping = new AbortController();
-    const settled = await load(loaded, stopping.signal);
-    started = performance.now();
-    await tester(base, loaded.tester);
-    close(loaded, (performance.now() - started) / 1000);
-    stopping.abort();
-    await settled();
-    run.completedAt = new Date().toISOString();
+    // The small case supplies disposable probes. Agent turns rotate through every case that has something to compact.
+    const agentWorkloads = workloads.filter(work => work.sceneCount > config.keepScenes);
+    if (!agentWorkloads.length) throw new Error('no_compactable_fixture');
+    const load = (phase: Phase, stopping: AbortSignal) => {
+      const agent = (async () => {
+        let index = 0;
+        while (!stopping.aborted) {
+          const work = agentWorkloads[index++ % agentWorkloads.length];
+          const turn = scheduler.agent.openTurn({ holder: 'measure-agent' });
+          try {
+            await measureAgentTurn(turn, work.state, { ...config, signal: stopping, range: work.outputCharacters },
+              call => { phase.agent.push(call); });
+          } catch (error) {
+            if (!stopping.aborted) report({ event: 'agent_call_failed', code: errorCode(error) ?? 'measurement_failed' });
+          } finally { turn.end(); save(); }
+          try { await delay(1000, undefined, { signal: stopping }); } catch { break; }
+        }
+      })();
+      const probes = (async () => {
+        while (!stopping.aborted) {
+          try {
+            await scheduler.background.generate(structuredClone(workloads[0].request), { signal: stopping });
+            phase.probes.completed++;
+          } catch { phase.probes.preempted++; }
+          try { await delay(1000, undefined, { signal: stopping }); } catch { break; }
+        }
+      })();
+      return Promise.all([agent, probes]);
+    };
+    for (const name of ['solo', 'loaded'] as const) {
+      const phase: Phase = { seconds: 0, tester: [], agent: [], probes: { completed: 0, preempted: 0 },
+        usefulOutputTokens: null, usefulTokensPerHour: null, complete: false };
+      run.phases[name] = phase;
+      report({ event: 'phase_started', phase: name });
+      const started = performance.now();
+      const stopping = new AbortController();
+      const loadSignal = AbortSignal.any([signal, stopping.signal]);
+      const loading = name === 'loaded' ? load(phase, loadSignal) : Promise.resolve();
+      try {
+        for (const work of workloads) for (let cycle = 0; cycle < coldRuns; cycle++) {
+          for (let index = 0; index <= warmRuns; index++) {
+            signal.throwIfAborted();
+            const intent = index === 0 ? 'cold' : 'warm';
+            // A fixed branch point in both phases. Each new cycle forces cold prefill in its selected slot; warm
+            // calls replay the same input. Generated text is measured but never appended to the next trial.
+            const request = structuredClone(work.request);
+            if (intent === 'cold') coldRequests.add(request);
+            const turn = scheduler.foreground.openTurn({ holder: 'measure-tester' });
+            try {
+              const { call } = await measureCall(turn, request, { label: 'tester_scene', signal,
+                inputLimitTokens: config.compactAtTokens - 1, range: work.outputCharacters });
+              Object.assign(call, { caseId: work.description.id, cycle, cacheIntent: intent,
+                useful: !call.formatFailed && call.representative });
+              phase.tester.push(call);
+              closePhase(phase, (performance.now() - started) / 1000);
+              report({ event: 'call_measured', ...call });
+              save();
+            } finally { turn.end(); }
+            if (index < warmRuns) await delay(readSeconds * 1000, undefined, { signal });
+          }
+        }
+        phase.complete = true;
+      } finally {
+        stopping.abort();
+        await loading;
+        closePhase(phase, (performance.now() - started) / 1000);
+        for (const summary of summaries(phase.tester)) report({ event: 'series_measured', phase: name, ...summary });
+        save();
+      }
+    }
   } catch (error) {
-    const code = String(errorCode(error) ?? '');
-    run.error = /^[a-z_]{1,50}$/.test(code) ? code : 'measurement_failed';
+    const code = String(errorCode(error) ?? (error instanceof Error ? error.message : ''));
+    run.error = signal.aborted ? 'budget_exceeded' : /^[a-z_]{1,50}$/.test(code) ? code : 'measurement_failed';
     process.exitCode = 1;
   } finally {
-    sampler?.stop();
+    clearTimeout(budgetTimer);
+    await sampler?.stop();
     await scheduler.close();
+    run.completedAt = new Date().toISOString();
     save();
     report({ event: 'measurement_written', directory, profile: run.profile, error: run.error });
     for (const check of verdictOf(run)) report({ event: 'check', ...check });
@@ -378,10 +540,12 @@ function watchVram(run: Report, save: () => void) {
   const configured = process.env.SIMPLE_CHAT_GPU_SSH_HOST;
   const host = configured && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(configured) ? configured : undefined;
   let stopped = false;
+  const stopping = new AbortController();
   const loop = (async () => {
     while (!stopped && host) {
       try {
         const seen = await diagnose({ host, events: 1 });
+        if (stopped) break;
         for (const card of seen.remote?.gpus ?? []) {
           if (card.memoryUsedMiB === undefined || card.memoryTotalMiB === undefined) continue;
           run.vram.samples++;
@@ -396,10 +560,10 @@ function watchVram(run: Report, save: () => void) {
         }
         save();
       } catch (error) { report({ event: 'vram_sample_failed', code: errorCode(error) }); }
-      await delay(20000);
+      try { await delay(20000, undefined, { signal: stopping.signal }); } catch { break; }
     }
   })();
-  return { stop() { stopped = true; return loop; } };
+  return { stop() { stopped = true; stopping.abort(); return loop; } };
 }
 
 function printDecision(directory: string) {

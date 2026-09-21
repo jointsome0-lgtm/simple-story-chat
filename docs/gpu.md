@@ -171,12 +171,55 @@ On the RX 580 with Gemma 3 1B (3 slots, 12288 cells) a 6.4K-token tester kept it
 
 ### Measurement session
 
-The rented card is paid by the minute, so what to keep is decided by a script and not by an impression. `npm run gpu:measure -- --profile <name>` measures one server profile and writes `measurements/<name>/report.json`; `npm run gpu:measure -- --decide measurements` reads every report and prints one answer. The prompts are synthetic, and a report holds counters only, never text.
+`npm run gpu:measure -- --profile <name>` measures one running server profile and writes
+`measurements/<name>/report.json`. `npm run gpu:measure -- --decide measurements` compares saved reports.
+Run it only during an authorized GPU session. Reports contain counts, timings and fixture hashes, never story text.
 
-A run has two phases with the same synthetic tester, who writes a scene, reads it for `--read-seconds` and writes the next, so its history grows and its cache is what the work beside it must not evict:
+The workload uses `makeRequest` and the checked-in synthetic stories in `examples/frozen/`. The default is `battle`;
+`--fixture chess`, `--fixture dance` and `--fixture all` select the others. Whole frozen scenes are repeated until the
+server's real `countInput` reaches the largest complete history below each target: about 4,000, 24,000 and 43,000
+input tokens. The report records the actual count, scene count, request hash, fixture hash, and the fixture's minimum
+and maximum scene lengths. This is a performance replay; repeated scenes do not test story consistency.
 
-- **solo** — the tester alone, the card idling while it reads, which is how the bot runs today;
-- **loaded** — the same tester with agent turns (a compaction and a scene) and probes filling the card.
+The selected `compactAtTokens`, memory mode and kept-scene count are recorded. A target at or above the configured
+compaction threshold is refused; use `--history-tokens N` to select a smaller single target. The default llama.cpp
+threshold is 44,000, but the measurement uses the loaded configuration. Scene output uses the bot's ordinary prompt
+and output allowance. An output outside the frozen fixture's character range makes the workload checks unknown;
+a short response cannot establish that full scenes meet the time budget.
+
+Both phases replay identical branch points. Generated output is measured and discarded, so the history does not
+grow past the selected size. In `solo`, only the tester runs. In `loaded`, agent turns and disposable probes run
+beside it. An agent turn extracts memory with `summaryRequest`, validates it with `parseMemory`, commits it to a
+synthetic clone and requests the next scene from that memory. The increment must shorten the request. Its output
+tokens count as useful only when the following valid scene uses it; probes, failed scenes and abandoned increments
+do not count. This load does not exercise the bot's complete automatic-compaction retry/repair path.
+
+Each size has `--cold-runs 2` cycles by default. A cycle forces a cold generation with `cache_prompt:false`, then
+replays the prefix for `--scenes 3` warm calls, with `--read-seconds 30` between calls. The switch prevents prompt
+reuse in that request's slot; it does not clear the whole server. See llama.cpp's
+[cache-prompt branch](https://github.com/ggml-org/llama.cpp/blob/b29c606e28a01b1bc8c1351026a0fa6e616bf6c4/tools/server/server-context.cpp#L2892-L3000).
+Every call records both its intended and observed cache condition. Cold requires zero cached tokens and full
+prefill within the existing 256-token tolerance; warm requires the prefix retained with at most 256 tokens of
+prefill. Missing `cacheTokens` or `promptTokens` leaves the condition unknown. Warm calls that lose the cache fail
+retention. Cold calls whose cold prefill cannot be confirmed cannot validate a profile.
+
+The report separates `countMs`, the full token-count operation, from `countQueueMs`, its dispatch wait.
+`queueMs` sums the counting and generation dispatch waits. `elapsedMs` starts when generation is dispatched.
+`firstTextFromStartMs` and `firstTextFromRequestMs` end at the first nonempty `onText` delta, while
+`totalRequestMs` ends at the completed response. The first delta is observed in the local adapter; Telegram's
+draft cadence and delivery are outside this measurement. `decodeTokensPerSecond` uses server decode time.
+`unattributedMs` is generation wall time minus server prefill and decode time, a signed residual which also includes
+server work outside those timers. It is not an isolated measurement of the tunnel. Missing observations are `null`.
+
+Summaries show sample count, median and maximum separately for each history size and cold/warm condition.
+The generation budget applies to every such median; long histories cannot hide among more short samples.
+The 30-minute default budget covers setup, counts, queues, reading waits and both phases. Expiry aborts pending work
+and saves a partial report. Incomplete series cannot pass. Cross-profile comparisons require the same workload
+fingerprint, model, prompt configuration and reading cadence; draft comparisons also require the same slot/pool
+configuration. Legacy short-prompt reports remain readable, but cannot establish the new workload checks.
+An unreachable server or interrupted run is not proof of a VRAM shortage. Without measured insufficient headroom,
+the combined pool/draft memory check stays unknown. A pending read-only VRAM sample can take up to 30 seconds to
+finish during cleanup; the budget has already cancelled model work.
 
 The owner's thresholds, agreed on 20 September 2026 and encoded in `THRESHOLDS` in `local/gpu-measure.ts`:
 
@@ -185,10 +228,14 @@ The owner's thresholds, agreed on 20 September 2026 and encoded in `THRESHOLDS` 
 | 1 | Free video memory at the peak | at least 1 GiB |
 | 2 | The tester's cache while others work | kept, 256 tokens of tolerance |
 | 3 | Useful work per hour with lanes beside the tester | at least 1.2× |
-| 4 | The tester's scene beside that work | no longer than 10 seconds |
-| 5 | The tester's longest wait for the queue | 120 seconds |
-| 6 | The draft model (MTP) | at least 1.2×, without a format regression |
+| 4 | Generation beside other work, from dispatch to completion | each history/cache median at most 10 seconds; excludes counting and queues |
+| 5 | The tester's longest total dispatch wait | counting queue plus generation queue at most 120 seconds |
+| 6 | The draft model's server decode speed | at least 1.2× in each matching history/cache series, without a format regression |
 | 7 | The pool and the draft model do not fit together | keep the pool, drop the draft model |
+
+No budget for first text, total request time, or minimum absolute decode speed has been agreed. The script reports
+those measurements without assigning new pass/fail numbers. The 10-second threshold retains its existing meaning
+of generation time after dispatch; it is not a claim about first visible text or total user wait.
 
 Thresholds 2 and 4 were reshaped by the owner on 2026-09-20, after the first live run and before the reports were
 re-read. The cache tolerance was 32 tokens, which the tester crossed by re-reading 1 to 219 tokens of a 39,700-token
@@ -199,7 +246,8 @@ gets faster, so the same experience would fail the check on better hardware.
 
 #### Measured on a rented RTX 5090, 2026-09-20
 
-One 32607 MiB card, Gemma 4 31B heretic Q6_K, context 65536, pool 98304 cells, `--kv-unified`. The decision was
+These historical results used the earlier short synthetic scene prompt. They do not measure the frozen-story
+workload described above. One 32607 MiB card, Gemma 4 31B heretic Q6_K, context 65536, pool 98304 cells, `--kv-unified`. The decision was
 `pool-3` over `single`, "take the pool without the draft model".
 
 | Profile | Slots | Draft | Useful tokens/hour | 1: free | 2: cache | 3: gain | 4: scene | 5: wait |
