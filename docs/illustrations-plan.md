@@ -338,19 +338,22 @@ It is **opt-in**: `SIMPLE_CHAT_IMAGE_QWEN=true`, 17.28 GB on top of the session'
 [rent-plan.ts](../local/rent-plan.ts) prices an offer's traffic from what a default run pulls, and a comparison
 nobody asked for should not be in that number. The bytes and the minutes are in [gpu.md](gpu.md).
 
-**Licence.** Qwen Research License (the repository's own `license_name: qwen-research`), non-commercial, read as
-what it says on the card and not verified clause by clause here [A]. The owner accepted it on 2026-09-21 for as
-long as the bot is used by the owner and one tester. That is a narrower permission than Krea's, which allows
-commercial use below $1M: if this feature ever reaches people who are not those two, Qwen has to be re-decided,
-and it is a comparison checkpoint rather than a candidate for the deployed bot until then.
+**Licence, undecided.** Qwen Research License (the repository's own `license_name: qwen-research`), non-commercial,
+read as what it says on the card and not verified clause by clause here [A]. **Acceptance is not recorded**: no
+session here has the owner's own words for it, and the opt-in stays off until it does. It is a narrower permission
+than Krea's, which allows commercial use below $1M: even accepted, it would be a comparison checkpoint rather than
+a candidate for the deployed bot, and if this feature ever reaches people beyond the owner and the tester, Qwen has
+to be decided again. Turn the opt-in on for a real session in the same commit that writes down what was accepted
+and when.
 
 **The "Uncensored GGUF" reuploads are not used, and not because of the name.** Checked 2026-09-21 on
 `KasugaiSakura/Qwen-Image-2.1-Uncensored-GGUF`: its own card says `base_model_relation: quantized` and "GGUF
-quantizations of Qwen/Qwen-Image-2.1 using the original upstream base weights", and its text encoder and VAE are
-byte-identical to the ones we pin — same SHA256, all three files. So it is the same model at Q4 to Q8, with a word
-added to the title; there is no second, freer set of weights to choose. It would also need the ComfyUI-GGUF custom
-node, and [image-serve.sh](../gpu/image-serve.sh) starts the server with `--disable-all-custom-nodes` so that a
-stray clone cannot change a measurement. Two reasons, either one enough.
+quantizations of Qwen/Qwen-Image-2.1 using the original upstream base weights". Its text encoder and its VAE are
+the files we pin, by SHA256; its transformer is not that file at all, but five GGUF quantizations, Q4_0 to Q8_0, of
+the same base weights. So it is the same model at Q4 to Q8, with a word added to the title; there is no second,
+freer set of weights to choose. Using it would also need the ComfyUI-GGUF custom node, and
+[image-serve.sh](../gpu/image-serve.sh) starts the server with `--disable-all-custom-nodes` so that a stray clone
+cannot change a measurement. Two reasons, either one enough.
 
 **int8, not bf16.** ComfyUI's two official templates ship with the int8 transformer and the int8 encoder as their
 own widget values, the three files in bf16 are 32.4 GB of weights on a 32 GB card before a single activation, and
