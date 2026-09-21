@@ -10,6 +10,9 @@ If the owner asks you to improve prompts or memory, follow [docs/improve-loop.md
 change, what may not, how one step is measured with `npm run eval`, and when to stop. Past steps are in
 `docs/improve-log.md`.
 
+When you delegate: Opus subagents run at `max` reasoning effort, GPT-6 (codex) sessions at `high`; Fable and GPT-6
+are kept for the steps that decide something. The owner's rule, 2026-09-21; details in the same document.
+
 ## What this project is
 
 A **Telegram bot for branching interactive stories** that runs locally: Node 24.9+, strict TypeScript executed

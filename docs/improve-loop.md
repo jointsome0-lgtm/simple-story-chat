@@ -36,6 +36,7 @@ A change to the narrator's rule is made in the catalog, not only in `local/promp
 
 Who does the work: Opus agents, paired with the local model, for the bulk; Fable and GPT-6 only at the steps that
 decide something — a design, a review of core code, a verdict on pictures — because they cost much more.
+Opus agents are started at `max` reasoning effort, always; GPT-6 sessions at `high`.
 
 - `examples/memory-checks.ts`, `examples/scene-traps.ts`, `examples/*-probe.ts`, `examples/frozen/` — questions, answers, scenarios and frozen scenes. Describe an error in a check to the owner; do not fix it yourself.
 - `local/eval.ts`, `local/scene-judge.ts`, `local/scenarios.ts`, `local/pack-hf.ts`, `local/budget.ts`, the judge model, the limit values in `.env.eval` — the eval and the safety guard.
