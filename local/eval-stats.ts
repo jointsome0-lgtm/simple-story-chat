@@ -9,7 +9,7 @@
 import { parseArgs } from 'node:util';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import type { ReplayReport } from './memory-probe.ts';
 import { loadScenario, packScenarios } from './scenarios.ts';
 
@@ -148,8 +148,12 @@ export function dedupe(cells: Cell[]): { cells: Cell[]; dropped: number } {
 
 // ——— reading the corpus ———
 
-const itemsFromFailed = (keys: Map<string, string> | undefined, failed: string[]): Item[] | undefined =>
-  keys?.size ? [...keys].map(([key, expected]) => ({ key, pass: !failed.includes(key), expected })) : undefined;
+// A summary keeps the keys that failed, not the ones that were asked, so the items are read back from today's
+// fixture — which is the same suite only when it holds as many keys as the cell was scored against. Against a key
+// set of another size every added question would be invented as a pass of a run that never saw it, and the cluster
+// table would flag it `always` on that invention. Such a cell keeps its counts and contributes no item.
+const itemsFromFailed = (keys: Map<string, string> | undefined, failed: string[], total: number): Item[] | undefined =>
+  total && keys?.size === total ? [...keys].map(([key, expected]) => ({ key, pass: !failed.includes(key), expected })) : undefined;
 
 // A memory-probe directory: report.json holds the per-question outcome of every mode, and the trap scenes with the
 // verdicts scene-judge.ts wrote back into it.
@@ -160,16 +164,19 @@ function cellsFromReport(path: string, report: ReplayReport, keys: Map<string, K
     if (!result) continue;
     const common = { run: path, source: 'report' as const, model: report.model, scenario: report.scenario, mode };
     const answers = result.answers ?? [];
+    // The denominator is the one the cell was scored against — memory-probe.ts:252 answers every question of the
+    // fixture of its own day at once — and never today's, which would take questions away from a run that answered
+    // all it was asked. Today's fixture counts only for a mode that answered nothing, the 0/N cell eval.ts:139 pools.
     if (answers.length || result.error || result.completedAt) cells.push({ ...common, instrument: 'memory',
-      passed: answers.filter(answer => answer.pass).length, total: Math.max(answers.length, key?.memory.size ?? 0),
+      passed: answers.filter(answer => answer.pass).length, total: answers.length || (key?.memory.size ?? 0),
       items: answers.map(answer => ({ key: answer.key, pass: answer.pass, expected: answer.expected, actual: typeof answer.actual === 'string' ? answer.actual : null })),
       ...(result.completedAt ? {} : { error: result.error ?? 'probe_failed' }) });
     const verdicts = result.verdicts ?? [];
-    // Without verdicts a scene cell exists only when the replay finished and the judge then failed. A lab/ directory
-    // holds trap scenes of an unfinished research batch and is not a judged cell.
+    // Without verdicts a scene cell exists only when the replay finished and the judge then failed. The research
+    // batches under lab/ never reach this function: `find` reads the two writers' own directories only.
     if (!verdicts.length && !(result.completedAt && result.traps?.length)) continue;
     cells.push({ ...common, instrument: 'scene', passed: verdicts.filter(verdict => verdict.pass).length,
-      total: Math.max(verdicts.length, key?.scene.size ?? 0),
+      total: verdicts.length || (key?.scene.size ?? 0),
       truncated: result.traps?.filter(trap => trap.truncated).length ?? 0,
       items: verdicts.map(verdict => ({ key: verdict.key, pass: verdict.pass, expected: verdict.expected, actual: typeof verdict.actual === 'string' ? verdict.actual : null })),
       ...(verdicts.length ? {} : { error: 'no_scenes' }) });
@@ -189,42 +196,52 @@ function cellsFromSummary(path: string, summary: Summary, keys: Map<string, KeyS
       for (const [mode, cell] of Object.entries(modes)) {
         const common = { run: path, source: 'summary' as const, model, scenario, mode };
         cells.push({ ...common, instrument: 'memory', passed: cell.passed ?? 0, total: cell.total ?? 0,
-          items: itemsFromFailed(key?.memory, cell.failedKeys ?? []), ...(cell.error ? { error: cell.error } : {}) });
+          items: itemsFromFailed(key?.memory, cell.failedKeys ?? [], cell.total ?? 0), ...(cell.error ? { error: cell.error } : {}) });
         if (cell.scene) cells.push({ ...common, instrument: 'scene', passed: cell.scene.passed ?? 0, total: cell.scene.total ?? 0,
-          items: itemsFromFailed(key?.scene, cell.scene.failedKeys ?? []), ...(cell.scene.error ? { error: cell.scene.error } : {}) });
+          items: itemsFromFailed(key?.scene, cell.scene.failedKeys ?? [], cell.scene.total ?? 0), ...(cell.scene.error ? { error: cell.scene.error } : {}) });
       }
     }
   }
   return cells;
 }
 
+// Each writer names the directory it creates: memory-probe.ts:87 mkdtemps `simple-chat-memory-<scenario>-` and
+// eval.ts:234 `simple-chat-eval-`. Only those two names are read, because the default root is the whole temporary
+// directory, where any other tool may leave a report.json and two of them would move the worst-model headline this
+// tool prints. The same rule leaves out `lab/<variant>-<sample>/report.json` (memory-probe.ts:149): once judged,
+// those are N samples of one trap written for p_flip, not N runs of the suite, and the bootstrap would read them as
+// independent. A kept run therefore keeps its directory name; `sources.paths` says what was read.
+const WRITERS: Record<string, string> = { 'report.json': 'simple-chat-memory-', 'eval.json': 'simple-chat-eval-' };
 // The search walks itself rather than passing `recursive` to readdirSync, because the default root is the whole
 // temporary directory and one unreadable subdirectory there would end the walk.
 function* find(root: string, depth: number): Generator<string> {
   let entries;
   try { entries = readdirSync(root, { withFileTypes: true }); } catch { return; }
   for (const entry of entries) {
-    if (entry.isFile() && (entry.name === 'report.json' || entry.name === 'eval.json')) yield join(root, entry.name);
+    const writer = WRITERS[entry.name];
+    if (entry.isFile() && writer && basename(root).startsWith(writer)) yield join(root, entry.name);
     else if (entry.isDirectory() && !entry.isSymbolicLink() && depth > 0) yield* find(join(root, entry.name), depth - 1);
   }
 }
 
-export function readCorpus(roots: string[], keys: Map<string, KeySet>, depth = 4): { cells: Cell[]; reports: number; summaries: number } {
+export function readCorpus(roots: string[], keys: Map<string, KeySet>, depth = 4): { cells: Cell[]; reports: number; summaries: number; paths: string[] } {
   const cells: Cell[] = [];
+  const paths: string[] = [];
   let [reports, summaries] = [0, 0];
   for (const root of roots) {
     for (const path of find(root, depth)) {
       let data: (ReplayReport & Summary) | null = null;
       try { data = JSON.parse(readFileSync(path, 'utf8')); } catch { continue; }
-      // A GPU measurement report has neither shape, and a lab/ directory has the replay shape but nothing scored in
-      // it; both are counted only if they yield a cell, so the source counts say how much was actually read.
+      // A GPU measurement report has neither shape, and a probe directory of a run that failed before it answered
+      // has nothing scored in it; both are counted only if they yield a cell, so the paths say what was read.
       const found = data?.modes && data.model ? cellsFromReport(path, data, keys) : data?.models ? cellsFromSummary(path, data, keys) : [];
       if (!found.length) continue;
       if (data!.modes) reports++; else summaries++;
+      paths.push(path);
       cells.push(...found);
     }
   }
-  return { cells, reports, summaries };
+  return { cells, reports, summaries, paths };
 }
 
 type Event = { event?: string; model?: string; scenario?: string; mode?: string; code?: string; passed?: number; total?: number; truncated?: boolean };
@@ -236,8 +253,10 @@ export function readEventLog(text: string): { cells: Cell[]; lines: number; runs
   let run = 0;
   let lines = 0;
   // `eval ceiling` and `eval judge` record no `run_started` (eval.ts:191-205), so their events inherit the run counter
-  // of whatever ran before and two ceiling invocations share a run id. Every probe opens with `started`
-  // (memory-probe.ts:131), which is the boundary of one invocation and so of one cell.
+  // of whatever ran before and two ceiling invocations share a run id. Both probes open with `started`
+  // (memory-probe.ts:131 and scene-judge.ts:32, which eval.ts:147 runs under the same model, scenario and mode), so
+  // the counter below separates invocations of one slot, not cells: a judged cell spans two of them. Only the
+  // failure dedupe reads it; what a cell holds is read on the slot itself.
   const attempts = new Map<string, number>();
   const attemptOf = (event: Event) => `${event.model}\u0000${event.scenario}\u0000${event.mode}`;
   for (const line of text.split('\n')) {
@@ -254,28 +273,33 @@ export function readEventLog(text: string): { cells: Cell[]; lines: number; runs
   const cells: Cell[] = [];
   const complete = new Set<string>();
   const totals = new Map<string, number>();
-  const name = (event: { run: string; attempt: number; model?: string; scenario?: string; mode?: string }) =>
-    `${event.run}\u0000${event.attempt}\u0000${event.model}\u0000${event.scenario}\u0000${event.mode}`;
+  // One slot: the model, scenario and mode of one run. The memory probe writes the trap scenes of a slot and the
+  // judge reports them one invocation later, so both are found here and nowhere else.
+  const slot = (event: { run: string; model?: string; scenario?: string; mode?: string }) =>
+    `${event.run}\u0000${event.model}\u0000${event.scenario}\u0000${event.mode}`;
+  const invocation = (event: { run: string; attempt: number; model?: string; scenario?: string; mode?: string }) =>
+    `${slot(event)}\u0000${event.attempt}`;
   const truncations = new Map<string, number>();
   for (const event of events) {
-    if (event.event === 'trap_scene' && event.truncated) truncations.set(name(event), (truncations.get(name(event)) ?? 0) + 1);
+    if (event.event === 'trap_scene' && event.truncated) truncations.set(slot(event), (truncations.get(slot(event)) ?? 0) + 1);
   }
   for (const event of events) {
     if (!event.model || !event.scenario || !event.mode || event.passed === undefined || event.total === undefined) continue;
     const instrument = event.event === 'mode_complete' ? 'memory' as const : event.event === 'judged' ? 'scene' as const : null;
     if (!instrument) continue;
-    if (instrument === 'memory') complete.add(name(event));
+    if (instrument === 'memory') complete.add(slot(event));
     totals.set(`${instrument}\u0000${event.scenario}`, event.total);
     cells.push({ run: event.run, source: 'events', model: event.model, scenario: event.scenario, mode: event.mode,
-      instrument, passed: event.passed, total: event.total, ...(instrument === 'scene' ? { truncated: truncations.get(name(event)) ?? 0 } : {}) });
+      instrument, passed: event.passed, total: event.total, ...(instrument === 'scene' ? { truncated: truncations.get(slot(event)) ?? 0 } : {}) });
   }
   const failed = new Set<string>();
   for (const event of events) {
     if (event.event !== 'deferred_or_failed' || !event.model || !event.scenario || !event.mode) continue;
-    // Within one probe invocation a failure after the mode completed is a retry, not a second cell; a later
-    // invocation of the same model, scenario and mode is its own cell even when no `run_started` separates them.
-    if (complete.has(name(event)) || failed.has(name(event))) continue;
-    failed.add(name(event));
+    // A failure of a slot whose mode completed is a retry of the probe or the judge failing afterwards, not a cell of
+    // its own; a second failing invocation of the same model, scenario and mode is one even when no `run_started`
+    // separates them, which is how two `eval ceiling` runs land in one run id.
+    if (complete.has(slot(event)) || failed.has(invocation(event))) continue;
+    failed.add(invocation(event));
     // The fixture count is not in the log; the count the same scenario reported when it finished is.
     cells.push({ run: event.run, source: 'events', model: event.model, scenario: event.scenario, mode: event.mode,
       instrument: 'memory', passed: 0, total: totals.get(`memory\u0000${event.scenario}`) ?? 0, error: event.code ?? 'probe_failed' });
@@ -357,13 +381,20 @@ export function summarize(input: Cell[], keys: Map<string, KeySet>, options: { s
   // The scores pool a failed cell as 0/N because eval.ts does. The judge rate and the cluster tables say what was
   // seen, so they read observed cells only: the items of a failed summary cell are read back from its failed keys and
   // would otherwise count as the judge answering questions nobody asked, and as every check of the scenario losing a
-  // run.
+  // run. A cell of a retired key stays in, unlike in the scores: its items name the questions that run was really
+  // asked, one row counts one such question and `runs` says how many runs are behind it. What no run was asked never
+  // becomes an item at all — `itemsFromFailed` reconstructs only against a suite of the size the cell was scored on.
   const observed = cells.filter(cell => !broken(cell));
-  // The judge answers yes or no, so a verdict that was not stored is still known: a passed question was answered with
-  // its own expected answer, a failed one with the other. Questions the judge never saw are left out.
+  // The judge answers yes or no, so a verdict a summary did not store is still derivable: a passed question was
+  // answered with its own expected answer, a failed one with the other. That holds only for a question the judge was
+  // asked — scene-judge.ts:38 fails every question of a missing or cut-off scene without a call, and a summary keeps
+  // no trap list to tell those apart — so the rate is the stored answers' own and the derived ones are counted
+  // beside it. A report marks a question the judge never saw with `actual: null`; it is neither.
   const verdicts = observed.filter(cell => cell.instrument === 'scene').flatMap(cell => cell.items ?? []);
-  const answered = verdicts.filter(item => item.actual !== null);
-  const saidYes = answered.filter(item => item.actual === 'yes' || (item.actual === undefined && (item.pass ? item.expected === 'yes' : item.expected === 'no')));
+  const stored = verdicts.filter(item => typeof item.actual === 'string');
+  const derived = verdicts.filter(item => item.actual === undefined);
+  const yesRate = (items: Item[], saidYes: (item: Item) => boolean) =>
+    items.length ? round(items.filter(saidYes).length / items.length) : null;
 
   const clusterTable = (instrument: Instrument, keyOf: (key: string) => string) => {
     const scoped = observed.filter(cell => cell.instrument === instrument && cell.items?.length);
@@ -391,7 +422,8 @@ export function summarize(input: Cell[], keys: Map<string, KeySet>, options: { s
       byScenario: Object.fromEntries(scenarios.map(name => [name, cells.filter(cell => cell.scenario === name).length])) },
     answerKey: balance,
     keyVersions,
-    judge: { verdicts: verdicts.length, answered: answered.length, yesRate: answered.length ? round(saidYes.length / answered.length) : null },
+    judge: { verdicts: verdicts.length, answered: stored.length, yesRate: yesRate(stored, item => item.actual === 'yes'),
+      derived: derived.length, derivedYesRate: yesRate(derived, item => item.pass ? item.expected === 'yes' : item.expected === 'no') },
     scores: Object.fromEntries(instruments.flatMap(instrument => modes.map(mode => [`${instrument}/${mode}`, section(instrument, mode)]))
       .filter(([, value]) => value !== null)),
     clusters: { checks: clusterTable('memory', key => key), traps: clusterTable('scene', key => trapOf.get(key) ?? key),
@@ -427,7 +459,9 @@ if (import.meta.main) {
   const corpus = readCorpus(roots, keys);
   const log = events && existsSync(events) ? readEventLog(readFileSync(events, 'utf8')) : { cells: [], lines: 0, runs: 0 };
   const stats = summarize([...corpus.cells, ...log.cells], keys, { samples, seed });
-  console.log(JSON.stringify({ sources: { roots, reportDirectories: corpus.reports, evalSummaries: corpus.summaries,
+  // The accepted files, not only how many: the default root is shared with every other tool on this machine, and a
+  // reader has to be able to see which run each number came from.
+  console.log(JSON.stringify({ sources: { roots, paths: corpus.paths, reportDirectories: corpus.reports, evalSummaries: corpus.summaries,
     eventLog: events && existsSync(events) ? { lines: log.lines, runs: log.runs } : null,
     fixtures: [...keys.keys()], seed, samples }, ...stats }, null, 2));
 }

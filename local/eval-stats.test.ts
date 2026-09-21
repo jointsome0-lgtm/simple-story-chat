@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { keyBalance, pooled, familyWeighted, clusters, bootstrap, dedupe, readCorpus, readEventLog, summarize } from './eval-stats.ts';
+import { keyBalance, pooled, familyWeighted, clusters, bootstrap, dedupe, onCurrentKey, readCorpus, readEventLog, summarize } from './eval-stats.ts';
 import type { Cell, KeySet } from './eval-stats.ts';
 
 // Two synthetic scenarios, so that the arithmetic can be checked by hand and no fixture of the suite is involved.
@@ -88,12 +88,14 @@ test('one run saved in three places is one cell, not three', () => {
 });
 
 test('a failed cell is pooled into the headline as zero, and the same score without those cells is far higher', t => {
-  const directory = mkdtempSync(join(tmpdir(), 'simple-chat-eval-stats-'));
+  const directory = mkdtempSync(join(tmpdir(), 'simple-chat-stats-test-'));
   // The tool searches the temporary directory by default, so a leftover fixture here would enter a later real run.
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  mkdirSync(join(directory, 'replay'));
+  // The directory names are the ones the two writers create (memory-probe.ts:87, eval.ts:234); no other name is read.
+  const probe = join(directory, 'simple-chat-memory-alpha-1');
+  mkdirSync(probe);
   // The shape memory-probe.ts writes: per-question outcomes, and the verdicts scene-judge.ts wrote back.
-  writeFileSync(join(directory, 'replay', 'report.json'), JSON.stringify({
+  writeFileSync(join(probe, 'report.json'), JSON.stringify({
     scenario: 'alpha', sourceHash: 'x', model: 'M1', startedAt: 'now', scope: 'synthetic',
     modes: { plain: { preemptions: 0, compactions: [], through: 4, completedAt: 'now',
       answers: [['a1', true], ['a2', false], ['a3', true], ['a4', true]].map(([key, pass]) => ({ key, expected: keys.get('alpha')!.memory.get(key as string), actual: '', pass })),
@@ -101,20 +103,28 @@ test('a failed cell is pooled into the headline as zero, and the same score with
       verdicts: [{ key: 't1a', expected: 'yes', actual: 'yes', pass: true }, { key: 't1b', expected: 'yes', actual: 'no', pass: false },
         { key: 't2a', expected: 'no', actual: 'no', pass: true }] } }, completedAt: 'now' }));
   // The shape eval.ts writes: counts and failed keys, without the judge's own answers.
-  mkdirSync(join(directory, 'summary'));
-  writeFileSync(join(directory, 'summary', 'eval.json'), JSON.stringify({ at: 'now', scenarios: ['alpha', 'beta'],
+  mkdirSync(join(directory, 'simple-chat-eval-1'));
+  writeFileSync(join(directory, 'simple-chat-eval-1', 'eval.json'), JSON.stringify({ at: 'now', scenarios: ['alpha', 'beta'],
     models: { M1: { plain: 0.5, cells: {
       alpha: { plain: { passed: 2, total: 4, failedKeys: ['a2', 'a4'], scene: { passed: 1, total: 3, failedKeys: ['t1b', 't2a'] } } },
       beta: { plain: { passed: 0, total: 2, failedKeys: ['b1', 'b2'], error: 'unsupported_server' } } } } } }));
-  // Neither a GPU measurement report nor an unjudged lab batch is a scored cell.
-  mkdirSync(join(directory, 'measurement'));
-  writeFileSync(join(directory, 'measurement', 'report.json'), JSON.stringify({ profile: 'pool-3', cells: [] }));
-  mkdirSync(join(directory, 'replay', 'lab', 'base-1'), { recursive: true });
-  writeFileSync(join(directory, 'replay', 'lab', 'base-1', 'report.json'), JSON.stringify({ scenario: 'alpha', model: 'M1',
-    modes: { plain: { traps: [{ key: 't1', text: '', truncated: false }] } } }));
+  // A GPU measurement report is not a scored cell, and neither is a probe directory whose run wrote no mode.
+  mkdirSync(join(directory, 'measurements-pool-3'));
+  writeFileSync(join(directory, 'measurements-pool-3', 'report.json'), JSON.stringify({ profile: 'pool-3', cells: [] }));
+  mkdirSync(join(directory, 'simple-chat-memory-beta-1'));
+  writeFileSync(join(directory, 'simple-chat-memory-beta-1', 'report.json'), JSON.stringify({ scenario: 'beta',
+    sourceHash: 'x', model: 'M1', startedAt: 'now', scope: 'synthetic', modes: {} }));
+  // memory-probe.ts:149 writes one lab/<variant>-<sample>/report.json per variant and sample of the same trap, in the
+  // shape the judge reads. Judging them is the designed p_flip measurement, and the samples of one trap are not runs
+  // of the suite: judged or not, a lab batch is never read.
+  mkdirSync(join(probe, 'lab', 'base-1'), { recursive: true });
+  writeFileSync(join(probe, 'lab', 'base-1', 'report.json'), JSON.stringify({ scenario: 'alpha', model: 'M1',
+    modes: { plain: { traps: [{ key: 't1', text: '', truncated: false }],
+      verdicts: [{ key: 't1a', expected: 'yes', actual: 'no', pass: false }, { key: 't1b', expected: 'yes', actual: 'no', pass: false }] } } }));
 
   const corpus = readCorpus([directory], keys);
   assert.deepEqual([corpus.reports, corpus.summaries], [1, 1]);
+  assert.deepEqual(corpus.paths.sort(), [join(probe, 'report.json'), join(directory, 'simple-chat-eval-1', 'eval.json')].sort());
   const stats = summarize(corpus.cells, keys, { samples: 200, seed: 1 });
   assert.deepEqual(stats.corpus.bySource, { report: 2, summary: 3, events: 0 });
 
@@ -140,8 +150,8 @@ test('a failed cell is pooled into the headline as zero, and the same score with
   // The key of the suite, not its scores: constant "yes" would take two of the three trap questions.
   assert.deepEqual(stats.answerKey.scene, { keys: 3, byExpected: { yes: 2, no: 1 }, constantYes: 2 / 3, constantNo: 1 / 3, silence: 0, bestConstant: 2 / 3 });
 
-  // A judged question is binary, so the answer is known even where only the failed keys were saved.
-  assert.deepEqual(stats.judge, { verdicts: 6, answered: 6, yesRate: 0.5 });
+  // The judge's own three answers are the rate; the three the summary only allows to be derived are counted apart.
+  assert.deepEqual(stats.judge, { verdicts: 6, answered: 3, yesRate: 0.3333, derived: 3, derivedYesRate: 0.6667 });
   // beta's checks are absent: its only cell failed before the model answered, so b1 and b2 were never asked.
   assert.deepEqual(stats.clusters.checks.table, [
     { key: 'a2', runs: 2, passed: 0, rate: 0, flag: 'never' },
@@ -156,6 +166,27 @@ test('a failed cell is pooled into the headline as zero, and the same score with
   assert.deepEqual([stats.clusters.checks.never, stats.clusters.checks.always, stats.clusters.checks.live], [1, 2, 1]);
 });
 
+test('a report.json another tool left in the temporary directory is not a run of this suite', t => {
+  const directory = mkdtempSync(join(tmpdir(), 'simple-chat-stats-test-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  // The default root is the whole temporary directory, which this machine shares with everything else that runs on
+  // it; a fixture of another tool has the same shape and would move the worst-model headline.
+  const report = JSON.stringify({ scenario: 'alpha', sourceHash: 'x', model: 'STRAY', startedAt: 'now', scope: 'synthetic',
+    completedAt: 'now', modes: { plain: { preemptions: 0, compactions: [], through: 4, completedAt: 'now',
+      answers: [{ key: 'a1', expected: '1', actual: 'no', pass: false }] } } });
+  for (const name of ['versus-1', 'lab-2']) { mkdirSync(join(directory, name)); writeFileSync(join(directory, name, 'report.json'), report); }
+  mkdirSync(join(directory, 'kept'));
+  writeFileSync(join(directory, 'kept', 'eval.json'), JSON.stringify({ at: 'now',
+    models: { STRAY: { cells: { alpha: { plain: { passed: 0, total: 4, failedKeys: [] } } } } } }));
+  assert.deepEqual(readCorpus([directory], keys), { cells: [], reports: 0, summaries: 0, paths: [] });
+  // The two writers name the directory they create, and what they wrote is read and named in the output.
+  mkdirSync(join(directory, 'simple-chat-memory-alpha-9'));
+  writeFileSync(join(directory, 'simple-chat-memory-alpha-9', 'report.json'), report);
+  const corpus = readCorpus([directory], keys);
+  assert.deepEqual([corpus.reports, corpus.summaries, corpus.paths],
+    [1, 0, [join(directory, 'simple-chat-memory-alpha-9', 'report.json')]]);
+});
+
 test('a cell that failed before the model answered is pooled into the score and left out of everything else', () => {
   const keyed = (instrument: 'memory' | 'scene') => [...keys.get('alpha')![instrument]].map(([key, expected]) => ({ key, pass: false, expected }));
   // What eval.ts writes when the provider refused the key: no model and no judge was reached, and every question of
@@ -167,7 +198,7 @@ test('a cell that failed before the model answered is pooled into the score and 
   assert.deepEqual([stats.scores['memory/plain']!.all.pooled, stats.scores['memory/plain']!.failures.cells], [0, 1]);
   assert.equal(stats.scores['memory/plain']!.withoutFailures.pooled, null);
   // The judge never answered, and no check or trap lost a run it was asked.
-  assert.deepEqual(stats.judge, { verdicts: 0, answered: 0, yesRate: null });
+  assert.deepEqual(stats.judge, { verdicts: 0, answered: 0, yesRate: null, derived: 0, derivedYesRate: null });
   assert.deepEqual([stats.clusters.checks.table, stats.clusters.traps.table, stats.clusters.checks.never], [[], [], 0]);
 });
 
@@ -192,12 +223,64 @@ test('cells of a retired answer key are kept out of the score the baseline is pr
   assert.equal(packed.scores['memory/plain']!.headline.baselineBestConstant, null);
 });
 
+test('a saved run is read with the number of questions it was asked, not with today\'s', t => {
+  const directory = mkdtempSync(join(tmpdir(), 'simple-chat-stats-test-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  // alpha holds four checks and three trap questions today. This directory was kept from a day when it had two and
+  // one, and the model and the judge answered every one of them: a perfect run, not a run that lost the rest.
+  const probe = join(directory, 'simple-chat-memory-alpha-7');
+  mkdirSync(probe);
+  writeFileSync(join(probe, 'report.json'), JSON.stringify({ scenario: 'alpha', sourceHash: 'x', model: 'OLD',
+    startedAt: 'now', scope: 'synthetic', completedAt: 'now', modes: { plain: { preemptions: 0, compactions: [], through: 2,
+      completedAt: 'now', answers: [{ key: 'a1', expected: '1', actual: '1', pass: true }, { key: 'a2', expected: '2', actual: '2', pass: true }],
+      traps: [{ key: 't1', text: '', truncated: false }],
+      verdicts: [{ key: 't1a', expected: 'yes', actual: 'yes', pass: true }] } } }));
+  // A mode that answered nothing is the 0/N cell eval.ts:139 pools, and there N is the fixture of today.
+  mkdirSync(join(directory, 'simple-chat-memory-beta-7'));
+  writeFileSync(join(directory, 'simple-chat-memory-beta-7', 'report.json'), JSON.stringify({ scenario: 'beta',
+    sourceHash: 'x', model: 'OLD', startedAt: 'now', scope: 'synthetic',
+    modes: { plain: { preemptions: 0, compactions: [], through: 0, error: 'unauthorized' } } }));
+  const { cells } = readCorpus([directory], keys);
+  assert.deepEqual(cells.map(one => [one.scenario, one.instrument, one.passed, one.total, onCurrentKey(one, keys)]),
+    [['alpha', 'memory', 2, 2, false], ['alpha', 'scene', 1, 1, false], ['beta', 'memory', 0, 2, true]]);
+  const stats = summarize(cells, keys, { samples: 50, seed: 1 });
+  // Both alpha cells belong to a retired suite, which the section and the key versions say rather than hide.
+  assert.deepEqual(stats.keyVersions['memory/alpha'], { current: 4, cellsByTotal: { 2: 1 } });
+  assert.deepEqual(stats.scores['memory/plain']!.offKey, { cells: 1, noFixture: 0, modelsWithoutCurrentKey: [] });
+  assert.deepEqual([stats.scores['memory/plain']!.onCurrentKey.cells, stats.scores['scene/plain']!.onCurrentKey.cells], [1, 0]);
+  assert.equal(stats.scores['scene/plain']!.all.pooled, 1);
+});
+
+test('a summary written against a suite of another size invents no answer and no cluster row', t => {
+  const directory = mkdtempSync(join(tmpdir(), 'simple-chat-stats-test-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  // A summary keeps the failed keys, not the asked ones, so its items are read back from the fixture — which is the
+  // same suite only when it is the same size. alpha had two checks and two trap questions on the day of this run.
+  mkdirSync(join(directory, 'simple-chat-eval-7'));
+  writeFileSync(join(directory, 'simple-chat-eval-7', 'eval.json'), JSON.stringify({ at: 'now', models: { OLD: { cells: {
+    alpha: { plain: { passed: 1, total: 2, failedKeys: ['a2'], scene: { passed: 1, total: 2, failedKeys: ['t1b'] } } } } } } }));
+  const stats = summarize(readCorpus([directory], keys).cells, keys, { samples: 50, seed: 1 });
+  // The counts are still the cell's own; a3, a4 and t2a were never asked and are not answers of that run.
+  assert.deepEqual([stats.corpus.cells, stats.corpus.withItems], [2, 0]);
+  assert.deepEqual(stats.judge, { verdicts: 0, answered: 0, yesRate: null, derived: 0, derivedYesRate: null });
+  assert.deepEqual([stats.clusters.checks.table, stats.clusters.questions.table, stats.clusters.traps.table], [[], [], []]);
+  assert.deepEqual([stats.scores['memory/plain']!.all.passed, stats.scores['scene/plain']!.offKey.cells], [1, 1]);
+});
+
 test('a question the judge never saw is not an answer of the judge', () => {
   const cells = [cell({ instrument: 'scene', passed: 1, total: 3, items: [
     { key: 't1a', expected: 'yes', actual: 'yes', pass: true },
     { key: 't1b', expected: 'yes', actual: null, pass: false },
     { key: 't2a', expected: 'no', actual: null, pass: false }] })];
-  assert.deepEqual(summarize(cells, keys, { samples: 50, seed: 1 }).judge, { verdicts: 3, answered: 1, yesRate: 1 });
+  assert.deepEqual(summarize(cells, keys, { samples: 50, seed: 1 }).judge,
+    { verdicts: 3, answered: 1, yesRate: 1, derived: 0, derivedYesRate: null });
+  // The same run saved as a summary keeps no trap list, so scene-judge.ts:38 failing t1b and t2a without a call
+  // cannot be told from a judge that answered them: those two are derived, and the rate is not theirs.
+  const summary = [cell({ source: 'summary', instrument: 'scene', passed: 1, total: 3, items: [
+    { key: 't1a', expected: 'yes', pass: true }, { key: 't1b', expected: 'yes', pass: false },
+    { key: 't2a', expected: 'no', pass: false }] })];
+  assert.deepEqual(summarize(summary, keys, { samples: 50, seed: 1 }).judge,
+    { verdicts: 3, answered: 0, yesRate: null, derived: 3, derivedYesRate: 0.6667 });
 });
 
 test('the event log keeps the cells of a run after the temporary directories are gone', () => {
@@ -246,4 +329,35 @@ test('two probe invocations of one scenario are two cells even when no run_start
   const { cells } = readEventLog(log);
   assert.deepEqual(cells.filter(one => one.mode === 'full').map(one => [one.error, one.passed, one.total]),
     [['rate_limited', 0, 4], ['server_error', 0, 4]]);
+});
+
+test('the memory probe and the judge of one cell are two invocations of one slot', () => {
+  // What `eval --judge` writes for one model, scenario and mode: memory-probe.ts:131 opens with `started`, writes the
+  // trap scenes and completes the mode, and eval.ts:147 then runs scene-judge.ts under the same tags, which opens
+  // with a `started` of its own (scene-judge.ts:32). The scenes belong to the cell the judge reports.
+  const log = [
+    { event: 'run_started', models: ['M1'], scenarios: ['alpha'] },
+    { event: 'started', model: 'M1', scenario: 'alpha', mode: 'plain' },
+    { event: 'trap_scene', model: 'M1', scenario: 'alpha', mode: 'plain', truncated: true },
+    { event: 'trap_scene', model: 'M1', scenario: 'alpha', mode: 'plain', truncated: false },
+    { event: 'mode_complete', model: 'M1', scenario: 'alpha', mode: 'plain', passed: 4, total: 4 },
+    { event: 'started', model: 'M1', scenario: 'alpha', mode: 'plain' },
+    { event: 'judged', model: 'M1', scenario: 'alpha', mode: 'plain', passed: 2, total: 3 },
+    // The same sequence in sgr, where the judge failed after the mode had completed. That is a judged cell nobody
+    // judged, not a memory cell of 0/4: counting it would lower the headline and report a failure that never happened.
+    { event: 'started', model: 'M1', scenario: 'alpha', mode: 'sgr' },
+    { event: 'mode_complete', model: 'M1', scenario: 'alpha', mode: 'sgr', passed: 3, total: 4 },
+    { event: 'started', model: 'M1', scenario: 'alpha', mode: 'sgr' },
+    { event: 'trap_judged', model: 'M1', scenario: 'alpha', mode: 'sgr' },
+    { event: 'deferred_or_failed', model: 'M1', scenario: 'alpha', mode: 'sgr', code: 'rate_limited' },
+  ].map(line => JSON.stringify(line)).join('\n');
+  const { cells } = readEventLog(log);
+  assert.deepEqual(cells.map(one => [one.mode, one.instrument, one.passed, one.total, one.truncated, one.error]), [
+    ['plain', 'memory', 4, 4, undefined, undefined],
+    ['plain', 'scene', 2, 3, 1, undefined],
+    ['sgr', 'memory', 3, 4, undefined, undefined],
+  ]);
+  const stats = summarize(cells, keys, { samples: 50, seed: 1 });
+  assert.deepEqual([stats.scores['memory/plain']!.all.pooled, stats.scores['memory/plain']!.failures.cells], [1, 0]);
+  assert.equal(stats.scores['scene/plain']!.failures.truncatedScenes, 1);
 });
