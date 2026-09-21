@@ -70,21 +70,25 @@ fetch_pid=$!
 # clone and the build behind it for the five minutes it took.
 draft_path="$gpu_dir/models/$DRAFT_FILE"
 # The here-document inside ends at the start of a line, so its own body stays unindented.
+# A file already in place is checked like a fresh one, as the weights are: a file left by an earlier attempt is not
+# evidence of its content, and threshold 6 is a claim about these weights.
 fetch_draft() {
-  curl --fail --location --silent --show-error --retry 2 --continue-at - \
-    "https://huggingface.co/$DRAFT_REPO/resolve/$DRAFT_REVISION/$DRAFT_FILE" -o "$draft_path.part"
+  if [[ ! -f "$draft_path" ]]; then
+    curl --fail --location --silent --show-error --retry 2 --continue-at - \
+      "https://huggingface.co/$DRAFT_REPO/resolve/$DRAFT_REVISION/$DRAFT_FILE" -o "$draft_path.part"
+  fi
   python3 - "$draft_path" "$DRAFT_SHA256" "$DRAFT_BYTES" <<'PY'
 import hashlib,pathlib,sys
-target=pathlib.Path(sys.argv[1]); current=pathlib.Path(str(target)+'.part')
+target=pathlib.Path(sys.argv[1]); current=target if target.exists() else pathlib.Path(str(target)+'.part')
 if current.stat().st_size != int(sys.argv[3]): current.unlink(); raise SystemExit('Draft model size mismatch.')
 with current.open('rb') as f: digest=hashlib.file_digest(f,'sha256').hexdigest()
 if digest != sys.argv[2]: current.unlink(); raise SystemExit('Draft model SHA256 mismatch.')
-current.rename(target)
+if current != target: current.rename(target)
 print('Draft model SHA256 verified.')
 PY
 }
 draft_pid=''
-if [[ "${SIMPLE_CHAT_GPU_DRAFT:-false}" = true && ! -f "$draft_path" ]]; then
+if [[ "${SIMPLE_CHAT_GPU_DRAFT:-false}" = true ]]; then
   fetch_draft &
   draft_pid=$!
 fi
