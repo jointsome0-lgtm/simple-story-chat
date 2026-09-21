@@ -9,8 +9,10 @@
 // Modes over a saved memory-probe directory, so the two instruments can be compared on identical scenes. The card file
 // carries the memory mode in its name, because one directory holds plain and sgr side by side as report.json does:
 //   --report dir --mode plain           extract for the same trap scenes the old judge saw, write extraction-plain.json
-//   --report dir --mode plain --resume  keep the cards already paid for, ask only for the scenes still missing
-//   --report dir --mode plain --offline regrade an existing extraction-plain.json; no judge call, no cost
+//   --report dir --mode plain --resume  keep the cards already paid for, ask only for the scenes still missing; the
+//                                       judge of the saved file has to be the judge of this run
+//   --report dir --mode plain --offline regrade an existing extraction-plain.json; no judge call, no cost, and the
+//                                       file keeps the judge, the time and the `complete` of the run that paid
 //   --labels file.json                  add the agreement report against hand labels (both instruments, same slots)
 // The judge is the provider of the environment, as it is for scene-judge.ts — but local/eval.ts:81-84 spawns that one
 // with an explicit SIMPLE_CHAT_PROVIDER/SIMPLE_CHAT_MODEL pair and an empty cwd, so it never reads a .env. Run this
@@ -209,17 +211,29 @@ export function constantBaseline(scenes: { item: Item; scene: string }[]): Basel
 // scored against it. That is the gate: extraction has to agree with the human more often than yes/no does.
 export type Agreement = { labelled: number; statusAgreed: number; extractorCorrect: number; judgeCompared: number; judgeCorrect: number;
   disagreements: { trap: string; slot: string; human: Status; extracted: Status | null; humanVerdict: boolean; extractorVerdict: boolean; judgeVerdict: boolean | null }[] };
+// Which slot of the key a label names, and whether it carries everything that slot asks of it. Neither question needs
+// a judge, so `checkLabels` asks both of them once before the first call is paid for.
+function labelSlot(keys: Keys, label: Label): { item: Item; slot: Slot } {
+  const item = keys.items.find(one => one.key === label.trap);
+  const slot = label.slot ? item?.slots.find(one => one.key === label.slot) : item?.slots.length === 1 ? item.slots[0] : undefined;
+  if (!item || !slot) throw Object.assign(new Error(), { code: 'unknown_label' });
+  if ((slot.expect.actor && label.actor === undefined) || (slot.expect.object && label.object === undefined)
+    || (slot.expect.number !== undefined && label.number === undefined)) throw Object.assign(new Error(), { code: 'incomplete_label' });
+  return { item, slot };
+}
+// A typo in a label file is worth no judge calls: the agreement is built inside the save after every scene, so this
+// same walk running there for the first time would throw away the card that run had just paid for.
+export function checkLabels(keys: Keys, labels: Label[], run: string): void {
+  for (const label of labels) if (label.scene === run) labelSlot(keys, label);
+}
+
 export function agreementReport(keys: Keys, results: ItemResult[], labels: Label[], run: string,
   verdicts: Verdict[]): Agreement {
   const report: Agreement = { labelled: 0, statusAgreed: 0, extractorCorrect: 0, judgeCompared: 0, judgeCorrect: 0, disagreements: [] };
   for (const label of labels) {
     if (label.scene !== run) continue;
-    const item = keys.items.find(one => one.key === label.trap);
-    const slot = label.slot ? item?.slots.find(one => one.key === label.slot) : item?.slots.length === 1 ? item.slots[0] : undefined;
-    if (!item || !slot) throw Object.assign(new Error(), { code: 'unknown_label' });
+    const { item, slot } = labelSlot(keys, label);
     const extracted = results.find(one => one.key === item.key)?.slots.find(one => one.key === slot.key) ?? null;
-    if ((slot.expect.actor && label.actor === undefined) || (slot.expect.object && label.object === undefined)
-      || (slot.expect.number !== undefined && label.number === undefined)) throw Object.assign(new Error(), { code: 'incomplete_label' });
     // Both sides are compared on the claim: status, actor, object and number. The quote is the extractor's own guard —
     // the human was not asked for one — so it stays out of this number and is reported per item instead.
     const humanVerdict = gradeSlot(slot, { key: slot.key, status: label.status, actor: label.actor ?? '',
@@ -310,7 +324,12 @@ export type ExtractReport = {
   // `complete` is false while the run is still going and after it failed: the file is written after every scene, so a
   // failure on the eleventh card of twelve keeps the ten already paid for, and --resume asks only for what is missing.
   complete: boolean;
-  items: ItemResult[]; passed: number; total: number; pairs: PairScore; versus: Versus;
+  items: ItemResult[];
+  // `passed`/`total` count the slots the judge was asked about and nothing else. A trap missing from report.json, a
+  // truncated scene and, offline, a card nobody paid for are the `asked - scored` items instead of failures, as
+  // docs/eval-experiments-plan.md:216 (S6) requires of every denominator. `total` is then `baseline.slots`, so the
+  // score and the constant it has to beat are rates over the same questions.
+  passed: number; total: number; scored: number; asked: number; pairs: PairScore; versus: Versus;
   // What a constant answerer scores on the same slots and scenes. A score at or below it is not a measurement.
   baseline: Baseline; agreement?: Agreement;
   // Kept so --offline can grade the same cards again after a key or a tolerance changed, without a judge call.
@@ -337,29 +356,42 @@ export async function runExtraction(options: RunOptions): Promise<ExtractReport>
   const result = saved.modes[mode as 'plain'];
   if (!result?.traps) throw Object.assign(new Error(), { code: 'no_scenes' });
   const cards = join(directory, cardFile(mode));
-  // Offline always reads the cards; a resumed run reads them to skip what it already paid for.
-  const read = (): Record<string, Extraction[]> => {
-    try { return (JSON.parse(readFileSync(cards, 'utf8')) as ExtractReport).extractions; }
+  // Offline always reads the saved file; a resumed run reads it to skip what it already paid for.
+  const read = (): ExtractReport | null => {
+    try { return JSON.parse(readFileSync(cards, 'utf8')) as ExtractReport; }
     // Resuming a directory that holds no cards yet is an ordinary first run; regrading one offline is not.
-    catch (error) { if (provider && (error as NodeJS.ErrnoException).code === 'ENOENT') return {}; throw error; }
+    catch (error) { if (provider && (error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error; }
   };
-  const previous: Record<string, Extraction[]> = provider && !options.resume ? {} : read();
+  const before = provider && !options.resume ? null : read();
+  // A card is the answer of the judge that was paid for it. Resuming under another one would merge two judges'
+  // answers into a single `extractions` map labelled with the second, the mismatch memory-probe.ts:92 refuses.
+  if (provider && before && before.model !== options.model) throw Object.assign(new Error(), { code: 'resume_mismatch' });
+  // Offline changes the grade, not the cards: who answered them, when, and whether the set is finished belong to the
+  // run that made the calls. A free regrade that stamped its own name on them would erase the only record of it.
+  const paid = provider ? null : before;
+  const previous: Record<string, Extraction[]> = before?.extractions ?? {};
   const extractions: Record<string, Extraction[]> = {};
   const items: ItemResult[] = [];
   const scenes: { item: Item; scene: string }[] = [];
   const verdicts = result.verdicts ?? [];
-  const build = (complete: boolean): ExtractReport => ({ scenario: saved.scenario, mode, run, model: options.model,
-    writer: saved.model, at: new Date().toISOString(), complete,
-    items, passed: items.reduce((sum, item) => sum + item.slots.filter(slot => slot.pass).length, 0),
-    total: items.reduce((sum, item) => sum + item.slots.length, 0), pairs: scorePairs(items),
-    versus: versusYesNo(keys, items, verdicts), baseline: constantBaseline(scenes),
-    ...(options.labels ? { agreement: agreementReport(keys, items, options.labels, run, verdicts) } : {}),
-    extractions: { ...previous, ...extractions } });
+  const build = (complete: boolean): ExtractReport => {
+    const counted = items.filter(item => item.scored);
+    return { scenario: saved.scenario, mode, run, model: paid?.model ?? options.model, writer: saved.model,
+      at: paid?.at ?? new Date().toISOString(), complete: paid?.complete ?? complete,
+      items, passed: counted.reduce((sum, item) => sum + item.slots.filter(slot => slot.pass).length, 0),
+      total: counted.reduce((sum, item) => sum + item.slots.length, 0), scored: counted.length, asked: items.length,
+      pairs: scorePairs(items), versus: versusYesNo(keys, items, verdicts), baseline: constantBaseline(scenes),
+      ...(options.labels ? { agreement: agreementReport(keys, items, options.labels, run, verdicts) } : {}),
+      extractions: { ...previous, ...extractions } };
+  };
   const save = (complete: boolean) => {
     const report = build(complete);
     writeFileSync(cards, JSON.stringify(report, null, 2));
     return report;
   };
+  // Before the first call, because `save` builds the agreement and a label file that names a trap of no key would
+  // otherwise throw inside the save that was to keep the card just paid for.
+  if (options.labels) checkLabels(keys, options.labels, run);
   for (const item of keys.items) {
     const scene = result.traps.find(written => written.key === item.key);
     if (!scene || scene.truncated) { items.push(gradeItem(item, [], '', false)); continue; }
@@ -418,6 +450,12 @@ export function readKeys(value: unknown): Keys {
       && (i.pairId === undefined || i.slots!.filter(s => ((s as Slot).role ?? 'target') === 'target').length === 1);
   };
   if (!data || !text(data.scenario, 40) || !list(data.items, item)) throw new Error('Invalid key file');
+  // A pairId names one trap and one twin. `scorePairs` takes one side of each, so a repeated id — the shape a pack
+  // that writes several traps against one twin would reach for — drops the rest from the rate and from `unpaired`
+  // alike, and the headline would be counted over fewer traps than the file holds, with nothing saying so.
+  const sides = new Map<string, string[]>();
+  for (const one of data.items as Item[]) if (one.pairId) sides.set(one.pairId, [...sides.get(one.pairId) ?? [], one.side!]);
+  for (const pair of sides.values()) if (pair.length !== 2 || new Set(pair).size !== 2) throw new Error('Invalid key file');
   return data as Keys;
 }
 
@@ -480,8 +518,11 @@ async function main(args: string[]) {
   try {
     const report = await runExtraction({ directory, mode: values.mode, keys, inputs, model: config?.model ?? 'offline',
       provider: config ? createModel(config) : null, run: values.run, labels, resume: values.resume, signal: deadline, log: progress });
-    progress({ event: 'extracted', mode: values.mode, passed: report.passed, total: report.total, versus: report.versus,
-      baseline: report.baseline.best, pairs: report.pairs.rates,
+    // Every rate with its own denominator: `passed` of `total` slots over `scored` of `asked` scenes, and the
+    // constant answerer's score over the slots it was counted on, which are the same ones.
+    progress({ event: 'extracted', mode: values.mode, passed: report.passed, total: report.total,
+      scored: report.scored, asked: report.asked, versus: report.versus,
+      baseline: { ...report.baseline.best, slots: report.baseline.slots }, pairs: report.pairs.rates,
       agreement: report.agreement && { ...report.agreement, disagreements: report.agreement.disagreements.length }, directory });
   } catch (error) {
     const failure = error as Failure;

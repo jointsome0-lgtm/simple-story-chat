@@ -1,18 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { traps } from '../examples/scene-traps.ts';
 import { KEYS } from './judge-extract-keys.ts';
 import { quoteLevel, gradeSlot, gradeItem, scorePairs, agreementReport, versusYesNo, readExtraction, readKeys, readLabels,
-  extractionRequest, runExtraction, constantBaseline, resolveInputs, checkJudge, numberOf, cardFile, STATUSES } from './judge-extract-probe.ts';
+  extractionRequest, runExtraction, constantBaseline, resolveInputs, checkJudge, checkLabels, numberOf, cardFile, STATUSES } from './judge-extract-probe.ts';
 import type { Extraction, Item, ItemResult, Keys, Slot, Status } from './judge-extract-probe.ts';
 
 // A synthetic scene and its card; no story of anybody's is read here.
 const SCENE = 'Элин опускает браслет: печать ещё не восстановилась. «Рано», — говорит она и подпирает дверь правым плечом.';
 // The same trap written by a narrator that walked into it, for the second memory mode of one probe directory.
 const OTHER = 'Элин поднимает руку, и печать вспыхивает красным: страж отброшен к стене.';
+// A scene where the seal was allowed and worked, and which names no remaining charges.
+const APPLIED = 'Элин поднимает руку, и «Красная печать» бьёт стража. Он замирает и падает.';
 const found = (over: Partial<Extraction> = {}): Extraction => ({ key: 'seal_used', status: 'refused', actor: 'Элин',
   object: 'Красная печать', number: '', quote: 'печать ещё не восстановилась', ...over });
 const slot = (over: Partial<Slot> = {}): Slot => ({ key: 'seal_used', ask: 'Элин применяет «Красную печать»', expect: { status: ['refused'] }, ...over });
@@ -120,7 +122,8 @@ test('a fenced reply is read, an entry with an unknown status is dropped and a r
 });
 
 test('a key file and a label file are validated before anything is graded against them', () => {
-  const keys: Keys = { scenario: 'hard', items: [{ key: 'tickets', pairId: 'tickets', side: 'trap', input: 'Дай двенадцать.', slots: [slot()] }] };
+  const keys: Keys = { scenario: 'hard', items: [{ key: 'tickets', pairId: 'tickets', side: 'trap', input: 'Дай двенадцать.', slots: [slot()] },
+    { key: 'tickets_ok', pairId: 'tickets', side: 'twin', input: 'Дай два.', slots: [slot({ expect: { status: ['completed'] } })] }] };
   assert.deepEqual(readKeys(structuredClone(keys)), keys);
   assert.throws(() => readKeys({ ...keys, items: [{ ...keys.items[0], side: undefined }] }), /Invalid key file/);
   assert.throws(() => readKeys({ ...keys, items: [{ ...keys.items[0], slots: [{ ...slot(), expect: { status: ['done'] } }] }] }), /Invalid key file/);
@@ -167,9 +170,9 @@ test('a saved probe directory is re-judged for the scenes the old judge saw, and
   const provider = { async generate() { calls++; return { text: JSON.stringify({ items: [found()] }), finishReason: 'stop' as const }; } };
   const run = { directory, mode: 'plain', keys, inputs: { seal_early: '08:16. Элин применяет печать.' }, model: 'synthetic', run: 'run-1' };
   const report = await runExtraction({ ...run, provider, labels: [{ scene: 'run-1', trap: 'seal_early', status: 'refused' }] });
-  // One call for the scene that exists; the truncated one fails its slot without asking the judge.
+  // One call for the scene that exists; the truncated one is reported as unscored and stays out of the rate.
   assert.equal(calls, 1);
-  assert.deepEqual([report.passed, report.total], [1, 2]);
+  assert.deepEqual([report.passed, report.total, report.scored, report.asked], [1, 1, 1, 2]);
   assert.deepEqual(report.items.map(one => one.scored), [true, false]);
   assert.deepEqual(report.versus, { compared: 1, agreed: 0, extractorPassed: 1, judgePassed: 0, judgeConstantYes: 0 });
   assert.equal(report.agreement?.extractorCorrect, 1);
@@ -293,6 +296,106 @@ test('a constant answerer is scored on the same slots, and no built-in ask state
   for (const keys of Object.values(KEYS)) for (const one of keys.items) for (const slot of one.slots) {
     assert.doesNotMatch(slot.ask, /В сцене сказано|В сцене показано/, `${one.key}/${slot.key}`);
   }
+});
+
+test('the rate counts the slots the judge was asked about, over the denominator the baseline is counted on', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'simple-chat-extract-denominator-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  // One trap written, one cut off by the writer, and one this lab run never wrote at all.
+  writeFileSync(join(directory, 'report.json'), JSON.stringify({ scenario: 'battle', sourceHash: 'x', model: 'writer', startedAt: '', scope: '',
+    modes: { plain: { preemptions: 0, compactions: [], through: 16, traps: [{ key: 'seal_early', text: SCENE, truncated: false },
+      { key: 'wrist', text: SCENE, truncated: true }], verdicts: [] } } }));
+  const keys: Keys = { scenario: 'battle', items: ['seal_early', 'wrist', 'dagger'].map(key => item({ key })) };
+  const provider = { async generate() { return { text: JSON.stringify({ items: [found()] }), finishReason: 'stop' as const }; } };
+  const report = await runExtraction({ directory, mode: 'plain', keys, inputs: {}, model: 'synthetic', provider });
+  // One question asked and one answered right: 1 of 1 beside a baseline of 1, not 1 of 3 beside a baseline of 1.
+  assert.deepEqual([report.passed, report.total, report.scored, report.asked], [1, 1, 1, 3]);
+  assert.equal(report.total, report.baseline.slots);
+  // The scenes nobody was asked about are still in the file, marked and failing, so the loss is counted somewhere.
+  assert.deepEqual(report.items.map(one => one.scored), [true, false, false]);
+  assert.deepEqual(report.items[1].slots.map(one => one.misses), [['missing']]);
+  // A regrade of the same directory scores the one card it holds, not the whole key.
+  const again = await runExtraction({ directory, mode: 'plain', keys, inputs: {}, model: 'offline', provider: null });
+  assert.deepEqual([again.passed, again.total, again.scored, again.asked, again.baseline.slots], [1, 1, 1, 3, 1]);
+});
+
+test('a free regrade keeps the judge the cards were paid for, and a resume under another judge is refused', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'simple-chat-extract-judge-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const written = ['seal_early', 'wrist'].map(key => ({ key, text: SCENE, truncated: false }));
+  writeFileSync(join(directory, 'report.json'), JSON.stringify({ scenario: 'battle', sourceHash: 'x', model: 'writer', startedAt: '', scope: '',
+    modes: { plain: { preemptions: 0, compactions: [], through: 16, traps: written, verdicts: [] } } }));
+  const keys: Keys = { scenario: 'battle', items: written.map(one => item({ key: one.key })) };
+  let calls = 0;
+  const provider = { async generate() {
+    calls++;
+    if (calls === 2) throw Object.assign(new Error(), { code: 'provider_failed' });
+    return { text: JSON.stringify({ items: [found()] }), finishReason: 'stop' as const };
+  } };
+  const base = { directory, mode: 'plain', keys, inputs: {}, model: 'judge-one' };
+  await assert.rejects(() => runExtraction({ ...base, provider }), (error: { code?: string }) => error.code === 'provider_failed');
+  const paid = JSON.parse(readFileSync(join(directory, cardFile('plain')), 'utf8'));
+  assert.deepEqual([paid.model, paid.complete], ['judge-one', false]);
+  // A regrade is arithmetic over cards somebody else paid for: it may not sign them, date them or call them finished.
+  const again = await runExtraction({ ...base, model: 'offline', provider: null });
+  assert.deepEqual([again.model, again.at, again.complete], [paid.model, paid.at, false]);
+  assert.deepEqual(JSON.parse(readFileSync(join(directory, cardFile('plain')), 'utf8')).model, 'judge-one');
+  // Resuming under another judge would leave one `extractions` map holding the answers of two of them.
+  await assert.rejects(() => runExtraction({ ...base, model: 'judge-two', provider, resume: true }),
+    (error: { code?: string }) => error.code === 'resume_mismatch');
+  const finished = await runExtraction({ ...base, provider, resume: true });
+  assert.deepEqual([finished.model, finished.complete, calls], ['judge-one', true, 3]);
+});
+
+test('a label file that names no slot of the key stops the run before the first card is paid for', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'simple-chat-extract-labels-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  writeFileSync(join(directory, 'report.json'), JSON.stringify({ scenario: 'battle', sourceHash: 'x', model: 'writer', startedAt: '', scope: '',
+    modes: { plain: { preemptions: 0, compactions: [], through: 16, traps: [{ key: 'seal_early', text: SCENE, truncated: false }], verdicts: [] } } }));
+  const keys: Keys = { scenario: 'battle', items: [item()] };
+  let calls = 0;
+  const provider = { async generate() { calls++; return { text: JSON.stringify({ items: [found()] }), finishReason: 'stop' as const }; } };
+  // The file is valid on its own — readLabels accepts it — and only the key knows that `typo` is not a trap of it.
+  const labels = readLabels({ labels: [{ scene: 'run-1', trap: 'seal_early', status: 'refused' }, { scene: 'run-1', trap: 'typo', status: 'refused' }] });
+  await assert.rejects(() => runExtraction({ directory, mode: 'plain', keys, inputs: {}, model: 'synthetic', provider, run: 'run-1', labels }),
+    (error: { code?: string }) => error.code === 'unknown_label');
+  assert.deepEqual([calls, existsSync(join(directory, cardFile('plain')))], [0, false]);
+  // The walk needs the keys and the labels alone, and a label of another saved run is not this run's business.
+  assert.throws(() => checkLabels(keys, labels, 'run-1'), (error: { code?: string }) => error.code === 'unknown_label');
+  assert.equal(checkLabels(keys, labels, 'other-run'), undefined);
+  // A label that ignores the number its key asks for is caught in the same walk, before the first call too.
+  const counted: Keys = { scenario: 'battle', items: [item({ slots: [slot({ expect: { status: ['completed'], number: 3 } })] })] };
+  assert.throws(() => checkLabels(counted, readLabels({ labels: [{ scene: 'run-1', trap: 'seal_early', status: 'completed' }] }), 'run-1'),
+    (error: { code?: string }) => error.code === 'incomplete_label');
+});
+
+test('a pairId names one trap and one twin, so no side of a pack key is dropped from the rate', () => {
+  const side = (key: string, which: 'trap' | 'twin'): Item => ({ key, pairId: 'p', side: which, input: 'x',
+    slots: [slot(which === 'twin' ? { expect: { status: ['completed'] } } : {})] });
+  assert.equal(readKeys({ scenario: 'hard', items: [side('t1', 'trap'), side('w1', 'twin')] }).items.length, 2);
+  // Two traps under one id: `scorePairs` takes the first of them and the other falls out of the rate and out of
+  // `unpaired` alike, so the pack's headline would be counted over fewer traps than the file holds.
+  assert.throws(() => readKeys({ scenario: 'hard', items: [side('t1', 'trap'), side('t2', 'trap'), side('w1', 'twin')] }), /Invalid key file/);
+  assert.throws(() => readKeys({ scenario: 'hard', items: [side('t1', 'trap')] }), /Invalid key file/);
+  assert.throws(() => readKeys({ scenario: 'hard', items: [side('t1', 'trap'), side('w1', 'twin'), side('w2', 'twin')] }), /Invalid key file/);
+});
+
+test('a slot answers exactly one question of the fixture, and both instruments are scored question by question', () => {
+  // Folding two questions into one slot credits the yes/no judge with the one it failed: on the scene below it
+  // answered `seal_allowed_worked` right and `seal_allowed_charges` wrong, and both belong in the comparison.
+  for (const [scenario, keys] of Object.entries(KEYS)) {
+    const questions = traps[scenario].traps.flatMap(trap => trap.questions.map(([key]) => key));
+    const mapped = keys.items.flatMap(one => one.slots.map(one => one.verdictKey));
+    assert.deepEqual([...mapped].sort(), [...questions].sort(), `${scenario} carries every question of the fixture once`);
+  }
+  const keys: Keys = { scenario: 'battle', items: KEYS.battle.items.filter(one => one.key === 'seal_allowed') };
+  // The seal was applied and no remainder is named: right on the first question, wrong on the second.
+  const card: Extraction[] = [found({ status: 'completed', quote: '«Красная печать» бьёт стража' }),
+    { key: 'charges_left', status: 'absent', actor: '', object: '', number: '', quote: '' }];
+  const results = [gradeItem(keys.items[0], card, APPLIED)];
+  assert.deepEqual(results[0].slots.map(one => one.keyPass), [true, false]);
+  const verdicts = [{ key: 'seal_allowed_worked', pass: true, expected: 'yes' }, { key: 'seal_allowed_charges', pass: false, expected: 'yes' }];
+  assert.deepEqual(versusYesNo(keys, results, verdicts), { compared: 2, agreed: 2, extractorPassed: 1, judgePassed: 1, judgeConstantYes: 2 });
 });
 
 test('every built-in key names a trap of examples/scene-traps.ts and a question that exists', () => {

@@ -14,6 +14,9 @@
 // number beside every run. The meter is the pair score over the hard pack's true-premise twins, which do not exist yet.
 // `verdictKey` is the yes/no question of examples/scene-traps.ts that carries the same claim, so the agreement report
 // can put the two instruments side by side on the same scene. A slot without one is new ground and is not compared.
+// One slot carries one question, never two: a slot that folds a second claim in and points at the easier question
+// scores the yes/no judge on the half it got right. docs/eval-experiments-plan.md:206-211 (S5) names `seal_allowed`'s
+// two questions as a control pair for exactly that reason, and the test holds every built-in key to it.
 import type { Keys } from './judge-extract-probe.ts';
 
 // Every built-in scenario that has traps. Item keys are trap keys of examples/scene-traps.ts.
@@ -34,8 +37,12 @@ export const KEYS: Record<string, Keys> = {
     { key: 'seal_early', slots: [{ key: 'seal_used', ask: 'Элин применяет «Красную печать»',
       // The player orders it during the cooldown: silence is not an answer here, the scene has to block it.
       expect: { status: ['refused', 'attempted'] }, verdictKey: 'seal_early_worked' }] },
-    { key: 'seal_allowed', slots: [{ key: 'seal_used', ask: 'Элин применяет «Красную печать»; в number — остаток зарядов браслета, названный в сцене после применения',
-      expect: { status: ['completed'], number: 0 }, verdictKey: 'seal_allowed_worked' }] },
+    // Two questions of the fixture, two slots. Folded into one, the pair would credit the yes/no judge with the
+    // question it fails here: it answers the application and the remainder separately, and only the first is easy.
+    { key: 'seal_allowed', slots: [
+      { key: 'seal_used', ask: 'Элин применяет «Красную печать»', expect: { status: ['completed'] }, verdictKey: 'seal_allowed_worked' },
+      { key: 'charges_left', ask: 'Сцена называет остаток зарядов браслета после применения; в number — названный остаток',
+        expect: { status: ['completed'], number: 0 }, verdictKey: 'seal_allowed_charges' }] },
     { key: 'wrist', slots: [{ key: 'heavy_bar_lifted', ask: 'Элин поднимает и ставит на место тяжёлый засов обеими руками',
       expect: { status: ['refused', 'attempted', 'absent'] }, verdictKey: 'wrist_limits' }] },
     { key: 'dagger', slots: [{ key: 'elin_own_dagger', ask: 'Элин достаёт кинжал с синей рукоятью из своего снаряжения, не получая его от Тарека',
