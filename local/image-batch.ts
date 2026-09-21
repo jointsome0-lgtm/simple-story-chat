@@ -1,0 +1,398 @@
+// Draws the assembled prompts of local/illustrate-probe.ts on a rented card and prepares blind review bundles.
+// It talks to one ComfyUI server over its HTTP API through an ssh tunnel on loopback: POST /prompt, poll /history,
+// GET /view. Two rules come from docs/illustrations-plan.md and AGENTS.md and are not options:
+//   - a picture is derived from somebody's scene, so every PNG we keep is rewritten without its text chunks. ComfyUI
+//     puts the whole prompt and workflow into tEXt/iTXt/zTXt, and the server's /history keeps every job until it is
+//     cleared. What this harness can reach it clears; what it cannot is named at `drawOne` and must be wiped with
+//     the card.
+//   - a review bundle never names the checkpoint that drew a picture; the key stays on our side of the bundle.
+// The prompts of the frozen synthetic stories are the only input; no reader's story is drawn here.
+import { parseArgs } from 'node:util';
+import { fileURLToPath } from 'node:url';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, copyFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
+import { setTimeout as delay } from 'node:timers/promises';
+import { join, resolve } from 'node:path';
+import type { Case } from './illustrate-probe.ts';
+
+// A checkpoint's place in the comparison. The bot logs this role, never the file name (local/model-error.ts).
+export type Role = 'primary' | 'alternate';
+export type Cell = { caseId: string; checkpoint: string; role: Role; seed: number };
+// Per-device video memory, as the server reports it while the picture is drawn.
+export type Vram = { index: number; totalMiB: number; usedMiBMax: number };
+export type Picture = Cell & {
+  steps: number; sampler: string; scheduler: string; width: number; height: number;
+  // The seconds the rental asks for: submit to file. `viewMs` is the download through the tunnel, apart from the card.
+  totalMs: number; viewMs: number; vram: Vram[]; bytes: number; sha256: string; file: string;
+};
+export type BatchIndex = {
+  startedAt: string; completedAt?: string; comfy: { steps: number; sampler: string; scheduler: string; cfg: number; width: number; height: number };
+  pictures: Picture[]; failures: { caseId: string; role: Role; code: string }[]; error?: string;
+};
+export type Graph = Record<string, { class_type: string; inputs: Record<string, unknown> }>;
+
+const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
+// Everything an image needs to be decoded, and nothing that carries text. Colour-management chunks (gAMA, sRGB,
+// iCCP) go too: a viewer's default is a smaller loss than a chunk nobody audited.
+const KEPT_CHUNKS = ['IHDR', 'PLTE', 'tRNS', 'IDAT', 'IEND'];
+
+// Rewrites a PNG with only the chunks above. Chunks are copied byte for byte, so their CRCs stay valid.
+export function stripPngMetadata(bytes: Uint8Array): Uint8Array {
+  if (bytes.length < 8 || PNG_SIGNATURE.some((byte, index) => bytes[index] !== byte)) throw new Error('not_a_png');
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const kept: Uint8Array[] = [bytes.subarray(0, 8)];
+  let at = 8;
+  while (at + 8 <= bytes.length) {
+    const length = view.getUint32(at);
+    const type = String.fromCharCode(...bytes.subarray(at + 4, at + 8));
+    const end = at + 12 + length;
+    if (end > bytes.length) throw new Error('truncated_png');
+    if (KEPT_CHUNKS.includes(type)) kept.push(bytes.subarray(at, end));
+    at = end;
+    if (type === 'IEND') break;
+  }
+  if (kept.length < 3) throw new Error('not_a_png');
+  return Buffer.concat(kept);
+}
+
+// The plain workflow the plan asks for: no LoRA, no upscaler, so a weak picture means a weak prompt. A pinned
+// workflow exported from the card's own ComfyUI can replace it with --workflow — and then node 7 is that
+// workflow's business, see the note on `PreviewImage` below.
+export function defaultWorkflow(): Graph {
+  return {
+    '1': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'checkpoint.safetensors' } },
+    '2': { class_type: 'CLIPTextEncode', inputs: { text: '', clip: ['1', 1] } },
+    '3': { class_type: 'CLIPTextEncode', inputs: { text: '', clip: ['1', 1] } },
+    '4': { class_type: 'EmptyLatentImage', inputs: { width: 1344, height: 768, batch_size: 1 } },
+    '5': { class_type: 'KSampler', inputs: { seed: 0, steps: 8, cfg: 1, sampler_name: 'er_sde', scheduler: 'simple',
+      denoise: 1, model: ['1', 0], positive: ['2', 0], negative: ['3', 0], latent_image: ['4', 0] } },
+    '6': { class_type: 'VAEDecode', inputs: { samples: ['5', 0], vae: ['1', 2] } },
+    // Not SaveImage. Whatever node writes the file writes ComfyUI's prompt and workflow into its text chunks, and
+    // nothing in the HTTP API deletes a file afterwards; SaveImage would leave that copy in the server's permanent
+    // output directory. PreviewImage writes the same picture to the temp directory the server empties at startup,
+    // and /view serves it the same way, from the type the history entry reports.
+    '7': { class_type: 'PreviewImage', inputs: { images: ['6', 0] } },
+  };
+}
+
+export type WorkflowValues = {
+  checkpoint: string; prompt: string; negative: string; seed: number; steps: number;
+  sampler: string; scheduler: string; width: number; height: number; cfg: number;
+};
+// Fills a graph by the role of each node rather than by its id, so a workflow pinned on the card keeps working as
+// long as it samples, loads a checkpoint and encodes text. It throws rather than draw with the wrong seed or prompt.
+export function applyToWorkflow(graph: Graph, values: WorkflowValues): Graph {
+  const filled: Graph = JSON.parse(JSON.stringify(graph));
+  const nodes = Object.entries(filled);
+  const seedKey = (inputs: Record<string, unknown>) => ('seed' in inputs ? 'seed' : 'noise_seed' in inputs ? 'noise_seed' : null);
+  const sampler = nodes.find(([, node]) => seedKey(node.inputs) && 'steps' in node.inputs);
+  const loader = nodes.find(([, node]) => 'ckpt_name' in node.inputs || 'unet_name' in node.inputs);
+  if (!sampler || !loader) throw new Error('workflow_needs_a_sampler_and_a_checkpoint_loader');
+  const inputs = sampler[1].inputs;
+  inputs[seedKey(inputs)!] = values.seed;
+  inputs.steps = values.steps;
+  if ('sampler_name' in inputs) inputs.sampler_name = values.sampler;
+  if ('scheduler' in inputs) inputs.scheduler = values.scheduler;
+  if ('cfg' in inputs) inputs.cfg = values.cfg;
+  loader[1].inputs['ckpt_name' in loader[1].inputs ? 'ckpt_name' : 'unet_name'] = values.checkpoint;
+  // The positive text is the node the sampler takes its positive conditioning from; the negative one, if any, the other.
+  const linked = (key: string) => {
+    const link = inputs[key];
+    const id = Array.isArray(link) ? String(link[0]) : null;
+    return id && filled[id] && 'text' in filled[id].inputs ? filled[id] : null;
+  };
+  const positive = linked('positive');
+  if (!positive) throw new Error('workflow_needs_a_positive_prompt');
+  positive.inputs.text = values.prompt;
+  const negative = linked('negative');
+  if (negative) negative.inputs.text = values.negative;
+  for (const [, node] of nodes) {
+    if ('width' in node.inputs && 'height' in node.inputs) { node.inputs.width = values.width; node.inputs.height = values.height; }
+  }
+  return filled;
+}
+
+type Comfy = { baseUrl: string; timeoutMs: number };
+type HistoryEntry = { status?: { completed?: boolean; status_str?: string }; outputs?: Record<string, { images?: { filename: string; subfolder: string; type: string }[] }> };
+
+const call = async (comfy: Comfy, path: string, init?: RequestInit) => {
+  const response = await fetch(comfy.baseUrl + path, { ...init, signal: AbortSignal.timeout(comfy.timeoutMs) });
+  if (!response.ok) throw Object.assign(new Error('comfy_http_error'), { code: 'comfy_http_error', httpStatus: response.status });
+  return response;
+};
+
+// Used video memory per device, if this server reports it. A ComfyUI without the fields is not an error: the rental
+// reads the card directly as well (local/gpu-diagnose.ts).
+async function readVram(comfy: Comfy): Promise<{ index: number; totalMiB: number; usedMiBMax: number }[]> {
+  try {
+    const stats = await (await call(comfy, '/system_stats')).json() as { devices?: { index?: number; vram_total?: number; vram_free?: number }[] };
+    return (stats.devices ?? []).flatMap((device, order) => {
+      if (typeof device.vram_total !== 'number' || typeof device.vram_free !== 'number') return [];
+      const mib = (bytes: number) => Math.round(bytes / 1024 / 1024);
+      return [{ index: device.index ?? order, totalMiB: mib(device.vram_total), usedMiBMax: mib(device.vram_total - device.vram_free) }];
+    });
+  } catch { return []; }
+}
+
+const mergeVram = (into: Vram[], seen: Vram[]) => {
+  for (const device of seen) {
+    const known = into.find(one => one.index === device.index);
+    if (known) known.usedMiBMax = Math.max(known.usedMiBMax, device.usedMiBMax);
+    else into.push({ ...device });
+  }
+};
+
+// One picture: submit, poll until the server has it, download it, forget the job. The elapsed time is measured from
+// the submit, which is what the reader waits for; never from a timestamp in the server's own reply.
+export async function drawOne(comfy: Comfy, graph: Graph, options: { pollMs?: number; waitMs?: number } = {}) {
+  const pollMs = options.pollMs ?? 500;
+  const started = performance.now();
+  const submitted = await (await call(comfy, '/prompt', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ prompt: graph }) })).json() as { prompt_id?: string; error?: unknown };
+  const promptId = submitted.prompt_id;
+  if (!promptId) throw Object.assign(new Error('comfy_rejected_prompt'), { code: 'comfy_rejected_prompt' });
+  const vram: Vram[] = [];
+  try {
+    const deadline = started + (options.waitMs ?? 600000);
+    let entry: HistoryEntry | undefined;
+    for (let poll = 0; ; poll++) {
+      const seen = await (await call(comfy, `/history/${promptId}`)).json() as Record<string, HistoryEntry>;
+      entry = seen[promptId];
+      if (entry?.status?.completed || entry?.status?.status_str === 'error') break;
+      if (performance.now() > deadline) throw Object.assign(new Error('image_timeout'), { code: 'image_timeout' });
+      // Video memory is sampled while the card works, not after it has freed the weights.
+      if (poll % 4 === 0) mergeVram(vram, await readVram(comfy));
+      await delay(pollMs);
+    }
+    const image = Object.values(entry.outputs ?? {}).flatMap(output => output.images ?? [])[0];
+    if (!image || entry.status?.status_str === 'error') throw Object.assign(new Error('image_failed'), { code: 'image_failed' });
+    const viewStarted = performance.now();
+    const query = new URLSearchParams({ filename: image.filename, subfolder: image.subfolder ?? '', type: image.type ?? 'output' });
+    const bytes = new Uint8Array(await (await call(comfy, `/view?${query}`)).arrayBuffer());
+    const viewMs = Math.round(performance.now() - viewStarted);
+    mergeVram(vram, await readVram(comfy));
+    return { bytes: stripPngMetadata(bytes), totalMs: Math.round(performance.now() - started), viewMs, vram };
+  } finally {
+    // The server keeps the prompt, the workflow and the outputs of every job it has run until history is cleared.
+    // This clears the job record, and that is all it can clear: the file the saving node wrote stays in ComfyUI's
+    // own directory, with its text chunks, and the API has no route that deletes it. The picture on our disk is
+    // stripped; the card's copy goes when the card does, which is why only synthetic scenes are drawn on a rental.
+    await call(comfy, '/history', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ delete: [promptId] }) }).catch(() => undefined);
+  }
+}
+
+export type DrawOptions = {
+  prompts: string; out: string; comfy: string; checkpoints: string[]; seeds: number[];
+  steps: number; sampler: string; scheduler: string; cfg: number; width: number; height: number;
+  negative: string; minutes: number; timeoutMs: number; pollMs?: number; workflow?: string;
+  log?: (event: object) => void;
+};
+
+// A checkpoint name and a case id both become one path component and nothing else: they name a file on our disk, and
+// the checkpoint name arrives from the command line, the case id from a JSON file. The extension stays part of the
+// name: fp8 and GGUF builds of one checkpoint are published under the same stem, and dropping it made two of them
+// share a path (below, `fileOf`, where a shared path would be read as "already drawn").
+const safeName = (value: string) => value.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 60);
+const fileOf = (cell: Cell) => join('pictures', safeName(cell.checkpoint), `${safeName(cell.caseId)}-s${cell.seed}.png`);
+
+// Seeds as the command line writes them. An empty part is dropped rather than read as seed 0: `Number('')` is 0, so
+// one trailing comma would add a whole extra pass over every case, paid for in rented card time.
+export function parseSeeds(value: string): number[] {
+  const seeds = value.split(',').map(part => part.trim()).filter(Boolean).map(Number);
+  return seeds.every(seed => Number.isInteger(seed) && seed >= 0) && seeds.length ? seeds : [];
+}
+
+// Checkpoint-major order: a switch reloads the whole checkpoint, and an early stop then leaves whole comparable
+// blocks rather than a little of each.
+export function cells(cases: Case[], checkpoints: string[], seeds: number[]): Cell[] {
+  return checkpoints.flatMap((checkpoint, order) => seeds.flatMap(seed =>
+    cases.map(one => ({ caseId: one.id, checkpoint, role: (order === 0 ? 'primary' : 'alternate') as Role, seed }))));
+}
+
+export async function draw(options: DrawOptions): Promise<BatchIndex> {
+  const log = options.log ?? (() => undefined);
+  const comfy: Comfy = { baseUrl: options.comfy, timeoutMs: options.timeoutMs };
+  const cases: Case[] = JSON.parse(readFileSync(join(resolve(options.prompts), 'prompts.json'), 'utf8'));
+  if (!cases.length) throw new Error('No assembled prompts to draw');
+  const directory = resolve(options.out);
+  mkdirSync(join(directory, 'pictures'), { recursive: true, mode: 0o700 });
+  // The bundles are built from this copy, so a review directory needs nothing but the run directory.
+  copyFileSync(join(resolve(options.prompts), 'prompts.json'), join(directory, 'prompts.json'));
+  const indexPath = join(directory, 'index.json');
+  const index: BatchIndex = existsSync(indexPath) ? JSON.parse(readFileSync(indexPath, 'utf8'))
+    : { startedAt: new Date().toISOString(), comfy: { steps: options.steps, sampler: options.sampler, scheduler: options.scheduler,
+      cfg: options.cfg, width: options.width, height: options.height }, pictures: [], failures: [] };
+  const save = () => writeFileSync(indexPath, JSON.stringify(index, null, 2));
+  const graph: Graph = options.workflow ? JSON.parse(readFileSync(resolve(options.workflow), 'utf8')) : defaultWorkflow();
+  const deadline = performance.now() + options.minutes * 60000;
+
+  // Two cells that would write one file are a comparison of a checkpoint with itself: the second is read as already
+  // drawn, skipped, and recorded nowhere. Repeated checkpoints or seeds, and names that collide once `safeName` has
+  // folded or truncated them, all land here — before anything is drawn, not after the card has been paid for.
+  const plan = cells(cases, options.checkpoints, options.seeds);
+  const paths = plan.map(fileOf);
+  if (new Set(paths).size !== paths.length) throw new Error('Two cells would share one file: give distinct checkpoints and seeds');
+
+  for (const cell of plan) {
+    const file = fileOf(cell);
+    // Resumable: a cell already drawn into this directory is left alone, so a lost session restarts where it stopped.
+    if (index.pictures.some(picture => picture.file === file) && existsSync(join(directory, file))) continue;
+    if (performance.now() > deadline) { log({ event: 'budget_spent', drawn: index.pictures.length }); break; }
+    const one = cases.find(entry => entry.id === cell.caseId)!;
+    try {
+      const filled = applyToWorkflow(graph, { checkpoint: cell.checkpoint, prompt: one.prompt, negative: options.negative,
+        seed: cell.seed, steps: options.steps, sampler: options.sampler, scheduler: options.scheduler,
+        width: options.width, height: options.height, cfg: options.cfg });
+      const drawn = await drawOne(comfy, filled, { pollMs: options.pollMs, waitMs: options.timeoutMs });
+      mkdirSync(join(directory, 'pictures', safeName(cell.checkpoint)), { recursive: true, mode: 0o700 });
+      writeFileSync(join(directory, file), drawn.bytes, { mode: 0o600 });
+      const picture: Picture = { ...cell, steps: options.steps, sampler: options.sampler, scheduler: options.scheduler,
+        width: options.width, height: options.height, totalMs: drawn.totalMs, viewMs: drawn.viewMs, vram: drawn.vram,
+        bytes: drawn.bytes.length, sha256: createHash('sha256').update(drawn.bytes).digest('hex'), file };
+      index.pictures.push(picture);
+      save();
+      log({ event: 'picture_drawn', caseId: cell.caseId, role: cell.role, totalMs: picture.totalMs, viewMs: picture.viewMs,
+        vramUsedMiBMax: Math.max(0, ...drawn.vram.map(device => device.usedMiBMax)) });
+    } catch (error) {
+      const code = String((error as { code?: string }).code ?? '');
+      index.failures.push({ caseId: cell.caseId, role: cell.role, code: /^[a-z_]{1,50}$/.test(code) ? code : 'image_failed' });
+      save();
+      log({ event: 'picture_failed', caseId: cell.caseId, role: cell.role, code: index.failures.at(-1)!.code });
+    }
+  }
+  index.completedAt = new Date().toISOString();
+  save();
+  return index;
+}
+
+// One judging session's material. The picture names carry nothing: which checkpoint drew which is in the key file,
+// which stays outside the bundle.
+export type Bundle = { name: string; pictures: { picture: string; source: Picture }[] };
+
+// Pictures are ordered by their own hash, so neither the drawing order nor the checkpoint shows in the naming, and
+// then dealt round robin, so every session sees a mix of checkpoints. The same index always gives the same bundles.
+export function bundlesOf(pictures: Picture[], count: number): Bundle[] {
+  const ordered = [...pictures].sort((a, b) => a.sha256.localeCompare(b.sha256));
+  const bundles: Bundle[] = Array.from({ length: count }, (unused, order) => ({ name: `bundle-${order + 1}`, pictures: [] }));
+  ordered.forEach((picture, order) => bundles[order % count].pictures.push({ picture: '', source: picture }));
+  for (const bundle of bundles) {
+    bundle.pictures.forEach((entry, order) => { entry.picture = `pic-${String(order + 1).padStart(2, '0')}.png`; });
+  }
+  return bundles.filter(bundle => bundle.pictures.length);
+}
+
+// Modelled on the task the fifth reading session was given (docs/illustrations-plan.md, step 6), widened from three
+// pictures to a bundle: the question is a rate of rejection, and contradiction is counted apart from omission.
+export function taskMarkdown(count: number): string {
+  return `Ты оцениваешь сгенерированные иллюстрации, их здесь ${count}. Весь материал здесь синтетический, читай и смотри его свободно. Песочница только для чтения: ничего не записывай. Весь отчёт дай последним сообщением, по-русски. Первой строкой отчёта — точное название модели, которой ты работаешь.
+
+Контекст. Телеграм-бот пишет ветвящиеся истории по-русски. После того как сцена написана, второй вызов модели описывает по-английски один кадр этой сцены отдельными полями, а программа собирает из них запрос к модели картинок: план, место, момент, каждый человек (постоянная строка внешности из листа персонажей истории, затем состояние, затем действие), предметы, свет, одно предложение о стиле. Имена до модели картинок не доходят. Про модель картинок известно, что она рисует, кто в кадре, где, в какой позе и с чем в руках, и не справляется с точными контактами, с тем, чья это рука, и с содержимым экранов. Поэтому описывающий вызов выбирает кадр, который на это не опирается: люди и место сразу до или сразу после действия, не больше четырёх человек, позы на уровне тела. Читатель получает сначала текст сцены, а под ним картинку. Вопрос в том, годятся ли такие картинки как иллюстрации.
+
+Материал в этом каталоге:
+- PNG-файлы с нейтральными именами \`pic-NN.png\`, числом ${count}; какой моделью нарисован каждый, тебе не сообщают, и угадывать это по картинке не надо;
+- \`cases.json\`: для каждой картинки русский текст сцены (\`scene_text_ru\`), \`character_sheet\`, структурное описание и \`prompt_sent\` — ровно тот текст, который получила модель картинок.
+
+По каждой картинке отдельно:
+1. Против \`prompt_sent\`: каждый названный элемент и каждое отношение — выполнено / не выполнено, несколько слов там, где не выполнено. Итоги числами.
+2. Против текста сцены: противоречит ли что-нибудь на картинке сцене (не та сторона травмы, открытая дверь там, где её держат закрытой, не то число щитов, человек делает чужое действие, не то место)? Пропуск — не противоречие: перечисли пропуски отдельно и скажи, важен ли каждый для читателя. Для каждого противоречия: вина описания или вина модели картинок.
+3. Дефекты изображения: руки, лица, лишние конечности, анатомия, перспектива, слипшиеся предметы, случайный текст.
+4. Хорошо ли описание выбрало кадр? Узнаётся ли момент как именно эта сцена, а не любая сцена этой истории? Если в тексте сцены есть кадр лучше и его можно нарисовать, назови его.
+
+По всем вместе:
+5. Держится ли один стиль? Там, где несколько картинок делят персонажа с одинаковой строкой внешности, узнаётся ли он как один и тот же человек?
+6. Что ты изменил бы в инструкции описывающей модели или в сборке запроса. Точные формулировки.
+7. По одной строке на картинку: принял бы читатель, только что прочитавший эту сцену, картинку под ней как иллюстрацию? да / с оговорками / нет, и одна главная причина.
+
+Будь конкретен и критичен, ничьи чувства от этого не зависят. Не смягчай находки и не выдумывай дефектов, на которые не можешь показать.
+`;
+}
+
+// Writes the bundles and their keys. The bundles go under `review/`, which holds nothing else: a session handed one
+// bundle is blind, and so is a session handed the whole of `review/` by a hand that mounted one directory too high.
+// The run directory itself is not blind — `pictures/` is named by checkpoint and `keys/` is the answer sheet — and
+// it stays on our side.
+export const REVIEW = 'review';
+export function buildBundles(directory: string, count: number, log: (event: object) => void = () => undefined) {
+  const root = resolve(directory);
+  const index: BatchIndex = JSON.parse(readFileSync(join(root, 'index.json'), 'utf8'));
+  const cases: Case[] = JSON.parse(readFileSync(join(root, 'prompts.json'), 'utf8'));
+  const bundles = bundlesOf(index.pictures, count);
+  mkdirSync(join(root, 'keys'), { recursive: true, mode: 0o700 });
+  for (const bundle of bundles) {
+    const folder = join(root, REVIEW, bundle.name);
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
+    const material = bundle.pictures.map(entry => {
+      const one = cases.find(candidate => candidate.id === entry.source.caseId)!;
+      copyFileSync(join(root, entry.source.file), join(folder, entry.picture));
+      return { picture: entry.picture, scene_text_ru: one.scene, character_sheet: one.sheet, description: one.description, prompt_sent: one.prompt };
+    });
+    writeFileSync(join(folder, 'cases.json'), JSON.stringify(material, null, 2), { mode: 0o600 });
+    writeFileSync(join(folder, 'TASK.md'), taskMarkdown(material.length), { mode: 0o600 });
+    writeFileSync(join(root, 'keys', `${bundle.name}.json`), JSON.stringify(bundle.pictures.map(entry => ({
+      picture: entry.picture, caseId: entry.source.caseId, checkpoint: entry.source.checkpoint, role: entry.source.role,
+      seed: entry.source.seed, file: entry.source.file, sha256: entry.source.sha256 })), null, 2), { mode: 0o600 });
+    log({ event: 'bundle_written', bundle: bundle.name, pictures: material.length });
+  }
+  return bundles;
+}
+
+// The server is reached through an ssh tunnel; it is never published, so only a loopback root is accepted.
+function comfyUrl(value: string): string {
+  let url;
+  try { url = new URL(value); } catch { throw new Error('Set --comfy to the tunnelled ComfyUI root, such as http://127.0.0.1:8188'); }
+  if (url.protocol !== 'http:' || !['127.0.0.1', '[::1]', 'localhost'].includes(url.hostname) || url.pathname !== '/' || url.search || url.username) {
+    throw new Error('--comfy must be a loopback HTTP root: the ComfyUI server is tunnelled, not published');
+  }
+  return url.origin;
+}
+
+const report = (value: object) => console.log(JSON.stringify(value)); // counts, ids and codes only, never a prompt
+
+async function main(args: string[]) {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
+    prompts: { type: 'string' }, out: { type: 'string' }, comfy: { type: 'string', default: 'http://127.0.0.1:8188' },
+    checkpoints: { type: 'string' }, seeds: { type: 'string', default: '7' }, steps: { type: 'string', default: '8' },
+    sampler: { type: 'string', default: 'er_sde' }, scheduler: { type: 'string', default: 'simple' },
+    cfg: { type: 'string', default: '1' }, size: { type: 'string', default: '1344x768' }, negative: { type: 'string', default: '' },
+    minutes: { type: 'string', default: '30' }, timeout: { type: 'string', default: '180' }, workflow: { type: 'string' },
+    bundles: { type: 'string', default: '3' },
+  } });
+  const command = positionals[0] ?? 'draw';
+  // A picture is the reader's scene in another form, so both defaults sit under the directory .gitignore keeps for
+  // story data, and they chain: local/illustrate-probe.ts writes illustrations/prompts, this reads it.
+  const root = resolve(import.meta.dirname, '..');
+  const directory = values.out ? resolve(values.out) : join(root, 'illustrations', 'pictures');
+  const prompts = values.prompts ? resolve(values.prompts) : join(root, 'illustrations', 'prompts');
+  const bundles = Number(values.bundles);
+  if (!['draw', 'bundles'].includes(command) || !Number.isInteger(bundles) || bundles < 1 || bundles > 12) {
+    throw new Error('Use: draw --checkpoints a.safetensors,b.safetensors [--prompts directory] [--out directory] [--seeds 7] [--steps 8] [--sampler er_sde] [--scheduler simple] [--size 1344x768] [--cfg 1] [--minutes 30] [--timeout 180] [--workflow file.json] [--comfy http://127.0.0.1:8188]; or: bundles [--out directory] [--bundles 3]');
+  }
+  if (command === 'bundles') { buildBundles(directory, bundles, report); return; }
+  const [width, height] = (values.size ?? '').split('x').map(Number);
+  const seeds = parseSeeds(values.seeds ?? '');
+  const checkpoints = (values.checkpoints ?? '').split(',').map(name => name.trim()).filter(Boolean);
+  const numbers = { steps: Number(values.steps), cfg: Number(values.cfg), minutes: Number(values.minutes), timeout: Number(values.timeout) };
+  if (!checkpoints.length || checkpoints.length > 6
+    || !seeds.every(seed => seed <= Number.MAX_SAFE_INTEGER) || !seeds.length
+    || ![width, height].every(size => Number.isInteger(size) && size >= 256 && size <= 4096)
+    || !Number.isInteger(numbers.steps) || numbers.steps < 1 || numbers.steps > 100
+    || !Number.isFinite(numbers.cfg) || numbers.cfg < 0 || numbers.cfg > 30
+    || !Number.isInteger(numbers.minutes) || numbers.minutes < 1 || numbers.minutes > 240
+    || !Number.isInteger(numbers.timeout) || numbers.timeout < 10 || numbers.timeout > 1800
+    || !/^[a-z0-9_]{1,40}$/.test(values.sampler ?? '') || !/^[a-z0-9_]{1,40}$/.test(values.scheduler ?? '')) {
+    throw new Error('Invalid batch options');
+  }
+  const index = await draw({ prompts, out: directory, comfy: comfyUrl(values.comfy!),
+    checkpoints, seeds, steps: numbers.steps, sampler: values.sampler!, scheduler: values.scheduler!, cfg: numbers.cfg,
+    width, height, negative: values.negative ?? '', minutes: numbers.minutes, timeoutMs: numbers.timeout * 1000,
+    workflow: values.workflow, log: report });
+  report({ event: 'batch_written', directory, drawn: index.pictures.length, failed: index.failures.length });
+  if (index.failures.length) process.exitCode = 1;
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  process.umask(0o077);
+  await main(process.argv.slice(2));
+}

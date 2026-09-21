@@ -12,6 +12,9 @@ const ACTORS = ['owner', 'other', 'agent'] as const;
 const STAGES = ['queued', 'extracting', 'validating', 'saving', 'done', 'failed', 'cancelled'] as const;
 // Calls of the agent interface, for its log rows.
 const AGENT_CALLS = ['create_seed', 'start_story', 'act', 'fork'] as const;
+// Which checkpoint drew a picture, by its place in the comparison (local/image-batch.ts). The file name of a
+// community checkpoint is not an enum and does not belong in a log row.
+const IMAGE_ROLES = ['primary', 'alternate'] as const;
 // Sizes, counts and durations. Each is kept only as a non-negative safe integer, so none can carry text.
 const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'repairSceneCount', 'requestBytes',
   'inputBytesBefore', 'inputBytesAfter', 'outputCharacters', 'inputTokens', 'outputTokens', 'elapsedMs',
@@ -21,7 +24,12 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   'waitMs', 'countMs', 'cacheTokens', 'promptTokens', 'promptMs', 'predictedTokens', 'predictedMs', 'draftTokens',
   'draftAcceptedTokens', 'slot',
   // Which run of local/prepare.ts a row belongs to, counted from the start of the process.
-  'prepareRun'] as const;
+  'prepareRun',
+  // One illustrated scene (docs/illustrations-plan.md): the description call, then the image server from submit to
+  // file, and what the reader waits from the end of the scene to the picture. The seed stays out: it is drawn from
+  // 0..2^64-1 and is not a safe integer, and so do the prompt, the description and the file name, which are the
+  // reader's scene in another form.
+  'describeMs', 'imageQueueMs', 'imageMs', 'imageSteps', 'pictureAfterSceneMs'] as const;
 
 export type ErrorDetails = {
   httpStatus?: number; phase?: typeof PHASES[number]; operation?: typeof OPERATIONS[number];
@@ -29,6 +37,8 @@ export type ErrorDetails = {
   exitCode?: number; signal?: typeof SIGNALS[number]; sshReason?: typeof SSH_REASONS[number];
   // Whose request a bot log row belongs to. Only the owner allowed reading the owner's own stories for debugging.
   actor?: typeof ACTORS[number]; automatic?: boolean; agentCall?: typeof AGENT_CALLS[number]; stage?: typeof STAGES[number];
+  // A picture: which checkpoint drew it, and whether the reader's next message ended it before it arrived.
+  imageRole?: typeof IMAGE_ROLES[number]; cancelled?: boolean;
 } & { [Key in typeof COUNTS[number]]?: number };
 export type Log = (event: string, code?: string | number, details?: unknown) => void;
 
@@ -56,6 +66,8 @@ export function safeErrorDetails(value: unknown = {}): ErrorDetails {
   if (typeof input?.automatic === 'boolean') result.automatic = input.automatic;
   if (member(AGENT_CALLS, input?.agentCall)) result.agentCall = input.agentCall;
   if (member(STAGES, input?.stage)) result.stage = input.stage;
+  if (member(IMAGE_ROLES, input?.imageRole)) result.imageRole = input.imageRole;
+  if (typeof input?.cancelled === 'boolean') result.cancelled = input.cancelled;
   for (const key of COUNTS) {
     const count = input?.[key];
     if (typeof count === 'number' && Number.isSafeInteger(count) && count >= 0) result[key] = count;

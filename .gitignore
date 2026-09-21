@@ -10,6 +10,9 @@ handlers/_configure.js
 
 # Private stories, exports, backups and diagnostic output
 data/
+# A description and a picture are made from the text of somebody's scene, so they are story data. Both default
+# here: illustrations/prompts (local/illustrate-probe.ts) and illustrations/pictures (local/image-batch.ts).
+illustrations/
 seeds/
 stories/
 exports/

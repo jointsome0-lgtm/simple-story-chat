@@ -27,3 +27,11 @@ test('bot log rows may name the actor class and carry sizes and counts, never an
   assert.deepEqual(safeErrorDetails({ actor: '1', automatic: 'PRIVATE', userId: '1', factCount: 'PRIVATE', requestBytes: -1, elapsedMs: 1.5,
     inputTokens: null, outputCharacters: Number.MAX_SAFE_INTEGER + 1 }), {});
 });
+
+test('an illustrated scene logs its durations and the checkpoint role, never the seed, the prompt or the file', () => {
+  assert.deepEqual(safeErrorDetails({ imageRole: 'alternate', cancelled: true, describeMs: 6200, imageQueueMs: 40,
+    imageMs: 9500, imageSteps: 8, pictureAfterSceneMs: 16000 }),
+  { imageRole: 'alternate', cancelled: true, describeMs: 6200, imageQueueMs: 40, imageMs: 9500, imageSteps: 8, pictureAfterSceneMs: 16000 });
+  assert.deepEqual(safeErrorDetails({ imageRole: 'kreamania-fp8.safetensors', cancelled: 'PRIVATE',
+    imageSeed: 12157665459056928801, prompt: 'PRIVATE_PROMPT', file: 'PRIVATE_PATH', imageMs: -1 }), {});
+});
