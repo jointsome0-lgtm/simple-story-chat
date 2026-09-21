@@ -140,7 +140,7 @@ the general `/api/v1/models` list omits image models, which are under `/api/v1/i
 and one reference image. The open weights are `krea/Krea-2-Turbo` and `krea/Krea-2-Raw`: a 26.3 GB transformer in
 bf16, an 8.9 GB text encoder and a 0.5 GB VAE [M, HuggingFace file sizes], 35.7 GB together, so a 32 GB card needs
 fp8 or the encoder offloaded. Which hosted name the open weights correspond to is not known. Their licence is
-`krea-2-community-license` and has not been read.
+`krea-2-community-license`, read below.
 
 **On price the owner was right and the first estimate here was wrong.** A second card at $0.52/h pays for itself
 against `medium` from 17 pictures an hour and against `medium-turbo` from 35 [D]; one active reader with a picture
@@ -220,6 +220,24 @@ and the place just before or after the action — and code refuses frames that d
 this is the model or its distilled 8-step variant: the same three prompts through `krea-2-large` cost $0.18, and
 on a rented card `Krea-2-Raw` can be set against `Krea-2-Turbo`.
 
+## Step 5, the larger hosted model, 2026-09-21
+
+The three hand-written prompts of step 4 and the same seed through `krea-2-large`: $0.06 and 27–31 s a picture
+[M], against $0.015 and about 10 s for `medium-turbo`. A fourth clean-context GPT-6 session got both sets as
+models A and B, unnamed, and marked every stated relation for each.
+
+- **No difference that matters**: `large` followed 49 of 76 relations, `medium-turbo` 46 of 76 [M, the reader's
+  count; its list of relations is its own, so the 31 of 70 of step 4 is not the same scale]. By scene 15 to 17,
+  16 to 17 and 18 to 12. Neither shows the main action of any scene. Reader's verdicts: three "with reservations"
+  for `large`; "no", "with reservations", "no" for `medium-turbo`.
+- Each gets right what the other gets wrong. `large`: the lockpick in the keyhole, the mouse under the right hand,
+  a screen the dancers can see. `medium-turbo`: one shield, the commander's back against the door. Both duplicate
+  shields; the three-armed guard is `medium-turbo`'s.
+- `medium-turbo` held style and faces slightly better across its three pictures.
+
+So four times the price and three times the wait buy nothing here, and the failure is the family's, not the
+distillation's. The way forward is the first of step 4's two: frames chosen for what this model can draw.
+
 ## What the reader sees
 
 Settled with the owner 2026-09-21. The tester funds the second card by topping up the vast.ai account, so the card
@@ -230,6 +248,28 @@ last block together with the wait of the next turn. Hosted `medium-turbo` took 9
 pictures [M]; the description call on our card and `Krea-2-Turbo` fp8 on a second card are not measured. What
 happens to a picture still in flight when the reader answers is the owner's to decide; cancelling it is the
 proposal.
+
+## The licence, read 2026-09-21
+
+Krea 2 Community License Agreement v.1 of 2026-06-22 and the Acceptable Use Policy it incorporates [M, both read
+in full]. Not legal advice.
+
+- **Only `Raw` and `Turbo` are downloadable.** The licence names exactly those two variants. `large` and `medium`
+  exist as hosted names only, so a card of ours runs `Turbo` or `Raw`, and a hosted `large` picture says nothing
+  certain about what our card would draw.
+- **The repositories are gated**: a HuggingFace account has to press "Agree" with a name, an e-mail and a company,
+  and the bootstrap needs that account's token. That is the owner's act, not a script's.
+- Commercial use is allowed below $1M of yearly revenue. Outputs belong to whoever generated them.
+- **A deployer must run content filters** (4.2): "reasonable and appropriate" measures against prohibited output,
+  with an image classifier, a moderation API or human review given as examples. Not doing so is a breach, and a
+  breach ends the licence at once. A bot that draws from free-form stories is a deployment in this sense.
+- The policy forbids sexual content with minors, intimate images of real people, deception about real people, and
+  content "obscene or otherwise objectionable under applicable law". It does not forbid adult content as such. The
+  test-ground rule stays as it is: nothing adult goes to a hosted API.
+- Distribution of the weights needs the licence text, a "Krea" name prefix and a notice file. We do not distribute;
+  the pin in a manifest is a reference, not a copy.
+- Krea may end the licence for any reason on 30 days' notice, after which the weights must be deleted. A feature
+  built on them can be taken away.
 
 ## The model, if it gets that far
 
