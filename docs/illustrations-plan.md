@@ -338,13 +338,13 @@ It is **opt-in**: `SIMPLE_CHAT_IMAGE_QWEN=true`, 17.28 GB on top of the session'
 [rent-plan.ts](../local/rent-plan.ts) prices an offer's traffic from what a default run pulls, and a comparison
 nobody asked for should not be in that number. The bytes and the minutes are in [gpu.md](gpu.md).
 
-**Licence, undecided.** Qwen Research License (the repository's own `license_name: qwen-research`), non-commercial,
-read as what it says on the card and not verified clause by clause here [A]. **Acceptance is not recorded**: no
-session here has the owner's own words for it, and the opt-in stays off until it does. It is a narrower permission
-than Krea's, which allows commercial use below $1M: even accepted, it would be a comparison checkpoint rather than
-a candidate for the deployed bot, and if this feature ever reaches people beyond the owner and the tester, Qwen has
-to be decided again. Turn the opt-in on for a real session in the same commit that writes down what was accepted
-and when.
+**Licence, accepted for the test.** Qwen Research License (the repository's own `license_name: qwen-research`),
+non-commercial, read as what it says on the card and not verified clause by clause here [A]. The owner accepted it
+in their own words on 2026-09-22, asked whether they take it for as long as only the owner and the tester use the
+bot. It is a narrower permission than Krea's, which allows commercial use below $1M: it makes Qwen a comparison
+checkpoint rather than a candidate for a bot that earns money, and if this feature ever reaches people beyond the
+owner and the tester, Qwen has to be decided again. The opt-in stays a flag of the session
+(`SIMPLE_CHAT_IMAGE_QWEN=true`), off by default, because the default download is what a rental is priced by.
 
 **The "Uncensored GGUF" reuploads are not used, and not because of the name.** Checked 2026-09-21 on
 `KasugaiSakura/Qwen-Image-2.1-Uncensored-GGUF`: its own card says `base_model_relation: quantized` and "GGUF
