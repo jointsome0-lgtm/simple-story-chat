@@ -161,7 +161,7 @@ test('both Qwen graphs load the files the manifest pins, through the loader type
   }
 });
 
-test('both Qwen graphs keep the template settings, at the 16:9 frame the lane compares', () => {
+test('both Qwen graphs keep the template settings, at the frame each of them samples', () => {
   for (const graph of [qwen, qwenEdit]) {
     const sampler = oneOf(graph, 'KSampler').inputs;
     // image_qwen_image_2_1_t2i.json and its edit twin: 25 steps, cfg 1, euler, simple. The upstream card's 40 is
@@ -172,15 +172,11 @@ test('both Qwen graphs keep the template settings, at the 16:9 frame the lane co
     assert.equal(sampler['sampler_name'], 'euler');
     assert.equal(sampler['scheduler'], 'simple');
     assert.equal(sampler['denoise'], 1.0);
-    // The template's ResolutionSelector asks for one megapixel; the lane asks for 16:9, because a blind bundle
-    // holding one square picture and one wide one has told the rater which model drew which.
+    // ComfyUI folds an empty latent to this model's 1/16 grid; a size off it is silently rounded on the card.
     const latent = oneOf(graph, 'EmptyLatentImage').inputs;
     const width = latent['width'] as number, height = latent['height'] as number;
-    assert.deepEqual([width, height], [1280, 720]);
-    // ComfyUI folds an empty latent to this model's 1/16 grid; a size off it is silently rounded on the card.
     assert.equal(width % 16, 0);
     assert.equal(height % 16, 0);
-    assert.equal(width * 9, height * 16);
     // The placeholders local/image-batch.ts fills, in the state the graph is committed in: nothing of a previous
     // run left in a file that is posted as it is.
     const encode = oneOf(graph, 'TextEncodeQwenImage21').inputs;
@@ -188,13 +184,34 @@ test('both Qwen graphs keep the template settings, at the 16:9 frame the lane co
     assert.equal(encode['negative_prompt'], '');
     assert.equal(sampler['seed'], 0);
   }
+  // The template's ResolutionSelector asks for one megapixel; the text-to-image lane asks for 16:9, because a
+  // blind bundle holding one square picture and one wide one has told the rater which model drew which. Its
+  // encode node keeps the template's own `resolution` default, which does nothing at all without references.
+  const frame = oneOf(qwen, 'EmptyLatentImage').inputs;
+  assert.deepEqual([frame['width'], frame['height']], [1280, 720]);
+  assert.equal((frame['width'] as number) * 9, (frame['height'] as number) * 16);
+  assert.equal(oneOf(qwen, 'TextEncodeQwenImage21').inputs['resolution'], 1024);
+  // The edit graph is 16 rows shorter, and that is the template's own relationship rather than a choice: at
+  // `resolution: 0` the encode node keeps each reference at its own size rounded to a multiple of 32, so a
+  // 1280x720 portrait out of the graph above becomes 1280x704 — Python's `round(720 / 32)` is 22 and not 23, it
+  // rounds a half to the even side — and the node's latent output, "Empty latent on the first reference image's
+  // size, to match with sampling as any other size shifts the edit", is that size. The template samples from that
+  // output through its `custom_size = off` switch; we cannot, because applyToWorkflow needs the sampler's latent to
+  // come from a node with a width and a height, so the EmptyLatentImage carries the same number instead. At the
+  // node's default 1024 it would be 1376x768, and a 1280x720 canvas under it is what the template's note warns of.
+  const editFrame = oneOf(qwenEdit, 'EmptyLatentImage').inputs;
+  assert.equal(oneOf(qwenEdit, 'TextEncodeQwenImage21').inputs['resolution'], 0);
+  assert.deepEqual([editFrame['width'], editFrame['height']], [1280, 704]);
 });
 
-test('the Qwen edit graph offers four reference slots, one per person the describing call may name', () => {
+test('the Qwen edit graph offers a reference slot per person a character sheet can hold', () => {
   const encode = oneOf(qwenEdit, 'TextEncodeQwenImage21');
   const slots = Object.keys(encode.inputs).filter(name => name.startsWith('images.'));
-  // Four, because local/illustrate-probe.ts caps a frame at four people; the node itself takes sixteen.
-  assert.deepEqual(slots.sort(), ['images.image_1', 'images.image_2', 'images.image_3', 'images.image_4']);
+  // Six, the sheet's own `maxItems` in local/illustrate-probe.ts: its frame schema admits four people, but a frame
+  // that arrives with more ends the whole run in `workflow_too_few_reference_slots`, and a graph widened after that
+  // has another hash than the run directory was opened with. The node itself takes sixteen.
+  assert.deepEqual(slots.sort(), ['images.image_1', 'images.image_2', 'images.image_3', 'images.image_4',
+    'images.image_5', 'images.image_6']);
   for (const slot of slots) {
     const link = encode.inputs[slot];
     assert.ok(isLink(link), `${slot} is not wired to a loader`);

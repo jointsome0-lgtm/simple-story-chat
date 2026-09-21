@@ -427,11 +427,50 @@ test('a person the sheet does not cover, or covers without a portrait, is left o
     sampler: undefined, scheduler: undefined, cfg: undefined, checkpoints: ['q.safetensors'],
     workflow: resolve('gpu/image-workflow-qwen-edit.json'), references: join(root, 'references.json') }),
     /portrait for a person of "battle"/);
-  // A graph without reference slots has none to find, and the edit graph's four are in slot order.
+  // A graph without reference slots has none to find, and the edit graph's are in slot order.
   assert.deepEqual(referenceSlots(defaultWorkflow()), []);
   const edit: Graph = JSON.parse(readFileSync(resolve('gpu/image-workflow-qwen-edit.json'), 'utf8'));
-  assert.deepEqual(referenceSlots(edit).map(slot => slot.key),
-    ['images.image_1', 'images.image_2', 'images.image_3', 'images.image_4']);
+  assert.deepEqual(referenceSlots(edit).map(slot => slot.key), ['images.image_1', 'images.image_2',
+    'images.image_3', 'images.image_4', 'images.image_5', 'images.image_6']);
+});
+
+// Which face is whose is carried by the order and by nothing else: the encoder's tokenizer writes its own
+// `<image1> <image2> …` block in front of a prompt that never mentions the references, and `assemblePrompt` writes
+// one clause per person in the order of `description.people`, which is the order the slots are filled in.
+test('a person with no portrait ends the binding instead of moving the next face up a slot', () => {
+  const sheet = [{ name: 'Элин', look: 'A middle-aged woman in grey' }, { name: 'Марк', look: 'A young man in brown' }];
+  const references: References = { battle: { 'Элин': 'elin.png', 'Марк': 'mark.png' } };
+  const frame = (...who: string[]): Case => ({ id: 'battle-7', scenario: 'battle', index: 7, scene: 'Сцена.', sheet,
+    description: { moment: 'At a wheel', shot: 'Wide shot', setting: 'A salt road', objects: '', props: '', light: 'Noon',
+      people: who.map(name => ({ who: name, look: '', state: '', action: 'stands' })) },
+    prompt: 'Wide shot.', namesStripped: 0, fromSheet: who.length, withoutLook: 0 });
+  assert.deepEqual(portraitsFor(frame('Марк', 'Элин'), references), ['mark.png', 'elin.png']);
+  // The first person of the frame is off the sheet. Her portrait in `image_1` would be the face the prompt's first
+  // clause describes as a young man in brown, and question 5 of the bundle would read that as one person kept.
+  assert.deepEqual(portraitsFor(frame('salt worker', 'Элин'), references), []);
+  // A stranger after them takes nothing away: slots 1..N are still people 1..N of the prompt.
+  assert.deepEqual(portraitsFor(frame('Элин', 'salt worker', 'Марк'), references), ['elin.png']);
+  // The same face twice is not two people either, and skipping the repeat would shift everybody after it.
+  assert.deepEqual(portraitsFor(frame('Элин', 'Элин', 'Марк'), references), ['elin.png']);
+  // A person on the sheet the portrait run drew nothing for is the same case as one who is not on it at all.
+  assert.deepEqual(portraitsFor(frame('Марк', 'Элин'), { battle: { 'Элин': 'elin.png' } }), []);
+});
+
+// Four slots were one per person the frame schema of local/illustrate-probe.ts admits (`people` is `maxItems: 4`).
+// A frame that arrived with more — a schema the provider did not enforce, a prompts.json written by hand — raises
+// `workflow_too_few_reference_slots`, which stops the whole run, and widening the graph afterwards changes its hash,
+// which the resume guard refuses: the recovery is to redraw the timeboxed run into a fresh directory.
+test('the edit graph holds as many faces as a character sheet has people, so one crowded frame cannot end a run', () => {
+  const edit: Graph = JSON.parse(readFileSync(resolve('gpu/image-workflow-qwen-edit.json'), 'utf8'));
+  const values = { checkpoint: 'qwen_image_2.1_int8_convrot.safetensors', prompt: 'a picture', negative: '',
+    seed: 7, steps: 25, sampler: 'euler', scheduler: 'simple', width: 1280, height: 704, cfg: 1 };
+  // Six: the most characters a story's sheet can hold (`maxItems: 6` on the same file's sheet schema), so the
+  // graph is never the thing that runs out. A slot nobody fills leaves with its loader and costs nothing.
+  const faces = ['a.png', 'b.png', 'c.png', 'd.png', 'e.png', 'f.png'];
+  const filled = applyToWorkflow(edit, { ...values, references: faces });
+  assert.deepEqual(referenceSlots(filled).map(slot => filled[slot.loader].inputs.image), faces);
+  assert.throws(() => applyToWorkflow(edit, { ...values, references: [...faces, 'g.png'] }),
+    { code: 'workflow_too_few_reference_slots' });
 });
 
 // ComfyUI draws one job at a time. A picture abandoned when the wait runs out keeps the card: the next cell queues

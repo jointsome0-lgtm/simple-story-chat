@@ -22,16 +22,18 @@
       "vae": ["3", 0],
       "prompt": "",
       "negative_prompt": "",
-      "resolution": 1024,
+      "resolution": 0,
       "images.image_1": ["11", 0],
       "images.image_2": ["12", 0],
       "images.image_3": ["13", 0],
-      "images.image_4": ["14", 0]
+      "images.image_4": ["14", 0],
+      "images.image_5": ["15", 0],
+      "images.image_6": ["16", 0]
     }
   },
   "6": {
     "class_type": "EmptyLatentImage",
-    "inputs": { "width": 1280, "height": 720, "batch_size": 1 }
+    "inputs": { "width": 1280, "height": 704, "batch_size": 1 }
   },
   "7": {
     "class_type": "KSampler",
@@ -59,5 +61,7 @@
   "11": { "class_type": "LoadImage", "inputs": { "image": "reference-1.png" } },
   "12": { "class_type": "LoadImage", "inputs": { "image": "reference-2.png" } },
   "13": { "class_type": "LoadImage", "inputs": { "image": "reference-3.png" } },
-  "14": { "class_type": "LoadImage", "inputs": { "image": "reference-4.png" } }
+  "14": { "class_type": "LoadImage", "inputs": { "image": "reference-4.png" } },
+  "15": { "class_type": "LoadImage", "inputs": { "image": "reference-5.png" } },
+  "16": { "class_type": "LoadImage", "inputs": { "image": "reference-6.png" } }
 }

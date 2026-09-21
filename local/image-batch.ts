@@ -284,8 +284,13 @@ export async function uploadReference(comfy: Comfy, bytes: Uint8Array): Promise<
 
 // The portraits of the people in this frame, in the order the prompt names them. `who` is the only described field
 // that carries a name; here it picks a file, the way it picks an appearance line in local/illustrate-probe.ts, and
-// goes no further. Somebody the sheet does not cover, or covers without a portrait, is left out rather than given
-// another person's face; one portrait is never sent twice, because two slots of one face is not what the slot means.
+// goes no further.
+// Slot N is person N of the prompt and nothing else says so: the encoder's tokenizer puts its own
+// `<image1> <image2> …` block ahead of a prompt that never mentions the references, and `assemblePrompt` writes one
+// clause per person in this same order. So the binding stops at the first person there is no portrait for — a
+// person the sheet does not cover, or covers without a picture, or one whose portrait is already in a slot — rather
+// than skipping them and moving everybody after them up a slot, which would put a face against another person's
+// clause. Those later people are drawn from their appearance line alone, which is what the whole Krea lane does.
 export function portraitsFor(one: Case, references: References): string[] {
   const story = references[one.scenario] ?? {};
   const names = (one.sheet ?? []).map(character => character.name);
@@ -293,7 +298,8 @@ export function portraitsFor(one: Case, references: References): string[] {
   for (const person of one.description?.people ?? []) {
     const matched = matchSheet(person.who ?? '', names);
     const file = matched === null ? undefined : story[matched];
-    if (file && !found.includes(file)) found.push(file);
+    if (!file || found.includes(file)) break;
+    found.push(file);
   }
   return found;
 }

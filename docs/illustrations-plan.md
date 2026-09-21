@@ -328,9 +328,11 @@ the six steps above kept running into: **does the same person come back the same
 the best identity reading so far out of a fixed appearance line alone — "the commander, confidently" — and that is
 a sheet of words, redescribed from nothing every time. Qwen Image 2.1 takes reference pictures through its edit
 path and is built to keep the people in them — its card claims ten, the node carries sixteen slots, and
-[image-workflow-qwen-edit.json](../gpu/image-workflow-qwen-edit.json) wires four, which is more people than a frame
-of these stories has. A different mechanism for the same goal, and the only one on the list that can be tried in
-the same rented hour.
+[image-workflow-qwen-edit.json](../gpu/image-workflow-qwen-edit.json) wires six, the largest cast a story's
+character sheet can hold, so that the graph is never the thing that runs out: a frame needing a seventh slot would
+end the whole timeboxed run in `workflow_too_few_reference_slots`, and a graph widened afterwards has another hash
+than the run directory was opened with. A different mechanism for the same goal, and the only one on the list that
+can be tried in the same rented hour.
 
 It is **opt-in**: `SIMPLE_CHAT_IMAGE_QWEN=true`, 17.28 GB on top of the session's download. Off by default because
 [rent-plan.ts](../local/rent-plan.ts) prices an offer's traffic from what a default run pulls, and a comparison
@@ -354,9 +356,20 @@ stray clone cannot change a measurement. Two reasons, either one enough.
 own widget values, the three files in bf16 are 32.4 GB of weights on a 32 GB card before a single activation, and
 the download is 17.28 GB against 32.4. The full reasoning, including why the w4a8 encoder and the two prompt-enhancer
 encoders are refused, is written beside the pins in [image-manifest.env](../gpu/image-manifest.env). The graphs keep
-the templates' 25 steps, cfg 1, euler and simple; the upstream card's 40 steps are `--steps 40` away, and the frame
-is 1280x720 like Krea's, because a blind bundle holding one square picture and one wide one has already told the
-rater which model drew which.
+the templates' 25 steps, cfg 1, euler and simple; the upstream card's 40 steps are `--steps 40` away, and the
+text-to-image frame is 1280x720 like Krea's, because a blind bundle holding one square picture and one wide one has
+already told the rater which model drew which.
+
+**The identity frames are 1280x704, sixteen rows shorter, and that is the reference's size rather than a choice.**
+The encode node of the edit graph is at the template's `resolution: 0`, which keeps each reference at its own size
+rounded to a multiple of 32; a 1280x720 portrait out of the text-to-image graph becomes 1280x704 there (Python's
+`round(720 / 32)` is 22, not 23). The node hands out an empty latent of exactly that size, with the warning that
+sampling has to match it because "any other size shifts the edit", and the template samples from it through a
+switch whose other branch is a free-size canvas. We cannot wire that output: `applyToWorkflow` needs the sampler's
+latent to come from a node that has a width and a height, or it refuses the graph rather than draw one size and
+record another. So the graph keeps an `EmptyLatentImage` and pins it to the number the node computes — the
+template's relationship, written out. The two sizes differ, so a Krea frame and an identity frame are not the same
+canvas; the blind page compares Krea against the text-to-image graph, which is.
 
 **The identity runbook, two steps.** The portraits are drawn on the card first, by the same text-to-image graph, so
 that the references are the model's own faces and not photographs of anybody:
@@ -381,6 +394,15 @@ the people who are in that frame: a face reaches the card once, under the hash o
 picks the file and goes no further — the rule that no name reaches the image model is unchanged. Portraits pass
 through `stripPngMetadata` on the way up like every picture here passes through it on the way down.
 
+**Slot N is person N of the prompt.** Nothing else says whose face is whose: the encoder's tokenizer writes its own
+`<image1> <image2> …` block in front of a prompt that never mentions the references, and the prompt names people in
+the order of `description.people`, which is the order the slots are filled in. So the binding stops at the first
+person of a frame who has no portrait — somebody off the sheet, a stranger of one scene, a sheet person the portrait
+run drew nothing for — rather than skipping them and moving every later face up a slot, which would put a portrait
+against another person's clause and let question 5 read it as one person kept. The people after that stop are drawn
+from their appearance line alone, which is what the whole Krea lane does, and `references` in the index counts what
+was actually bound.
+
 Judge it by its own bundle, not by the blind page: `image:blind` keeps one picture per checkpoint per scene, so the
 Qwen frames with references and the Qwen frames without would collapse into one. `npm run image:batch -- bundles`
 over each run asks question 5 — "where several pictures share a person with the same appearance line, is he
@@ -395,9 +417,9 @@ recorded with the settings it was drawn at.
 **Not verified without a card**, in the order it would bite: that the int8 transformer and the int8 encoder load
 through `UNETLoader` with `weight_dtype: default` and `CLIPLoader` with `type: qwen_image` (read from the pinned
 source, never run); how long one 25-step 1280x720 picture takes, which decides whether the comparison fits the
-hour at all; whether four reference latents plus the encoder plus the transformer stay inside 32 GB, and whether
-`QwenImage21Cache` has to be moved off `auto` if they do not; and whether references at `resolution: 1024` help
-identity at a 1280x720 frame or fight it.
+hour at all; whether four reference latents of 1280x704 each plus the encoder plus the transformer stay inside
+32 GB, and whether `QwenImage21Cache` has to be moved off `auto` if they do not; and whether a reference kept at
+its own size helps identity at this frame or whether the references want to be smaller than the picture.
 
 ## Two constraints that do not bend
 
