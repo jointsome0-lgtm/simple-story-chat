@@ -108,7 +108,7 @@ Not verified: behaviour when the limit is exhausted. The first one who verifies 
 
 ## Acceptance on the GPU
 
-The bot runs on an uncensored Gemma 4 31B Q6K on its own GPU; hosted models are only a test ground. Hosted Gemma is an optimistic substitute: after refusal removal and quantization the model follows the format worse. An edit counts as finally accepted after `npm run memory:probe` on the GPU through the queue of the running bot. The rental costs money, so only what is already selected is checked on the GPU, once every few steps, and only on the owner's word. Adult content is never sent to hosted APIs: the test-ground scenarios stay clean.
+The bot runs on an uncensored Gemma 4 31B Q6K on its own GPU; hosted models are only a test ground. Hosted Gemma is an optimistic substitute: after refusal removal and quantization the model follows the format worse. An edit counts as finally accepted after `npm run memory:probe` on the GPU through the queue of the running bot. The rental costs money, so only what is already selected is checked on the GPU, once every few steps, and only on the owner's word. Adult content is never sent to hosted APIs: the test-ground scenarios stay clean. The owner's one exception, 2026-09-21, is for judging pictures: the hand-written "sharp" prompt set (battlefield, wounds, an execution, an interrogation, a harem, a bath) is drawn on the rented card only, its prompts are written by hand and never pass a hosted text model, and its pictures may be shown to a GPT-6 session for the blind comparison as long as a picture has no explicit nudity. A picture that has it is judged by the owner alone.
 
 ## When to stop and write to the owner
 
