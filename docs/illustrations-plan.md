@@ -146,6 +146,49 @@ fp8 or the encoder offloaded. Which hosted name the open weights correspond to i
 against `medium` from 17 pictures an hour and against `medium-turbo` from 35 [D]; one active reader with a picture
 per scene is already there. Hosted is for looking, not for running.
 
+## Step 3, the prompt assembled in code, 2026-09-21
+
+The same three scenes again, with the second reader's points applied. The description lost its `prompt` field:
+the model now fills `moment`, `shot`, `setting`, `objects`, `light` and `people[]` with `who`, `state` and
+`action`, and code joins them in a fixed order with one style sentence. One more call per story writes a sheet of
+recurring characters, a fixed appearance line each, and the assembly puts that line in wherever `who` matches.
+Ages written as numbers are stripped. The instruction gained "do not hand an action to another person" and "keep
+who is where". Three `medium-turbo` pictures, $0.015 and about 9.5 s each; a fresh clean-context GPT-6 session
+checked them element by element against the prompt and the scene, without knowing the first verdict.
+
+**Verdict of the reader: with reservations, no, with reservations.** Not one picture shows its scene's main action.
+
+- **The description stage is now mostly right; the image model is what fails** [M]. Of the contradictions the
+  reader found, most are marked as the picture's fault against a correct prompt: the dagger hangs over the cart
+  with a visible gap to the wrist joint it was to be driven into; two shields where one was asked for; the bandage
+  moves from the commander's left arm to her right between two pictures though both prompts name the side; a man
+  who should sit with his heels on the threshold kneels barefoot; a middle-aged official is drawn young.
+- **The assembly dropped the one field that mattered** [M]. `moment` was not sent. In the door scene it alone said
+  the door is held shut, and the picture has a wide open doorway; `light` asking for daylight "through the
+  archway" invited it. The order should be shot, setting, moment, people, objects, light, style, with the shared
+  action said once in `moment` and only pose, place and gaze left to each person.
+- **The model loses relations, not details** [M]: which hand, where the blade goes, what props the door, who is on
+  the monitor. Late items of a 283-word prompt still arrived (the fifth person, the monitor, the papers, the
+  style), so length as such is not shown to be the limit; three pictures cannot show where the limit is. Cut
+  repetition and spend the words on one contact and the staging.
+- **"No lettering" fought the scene**: the frozen count "10" on the monitor is the evidence the scene turns on.
+  The style sentence should forbid captions, logos and watermarks and allow numerals the scene asks for.
+- **The sheet gives approximate recognition, not identity** [M]. Hair colour and cut, build and the colour of the
+  clothes carried over; faces, the cut of the clothes, fittings and armour did not. "Enough to recognise, not
+  enough to believe one artist drew from one sheet." The sheet is worth keeping and is not sufficient; a reference
+  image is the next thing to try for identity, and the hosted API takes one.
+- **The style drifts in faces** [M]: painterly and realistic in the fight, larger eyes and flatter faces in the
+  dance, a visible step toward anime. "Consistent facial stylization" names no rule; the replacement names
+  proportions, eye size and age lines.
+- The description still specifies what the scene does not: a "stone city gate" the excerpt never sets, glowing
+  eyes on the guard. The sheet fixes clothes as constant, and clothes change with the scene.
+
+What this says about the feature: a picture that is close but shows the wrong action is worse for a reader than
+no picture, and at this point two of three are close and one is wrong. The next round is cheap — reorder the
+assembly, send `moment`, the new style sentence, the reader's per-scene wording as a test of what the image model
+can follow at all — and its question is whether Krea can draw a stated contact between two things. If it cannot
+with a prompt written by hand, no instruction to the describing model will fix it.
+
 ## The model, if it gets that far
 
 Krea 2, open weights, released 2026-06-22: a 12.9B diffusion transformer, shipped as `Raw` (undistilled, for
