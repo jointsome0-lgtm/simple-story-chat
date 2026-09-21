@@ -376,26 +376,41 @@ test('a compaction prepared ahead leaves its holder\'s scenes in their slot, and
   assert.equal(await run('tester after', { holder: 'tester' }), 2);
   assert.equal(await run('owner next', { holder: 'owner' }), 1);
 });
-test('a compaction prepared ahead waits for room beside people\'s caches in a shared pool, its holder\'s included', async t => {
+test('a compaction prepared ahead that people\'s idle caches leave no room for ends, rather than wait for ever', async t => {
   const f = poolFixture(t, { poolTokens: 30000 });
+  // While the scene runs, its claim is what is in the way, and that ends: the extraction waits.
   const tester = f.scheduler.foreground.openTurn({ holder: 'tester' });
   const scene = tester.generate('tester:12000');
   await f.started(1);
-  f.calls[0].finish(); await scene; tester.end();
-  // 2048 margin + 16000 claim + the tester's 13000 cache, 1000 output and 1024 of growth exceed 30000.
   const prepared = f.scheduler.foreground.openTurn({ holder: 'tester', yields: true });
+  // 2048 margin + 16000 claim + the scene's 13000 exceed 30000.
   const extraction = prepared.generate('prepared:15000');
   extraction.catch(() => {});
   await turn(); await turn();
   assert.equal(f.calls.length, 1);
-  // It keeps nobody waiting, its holder least of all: the next scene runs in the slot of the scenes.
+  assert.equal(f.scheduler.snapshot().foregroundQueued, 1);
+  // The finished scene leaves an idle cache, 13000 with 1000 output and 1024 of growth. That stays until the tester
+  // comes back, so the extraction would wait for ever and keep the GPU awake: it ends instead.
+  f.calls[0].finish(); await scene; tester.end();
+  await assert.rejects(extraction, { code: 'background_unavailable' });
+  assert.equal(f.scheduler.snapshot().foregroundQueued, 0);
+  await assert.rejects(prepared.generate('prepared supplement:100'), { code: 'background_unavailable' });
+  // The next scene runs in the slot of the scenes.
   const again = f.scheduler.foreground.openTurn({ holder: 'tester' });
   const next = again.generate('tester next:13000');
   await f.started(2);
   assert.deepEqual([f.calls[1].name, f.calls[1].slot], ['tester next', 2]);
-  prepared.end();
-  await assert.rejects(extraction, { code: 'cancelled' });
   f.calls[1].finish(); await next; again.end();
+  // A supplement that no longer fits, after an extraction that did, ends the same way.
+  const g = poolFixture(t, { poolTokens: 30000 });
+  const owner = g.scheduler.foreground.generate('owner:12000');
+  await g.started(1);
+  g.calls[0].finish(); await owner;
+  const ahead = g.scheduler.foreground.openTurn({ holder: 'owner', yields: true });
+  const first = ahead.generate('prepared small:5000');
+  await g.started(2);
+  g.calls[1].finish(); await first;
+  await assert.rejects(ahead.generate('prepared supplement:15000'), { code: 'background_unavailable' });
 });
 test('an agent waits while its claim would crowd out a person\'s cache; a person is admitted beside it', async t => {
   const f = poolFixture(t, { poolTokens: 20000 });

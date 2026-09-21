@@ -198,6 +198,17 @@ export function createScheduler<Request, Result>(provider: {
     // A call too large for the pool runs when the pool holds nothing else, rather than wait for ever.
     return used <= poolTokens || alone;
   }
+  // A yielding call that the people's idle caches alone leave no room for. Running calls end and turns between their
+  // calls end, but an idle cache stays until its person comes back, so such a call would wait for ever, and whoever
+  // prepared it would keep the GPU from going idle all that time (bot.ts `prepareNext`).
+  function hopeless(item: Item<Request>) {
+    if (!admits || !item.turn?.yields || item.inputTokens === undefined) return false;
+    const lane = laneOf(item.turn) ?? pick(item);
+    if (!lane) return false;
+    let used = POOL_MARGIN + item.inputTokens + outputTokens(item.request);
+    for (const other of lanes) if (other !== lane && !other.active && other.person) used += other.claim + other.output + PERSON_GROWTH;
+    return used > poolTokens;
+  }
   // Tells every waiting call how many calls go before it: the queues of higher priority, the calls ahead in its own,
   // and the work holding the slots it may use. A turn's own next call goes first while the turn holds its slot.
   function notify() {
@@ -230,6 +241,12 @@ export function createScheduler<Request, Result>(provider: {
       && !waiting(lane.reserved.turn)) {
       log('turn_lost');
       return endTurn(lane.reserved.turn, 'background_unavailable');
+    }
+    // Work done ahead of need that can never be admitted ends here, so that its owner lets the GPU go.
+    const stuck = foreground.find(hopeless);
+    if (stuck) {
+      log('background_unavailable');
+      return endTurn(stuck.turn!, 'background_unavailable');
     }
     // A reserved slot runs only the next call of its turn; an agent's is not held back by the quiet window. A turn kept
     // waiting there clears its own way below, unless it yields: such a turn preempts nothing and keeps nobody behind it.
