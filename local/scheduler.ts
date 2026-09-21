@@ -34,7 +34,8 @@ type Item<Request> = {
   // In a pool: the input the server counted, and the cache cells the call may fill (input and the whole output limit).
   inputTokens?: number; claim?: number;
 };
-// One server slot. `claim` is the most cache its last call could leave there; `person` whether that was a person's.
+// One server slot. `claim` is the most cache its last call could leave there; `person` whether that is a person's
+// scenes, which work prepared ahead leaves none of; `holder` whose.
 type Lane<Request> = {
   id: number; active: Item<Request> | null; reserved: { turn: Turn; release: () => void } | null;
   holder?: string; person: boolean; claim: number; output: number;
@@ -164,16 +165,20 @@ export function createScheduler<Request, Result>(provider: {
     });
   }
   // The free slot a call goes to: its holder's last one, else the highest for a person and the lowest for anyone else,
-  // sparing slots that keep another person's cache while there are others.
+  // sparing slots that keep another person's cache while there are others. A yielding turn (a compaction prepared
+  // ahead) asks with another system prompt and would evict its own holder's scenes from their slot, so it takes the
+  // lowest slot that keeps nobody's scenes, and its holder's own only when there is no such slot.
   function pick(item: Item<Request>) {
     const open = (item.priority === 'foreground' ? lanes : shared).filter(free);
     const holder = item.turn?.holder;
+    const own = open.find(lane => holder !== undefined && lane.holder === holder);
+    if (item.turn?.yields) return open.find(lane => !lane.person) ?? own ?? open[0];
     const order = item.priority === 'foreground' ? [...open].reverse() : open;
-    return open.find(lane => holder !== undefined && lane.holder === holder)
-      ?? order.find(lane => !lane.person) ?? order[0];
+    return own ?? order.find(lane => !lane.person) ?? order[0];
   }
   // Whether the pool has room for the call's claim beside every running call, every other turn between its calls and,
-  // unless the call is a person's, every person's cache with room for its next request. llama.cpp evicts the other idle
+  // unless the call is a person's scene, every person's cache with room for its next request: work done ahead of need
+  // is not worth anybody's scenes, its own holder's included. llama.cpp evicts the other idle
   // caches. The next call of a started turn does not count the idle caches of other turns: two turns between their calls
   // must not wait for each other, and the server evicts an idle cache rather than fail a running call. It still leaves
   // people their room: an agent must not grow into a person's cache between its own calls either.
@@ -185,7 +190,7 @@ export function createScheduler<Request, Result>(provider: {
     let alone = true;
     for (const other of lanes) if (other !== lane) {
       if (other.active) used += other.active.claim ?? 0;
-      else if (item.priority !== 'foreground' && other.person) used += other.claim + other.output + PERSON_GROWTH;
+      else if ((item.priority !== 'foreground' || item.turn?.yields) && other.person) used += other.claim + other.output + PERSON_GROWTH;
       else if (other.reserved && !continuing) used += other.claim;
       else continue;
       alone = false;
@@ -278,7 +283,9 @@ export function createScheduler<Request, Result>(provider: {
     if (pool) {
       const output = outputTokens(item.request);
       item.claim = (item.inputTokens ?? 0) + output;
-      Object.assign(lane, { claim: item.claim, output, person: item.priority === 'foreground', holder: item.turn?.holder });
+      // What a yielding turn leaves in a slot is no use to its holder's next scene, which must not follow it there.
+      const scene = item.priority === 'foreground' && !item.turn?.yields;
+      Object.assign(lane, { claim: item.claim, output, person: scene, holder: item.turn?.yields ? undefined : item.turn?.holder });
     }
     const timer = item.priority === 'background'
       ? setTimeout(() => item.controller.abort(fail('background_timeout')), backgroundTimeoutMs) : undefined;

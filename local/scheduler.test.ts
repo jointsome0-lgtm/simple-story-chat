@@ -353,6 +353,50 @@ test('a pool runs calls side by side, gives a person the highest slot and keeps 
   assert.equal(f.calls[3].slot, 2);
   f.calls[3].finish(); await next; again.end();
 });
+test('a compaction prepared ahead leaves its holder\'s scenes in their slot, and the next scene goes back to them', async t => {
+  const f = poolFixture(t);
+  const run = async (name: string, options: { holder: string; yields?: boolean }) => {
+    const opened = f.scheduler.foreground.openTurn(options);
+    const result = opened.generate(name);
+    await f.started(f.calls.length + 1);
+    const call = f.calls.at(-1)!;
+    call.finish(); await result; opened.end();
+    return call.slot;
+  };
+  assert.equal(await run('tester scene', { holder: 'tester' }), 2);
+  // Another system prompt, so nothing of the scenes would survive it: it takes the lowest slot that keeps nobody's.
+  assert.equal(await run('prepared extraction', { holder: 'tester', yields: true }), 0);
+  // The slot of the extraction is not the holder's: the scene goes where the scenes are.
+  assert.equal(await run('tester next', { holder: 'tester' }), 2);
+  // With other people's scenes in every other slot it costs its holder's own, never theirs.
+  assert.equal(await run('owner scene', { holder: 'owner' }), 1);
+  assert.equal(await run('guest scene', { holder: 'guest' }), 0);
+  assert.equal(await run('prepared again', { holder: 'tester', yields: true }), 2);
+  // The scenes are gone from that slot and it is nobody's now; the others still keep theirs.
+  assert.equal(await run('tester after', { holder: 'tester' }), 2);
+  assert.equal(await run('owner next', { holder: 'owner' }), 1);
+});
+test('a compaction prepared ahead waits for room beside people\'s caches in a shared pool, its holder\'s included', async t => {
+  const f = poolFixture(t, { poolTokens: 30000 });
+  const tester = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const scene = tester.generate('tester:12000');
+  await f.started(1);
+  f.calls[0].finish(); await scene; tester.end();
+  // 2048 margin + 16000 claim + the tester's 13000 cache, 1000 output and 1024 of growth exceed 30000.
+  const prepared = f.scheduler.foreground.openTurn({ holder: 'tester', yields: true });
+  const extraction = prepared.generate('prepared:15000');
+  extraction.catch(() => {});
+  await turn(); await turn();
+  assert.equal(f.calls.length, 1);
+  // It keeps nobody waiting, its holder least of all: the next scene runs in the slot of the scenes.
+  const again = f.scheduler.foreground.openTurn({ holder: 'tester' });
+  const next = again.generate('tester next:13000');
+  await f.started(2);
+  assert.deepEqual([f.calls[1].name, f.calls[1].slot], ['tester next', 2]);
+  prepared.end();
+  await assert.rejects(extraction, { code: 'cancelled' });
+  f.calls[1].finish(); await next; again.end();
+});
 test('an agent waits while its claim would crowd out a person\'s cache; a person is admitted beside it', async t => {
   const f = poolFixture(t, { poolTokens: 20000 });
   const tester = f.scheduler.foreground.generate('tester:10000');

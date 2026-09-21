@@ -9,6 +9,7 @@ import { createScheduler } from './scheduler.ts';
 import { makeRequest } from './prompt.ts';
 import { requestBudget } from './context.ts';
 import { safeErrorDetails } from './model-error.ts';
+import type { Log } from './model-error.ts';
 import type { GenerateControls, GenerationResult, ModelRequest, Provider } from './model.ts';
 import { addSeed, newStory, beginJob, commitTurn } from '../lib/library.ts';
 
@@ -184,6 +185,25 @@ test('each prepared request writes its own row with its counts and timings', asy
   await createPrepared().run(f.store.read('1'), timed, f.config,
     { log: (event, code, details) => { rows.push({ event, ...safeErrorDetails(details) }); } });
   assert.deepEqual(rows.map(row => [row.event, row.promptMs, row.predictedMs]), [['compaction_prepare_request_completed', 40, 60]]);
+});
+test('each run writes one row with what became of it, under its own number', async t => {
+  const f = fixture(t);
+  const rows: { event: string; code?: string | number; prepareRun?: number }[] = [];
+  const log: Log = (event, code, details) => { rows.push({ event, code, ...safeErrorDetails(details) }); };
+  const outcomes = () => rows.filter(row => row.event === 'compaction_prepare_outcome').map(row => row.code);
+  const prepared = createPrepared();
+  // Replaced by the next run before any turn took it.
+  await prepared.run(f.store.read('1'), f.provider, f.config, { log });
+  await prepared.run(f.store.read('1'), f.provider, f.config, { log });
+  assert.deepEqual(outcomes(), ['discarded']);
+  await f.scene(prepared);
+  // Taken by the turn; stopping it afterwards adds nothing.
+  prepared.stop();
+  assert.deepEqual(outcomes(), ['discarded', 'used']);
+  const numbers = rows.map(row => row.prepareRun!);
+  assert.equal(numbers.length, 4);
+  // A request row and an outcome row for each run.
+  assert.deepEqual(numbers.map(number => number - numbers[0]), [0, 0, 1, 1]);
 });
 
 test('a scene row separates the queue from the token count', async t => {

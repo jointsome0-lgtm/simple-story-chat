@@ -276,7 +276,9 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
         if (!measured) throw new ModelError('usage_unavailable');
         if (inputTokens > limit) throw new ModelError('context_limit');
         return { text, finishReason, usage: { inputTokens, outputTokens, cachedInputTokens, reasoningCharacters,
-          totalTokens: outputTokens === null ? null : inputTokens + outputTokens }, ...(timings ? { timings } : {}) };
+          totalTokens: outputTokens === null ? null : inputTokens + outputTokens },
+          // The slot a pool named goes with the timings: which cache the request met is half of what `cacheTokens` says.
+          ...(timings ? { timings: !hosted && slot !== undefined ? { ...timings, slot } : timings } : {}) };
       });
     },
     // Several independent samples of one request, for research batches on an own llama-server started with that many

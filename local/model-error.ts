@@ -19,7 +19,9 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   'quoteCount', 'quoteWhitespace', 'quoteTypography', 'quotePunctuation', 'quoteOther',
   // One model request: time in the queue and in token counting, then llama-server's own timings (local/model.ts Timings).
   'waitMs', 'countMs', 'cacheTokens', 'promptTokens', 'promptMs', 'predictedTokens', 'predictedMs', 'draftTokens',
-  'draftAcceptedTokens'] as const;
+  'draftAcceptedTokens', 'slot',
+  // Which run of local/prepare.ts a row belongs to, counted from the start of the process.
+  'prepareRun'] as const;
 
 export type ErrorDetails = {
   httpStatus?: number; phase?: typeof PHASES[number]; operation?: typeof OPERATIONS[number];

@@ -63,6 +63,8 @@ test('llama-server timings of the last chunk become rounded counts; malformed on
   const f = fixture(() => stream([chunk({ content: 'Готово.' }, 'stop'), { choices: [], usage, timings }]));
   const result = await f.provider.generate(request());
   assert.deepEqual(result.timings, { cacheTokens: 100, promptTokens: 20, promptMs: 42, predictedTokens: 8, predictedMs: 250 });
+  // In a pool the slot goes with them: a cache count says little without the cache it was counted in.
+  assert.equal((await f.provider.generate(request(), { slot: 2 })).timings!.slot, 2);
   assert.equal('timings' in await fixture().provider.generate(request()), false);
 });
 
