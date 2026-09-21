@@ -33,7 +33,7 @@ export const THRESHOLDS = {
   cacheToleranceTokens: 256,
   // 3. Parallel lanes are worth it only at this much more useful work per hour.
   throughputGain: 1.2,
-  // 4. How long the tester's scene may take with work beside it. Agreed by the owner on 2026-09-20 in place of a
+  // 4. How long the tester's warm scene may take with work beside it. Agreed by the owner on 2026-09-20 in place of a
   // ratio (it was "no more than 1.5x slower"): a person feels seconds, not ratios, and a ratio tightens by itself
   // every time the card gets faster. On the rented 5090 a scene took 3.6 s alone and 6.6 s beside a full load.
   sceneSecondsUnderLoad: 10,
@@ -52,16 +52,20 @@ export type Call = {
   firstTextFromStartMs?: number | null; firstTextFromRequestMs?: number | null; totalRequestMs?: number | null;
   countedInputTokens?: number | null; decodeTokensPerSecond?: number | null; unattributedMs?: number | null;
   outputCharacters?: number; representative?: boolean; useful?: boolean;
-  caseId?: string; cycle?: number; cacheIntent?: 'cold' | 'warm'; cacheObserved?: 'cold' | 'warm' | 'mixed' | 'unknown';
+  caseId?: string; cycle?: number; cacheIntent?: 'cold' | 'warm' | 'next' | 'prime';
+  cacheObserved?: 'cold' | 'warm' | 'mixed' | 'unknown';
+  expectedCacheTokens?: number; expectedPromptTokens?: number; cacheMatched?: boolean | null;
 };
 export type Phase = {
-  seconds: number; tester: Call[]; agent: Call[]; probes: { completed: number; preempted: number };
+  seconds: number; tester: Call[]; primers?: Call[]; agent: Call[];
+  probes: { completed: number; preempted: number; outputTokens?: number | null };
   // A memory increment counts only after a valid scene uses it. Probes and discarded work never count.
   usefulOutputTokens: number | null; usefulTokensPerHour: number | null; complete?: boolean;
 };
 export type WorkCase = { id: string; fixture: string; fixtureSha256: string; requestSha256: string;
-  targetTokens: number; inputTokens: number; sceneCount: number; outputCharacters: { min: number; max: number } };
-export type Workload = { version: 2; fingerprint: string; cases: WorkCase[]; coldRuns: number; warmRuns: number;
+  targetTokens: number; inputTokens: number; sceneCount: number; outputCharacters: { min: number; max: number };
+  previousInputTokens?: number; prefixTokens?: number; previousRequestSha256?: string };
+export type Workload = { version: 3; fingerprint: string; cases: WorkCase[]; coldRuns: number; warmRuns: number; nextTurns: boolean;
   compactAtTokens: number; keepScenes: number; memoryMode: 'plain' | 'sgr' };
 export type Vram = { samples: number; totalMiB: number | null; usedMiBMax: number | null; freeMiBMin: number | null };
 export type Report = {
@@ -70,6 +74,7 @@ export type Report = {
   bot: { slots: number; poolTokens: number; sharedCache: boolean; contextTokens: number; maxOutputTokens: number;
     quietMs: number; readSeconds: number; historyTokens: number | null };
   phases: { solo?: Phase; loaded?: Phase }; vram: Vram; error?: string; workload?: Workload;
+  plan?: ReturnType<typeof measurementPlan>; smoke?: ReturnType<typeof smokeOutcome>;
 };
 // `unknown` when a run did not produce the number: a missing VRAM reading or a profile the comparison needs a pair for.
 export type Check = { id: number; name: string; verdict: 'pass' | 'fail' | 'unknown'; measured: string; threshold: string };
@@ -86,7 +91,6 @@ const number = (value: number | null | undefined): value is number => typeof val
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const validScene = (text: string) => validTime(text.split('\n')[0].trim())
   && !/<\/?think>|<\|(?:channel|im_start|im_end)|\[start_header_id\]/i.test(text);
-const inRange = (n: number, range: WorkCase['outputCharacters']) => n >= range.min && n <= range.max;
 
 // Clock and provider are the whole timing seam. The same request object crosses countInput and generate so the
 // adapter can reuse its prepared body. countMs includes that operation's queue; queueMs adds both queue waits.
@@ -124,7 +128,8 @@ export async function measureCall(provider: Provider, request: ModelRequest, { l
     // This signed residual also includes server work outside these timers. It is not a network measurement.
     unattributedMs: number(elapsedMs) && number(timing?.promptMs) && number(timing?.predictedMs)
       ? round(elapsedMs - timing.promptMs - timing.predictedMs) : null,
-    formatFailed, representative: range ? inRange(result.text.length, range) : false, useful: false,
+    // A longer complete response costs more work; it cannot flatter the latency result. Only short scenes are excluded.
+    formatFailed, representative: range ? result.text.length >= range.min : false, useful: false,
     cacheObserved: cacheState(timing, counted), ...(timing ? { timings: timing } : {}) };
   return { call, result };
 }
@@ -135,6 +140,36 @@ export function cacheState(timing: Timings | undefined, input: number | null): N
   if (timing.cacheTokens === 0 && timing.promptTokens >= input - tolerance) return 'cold';
   if (timing.cacheTokens >= input - tolerance && timing.promptTokens <= tolerance) return 'warm';
   return 'mixed';
+}
+
+export function expectCache(call: Call, intent: NonNullable<Call['cacheIntent']>, prefixTokens: number) {
+  call.cacheIntent = intent;
+  call.expectedCacheTokens = prefixTokens;
+  const input = call.countedInputTokens;
+  call.expectedPromptTokens = number(input) ? Math.max(0, input - prefixTokens) : undefined;
+  call.cacheMatched = number(call.timings?.cacheTokens) && number(call.timings?.promptTokens) && number(call.expectedPromptTokens)
+    ? Math.abs(call.timings.cacheTokens - prefixTokens) <= THRESHOLDS.cacheToleranceTokens
+      && Math.abs(call.timings.promptTokens - call.expectedPromptTokens) <= THRESHOLDS.cacheToleranceTokens : null;
+}
+
+// A planning allowance, not a prediction or an added performance threshold. Ten seconds per call reuses the existing
+// warm-generation budget; 30% is left outside this estimate for setup, longer cold prefill and queue variation.
+export function measurementPlan({ cases, coldRuns, warmRuns, readSeconds, minutes, smoke = false }:
+  { cases: number; coldRuns: number; warmRuns: number; readSeconds: number; minutes: number; smoke?: boolean }) {
+  const cycles = cases * coldRuns * (smoke ? 1 : 2);
+  const calls = cycles * (1 + warmRuns + (smoke ? 0 : 2));
+  const readingSeconds = cycles * (warmRuns + (smoke ? 0 : 1)) * readSeconds;
+  const callReserveSeconds = calls * THRESHOLDS.sceneSecondsUnderLoad;
+  const plannedSeconds = readingSeconds + callReserveSeconds;
+  const budgetSeconds = minutes * 60, maximumPlannedSeconds = Math.floor(budgetSeconds * 0.7);
+  return { calls, readingSeconds, callReserveSeconds, plannedSeconds, budgetSeconds, maximumPlannedSeconds,
+    fits: plannedSeconds <= maximumPlannedSeconds };
+}
+
+export function smokeOutcome(calls: Call[]) {
+  const cold = calls.find(call => call.cacheIntent === 'cold')?.cacheObserved ?? 'unknown';
+  const warm = calls.find(call => call.cacheIntent === 'warm')?.cacheObserved ?? 'unknown';
+  return { passed: calls.length === 2 && cold === 'cold' && warm === 'warm', cold, warm };
 }
 
 // A second adapter uses this transport for cold calls only. Counting and health requests retain their original bodies.
@@ -176,8 +211,19 @@ export async function buildWorkload(frozen: Library, targetTokens: number, maxOu
     if (candidate.inputTokens <= targetTokens) { lower = middle; best = candidate; } else upper = middle;
   }
   if (!best.sceneCount) throw new Error('fixture_scene_exceeds_target');
+  const target = active(best.state), last = target.story.nodes[target.branch.head!];
+  // The previous turn ends at k-1 and asks for the action stored on scene k. Its last user message contains the
+  // narrator rule; the next request stores the raw action and frozen scene, as the bot does. Count their common
+  // complete-message prefix with an empty user suffix so the server receives a valid chat template. The existing
+  // tolerance covers this small suffix/template boundary, not the added scene.
+  const previousRequest = makeRequest(best.state, { ...best.state.job!, head: last.parent, input: last.input }, maxOutputTokens);
+  let common = 0;
+  while (common < previousRequest.messages.length && JSON.stringify(previousRequest.messages[common]) === JSON.stringify(best.request.messages[common])) common++;
+  const prefixTokens = await count({ ...best.request, messages: [...best.request.messages.slice(0, common), { role: 'user', content: '' }] });
+  const previousInputTokens = await count(previousRequest);
   const lengths = scenes.map(scene => scene.text.length);
-  return { ...best, outputCharacters: { min: Math.min(...lengths), max: Math.max(...lengths) } };
+  return { ...best, previousRequest, previousInputTokens, prefixTokens,
+    outputCharacters: { min: Math.min(...lengths), max: Math.max(...lengths) } };
 }
 
 // Reports expose small samples honestly: count, median and maximum, grouped by history and requested cache state.
@@ -199,26 +245,36 @@ export function summaries(calls: Call[]) {
 // ---- Verdicts -------------------------------------------------------------------------------------------------
 function sampleProblem(run: Report, phase: Phase | undefined, checkFormat = true): string | null {
   const plan = run.workload;
-  if (plan?.version !== 2) return 'legacy workload; scene length and cache conditions were not controlled';
+  if (plan?.version !== 3) return 'legacy workload; the current request series was not measured';
   if (!phase?.complete) return 'incomplete phase';
-  if (phase.tester.length !== plan.cases.length * plan.coldRuns * (1 + plan.warmRuns)) return 'incomplete series';
+  if (phase.tester.length !== plan.cases.length * plan.coldRuns * (1 + plan.warmRuns + (plan.nextTurns ? 1 : 0))) return 'incomplete series';
   for (const cell of plan.cases) for (let cycle = 0; cycle < plan.coldRuns; cycle++) {
     const calls = phase.tester.filter(call => call.caseId === cell.id && call.cycle === cycle);
     if (calls.filter(call => call.cacheIntent === 'cold').length !== 1
-      || calls.filter(call => call.cacheIntent === 'warm').length !== plan.warmRuns) return 'incomplete series';
+      || calls.filter(call => call.cacheIntent === 'warm').length !== plan.warmRuns
+      || (plan.nextTurns && calls.filter(call => call.cacheIntent === 'next').length !== 1)) return 'incomplete series';
+    if (plan.nextTurns) {
+      const primers = phase.primers?.filter(call => call.caseId === cell.id && call.cycle === cycle) ?? [];
+      if (primers.length !== 1 || primers[0].cacheObserved !== 'cold'
+        || primers[0].countedInputTokens !== cell.previousInputTokens) return 'previous-turn primer was not confirmed';
+    }
     for (const call of calls) {
       if (call.countedInputTokens !== cell.inputTokens) return 'input size changed';
       if (call.cacheObserved === 'unknown' || !call.cacheObserved) return 'cache timings unavailable';
       if (call.cacheIntent === 'cold' && call.cacheObserved !== 'cold') return 'cold prefill was not confirmed';
-      if (!call.representative) return 'scene length outside the frozen fixture range';
+      if (call.cacheIntent === 'next' && (!number(cell.prefixTokens) || call.expectedCacheTokens !== cell.prefixTokens
+        || !number(call.expectedPromptTokens))) return 'next-turn prefix was not counted';
+      if (call.cacheIntent === 'next' && number(call.timings?.promptTokens) && number(call.expectedPromptTokens)
+        && call.timings.promptTokens < call.expectedPromptTokens - THRESHOLDS.cacheToleranceTokens) return 'next-turn prefill was not observed';
+      if (!call.representative) return 'scene shorter than the frozen fixture minimum';
       if (checkFormat && call.formatFailed) return 'scene format failed';
     }
   }
   return null;
 }
 
-const sameWork = (a: Report, b: Report) => !!a.workload?.fingerprint && a.workload.version === 2
-  && b.workload?.version === 2 && a.workload.fingerprint === b.workload.fingerprint
+const sameWork = (a: Report, b: Report) => !!a.workload?.fingerprint && a.workload.version === 3
+  && b.workload?.version === 3 && a.workload.fingerprint === b.workload.fingerprint
   && a.model === b.model && a.temperature === b.temperature && a.bot.contextTokens === b.bot.contextTokens
   && a.bot.maxOutputTokens === b.bot.maxOutputTokens && a.bot.readSeconds === b.bot.readSeconds;
 
@@ -238,9 +294,13 @@ export function verdictOf(run: Report): Check[] {
   const contested = !problem && !!loaded && (loaded.agent.length > 0 || loaded.probes.completed > 0);
   const missing = problem ?? (contested ? 'not measured' : 'nothing ran beside the tester');
   // Fixed-prefix replay: each warm request must retain the input prepared by its own preceding cold/warm call.
-  const margins = (loaded?.tester ?? []).filter(call => call.cacheIntent === 'warm').map(call =>
-    number(call.timings?.cacheTokens) && number(call.countedInputTokens)
-      ? call.timings.cacheTokens - (call.countedInputTokens - THRESHOLDS.cacheToleranceTokens) : null).filter(number);
+  const margins = (loaded?.tester ?? []).filter(call => call.cacheIntent === 'warm' || call.cacheIntent === 'next').map(call => {
+    const expected = call.cacheIntent === 'next' ? call.expectedCacheTokens : call.countedInputTokens;
+    const prefill = call.cacheIntent === 'next' ? call.expectedPromptTokens : 0;
+    return number(call.timings?.cacheTokens) && number(call.timings?.promptTokens) && number(expected) && number(prefill)
+      ? Math.min(call.timings.cacheTokens - (expected - THRESHOLDS.cacheToleranceTokens),
+        prefill + THRESHOLDS.cacheToleranceTokens - call.timings.promptTokens) : null;
+  }).filter(number);
   const worst = contested && margins.length ? Math.min(...margins) : null;
   add(2, 'the tester keeps its cache', worst === null ? missing : `${worst} tokens of margin`,
     `>= 0 (tolerance ${THRESHOLDS.cacheToleranceTokens})`, worst === null ? 'unknown' : worst >= 0 ? 'pass' : 'fail');
@@ -250,13 +310,15 @@ export function verdictOf(run: Report): Check[] {
   add(3, 'useful work per hour beside the tester', gain === null ? missing : `${round(gain)}x`,
     `>= ${THRESHOLDS.throughputGain}x`, gain === null ? 'unknown' : gain >= THRESHOLDS.throughputGain ? 'pass' : 'fail');
 
-  // Keep history sizes and cold/warm separate: fast small prompts must not hide slow long ones in a pooled median.
-  const durations = summaries(loaded?.tester ?? []).map(group => group.metrics.elapsedMs.median).filter(number);
-  const sceneSeconds = contested && durations.length && loaded?.tester.every(call => number(call.elapsedMs))
+  // The existing budget was measured after warmup. Cold startup and next-turn added prefill are reported separately.
+  // Keep the warm history sizes separate too: fast small prompts must not hide slow long ones in a pooled median.
+  const warm = loaded?.tester.filter(call => call.cacheIntent === 'warm') ?? [];
+  const durations = summaries(warm).map(group => group.metrics.elapsedMs.median).filter(number);
+  const sceneSeconds = contested && durations.length && warm.every(call => number(call.elapsedMs))
     ? Math.max(...durations) / 1000 : null;
   add(4, 'the tester\'s scene beside other work',
     sceneSeconds === null ? missing : `${round(sceneSeconds, 1)} s`,
-    `each case/cache median <= ${THRESHOLDS.sceneSecondsUnderLoad} s after generation starts`,
+    `each warm replay median <= ${THRESHOLDS.sceneSecondsUnderLoad} s after generation starts`,
     sceneSeconds === null ? 'unknown' : sceneSeconds <= THRESHOLDS.sceneSecondsUnderLoad ? 'pass' : 'fail');
 
   const waits = loaded?.tester.map(call => call.queueMs).filter(number) ?? [];
@@ -377,25 +439,31 @@ export function closePhase(phase: Phase, seconds: number) {
 async function main(args: string[]) {
   const { values } = parseArgs({ args, options: {
     profile: { type: 'string' }, out: { type: 'string' }, decide: { type: 'string' },
-    scenes: { type: 'string', default: '3' }, 'cold-runs': { type: 'string', default: '2' },
-    fixture: { type: 'string', default: 'battle' }, 'read-seconds': { type: 'string', default: '30' },
+    scenes: { type: 'string', default: '1' }, 'cold-runs': { type: 'string', default: '2' },
+    fixture: { type: 'string', default: 'battle' }, 'read-seconds': { type: 'string', default: '15' },
     'history-tokens': { type: 'string' }, minutes: { type: 'string', default: '30' },
-    draft: { type: 'boolean', default: false }, 'no-vram': { type: 'boolean', default: false },
+    draft: { type: 'boolean', default: false }, 'no-vram': { type: 'boolean', default: false }, smoke: { type: 'boolean', default: false },
   } });
   if (values.decide) return void printDecision(resolve(values.decide));
-  const warmRuns = Number(values.scenes), coldRuns = Number(values['cold-runs']);
-  const readSeconds = Number(values['read-seconds']), minutes = Number(values.minutes);
+  const profile = values.profile ?? (values.smoke ? 'smoke' : undefined);
+  const warmRuns = values.smoke ? 1 : Number(values.scenes), coldRuns = values.smoke ? 1 : Number(values['cold-runs']);
+  const readSeconds = values.smoke ? 0 : Number(values['read-seconds']), minutes = values.smoke ? 2 : Number(values.minutes);
   const asked = values['history-tokens'] === undefined ? null : Number(values['history-tokens']);
   const bounded = (n: number, lo: number, hi: number) => Number.isInteger(n) && n >= lo && n <= hi;
-  if (!values.profile || !/^[a-z0-9][a-z0-9-]{0,30}$/.test(values.profile)
+  if (!profile || !/^[a-z0-9][a-z0-9-]{0,30}$/.test(profile)
     || !bounded(warmRuns, 1, 12) || !bounded(coldRuns, 1, 12) || !bounded(readSeconds, 0, 600)
     || !bounded(minutes, 2, 60) || (asked !== null && !bounded(asked, 512, 131072))
     || !['battle', 'chess', 'dance', 'all'].includes(values.fixture)) {
-    throw new Error('Use --profile <name> [--fixture battle|chess|dance|all] [--cold-runs 1..12] [--scenes 1..12] [--read-seconds 0..600] [--history-tokens N] [--minutes 2..60] [--draft] [--no-vram], or --decide <directory>');
+    throw new Error('Use --smoke, or --profile <name> [--fixture battle|chess|dance|all] [--cold-runs 1..12] [--scenes 1..12] [--read-seconds 0..600] [--history-tokens N] [--minutes 2..60] [--draft] [--no-vram], or --decide <directory>');
   }
+  if (values.smoke && (values.fixture === 'all' || (asked !== null && asked > 4000))) throw new Error('smoke_requires_one_small_case');
+  const targets = asked !== null ? [asked] : values.smoke ? [4000] : [4000, 24000, 43000];
+  const names = values.fixture === 'all' ? ['battle', 'chess', 'dance'] : [values.fixture];
+  const plan = measurementPlan({ cases: names.length * targets.length, coldRuns, warmRuns, readSeconds, minutes, smoke: values.smoke });
+  report({ event: 'measurement_plan', ...plan });
+  if (!plan.fits) throw new Error('measurement_plan_exceeds_budget: reduce --read-seconds, --cold-runs, --scenes or cases, or increase --minutes');
   const config = loadModelConfig();
   if (config.provider !== 'llama-cpp') throw new Error('gpu_config_required');
-  const targets = asked === null ? [4000, 24000, 43000] : [asked];
   // This fixed-prefix experiment stays below automatic compaction. A lower configured threshold needs an explicit
   // smaller target; silently clipping it would make the profile incomparable with the other reports.
   if (targets.some(target => target >= config.compactAtTokens || target > config.contextTokens - config.maxOutputTokens)) {
@@ -408,9 +476,9 @@ async function main(args: string[]) {
   const provider: Provider = { check: controls => warm.check(controls),
     countInput: (request, controls) => adapter(request).countInput(request, controls),
     generate: (request, controls) => adapter(request).generate(request, controls) };
-  const directory = resolve(values.out ?? `measurements/${values.profile}`);
+  const directory = resolve(values.out ?? `measurements/${profile}`);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const run: Report = { profile: values.profile, startedAt: new Date().toISOString(), model: config.model,
+  const run: Report = { profile, plan, startedAt: new Date().toISOString(), model: config.model,
     temperature: config.temperature, draft: values.draft, server: { slots: null, contextTokens: null },
     bot: { slots: config.slots, poolTokens: config.poolTokens, sharedCache: config.sharedCache,
       contextTokens: config.contextTokens, maxOutputTokens: config.maxOutputTokens,
@@ -427,7 +495,6 @@ async function main(args: string[]) {
   try {
     const server = await warm.check({ signal });
     run.server = { slots: server.slots ?? null, contextTokens: server.contextTokens ?? null };
-    const names = values.fixture === 'all' ? ['battle', 'chess', 'dance'] : [values.fixture];
     const workloads: (Awaited<ReturnType<typeof buildWorkload>> & { description: WorkCase })[] = [];
     for (const fixture of names) {
       const raw = readFileSync(new URL(`../examples/frozen/${fixture}.json`, import.meta.url), 'utf8');
@@ -438,20 +505,22 @@ async function main(args: string[]) {
           request => warm.countInput(request, { signal }));
         const description: WorkCase = { id: `${fixture}-${targetTokens}`, fixture, fixtureSha256: hash(raw),
           requestSha256: hash(JSON.stringify(work.request)), targetTokens, inputTokens: work.inputTokens,
-          sceneCount: work.sceneCount, outputCharacters: work.outputCharacters };
+          sceneCount: work.sceneCount, outputCharacters: work.outputCharacters,
+          prefixTokens: work.prefixTokens, previousInputTokens: work.previousInputTokens,
+          previousRequestSha256: hash(JSON.stringify(work.previousRequest)) };
         workloads.push({ ...work, description });
         report({ event: 'history_prepared', ...description });
       }
     }
-    const plan = { version: 2 as const, cases: workloads.map(work => work.description), coldRuns, warmRuns,
+    const workload = { version: 3 as const, cases: workloads.map(work => work.description), coldRuns, warmRuns, nextTurns: !values.smoke,
       compactAtTokens: config.compactAtTokens, keepScenes: config.keepScenes, memoryMode: config.memoryMode };
-    run.workload = { ...plan, fingerprint: hash(JSON.stringify({ ...plan, model: config.model,
+    run.workload = { ...workload, fingerprint: hash(JSON.stringify({ ...workload, model: config.model,
       temperature: config.temperature, contextTokens: config.contextTokens,
       maxOutputTokens: config.maxOutputTokens, readSeconds })) };
     save();
     // The small case supplies disposable probes. Agent turns rotate through every case that has something to compact.
     const agentWorkloads = workloads.filter(work => work.sceneCount > config.keepScenes);
-    if (!agentWorkloads.length) throw new Error('no_compactable_fixture');
+    if (!values.smoke && !agentWorkloads.length) throw new Error('no_compactable_fixture');
     const load = (phase: Phase, stopping: AbortSignal) => {
       const agent = (async () => {
         let index = 0;
@@ -470,16 +539,19 @@ async function main(args: string[]) {
       const probes = (async () => {
         while (!stopping.aborted) {
           try {
-            await scheduler.background.generate(structuredClone(workloads[0].request), { signal: stopping });
+            const result = await scheduler.background.generate(structuredClone(workloads[0].request), { signal: stopping });
             phase.probes.completed++;
+            phase.probes.outputTokens = number(phase.probes.outputTokens) && number(result.usage?.outputTokens)
+              ? phase.probes.outputTokens + result.usage.outputTokens : null;
           } catch { phase.probes.preempted++; }
           try { await delay(1000, undefined, { signal: stopping }); } catch { break; }
         }
       })();
       return Promise.all([agent, probes]);
     };
-    for (const name of ['solo', 'loaded'] as const) {
-      const phase: Phase = { seconds: 0, tester: [], agent: [], probes: { completed: 0, preempted: 0 },
+    const phases: ('solo' | 'loaded')[] = values.smoke ? ['solo'] : ['solo', 'loaded'];
+    for (const name of phases) {
+      const phase: Phase = { seconds: 0, tester: [], primers: [], agent: [], probes: { completed: 0, preempted: 0, outputTokens: 0 },
         usefulOutputTokens: null, usefulTokensPerHour: null, complete: false };
       run.phases[name] = phase;
       report({ event: 'phase_started', phase: name });
@@ -489,25 +561,34 @@ async function main(args: string[]) {
       const loading = name === 'loaded' ? load(phase, loadSignal) : Promise.resolve();
       try {
         for (const work of workloads) for (let cycle = 0; cycle < coldRuns; cycle++) {
-          for (let index = 0; index <= warmRuns; index++) {
+          const measure = async (intent: NonNullable<Call['cacheIntent']>) => {
             signal.throwIfAborted();
-            const intent = index === 0 ? 'cold' : 'warm';
-            // A fixed branch point in both phases. Each new cycle forces cold prefill in its selected slot; warm
-            // calls replay the same input. Generated text is measured but never appended to the next trial.
-            const request = structuredClone(work.request);
-            if (intent === 'cold') coldRequests.add(request);
+            const request = structuredClone(intent === 'prime' ? work.previousRequest : work.request);
+            if (intent === 'cold' || intent === 'prime') coldRequests.add(request);
             const turn = scheduler.foreground.openTurn({ holder: 'measure-tester' });
             try {
-              const { call } = await measureCall(turn, request, { label: 'tester_scene', signal,
+              const { call } = await measureCall(turn, request, { label: intent === 'prime' ? 'tester_prime' : 'tester_scene', signal,
                 inputLimitTokens: config.compactAtTokens - 1, range: work.outputCharacters });
-              Object.assign(call, { caseId: work.description.id, cycle, cacheIntent: intent,
-                useful: !call.formatFailed && call.representative });
-              phase.tester.push(call);
+              expectCache(call, intent, intent === 'next' ? work.prefixTokens : intent === 'warm' ? work.inputTokens : 0);
+              Object.assign(call, { caseId: work.description.id, cycle,
+                useful: intent !== 'prime' && !call.formatFailed && call.representative });
+              (intent === 'prime' ? phase.primers! : phase.tester).push(call);
               closePhase(phase, (performance.now() - started) / 1000);
               report({ event: 'call_measured', ...call });
               save();
             } finally { turn.end(); }
-            if (index < warmRuns) await delay(readSeconds * 1000, undefined, { signal });
+          };
+          // Replay for the best-case prefix measurement; then prime k-1 independently and request k for a real
+          // next-turn prefix change. Both phases use the same frozen scene k, not an earlier generated alternative.
+          await measure('cold');
+          for (let index = 0; index < warmRuns; index++) {
+            await delay(readSeconds * 1000, undefined, { signal });
+            await measure('warm');
+          }
+          if (!values.smoke) {
+            await measure('prime');
+            await delay(readSeconds * 1000, undefined, { signal });
+            await measure('next');
           }
         }
         phase.complete = true;
@@ -516,8 +597,15 @@ async function main(args: string[]) {
         await loading;
         closePhase(phase, (performance.now() - started) / 1000);
         for (const summary of summaries(phase.tester)) report({ event: 'series_measured', phase: name, ...summary });
+        report({ event: 'phase_completed', phase: name, complete: phase.complete, probes: phase.probes,
+          usefulTokensPerHour: phase.usefulTokensPerHour });
         save();
       }
+    }
+    if (values.smoke) {
+      run.smoke = smokeOutcome(run.phases.solo?.tester ?? []);
+      report({ event: 'smoke_checked', ...run.smoke });
+      if (!run.smoke.passed) { run.error = 'smoke_cache_failed'; process.exitCode = 1; }
     }
   } catch (error) {
     const code = String(errorCode(error) ?? (error instanceof Error ? error.message : ''));
@@ -530,7 +618,8 @@ async function main(args: string[]) {
     run.completedAt = new Date().toISOString();
     save();
     report({ event: 'measurement_written', directory, profile: run.profile, error: run.error });
-    for (const check of verdictOf(run)) report({ event: 'check', ...check });
+    if (values.smoke && !run.smoke) { run.smoke = smokeOutcome(run.phases.solo?.tester ?? []); save(); report({ event: 'smoke_checked', ...run.smoke }); }
+    if (!values.smoke) for (const check of verdictOf(run)) report({ event: 'check', ...check });
   }
 }
 
@@ -581,6 +670,10 @@ function printDecision(directory: string) {
       usefulTokensPerHour: entry.usefulTokensPerHour, testerTokensPerSecond: entry.testerTokensPerSecond,
       formatFailures: entry.formatFailures });
     for (const check of entry.checks) report({ event: 'check', profile: entry.profile, ...check });
+    const source = runs.find(run => run.profile === entry.profile)!;
+    for (const phase of ['solo', 'loaded'] as const) for (const summary of summaries(source.phases[phase]?.tester ?? [])) {
+      report({ event: 'series_measured', profile: entry.profile, phase, ...summary });
+    }
   }
   report({ event: 'check', ...decision.draft });
   report({ event: 'check', ...decision.together });

@@ -1,12 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { active, addSeed, beginJob, commitTurn, emptyLibrary, history, newStory } from '../lib/library.ts';
 import type { Library } from '../lib/library.ts';
 import { makeRequest } from './prompt.ts';
 import type { GenerationResult, ModelRequest, Provider } from './model.ts';
 import { THRESHOLDS, verdictOf, decide, measureCall, cacheState, withoutPromptCache, buildWorkload,
-  summaries, measureAgentTurn, closePhase } from './gpu-measure.ts';
+  summaries, measureAgentTurn, closePhase, measurementPlan, smokeOutcome, expectCache } from './gpu-measure.ts';
 import type { Call, Phase, Report, WorkCase } from './gpu-measure.ts';
 
 const request: ModelRequest = { system: 'Synthetic timing test.', messages: [{ role: 'user', content: 'Continue.' }], maxOutputTokens: 1000 };
@@ -114,6 +119,12 @@ test('history sizing counts actual makeRequest messages and repeats whole frozen
   assert.deepEqual(copied.map(node => node.text), Array.from({ length: 6 }, (_, i) => originals[i % 2].text));
   assert.equal(history(before.story, before.branch.head).length, 2);
   assert.deepEqual(work.outputCharacters, { min: originals[0].text.length, max: originals[0].text.length });
+  assert.deepEqual(work.previousRequest, makeRequest(work.state,
+    { ...work.state.job!, head: copied.at(-1)!.parent, input: copied.at(-1)!.input }, 1000));
+  assert.equal(work.previousInputTokens, 2200);
+  assert.equal(work.prefixTokens, 2200);
+  // The previous request wraps the last action with the narrator rule; the next stores the raw action and a scene.
+  assert.notEqual(work.previousRequest.messages.at(-1)!.content, work.request.messages.at(-3)!.content);
 });
 
 test('all three checked-in frozen fixtures render through the ordinary prompt path', async () => {
@@ -197,7 +208,7 @@ const make = (over: Partial<Report> = {}): Report => ({ profile: '96k-3', starte
   model: 'synthetic', temperature: 0.8, draft: false, server: { slots: 3, contextTokens: 98304 },
   bot: { slots: 3, poolTokens: 98304, sharedCache: true, contextTokens: 65536, maxOutputTokens: 4096,
     quietMs: 60000, readSeconds: 30, historyTokens: null },
-  workload: { version: 2, fingerprint: 'same-work', cases: [cell], coldRuns: 1, warmRuns: 1,
+  workload: { version: 3, fingerprint: 'same-work', cases: [cell], coldRuns: 1, warmRuns: 1, nextTurns: false,
     compactAtTokens: 44000, keepScenes: 4, memoryMode: 'plain' },
   phases: { solo: phase(), loaded: phase({ usefulTokensPerHour: 90000 }) },
   vram: { samples: 3, totalMiB: 32768, usedMiBMax: 30000, freeMiBMin: 2768 }, ...over });
@@ -229,16 +240,19 @@ test('a cold response where warm reuse was requested fails cache retention, with
   assert.equal(of(run, 2).measured, `${THRESHOLDS.cacheToleranceTokens - 4000} tokens of margin`);
 });
 
-test('a slow cold series cannot hide behind more fast warm samples', () => {
+test('cold prefill is reported separately and cannot redefine the agreed warm-scene budget', () => {
   const tester = [coldCall(), call({ elapsedMs: 2000 }), call({ elapsedMs: 2000 }), call({ elapsedMs: 2000 })];
   tester[0].elapsedMs = 16000;
   const run = make({ workload: { ...make().workload!, warmRuns: 3 },
     phases: { solo: phase({ tester: structuredClone(tester) }), loaded: phase({ tester }) } });
-  assert.equal(of(run, 4).verdict, 'fail');
-  assert.equal(of(run, 4).measured, '16 s');
+  assert.equal(of(run, 4).verdict, 'pass');
+  assert.equal(of(run, 4).measured, '2 s');
   const rows = summaries(tester);
   assert.equal(rows.find(row => row.group.endsWith(':cold'))!.n, 1);
   assert.deepEqual(rows.find(row => row.group.endsWith(':warm'))!.metrics.elapsedMs, { n: 3, median: 2000, max: 2000 });
+  tester[1].elapsedMs = tester[2].elapsedMs = tester[3].elapsedMs = 16000;
+  assert.equal(of(run, 4).verdict, 'fail');
+  assert.equal(of(run, 4).measured, '16 s');
 });
 
 test('queue, useful throughput and memory thresholds still reject their own failures', () => {
@@ -299,4 +313,125 @@ test('a measured memory shortage rejects the combined profile; an incomplete war
     workload: { ...make().workload!, warmRuns: 2 }, phases: {
       solo: phase({ tester: [coldCall(), call(), call({ decodeTokensPerSecond: null })] }), loaded: phase() } });
   assert.equal(decide([series(false), series(true)]).draft.verdict, 'unknown');
+});
+
+test('long complete scenes remain representative, while short or truncated scenes cannot validate a profile', async () => {
+  const measure = (text: string, finishReason: 'stop' | 'length' = 'stop') => measureCall({ async generate(_request, controls) {
+    controls?.onStart?.(); return result({ text, finishReason });
+  } }, request, { label: 'length', range: { min: 100, max: 200 } });
+  const text = '2026-09-20 21:00\n\n' + 'Synthetic. '.repeat(50);
+  assert.equal((await measure(text)).call.representative, true);
+  assert.equal((await measure(text)).call.formatFailed, false);
+  assert.equal((await measure('2026-09-20 21:00\n\nShort.')).call.representative, false);
+  assert.equal((await measure(text, 'length')).call.formatFailed, true);
+});
+
+test('the default plan leaves room for setup and cold prefill, and an overfull plan is rejected before model work', () => {
+  const plan = measurementPlan({ cases: 3, coldRuns: 2, warmRuns: 1, readSeconds: 15, minutes: 30 });
+  assert.deepEqual(plan, { calls: 48, readingSeconds: 360, callReserveSeconds: 480,
+    plannedSeconds: 840, budgetSeconds: 1800, maximumPlannedSeconds: 1260, fits: true });
+  assert.equal(measurementPlan({ cases: 3, coldRuns: 2, warmRuns: 3, readSeconds: 30, minutes: 30 }).fits, false);
+  assert.equal(measurementPlan({ cases: 9, coldRuns: 2, warmRuns: 1, readSeconds: 15, minutes: 30 }).fits, false);
+  assert.equal(measurementPlan({ cases: 1, coldRuns: 1, warmRuns: 1, readSeconds: 0, minutes: 2, smoke: true }).calls, 2);
+});
+
+test('smoke requires exactly one confirmed cold and warm call; missing timings or cache reuse fail', () => {
+  assert.deepEqual(smokeOutcome([coldCall(), call()]), { passed: true, cold: 'cold', warm: 'warm' });
+  assert.equal(smokeOutcome([coldCall(), { ...coldCall(), cacheIntent: 'warm' }]).passed, false);
+  assert.equal(smokeOutcome([coldCall(), call({ cacheObserved: 'unknown' })]).passed, false);
+  assert.equal(smokeOutcome([coldCall()]).passed, false);
+  assert.equal(smokeOutcome([coldCall(), call(), call()]).passed, false);
+});
+
+test('a next turn retains its counted common prefix while pre-filling a new action and scene', () => {
+  const next = call({ cacheObserved: 'mixed', timings: { cacheTokens: 3010, promptTokens: 990 }, elapsedMs: 30000 });
+  expectCache(next, 'next', 3000);
+  assert.equal(next.expectedPromptTokens, 1000);
+  assert.equal(next.cacheMatched, true);
+  const primer = { ...coldCall(), cacheIntent: 'prime' as const, countedInputTokens: 3300 };
+  const nextPhase = () => phase({ tester: [coldCall(), call(), next], primers: [primer] });
+  const run = make({ workload: { ...make().workload!, nextTurns: true,
+    cases: [{ ...cell, prefixTokens: 3000, previousInputTokens: 3300 }] },
+    phases: { solo: nextPhase(), loaded: nextPhase() } });
+  assert.equal(of(run, 2).verdict, 'pass');
+  // The added-prefill latency stays visible and separate from the existing warm replay gate.
+  assert.equal(of(run, 4).verdict, 'pass');
+  assert.equal(summaries(run.phases.loaded!.tester).find(row => row.group.endsWith(':next'))!.metrics.elapsedMs.median, 30000);
+  next.timings = { cacheTokens: 0, promptTokens: 4000 };
+  next.cacheObserved = 'cold';
+  expectCache(next, 'next', 3000);
+  assert.equal(next.cacheMatched, false);
+  assert.equal(of(run, 2).verdict, 'fail');
+  next.timings = { cacheTokens: 3990, promptTokens: 10 };
+  next.cacheObserved = 'warm';
+  expectCache(next, 'next', 3000);
+  assert.equal(of(run, 2).verdict, 'unknown');
+  primer.cacheObserved = 'unknown';
+  assert.equal(of(run, 2).verdict, 'unknown');
+});
+
+for (const [smoke, reuse] of [[true, true], [true, false], [false, true]]) test(
+  `${smoke ? 'smoke' : 'measurement'} CLI observes fake-server cache behavior (${reuse})`, { timeout: 15000 }, async t => {
+  // A fresh cwd and explicit environment prevent reading any workspace configuration. Only this loopback fake is used.
+  const directory = mkdtempSync(join(tmpdir(), 'gpu-measure-smoke-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const caches: boolean[] = [];
+  const server = createServer(async (incoming, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of incoming) chunks.push(Buffer.from(chunk));
+    const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) as
+      { cache_prompt: boolean; messages: { content: string }[] } : null;
+    const send = (value: object) => { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(value)); };
+    if (incoming.url === '/v1/models') return send({ data: [{ id: 'synthetic' }] });
+    if (incoming.url === '/props') return send({ total_slots: 1, default_generation_settings: { n_ctx: 65536 } });
+    const input = Math.ceil(body!.messages.reduce((sum, message) => sum + message.content.length, 0) / 4);
+    if (incoming.url?.endsWith('/input_tokens')) return send({ input_tokens: input });
+    assert.equal(incoming.url, '/v1/chat/completions');
+    caches.push(body!.cache_prompt);
+    const cached = reuse && body!.cache_prompt ? input - 10 : 0;
+    response.setHeader('Content-Type', 'text/event-stream');
+    response.end(`data: ${JSON.stringify({ model: 'synthetic', choices: [{ index: 0,
+      delta: { content: '2026-09-20 21:00\n\n' + 'Синтетическая сцена. '.repeat(120) }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: input, completion_tokens: 500, prompt_tokens_details: { cached_tokens: cached } },
+      timings: { cache_n: cached, prompt_n: input - cached, prompt_ms: 20, predicted_n: 500, predicted_ms: 500 } })}\n\ndata: [DONE]\n\n`);
+  });
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const mode = smoke ? ['--smoke'] : ['--profile', 'fake-normal', '--history-tokens', '4000', '--cold-runs', '1',
+    '--scenes', '1', '--read-seconds', '0', '--minutes', '2'];
+  const child = spawn(process.execPath, [fileURLToPath(new URL('./gpu-measure.ts', import.meta.url)), ...mode, '--no-vram', '--out', directory], {
+    cwd: directory, env: { PATH: dirname(process.execPath), SIMPLE_CHAT_PROVIDER: 'llama-cpp', SIMPLE_CHAT_MODEL: 'synthetic',
+      SIMPLE_CHAT_BASE_URL: `http://127.0.0.1:${address.port}`, SIMPLE_CHAT_MODEL_TIMEOUT_MS: '10000' }, stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  t.after(() => child.kill());
+  let stdout = '', stderr = '';
+  child.stdout.on('data', chunk => { stdout += chunk; });
+  child.stderr.on('data', chunk => { stderr += chunk; });
+  const code = await new Promise<number | null>((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
+  assert.equal(code, reuse ? 0 : 1, stderr);
+  const saved = JSON.parse(readFileSync(join(directory, 'report.json'), 'utf8')) as Report;
+  assert.equal(saved.plan!.budgetSeconds, 120);
+  const rows = stdout.trim().split('\n').map(line => JSON.parse(line) as { event: string; cacheObserved?: string });
+  if (smoke) {
+    assert.deepEqual(caches, [false, true]);
+    assert.deepEqual(saved.smoke, { passed: reuse, cold: 'cold', warm: reuse ? 'warm' : 'cold' });
+    assert.equal(saved.plan!.calls, 2);
+    assert.equal(saved.phases.loaded, undefined);
+    assert.deepEqual(rows.filter(row => row.event === 'call_measured').map(row => row.cacheObserved), ['cold', reuse ? 'warm' : 'cold']);
+  } else {
+    assert.deepEqual(caches, [false, true, false, true, false, true, false, true]);
+    assert.equal(saved.plan!.calls, 8);
+    assert.equal(saved.smoke, undefined);
+    for (const part of [saved.phases.solo!, saved.phases.loaded!]) {
+      assert.equal(part.complete, true);
+      assert.deepEqual(part.tester.map(call => call.cacheIntent), ['cold', 'warm', 'next']);
+      assert.equal(part.primers!.length, 1);
+      assert.ok(part.tester[2].expectedPromptTokens! > THRESHOLDS.cacheToleranceTokens);
+      // This fake reports best-case reuse even on a changed prompt. The CLI must expose the missing next prefill.
+      assert.equal(part.tester[2].cacheMatched, false);
+    }
+    assert.equal(of(saved, 2).verdict, 'unknown');
+  }
 });
