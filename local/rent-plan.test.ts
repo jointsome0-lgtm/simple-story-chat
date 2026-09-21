@@ -33,22 +33,27 @@ test('the disk size is one number: the plan, the offer filter, the storage price
   assert.equal(describeOffer(offer({ dph_total: 0.9, storage_cost: 0.1 }), plan).hour, 0.921);
 });
 
-test('the traffic term counts every file a default run downloads, at the sizes the manifests pin', () => {
-  const plan = rentPlan({ gpus: 2 });
+// What gpu/bootstrap.sh and gpu/image-bootstrap.sh pull with no flags set, at the sizes the manifests pin: Gemma
+// and its draft, the fine-tune, the ComfyUI-native encoder and VAE, and the Turbo checkpoint
+// (SIMPLE_CHAT_IMAGE_TURBO defaults to true). The gated bf16 originals under OFFICIAL_ are downloaded only by
+// SIMPLE_CHAT_IMAGE_SOURCE=official, and the three Qwen files only by SIMPLE_CHAT_IMAGE_QWEN=true.
+const defaultDownloadBytes = () => {
   const language = pinned('manifest.env'), image = pinned('image-manifest.env');
   const bytes = (record: Record<string, string>, key: string) => {
     const size = Number(record[key]);
     assert.ok(Number.isSafeInteger(size) && size > 0, `${key} is a byte count`);
     return size;
   };
-  // What gpu/bootstrap.sh and gpu/image-bootstrap.sh pull with no flags set: Gemma and its draft, the fine-tune,
-  // the ComfyUI-native encoder and VAE, and the Turbo checkpoint (SIMPLE_CHAT_IMAGE_TURBO defaults to true). The
-  // gated bf16 originals under OFFICIAL_ are downloaded only by SIMPLE_CHAT_IMAGE_SOURCE=official.
-  const models = bytes(language, 'MODEL_BYTES') + bytes(language, 'DRAFT_BYTES') + bytes(image, 'IMAGE_MODEL_BYTES')
+  return bytes(language, 'MODEL_BYTES') + bytes(language, 'DRAFT_BYTES') + bytes(image, 'IMAGE_MODEL_BYTES')
     + bytes(image, 'IMAGE_ENCODER_BYTES') + bytes(image, 'IMAGE_VAE_BYTES') + bytes(image, 'IMAGE_TURBO_BYTES');
-  assert.equal(plan.sessionBytes - models, 6000000000, 'the pinned files plus the wheels, and nothing invented');
+};
+
+test('the traffic term counts every file a default run downloads, at the sizes the manifests pin', () => {
+  const plan = rentPlan({ gpus: 2 });
+  assert.equal(plan.sessionBytes - defaultDownloadBytes(), 6000000000, 'the pinned files plus the wheels, and nothing invented');
   // Gemma is 25.2 GB of the 63 GB the session pulls. At a cent per GB that is $0.63, not $0.25.
-  assert.ok(plan.sessionBytes > 2 * bytes(language, 'MODEL_BYTES'), 'the image lane is counted, not Gemma alone');
+  const gemma = Number(pinned('manifest.env')['MODEL_BYTES']);
+  assert.ok(plan.sessionBytes > 2 * gemma, 'the image lane is counted, not Gemma alone');
   assert.equal(describeOffer(offer({ inet_down_cost: 0.01 }), plan).download, 0.63);
 });
 
@@ -58,10 +63,11 @@ test('the Qwen comparison is pinned beside the rest and is priced only by the se
   const qwen = ['IMAGE_QWEN_MODEL_BYTES', 'IMAGE_QWEN_ENCODER_BYTES', 'IMAGE_QWEN_VAE_BYTES']
     .reduce((total, key) => total + Number(image[key]), 0);
   assert.equal(qwen, 17283091112, 'the int8 transformer, the int8 encoder and the bf16 VAE');
-  // The term above is what an offer is chosen by, and the test over it counts the pinned files exactly. So this is
-  // the other half of the same rule, written where somebody who turns the opt-in on will look: the default run's
-  // traffic is not the opt-in run's, and the difference is one number the docs quote in minutes.
-  assert.ok(plan.sessionBytes > 3 * qwen, 'the opt-in is not what the default session is priced by');
+  // The term above is what an offer is chosen by. This is the other half of the same rule, written where somebody
+  // who turns the opt-in on will look: the traffic term is the default download and the wheels, and these three
+  // files are outside it. It has to be that identity — `sessionBytes > 3 * qwen` stood here, and it holds just as
+  // well with the 17.28 GB added to the sum, so the regression it named could not have failed it.
+  assert.equal(plan.sessionBytes, defaultDownloadBytes() + 6000000000, 'the opt-in is priced into every session');
   // And it still fits the disk the plan rents: the pinned files, the opt-in, and about 13 GiB for torch.
   assert.ok((plan.sessionBytes + qwen) / 1e9 + 14 < plan.diskGb, 'the opt-in does not fit the rented disk');
 });
