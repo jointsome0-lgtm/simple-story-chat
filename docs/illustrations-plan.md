@@ -109,15 +109,31 @@ Three of the prompts were drawn by `krea/krea-2-medium-turbo` through OpenRouter
 16:9, seed 7, with one style sentence appended to every prompt by us. $0.015 and 18.5 s each [M]; $0.045 in all.
 The pictures are not in the repository.
 
-- **They belong to their scenes** [M, one reader]. The gate, the cart braced by a shield, the bandaged left forearm,
-  the blue-hilted dagger in a machine's joint, salt pouring from torn sacks; five people holding a door while one
-  kneels at its lock; two women at a monitor showing dancers, the couple in costume in a lit doorway behind them,
-  cold screen light against warm hall light. Every element named in a prompt is in its picture but one bystander.
-- **One appended sentence held the style** across all three [M]. This is the fix for the defect of step 1.
-- **Left and right are lost** [M]: the description puts the bandage on the left wrist and the bracelet on the right,
-  the picture puts both on one arm.
-- The commander looks like the same person in both battle pictures. With one seed and two samples that is luck
-  until shown otherwise [A].
+A first reading here called the pictures faithful, "every element named in a prompt is in its picture but one
+bystander". That was too kind. The owner had the pictures read again by GPT-6 (Codex, a fresh session, read-only,
+given the scenes, the descriptions and the prompts but not the first reading), and its element-by-element check is
+the one to keep [M, second reader]:
+
+- **The description loses more than the image model does.** In the gate scene the shield-bearer strikes a machine's
+  fingers with the edge of his shield; the description turned that into bracing a cart. In the door scene the
+  commander is forbidden to load her injured arm and holds the door with her right shoulder; the description
+  dropped the prohibition and the picture has her pushing with both palms. In the dance scene the man chairing the
+  commission rewinds the recording; the description gave the gesture to a woman, and asked for "a video of
+  dancers" where the scene is about one frozen count.
+- **Only `prompt` reaches the image model, and it does not carry the other fields.** `light` said cold and
+  overcast, the prompt did not, the picture is warm and sunny, and the picture is right by what it was sent. In the
+  door scene `people[]` holds one person and the prompt names five. The structure cannot be checked against itself
+  before it is sent, and should be assembled in code from the fields rather than written a second time by the model.
+- **The description invents.** A bracelet the story only mentions became a glowing one.
+- **The image model's own faults** [M]: the dagger lies along the machine's leg rather than in a joint and the grip
+  cannot be traced; four distinct people where five were asked for; tangled lower bodies in the crowded frame; two
+  near-identical women; pseudo-text on a screen and on papers despite "no text".
+- **The style held** across all three [M, both readers]. This is the fix for the defect of step 1.
+- **The characters did not** [M]: the shield-bearer wears plate in one picture and a shirt and waistcoat thirteen
+  story-minutes later, because one prompt said "in armor" and the other did not; the commander's clothes are fixed
+  nowhere. One seed is no evidence of identity. A fixed appearance line per recurring character, kept with the
+  memory and repeated verbatim, is the next thing to try, before any reference image.
+- Left and right of a body must be written as the character's own, and screen sides separately.
 
 OpenRouter lists Krea 2 as `large` ($0.06 an image), `medium` ($0.03) and `medium-turbo` ($0.015) [M, its pages];
 the general `/api/v1/models` list omits image models, which are under `/api/v1/images/models`. Each takes a `seed`
