@@ -25,6 +25,10 @@ image_source="${SIMPLE_CHAT_IMAGE_SOURCE:-comfy}"
 # default, because deciding that at minute 50 of a rental is too late to download it.
 turbo="${SIMPLE_CHAT_IMAGE_TURBO:-true}"
 [[ "$turbo" = true || "$turbo" = false ]] || { echo 'Use SIMPLE_CHAT_IMAGE_TURBO=true or false.' >&2; exit 1; }
+# Qwen-Image 2.1 is the opt-in third checkpoint: 17.28 GB that local/rent-plan.ts does not price, so a session that
+# wants it says so before it rents. Off by default, unlike Turbo, because it is a comparison somebody chose to make.
+qwen="${SIMPLE_CHAT_IMAGE_QWEN:-false}"
+[[ "$qwen" = true || "$qwen" = false ]] || { echo 'Use SIMPLE_CHAT_IMAGE_QWEN=true or false.' >&2; exit 1; }
 # An offer that advertises 1171 Mbit/s has delivered 115 (docs/gpu.md). Below the floor the answer is to destroy the
 # machine and take the next candidate, not to wait: 22 GB at 100 Mbit/s is half the session.
 min_mbit="${SIMPLE_CHAT_IMAGE_MIN_MBIT:-200}"
@@ -96,11 +100,21 @@ else
   [[ "$turbo" = false ]] || add_record "$(hf_url "$IMAGE_TURBO_REPO" "$IMAGE_TURBO_REVISION" "$IMAGE_TURBO_PATH")" \
     "$models_dir/diffusion_models/$IMAGE_TURBO_FILE" "$IMAGE_TURBO_SHA256" "$IMAGE_TURBO_BYTES" none
 fi
+# Qwen brings its own transformer, its own text encoder and its own VAE; nothing of Krea's is shared with it, and
+# nothing of Krea's is replaced, so both checkpoints stay drawable from the same box. Public repository, no token.
+if [[ "$qwen" = true ]]; then
+  add_record "$(hf_url "$IMAGE_QWEN_REPO" "$IMAGE_QWEN_REVISION" "$IMAGE_QWEN_MODEL_PATH")" \
+    "$models_dir/diffusion_models/$IMAGE_QWEN_MODEL_FILE" "$IMAGE_QWEN_MODEL_SHA256" "$IMAGE_QWEN_MODEL_BYTES" none
+  add_record "$(hf_url "$IMAGE_QWEN_REPO" "$IMAGE_QWEN_REVISION" "$IMAGE_QWEN_ENCODER_PATH")" \
+    "$models_dir/text_encoders/$IMAGE_QWEN_ENCODER_FILE" "$IMAGE_QWEN_ENCODER_SHA256" "$IMAGE_QWEN_ENCODER_BYTES" none
+  add_record "$(hf_url "$IMAGE_QWEN_REPO" "$IMAGE_QWEN_REVISION" "$IMAGE_QWEN_VAE_PATH")" \
+    "$models_dir/vae/$IMAGE_QWEN_VAE_FILE" "$IMAGE_QWEN_VAE_SHA256" "$IMAGE_QWEN_VAE_BYTES" none
+fi
 
 # The pinned graph names the `comfy` files; this fills in what this run installs, so `official` is posted with the
 # file names it downloaded. Whether ComfyUI's loaders read the official diffusers layout at all is still unverified.
 render_workflow() {
-  python3 - "$task_dir/$IMAGE_WORKFLOW" "$IMAGE_MODEL_FILE" "$encoder_file" "$vae_file" <<'PY'
+  python3 - "$task_dir/$1" "$2" "$3" "$4" <<'PY'
 import json,sys
 graph=json.load(open(sys.argv[1]))
 widgets={'UNETLoader':('unet_name',sys.argv[2]),'CLIPLoader':('clip_name',sys.argv[3]),'VAELoader':('vae_name',sys.argv[4])}
@@ -111,7 +125,15 @@ json.dump(graph,sys.stdout,indent=2)
 print()
 PY
 }
-[[ "$print_workflow" = false ]] || { render_workflow; exit 0; }
+# The Qwen graphs have no second source to choose between — the manifest names their three files and nothing else
+# installs them — so rendering them is not substitution but the same guarantee run twice: what is written into
+# $gpu_dir names the files this run verified.
+render_qwen() {
+  for graph in "$IMAGE_QWEN_WORKFLOW" "$IMAGE_QWEN_EDIT_WORKFLOW"; do
+    render_workflow "$graph" "$IMAGE_QWEN_MODEL_FILE" "$IMAGE_QWEN_ENCODER_FILE" "$IMAGE_QWEN_VAE_FILE" >"$gpu_dir/$graph"
+  done
+}
+[[ "$print_workflow" = false ]] || { render_workflow "$IMAGE_WORKFLOW" "$IMAGE_MODEL_FILE" "$encoder_file" "$vae_file"; exit 0; }
 
 # One run at a time on this machine. Two would resume the same .part from two ends and the corruption would only
 # show in the SHA256, after the whole file has been paid for; a dry run would meanwhile throw away a leftover the
@@ -152,6 +174,7 @@ if [[ "$dry_run" = true ]]; then
     printf '%s\t%s bytes\t%s\n' "$(basename -- "$destination")" "$size" "$([[ -f "$destination" ]] && echo present || echo 'to fetch')"
   done
   echo "The graph would load $IMAGE_MODEL_FILE, $encoder_file and $vae_file; --print-workflow prints it."
+  [[ "$qwen" = false ]] || echo "Qwen is on: $IMAGE_QWEN_WORKFLOW and $IMAGE_QWEN_EDIT_WORKFLOW would load $IMAGE_QWEN_MODEL_FILE, $IMAGE_QWEN_ENCODER_FILE and $IMAGE_QWEN_VAE_FILE."
   exit 0
 fi
 
@@ -338,5 +361,7 @@ print(f'{target.name}: SHA256 verified.')
 PY
 done
 # The graph is written only once the weights it names are verified, so its presence means the box can render.
-render_workflow >"$gpu_dir/$IMAGE_WORKFLOW"
+render_workflow "$IMAGE_WORKFLOW" "$IMAGE_MODEL_FILE" "$encoder_file" "$vae_file" >"$gpu_dir/$IMAGE_WORKFLOW"
+[[ "$qwen" = false ]] || render_qwen
 echo "Prepared; post $gpu_dir/$IMAGE_WORKFLOW. Start with: bash $task_dir/image-serve.sh"
+[[ "$qwen" = false ]] || echo "Qwen is on: $gpu_dir/$IMAGE_QWEN_WORKFLOW draws frames, $gpu_dir/$IMAGE_QWEN_EDIT_WORKFLOW takes reference portraits."

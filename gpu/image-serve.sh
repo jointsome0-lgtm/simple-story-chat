@@ -30,6 +30,16 @@ done
 workflow="$gpu_dir/$IMAGE_WORKFLOW"
 [[ -f "$workflow" ]] || { echo "Missing $workflow; rerun image-bootstrap.sh." >&2; exit 1; }
 grep -q "\"$encoder\"" "$workflow" || { echo "$workflow names another encoder than $image_source installed." >&2; exit 1; }
+# The Qwen checkpoint is additive: the same server serves it, from its own three files and its own two graphs. This
+# refuses to start with the flag on and the files absent, rather than let the first cell of a timed run find out.
+if [[ "${SIMPLE_CHAT_IMAGE_QWEN:-false}" = true ]]; then
+  for file in "models/diffusion_models/$IMAGE_QWEN_MODEL_FILE" "models/text_encoders/$IMAGE_QWEN_ENCODER_FILE" "models/vae/$IMAGE_QWEN_VAE_FILE"; do
+    [[ -f "$comfy_dir/$file" ]] || { echo "Missing $file; rerun image-bootstrap.sh with SIMPLE_CHAT_IMAGE_QWEN=true." >&2; exit 1; }
+  done
+  for graph in "$IMAGE_QWEN_WORKFLOW" "$IMAGE_QWEN_EDIT_WORKFLOW"; do
+    [[ -f "$gpu_dir/$graph" ]] || { echo "Missing $gpu_dir/$graph; rerun image-bootstrap.sh with SIMPLE_CHAT_IMAGE_QWEN=true." >&2; exit 1; }
+  done
+fi
 # Krea 2 produces garbage under SageAttention, and several rented ComfyUI templates turn it on through their own
 # launcher. This script is the launcher: the flag is absent, and an inherited request for it is refused rather than
 # silently ignored, because a bad picture would otherwise be blamed on the fine-tune.

@@ -52,6 +52,20 @@ test('the traffic term counts every file a default run downloads, at the sizes t
   assert.equal(describeOffer(offer({ inet_down_cost: 0.01 }), plan).download, 0.63);
 });
 
+test('the Qwen comparison is pinned beside the rest and is priced only by the session that asks for it', () => {
+  const plan = rentPlan({ gpus: 2 });
+  const image = pinned('image-manifest.env');
+  const qwen = ['IMAGE_QWEN_MODEL_BYTES', 'IMAGE_QWEN_ENCODER_BYTES', 'IMAGE_QWEN_VAE_BYTES']
+    .reduce((total, key) => total + Number(image[key]), 0);
+  assert.equal(qwen, 17283091112, 'the int8 transformer, the int8 encoder and the bf16 VAE');
+  // The term above is what an offer is chosen by, and the test over it counts the pinned files exactly. So this is
+  // the other half of the same rule, written where somebody who turns the opt-in on will look: the default run's
+  // traffic is not the opt-in run's, and the difference is one number the docs quote in minutes.
+  assert.ok(plan.sessionBytes > 3 * qwen, 'the opt-in is not what the default session is priced by');
+  // And it still fits the disk the plan rents: the pinned files, the opt-in, and about 13 GiB for torch.
+  assert.ok((plan.sessionBytes + qwen) / 1e9 + 14 < plan.diskGb, 'the opt-in does not fit the rented disk');
+});
+
 test('the card count drives the query, the ceiling and the RAM floor, and an unpriced count is refused', () => {
   const one = rentPlan(), two = rentPlan({ gpus: 2 });
   assert.equal(offerQuery(one).num_gpus.eq, 1);

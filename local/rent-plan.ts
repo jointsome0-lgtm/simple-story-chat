@@ -33,6 +33,8 @@ const DISK_GB = 150;
 // unless SIMPLE_CHAT_IMAGE_TURBO=false and the ComfyUI-native encoder and VAE unless
 // SIMPLE_CHAT_IMAGE_SOURCE=official, so the gated bf16 originals are not in the sum and Turbo is. On Vast the
 // traffic price differs between machines by a factor of twenty, so this term decides between offers.
+// Qwen-Image 2.1 is not here on purpose: SIMPLE_CHAT_IMAGE_QWEN=true adds its 17.28 GB, and a session that means
+// to run that comparison prices it by hand rather than pay for it on every rental that does not.
 const SESSION_BYTES = 25201484928 + 514687200 + 12821743396 + 5242467968 + 253806246 + 13141730784 + 6000000000;
 // docs/gpu.md asks for at least 32 GB of RAM for the language lane; the image lane wants its own. This is the
 // container's share, not the machine's: a container on the measured 256-core host held 30.72 cores of it. Without a
