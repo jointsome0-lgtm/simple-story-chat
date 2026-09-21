@@ -189,6 +189,48 @@ assembly, send `moment`, the new style sentence, the reader's per-scene wording 
 can follow at all — and its question is whether Krea can draw a stated contact between two things. If it cannot
 with a prompt written by hand, no instruction to the describing model will fix it.
 
+## Step 4, prompts written by hand, 2026-09-21
+
+The question of step 3, asked directly: the second reader's own wording for the three scenes, put over the step 3
+descriptions by hand, assembled as shot, setting, moment, people, objects, light, style, with the new style
+sentence. 249, 369 and 332 words. Three more `medium-turbo` pictures at $0.015 and about 10 s each. A third
+clean-context GPT-6 session checked them, listed every relation the prompts state and marked each followed or
+not, and compared each picture with its step 3 counterpart without being told which was which.
+
+**Verdict: with reservations, with reservations, no.** Still no picture shows its scene's main action.
+
+- **31 of 70 stated relations were followed** [M, the reader's count]. Followed: that a thing is present, who is
+  next to whom, the large left and right of the frame, a door that is closed, a requested numeral ("10" appeared
+  once lettering was allowed). Not followed: exact contacts (blade in the joint, shield rim on the fingers, back
+  against the door, heels on the threshold, lockpick in the keyhole), whose limb is whose, which person performs
+  which action (the mouse went to another official), where the viewer stands relative to a screen, and what the
+  screen shows. The guard has three arms. The dancers strike the pose at the door instead of watching it on the
+  monitor.
+- **Blind comparison with step 3**: the new picture is closer in both fight scenes (one shield, visible splints,
+  pouring salt, the closed door) and the older one is closer in the dance scene. Sending `moment` and naming the
+  door's state fixed what they were meant to fix.
+- **Identity and style as before**: the shield-bearer reads as the same man in different armour, the commander is
+  held by hair, grey clothes and the injured arm, faces drift toward cartoon in the dance scene. The injury again
+  changed arms.
+
+What follows [D]: this image model, at this size and step count, draws who, where and with what, and does not draw
+what is being done to what. A better description cannot buy the second. Two ways forward, not exclusive. Choose
+the frame for what can be drawn: the describing call picks a moment that needs no precise contact — the people
+and the place just before or after the action — and code refuses frames that depend on one. And find out whether
+this is the model or its distilled 8-step variant: the same three prompts through `krea-2-large` cost $0.18, and
+on a rented card `Krea-2-Raw` can be set against `Krea-2-Turbo`.
+
+## What the reader sees
+
+Settled with the owner 2026-09-21. The tester funds the second card by topping up the vast.ai account, so the card
+is rented and run by us and story text stays on our side. The picture comes after the text; what the reader needs
+is to know how long. So: a status line under the scene while the picture is made, replaced by the picture; the
+seconds from the end of the scene to the picture logged as a non-negative integer, and measured in the rental's
+last block together with the wait of the next turn. Hosted `medium-turbo` took 9.5–10.3 s a picture over six
+pictures [M]; the description call on our card and `Krea-2-Turbo` fp8 on a second card are not measured. What
+happens to a picture still in flight when the reader answers is the owner's to decide; cancelling it is the
+proposal.
+
 ## The model, if it gets that far
 
 Krea 2, open weights, released 2026-06-22: a 12.9B diffusion transformer, shipped as `Raw` (undistilled, for
