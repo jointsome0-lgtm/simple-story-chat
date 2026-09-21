@@ -54,10 +54,11 @@ type Direct = { seconds: number; failure?: 'ssh_failed' | 'ssh_timeout' | 'ssh_s
 // ok: both paths answer. no_tunnel: nothing listens on the forwarded port. ssh_path: the server answers on its own
 // loopback while the forwarded port does not. server: it does not answer even there. ssh_unreachable: no separate
 // SSH session either. ssh_stalled: the watching session stopped delivering. unclear: the session worked, yet it
-// returned no report.
-export type Reading = 'ok' | 'no_tunnel' | 'ssh_path' | 'server' | 'ssh_unreachable' | 'ssh_stalled' | 'unclear';
-// `tunnel.props` is absent when `models` failed: the bot's check stops there as well.
-export type Report = { at: string; reading: Reading; tunnel: { models: Probe; props?: Probe }; direct: Direct; remote?: Remote };
+// returned no report. counters: the reading was asked for counters alone and probed neither path.
+export type Reading = 'ok' | 'no_tunnel' | 'ssh_path' | 'server' | 'ssh_unreachable' | 'ssh_stalled' | 'unclear' | 'counters';
+// `tunnel.props` is absent when `models` failed: the bot's check stops there as well, and the whole field is absent
+// from a counters-only reading, which probes nothing.
+export type Report = { at: string; reading: Reading; tunnel?: { models: Probe; props?: Probe }; direct: Direct; remote?: Remote };
 export type Options = {
   host?: string; events?: number | 'all'; script?: string; timeoutMs?: number;
   spawn?: SpawnSsh; request?: Request; now?: () => Date;
@@ -66,7 +67,11 @@ export type Options = {
 // line; after that a line later than `silenceMs` counts as missing.
 export type WatchOptions = Pick<Options, 'host' | 'script' | 'spawn' | 'request' | 'now'> &
 // `events` is how many retained server events each line carries; a watcher that only wants counters asks for none.
-  { every: number; signal: AbortSignal; retryMs?: number; startMs?: number; silenceMs?: number; events?: number };
+// `parts` limits the snapshot to the parts named, so a frequent watcher does not walk /proc or re-read the server's
+// log every line. `probeTunnel` off drops the probe of the forwarded port that is paired with each line: a sampler
+// running beside a measurement must not add requests to the path whose latency is being measured.
+  { every: number; signal: AbortSignal; retryMs?: number; startMs?: number; silenceMs?: number; events?: number;
+    parts?: string; probeTunnel?: boolean };
 
 const script = () => readFileSync(new URL('../gpu/diagnose-remote.py', import.meta.url), 'utf8');
 
@@ -189,9 +194,11 @@ function direct(host: string, events: number | 'all', source: string, spawnChild
 
 function reading(tunnel: Report['tunnel'], session: Direct, remote: Remote | undefined): Reading {
   // Both steps of the bot's check. How long they took is in `seconds`; a slow answer is still an answer.
-  const passes = (check: Report['tunnel']) => check.models.httpStatus === 200 && check.props?.httpStatus === 200;
+  const passes = (check: NonNullable<Report['tunnel']>) => check.models.httpStatus === 200 && check.props?.httpStatus === 200;
   if (!remote) return session.failure === 'ssh_silent' ? 'ssh_stalled'
     : session.failure === 'ssh_failed' || session.failure === 'ssh_timeout' ? 'ssh_unreachable' : 'unclear';
+  // A line asked for counters alone probed neither path and answers nothing about which of them is broken.
+  if (!tunnel) return 'counters';
   if (!passes(remote.http)) return 'server';
   if (passes(tunnel)) return 'ok';
   return tunnel.models.failure === 'ECONNREFUSED' ? 'no_tunnel' : 'ssh_path';
@@ -208,29 +215,36 @@ export async function diagnose({ host = 'simple-chat-vast', events = 25, script:
 
 // On 17 September sessions that were already open kept working while new ones hung. A watcher therefore keeps one
 // session open and the remote script reports through it, so a failure that starts later can still be seen from the
-// server's side. Every line is paired with a probe of the forwarded port made on its arrival.
+// server's side. Every line is paired with a probe of the forwarded port made on its arrival, unless the watcher
+// asked for counters alone: a sampler beside a measurement would otherwise measure a path it is adding requests to.
 export async function watch({ host = 'simple-chat-vast', every, script: source = script(), retryMs = Math.max(5000, every * 1000), startMs = 30000, silenceMs = every * 1000 + 20000,
-  spawn: spawnChild = spawn, request = fetch, now = () => new Date(), signal: stopped, events = 5 }: WatchOptions, emit: (report: Report) => void): Promise<void> {
+  spawn: spawnChild = spawn, request = fetch, now = () => new Date(), signal: stopped, events = 5,
+  parts, probeTunnel = true }: WatchOptions, emit: (report: Report) => void): Promise<void> {
   if (!HOST.test(host)) throw new Error('invalid_host');
   // A second between lines is allowed: a server that runs out of memory does it within seconds of its start, and a
   // slower watch reports nothing but the exit. A lost session is still reopened no faster than every five seconds.
   if (!(Number.isSafeInteger(every) && every >= 1 && every <= 3600)) throw new Error('invalid_interval');
   if (!(Number.isSafeInteger(events) && events >= 0 && events <= 9999)) throw new Error('invalid_events');
+  if (parts !== undefined && !parts.split(',').every(part => PARTS.includes(part))) throw new Error('invalid_parts');
+  const asked = parts === undefined ? '' : ` --parts ${parts}`;
   const session = () => new Promise<void>((resolve, reject) => {
     const started = performance.now();
     const age = () => Math.round(performance.now() - started) / 1000;
     // Keepalives end a session whose path is dead, as they do for the bot's tunnel; the exit is then reported.
     const child = spawnChild('ssh', [...SSH, '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3', host,
-      `python3 - --events ${events} --every ${every}`], { stdio: ['pipe', 'pipe', 'pipe'], env: sshEnvironment() });
+      `python3 - --events ${events} --every ${every}${asked}`], { stdio: ['pipe', 'pipe', 'pipe'], env: sshEnvironment() });
     let pending = '';
     let diagnostic = '';
     let sshReason: SshReason | undefined;
     let reports = Promise.resolve();
     const report = (direct: Direct, remote?: Remote) => {
       const at = now().toISOString();
+      // Whether this line arrived before the watcher was stopped. Stopping ends the reporting, it does not throw
+      // away what has already been read: the peak a sampler exists for can be in the last line of a session.
+      const arrived = !stopped.aborted;
       reports = reports.then(async () => {
-        const tunnel = await tunnelCheck(request, stopped);
-        if (!stopped.aborted) emit({ at, reading: reading(tunnel, direct, remote), tunnel, direct, remote });
+        const tunnel = probeTunnel ? await tunnelCheck(request, stopped) : undefined;
+        if (arrived) emit({ at, reading: reading(tunnel, direct, remote), ...(tunnel ? { tunnel } : {}), direct, remote });
       });
       // A snapshot that cannot be written ends the watch with that error: a quiet terminal would pass for a healthy one.
       reports.catch(() => { closed(undefined); child.kill(); });

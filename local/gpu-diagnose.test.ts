@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter, once } from 'node:events';
+import { setTimeout as delay } from 'node:timers/promises';
 import { PassThrough } from 'node:stream';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -60,7 +61,7 @@ test('a snapshot compares the forwarded port with the server loopback and keeps 
   finally { delete process.env.SIMPLE_CHAT_SYNTHETIC_SECRET; }
   assert.equal(report.reading, 'ok');
   assert.equal(report.at, '1970-01-01T00:00:00.000Z');
-  assert.deepEqual([report.tunnel.models.httpStatus, report.tunnel.props?.httpStatus, report.direct.failure], [200, 200, undefined]);
+  assert.deepEqual([report.tunnel!.models.httpStatus, report.tunnel!.props?.httpStatus, report.direct.failure], [200, 200, undefined]);
   assert.deepEqual(f.calls[0].args.slice(-2), ['synthetic-host', 'python3 - --events 25']);
   for (const option of ['StrictHostKeyChecking=yes', 'BatchMode=yes', 'ControlPath=none']) assert.ok(f.calls[0].args.includes(option));
   assert.equal(await f.calls[0].script, 'print(1)');
@@ -97,10 +98,10 @@ test('the reading separates a missing tunnel, a failing SSH path and a server th
   const paths: string[] = [];
   const second = await diagnose({ script: '', spawn: fixture(succeed(remote())).spawn,
     request: async url => { paths.push(new URL(url).pathname); return paths.length === 1 ? answers() : stalls(); } });
-  assert.deepEqual([paths, second.reading, second.tunnel.props?.failure], [['/v1/models', '/props'], 'ssh_path', 'timeout']);
+  assert.deepEqual([paths, second.reading, second.tunnel!.props?.failure], [['/v1/models', '/props'], 'ssh_path', 'timeout']);
   const stalled = await diagnose({ script: '', spawn: fixture(succeed(remote())).spawn, request: stalls });
-  assert.deepEqual([stalled.tunnel.models.failure, stalled.tunnel.props], ['timeout', undefined]);
-  assert.equal((await diagnose({ script: '', spawn: fixture(succeed(remote())).spawn, request: resets })).tunnel.models.failure, 'UND_ERR_SOCKET');
+  assert.deepEqual([stalled.tunnel!.models.failure, stalled.tunnel!.props], ['timeout', undefined]);
+  assert.equal((await diagnose({ script: '', spawn: fixture(succeed(remote())).spawn, request: resets })).tunnel!.models.failure, 'UND_ERR_SOCKET');
   assert.doesNotMatch(JSON.stringify([second, stalled]), /PRIVATE/);
 });
 
@@ -163,7 +164,7 @@ test('a watching session that goes quiet is reported as stalled; stopping the wa
     reports.push(report);
     if (reports.length === 3) stopped.abort();
   });
-  assert.deepEqual(reports.map(report => [report.reading, report.direct.failure, report.tunnel.models.failure]),
+  assert.deepEqual(reports.map(report => [report.reading, report.direct.failure, report.tunnel!.models.failure]),
     [['ssh_path', undefined, 'timeout'], ['ssh_stalled', 'ssh_silent', 'timeout'], ['ssh_stalled', 'ssh_silent', 'timeout']]);
   // The exit of a stopped session is not reported, and no new session follows.
   assert.deepEqual(f.calls.map(call => call.killed), [true]);
@@ -195,6 +196,53 @@ test('a watching session that goes quiet is reported as stalled; stopping the wa
   // A second is the shortest watch, for the seconds after a server starts; less is no interval at all.
   await assert.rejects(watch({ every: 0, spawn: f.spawn, request: answers, signal: stopped.signal }, () => {}), { message: 'invalid_interval' });
   await assert.rejects(watch({ host: '-oProxyCommand=synthetic', every: 30, spawn: f.spawn, request: answers, signal: stopped.signal }, () => {}), { message: 'invalid_host' });
+});
+
+test('a counters-only watcher probes no path and asks the instance for the parts it reads', async () => {
+  // The video-memory sampler runs beside a measurement: a probe of the forwarded port would be one more request in
+  // the latency it is there to measure, and every part it does not ask for is work the instance does not do.
+  const f = fixture(worker => { worker.stdout.write(`${remote()}\n`); });
+  const stopped = new AbortController();
+  const reports: Report[] = [];
+  let probes = 0;
+  const counted: NonNullable<Options['request']> = () => { probes++; return answers(); };
+  await watch({ every: 2, events: 0, parts: 'gpus,processes', probeTunnel: false, retryMs: 1, script: '',
+    spawn: f.spawn, request: counted, signal: stopped.signal }, report => { reports.push(report); stopped.abort(); });
+  assert.deepEqual(reports.map(report => [report.reading, report.tunnel]), [['counters', undefined]]);
+  assert.equal(probes, 0);
+  assert.equal(f.calls[0].args.at(-1), 'python3 - --events 0 --every 2 --parts gpus,processes');
+  assert.equal(reports[0].remote!.gpus.length, 2);
+  await assert.rejects(watch({ every: 2, parts: 'gpus,PRIVATE_PART', script: '', spawn: f.spawn, request: answers,
+    signal: stopped.signal }, () => {}), { message: 'invalid_parts' });
+});
+
+test('a reading that arrived before the watcher was stopped is delivered, however long its tunnel check takes', async () => {
+  // The peak a sampler exists for can be in the last line of a session. Stopping ends the reporting; it does not
+  // throw away a reading that was already in hand while its paired tunnel check was still running.
+  let worker: Worker | undefined;
+  const f = fixture(started => { worker = started; started.stdout.write(`${remote()}\n`); });
+  const stopped = new AbortController();
+  const reports: Report[] = [];
+  let probes = 0, release = () => {};
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const slow: NonNullable<Options['request']> = async () => {
+    // The first line's two probes answer; the second line's first probe is still running when the stop arrives.
+    if (++probes === 3) await held;
+    return answers();
+  };
+  const until = async (ready: () => boolean) => {
+    for (let attempt = 0; attempt < 1000 && !ready(); attempt++) await delay(2);
+    assert.ok(ready(), 'the watcher reached the state the test waits for');
+  };
+  const watching = watch({ every: 30, retryMs: 1, script: '', spawn: f.spawn, request: slow, signal: stopped.signal },
+    report => { reports.push(report); });
+  await until(() => reports.length === 1);
+  worker!.stdout.write(`${remote({ httpStatus: 503, seconds: 0.01 })}\n`);
+  await until(() => probes === 3);
+  stopped.abort();
+  release();
+  await watching;
+  assert.deepEqual(reports.map(report => report.remote!.http.models.httpStatus), [200, 503]);
 });
 
 test('a host or an event count that is not plain is refused before SSH starts', async () => {
@@ -273,6 +321,12 @@ test('the remote script reports a synthetic server and retained events without a
   // A watcher prints a line per interval and ends by itself at its time limit.
   const lines = await run('0', '--every', '1', '--limit', '2');
   assert.deepEqual(lines.map(line => line.http.health.httpStatus), [200, 200]);
+  // --parts leaves out the work the caller did not ask for: no requests at the server it is watching, no walk of
+  // /proc and no re-reading of the server's whole log, which a sampler would otherwise repeat every two seconds.
+  const [counters] = await run('0', '--parts', 'gpus,processes');
+  assert.deepEqual(Object.keys(counters).filter(key => ['http', 'serverEvents', 'sockets', 'machine', 'container'].includes(key)), []);
+  // The cards are asked for; whether this machine has a driver to answer decides between a reading and `failed`.
+  assert.ok(counters.processes && ('gpus' in counters || counters.failed.includes('gpus')));
 });
 
 test('every card is reported under the driver\'s own index, so two cards can be told apart', async t => {

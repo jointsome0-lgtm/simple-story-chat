@@ -36,6 +36,9 @@ test('the fake server answers the endpoints the provider calls, and its count is
   const other = await llama.generate(request('Другая история. '.repeat(50)), { slot: 1 });
   assert.equal(other.usage!.cachedInputTokens, 0);
   assert.deepEqual(fake.calls.map(call => call.slot), [0, 0, 1]);
+  // Each prompt is counted once before it is generated, recorded here as the generations answered by then: the
+  // count above, reused by its own generation, and one for each of the two requests that followed.
+  assert.deepEqual(fake.counts, [0, 1, 2]);
 });
 
 test('a call that asks for no cache gets none, and a server told to keep none never reports any', async t => {
@@ -88,6 +91,57 @@ test('a slot serves one request at a time, so more callers than slots have to wa
   assert.deepEqual(waits.slice(0, 2), [0, 0]);
   assert.ok(waits[2] >= 100, `the third call waited ${waits[2]} ms`);
   assert.deepEqual([...new Set(fake.calls.map(call => call.slot))].sort(), [0, 1]);
+});
+
+test('a slot freed for a caller that asked for it by number wakes that caller, not whoever queued first', async t => {
+  // The scheduler pins a call to a slot so that its prefix cache stays with its owner, so the fake must free a slot
+  // for the caller that asked for that slot. Waking one waiter only would let a waiter for another slot swallow it.
+  const fake = await startFakeLlama({ slots: 2, contextTokens: 8192, outputTokens: 400,
+    predictMsPerToken: 5, promptMsPerToken: 0, realTime: true });
+  t.after(() => fake.close());
+  const ended: string[] = [];
+  const send = (slot: number, name: string, tokens: number) =>
+    fetch(`${fake.baseUrl}/v1/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: `Синтетический запрос ${name}. ` }],
+        max_tokens: tokens, stream: false, id_slot: slot }) }).then(async response => {
+      await response.json();
+      ended.push(name);
+    });
+  // Slot 0 is held for two seconds and slot 1 for a moment; then one caller waits for each of them.
+  const running = [send(0, 'long', 400), send(1, 'short', 8)];
+  await new Promise(resolve => setTimeout(resolve, 20));
+  running.push(send(0, 'after-long', 8));
+  await new Promise(resolve => setTimeout(resolve, 5));
+  running.push(send(1, 'after-short', 8));
+  await Promise.all(running);
+  // The caller of slot 1 is served as soon as the short call frees it, without waiting for the long one on slot 0.
+  assert.deepEqual(ended, ['short', 'after-short', 'long', 'after-long']);
+  const queued = new Map(fake.calls.map(call => [call.slot, call.queuedMs]));
+  assert.ok(queued.get(1)! < 1000, `the caller of slot 1 waited ${queued.get(1)} ms`);
+});
+
+test('a request that asks for a schema is answered in that schema, so a compaction can be rehearsed', async t => {
+  const fake = await startFakeLlama({ slots: 1, contextTokens: 8192, outputTokens: 64 });
+  t.after(() => fake.close());
+  const llama = provider(fake.baseUrl, 1);
+  // The shape of the bot's memory request: the scenes a fact may cite are listed in the schema itself.
+  const schema = { type: 'object', required: ['facts'], additionalProperties: false, properties: {
+    facts: { type: 'array', minItems: 1, maxItems: 200, items: { type: 'object',
+      required: ['kind', 'at', 'text', 'source'], additionalProperties: false, properties: {
+        kind: { type: 'string', enum: ['event', 'state'] },
+        at: { type: 'string', minLength: 1, maxLength: 200 },
+        text: { type: 'string', minLength: 1, maxLength: 4000 },
+        source: { type: 'array', minItems: 1, maxItems: 3, items: { type: 'string', enum: ['n1', 'n2', 'n3'] } },
+      } } } } };
+  const answer = await llama.generate({ ...request('Синтетическая история. '), outputSchema: schema, purpose: 'memory' });
+  assert.equal(answer.finishReason, 'stop');
+  const parsed = JSON.parse(answer.text) as { facts: { kind: string; at: string; text: string; source: string[] }[] };
+  assert.equal(parsed.facts.length, 1);
+  assert.equal(parsed.facts[0].kind, 'event');
+  assert.ok(parsed.facts[0].at.length > 0 && parsed.facts[0].text.length > 0);
+  // Every scene the schema allows is cited: a memory that left one out would be refused for missing coverage.
+  assert.deepEqual(parsed.facts[0].source, ['n1', 'n2', 'n3']);
+  assert.equal(answer.usage!.outputTokens, Math.ceil(answer.text.length / 4));
 });
 
 test('several samples of one prompt read it once, as the research batches ask for them', async t => {

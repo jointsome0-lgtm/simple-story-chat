@@ -13,6 +13,7 @@ import type { AddressInfo } from 'node:net';
 type Message = { role: string; content: string };
 type Body = {
   messages?: unknown; max_tokens?: unknown; stream?: unknown; n?: unknown; id_slot?: unknown; cache_prompt?: unknown;
+  response_format?: unknown;
 };
 export type FakeOptions = {
   model?: string; slots?: number; contextTokens?: number;
@@ -33,6 +34,10 @@ export type FakeCall = { slot: number; promptTokens: number; cachedTokens: numbe
 // A token stands for four characters. The exact number is not the point — only that the count is deterministic,
 // grows with the text and lets two prompts be compared piece by piece, which is what a prefix cache does.
 const CHARS_PER_TOKEN = 4;
+// What a rehearsal answers with by default. The measurer discards a scene shorter than the shortest scene of the
+// frozen fixture it replays (1847 characters for `battle`) and reports "scene shorter than the frozen fixture
+// minimum" instead of a verdict, so a server that answers in 256 tokens decides nothing at all.
+export const REHEARSAL_OUTPUT_TOKENS = 520;
 const SENTENCE = 'Синтетический ответ замера: сцена продолжается, ключ остаётся у того, у кого был. ';
 // The measurer asks the model to begin its answer with a date and counts an answer that does not as a format failure.
 // The date is read back out of the request, so this server knows nothing about the caller's prompt.
@@ -60,6 +65,31 @@ function messagesOf(value: unknown): Message[] {
 const whole = (value: unknown, fallback: number) =>
   typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : fallback;
 
+// The schema a request asks its answer to follow, in either spelling the adapters use.
+const schemaOf = (format: unknown) => {
+  const asked = (format ?? {}) as { schema?: unknown; json_schema?: { schema?: unknown } | null };
+  return asked.json_schema?.schema ?? asked.schema;
+};
+// An answer that obeys a schema: the first value every field allows. llama-server constrains its sampling with a
+// grammar built from the schema, and the bot's memory step is a schema request; a server that answered it with prose
+// would fail every compaction, and the rehearsal would never reach the scene that uses the memory. Only the schema
+// is read here, never the prompt — the scene ids a memory must cite are in the schema itself.
+function sample(schema: unknown): unknown {
+  const node = (schema ?? {}) as { type?: unknown; enum?: unknown[]; properties?: Record<string, unknown>;
+    items?: unknown; maxItems?: unknown };
+  if (Array.isArray(node.enum) && node.enum.length) return node.enum[0];
+  if (node.type === 'array') {
+    // Every value an item is allowed to take, so that a field listing the scenes to cite cites all of them.
+    const items = (node.items ?? {}) as { enum?: unknown[] };
+    const all = Array.isArray(items.enum) && items.enum.length ? items.enum : [sample(node.items)];
+    return typeof node.maxItems === 'number' ? all.slice(0, Math.max(1, node.maxItems)) : all;
+  }
+  if (node.properties) return Object.fromEntries(Object.entries(node.properties).map(([key, value]) => [key, sample(value)]));
+  if (node.type === 'integer' || node.type === 'number') return 0;
+  if (node.type === 'boolean') return false;
+  return SENTENCE.trim();
+}
+
 export async function startFakeLlama({ model = 'fake-llama', slots: slotCount = 1, contextTokens = 65536,
   outputTokens = 64, promptMsPerToken = 0.05, predictMsPerToken = 20, realTime = false,
   draftAcceptance, prefixCache = true }: FakeOptions = {}) {
@@ -68,6 +98,10 @@ export async function startFakeLlama({ model = 'fake-llama', slots: slotCount = 
   // waiting and about the scene slowing down beside other work would pass on a server that never had to choose.
   const slots = Array.from({ length: slotCount }, () => ({ tokens: [] as string[], busy: false }));
   const calls: FakeCall[] = [];
+  // Every request that asked the server to count a prompt, recorded as the number of generations it had already
+  // answered. A scheduler that admits calls by size counts each call it queues, and those counts land between
+  // generations; one that hands a whole slot to a call asks for no count of its own.
+  const counts: number[] = [];
   const waiting: (() => void)[] = [];
 
   // The body is decoded only once it is whole: a prompt of 40,000 tokens arrives in many chunks, and a Russian
@@ -100,7 +134,9 @@ export async function startFakeLlama({ model = 'fake-llama', slots: slotCount = 
     }
     return best;
   }
-  const release = (slot: number) => { slots[slot].busy = false; waiting.shift()?.(); };
+  // Every waiter is woken, not the first one: a waiter that asked for another slot cannot take this one, and waking
+  // it alone would leave the caller that asked for exactly this slot asleep until some other call happened to end.
+  const release = (slot: number) => { slots[slot].busy = false; for (const resume of waiting.splice(0)) resume(); };
   async function acquire(asked: unknown, tokens: string[]) {
     for (;;) {
       const slot = pick(asked, tokens);
@@ -124,11 +160,14 @@ export async function startFakeLlama({ model = 'fake-llama', slots: slotCount = 
       : Math.min(sharedPrefix(slots[slot].tokens, tokens), Math.max(0, tokens.length - 1));
     slots[slot].tokens = prefixCache ? tokens : [];
     const limit = whole(request.max_tokens, outputTokens);
-    const answer = Math.max(1, Math.min(outputTokens, limit));
+    const wanted = Math.max(1, Math.min(outputTokens, limit));
     const date = messages.map(message => message.content).join('\n').match(DATE)?.[0];
     const opening = date ? `${date}\n` : '';
-    const text = (opening + SENTENCE.repeat(Math.ceil(answer * CHARS_PER_TOKEN / SENTENCE.length) + 1))
-      .slice(0, answer * CHARS_PER_TOKEN);
+    const schema = schemaOf(request.response_format);
+    const text = schema ? JSON.stringify(sample(schema))
+      : (opening + SENTENCE.repeat(Math.ceil(wanted * CHARS_PER_TOKEN / SENTENCE.length) + 1)).slice(0, wanted * CHARS_PER_TOKEN);
+    // A schema answer is as long as the schema makes it; a scene is as long as it was asked to be.
+    const answer = schema ? Math.max(1, Math.ceil(text.length / CHARS_PER_TOKEN)) : wanted;
     const read = tokens.length - cached;
     const timings = { cache_n: cached, prompt_n: read, prompt_ms: read * promptMsPerToken,
       predicted_n: answer, predicted_ms: answer * predictMsPerToken,
@@ -176,6 +215,7 @@ export async function startFakeLlama({ model = 'fake-llama', slots: slotCount = 
       if (request.method !== 'POST') return json(404, { error: 'not_found' });
       const sent = await body(request);
       if (path === '/v1/chat/completions/input_tokens') {
+        counts.push(calls.length);
         return json(200, { input_tokens: tokenize(messagesOf(sent.messages)).length });
       }
       if (path !== '/v1/chat/completions') return json(404, { error: 'not_found' });
@@ -199,7 +239,7 @@ export async function startFakeLlama({ model = 'fake-llama', slots: slotCount = 
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   const { port } = server.address() as AddressInfo;
   return {
-    port, baseUrl: `http://127.0.0.1:${port}`, calls,
+    port, baseUrl: `http://127.0.0.1:${port}`, calls, counts,
     async close() {
       server.closeAllConnections();
       await new Promise<unknown>(resolve => server.close(resolve));
@@ -210,7 +250,7 @@ export async function startFakeLlama({ model = 'fake-llama', slots: slotCount = 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const { values } = parseArgs({ args: process.argv.slice(2), options: {
     model: { type: 'string', default: 'fake-llama' }, slots: { type: 'string', default: '1' },
-    context: { type: 'string', default: '65536' }, 'output-tokens': { type: 'string', default: '256' },
+    context: { type: 'string', default: '65536' }, 'output-tokens': { type: 'string', default: String(REHEARSAL_OUTPUT_TOKENS) },
     'ms-per-token': { type: 'string', default: '20' },
   } });
   const fake = await startFakeLlama({ model: values.model, slots: Number(values.slots), realTime: true,

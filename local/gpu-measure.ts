@@ -69,14 +69,16 @@ export type WorkCase = { id: string; fixture: string; fixtureSha256: string; req
 export type Workload = { version: 3; fingerprint: string; cases: WorkCase[]; coldRuns: number; warmRuns: number; nextTurns: boolean;
   compactAtTokens: number; keepScenes: number; memoryMode: 'plain' | 'sgr' };
 // Memory of one card, by the driver's own index. A box with two cards runs llama-server on one of them and, this
-// session, an image model on the other: one number per card, never one across all of them.
-export type Card = { index: number; totalMiB: number | null; usedMiBMax: number | null; freeMiBMin: number | null };
-// `card` is the index llama-server was seen on, from `--card` or from the pids the driver reports per card. It stays
-// null while no card has been established, and the memory verdicts then have nothing to be about.
+// session, an image model on the other: one number per card, never one across all of them. `server` records that
+// llama-server was seen computing on this card, which is how the verdicts find the cards they are about.
+export type Card = { index: number; totalMiB: number | null; usedMiBMax: number | null; freeMiBMin: number | null; server: boolean };
+// `card` is the index the memory verdicts are about: the card llama-server was seen on, the tightest of them when it
+// was seen on several, and the operator's `--card` only while the driver attributes nothing. It stays null while no
+// card has been established, and the memory verdicts then have nothing to be about.
 export type Vram = { samples: number; card: number | null; cards: Card[] };
 // The shape written before memory was recorded per card: one set of numbers for the whole machine. `--decide` still
 // reads those reports, so the fields survive as optional ones rather than as a second type to branch on.
-type StoredVram = Vram & Partial<Omit<Card, 'index'>>;
+type StoredVram = Vram & Partial<Omit<Card, 'index' | 'server'>>;
 export type Report = {
   profile: string; startedAt: string; completedAt?: string; model: string; temperature: number;
   server: { slots: number | null; contextTokens: number | null }; draft: boolean;
@@ -189,6 +191,13 @@ export function measurementPlan({ cases, coldRuns, warmRuns, readSeconds, minute
   return { calls, readingSeconds, callReserveSeconds, plannedSeconds, budgetSeconds, maximumPlannedSeconds,
     fits: plannedSeconds <= maximumPlannedSeconds };
 }
+
+// What the scheduler is told about the server, always from the configuration the bot itself runs under. The three
+// belong together: with isolated slots (`--kv-unified` off, where `poolTokens` is one whole context) a scheduler
+// left to its default would admit calls by size and put more work on a slot than the slot can hold, and the profile
+// would measure an admission no bot of this configuration uses.
+export const serverShape = (config: { slots: number; poolTokens: number; sharedCache: boolean }) =>
+  ({ slots: config.slots, poolTokens: config.poolTokens, sharedCache: config.sharedCache });
 
 export function smokeOutcome(calls: Call[]) {
   const cold = calls.find(call => call.cacheIntent === 'cold')?.cacheObserved ?? 'unknown';
@@ -467,9 +476,10 @@ async function main(args: string[]) {
     fixture: { type: 'string', default: 'battle' }, 'read-seconds': { type: 'string', default: '15' },
     'history-tokens': { type: 'string' }, minutes: { type: 'string', default: '30' },
     draft: { type: 'boolean', default: false }, 'no-vram': { type: 'boolean', default: false }, smoke: { type: 'boolean', default: false },
-    // Which card the memory verdicts are about, and how often it is read. Without `--card` the card llama-server
-    // was seen on is used, and on a one-card box that is the only one there is. The sampler is fast by default: a
-    // recorded out-of-memory arrived twelve seconds after a start (docs/gpu.md), which a slow one misses entirely.
+    // Which card the memory verdicts are about, and how often it is read. The cards llama-server is seen computing
+    // on decide; `--card` answers for a driver that attributes no process, and is reported when the driver's own
+    // attribution contradicts it. The sampler is fast by default: a recorded out-of-memory arrived twelve seconds
+    // after a start (docs/gpu.md), which a slow one misses entirely.
     card: { type: 'string' }, 'vram-seconds': { type: 'string', default: '2' },
   } });
   if (values.decide) return void printDecision(resolve(values.decide));
@@ -519,10 +529,10 @@ async function main(args: string[]) {
   const budget = new AbortController();
   const budgetTimer = setTimeout(() => budget.abort(new ModelError('budget_exceeded')), minutes * 60000);
   const signal = budget.signal;
-  const scheduler = createScheduler(provider, { slots: config.slots, poolTokens: config.poolTokens,
-    sharedCache: config.sharedCache, outputTokens: (request: ModelRequest) => request.maxOutputTokens,
+  const scheduler = createScheduler(provider, { ...serverShape(config),
+    outputTokens: (request: ModelRequest) => request.maxOutputTokens,
     log: (event, code) => report({ event, ...(code ? { code } : {}) }) });
-  const sampler = values['no-vram'] ? undefined : watchVram(run, save, vramSeconds);
+  const sampler = values['no-vram'] ? undefined : watchVram(run, save, vramSeconds, card);
   try {
     const server = await warm.check({ signal });
     run.server = { slots: server.slots ?? null, contextTokens: server.contextTokens ?? null };
@@ -656,20 +666,27 @@ async function main(args: string[]) {
 
 // One snapshot of the cards folded into the run: each card keeps its own peak and its own minimum, and a snapshot
 // that read at least one card counts as one sample. A card the driver numbers itself is kept under that number; an
-// older driver query without one is taken in the order it came.
-export function recordCards(vram: Vram, remote: { gpus: Remote['gpus']; processes?: Remote['processes'] } | undefined) {
+// older driver query without one is taken in the order it came. `named` is the operator's `--card`, if any.
+export function recordCards(vram: Vram, remote: { gpus: Remote['gpus']; processes?: Remote['processes'] } | undefined,
+  named: number | null = null) {
   if (!remote) return vram;
   let read = false;
+  const pids = new Set((remote.processes?.llamaServer ?? []).map(process => process.pid).filter(number));
   remote.gpus.forEach((seen, position) => {
-    if (seen.memoryUsedMiB === undefined || seen.memoryTotalMiB === undefined) return;
-    read = true;
     const index = seen.index ?? position;
     let card = vram.cards.find(entry => entry.index === index);
+    // Every card the driver reports has an entry, counters or no counters: a card whose memory could not be read is
+    // still a card, and a two-card box whose second card answered nothing must not pass for a box with one.
     if (!card) {
-      card = { index, totalMiB: null, usedMiBMax: null, freeMiBMin: null };
+      card = { index, totalMiB: null, usedMiBMax: null, freeMiBMin: null, server: false };
       vram.cards.push(card);
       vram.cards.sort((a, b) => a.index - b.index);
     }
+    // A card that held llama-server once counts as one of its cards for the rest of the run: `nvidia-smi` lists the
+    // compute processes of this moment, and a card is not given back because the peak has passed.
+    card.server ||= seen.pids.some(pid => pids.has(pid));
+    if (seen.memoryUsedMiB === undefined || seen.memoryTotalMiB === undefined) return;
+    read = true;
     card.totalMiB = seen.memoryTotalMiB;
     card.usedMiBMax = Math.max(card.usedMiBMax ?? 0, seen.memoryUsedMiB);
     // The driver keeps a reserve of its own, and this output counts it in neither used nor free: subtracting used
@@ -678,15 +695,17 @@ export function recordCards(vram: Vram, remote: { gpus: Remote['gpus']; processe
     const free = seen.memoryFreeMiB ?? seen.memoryTotalMiB - seen.memoryUsedMiB;
     card.freeMiBMin = Math.min(card.freeMiBMin ?? free, free);
   });
-  // Which card the verdicts are about, when the operator did not name one: the card llama-server was seen computing
-  // on. A box with one card leaves no room for doubt even before the server appears on it; a box with several and no
-  // attributed process names none, and check 1 stays unknown rather than reporting about the image model's card.
-  if (vram.card === null) {
-    const pids = new Set((remote.processes?.llamaServer ?? []).map(process => process.pid).filter(number));
-    const found = remote.gpus.findIndex(gpu => gpu.pids.some(pid => pids.has(pid)));
-    if (found >= 0) vram.card = remote.gpus[found].index ?? found;
-    else if (vram.cards.length === 1) vram.card = vram.cards[0].index;
-  }
+  // Which card the verdicts are about: the one llama-server was seen computing on, and the tightest of them when it
+  // was seen on several — nothing starts the server on a single device, and llama.cpp spreads a model over every
+  // visible card by default, so the card that runs out first is the one that ends the run. A card the driver could
+  // not read counts as the tightest of all, because an unread card cannot be declared roomy. A box with one card
+  // leaves no room for doubt even before the server appears on it; on a box with several and nothing attributed the
+  // operator's `--card` is the only answer, and without it check 1 stays unknown rather than reporting about the
+  // image model's card.
+  const hosts = vram.cards.filter(card => card.server);
+  vram.card = hosts.length
+    ? hosts.reduce((tightest, card) => (card.freeMiBMin ?? -1) < (tightest.freeMiBMin ?? -1) ? card : tightest).index
+    : named !== null ? named : vram.cards.length === 1 ? vram.cards[0].index : null;
   if (read) vram.samples++;
   return vram;
 }
@@ -698,14 +717,35 @@ export function recordCards(vram: Vram, remote: { gpus: Remote['gpus']; processe
 // one long-lived session: a login per sample would be thirty a minute, and the bot was backed off from far fewer
 // because they piled up on sshd (docs/gpu.md). The window before a profile starts — the server's own start — still
 // belongs to `npm run gpu:diagnose -- --watch`.
-function watchVram(run: Report, save: () => void, seconds: number) {
+function watchVram(run: Report, save: () => void, seconds: number, named: number | null) {
   const configured = process.env.SIMPLE_CHAT_GPU_SSH_HOST;
   const host = configured && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(configured) ? configured : undefined;
   if (!host) return undefined;
   const stopping = new AbortController();
-  // No retained server events: this watcher only asks the cards how much memory is in use.
-  const loop = watch({ host, every: seconds, events: 0, signal: stopping.signal }, snapshot => {
-    recordCards(run.vram, snapshot.remote);
+  let failures = 0, told = -Infinity, mismatched = false;
+  // The cards and the processes on them, and nothing else: no retained server events, no loopback probes on the
+  // instance and no probe of the forwarded port, which is the path whose latency thresholds 4 and 5 are about.
+  // A session that is lost is reopened at the pace the bot uses, not once per interval: reconnecting every two
+  // seconds is the pile-up on sshd the bot itself was backed off from.
+  const loop = watch({ host, every: seconds, events: 0, parts: 'gpus,processes', probeTunnel: false, retryMs: 20000,
+    signal: stopping.signal }, snapshot => {
+    // A sampler that reads nothing leaves check 1 `unknown` at the end of a paid block. The operator hears about it
+    // while the block is still running, and then no more than once a minute however long the failure lasts.
+    if (!snapshot.remote) {
+      failures++;
+      if (performance.now() - told >= 60000) {
+        told = performance.now();
+        report({ event: 'vram_sample_failed', code: snapshot.direct.failure ?? 'no_reading', reading: snapshot.reading, failures });
+      }
+      return;
+    }
+    recordCards(run.vram, snapshot.remote, named);
+    // A card named by hand that the driver's own attribution contradicts: the pids decide, and the operator is told
+    // once, rather than reading a confident verdict about a card llama-server never computed on.
+    if (named !== null && !mismatched && run.vram.card !== null && run.vram.card !== named) {
+      mismatched = true;
+      report({ event: 'vram_card_mismatch', named, card: run.vram.card });
+    }
     save();
   }).catch(error => { report({ event: 'vram_sample_failed', code: errorCode(error) }); });
   return { stop() { stopping.abort(); return loop; } };

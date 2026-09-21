@@ -3,6 +3,7 @@
 
 local/gpu-diagnose.ts pipes this file to `python3 -` over a separate SSH session, so it needs no deployment.
 With --every it keeps printing one line per interval through that session until --limit seconds have passed.
+With --parts it reports only the parts named, for a watcher that reads one of them often.
 It reads no request bodies, server output, environment or process arguments. Every string it prints comes from
 a fixed list or matches a strict pattern; everything else is a number.
 """
@@ -312,13 +313,27 @@ def events_limit(value):
     return int(value)
 
 
+PARTS = ('sockets', 'processes', 'gpus', 'machine', 'container', 'http', 'serverEvents')
+
+
+def part_names(value):
+    names = [name for name in value.split(',') if name]
+    if not names or any(name not in PARTS for name in names):
+        raise argparse.ArgumentTypeError('expected parts out of ' + ','.join(PARTS))
+    return set(names)
+
+
 def snapshot(options):
     report = {'at': datetime.datetime.now(datetime.timezone.utc).isoformat()}
     # Sockets and processes are counted before this script opens its own connections. A part that fails is left out
-    # and named, so the rest of the snapshot still arrives.
+    # and named, so the rest of the snapshot still arrives. --parts keeps only the parts asked for: a watcher reading
+    # the cards every couple of seconds has no use for a walk of /proc, three requests at the server it is watching
+    # and a re-read of the whole server log, thirty times a minute.
     for key, part in (('sockets', lambda: sockets(options.port)), ('processes', processes), ('gpus', gpus), ('machine', machine),
                       ('container', container), ('http', lambda: http(options.port)),
                       ('serverEvents', lambda: server_events(Path(options.dir), options.events))):
+        if options.parts and key not in options.parts:
+            continue
         try:
             report[key] = part()
         except Exception:
@@ -331,6 +346,7 @@ if __name__ == '__main__':
     parser.add_argument('--dir', default='/workspace/simple-chat-gpu')
     parser.add_argument('--port', type=int, default=8080)
     parser.add_argument('--events', type=events_limit, default=25)
+    parser.add_argument('--parts', type=part_names, default=None)
     parser.add_argument('--every', type=int, default=0)
     parser.add_argument('--limit', type=int, default=3600)
     options = parser.parse_args()
