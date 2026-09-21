@@ -14,12 +14,14 @@
 #   bash gpu/measure-profile.sh --print pool-3        # the profile and the measurer command; starts nothing
 #   bash gpu/measure-profile.sh pool-3                # stop, start, wait for health, verify, record
 #   bash gpu/measure-profile.sh --verify pool-3       # verify the running server again, mid-block
-#   bash gpu/measure-profile.sh --release             # end of the session: the bot owns the server again
+#   bash gpu/measure-profile.sh --release             # end of the session: stop the profile, give the bot its server
 #
 # An interrupted start leaves the marker behind, and with it the bot has no server at all. Two things undo that:
-# `--release`, and the marker's own expiry — it carries the moment `ensure-server.sh` stops believing it
-# (SIMPLE_CHAT_MEASURE_HOLD_SECONDS, two hours by default), and every profile start renews it. A bot that never
-# starts a server again costs more than a spoiled measurement.
+# `--release`, which stops the profile and starts the bot's own default server again, and the marker's own expiry —
+# it carries the moment `ensure-server.sh` stops believing it (SIMPLE_CHAT_MEASURE_HOLD_SECONDS, two hours by
+# default), and every profile start renews it. The expiry only reaches a bot that builds a new tunnel, since that is
+# the only time the bot runs `ensure-server.sh`; a bot already connected gets its server back from `--release` alone.
+# A bot that never starts a server again costs more than a spoiled measurement.
 # `--verify PROFILE FILE` checks a saved command line instead of a running process.
 set -euo pipefail
 umask 077
@@ -32,6 +34,12 @@ port="${SIMPLE_CHAT_GPU_PORT:-8080}"
 # Loading a 25 GB model from page cache takes seconds and from disk minutes; a profile that is not serving by then is
 # a failure worth seeing rather than waiting out.
 health_timeout="${SIMPLE_CHAT_MEASURE_HEALTH_SECONDS:-600}"
+# Read beside its neighbour and not at the arithmetic that first uses it: that one runs after the profile server has
+# started, so a value that is not a number would kill the script there, the trap would take the marker away, and the
+# server just started would be left holding the lock with nothing to say it is there. A wait shorter than the 15 s
+# appear window below is allowed on purpose and clamps it; zero is not, since it gives up before the exec it waits for.
+[[ "$health_timeout" =~ ^[0-9]+$ ]] && (( health_timeout >= 1 )) \
+  || { echo 'Use SIMPLE_CHAT_MEASURE_HEALTH_SECONDS in whole seconds, 1 or more.' >&2; exit 1; }
 # How long the marker holds the bot back. Longer than one profile's block and shorter than a night of paid idling;
 # a value that is not a number would silently become "already expired", which is the bug this guards against.
 hold_seconds="${SIMPLE_CHAT_MEASURE_HOLD_SECONDS:-7200}"
@@ -50,25 +58,37 @@ require_tools() {
 }
 
 # One request's cells and the prefill batch stay the same in every profile of a session. `decide()`
-# (local/gpu-measure.ts) compares tokens per hour and the tester's speed between profiles and checks nothing about
-# the workload behind them, so a context or ubatch changed mid-session would silently produce four reports that
-# answer different questions. Change them between sessions, never inside one.
+# (local/gpu-measure.ts) compares only reports whose workloads match (`sameWork`), and that fingerprint carries the
+# request series and the bot's own context, never the server's `--ctx-size` or `--ubatch-size`: these two are exactly
+# the mid-session change it cannot catch, so four reports would answer different questions without saying so.
+# Change them between sessions, never inside one.
 CONTEXT=65536
 UBATCH=128
-# The measurer's flags, written once here so every report of the session is comparable. `--scenes 2` with
-# `--minutes 12` is the short plan that fits four profiles into one rental; the label always comes from this script.
-MEASURE_FLAGS='--scenes 2 --read-seconds 15 --minutes 12'
+# The measurer's flags, written once here so every report of the session is comparable: they are part of that same
+# fingerprint, and flags improvised per profile leave `decide()` with nothing it may compare. One cold run and one
+# warm scene over the three history sizes of `battle` is 24 calls and 420 planned seconds against the 503 that
+# `--minutes 12` allows (`measurementPlan`), which is what fits four profiles into one rental; each cell then holds
+# one observation, and the report has to say so. The label always comes from this script.
+MEASURE_FLAGS='--fixture battle --cold-runs 1 --scenes 1 --read-seconds 15 --minutes 12'
 PROFILES='single pool-2 pool-3 pool-3-draft pool-3-cache-ram'
 
 # The profiles, in one place. `pool` is the shared cache of a unified profile and must equal the bot's
 # SIMPLE_CHAT_POOL_TOKENS; `cache_ram` is the host RAM snapshot cache in MiB.
+#
+# Every pooled profile keeps the one pool the card was measured at (docs/gpu.md, "Measured on a rented RTX 5090"), so
+# the comparison between them is about slots alone. That table is also why it is not raised: it leaves 4191 MiB free
+# on one slot, 2141 on two and 1717 on three at 98304 cells, so a slot costs about 424 MiB and a unified cell
+# (4191-2141-424)/(98304-65536) = 0.05 MiB. Three slots at 131072 cells would therefore keep about 91 MiB by that
+# table's own optimistic accounting (total minus used; `memory.free` read some 500 MiB lower still), against the
+# 1024 MiB of THRESHOLDS.freeVramMiB. Recompute both numbers for another card or quantization; the floor is the
+# scheduler's 78970 cells (docs/gpu.md, "The pool has a floor").
 profile_env() {
   case "$1" in
-    single)           slots=1 unified=false pool=0      draft=false cache_ram=0 ;;
-    pool-2)           slots=2 unified=true  pool=98304  draft=false cache_ram=0 ;;
-    pool-3)           slots=3 unified=true  pool=131072 draft=false cache_ram=0 ;;
-    pool-3-draft)     slots=3 unified=true  pool=131072 draft=true  cache_ram=0 ;;
-    pool-3-cache-ram) slots=3 unified=true  pool=131072 draft=false cache_ram=16384 ;;
+    single)           slots=1 unified=false pool=0     draft=false cache_ram=0 ;;
+    pool-2)           slots=2 unified=true  pool=98304 draft=false cache_ram=0 ;;
+    pool-3)           slots=3 unified=true  pool=98304 draft=false cache_ram=0 ;;
+    pool-3-draft)     slots=3 unified=true  pool=98304 draft=true  cache_ram=0 ;;
+    pool-3-cache-ram) slots=3 unified=true  pool=98304 draft=false cache_ram=16384 ;;
     *) return 1 ;;
   esac
 }
@@ -180,16 +200,22 @@ stop_server() {
 
 healthy() { curl -sf -m 5 -o /dev/null "http://127.0.0.1:$port/health"; }
 
+server_appears() { # waits the given seconds for a server process to exist at all
+  local waited=0 limit="$1"
+  while ! server_running; do
+    (( waited < limit )) || return 1
+    sleep 1
+    waited=$(( waited + 1 ))
+  done
+}
+
 wait_for_health() {
   local waited=0 appear=15
   # The server has to appear first: a profile that never took the lock is a failure, not a slow start. Whoever allows
   # the whole start less than that allows the exec less too.
   (( appear <= health_timeout )) || appear="$health_timeout"
-  while ! server_running; do
-    (( waited < appear )) || { echo "The profile server did not start; see $gpu_dir/serve-$profile.out." >&2; return 1; }
-    sleep 1
-    waited=$(( waited + 1 ))
-  done
+  server_appears "$appear" \
+    || { echo "The profile server did not start; see $gpu_dir/serve-$profile.out." >&2; return 1; }
   waited=0
   until healthy; do
     if ! server_running; then echo "The profile server exited during startup; see $gpu_dir/serve-$profile.out." >&2; return 1; fi
@@ -199,13 +225,16 @@ wait_for_health() {
   done
 }
 
+# LD_LIBRARY_PATH and CUDA_VISIBLE_DEVICES carry the CUDA runtime and the card choice of the machine, not the bot's
+# configuration; everything SIMPLE_CHAT_* comes from the profile, or from nowhere when the bot's own server is started.
+machine_environment() {
+  if [[ -n "${LD_LIBRARY_PATH-}" ]]; then printf '%s\n' "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"; fi
+  if [[ -n "${CUDA_VISIBLE_DEVICES-}" ]]; then printf '%s\n' "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"; fi
+}
+
 start_server() {
   local environment=()
-  # LD_LIBRARY_PATH and CUDA_VISIBLE_DEVICES carry the CUDA runtime and the card choice of the machine, not the bot's
-  # configuration; everything SIMPLE_CHAT_* comes from the profile.
-  if [[ -n "${LD_LIBRARY_PATH-}" ]]; then environment+=("LD_LIBRARY_PATH=$LD_LIBRARY_PATH"); fi
-  if [[ -n "${CUDA_VISIBLE_DEVICES-}" ]]; then environment+=("CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"); fi
-  mapfile -t -O "${#environment[@]}" environment < <(profile_command)
+  mapfile -t environment < <(machine_environment; profile_command)
   # The log is truncated, not appended: a failed start sends the operator to this file, and yesterday's success line
   # for the same profile would answer the wrong question. `flock -n` alone says nothing when the lock is taken, so the
   # lock is held on a file descriptor and the refusal is written where the operator is sent.
@@ -255,8 +284,20 @@ if [[ "$mode" = release ]]; then
   rm -f "$marker"
   require_tools pgrep pkill
   stop_server
-  echo 'Marker removed and the server stopped; the bot owns the next start.'
-  exit 0
+  # Stopping is not handing back. The bot runs ensure-server.sh while it creates a tunnel and never again while that
+  # tunnel lives (local/gpu-connection.ts keeps the one it has; a failing health check does not close it), so a
+  # session that ends on an empty machine leaves a bot forwarding the port to nothing until it is restarted. Start
+  # the bot's own default server, through the script the bot itself runs; `env -i` again, so that no leftover
+  # SIMPLE_CHAT_GPU_* of this shell decides what "default" means.
+  mapfile -t release_environment < <(machine_environment)
+  if env -i PATH="$PATH" HOME="${HOME:-/root}" SIMPLE_CHAT_GPU_DIR="$gpu_dir" SIMPLE_CHAT_GPU_PORT="$port" \
+      ${release_environment[@]+"${release_environment[@]}"} bash "$task_dir/ensure-server.sh" \
+      && server_appears 15; then
+    echo 'Marker removed, the profile stopped and the bot default server started; the bot owns it again.'
+    exit 0
+  fi
+  echo "The marker is gone and no server runs; start the bot's own with: bash $task_dir/ensure-server.sh" >&2
+  exit 1
 fi
 
 [[ -n "$profile" ]] || { usage; exit 1; }

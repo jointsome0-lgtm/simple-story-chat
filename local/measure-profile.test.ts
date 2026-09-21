@@ -111,7 +111,7 @@ test('every profile of a session shares the workload flags and labels its own me
   for (const profile of names) {
     const printed = run(['--print', profile]).stdout;
     assert.match(printed, /--ubatch-size 128/);
-    assert.match(printed, /--scenes 2 --read-seconds 15 --minutes 12/);
+    assert.match(printed, /--fixture battle --cold-runs 1 --scenes 1 --read-seconds 15 --minutes 12/);
     assert.match(printed, new RegExp(`--profile ${profile} `));
     // The measurer's `--draft` only labels a report, so the label has to come from the same place as the server.
     assert.equal(/--draft/.test(printed), profile.includes('draft'));
@@ -121,6 +121,38 @@ test('every profile of a session shares the workload flags and labels its own me
   }
   assert.equal(run(['--print', 'pool-4']).status, 1);
   assert.match(run(['--print', 'pool-4']).stderr, /Unknown profile/);
+});
+
+// The one command the operator is told to run in every block, checked against the measurer that has to accept it.
+// A plan that does not fit is refused before anything is measured, and improvising flags per profile instead would
+// give each report its own `workload.fingerprint`, which is exactly what makes `decide()` refuse to compare them.
+test('the measurer accepts the command every profile prints, and its plan fits the block', t => {
+  const printed = run(['--print', 'pool-3']).stdout;
+  const command = /^\s*npm run gpu:measure -- (--profile \S.*)$/m.exec(printed);
+  assert.ok(command, `no measurer command was printed:\n${printed}`);
+  // A directory of its own and a provider that is not llama.cpp: the plan is the whole question here, and no
+  // configuration of this machine may decide the answer.
+  const elsewhere = mkdtempSync(join(tmpdir(), 'simple-chat-plan-'));
+  t.after(() => rmSync(elsewhere, { recursive: true, force: true }));
+  const measurer = spawnSync(process.execPath, [resolve('local/gpu-measure.ts'), ...command[1].split(' ')],
+    { encoding: 'utf8', timeout: 60000, cwd: elsewhere, env: { PATH: process.env.PATH ?? '', SIMPLE_CHAT_PROVIDER: 'claude-code' } });
+  const plan = measurer.stdout.split('\n').filter(Boolean).map(line => JSON.parse(line) as Record<string, unknown>)
+    .find(row => row.event === 'measurement_plan');
+  assert.ok(plan, `the measurer refused the printed flags: ${measurer.stderr}`);
+  assert.equal(plan.fits, true, `${plan.plannedSeconds}s planned against the ${plan.maximumPlannedSeconds}s the block allows`);
+  // Everything after the plan needs a llama.cpp server, so this is as far as a measurement goes without one.
+  assert.match(measurer.stderr, /gpu_config_required/);
+});
+
+test('the pooled profiles differ from each other in slots alone, at a pool the card was measured at', () => {
+  const unified = profiles().map(environmentOf).filter(environment => environment.SIMPLE_CHAT_GPU_KV_UNIFIED === 'true');
+  assert.ok(unified.length >= 2, 'a session with one pooled profile decides nothing about slots');
+  const cells = new Set(unified.map(environment => environment.SIMPLE_CHAT_GPU_POOL));
+  assert.equal(cells.size, 1, `the pooled profiles move the pool and the slots at once: ${[...cells].join(', ')}`);
+  // The floor is the scheduler's (docs/gpu.md, "The pool has a floor"); 131072 is the ceiling local/config.ts
+  // allows SIMPLE_CHAT_POOL_TOKENS, which the pool has to stay within to be the bot's own.
+  const pool = Number([...cells][0]);
+  assert.ok(pool >= 78970 && pool <= 131072, `${pool} cells`);
 });
 
 test('serve.sh started with a profile environment passes that profile check and fails another', t => {
@@ -203,12 +235,31 @@ test('a start that takes effect records the server, not its supervisor, and call
   assert.match(String(rows[0].flags), /--parallel 1 /);
   assert.equal(rows[0].verified, true);
   assert.match(readFileSync(markerOf(machine), 'utf8'), /^single\nuntil=\d+\n$/);
+});
 
-  // The end of the session: the bot owns the next start again.
-  const released = measure(scripts, ['--release'], machine);
+// Stopping the profile is not handing the server back. The bot runs ensure-server.sh only while it is creating a
+// tunnel — local/gpu-connection.ts keeps a live one and never asks again, and a failing health check does not close
+// it — so a session that ends with an empty machine leaves a bot forwarding the port to nothing until it restarts.
+test('the end of a session leaves the bot a running default server, not an empty machine', needsTools, async t => {
+  const port = String(await freePort());
+  const scripts = shippedScripts(t);
+  const machine = fakeMachine(t, { keep: 'serve' });
+  t.after(() => spawnSync('pkill', ['-f', machine.binary]));
+  const started = measure(scripts, ['pool-3'], machine, { SIMPLE_CHAT_GPU_PORT: port });
+  assert.equal(started.status, 0, started.stderr);
+  assert.match(String(recordOf(machine)[0].flags), /--parallel 3 /);
+  rmSync(machine.cmdline, { force: true });
+
+  const released = measure(scripts, ['--release'], machine, { SIMPLE_CHAT_GPU_PORT: port });
   assert.equal(released.status, 0, released.stderr);
   assert.equal(existsSync(markerOf(machine)), false);
-  assert.equal(spawnSync('pgrep', ['-f', machine.binary]).status, 1, 'the profile server outlived the session');
+  for (let tries = 0; tries < 200 && !existsSync(machine.cmdline); tries++) await delay(20);
+  assert.ok(existsSync(machine.cmdline), 'the session ended with a machine that has no server on it');
+  // The bot's own default server, not the profile's: nothing of the measurement session decides what runs now.
+  const argv = readFileSync(machine.cmdline, 'utf8').replaceAll('\0', ' ');
+  assert.match(argv, /--parallel 1 /, `the profile server outlived the session: ${argv}`);
+  assert.match(argv, /--no-kv-unified/);
+  assert.equal(spawnSync('pgrep', ['-f', machine.binary]).status, 0, 'the server the bot was handed is not running');
 });
 
 test('a start whose server answers with another profile flags is refused, and the record says it was', needsTools, async t => {
@@ -265,6 +316,17 @@ test('a start that cannot take the lock says so where the operator is sent', nee
   assert.ok(!text.includes('Starting gemma'), 'the log the operator is sent to still shows an earlier run succeeding');
   assert.match(text, /Another process holds/);
   assert.equal(existsSync(markerOf(machine)), false);
+});
+
+test('a health timeout that is not a number is refused before anything is started', async t => {
+  const machine = fakeMachine(t);
+  const started = measure(shippedScripts(t), ['single'], machine, { SIMPLE_CHAT_MEASURE_HEALTH_SECONDS: 'oops' });
+  assert.equal(started.status, 1);
+  assert.match(started.stderr, /SIMPLE_CHAT_MEASURE_HEALTH_SECONDS/);
+  // Read where its neighbour is read, or the arithmetic that first touches it runs after the profile server has
+  // started: the script then dies, the trap takes the marker with it, and that server is left holding the lock.
+  await delay(300);
+  assert.equal(existsSync(machine.cmdline), false, `a server was started before the value was read: ${started.stderr}`);
 });
 
 test('the script stops when a tool it decides with is missing', t => {

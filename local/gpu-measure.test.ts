@@ -295,6 +295,11 @@ test('profile selection compares equal workloads and still takes the faster soun
   assert.deepEqual(decide([one, make(), five]).pool, { take: 'five', over: 'one', note: 'take the pool' });
   const other = { ...five, workload: { ...five.workload!, fingerprint: 'different-fixture-or-cadence' } };
   assert.equal(decide([one, make(), other]).pool.take, null);
+  // What the fingerprint does not carry: the server's own cells and prefill batch. A profile started with another
+  // `--ctx-size` is compared as if it were the same work, which is why gpu/measure-profile.sh freezes both for the
+  // whole session instead of relying on this check to notice.
+  const wider = { ...five, profile: 'wider', server: { slots: 5, contextTokens: 131072 } };
+  assert.equal(decide([one, make(), wider]).pool.take, 'wider');
 });
 
 test('draft speed needs the same request series and configuration, with complete server timing samples', () => {
