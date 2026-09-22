@@ -57,8 +57,20 @@ mid-story, two identical keys from two hooks that are exchanged, a route that re
 sheet bookkeeping, the scope of a refutation and a later partial restoration, and negative knowledge from an
 exhaustive list of recipients. Same shape as the other two: 12 checks, 10 traps, 6 `yes` and 6 `no`. Fable
 re-derived all 12 answers by hand; the design is in the public pack (`hospital/scenario.json`, `authors`
-`gpt-6-astra`, `fable-5.1`), the scenes are being written by a clean Opus 5 agent. Ceiling and the scale on it
-follow in this entry.
+`gpt-6-astra`, `fable-5.1`, `opus-5`); the 16 scenes by a clean Opus 5 agent, re-read by Fable against all 12
+checks and the four mid-story traps.
+
+`hospital`, the ceiling. `openai:gpt-5.4` in one pass with reasoning off (143 output tokens, no reasoning) answers
+6/12: the six it misses are the deep derivations (the ward's current count, the garden batteries, free boat seats,
+the departure time, the evacuated originals, the minute Polina learned). Through the Claude CLI, Opus 5.5 and
+Fable both failed the same call with `provider_failed`, and the new fields said how: `cliResult: success`,
+`cliError: true`, exit code 1, after 24–44 s of generation. The recall request asked for at most 1024 output
+tokens; the CLI adapter passes that number as the run's whole output cap, and a model that reasons in text before
+its structured answer is cut off there, which the CLI reports as an error, not a truncation. Every Haiku recall on
+the two new scenarios had failed at the same call. Change (`ab9acfc`): the recall cap is 8192, and a failed CLI row
+carries `stopReason`. A model that answered within 1024 gives the same answer, so the cells above stand. With the
+cap raised, Opus 5.5 answers 12/12 over the full text in 24 s and Fable 12/12 in 33 s: the scenario is readable,
+and hard to read without reasoning. The scale on it follows in this entry.
 
 Limitations:
 - One run per cell; no temperature control on the CLI models (Claude CLI and Codex run on subscriptions and
