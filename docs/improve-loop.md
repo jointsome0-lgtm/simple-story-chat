@@ -56,6 +56,8 @@ Opus agents are started at `max` reasoning effort, always; GPT-6 sessions at `hi
 
 The walk (`npm run eval -- walk`, described in `docs/model-providers.md`) is the second measure: the model writes a story from a seed on its own, with the bot's continue signal or the author's intervention at each step, and a panel of judge models reads every scene for contradictions with what came before. Its `score.walk` is the share of scenes the panel found consistent, for the worst model. It is compared the same way as `sceneScore`, and it needs several walks per side: the story differs from run to run.
 
+The gold tree (`eval walk-gold`, `eval walk-nodes` in `docs/model-providers.md`) is the walk with fixed prefixes: scenes the council accepted, grown from the seed as a tree, so that every model continues from the same accepted story and is judged scene by scene at a known depth. The gate to gold is stricter than the eval's majority, a scene the council could not settle is not gold, and the tree's rendering marks what no person has read. The eval's number and the score by depth come from the same council as the walk; a model on the council still is not measured independently.
+
 ## Noise
 
 Memory is generated at temperature 0.2, and OpenAI generates at its own default temperature, so two runs of the same code give different numbers. The spread on `battle` was measured on 18 September (entry in the log): for `gpt-5.4-mini` up to three questions out of eight between runs, for Gemma one question, Ministral is stable. Therefore, on one scenario compare at least three runs per side. An improvement smaller than this spread does not count as an improvement; check a disputed result with a repeated run, do not declare it a win.

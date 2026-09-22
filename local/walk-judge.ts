@@ -22,9 +22,12 @@ type Failure = { code?: string };
 
 process.umask(0o077);
 const { values } = parseArgs({ options: { report: { type: 'string' }, label: { type: 'string' }, minutes: { type: 'string', default: '90' }, cross: { type: 'boolean', default: false },
-  'audit-seed': { type: 'string' }, pack: { type: 'string' }, out: { type: 'string' } } });
+  'audit-seed': { type: 'string' }, pack: { type: 'string' }, out: { type: 'string' }, only: { type: 'string' } } });
+// --only judges one scene of the report: the new scene of a gold attempt, whose prefix the council accepted already.
+const only = values.only === undefined ? undefined : Number(values.only);
+if (only !== undefined && (!Number.isInteger(only) || only < 1)) throw new Error('--only takes a scene number');
 const minutes = Number(values.minutes);
-if ((!values.report && !values['audit-seed']) || !values.label || !Number.isInteger(minutes) || minutes < 1 || minutes > 180) throw new Error('Use --report directory --label <host>:<id> [--minutes 1..180] [--cross], or --audit-seed <walk> --label <host>:<id> --out directory [--pack directory]');
+if ((!values.report && !values['audit-seed']) || !values.label || !Number.isInteger(minutes) || minutes < 1 || minutes > 180) throw new Error('Use --report directory --label <host>:<id> [--minutes 1..180] [--cross] [--only scene], or --audit-seed <walk> --label <host>:<id> --out directory [--pack directory]');
 // With --audit-seed there is no report: the seed of the named walk is read instead, and the file goes to --out.
 const directory = resolve(values.report ?? values.out ?? '.');
 const report: WalkReport = values.report ? JSON.parse(readFileSync(join(directory, 'report.json'), 'utf8')) : { scenario: '', model: '', provider: '', startedAt: '', seed: '', authors: [], steps: [], compactions: [] };
@@ -77,7 +80,7 @@ if (values['audit-seed']) {
     for (let index = 0; index < report.steps.length; index++) {
       const { turn } = report.steps[index];
       const given = file.verdicts.find(v => v.turn === turn);
-      if (given && !given.code) continue;
+      if ((given && !given.code) || (only !== undefined && turn !== only)) continue;
       const reply = await generate(judgeRequest(report.seed, report.steps, index));
       let verdict: Verdict;
       try { verdict = { turn, ...parseVerdict(reply.text) }; }
@@ -90,7 +93,7 @@ if (values['audit-seed']) {
         kinds: verdict.contradictions.map(c => c.kind), judgeCode: verdict.code, truncated: reply.finishReason !== 'stop' });
     }
     file.completedAt = new Date().toISOString(); save();
-    progress({ event: 'judged', passed: count('consistent'), total: report.steps.length, inconsistent: count('inconsistent'), errors: count('error'), directory });
+    progress({ event: 'judged', passed: count('consistent'), total: only === undefined ? report.steps.length : 1, inconsistent: count('inconsistent'), errors: count('error'), directory });
   } catch (error) { finish(codeOf(error), file, save); progress({ event: 'failure_details', ...safeErrorDetails(error) }); }
 } else {
   // The second round reads every judge's first-round file in the directory, this judge's own included.
@@ -105,7 +108,7 @@ if (values['audit-seed']) {
   const file = read<CrossFile>(path, { judge: values.label, model: config.model, at: new Date().toISOString(), checks: [] });
   file.model = config.model; delete file.error; delete file.completedAt;
   const save = () => writeFileSync(path, JSON.stringify(file, null, 2));
-  const turns = [...new Set(found.map(f => f.turn))];
+  const turns = [...new Set(found.map(f => f.turn))].filter(turn => only === undefined || turn === only);
   progress({ event: 'started', directory, model: config.model, scenes: report.steps.length, findings: found.length, judges: Object.keys(byJudge).length, cross: true });
   try {
     if (turns.length) await judge.check?.({ signal: deadline });

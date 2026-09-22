@@ -11,7 +11,10 @@ import type { ReplayReport, ModeReport } from './memory-probe.ts';
 import type { WalkReport } from './walk-probe.ts';
 import { loadScenario, packScenarios, loadWalk, packWalks } from './scenarios.ts';
 import { panel, summarize, judgeFileName, council, findings, crossFileName, auditFileName } from './walk-panel.ts';
-import type { JudgeFile, CrossFile, CouncilRow, PanelRow, Vote, AuditFile } from './walk-panel.ts';
+import type { JudgeFile, CrossFile, CouncilRow, PanelRow, Vote, AuditFile, Contradiction } from './walk-panel.ts';
+import { loadGold, saveGold, pathOf, trunk, addNode, gate, renderGold, goldPaths, trunkTasks } from './walk-gold.ts';
+import type { Task } from './walk-gold.ts';
+import type { TaskFile } from './walk-step.ts';
 import { channelFor, capsFor, readUsage } from './budget.ts';
 import { BUDGET_PATH } from './model.ts';
 
@@ -46,12 +49,13 @@ const record = (event: object) => { mkdirSync(join(root, 'logs'), { recursive: t
 process.umask(0o077);
 const { values, positionals } = parseArgs({ allowPositionals: true, options: { model: { type: 'string' }, models: { type: 'string' },
   scenarios: { type: 'string' }, pack: { type: 'string' }, out: { type: 'string' }, resume: { type: 'string' }, mode: { type: 'string' },
-  judge: { type: 'string' }, judges: { type: 'string' }, minutes: { type: 'string' }, cross: { type: 'boolean', default: false } } });
+  judge: { type: 'string' }, judges: { type: 'string' }, minutes: { type: 'string' }, cross: { type: 'boolean', default: false },
+  depth: { type: 'string' }, attempts: { type: 'string', default: '4' }, branches: { type: 'string', default: '4' }, grow: { type: 'boolean', default: true } }, allowNegative: true });
 // --pack names a directory of scenarios kept outside the repository, so the one who improves the prompts never reads
 // them. Its scenarios replace the built-in ones; every pack scenario names its authors.
 const pack = values.pack ? resolve(values.pack) : undefined;
 // `walk` and `walk-judge` take walk scenarios, which have their own files and loader.
-const walking = positionals[0] === 'walk' || positionals[0] === 'walk-judge' || positionals[0] === 'seed-audit';
+const walking = positionals[0] === 'walk' || positionals[0] === 'walk-judge' || positionals[0] === 'seed-audit' || positionals[0] === 'walk-gold' || positionals[0] === 'walk-nodes';
 const scenarios = values.scenarios?.split(',') ?? (pack ? (walking ? packWalks(pack) : packScenarios(pack)) : walking ? ['lighthouse'] : ['battle', 'chess', 'dance']);
 // --mode replays one memory mode, for a cheap look at a single failure.
 if (values.mode !== undefined && !ALL_MODES.includes(values.mode as 'plain')) throw new Error('Unknown memory mode');
@@ -230,6 +234,197 @@ if (positionals[0] === 'watch') {
     console.log(JSON.stringify({ event: 'seed_audit', scenario, out: directory, issues: issues.length, contradictions: issues.filter(issue => issue.kind === 'contradiction').length,
       byJudge: Object.fromEntries(judges.map(judge => [judge, issues.filter(issue => issue.judge === judge).length])) }));
   }
+} else if (positionals[0] === 'walk-gold') {
+  // The gold tree grows one trunk node at a time: the writer continues the accepted prefix with the walk's next step,
+  // the council reads the new scene, and the gate is stricter than the eval's: at most one dissenter in the first
+  // round, nothing confirmed and nothing disputed in the second. A rejected scene is kept with its findings and the
+  // writer tries again, every second attempt as a repair of the last rejected text. The tree is saved after every node.
+  const judges = (values.judges ?? '').split(',').filter(Boolean);
+  const minutes = values.minutes ?? '60';
+  const attempts = Number(values.attempts);
+  if (!values.model || judges.length < 2 || new Set(judges).size !== judges.length || !/^\d{1,3}$/.test(minutes) || !Number.isInteger(attempts) || attempts < 1 || attempts > 8
+      || (values.depth !== undefined && !/^\d{1,2}$/.test(values.depth))) throw new Error('Use: eval walk-gold --model <host>:<id> --judges <host>:<id>,... [--scenarios a] [--pack directory] [--depth n] [--attempts 1..8] [--minutes 1..180] [--out directory]');
+  const writer = values.model;
+  const out = resolve(values.out ?? mkdtempSync(join(tmpdir(), 'simple-chat-gold-')));
+  record({ event: 'run_started', models: [writer], scenarios, judges, gold: true });
+  const read = <T,>(file: string): T | null => { try { return JSON.parse(readFileSync(file, 'utf8')) as T; } catch { return null; } };
+  const result: Record<string, { nodes: number; trunk: number; steps: number; attempts: number; rejected: number; stopped?: string }> = {};
+  for (const scenario of scenarios) {
+    const walk = walks[scenario];
+    const paths = goldPaths(root, scenario, pack);
+    const tree = loadGold(paths.tree, scenario, walk.seed);
+    const target = Math.min(walk.steps.length, values.depth === undefined ? walk.steps.length : Number(values.depth));
+    const save = () => { saveGold(paths.tree, tree); writeFileSync(paths.story, renderGold(tree, walk)); };
+    let used = 0;
+    let stopped: string | undefined;
+    // Every trunk node is preceded by the seed or the trunk node before it; a rerun continues where the last one stopped.
+    for (let chain = trunk(tree, walk.steps); chain.length < target && !stopped; chain = trunk(tree, walk.steps)) {
+      const parent = chain.at(-1) ?? null;
+      const depth = chain.length + 1;
+      const step = walk.steps[chain.length];
+      const prefix = pathOf(tree, parent).map(({ id: _id, ...s }) => s);
+      let repair: TaskFile['repair'];
+      let accepted = false;
+      for (let attempt = 1; attempt <= attempts && !accepted; attempt++) {
+        used++;
+        const directory = join(out, scenario, `depth-${depth}`, `attempt-${new Date().toISOString().replace(/[-:.]/g, '').slice(0, 15)}`);
+        mkdirSync(directory, { recursive: true });
+        // Odd attempts write afresh, even ones repair the last rejected text with the findings that stood against it.
+        const task: TaskFile = { prefix, step, ...(attempt % 2 === 0 && repair ? { repair } : {}) };
+        writeFileSync(join(directory, 'task.json'), JSON.stringify(task, null, 2));
+        const written = await probe('walk-step.ts', ['--scenario', scenario, '--task', join(directory, 'task.json'), '--out', directory, '--minutes', minutes, ...packArgs], modelEnv(writer), writer, { scenario, mode: 'gold-write' });
+        const report = read<WalkReport>(join(directory, 'report.json'));
+        const scene = report?.steps.find(s => s.turn === depth);
+        if (!scene || written.status !== 0) { stopped = written.code || report?.error || 'probe_failed'; record({ event: 'gold_stopped', scenario, depth, attempt, code: stopped }); break; }
+        // The council on the new scene alone: the prefix is gold already.
+        const files: Record<string, JudgeFile | null> = {};
+        await Promise.all(judges.map(async judgeSpec => {
+          await probe('walk-judge.ts', ['--report', directory, '--label', judgeSpec, '--minutes', minutes, '--only', String(depth)], modelEnv(judgeSpec), writer, { scenario, mode: 'gold-judge', judge: judgeSpec });
+          files[judgeSpec] = read<JudgeFile>(join(directory, judgeFileName(judgeSpec)));
+        }));
+        const byJudge = Object.fromEntries(judges.map(judge => [judge, files[judge]?.verdicts ?? []]));
+        const listed = findings(byJudge).filter(f => f.turn === depth);
+        const checks: Record<string, CrossFile | null> = {};
+        if (listed.length) await Promise.all(judges.map(async judgeSpec => {
+          await probe('walk-judge.ts', ['--report', directory, '--label', judgeSpec, '--minutes', minutes, '--cross', '--only', String(depth)], modelEnv(judgeSpec), writer, { scenario, mode: 'gold-cross', judge: judgeSpec });
+          checks[judgeSpec] = read<CrossFile>(join(directory, crossFileName(judgeSpec)));
+        }));
+        const votes = panel(depth, byJudge)[depth - 1].votes;
+        const row = council(depth, byJudge, Object.fromEntries(judges.map(judge => [judge, checks[judge]?.checks ?? []])))[depth - 1];
+        // A finding the council confirmed or could not settle stands against the text; a refuted one is forgotten.
+        const standing: (Contradiction & { by: string })[] = listed.filter(f => {
+          const cast = Object.values(checks).flatMap(c => c?.checks ?? []).filter(c => c.turn === depth && c.finding === f.number);
+          return cast.filter(c => c.confirmed).length >= cast.filter(c => !c.confirmed).length;
+        }).map(({ turn: _turn, number: _number, ...f }) => f);
+        accepted = gate(votes, row);
+        const dissent = Object.values(votes).filter(v => v === 'inconsistent').length;
+        record({ event: 'gold_attempt', scenario, depth, attempt, repair: !!task.repair, accepted, verdict: row.verdict, dissent, findings: row.findings, confirmed: row.confirmed, disputed: row.disputed, truncated: scene.truncated });
+        console.log(JSON.stringify({ event: 'gold_attempt', scenario, depth, attempt, repair: !!task.repair, accepted, verdict: row.verdict, dissent, findings: row.findings, confirmed: row.confirmed, disputed: row.disputed }));
+        if (accepted) {
+          const id = addNode(tree, { parent, depth, step, input: scene.input, text: scene.text, author: writer, attempts: attempt,
+            approved: { at: new Date().toISOString(), judges: judges.filter(judge => votes[judge] !== 'error'), dissent }, read: false });
+          save(); record({ event: 'gold_node', scenario, depth, id, attempts: attempt });
+        } else {
+          tree.rejected.push({ parent, step, text: scene.text, author: writer, at: new Date().toISOString(), findings: standing });
+          repair = { text: scene.text, findings: standing };
+          save();
+        }
+      }
+      if (!accepted && !stopped) { stopped = 'unaccepted'; record({ event: 'gold_stopped', scenario, depth, attempt: attempts, code: stopped }); }
+    }
+    const chain = trunk(tree, walk.steps);
+    result[scenario] = { nodes: Object.keys(tree.nodes).length, trunk: chain.length, steps: walk.steps.length, attempts: used, rejected: tree.rejected.length, ...(stopped ? { stopped } : {}) };
+    console.log(JSON.stringify({ event: 'gold', scenario, tree: paths.tree, ...result[scenario] }));
+  }
+  writeFileSync(join(out, 'gold-run.json'), JSON.stringify({ at: new Date().toISOString(), writer, judges, result }, null, 2));
+  record({ event: 'gold_run', out, result });
+} else if (positionals[0] === 'walk-nodes') {
+  // The eval over the gold tree: every model continues from the seed and from every trunk node with the trunk's next
+  // step, and from up to --branches branch nodes chosen at random, each time through its own memory compaction of the
+  // prefix, as the bot would; the council reads each new scene against the gold prefix. A scene that passes the gold
+  // gate joins the tree as a branch, whoever wrote it, unless --no-grow. The number is the share of consistent scenes
+  // among the decided ones, for the worst model, and every scene carries the depth it was written at.
+  const models = (values.models ?? '').split(',').filter(Boolean);
+  const judges = (values.judges ?? '').split(',').filter(Boolean);
+  const minutes = values.minutes ?? '60';
+  const branches = Number(values.branches);
+  if (!models.length || judges.length < 2 || new Set(judges).size !== judges.length || !/^\d{1,3}$/.test(minutes) || !Number.isInteger(branches) || branches < 0 || branches > 40) throw new Error('Use: eval walk-nodes --models <host>:<id>,... --judges <host>:<id>,... [--scenarios a] [--pack directory] [--branches 0..40] [--no-grow] [--minutes 1..180] [--out file]');
+  const out = resolve(values.out ?? join(mkdtempSync(join(tmpdir(), 'simple-chat-nodes-')), 'walk-nodes.json'));
+  const work = join(out, '..', 'walk-nodes-runs');
+  record({ event: 'run_started', models, scenarios, judges, nodes: true });
+  const read = <T,>(file: string): T | null => { try { return JSON.parse(readFileSync(file, 'utf8')) as T; } catch { return null; } };
+  type NodeRow = { parent: string | null; depth: number; kind: 'continue' | 'intervention'; verdict: PanelRow['verdict']; dissent: number; findings: number; confirmed: number; disputed: number;
+    accepted: boolean; added?: string; truncated: boolean; error?: string; directory: string };
+  const results: Record<string, Record<string, { rows: NodeRow[]; consistent: number; split: number; decided: number; byDepth: Record<number, PanelRow['verdict']> }>> = {};
+  for (const scenario of scenarios) {
+    const walk = walks[scenario];
+    const paths = goldPaths(root, scenario, pack);
+    const tree = loadGold(paths.tree, scenario, walk.seed);
+    // The tasks are fixed before any model writes, so that every model gets the same prefixes; the branch nodes
+    // are drawn once and named in the report.
+    const chain = trunk(tree, walk.steps);
+    const pool = Object.keys(tree.nodes).filter(id => !chain.includes(id) && tree.nodes[id].depth < walk.steps.length);
+    for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
+    const tasks: Task[] = [...trunkTasks(tree, walk.steps), ...pool.slice(0, branches).map(id => ({ parent: id, step: walk.steps[tree.nodes[id].depth] }))];
+    if (!tasks.length) throw new Error('No gold tree to continue from; grow one with eval walk-gold');
+    const prefixes = tasks.map(task => pathOf(tree, task.parent).map(({ id: _id, ...s }) => s));
+    record({ event: 'nodes_tasks', scenario, tasks: tasks.length, trunk: chain.length, branches: Math.min(branches, pool.length) });
+    // Models in parallel, each over its tasks in order of depth, so that a task reuses the memory the model built over
+    // a shorter prefix of the same path: the compaction request is the same, so the reuse changes nothing but the cost.
+    await Promise.all(models.map(async spec => {
+      const env = modelEnv(spec);
+      const rows: NodeRow[] = [];
+      const reports: { texts: string[]; directory: string }[] = [];
+      const order = tasks.map((_, i) => i).sort((a, b) => prefixes[a].length - prefixes[b].length);
+      for (const index of order) {
+        const task = tasks[index];
+        const prefix = prefixes[index];
+        const depth = prefix.length + 1;
+        const directory = join(work, scenario, spec.replace(/[^a-z0-9]+/gi, '-'), `task-${String(index + 1).padStart(2, '0')}-depth-${depth}`);
+        mkdirSync(directory, { recursive: true });
+        writeFileSync(join(directory, 'task.json'), JSON.stringify({ prefix, step: task.step } satisfies TaskFile, null, 2));
+        // The deepest earlier task of this model whose prefix is the start of this one.
+        const from = reports.filter(r => r.texts.length <= prefix.length && r.texts.every((text, k) => text === prefix[k].text)).sort((a, b) => b.texts.length - a.texts.length)[0];
+        const written = await probe('walk-step.ts', ['--scenario', scenario, '--task', join(directory, 'task.json'), '--out', directory, '--compact', '--minutes', minutes, ...(from ? ['--from', join(from.directory, 'report.json')] : []), ...packArgs], env, spec, { scenario, mode: 'nodes-write' });
+        const report = read<WalkReport>(join(directory, 'report.json'));
+        const scene = report?.steps.find(s => s.turn === depth);
+        const kind = task.step ? 'intervention' as const : 'continue' as const;
+        if (!scene || written.status !== 0) { rows.push({ parent: task.parent, depth, kind, verdict: 'unjudged', dissent: 0, findings: 0, confirmed: 0, disputed: 0, accepted: false, truncated: false, error: written.code || report?.error || 'probe_failed', directory }); continue; }
+        reports.push({ texts: prefix.map(s => s.text), directory });
+        const files: Record<string, JudgeFile | null> = {};
+        await Promise.all(judges.map(async judgeSpec => {
+          await probe('walk-judge.ts', ['--report', directory, '--label', judgeSpec, '--minutes', minutes, '--only', String(depth)], modelEnv(judgeSpec), spec, { scenario, mode: 'nodes-judge', judge: judgeSpec });
+          files[judgeSpec] = read<JudgeFile>(join(directory, judgeFileName(judgeSpec)));
+        }));
+        const byJudge = Object.fromEntries(judges.map(judge => [judge, files[judge]?.verdicts ?? []]));
+        const listed = findings(byJudge).filter(f => f.turn === depth);
+        const checks: Record<string, CrossFile | null> = {};
+        if (listed.length) await Promise.all(judges.map(async judgeSpec => {
+          await probe('walk-judge.ts', ['--report', directory, '--label', judgeSpec, '--minutes', minutes, '--cross', '--only', String(depth)], modelEnv(judgeSpec), spec, { scenario, mode: 'nodes-cross', judge: judgeSpec });
+          checks[judgeSpec] = read<CrossFile>(join(directory, crossFileName(judgeSpec)));
+        }));
+        const votes = panel(depth, byJudge)[depth - 1].votes;
+        const row = council(depth, byJudge, Object.fromEntries(judges.map(judge => [judge, checks[judge]?.checks ?? []])))[depth - 1];
+        const dissent = Object.values(votes).filter(v => v === 'inconsistent').length;
+        const accepted = gate(votes, row);
+        rows.push({ parent: task.parent, depth, kind, verdict: row.verdict, dissent, findings: row.findings, confirmed: row.confirmed, disputed: row.disputed, accepted, truncated: scene.truncated, directory });
+        record({ event: 'node_judged', scenario, depth, kind, verdict: row.verdict, dissent, findings: row.findings, confirmed: row.confirmed, disputed: row.disputed, accepted, model: spec });
+        console.log(JSON.stringify({ event: 'node_judged', scenario, model: spec, depth, kind, verdict: row.verdict, dissent, findings: row.findings, confirmed: row.confirmed, disputed: row.disputed, accepted }));
+      }
+      const decided = rows.filter(r => r.verdict !== 'split').length;
+      (results[spec] ??= {})[scenario] = { rows, consistent: rows.filter(r => r.verdict === 'consistent').length, split: rows.length - decided, decided,
+        byDepth: Object.fromEntries(rows.filter(r => !r.parent || chain.includes(r.parent)).map(r => [r.depth, r.verdict])) };
+    }));
+    // Accepted scenes join the tree after every model has written, so no model continues from another's new node.
+    if (values.grow) {
+      let added = 0;
+      for (const spec of models) for (const row of results[spec][scenario].rows) {
+        if (!row.accepted) continue;
+        const report = read<WalkReport>(join(row.directory, 'report.json'));
+        const scene = report?.steps.find(s => s.turn === row.depth);
+        if (!scene) continue;
+        const votes = panel(row.depth, Object.fromEntries(judges.map(judge => [judge, read<JudgeFile>(join(row.directory, judgeFileName(judge)))?.verdicts ?? []])))[row.depth - 1].votes;
+        row.added = addNode(tree, { parent: row.parent, depth: row.depth, step: tasks.find(t => t.parent === row.parent)?.step ?? '', input: scene.input, text: scene.text, author: spec, attempts: 1,
+          approved: { at: new Date().toISOString(), judges: judges.filter(judge => votes[judge] !== 'error'), dissent: row.dissent }, read: false });
+        added++;
+      }
+      if (added) { saveGold(paths.tree, tree); writeFileSync(paths.story, renderGold(tree, walk)); }
+      record({ event: 'gold_grown', scenario, added, nodes: Object.keys(tree.nodes).length });
+    }
+  }
+  const share = (spec: string) => {
+    const decided = scenarios.reduce((sum, scenario) => sum + results[spec][scenario].decided, 0);
+    return decided ? scenarios.reduce((sum, scenario) => sum + results[spec][scenario].consistent, 0) / decided : 0;
+  };
+  const score = { nodes: Math.min(...models.map(share)) };
+  const summary = { at: new Date().toISOString(), kind: 'walk-nodes', scenarios, ...(pack ? { pack: true } : {}), judges, minutes: Number(minutes), branches, grow: values.grow, score,
+    models: Object.fromEntries(models.map(spec => [spec, { nodes: share(spec), cells: results[spec] }])) };
+  writeFileSync(out, JSON.stringify(summary, null, 2));
+  record({ event: 'eval', out, score });
+  console.log(JSON.stringify({ event: 'eval', out, score, models: Object.fromEntries(models.map(spec => [spec, { nodes: share(spec), cells: Object.fromEntries(scenarios.map(scenario => {
+    const { consistent, split, decided, rows, byDepth } = results[spec][scenario];
+    return [scenario, { consistent, split, decided, tasks: rows.length, added: rows.filter(r => r.added).length, failed: rows.filter(r => r.error).length, byDepth }];
+  })) }])) }));
 } else if (positionals[0] === 'walk-judge') {
   // One more judge over a finished walk, for a panel that grew or a judge that failed. Its file lands next to the report.
   if (!values.judge || !values.resume) throw new Error('Use: eval walk-judge --judge <host>:<id> --resume directory [--minutes 1..180] [--cross]');
