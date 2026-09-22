@@ -138,6 +138,8 @@ type Options = {
   holdFinal?: number; scheduler?: boolean; compactAtTokens?: number; keepScenes?: number;
   // A workflow pinned on a card the way the ones in gpu/ are: it ends in SaveImage.
   saveImage?: boolean;
+  // A model that refuses the sheet with this code, and a Telegram that will not delete a message.
+  sheetError?: string; refuseDelete?: boolean;
   // What the model says the scene cost. Above `compactAtTokens` the bot prepares the next compaction while the
   // reader reads; the numbers are the model's own and say nothing about the size of these synthetic scenes.
   usage?: { inputTokens: number; outputTokens: number };
@@ -161,7 +163,11 @@ function fixture(t: TestContext, options: Options = {}) {
   let heldFinals = 0;
   const api = async (method: string, fields?: TelegramPayload) => {
     const payload = fields as Payload;
-    if (method === 'deleteMessage') deleted.push(payload.message_id);
+    if (method === 'deleteMessage') {
+      deleted.push(payload.message_id);
+      // Telegram refuses to delete a message that is gone, too old, or was never the bot's.
+      if (options.refuseDelete) throw Object.assign(new Error('message to delete not found'), { code: 400 });
+    }
     sent.push({ method, payload });
     const id = sent.length;
     // A scene that is still being delivered: the story is already committed and its job lock clear, so the reader
@@ -172,6 +178,7 @@ function fixture(t: TestContext, options: Options = {}) {
   const model: Provider = { async generate(request, controls?: GenerateControls) {
     requests.push(request);
     const kind = kindOf(request);
+    if (kind === 'sheet' && options.sheetError) throw Object.assign(new Error(options.sheetError), { code: options.sheetError });
     if (kind === 'sheet') return { text: JSON.stringify(options.sheetReply ?? SHEET), finishReason: 'stop' };
     if (kind === 'frame') return { text: JSON.stringify(FRAME), finishReason: 'stop' };
     // A compaction prepared ahead asks with no stream and no schema; its answer is not a memory and is dropped by
@@ -214,7 +221,7 @@ function fixture(t: TestContext, options: Options = {}) {
   }
   // Lets every held delivery through, the way Telegram answers when the network comes back.
   const release = () => { for (const go of holding.splice(0)) go(); };
-  return { bot, store, sent, rows, requests, deleted, provider, message, click, start, release, workflow, directory };
+  return { bot, store, sent, rows, requests, deleted, provider, illustrator, message, click, start, release, workflow, directory };
 }
 
 // Waits for something the fake server or the bot does on its own; the whole file runs in milliseconds.
@@ -437,9 +444,65 @@ test('a sheet the model answers with nothing still describes the frame, and the 
   // Nobody is on the sheet, so the described look is what the person is drawn from, with its number of years cut.
   assert.match(prompt, /a woman in red/);
   assert.doesNotMatch(prompt, /\d/);
+  // And the name the frame carries is cut all the same: an empty sheet is no reason to send it (local/illustrate.ts).
+  assert.doesNotMatch(prompt, /Элин/);
   const row = f.rows.find(one => one.event === 'picture')!;
+  assert.equal(row.namesStripped, 2);
   assert.equal(row.outcome, 'ready');
   assert.equal(row.withoutLook, 0);
+});
+
+// The scheduler gives the slot to somebody who is waiting for a scene, which is the order the plan asks for: this
+// reader simply gets no picture for this one, and no apology either.
+test('a description the model gave away to somebody waiting for a scene is not a failure', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root, sheetError: 'background_preempted' });
+  await f.start();
+  await f.bot.idle();
+  const row = f.rows.find(one => one.event === 'picture')!;
+  assert.equal(row.outcome, 'skipped');
+  assert.equal(row.code, 'background_preempted');
+  assert.equal(photos(f.sent).length, 0);
+  assert.equal(comfy.submitted.length, 0, 'nothing reached the picture card');
+  assert.deepEqual(f.deleted, [f.sent.indexOf(statuses(f.sent)[0]) + 1], 'the status line goes without a word');
+  assert.ok(!f.sent.some(one => one.method === 'editMessageText'));
+  // The scene is the reader's as usual.
+  const state = f.store.read('1');
+  assert.equal(Object.keys(state.stories[state.active!.storyId].nodes).length, 1);
+});
+
+// The two ends of the status line that can fail on their own: Telegram refusing to send it, and refusing to take
+// it away again. Neither is worth a picture.
+test('a status line that cannot be sent, and one that cannot be deleted, cost the reader nothing', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root, refuseDelete: true });
+  await f.start();
+  await f.bot.idle();
+  assert.equal(photos(f.sent).length, 1, 'the picture is drawn and sent');
+  assert.equal(f.rows.find(one => one.event === 'picture')!.outcome, 'ready');
+
+  // The card of the language model is paused: nothing is described, nothing is drawn, and the caller is still told
+  // that the model is free, because it never took it (local/bot.ts `prepareNext` waits for that).
+  const rows: Row[] = [];
+  const sent: string[] = [];
+  let told = 0;
+  const chat = { send: async () => { sent.push('send'); throw Object.assign(new Error('forbidden'), { code: 403 }); },
+    edit: async () => { sent.push('edit'); }, remove: async () => { sent.push('remove'); },
+    photo: async () => { sent.push('photo'); } } as unknown as Parameters<NonNullable<typeof f.illustrator>['illustrate']>[0]['chat'];
+  await f.illustrator!.illustrate({ userId: '1', chat, storyId: 'h1', nodeId: 'n1', branchId: 'b1',
+    sceneMessageId: 5, sceneAt: Date.now(), signal: new AbortController().signal,
+    log: (event, code, details) => rows.push({ event, ...(code === undefined ? {} : { code }), ...safeErrorDetails(details) }),
+    hold: () => { throw Object.assign(new Error('gpu paused'), { code: 'gpu_paused' }); },
+    afterDescribe: () => { told++; } });
+  assert.deepEqual(sent, ['send'], 'no photo, and nothing to take away');
+  assert.deepEqual(rows.map(row => row.event), ['picture_status_unsent', 'picture']);
+  assert.equal(rows[1].code, 'gpu_not_ready');
+  assert.equal(rows[1].outcome, 'skipped');
+  assert.equal(told, 1);
 });
 
 // The graphs pinned on a card end in SaveImage, which writes the picture — with the prompt in its text chunks —
@@ -513,4 +576,11 @@ test('a workflow that is not a ComfyUI API export stops the bot at startup, not 
   delete (graph['4'] as { inputs: Record<string, unknown> }).inputs.width;
   writeFileSync(join(directory, 'sizeless.json'), JSON.stringify(graph));
   assert.throws(() => createIllustrator(config('sizeless.json'), { store, provider }), /width and a height/);
+  // A file that is not there, and one that is not JSON: both used to reach the startup row as a failure with no
+  // code at all, because ENOENT is upper case and a SyntaxError carries none.
+  writeFileSync(join(directory, 'broken.json'), '{ "1": ');
+  for (const file of ['missing.json', 'broken.json']) {
+    assert.throws(() => createIllustrator(config(file), { store, provider }),
+      (error: Error & { code?: string }) => error.code === 'workflow_unreadable' && /SIMPLE_CHAT_IMAGE_WORKFLOW/.test(error.message));
+  }
 });

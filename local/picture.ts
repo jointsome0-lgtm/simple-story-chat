@@ -76,8 +76,17 @@ export function createIllustrator(config: ImageConfig, deps: {
   // rather than under the first reader. Its own size and sampler settings are what it was pinned at on the card,
   // and the bot overrides none of them: this is the graph somebody measured.
   // A saving node becomes a preview one: a graph pinned on the card would otherwise leave a copy of the picture,
-  // with the prompt in its text chunks, in a directory the API cannot empty (`previewOnly`).
-  const graph: Graph = previewOnly(apiGraph(JSON.parse(readFileSync(config.workflow, 'utf8'))));
+  // with the prompt in its text chunks, in a directory the API cannot empty (`previewOnly`). A file that is not
+  // there or is not JSON fails under a code of its own: `ENOENT` is upper case and a SyntaxError has no code at
+  // all, so the startup row would otherwise say only that something went wrong (local/main.ts).
+  let graph: Graph;
+  try { graph = previewOnly(apiGraph(JSON.parse(readFileSync(config.workflow, 'utf8')))); }
+  catch (error) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === 'string' && /^workflow_[a-z_]+$/.test(code)) throw error;
+    throw Object.assign(new Error('SIMPLE_CHAT_IMAGE_WORKFLOW must name a readable ComfyUI graph exported in API format'),
+      { code: 'workflow_unreadable' });
+  }
   const latent = latentSizeOf(graph);
   if (!latent) throw new Error('SIMPLE_CHAT_IMAGE_WORKFLOW needs a sampler whose latent_image comes from a node with a width and a height');
   const size = latent;

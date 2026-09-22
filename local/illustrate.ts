@@ -125,7 +125,17 @@ export function sheetLooks(sheet: Character[]): Map<string, string> {
 // prompt an operator writes.
 export function assemblePrompt(description: Description, sheet: Character[], style = STYLE): Assembled {
   const looks = sheetLooks(sheet);
-  const names = sheet.map(character => character.name);
+  const sheetNames = sheet.map(character => character.name);
+  // The sheet holds the recurring people, and a stranger of one scene — or anybody at all, when the sheet came back
+  // empty — is named in `who` and then, often enough, in `moment` and `objects` as well. `who` never reaches the
+  // image model, but those fields do, so the description's own names join the ones the net strips. The instruction
+  // asks for a short lower-case role for a person the sheet does not cover ("salt worker"), so a `who` of one
+  // capitalised word is a name and a role written as the instruction asks is left alone: cutting a role would cost
+  // the picture the person it describes. A name in a field of somebody the description never lists is still only
+  // the instruction's to catch.
+  const strangers = (description.people ?? []).map(person => (person.who ?? '').trim())
+    .filter(who => who.length > 1 && !/\s/.test(who) && /^\p{Lu}/u.test(who) && matchSheet(who, sheetNames) === null);
+  const names = [...sheetNames, ...strangers];
   let namesStripped = 0;
   let fromSheet = 0;
   let withoutLook = 0;
@@ -135,7 +145,7 @@ export function assemblePrompt(description: Description, sheet: Character[], sty
     return stripped.text;
   };
   const people = (description.people ?? []).map(person => {
-    const matched = matchSheet(person.who ?? '', names);
+    const matched = matchSheet(person.who ?? '', sheetNames);
     const known = matched === null ? undefined : looks.get(matched.trim().toLowerCase());
     if (known) fromSheet++;
     // The sheet is model output too: a name in an appearance line would reach every frame of that story.
