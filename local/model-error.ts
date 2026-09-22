@@ -15,6 +15,11 @@ const AGENT_CALLS = ['create_seed', 'start_story', 'act', 'fork'] as const;
 // Which checkpoint drew a picture, by its place in the comparison (local/image-batch.ts). The file name of a
 // community checkpoint is not an enum and does not belong in a log row.
 const IMAGE_ROLES = ['primary', 'alternate'] as const;
+// How a Claude CLI run ended, from the `subtype` of its terminal result (local/claude.ts): the CLI's own verdicts,
+// `no_init` when the run never reported its tools, `missing` when it ended without a result, `other` for a subtype
+// this list does not know. Together with `exitCode` this tells a stalled CLI from a refused structured output.
+export const CLI_RESULTS = ['success', 'error_max_turns', 'error_during_execution', 'error_max_budget_usd',
+  'error_max_structured_output_retries', 'no_init', 'missing', 'other'] as const;
 // Sizes, counts and durations. Each is kept only as a non-negative safe integer, so none can carry text.
 const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'repairSceneCount', 'requestBytes',
   'inputBytesBefore', 'inputBytesAfter', 'outputCharacters', 'inputTokens', 'outputTokens', 'elapsedMs',
@@ -39,6 +44,8 @@ export type ErrorDetails = {
   actor?: typeof ACTORS[number]; automatic?: boolean; agentCall?: typeof AGENT_CALLS[number]; stage?: typeof STAGES[number];
   // A picture: which checkpoint drew it, and whether the reader's next message ended it before it arrived.
   imageRole?: typeof IMAGE_ROLES[number]; cancelled?: boolean;
+  // A failed Claude CLI run: how it ended and whether the CLI itself called the result an error.
+  cliResult?: typeof CLI_RESULTS[number]; cliError?: boolean;
 } & { [Key in typeof COUNTS[number]]?: number };
 export type Log = (event: string, code?: string | number, details?: unknown) => void;
 
@@ -68,6 +75,8 @@ export function safeErrorDetails(value: unknown = {}): ErrorDetails {
   if (member(STAGES, input?.stage)) result.stage = input.stage;
   if (member(IMAGE_ROLES, input?.imageRole)) result.imageRole = input.imageRole;
   if (typeof input?.cancelled === 'boolean') result.cancelled = input.cancelled;
+  if (member(CLI_RESULTS, input?.cliResult)) result.cliResult = input.cliResult;
+  if (typeof input?.cliError === 'boolean') result.cliError = input.cliError;
   for (const key of COUNTS) {
     const count = input?.[key];
     if (typeof count === 'number' && Number.isSafeInteger(count) && count >= 0) result[key] = count;
@@ -79,6 +88,7 @@ export class ModelError extends Error {
   declare httpStatus?: number; declare phase?: ErrorDetails['phase']; declare operation?: ErrorDetails['operation'];
   declare memoryReason?: ErrorDetails['memoryReason']; declare transportCode?: ErrorDetails['transportCode'];
   declare exitCode?: number; declare signal?: ErrorDetails['signal']; declare sshReason?: ErrorDetails['sshReason'];
+  declare cliResult?: ErrorDetails['cliResult']; declare cliError?: boolean;
   declare sceneCount?: number; declare missingCount?: number; declare connectionAgeMs?: number;
   // A failed compaction carries its sizes and counts to the log row of the failure.
   declare automatic?: boolean; declare repairSceneCount?: number; declare requestBytes?: number; declare inputBytesBefore?: number;

@@ -35,3 +35,9 @@ test('an illustrated scene logs its durations and the checkpoint role, never the
   assert.deepEqual(safeErrorDetails({ imageRole: 'kreamania-fp8.safetensors', cancelled: 'PRIVATE',
     imageSeed: 12157665459056928801, prompt: 'PRIVATE_PROMPT', file: 'PRIVATE_PATH', imageMs: -1 }), {});
 });
+
+test('a failed CLI run logs how it ended as an enum and a flag, never a subtype the list does not know', () => {
+  assert.deepEqual(safeErrorDetails({ cliResult: 'error_max_structured_output_retries', cliError: true, exitCode: 0 }),
+    { cliResult: 'error_max_structured_output_retries', cliError: true, exitCode: 0 });
+  assert.deepEqual(safeErrorDetails({ cliResult: 'PRIVATE', cliError: 'PRIVATE' }), {});
+});

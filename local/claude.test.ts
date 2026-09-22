@@ -126,3 +126,13 @@ test('large UTF-8 input is allowed when its observed token count fits, and fails
   const missing = fixture(t, [init, chunk('no'), { type: 'result', subtype: 'success', result: 'no' }]);
   await assert.rejects(missing.provider.generate(large), { code: 'usage_unavailable' });
 });
+
+test('a failed CLI run names how it ended, never its text', async t => {
+  const refused = fixture(t, [init, { type: 'result', subtype: 'error_max_structured_output_retries', is_error: true, result: 'PRIVATE' }]);
+  await assert.rejects(refused.provider.generate(request),
+    { code: 'provider_failed', cliResult: 'error_max_structured_output_retries', cliError: true, exitCode: 0 });
+  const unknown = fixture(t, [init, { type: 'result', subtype: 'PRIVATE', is_error: false, result: 'x' }]);
+  await assert.rejects(unknown.provider.generate(request), { code: 'provider_failed', cliResult: 'other', cliError: false });
+  const none = fixture(t, [init, chunk('scene')], 1);
+  await assert.rejects(none.provider.generate(request), { code: 'provider_failed', cliResult: 'missing', exitCode: 1 });
+});
