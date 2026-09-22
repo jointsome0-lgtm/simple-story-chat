@@ -2,6 +2,132 @@
 
 Every step of the loop from [improve-loop.md](improve-loop.md): date, hypothesis, change, numbers before and after per model, decision. Rejected hypotheses are recorded too. New entries go on top.
 
+## 2026-09-23 · Fable 5.1 · the seed audited, and a gold tree grown by four writers under the agreement of four judges
+
+Not a step of the loop: nothing in the prompts or the memory changed. The owner set the bar for a gold set: every scene
+written by all four council models, admitted only when all four judges agree, and even then a candidate, since a fault
+in a scene is often noticed only when a deeper scene is judged against it; gold comes from statistics kept over time.
+Commits `b862e6b`, `9c1c900`, `f576811`, `24f950b`, `862f559`, `2b872b4`, `c9c985a`; described in
+`docs/model-providers.md` ("The gold tree").
+
+**The seed first.** `eval seed-audit` asks every judge for a seed's own contradictions and ambiguities, with quotes.
+On `lighthouse` the four judges listed 23 issues: 22 ambiguities that several judges kept finding in the same places
+(which clock the times follow, whether 21:10 starts or ends the flooding, whether the generator is running, whether the
+spare canister is full, which side of the door the nail is on, who saw the boat, how the signal is given and whether
+it repeats) and one "contradiction" that was phrasing (the road is still open at 20:30 while the seed said the
+lighthouse is cut off until morning). The seed now says all of it: passable until 20:50, under water by 21:10, open
+again about 05:40; the generator running since noon with 14 litres at 20:30 and 3 litres an hour; a full 20-litre
+canister in a locked storeroom on the ground floor, its key on the nail to the right of the kitchen door; the panel's
+`автомат/ручной` switch; three 3-second flashes given once, no reply, no radio to the post; the phone's clock right
+and the kitchen clock at 20:23. The walks in the previous entry were measured on the seed before the audit. One
+ambiguity the audit did not catch showed at depth 9: the seed does not say how deep the water on the spit is, so
+when a scene had someone wade across, the two Codex judges read it as contradicting "cut off" and the two Claude
+judges did not. The seed is not edited now, because the tree is pinned to the seed's hash; it goes on the list for
+the next seed of this kind.
+
+**The tree.** Two walks of one model differ in every scene, so a walk cannot say at which depth a model loses the
+world. `eval walk-gold` grows a tree of scenes from the seed, in the bot's own shape (every scene has a parent), kept
+next to the walk as `lighthouse.gold.json` with `lighthouse.gold.md` for a person, every scene nobody has read marked
+so. At each depth all four writers continue the accepted prefix with the walk's next step (`local/walk-step.ts`, the
+writer sees the whole prefix); the council reads each new scene against the seed and the prefix (`walk-judge.ts
+--only`); the gate is the agreement of every judge, not the eval's majority: no findings in the first round, or none
+that any judge still confirms in the second, the judge that listed it included, which may take it back; a judge with
+no verdict is against. Of the agreed scenes the one with the fewest dissenters and findings becomes the trunk (a tie
+goes to the writer with the fewest trunk nodes so far), the rest are branches; a rejected scene stays in the file
+with the findings that stood against it, and its writer repairs it on the next attempt with those findings quoted as
+an editor's note, up to four attempts. An agreed scene is a candidate. Every node keeps a ledger: deeper scenes judged
+with it in their prefix (`seen`), findings against deeper scenes whose earlier quote stands in this node (`later`,
+with whether they stood), issues of the whole-story audit (`gold-audit`: every judge reads the whole trunk at once),
+fresh readings by the council (`gold-recheck`); `gold-promote` makes gold of a candidate with enough agreed rechecks
+and enough deeper readings and nothing against it, `gold-stats` prints the numbers, `gold-read` records a person's
+reading. `eval walk-nodes` is the eval over the tree: a model continues from the seed and from every trunk node
+through its own compaction of the prefix, and the verdict comes with the depth. A judge whose probe failed enters no
+ledger (`c9c985a`): its silence is the provider's, not a reading.
+
+**`lighthouse`, grown overnight.** Writers and judges `claude:claude-opus-5-5`, `claude:claude-fable-5-1`,
+`codex:gpt-6-astra`, `codex:gpt-6-sol`; four attempts per writer and depth; the first single-writer trunk (Opus 5.5,
+eight nodes, two by repair) was discarded as an artifact when the owner asked for four writers. Grown between 01:00 and 02:23 on 2026-09-23 in three starts (the agreement gate and the ledger were committed
+while it grew, the nodes kept each time): 63 nodes at 16 depths, four at every depth but the sixth, where a Fable
+repair died on a provider timeout; the trunk reaches the walk's sixteenth step, the dawn summary. Trunk by depth:
+Opus 1, 5, 9, 13, 16; Fable 2, 7, 10, 14; Astra 3, 6, 11, 15; Sol 4, 8, 12 (the tie-breaker keeps the writers even
+until a depth where one scene is cleaner). 102 attempts were logged since the four-writer growth began, 68 of them in
+the last start; 43 nodes were accepted at the first attempt, 19 by repair, one by a fresh third attempt; 24 attempts
+were rejected. 62 of the 63 nodes were clean in the first round; one (Sol, depth 16) was admitted when the judge that
+listed a finding took it back with the others. A depth took 1 to 9 minutes with four writers and four judges in
+parallel, the whole tree 67 minutes of wall-clock. Per writer:
+
+| Writer | Nodes | Accepted at the first attempt | Rejected attempts | Findings that stood against them | Of them about time | Characters per scene | Clock times per scene |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `claude:claude-opus-5-5` | 16 | 10 | 6 | 15 | 8 | 3366 | 2.8 |
+| `claude:claude-fable-5-1` | 15 | 7 | 12 | 41 | 31 | 3186 | 2.3 |
+| `codex:gpt-6-astra` | 16 | 14 | 2 | 4 | 2 | 1629 | 1.3 |
+| `codex:gpt-6-sol` | 16 | 12 | 4 | 14 | 2 | 1454 | 1.4 |
+
+The 74 findings that stood against rejected scenes: time 43, number 12, item 8, place 4, the author's step ignored 4,
+knowledge, person and other 1 each; by judge Astra 27, Sol 19, Fable 16, Opus 12. After the trunk, every judge read the whole trunk at once (`gold-audit`, 19 issues, 4 of them contradictions,
+on 9 of the 16 scenes: Opus 7, Fable 6, Astra 4, Sol 2) and the council read every node again, fresh
+(`gold-recheck`: 63 nodes, every judging held, 61 agreed again; the two refusals are below).
+
+What the numbers say:
+
+- **Length is not scored, but every claim is.** The Codex writers write half the text of the Claude writers (1.4 to
+  1.6 thousand characters against 3.2 to 3.4) with half the clock times, and lose 2 and 4 attempts against 6 and 12.
+  The tree is not skewed by it, 16 nodes per writer (15 for Fable, one timeout), because a writer repairs until it is
+  accepted, and the trunk went round the writers in turn, since 62 of 63 scenes were clean; the difference is the
+  price of admission. Every time in a scene is a claim the judges check: 31 of the 41 findings against Fable are about time (a relative interval
+  that does not match the clock, a log entry stamped before the event it records), and Fable was flagged by every
+  judge, itself included (Astra 15, Sol 13, Fable 7, Opus 6), so this is not the Codex judges' strictness. Opus lost 4
+  of its 15 findings on ignoring the author's step. The owner's decision: no penalty for length anywhere, consistency is
+  the only measure; the one place length matters is the eval over the tree, where a model that says little contradicts
+  little, and the rule on the author's step is the guard against saying nothing.
+- **Step 14 (the key is not on the nail) rejected all four at the first attempt, and all four repaired at once.**
+  The intervention was legitimate (scene 10 had hung the key back at 21:38); the errors were the writers' bookkeeping:
+  a first-aid kit locked in the storeroom while it lay open on the table since scene 11, a lamp counted in the
+  storeroom after Timur took it in scene 5, "thirty-eight minutes ago" that does not fit 21:38 at 22:11, a log entry
+  at 22:09 for what happened after 22:10. The repair with the findings quoted worked every time here; over the tree 19
+  of the 63 nodes came by repair, and one by writing afresh at the third attempt.
+- **In practice the gate is a clean first round.** 62 of 63 nodes had no finding at all in the first round; one was
+  admitted when the judge that listed a finding took it back with the others. The second round served the rejections:
+  it decides which findings stand and are quoted back to the writer.
+- **Whole-story reading finds what scene-by-scene reading let through**, which is the owner's reason for the ledger.
+  The audit's contradictions: the key in Timur's pocket in scene 9 after scene 7 left it on the kitchen table (three
+  judges, one as a contradiction, two as an ambiguity); a fire at the village seen at two kilometres while the same
+  scene gives 200 metres of visibility (two judges); the radio kept in use after the generator stopped; "from nine
+  you cannot cross" against the seed's 20:50. Its ambiguities: a second "storeroom" under the stairs that a reader
+  confuses with the locked one (two judges), which door was opened and where the antenna lies (two), whether Sergey
+  has his trousers on (two), a padlock in scene 14 against a mortice lock in scene 5, where the lamps are, what the
+  post could see, what Marta knows about the crew. Every issue sits in its scene's ledger; under the promotion rule
+  nine of the sixteen trunk scenes would stand barred as they are.
+- **What the ledger holds so far.** 47 findings against deeper attempts pointed back at 8 earlier nodes, 46 of them
+  standing after the cross round (in the cases read for this entry the deeper scene was at fault, which is what the
+  gate expects; a person reads both kinds); the most read node was judged over 126 times.
+- **The recheck measured the gate's noise: 2 of 63.** Every scene was read again by the four, fresh, with no silent
+  judge, and 61 were agreed again. One refusal was a lone judge standing by a finding against the seed that the other
+  three refuted (Sol, on the trunk scene of depth 8, which Sol itself had written); the other was a real contradiction
+  the growth-time reading had missed and all four now confirmed (a branch of Opus at the same depth: a radio call at
+  21:26 that the minutes of the previous scene do not allow). So a scene agreed once is refused on a fresh reading
+  about one time in thirty here, half of it noise and half a miss; the thresholds of version 2 should ask for k of n
+  rechecks rather than all, and count a lone insistence as noise.
+- **The seed.** One ambiguity the audit had not named showed at depth 9: the seed does not say how deep the water on
+  the spit is, so a scene with someone wading across was a contradiction of "cut off" to the two Codex judges and not
+  to the two Claude judges. The rewritten seed was not audited a second time before the tree grew; the owner's
+  decision: this tree is version 1, its scenes stay candidates and nothing is promoted; version 2 grows from a
+  re-audited seed and is the one meant to become gold.
+- Open, from the owner: the seed's size has never been varied (every synthetic seed is a page or two; `lighthouse` is
+  4.7 KB, about 1200 estimated tokens, and the seed goes whole into every request, untouched by compaction, in a
+  65 536-token window that compacts at 44 000). A tester's seed of 37 KB would take 15 to 20 percent of the window in
+  every call. The next scenarios of the walk kind should come in sizes, the same world at about 5, 15 and 37 KB, one
+  walk each with the council, to see whether the share of consistent scenes moves with the seed. Version 2 of the
+  tree grows from a re-audited seed into the private pack; version 1 stays public, the owner's decision.
+- Incidents: the growth was restarted twice while the gate and the ledger were committed, keeping the nodes; one Fable
+  repair died on a provider timeout (depth 6 has three nodes); `c9c985a` keeps a silent judge out of the ledger, found
+  while preparing the recheck. Under two eval runs the GPU test "video memory is sampled per card through one SSH
+  session" times out at 120 s; it passes when the machine is quiet.
+
+The plan for version 2 (a seed audited until clean, growth in width by the ledger, several gold paths, thresholds from
+measured noise, private) is written in `docs/improve-loop.md`, "The gold tree, version 2". Nothing was pushed to Hugging Face or to the remote; the gold files are committed next to the walk and copied into
+the dataset directory for a later push.
+
 ## 2026-09-22 · Fable 5.1 · the walk: the model writes its own story, and a council of four reads every scene
 
 Not a step of the loop. The owner redirected the day's task: what matters is consistency, not details, and the eval

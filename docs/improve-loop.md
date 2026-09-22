@@ -82,6 +82,11 @@ built differently. Written here so that it is not forgotten when the next seed i
   is refused on a fresh reading, and why (a lone judge insisting, or a real finding); the rule should ask for k of n
   rechecks rather than all of them, and count an audit issue only when a second audit repeats it. Version 1's
   numbers are in the log entry.
+- **The tree grows without a cap; the eval limits what it measures.** A weaker model is measured on the nodes whose
+  path from the seed fits its limit, about 50k tokens counted with tiktoken (`o200k_base`) as the one ruler that does
+  not depend on the model under test; the frontier is measured on the whole tree; one limit per run, named in the
+  report with the nodes it admitted. Planned: `pathTokens` per node in `gold-stats` and in the reading for people,
+  `--max-path-tokens` in `walk-nodes`, js-tiktoken as a dependency of the eval only.
 - **Version 2 grows on a private seed into the private pack**, by a session that does not run the improvement loop;
   version 1 stays public. A person reads the gold paths (`eval gold-read`) before anything is called gold.
 

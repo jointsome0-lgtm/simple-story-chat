@@ -21,7 +21,15 @@
         "dissent": 0
       },
       "read": false,
-      "seen": 67
+      "seen": 126,
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:26:49.040Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g2": {
       "parent": null,
@@ -41,7 +49,15 @@
         ],
         "dissent": 0
       },
-      "read": false
+      "read": false,
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:27:04.577Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g3": {
       "parent": null,
@@ -61,7 +77,15 @@
         ],
         "dissent": 0
       },
-      "read": false
+      "read": false,
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:27:11.702Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g4": {
       "parent": null,
@@ -81,7 +105,15 @@
         ],
         "dissent": 0
       },
-      "read": false
+      "read": false,
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:27:18.310Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g5": {
       "parent": "g1",
@@ -102,7 +134,15 @@
         "dissent": 0
       },
       "read": false,
-      "seen": 67
+      "seen": 122,
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:27:36.915Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g6": {
       "parent": "g1",
@@ -122,7 +162,15 @@
         ],
         "dissent": 0
       },
-      "read": false
+      "read": false,
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:27:44.889Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g7": {
       "parent": "g1",
@@ -142,7 +190,15 @@
         ],
         "dissent": 0
       },
-      "read": false
+      "read": false,
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:27:59.038Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g8": {
       "parent": "g1",
@@ -162,7 +218,15 @@
         ],
         "dissent": 0
       },
-      "read": false
+      "read": false,
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:28:10.175Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g9": {
       "parent": "g5",
@@ -183,7 +247,15 @@
         "dissent": 0
       },
       "read": false,
-      "seen": 67
+      "seen": 118,
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:28:27.037Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g10": {
       "parent": "g5",
@@ -203,7 +275,15 @@
         ],
         "dissent": 0
       },
-      "read": false
+      "read": false,
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:28:42.432Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g11": {
       "parent": "g5",
@@ -223,7 +303,15 @@
         ],
         "dissent": 0
       },
-      "read": false
+      "read": false,
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:28:53.567Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g12": {
       "parent": "g5",
@@ -243,7 +331,15 @@
         ],
         "dissent": 0
       },
-      "read": false
+      "read": false,
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:29:06.310Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g13": {
       "parent": "g9",
@@ -264,7 +360,15 @@
         "dissent": 0
       },
       "read": false,
-      "seen": 67
+      "seen": 114,
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:29:27.207Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g14": {
       "parent": "g9",
@@ -284,7 +388,15 @@
         ],
         "dissent": 0
       },
-      "read": false
+      "read": false,
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:29:46.923Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g15": {
       "parent": "g9",
@@ -304,7 +416,15 @@
         ],
         "dissent": 0
       },
-      "read": false
+      "read": false,
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:29:59.506Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g16": {
       "parent": "g9",
@@ -324,7 +444,15 @@
         ],
         "dissent": 0
       },
-      "read": false
+      "read": false,
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:30:11.442Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g17": {
       "parent": "g13",
@@ -346,7 +474,7 @@
       },
       "read": false,
       "status": "candidate",
-      "seen": 62,
+      "seen": 105,
       "reviews": [
         {
           "kind": "later",
@@ -407,6 +535,20 @@
           "confirmed": true,
           "now": "«Три керосиновые лампы ... были за запертой дверью; одна лампа ... стояла в сенях»",
           "before": "«На полке стояли три керосиновые лампы ... Тимур ... вернулся за одной из керосиновых ламп»"
+        },
+        {
+          "kind": "audit",
+          "at": "2026-09-22T23:26:40.135Z",
+          "by": "claude:claude-opus-5-5",
+          "issue": "ambiguity",
+          "quote": "Дорога за окном уже ушла под воду.",
+          "note": "Время 20:59, а по сиду дорога полностью уходит под воду только к 21:10; непонятно, закрыта она уже целиком или ещё нет."
+        },
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:30:25.050Z",
+          "agreed": true,
+          "against": []
         }
       ]
     },
@@ -429,7 +571,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:30:47.672Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g19": {
       "parent": "g13",
@@ -450,7 +600,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:31:01.294Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g20": {
       "parent": "g13",
@@ -471,7 +629,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:31:30.429Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g21": {
       "parent": "g17",
@@ -493,7 +659,7 @@
       },
       "read": false,
       "status": "candidate",
-      "seen": 57,
+      "seen": 97,
       "reviews": [
         {
           "kind": "later",
@@ -524,6 +690,12 @@
           "confirmed": true,
           "now": "Он схватил палку Марты, оставленную у двери, и поспешил в пристройку.",
           "before": "Марта добралась до пристройки с палкой, придерживаясь свободной рукой за стену."
+        },
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:31:42.784Z",
+          "agreed": true,
+          "against": []
         }
       ]
     },
@@ -546,7 +718,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:31:55.030Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g23": {
       "parent": "g17",
@@ -567,7 +747,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:32:10.205Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g24": {
       "parent": "g21",
@@ -589,7 +777,7 @@
       },
       "read": false,
       "status": "candidate",
-      "seen": 52,
+      "seen": 88,
       "reviews": [
         {
           "kind": "later",
@@ -720,6 +908,32 @@
           "confirmed": true,
           "now": "«За тридцать три минуты ... а между этим завёл дизель»",
           "before": "«2026-11-06 21:24\n\n— Теперь заводи»"
+        },
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:32:25.786Z",
+          "agreed": true,
+          "against": []
+        },
+        {
+          "kind": "later",
+          "at": "2026-09-22T23:38:55.800Z",
+          "by": "claude:claude-fable-5-1",
+          "depth": 8,
+          "writer": "claude:claude-opus-5-5",
+          "confirmed": true,
+          "now": "Выложил на стол ключ от кладовой.",
+          "before": "кухня стала маленькой и плоской: край стола, коричневый чайник, ключ, который он так и не вернул на гвоздь"
+        },
+        {
+          "kind": "later",
+          "at": "2026-09-22T23:38:55.800Z",
+          "by": "codex:gpt-6-astra",
+          "depth": 8,
+          "writer": "claude:claude-opus-5-5",
+          "confirmed": true,
+          "now": "21:26 … — Молчит, — сказал он. — Три раза вызывал.",
+          "before": "21:24 … Марта слушала двигатель … целую минуту, потом ещё одну. … Он поднялся за минуту с небольшим."
         }
       ]
     },
@@ -742,7 +956,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:32:43.654Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g26": {
       "parent": "g21",
@@ -763,7 +985,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:32:58.781Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g27": {
       "parent": "g21",
@@ -784,7 +1014,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:35:26.024Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g28": {
       "parent": "g24",
@@ -806,7 +1044,7 @@
       },
       "read": false,
       "status": "candidate",
-      "seen": 46,
+      "seen": 78,
       "reviews": [
         {
           "kind": "later",
@@ -827,6 +1065,22 @@
           "confirmed": true,
           "now": "Куртка Тимура висела там с двадцати одного тридцати восьми, она сама видела, как он её повесил, войдя из пристройки.",
           "before": "Тимур снял мокрую куртку, но от рации не отошёл. (21:32) / Тимур вернулся с аптечкой и стопкой одеял, положил их на стол и повесил ключ на гвоздь (21:38)"
+        },
+        {
+          "kind": "audit",
+          "at": "2026-09-22T23:26:40.135Z",
+          "by": "codex:gpt-6-astra",
+          "issue": "contradiction",
+          "quote": "я останусь у радио, пока оно работает",
+          "note": "План после остановки двигателя расходится с сидом и сценой 6: радиостанция теряет питание одновременно с лампой, когда генератор останавливается."
+        },
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:38:05.275Z",
+          "agreed": false,
+          "against": [
+            "codex:gpt-6-sol"
+          ]
         }
       ]
     },
@@ -849,7 +1103,20 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:38:55.801Z",
+          "agreed": false,
+          "against": [
+            "claude:claude-opus-5-5",
+            "claude:claude-fable-5-1",
+            "codex:gpt-6-astra",
+            "codex:gpt-6-sol"
+          ]
+        }
+      ]
     },
     "g30": {
       "parent": "g24",
@@ -870,7 +1137,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:39:18.058Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g31": {
       "parent": "g24",
@@ -891,7 +1166,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:39:28.222Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g32": {
       "parent": "g28",
@@ -913,7 +1196,39 @@
       },
       "read": false,
       "status": "candidate",
-      "seen": 38
+      "seen": 66,
+      "reviews": [
+        {
+          "kind": "audit",
+          "at": "2026-09-22T23:26:40.135Z",
+          "by": "claude:claude-opus-5-5",
+          "issue": "contradiction",
+          "quote": "По косе с девяти уже не пройти.",
+          "note": "По сиду пройти по косе можно только до 20:50, к 21:10 она полностью под водой; «с девяти» сдвигает срок."
+        },
+        {
+          "kind": "audit",
+          "at": "2026-09-22T23:26:40.135Z",
+          "by": "claude:claude-opus-5-5",
+          "issue": "contradiction",
+          "quote": "— Ключ у тебя? — Тимур хлопнул по карману и кивнул.",
+          "note": "В сцене 7 ключ лежит на кухонном столе («ключ, который он так и не вернул на гвоздь»), а здесь он без пояснений оказывается у Тимура в кармане."
+        },
+        {
+          "kind": "audit",
+          "at": "2026-09-22T23:26:40.135Z",
+          "by": "claude:claude-fable-5-1",
+          "issue": "ambiguity",
+          "quote": "Ключ у тебя? — Тимур хлопнул по карману и кивнул",
+          "note": "В сцене 7 ключ лежал на кухонном столе («так и не вернул на гвоздь»); как он оказался в кармане Тимура, не показано."
+        },
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:39:49.296Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g33": {
       "parent": "g28",
@@ -934,7 +1249,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:40:07.546Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g34": {
       "parent": "g28",
@@ -955,7 +1278,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:40:23.103Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g35": {
       "parent": "g28",
@@ -976,7 +1307,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:40:33.174Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g36": {
       "parent": "g32",
@@ -998,7 +1337,7 @@
       },
       "read": false,
       "status": "candidate",
-      "seen": 34,
+      "seen": 58,
       "reviews": [
         {
           "kind": "later",
@@ -1069,6 +1408,12 @@
           "confirmed": false,
           "now": "Оля подтвердила, что ты у нас.",
           "before": "Он у вас? Живой?"
+        },
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:40:48.313Z",
+          "agreed": true,
+          "against": []
         }
       ]
     },
@@ -1091,7 +1436,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:43:14.601Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g38": {
       "parent": "g32",
@@ -1112,7 +1465,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:43:29.697Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g39": {
       "parent": "g32",
@@ -1133,7 +1494,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:43:48.622Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g40": {
       "parent": "g36",
@@ -1155,7 +1524,7 @@
       },
       "read": false,
       "status": "candidate",
-      "seen": 28,
+      "seen": 48,
       "reviews": [
         {
           "kind": "later",
@@ -1186,6 +1555,28 @@
           "confirmed": true,
           "now": "Три керосиновые лампы и аптечка были за запертой дверью",
           "before": "Марта посмотрела на аптечку, всё ещё открытую на столе."
+        },
+        {
+          "kind": "audit",
+          "at": "2026-09-22T23:26:40.135Z",
+          "by": "claude:claude-opus-5-5",
+          "issue": "ambiguity",
+          "quote": "На мокрых штанах возле кармана подсыхала белёсая полоса соли. Он провёл по ней пальцем",
+          "note": "В сцене 10 Сергей снял штаны, повесил их над плитой и сидит в кальсонах и одеялах; здесь неясно, надел ли он их снова."
+        },
+        {
+          "kind": "audit",
+          "at": "2026-09-22T23:26:40.135Z",
+          "by": "claude:claude-fable-5-1",
+          "issue": "ambiguity",
+          "quote": "На мокрых штанах возле кармана подсыхала белёсая полоса соли. Он провёл по ней пальцем",
+          "note": "В сцене 10 Сергей снял штаны и они висят на верёвке над плитой (он в кальсонах, в сц. 14 босой, в сц. 16 тянется к штанам над плитой); здесь читается так, будто штаны на нём — неясно, одет он или трогает висящие."
+        },
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:44:00.496Z",
+          "agreed": true,
+          "against": []
         }
       ]
     },
@@ -1208,7 +1599,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:44:11.091Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g42": {
       "parent": "g36",
@@ -1229,7 +1628,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:44:23.170Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g43": {
       "parent": "g36",
@@ -1250,7 +1657,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:46:49.711Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g44": {
       "parent": "g40",
@@ -1272,7 +1687,7 @@
       },
       "read": false,
       "status": "candidate",
-      "seen": 24,
+      "seen": 40,
       "reviews": [
         {
           "kind": "later",
@@ -1293,6 +1708,28 @@
           "confirmed": true,
           "now": "Потом за коробкой ходил, под лестницу. Потом дверь открывал, антенну смотреть.",
           "before": "Тимур приоткрыл дверь в сени. … увидел провод … и тёмный стержень на земле у порога."
+        },
+        {
+          "kind": "audit",
+          "at": "2026-09-22T23:26:40.135Z",
+          "by": "claude:claude-opus-5-5",
+          "issue": "ambiguity",
+          "quote": "Тимур приоткрыл дверь в сени. В полосе света он увидел провод, который ветер хлестал о стену, и тёмный стержень на земле у порога.",
+          "note": "Не ясно, какую дверь открыли, кухонную или наружную (позже «прикрыл наружную дверь на засов»), и где лежит антенна: снаружи или в сенях (в сцене 14 провод мотается «у порога» сеней)."
+        },
+        {
+          "kind": "audit",
+          "at": "2026-09-22T23:26:40.135Z",
+          "by": "claude:claude-fable-5-1",
+          "issue": "ambiguity",
+          "quote": "Тимур приоткрыл дверь в сени. В полосе света он увидел провод, который ветер хлестал о стену, и тёмный стержень на земле у порога",
+          "note": "Открыта «дверь в сени», а закрывает он «наружную дверь на засов»; где лежит антенна — за наружной дверью во дворе или в сенях у порога — двояко (сц. 13, 14, 16 говорят «у порога»)."
+        },
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:47:02.835Z",
+          "agreed": true,
+          "against": []
         }
       ]
     },
@@ -1315,7 +1752,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:47:16.625Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g46": {
       "parent": "g40",
@@ -1336,7 +1781,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:47:33.344Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g47": {
       "parent": "g40",
@@ -1357,7 +1810,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:47:43.344Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g48": {
       "parent": "g44",
@@ -1469,9 +1930,31 @@
           "confirmed": true,
           "now": "в двадцать два ноль восемь он снял её с этого же гвоздя, чтобы идти наверх",
           "before": "время по телефону Тимура: 22:10… Марта повернулась к Тимуру. — Сходи наверх"
+        },
+        {
+          "kind": "audit",
+          "at": "2026-09-22T23:26:40.135Z",
+          "by": "claude:claude-opus-5-5",
+          "issue": "ambiguity",
+          "quote": "Марта показала Тимуру на кладовку под лестницей, где она держала хозяйственную мелочь",
+          "note": "Появляется вторая «кладовка», и её легко спутать с запертой кладовой из сида; непонятно, одно это помещение или два и нужен ли для неё ключ."
+        },
+        {
+          "kind": "audit",
+          "at": "2026-09-22T23:26:40.135Z",
+          "by": "codex:gpt-6-astra",
+          "issue": "ambiguity",
+          "quote": "Марта показала Тимуру на кладовку под лестницей",
+          "note": "Неясно, это прежняя запертая кладовая с единственным ключом или другое хозяйственное помещение, доступное без ключа."
+        },
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:47:59.588Z",
+          "agreed": true,
+          "against": []
         }
       ],
-      "seen": 18
+      "seen": 30
     },
     "g49": {
       "parent": "g44",
@@ -1492,7 +1975,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:50:27.621Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g50": {
       "parent": "g44",
@@ -1513,7 +2004,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:50:45.436Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g51": {
       "parent": "g44",
@@ -1534,7 +2033,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:51:22.292Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g52": {
       "parent": "g48",
@@ -1556,7 +2063,47 @@
       },
       "read": false,
       "status": "candidate",
-      "seen": 10
+      "seen": 18,
+      "reviews": [
+        {
+          "kind": "audit",
+          "at": "2026-09-22T23:26:40.135Z",
+          "by": "claude:claude-fable-5-1",
+          "issue": "ambiguity",
+          "quote": "Дверь в сени открывали один раз с тех пор, как ключ повесили: Тимур, когда сорвало антенну",
+          "note": "Тимур ходил за коробкой в «кладовку под лестницей» (сц. 13), а наружная дверь и пространство под лестницей — в сенях (сц. 9, 15); неясно, кладовка в кухне или в сенях, и сколько раз открывали дверь; также «кладовка под лестницей» легко путается с запертой кладовой."
+        },
+        {
+          "kind": "audit",
+          "at": "2026-09-22T23:26:40.135Z",
+          "by": "claude:claude-fable-5-1",
+          "issue": "ambiguity",
+          "quote": "На берегу огонь. Один, жёлтый, не двигается... дальше двухсот метров вообще не видно",
+          "note": "Посёлок в двух километрах (сид), а видимость по словам Тимура 200 м; неясно, как виден огонь на берегу у посёлка и что значит «на воде ничего»."
+        },
+        {
+          "kind": "audit",
+          "at": "2026-09-22T23:26:40.135Z",
+          "by": "claude:claude-fable-5-1",
+          "issue": "ambiguity",
+          "quote": "замок на кладовой был навесной, старый; сбить дужку — два-три удара",
+          "note": "В сцене 5 ключ провернулся только когда Тимур потянул дверь на себя, что описывает врезной замок, а не навесной; тип замка двоится."
+        },
+        {
+          "kind": "audit",
+          "at": "2026-09-22T23:26:40.135Z",
+          "by": "codex:gpt-6-astra",
+          "issue": "contradiction",
+          "quote": "Только дождь, дальше двухсот метров вообще не видно.",
+          "note": "Тимур одновременно сообщает об огне на берегу посёлка, который по сиду и сцене 11 находится в двух километрах от маяка, что несовместимо с заявленной предельной видимостью."
+        },
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:52:00.733Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g53": {
       "parent": "g48",
@@ -1577,7 +2124,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:52:15.567Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g54": {
       "parent": "g48",
@@ -1598,7 +2153,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:52:27.545Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g55": {
       "parent": "g48",
@@ -1619,7 +2182,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:53:00.031Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g56": {
       "parent": "g52",
@@ -1641,7 +2212,23 @@
       },
       "read": false,
       "status": "candidate",
-      "seen": 4
+      "seen": 8,
+      "reviews": [
+        {
+          "kind": "audit",
+          "at": "2026-09-22T23:26:40.135Z",
+          "by": "codex:gpt-6-astra",
+          "issue": "ambiguity",
+          "quote": "Ревун оставил на полке возле двери, чтобы можно было достать без поисков.",
+          "note": "Неясно, ревун вынесен наружу или оставлен внутри кладовой, которую Тимур затем запирает; от этого зависит его доступность без ключа."
+        },
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:53:14.521Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g57": {
       "parent": "g52",
@@ -1662,7 +2249,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:53:24.883Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g58": {
       "parent": "g52",
@@ -1683,7 +2278,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:53:51.900Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g59": {
       "parent": "g52",
@@ -1704,7 +2307,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:54:24.574Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g60": {
       "parent": "g56",
@@ -1725,7 +2336,39 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "audit",
+          "at": "2026-09-22T23:26:40.135Z",
+          "by": "claude:claude-opus-5-5",
+          "issue": "ambiguity",
+          "quote": "Три керосиновые лампы на кухне и в сенях.",
+          "note": "В сцене 7 одна зажжённая лампа осталась в пристройке, и нигде не сказано, что её оттуда унесли; поэтому неясно, где на самом деле лампы."
+        },
+        {
+          "kind": "audit",
+          "at": "2026-09-22T23:26:40.135Z",
+          "by": "codex:gpt-6-sol",
+          "issue": "ambiguity",
+          "quote": "это им тоже было видно",
+          "note": "Неясно, заметили ли дежурные поста, что маяк не горел с 21:00 до 21:24, или лишь могли это увидеть."
+        },
+        {
+          "kind": "audit",
+          "at": "2026-09-22T23:26:40.135Z",
+          "by": "codex:gpt-6-sol",
+          "issue": "ambiguity",
+          "quote": "Если катер был у посёлка, про Валеру ему сказали там",
+          "note": "Неясно, известно ли Марте, что экипажу действительно рассказали о Валере, или она только предполагает, что это сделали."
+        },
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:54:54.156Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g61": {
       "parent": "g56",
@@ -1746,7 +2389,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:55:23.854Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g62": {
       "parent": "g56",
@@ -1767,7 +2418,15 @@
         "dissent": 0
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:55:44.153Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     },
     "g63": {
       "parent": "g56",
@@ -1788,7 +2447,15 @@
         "dissent": 1
       },
       "read": false,
-      "status": "candidate"
+      "status": "candidate",
+      "reviews": [
+        {
+          "kind": "recheck",
+          "at": "2026-09-22T23:56:01.640Z",
+          "agreed": true,
+          "against": []
+        }
+      ]
     }
   },
   "rejected": [
