@@ -135,4 +135,10 @@ test('a failed CLI run names how it ended, never its text', async t => {
   await assert.rejects(unknown.provider.generate(request), { code: 'provider_failed', cliResult: 'other', cliError: false });
   const none = fixture(t, [init, chunk('scene')], 1);
   await assert.rejects(none.provider.generate(request), { code: 'provider_failed', cliResult: 'missing', exitCode: 1 });
+  // A run that hit its output cap: the CLI calls the result an error under the subtype `success`, and the row says why.
+  const capped = fixture(t, [init, chunk('PRIVATE'), { type: 'stream_event', event: { type: 'message_delta', delta: { stop_reason: 'max_tokens' } } },
+    { type: 'result', subtype: 'success', is_error: true, result: 'PRIVATE' }], 1);
+  await assert.rejects(capped.provider.generate(request), { code: 'provider_failed', cliResult: 'success', cliError: true, exitCode: 1, stopReason: 'max_tokens' });
+  const odd = fixture(t, [init, { type: 'assistant', message: { stop_reason: 'PRIVATE' } }, { type: 'result', subtype: 'success', is_error: true, result: 'x' }], 1);
+  await assert.rejects(odd.provider.generate(request), { code: 'provider_failed', stopReason: 'other' });
 });

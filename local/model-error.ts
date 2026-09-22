@@ -23,6 +23,9 @@ export const CLI_RESULTS = ['success', 'error_max_turns', 'error_during_executio
 // How one scene's picture ended (local/picture.ts): sent, failed with a code, ended by the reader's next message,
 // or not attempted at all because the card was paused. Four words; the scene and the picture stay out.
 const OUTCOMES = ['ready', 'failed', 'cancelled', 'skipped'] as const;
+// Why the model's last message ended, as the API names it, for the row of a failed Claude CLI run: `max_tokens` there
+// means the run's output cap was hit, which the CLI reports as an error rather than a truncation.
+export const STOP_REASONS = ['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'refusal', 'other'] as const;
 // Sizes, counts and durations. Each is kept only as a non-negative safe integer, so none can carry text.
 const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'repairSceneCount', 'requestBytes',
   'inputBytesBefore', 'inputBytesAfter', 'outputCharacters', 'inputTokens', 'outputTokens', 'elapsedMs',
@@ -54,7 +57,7 @@ export type ErrorDetails = {
   // A picture: which checkpoint drew it, how it ended, and whether the reader's next message ended it before it arrived.
   imageRole?: typeof IMAGE_ROLES[number]; outcome?: typeof OUTCOMES[number]; cancelled?: boolean;
   // A failed Claude CLI run: how it ended and whether the CLI itself called the result an error.
-  cliResult?: typeof CLI_RESULTS[number]; cliError?: boolean;
+  cliResult?: typeof CLI_RESULTS[number]; cliError?: boolean; stopReason?: typeof STOP_REASONS[number];
 } & { [Key in typeof COUNTS[number]]?: number };
 export type Log = (event: string, code?: string | number, details?: unknown) => void;
 
@@ -87,6 +90,7 @@ export function safeErrorDetails(value: unknown = {}): ErrorDetails {
   if (typeof input?.cancelled === 'boolean') result.cancelled = input.cancelled;
   if (member(CLI_RESULTS, input?.cliResult)) result.cliResult = input.cliResult;
   if (typeof input?.cliError === 'boolean') result.cliError = input.cliError;
+  if (member(STOP_REASONS, input?.stopReason)) result.stopReason = input.stopReason;
   for (const key of COUNTS) {
     const count = input?.[key];
     if (typeof count === 'number' && Number.isSafeInteger(count) && count >= 0) result[key] = count;
@@ -98,7 +102,7 @@ export class ModelError extends Error {
   declare httpStatus?: number; declare phase?: ErrorDetails['phase']; declare operation?: ErrorDetails['operation'];
   declare memoryReason?: ErrorDetails['memoryReason']; declare transportCode?: ErrorDetails['transportCode'];
   declare exitCode?: number; declare signal?: ErrorDetails['signal']; declare sshReason?: ErrorDetails['sshReason'];
-  declare cliResult?: ErrorDetails['cliResult']; declare cliError?: boolean;
+  declare cliResult?: ErrorDetails['cliResult']; declare cliError?: boolean; declare stopReason?: ErrorDetails['stopReason'];
   declare sceneCount?: number; declare missingCount?: number; declare connectionAgeMs?: number;
   // A failed compaction carries its sizes and counts to the log row of the failure.
   declare automatic?: boolean; declare repairSceneCount?: number; declare requestBytes?: number; declare inputBytesBefore?: number;

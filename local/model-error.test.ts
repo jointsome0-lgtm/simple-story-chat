@@ -50,4 +50,6 @@ test('a failed CLI run logs how it ended as an enum and a flag, never a subtype 
   assert.deepEqual(safeErrorDetails({ cliResult: 'error_max_structured_output_retries', cliError: true, exitCode: 0 }),
     { cliResult: 'error_max_structured_output_retries', cliError: true, exitCode: 0 });
   assert.deepEqual(safeErrorDetails({ cliResult: 'PRIVATE', cliError: 'PRIVATE' }), {});
+  assert.deepEqual(safeErrorDetails({ stopReason: 'max_tokens' }), { stopReason: 'max_tokens' });
+  assert.deepEqual(safeErrorDetails({ stopReason: 'PRIVATE_TEXT' }), {});
 });

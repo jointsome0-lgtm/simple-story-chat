@@ -48,6 +48,7 @@ type Answer = { key?: unknown; value?: unknown };
 type Failure = { code?: string };
 
 process.umask(0o077);
+const RECALL_OUTPUT_TOKENS = 8192;
 const { values } = parseArgs({ options: { source: { type: 'string' }, resume: { type: 'string' },
   minutes: { type: 'string', default: '15' }, direct: { type: 'boolean', default: false }, mode: { type: 'string' },
   traps: { type: 'boolean', default: false }, pack: { type: 'string' }, lab: { type: 'string' } } });
@@ -229,7 +230,10 @@ try {
     const job = store.mutate('synthetic', state => beginJob(state,
       'Проверка памяти, не продолжай историю. Верни JSON {"answers":[{"key":"ключ", "value":"точный ответ строкой"}]}. Без пояснений и единиц, если вопрос требует число. Неизвестное пометь unknown.\n'
         + questions.map(([key, question]) => `${key}: ${question}`).join('\n'), 0));
-    const request = makeRequest(store.read('synthetic'), job, 1024);
+    // The answer is a short JSON, but a model that reasons in text before its structured answer needs the room for
+    // that text: through the Claude CLI the cap is the run's whole output, and a run that exceeds it ends as an error
+    // rather than a truncation. At 1024 that was every Haiku recall and every CLI reader of `hospital` (log, 09-22).
+    const request = makeRequest(store.read('synthetic'), job, RECALL_OUTPUT_TOKENS);
     request.system = 'Ответь на проверочные вопросы только по переданной истории и её памяти. Соблюдай заданный формат, не достраивай неизвестное.';
     request.purpose = 'memory';
     request.outputSchema = { type: 'object', required: ['answers'], additionalProperties: false, properties: { answers: {
