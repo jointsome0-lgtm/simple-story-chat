@@ -58,6 +58,33 @@ The walk (`npm run eval -- walk`, described in `docs/model-providers.md`) is the
 
 The gold tree (`eval walk-gold`, `eval walk-nodes` in `docs/model-providers.md`) is the walk with fixed prefixes: scenes the council accepted, grown from the seed as a tree, so that every model continues from the same accepted story and is judged scene by scene at a known depth. The gate is the agreement of every judge, not the eval's majority: a finding one judge stands by keeps a scene out. An agreed scene is a candidate; it becomes gold by its ledger (rechecks, deeper scenes judged over it, the whole-story audit), and the tree's rendering marks what no person has read. The eval's number and the score by depth come from the same council as the walk; a model on the council still is not measured independently.
 
+### The gold tree, version 2: the owner's decisions of 2026-09-23
+
+Version 1 (`examples/walk/lighthouse.gold.json`, public, the log entry of 2026-09-23) is a draft: 63 scenes at 16
+depths, every one agreed by four judges once, none promoted. Version 2 is the one meant to become gold, and it is
+built differently. Written here so that it is not forgotten when the next seed is made.
+
+- **The seed is audited until the council finds nothing**, and only then does anything grow. Version 1 grew on a seed
+  rewritten after one audit and never audited again; the depth of the water over the spit was missing. A seed may be
+  any size the model's window allows (it goes whole into every request, untouched by compaction), and the eval
+  should have the same world in several sizes, about 5, 15 and 37 KB, to see whether consistency moves with the seed.
+- **Growth in width, not one trunk.** At every depth the k best nodes by their ledger (k about 2 or 3) are continued,
+  each by all four writers; every agreed scene stays in the tree; no trunk is chosen on the way. The ledger ranks a
+  node by what happens below it: how many deeper scenes were judged over it against how many later findings pointed
+  back at it, how many attempts its continuations cost (a node that is hard to continue hides a trap: an ambiguity
+  the scene itself does not show), the whole-story audit and the fresh rechecks. Gold is the set of nodes whose
+  ledger passes the thresholds, and the paths through them are several: different worlds, each consistent with the
+  seed and with itself, not with each other. The eval continues from every gold node; the reading for people shows
+  several stories with a common beginning.
+- **Length is never scored.** Consistency is the only measure; the rule on the author's step guards against saying
+  nothing. A writer that puts more claims into a scene pays more attempts, not a penalty.
+- **Thresholds come from measured noise, not from guesses.** Version 1's recheck says how often a scene agreed once
+  is refused on a fresh reading, and why (a lone judge insisting, or a real finding); the rule should ask for k of n
+  rechecks rather than all of them, and count an audit issue only when a second audit repeats it. Version 1's
+  numbers are in the log entry.
+- **Version 2 grows on a private seed into the private pack**, by a session that does not run the improvement loop;
+  version 1 stays public. A person reads the gold paths (`eval gold-read`) before anything is called gold.
+
 ## Noise
 
 Memory is generated at temperature 0.2, and OpenAI generates at its own default temperature, so two runs of the same code give different numbers. The spread on `battle` was measured on 18 September (entry in the log): for `gpt-5.4-mini` up to three questions out of eight between runs, for Gemma one question, Ministral is stable. Therefore, on one scenario compare at least three runs per side. An improvement smaller than this spread does not count as an improvement; check a disputed result with a repeated run, do not declare it a win.
