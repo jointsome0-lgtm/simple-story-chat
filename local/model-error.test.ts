@@ -35,3 +35,13 @@ test('an illustrated scene logs its durations and the checkpoint role, never the
   assert.deepEqual(safeErrorDetails({ imageRole: 'kreamania-fp8.safetensors', cancelled: 'PRIVATE',
     imageSeed: 12157665459056928801, prompt: 'PRIVATE_PROMPT', file: 'PRIVATE_PATH', imageMs: -1 }), {});
 });
+
+// The row the bot writes for one reader's picture (local/picture.ts): how it ended, how long they waited, and the
+// three counts that are all anybody may know about the description.
+test('a picture of a scene ends in one of four words, with whole seconds and counts beside it', () => {
+  assert.deepEqual(safeErrorDetails({ outcome: 'ready', pictureSeconds: 14, sheetCharacters: 4, namesStripped: 2, withoutLook: 0 }),
+    { outcome: 'ready', pictureSeconds: 14, sheetCharacters: 4, namesStripped: 2, withoutLook: 0 });
+  for (const outcome of ['failed', 'cancelled', 'skipped']) assert.equal(safeErrorDetails({ outcome }).outcome, outcome);
+  assert.deepEqual(safeErrorDetails({ outcome: 'PRIVATE_SCENE', pictureSeconds: -1, sheetCharacters: 1.5,
+    description: 'PRIVATE_DESCRIPTION', who: 'PRIVATE_NAME' }), {});
+});

@@ -442,6 +442,8 @@ export const zh: Messages = {
     failed: command => `操作未能完成。已完成的场景和存档点都已保存。重试：${command}。`,
     gpuNotConfigured: '还没有配置 GPU 租用的控制。用 /model 查看当前模型。',
     gpuPaused: 'GPU 已进入暂停。打开 /model 启动它，然后重新发送你的行动。',
+    drawing: '🎨 正在绘制插图…',
+    pictureFailed: '插图没有画成。场景已保存。',
   },
 
   errors: {
