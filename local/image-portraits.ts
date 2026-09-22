@@ -10,8 +10,9 @@ import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
-import { assemblePrompt } from './illustrate-probe.ts';
-import type { Case, Description } from './illustrate-probe.ts';
+import { assemblePrompt } from './illustrate.ts';
+import type { Description } from './illustrate.ts';
+import type { Case } from './illustrate-probe.ts';
 import type { BatchIndex, References } from './image-batch.ts';
 
 // A reference portrait is a body and a face with nothing happening: the frame run asks the model to keep this

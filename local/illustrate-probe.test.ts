@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assemblePrompt, matchSheet, scenesWanted, sheetLooks, stripAges, stripNames, STYLE } from './illustrate-probe.ts';
-import type { Character, Description } from './illustrate-probe.ts';
+import { scenesWanted } from './illustrate-probe.ts';
+import { assemblePrompt, matchSheet, sheetLooks, stripAges, stripNames, STYLE } from './illustrate.ts';
+import type { Character, Description } from './illustrate.ts';
 
 // A synthetic sheet and frame in the shape the describing model fills. No reader's story is involved.
 const sheet: Character[] = [

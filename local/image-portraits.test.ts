@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { portraitCases, portraitDescription, referencesOf } from './image-portraits.ts';
-import { STYLE } from './illustrate-probe.ts';
+import { STYLE } from './illustrate.ts';
 import type { Case } from './illustrate-probe.ts';
 import type { BatchIndex, Picture, References } from './image-batch.ts';
 
