@@ -522,6 +522,9 @@ export const ru = {
     failed: (command: string) => `Не получилось завершить операцию. Готовые сцены и чекпоинты сохранены. Повторить: ${command}.`,
     gpuNotConfigured: 'Управление арендой GPU пока не настроено. /model покажет текущую модель.',
     gpuPaused: 'GPU перешла на паузу. Открой /model и запусти её; затем отправь действие снова.',
+    // Стоит под сценой, пока рисуется картинка, и исчезает вместе с ней.
+    drawing: '🎨 Рисую иллюстрацию…',
+    pictureFailed: 'Иллюстрация не получилась. Сцена сохранена.',
   },
 
   // Refusals shown as a plain message. The key is what the code throws; keep the group flat, strings only.

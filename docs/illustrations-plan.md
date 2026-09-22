@@ -444,3 +444,40 @@ is a clean place to start.
 3. Does a plain generation, with a per-location seed and one fixed style string, produce a picture that belongs to
    the scene? The cheapest route is the tester's own machine with these synthetic descriptions: no story of a real
    person is involved.
+
+## What shipped on 2026-09-22
+
+The feature is in the bot, off by default. `local/illustrate.ts` holds the description step the probe and the bot
+now share — the two schemas, the two instructions, the name and age stripping, and `assemblePrompt`; `local/picture.ts`
+runs one picture, `local/image-batch.ts` draws it on the card, `local/telegram.ts` gained `sendPhoto` (multipart) and
+`deleteMessage`, and `local/config.ts` reads the settings. The flow: the scene is saved and sent, a status line goes
+up under it, the character sheet is written once per story and the frame of this scene after it — both in one
+scheduler turn that shares the scene's prefix, on the language model's card, holding its GPU no longer than a job
+would — then the prompt is assembled in code, ComfyUI draws it over the loopback tunnel, the PNG is stripped of its
+text chunks, the photo replaces the status line, and one `picture` row records the outcome, the whole seconds the
+reader waited and three counts. A failure or a card that is busy leaves the story exactly as it was.
+
+The six settings are `SIMPLE_CHAT_IMAGE_URL`, `_WORKFLOW`, `_CHECKPOINT`, `_USERS`, `_STYLE` and `_WAIT_SECONDS`,
+documented row by row in [setup.md](setup.md) and, with the reasons, above `imageConfig` in `local/config.ts`.
+Without the URL there is no second call, no status line and no picture; `_USERS` is empty by default, so nobody is
+drawn until an ID is written there, and every ID must also be on the access list. The URL must be loopback and must
+not be the language model's own server.
+
+Decisions the plan left open, taken here. The status line is a message of its own, deleted once the photo is there
+and rewritten to one line only when the picture really failed — a reader who has moved on gets no apology. The photo
+is sent as a reply to its own scene, with no caption. The character sheet is stored once per story beside its memory
+and reused by every later frame, which is what kept a person recognisable in step 6. The seed is derived from the
+story id, so one story keeps one visual family and a redraw repeats. Sheet and frame run in one turn with the
+prefix shared, so the server pays for the appended instruction alone and the reader's own next scene ends that turn.
+A picture in flight is stopped by the reader's next message and by `/cancel`; moving around the menus does not stop
+it, and no cancel button is offered, because by then the job lock is already clear. A workflow node that saves its
+picture is loaded as one that previews it: `SaveImage` writes the picture, with the prompt in its text chunks, into
+a directory no route of ComfyUI's API can empty, so the card is left with no copy of a reader's scene.
+
+What is not measured. All of this has met fakes only — a fake ComfyUI on loopback, a fake Bot API, a fake model —
+and never a real card or a real chat. In the tests the drawing is instant, so the seconds in the log rows are the
+test's clock and say nothing about a reader's wait; the numbers in "What the reader sees" above are still the
+hosted measurement of step 2 plus an assumption about the second card. Nothing in "What must be measured before any
+of this is believed" is closed by this commit: the wait from the end of a scene to the photo, what the second call
+does to the turn that follows it, and how often a card fails or times out under a real reader are all open, and the
+first rental with the tunnel up is what closes them.

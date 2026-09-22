@@ -6,7 +6,7 @@ import { deflateSync, inflateSync, crc32 } from 'node:zlib';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { draw, buildBundles, bundlesOf, applyToWorkflow, defaultWorkflow, latentSizeOf, parseSeeds, portraitsFor, referenceSlots, samplerSettingsOf, stripPngMetadata, taskMarkdown, REVIEW } from './image-batch.ts';
+import { draw, buildBundles, bundlesOf, applyToWorkflow, defaultWorkflow, drawOne, latentSizeOf, parseSeeds, portraitsFor, referenceSlots, samplerSettingsOf, stripPngMetadata, taskMarkdown, REVIEW } from './image-batch.ts';
 import type { Graph, Picture, References } from './image-batch.ts';
 import type { Case } from './illustrate-probe.ts';
 
@@ -118,6 +118,7 @@ function serialComfy(jobMs: number) {
   const prompts = new Map<string, string>();
   const finishAt = new Map<string, number>();
   const history = new Map<string, string>();
+  const polls = new Map<string, number>();
   const seen = { submitted: 0, interrupts: 0, queueDeletes: 0 };
   let busyUntil = 0;
   const settle = () => { for (const [id, at] of [...finishAt]) if (Date.now() >= at) { finishAt.delete(id); history.set(id, prompts.get(id)!); } };
@@ -148,6 +149,12 @@ function serialComfy(jobMs: number) {
         for (const id of ((await body()).delete as string[]) ?? []) if (id !== running()) finishAt.delete(id);
         return json({});
       }
+      // As ComfyUI reports it: the job on the card first, the ones waiting behind it after, each entry an array
+      // whose second element is the prompt id.
+      if (url.pathname === '/queue') {
+        const waiting = [...finishAt.keys()].filter(id => id !== running());
+        return json({ queue_running: running() ? [[0, running()]] : [], queue_pending: waiting.map((id, at) => [at + 1, id]) });
+      }
       if (request.method === 'POST' && url.pathname === '/history') {
         for (const id of ((await body()).delete as string[]) ?? []) history.delete(id);
         return json({});
@@ -155,6 +162,7 @@ function serialComfy(jobMs: number) {
       if (url.pathname === '/system_stats') return json({ devices: [{ index: 0, vram_total: 32 * 1024 * 1024 * 1024, vram_free: 2 * 1024 * 1024 * 1024 }] });
       if (url.pathname.startsWith('/history/')) {
         const id = url.pathname.slice('/history/'.length);
+        polls.set(id, (polls.get(id) ?? 0) + 1);
         if (!history.has(id)) return json({});
         return json({ [id]: { status: { completed: true, status_str: 'success' }, outputs: { 7: { images: [{ filename: `${id}.png`, subfolder: '', type: 'temp' }] } } } });
       }
@@ -165,7 +173,7 @@ function serialComfy(jobMs: number) {
   });
   // What the card is still working through, whether or not the harness is waiting for it.
   const onTheCard = () => finishAt.size;
-  return { server, history, seen, settle, onTheCard, listen: () => new Promise<string>(done => server.listen(0, '127.0.0.1', () => done(`http://127.0.0.1:${(server.address() as AddressInfo).port}`))) };
+  return { server, history, polls, seen, settle, onTheCard, listen: () => new Promise<string>(done => server.listen(0, '127.0.0.1', () => done(`http://127.0.0.1:${(server.address() as AddressInfo).port}`))) };
 }
 
 const cases: Case[] = [
@@ -491,6 +499,31 @@ test('a picture that outlives the wait is stopped on the card and leaves no reco
   assert.equal(comfy.onTheCard(), 0, 'a job the harness gave up on is still the card\'s');
   comfy.settle();
   assert.deepEqual([...comfy.history.keys()], [], 'the record of an abandoned job holds the whole prompt');
+});
+
+// Two readers share one card (local/picture.ts), and `/interrupt` carries no prompt id: it stops whatever is being
+// drawn. A reader who gives up while their own picture is still waiting in the queue must therefore not interrupt
+// anything — the job on the card belongs to somebody who is still waiting for it.
+test('a picture given up while it waits in the queue leaves the one being drawn alone', async t => {
+  const comfy = serialComfy(400);
+  const url = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const busy = drawOne({ baseUrl: url, timeoutMs: 5000 }, defaultWorkflow(), { pollMs: 5, waitMs: 5000 });
+  for (let attempt = 0; attempt < 500 && comfy.seen.submitted < 1; attempt++) await new Promise(next => setTimeout(next, 2));
+
+  // The second reader has already moved on by the time their picture is submitted, which is the order `drawOne`
+  // keeps on purpose: a job with no id is a job nobody can stop.
+  const stop = new AbortController();
+  stop.abort();
+  await assert.rejects(drawOne({ baseUrl: url, timeoutMs: 5000, signal: stop.signal }, defaultWorkflow(), { pollMs: 5, waitMs: 5000 }),
+    (error: { code?: string }) => error.code === 'cancelled');
+  assert.equal(comfy.seen.submitted, 2);
+  assert.equal(comfy.seen.interrupts, 0, 'the card was drawing another reader\'s picture');
+  assert.equal(comfy.seen.queueDeletes, 1, 'and the abandoned one was taken out of the queue');
+  // A job that never ran writes no record, so nothing is waited for: the ten polls used to run out under every
+  // cancelled picture, and `idle()` waited them out.
+  assert.equal(comfy.polls.get('p2') ?? 0, 0);
+  assert.ok((await busy).bytes.length > 0, 'the picture on the card was drawn and delivered');
 });
 
 // The file ComfyUI's Save menu writes is the UI format ({nodes:[...],links:[...]}), not the API format the harness

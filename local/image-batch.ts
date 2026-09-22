@@ -17,7 +17,7 @@ import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { safeErrorDetails } from './model-error.ts';
-import { matchSheet } from './illustrate-probe.ts';
+import { matchSheet } from './illustrate.ts';
 import type { Case } from './illustrate-probe.ts';
 
 // A checkpoint's place in the comparison. The bot logs this role, never the file name (local/model-error.ts).
@@ -98,6 +98,18 @@ export function defaultWorkflow(): Graph {
   };
 }
 
+// A graph the bot draws a reader's scene with, with every saving node turned into a preview one. Whatever writes
+// the file writes ComfyUI's prompt and the whole workflow into its text chunks, and `SaveImage` writes it into the
+// server's permanent output directory, which no route of the HTTP API deletes: the card would keep a copy of a
+// picture of somebody's scene until the card itself is gone. `PreviewImage` writes the same picture to the temp
+// directory the server empties at startup, and `/view` serves it from the type the history entry reports, so
+// nothing else about the drawing changes. The graphs pinned on a card end in `SaveImage` — that is what the batch
+// harness on a rented card wants, and it draws synthetic scenes; the bot draws a reader's, and rewrites it.
+export function previewOnly(graph: Graph): Graph {
+  return Object.fromEntries(Object.entries(graph).map(([id, node]) => [id, node.class_type === 'SaveImage'
+    ? { ...node, class_type: 'PreviewImage', inputs: { images: node.inputs.images } } : node]));
+}
+
 export type WorkflowValues = {
   checkpoint: string; prompt: string; negative: string; seed: number; steps: number;
   sampler: string; scheduler: string; width: number; height: number; cfg: number;
@@ -145,7 +157,7 @@ export function latentSizeOf(graph: Graph): { width: number; height: number } | 
 // The rest of what a pinned graph carries, for the same reason and with the same rule: a graph that says 25 euler
 // steps is a graph somebody chose 25 euler steps for. `--steps`, `--sampler`, `--scheduler` and `--cfg` override it;
 // a graph that pins none of them falls back to the eight-step Krea settings below, which is what it did before.
-const DEFAULTS = { steps: 8, sampler: 'er_sde', scheduler: 'simple', cfg: 1 };
+export const SAMPLER_DEFAULTS = { steps: 8, sampler: 'er_sde', scheduler: 'simple', cfg: 1 };
 export function samplerSettingsOf(graph: Graph): { steps?: number; sampler?: string; scheduler?: string; cfg?: number } {
   const inputs = samplerOf(graph)?.[1].inputs ?? {};
   const count = (value: unknown) => typeof value === 'number' ? value : undefined;
@@ -232,11 +244,17 @@ export function applyToWorkflow(graph: Graph, values: WorkflowValues): Graph {
   return filled;
 }
 
-export type Comfy = { baseUrl: string; timeoutMs: number };
+// `signal` ends the wait from outside: the bot draws while the reader reads, and a reader who sends the next
+// message is not waiting for this picture any more (local/picture.ts). The batch harness passes none.
+export type Comfy = { baseUrl: string; timeoutMs: number; signal?: AbortSignal };
 type HistoryEntry = { status?: { completed?: boolean; status_str?: string }; outputs?: Record<string, { images?: { filename: string; subfolder: string; type: string }[] }> };
+// The same server without the caller's signal: what stops an abandoned job must still reach the card after that
+// signal has fired, or the card would go on drawing a picture nobody waits for (`stopJob`).
+const afterAbort = (comfy: Comfy): Comfy => ({ baseUrl: comfy.baseUrl, timeoutMs: comfy.timeoutMs });
 
 const call = async (comfy: Comfy, path: string, init?: RequestInit) => {
-  const response = await fetch(comfy.baseUrl + path, { ...init, signal: AbortSignal.timeout(comfy.timeoutMs) });
+  const timeout = AbortSignal.timeout(comfy.timeoutMs);
+  const response = await fetch(comfy.baseUrl + path, { ...init, signal: comfy.signal ? AbortSignal.any([comfy.signal, timeout]) : timeout });
   if (!response.ok) throw Object.assign(new Error('comfy_http_error'), { code: 'comfy_http_error', httpStatus: response.status });
   return response;
 };
@@ -304,18 +322,44 @@ export function portraitsFor(one: Case, references: References): string[] {
   return found;
 }
 
+// What the card is drawing now and what waits behind it. A queue entry is an array whose second element is the
+// prompt id; a server that answers with anything else, or does not answer at all, is read as an empty queue, and
+// then `stopJob` below does the one thing that is safe on an unknown card.
+const promptIds = (list: unknown): string[] => (Array.isArray(list) ? list : [])
+  .flatMap(one => (Array.isArray(one) && typeof one[1] === 'string' ? [one[1]] : []));
+async function readQueue(comfy: Comfy): Promise<{ running: string[]; pending: string[] }> {
+  try {
+    const seen = await (await call(comfy, '/queue')).json() as { queue_running?: unknown; queue_pending?: unknown };
+    return { running: promptIds(seen.queue_running), pending: promptIds(seen.queue_pending) };
+  } catch { return { running: [], pending: [] }; }
+}
+
 // A picture that outlives the wait is still the card's. ComfyUI runs one job at a time, so the next cell would
 // queue behind the abandoned one and inherit its seconds — and the seconds are what the rental is decided on — and
 // its history entry, which holds the whole prompt and the workflow, is written when it finishes, which is after the
 // delete in `drawOne`'s `finally` has already run. So: out of the queue if it is still waiting, interrupted if it is
 // drawing, and then waited for, so that there is a record for the delete to remove.
+//
+// `/interrupt` carries no id: it stops whatever the card is drawing. With one card and two readers that is somebody
+// else's picture as often as ours, and they would get the failure line under a scene they never touched. So the
+// queue is read first and the interrupt is sent only while the card says this job is the one it is drawing. A job
+// that was still waiting is gone with the delete and will never write a record, so there is nothing to wait for
+// either; a card that did not answer the queue is left alone, because a wrong interrupt costs another reader their
+// picture and a missed one costs this reader's job a few more seconds of a card we are already paying for.
 async function stopJob(comfy: Comfy, promptId: string, pollMs: number) {
+  const queue = await readQueue(comfy);
   await post(comfy, '/queue', { delete: [promptId] }).catch(() => undefined);
+  if (!queue.running.includes(promptId)) return;
   await call(comfy, '/interrupt', { method: 'POST' }).catch(() => undefined);
+  let missing = 0;
   for (let poll = 0; poll < 10; poll++) {
     const seen: Record<string, HistoryEntry> = await call(comfy, `/history/${promptId}`)
       .then(response => response.json() as Promise<Record<string, HistoryEntry>>).catch(() => ({}));
     if (seen[promptId]) return;
+    // An interrupted job leaves the queue a moment before its record appears, so one more poll is given to it; a
+    // card that then still has neither is writing no record at all, and the rest of the wait would buy nothing.
+    const gone = await readQueue(comfy);
+    if (![...gone.running, ...gone.pending].includes(promptId) && ++missing > 1) return;
     await delay(pollMs);
   }
 }
@@ -325,7 +369,10 @@ async function stopJob(comfy: Comfy, promptId: string, pollMs: number) {
 export async function drawOne(comfy: Comfy, graph: Graph, options: { pollMs?: number; waitMs?: number } = {}) {
   const pollMs = options.pollMs ?? 500;
   const started = performance.now();
-  const submitted = await (await call(comfy, '/prompt', { method: 'POST', headers: { 'content-type': 'application/json' },
+  // The submit itself is never cut short, however early the caller lets go: a job the card has taken and we have no
+  // id for is a job nobody can stop, and it would draw a whole picture for a reader who has already left. It is one
+  // request to loopback, and the abort is answered on the next line, with an id in hand.
+  const submitted = await (await call(afterAbort(comfy), '/prompt', { method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ prompt: graph }) })).json() as { prompt_id?: string; error?: unknown };
   const promptId = submitted.prompt_id;
   if (!promptId) throw Object.assign(new Error('comfy_rejected_prompt'), { code: 'comfy_rejected_prompt' });
@@ -334,6 +381,9 @@ export async function drawOne(comfy: Comfy, graph: Graph, options: { pollMs?: nu
     const deadline = started + (options.waitMs ?? 600000);
     let entry: HistoryEntry | undefined;
     for (let poll = 0; ; poll++) {
+      // Asked before the poll rather than after it: a caller who has let go is answered without another request,
+      // and `stopJob` below takes the card off the job it is drawing.
+      if (comfy.signal?.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
       const seen = await (await call(comfy, `/history/${promptId}`)).json() as Record<string, HistoryEntry>;
       entry = seen[promptId];
       if (entry?.status?.completed || entry?.status?.status_str === 'error') break;
@@ -351,15 +401,17 @@ export async function drawOne(comfy: Comfy, graph: Graph, options: { pollMs?: nu
     mergeVram(vram, await readVram(comfy));
     return { bytes: stripPngMetadata(bytes), totalMs: Math.round(performance.now() - started), viewMs, vram };
   } catch (error) {
-    // The wait ran out, but the card did not stop by itself: see `stopJob`.
-    if ((error as { code?: string }).code === 'image_timeout') await stopJob(comfy, promptId, pollMs);
-    throw error;
+    // The wait ran out or the caller let go, but the card did not stop by itself: see `stopJob`. A fetch cut by the
+    // signal arrives as an AbortError, so what the signal says is what this failure is called, whatever was thrown.
+    const cancelled = comfy.signal?.aborted === true;
+    if (cancelled || (error as { code?: string }).code === 'image_timeout') await stopJob(afterAbort(comfy), promptId, pollMs);
+    throw cancelled ? Object.assign(new Error('cancelled'), { code: 'cancelled' }) : error;
   } finally {
     // The server keeps the prompt, the workflow and the outputs of every job it has run until history is cleared.
     // This clears the job record, and that is all it can clear: the file the saving node wrote stays in ComfyUI's
     // own directory, with its text chunks, and the API has no route that deletes it. The picture on our disk is
     // stripped; the card's copy goes when the card does, which is why only synthetic scenes are drawn on a rental.
-    await post(comfy, '/history', { delete: [promptId] }).catch(() => undefined);
+    await post(afterAbort(comfy), '/history', { delete: [promptId] }).catch(() => undefined);
   }
 }
 
@@ -425,10 +477,10 @@ export async function draw(options: DrawOptions): Promise<BatchIndex> {
   }
   // The same rule for the sampler: the flag, then the graph, then the harness's own eight-step settings.
   const settings = samplerSettingsOf(graph);
-  const steps = options.steps ?? settings.steps ?? DEFAULTS.steps;
-  const sampler = options.sampler ?? settings.sampler ?? DEFAULTS.sampler;
-  const scheduler = options.scheduler ?? settings.scheduler ?? DEFAULTS.scheduler;
-  const cfg = options.cfg ?? settings.cfg ?? DEFAULTS.cfg;
+  const steps = options.steps ?? settings.steps ?? SAMPLER_DEFAULTS.steps;
+  const sampler = options.sampler ?? settings.sampler ?? SAMPLER_DEFAULTS.sampler;
+  const scheduler = options.scheduler ?? settings.scheduler ?? SAMPLER_DEFAULTS.scheduler;
+  const cfg = options.cfg ?? settings.cfg ?? SAMPLER_DEFAULTS.cfg;
   const workflow = { file: options.workflow ? basename(resolve(options.workflow)) : '(built-in)',
     sha256: createHash('sha256').update(JSON.stringify(graph)).digest('hex') };
   // The portraits, read where the file that names them is, so that the file and the pictures move together.

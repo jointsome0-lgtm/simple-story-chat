@@ -28,6 +28,10 @@ export type Checkpoint = { id: string; branchId: string; label: string; kind: st
 export type Story = {
   id: string; seedId: string; title: string; branches: Record<string, Branch>; checkpoints: Record<string, Checkpoint>;
   nodes: Record<string, SceneNode>; memories: Record<string, MemoryVersion>;
+  // The character sheet the illustrations use: one fixed appearance line per recurring person, written once from
+  // the story's own history and kept beside its memory (docs/illustrations-plan.md, step 3). Only the local bot
+  // writes it, and only when pictures are switched on; a story without pictures never has it.
+  sheet?: { name: string; look: string }[];
 };
 export type Job = {
   id: string; storyId: string; branchId: string; head: string | null; memory: string | null; input: string; started: number;

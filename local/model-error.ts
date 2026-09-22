@@ -20,6 +20,9 @@ const IMAGE_ROLES = ['primary', 'alternate'] as const;
 // this list does not know. Together with `exitCode` this tells a stalled CLI from a refused structured output.
 export const CLI_RESULTS = ['success', 'error_max_turns', 'error_during_execution', 'error_max_budget_usd',
   'error_max_structured_output_retries', 'no_init', 'missing', 'other'] as const;
+// How one scene's picture ended (local/picture.ts): sent, failed with a code, ended by the reader's next message,
+// or not attempted at all because the card was paused. Four words; the scene and the picture stay out.
+const OUTCOMES = ['ready', 'failed', 'cancelled', 'skipped'] as const;
 // Sizes, counts and durations. Each is kept only as a non-negative safe integer, so none can carry text.
 const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'repairSceneCount', 'requestBytes',
   'inputBytesBefore', 'inputBytesAfter', 'outputCharacters', 'inputTokens', 'outputTokens', 'elapsedMs',
@@ -34,7 +37,13 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   // file, and what the reader waits from the end of the scene to the picture. The seed stays out: it is drawn from
   // 0..2^64-1 and is not a safe integer, and so do the prompt, the description and the file name, which are the
   // reader's scene in another form.
-  'describeMs', 'imageQueueMs', 'imageMs', 'imageSteps', 'pictureAfterSceneMs'] as const;
+  // `pictureSeconds` is the same wait as `pictureAfterSceneMs`, rounded: the plan asks for the seconds from the end
+  // of the scene to the picture as a non-negative integer, and that is the number a reader's patience is read in.
+  // The three counts of the description are all anybody can see of it: how many people the story's character sheet
+  // holds (one for a whole story is almost certainly a wrong sheet), how many names the assembly had to cut out of
+  // a field the instruction forbids them in, and how many people reached the prompt with no appearance at all.
+  'describeMs', 'imageQueueMs', 'imageMs', 'imageSteps', 'pictureAfterSceneMs', 'pictureSeconds',
+  'sheetCharacters', 'namesStripped', 'withoutLook'] as const;
 
 export type ErrorDetails = {
   httpStatus?: number; phase?: typeof PHASES[number]; operation?: typeof OPERATIONS[number];
@@ -42,8 +51,8 @@ export type ErrorDetails = {
   exitCode?: number; signal?: typeof SIGNALS[number]; sshReason?: typeof SSH_REASONS[number];
   // Whose request a bot log row belongs to. Only the owner allowed reading the owner's own stories for debugging.
   actor?: typeof ACTORS[number]; automatic?: boolean; agentCall?: typeof AGENT_CALLS[number]; stage?: typeof STAGES[number];
-  // A picture: which checkpoint drew it, and whether the reader's next message ended it before it arrived.
-  imageRole?: typeof IMAGE_ROLES[number]; cancelled?: boolean;
+  // A picture: which checkpoint drew it, how it ended, and whether the reader's next message ended it before it arrived.
+  imageRole?: typeof IMAGE_ROLES[number]; outcome?: typeof OUTCOMES[number]; cancelled?: boolean;
   // A failed Claude CLI run: how it ended and whether the CLI itself called the result an error.
   cliResult?: typeof CLI_RESULTS[number]; cliError?: boolean;
 } & { [Key in typeof COUNTS[number]]?: number };
@@ -74,6 +83,7 @@ export function safeErrorDetails(value: unknown = {}): ErrorDetails {
   if (member(AGENT_CALLS, input?.agentCall)) result.agentCall = input.agentCall;
   if (member(STAGES, input?.stage)) result.stage = input.stage;
   if (member(IMAGE_ROLES, input?.imageRole)) result.imageRole = input.imageRole;
+  if (member(OUTCOMES, input?.outcome)) result.outcome = input.outcome;
   if (typeof input?.cancelled === 'boolean') result.cancelled = input.cancelled;
   if (member(CLI_RESULTS, input?.cliResult)) result.cliResult = input.cliResult;
   if (typeof input?.cliError === 'boolean') result.cliError = input.cliError;

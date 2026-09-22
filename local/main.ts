@@ -6,6 +6,7 @@ import { createModel } from './model.ts';
 import type { GenerationResult, ModelRequest } from './model.ts';
 import { createBot } from './bot.ts';
 import type { Update } from './bot.ts';
+import { createIllustrator } from './picture.ts';
 import { render, scenePrefix, sceneKeyboard } from './ui.ts';
 import { commandSets } from './text.ts';
 import { createSeedFileReader } from './seed-file.ts';
@@ -82,7 +83,12 @@ try {
   store.recover();
   if (gpu) background = await serveBackground({ socketPath: config.dbPath + '.model.sock', scheduler,
     status: () => ({ model: config.model, contextTokens: config.contextTokens, gpu: gpu!.snapshot() }) });
-  bot = createBot({ store, api, provider, gpu, providerName: config.provider, readSeedFile: createSeedFileReader(config.token, api), render, scenePrefix, sceneKeyboard,
+  // Pictures under the scenes, if this computer has a second card tunnelled for them (docs/illustrations-plan.md).
+  // The graph is read and checked here, at startup: a workflow that is not a ComfyUI API export must fail now and
+  // not under the first reader who gets a scene.
+  const illustrator = config.images ? createIllustrator(config.images, { store, provider }) : undefined;
+  if (config.images) log('pictures_configured');
+  bot = createBot({ store, api, provider, gpu, illustrator, providerName: config.provider, readSeedFile: createSeedFileReader(config.token, api), render, scenePrefix, sceneKeyboard,
     allowedUsers: config.allowedUsers, ownerId: config.ownerId, maxOutputTokens: config.maxOutputTokens,
     contextTokens: config.contextTokens, compactAtTokens: config.compactAtTokens,
     keepScenes: config.keepScenes, memoryMode: config.memoryMode, repairCoverage: config.repairCoverage, model: config.model, log });

@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assemblePrompt, matchSheet, scenesWanted, sheetLooks, stripAges, stripNames, STYLE } from './illustrate-probe.ts';
-import type { Character, Description } from './illustrate-probe.ts';
+import { scenesWanted } from './illustrate-probe.ts';
+import { askJson, assemblePrompt, matchSheet, sheetLooks, sheetRequest, stripAges, stripNames, STYLE } from './illustrate.ts';
+import type { Character, Description } from './illustrate.ts';
+import type { GenerationResult, Provider } from './model.ts';
 
 // A synthetic sheet and frame in the shape the describing model fills. No reader's story is involved.
 const sheet: Character[] = [
@@ -134,6 +136,26 @@ test('a name that gets through the instruction never reaches the image model', (
   assert.doesNotMatch(named.prompt, /Тарек/);
 });
 
+// A person of one scene is not on the sheet and is named all the same: `who` carries their name, and the fields
+// that do reach the image model carry it too. An empty sheet is the same case for everybody in the frame.
+test('a name the sheet never knew is cut as well, when the description writes it as a name', () => {
+  const stranger = assemblePrompt(frame({
+    moment: 'Мирослав waits at the door', objects: 'Мирославова лампа stands on the step',
+    people: [{ who: 'Мирослав', look: 'a stocky young man in a canvas coat', state: '', action: 'waits' }],
+  }), sheet);
+  assert.doesNotMatch(stranger.prompt, /Мирослав/);
+  assert.equal(stranger.namesStripped, 2);
+  assert.match(stranger.prompt, /a stocky young man in a canvas coat/, 'the person is still described');
+  // A role as the instruction asks for it stays: it is what the picture has instead of a name.
+  const role = assemblePrompt(frame({ moment: 'The salt worker waits at the door',
+    people: [{ who: 'salt worker', look: 'a stocky young man', state: '', action: 'waits' }] }), sheet);
+  assert.match(role.prompt, /salt worker/);
+  // And what the net cannot know: a name in a field of somebody the description does not list at all. The
+  // instruction forbids it in every field, and here that is the only guard there is.
+  const unlisted = assemblePrompt(frame({ moment: 'Мирослав waits at the door', people: [] }), sheet);
+  assert.match(unlisted.prompt, /Мирослав/);
+});
+
 test('a person the sheet does not cover keeps their described look, and an empty field adds nothing', () => {
   const { prompt, fromSheet, withoutLook } = assemblePrompt(frame({ objects: '', props: '   ',
     people: [{ who: 'salt worker', look: 'a stocky middle-aged man in a canvas apron', state: '', action: 'pours salt into a crate' }] }), sheet);
@@ -160,4 +182,32 @@ test('an inflected or transliterated who still takes its look from the sheet, an
   assert.equal(lost.fromSheet, 0);
   assert.match(lost.prompt, /door\. leans her back against the door\./);
   assert.doesNotMatch(lost.prompt, /(^|[.\s]):/);
+});
+
+// JSON mode runs away into newlines until the output limit, and the same scene parsed on the next attempt: one
+// retry, and only one, and never a word of what came back (local/illustrate.ts).
+test('a description that did not parse is asked for once more, and never quoted', async () => {
+  const context = { system: 'система', messages: [] };
+  const answers = ['\n\n\n\n', JSON.stringify({ characters: [{ name: 'Элин', look: 'A middle-aged woman' }] })];
+  let asked = 0;
+  const twice: Provider = { generate: async () => ({ text: answers[asked++] ?? '', finishReason: 'stop' }) as GenerationResult };
+  const { value, retried } = await askJson(twice, sheetRequest(context));
+  assert.equal(asked, 2);
+  assert.equal(retried, true);
+  assert.deepEqual(value, { characters: [{ name: 'Элин', look: 'A middle-aged woman' }] });
+
+  let always = 0;
+  const never: Provider = { generate: async () => { always++; return { text: 'PRIVATE_SCENE_TEXT', finishReason: 'stop' } as GenerationResult; } };
+  await assert.rejects(askJson(never, sheetRequest(context)), (error: Error & { code?: string }) =>
+    error.code === 'unparsed_description' && !/PRIVATE/.test(JSON.stringify(error)));
+  assert.equal(always, 2, 'two attempts, not more');
+
+  // A reader who has moved on while the first answer was arriving gets no second attempt: their next scene needs
+  // the slot more than their last one needs a picture.
+  const stop = new AbortController();
+  let cancelled = 0;
+  const late: Provider = { generate: async () => { cancelled++; stop.abort(); return { text: 'not json', finishReason: 'stop' } as GenerationResult; } };
+  await assert.rejects(askJson(late, sheetRequest(context), { signal: stop.signal }),
+    (error: Error & { code?: string }) => error.code === 'unparsed_description');
+  assert.equal(cancelled, 1);
 });

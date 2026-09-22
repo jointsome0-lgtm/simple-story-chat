@@ -14,13 +14,37 @@ export class TelegramError extends Error {
   constructor(code: number | string, retryAfter?: number) { super(`telegram_${code}`); this.code = code; this.retryAfter = retryAfter; }
 }
 
+// A payload with bytes in it is a file upload, which the Bot API takes as multipart/form-data and not as JSON.
+// Only sendPhoto uses it here: the picture of a scene is sent from memory and is never written to this disk, so
+// there is no file_id and no URL to send instead. Every other field of the payload travels beside the bytes as a
+// form field, numbers and objects as the API reads them back (JSON), which is what `reply_parameters` needs.
+export function multipartBody(payload: TelegramPayload, boundary: string): Buffer {
+  const parts: Buffer[] = [];
+  for (const [name, value] of Object.entries(payload)) {
+    if (value === undefined) continue;
+    const bytes = value instanceof Uint8Array;
+    // The file name is ours and says nothing: Telegram shows it to nobody and the picture is not a document.
+    const head = `--${boundary}\r\nContent-Disposition: form-data; name="${name}"`
+      + (bytes ? '; filename="scene.png"\r\nContent-Type: image/png\r\n\r\n' : '\r\n\r\n');
+    parts.push(Buffer.from(head, 'utf8'));
+    parts.push(bytes ? Buffer.from(value.buffer, value.byteOffset, value.byteLength)
+      : Buffer.from(typeof value === 'object' ? JSON.stringify(value) : String(value), 'utf8'));
+    parts.push(Buffer.from('\r\n', 'utf8'));
+  }
+  parts.push(Buffer.from(`--${boundary}--\r\n`, 'utf8'));
+  return Buffer.concat(parts);
+}
+
 export function createApi(token: string): TelegramApi {
   return async (method, payload = {}) => {
-    const body = JSON.stringify(payload);
+    const upload = Object.values(payload).some(value => value instanceof Uint8Array);
+    const boundary = upload ? `simple-chat-${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}` : '';
+    const body = upload ? multipartBody(payload, boundary) : JSON.stringify(payload);
     return new Promise((resolve, reject) => {
       const request = https.request({ hostname: 'api.telegram.org', family: 4, method: 'POST',
         path: `/bot${token}/${method}`, timeout: (payload.timeout || 0) * 1000 + 15_000,
-        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+        headers: { 'Content-Type': upload ? `multipart/form-data; boundary=${boundary}` : 'application/json',
+          'Content-Length': Buffer.byteLength(body) },
       }, response => {
         let data = '';
         response.setEncoding('utf8');
@@ -47,6 +71,12 @@ export function createChat(api: TelegramApi, chatId: number | string) {
   return {
     send: (screen: Screen) => api('sendMessage', { chat_id: chatId, ...screen }),
     edit: (messageId: number, screen: Screen) => api('editMessageText', { chat_id: chatId, message_id: messageId, ...screen }),
+    remove: (messageId: number) => api('deleteMessage', { chat_id: chatId, message_id: messageId }),
+    // The picture of a scene, uploaded from memory as PNG bytes and hung under the message it belongs to. A text
+    // message cannot become a photo by an edit — editMessageMedia needs a message that already carries media — so
+    // the status line that stood here is a message of its own, and the caller removes it once this one lands.
+    photo: (bytes: Uint8Array, replyTo?: number) => api('sendPhoto', { chat_id: chatId, photo: bytes,
+      ...(replyTo ? { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } } : {}) }),
     async final(text: string, replyMarkup?: InlineKeyboard) {
       return api('sendRichMessage', { chat_id: chatId, rich_message: { markdown: text },
         ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
