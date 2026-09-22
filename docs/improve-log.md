@@ -2,7 +2,7 @@
 
 Every step of the loop from [improve-loop.md](improve-loop.md): date, hypothesis, change, numbers before and after per model, decision. Rejected hypotheses are recorded too. New entries go on top.
 
-## 2026-09-22 · Fable 5.1 · two scenarios built to separate, and a scale of models on them (hospital in progress)
+## 2026-09-22 · Fable 5.1 · three scenarios built to separate, and a scale of models on them
 
 Not a step of the loop: nothing in `local/` that shapes prompts or memory was changed, and no decision on a prompt
 is taken here. The owner's task for the day: the benchmarks should trouble the frontier models too, not only Gemma,
@@ -17,20 +17,21 @@ through Codex, `high`) from a written brief and checked by Fable, who re-derived
 `authors` lists all three. `ceiling` with `openai:gpt-5.4` answers 12/12 on both, so every check is readable from
 the text.
 
-The scale. Mode `plain`, judge `claude:claude-opus-5-5`, one run per cell, memory / scenes:
+The scale. Mode `plain`, judge `claude:claude-opus-5-5`, one run per cell, memory / scenes. The `hospital` column
+is the third scenario, designed later in the day (below):
 
-| Model | `assault` | `carnival` |
-| --- | --- | --- |
-| `mistral:ministral-14b-2512` | 8/12, 8/12 | 8/12, 10/12 |
-| `gpu:gemma-4-31b-heretic-q6k` (the production build, through the tunnel) | 8/12, 11/12 | 8/12, 11/12 |
-| `openrouter:google/gemma-4-31b-it` | failed `unauthorized` | 10/12, 12/12 |
-| `openai:gpt-5.4-mini` | 10/12, 10/12 | 8/12, 7/12 |
-| `claude:claude-haiku-4-5-20251001` | failed `provider_failed` | failed `provider_failed` |
-| `claude:claude-sonnet-5` | 12/12, 12/12 | 12/12, 12/12 (second run) |
-| `claude:claude-opus-5` | 12/12, 12/12 | not run |
-| `claude:claude-opus-5-5` | 12/12, 12/12 | 12/12, 12/12 |
-| `claude:claude-fable-5-1` | 12/12, 12/12 | 12/12, 12/12 |
-| `codex:gpt-6-astra` | 12/12, 12/12 | 12/12, 12/12 |
+| Model | `assault` | `carnival` | `hospital` |
+| --- | --- | --- | --- |
+| `mistral:ministral-14b-2512` | 8/12, 8/12 | 8/12, 10/12 | 2/12, 9/12 |
+| `gpu:gemma-4-31b-heretic-q6k` (the production build, through the tunnel) | 8/12, 11/12 | 8/12, 11/12 | not run (the card was gone) |
+| `openrouter:google/gemma-4-31b-it` | failed `unauthorized` | 10/12, 12/12 | not run (channel stopped) |
+| `openai:gpt-5.4-mini` | 10/12, 10/12 | 8/12, 7/12 | 2/12, 6/12 |
+| `claude:claude-haiku-4-5-20251001` | 11/12, 10/12 | 12/12, 12/12 | 8/12, 9/12 |
+| `claude:claude-sonnet-5` | 12/12, 12/12 | 12/12, 12/12 (second run) | failed, 3 of 3 (compaction) |
+| `claude:claude-opus-5` | 12/12, 12/12 | not run | not run |
+| `claude:claude-opus-5-5` | 12/12, 12/12 | 12/12, 12/12 | 12/12, 10/12 |
+| `claude:claude-fable-5-1` | 12/12, 12/12 | 12/12, 12/12 | 12/12, 10/12 |
+| `codex:gpt-6-astra` | 12/12, 12/12 | 12/12, 12/12 | 12/12, 12/12 (its own design) |
 
 - Every memory miss of the small models is an accumulated count: on `assault` the barriers per site and the stock
   that only decreases (all four for Ministral and the local Gemma, two for `gpt-5.4-mini`), on `carnival` four
@@ -42,11 +43,15 @@ The scale. Mode `plain`, judge `claude:claude-opus-5-5`, one run per cell, memor
 - The judge: the first cells were judged by Opus 5 and all of them were judged again by Opus 5.5 after the owner
   asked for it; the only verdict that moved is Ministral's `carnival` scenes, 9 to 10. Opus 5.5 judges its own
   scenes and Fable's, so the 12/12 scene rows at the top are not an independent measurement.
-- Failures. Haiku through the Claude CLI fails at the recall call after the third compaction on both scenarios,
-  2 of 2; the CLI's own verdict was not being logged, so `cliResult` and `cliError` were added to the log whitelist
-  (07ee814) for the next run. Sonnet failed once during the second compaction of `carnival` and passed the repeat.
-  The OpenRouter key reached its $2 limit during the hosted Gemma cell of `assault`; that channel was stopped and
-  the limit was not raised.
+-  Failures. Haiku through the Claude CLI failed at the recall call after the third compaction on both scenarios, 2 of
+  2; the CLI's own verdict was not being logged, so `cliResult` and `cliError` were added to the log whitelist
+  (07ee814). The cause turned out to be the runner's recall cap (`hospital`, the ceiling, below); the Haiku cells
+  above are from the runs after the fix. Sonnet through the CLI fails at a compaction now and then: once on `carnival`
+  (the repeat passed) and three times of three on `hospital` (at the third, the second and the second compaction).
+  Every failed Sonnet compaction ended after 171–199 s with an empty result and, where the field was already logged,
+  `stopReason: stop_sequence`; every successful one (13 today) ended within 126 s. A failed compaction fails the cell;
+  the runner does not retry a compaction. The OpenRouter key reached its $2 limit during the hosted Gemma cell of
+  `assault`; that channel was stopped and the limit was not raised.
 
 Conclusion: the two scenarios separate the small models from the frontier, and they separate nothing at the top:
 five models sit at 12/12 and 12/12 on both. A scale with no room above the production model's target is not a
@@ -70,11 +75,57 @@ its structured answer is cut off there, which the CLI reports as an error, not a
 the two new scenarios had failed at the same call. Change (`ab9acfc`): the recall cap is 8192, and a failed CLI row
 carries `stopReason`. A model that answered within 1024 gives the same answer, so the cells above stand. With the
 cap raised, Opus 5.5 answers 12/12 over the full text in 24 s and Fable 12/12 in 33 s: the scenario is readable,
-and hard to read without reasoning. The scale on it follows in this entry.
+and hard to read without reasoning.
+
+`hospital`, the scale (the column in the table above). The small models collapse: Ministral and `gpt-5.4-mini` answer
+2 of 12 checks each (Ministral keeps `origin_evacuated` and `uninformed`, mini `river_stretchers` and `uninformed`).
+What is lost is everything derived across the compactions, not only the counts as on the other two scenarios: the
+holder of the key, the current route, the departure time, the minutes at which Polina and Boris learned. The frontier
+does not collapse: Opus 5.5, Fable and GPT-6 answer 12/12 through the same pipeline, so the scenario that `gpt-5.4`
+cannot read in one pass without reasoning is still remembered whole by a compactor that reasons. Haiku answers 8/12:
+it loses the four derived counts (`river_left`, `garden_cells`, `boat_spare`, `origin_evacuated`) and keeps the
+holder, the route, the times and who learned what, between the small models and the frontier as on `assault`. Sonnet
+has no cell: three runs, each ended at a compaction with an empty result (the failures bullet above). Scenes: GPT-6
+12/12 (it designed the scenario and its traps, so this is the least independent cell of the day), Opus 5.5 and Fable
+10/12, both missing the same two questions on both judgings.
+
+The two questions the frontier misses, read against the scenes (synthetic, in the run directories). `key_fetched`
+follows turn 9: Klim is to open the battery cupboard with a key he expects to find on himself, while the right key is
+with Evdokia; the question expects the scene to show her handing it to him. The two small models fail it with real
+errors: Ministral's Klim finds two keys in his own pocket, mini's Agata takes the key off the hook it left at 23:00.
+Opus 5.5 and Fable both have Klim find nothing, which is right; then Opus leaves the cupboard closed and Fable has
+Evdokia open it herself and keep the key. Consistent scenes that resolve the turn differently from the designed
+handover; only GPT-6 wrote the handover. `garden_lamp_lit` is the last trap, an allowed action: Evdokia puts one spare
+Garden battery into a separate working lamp, expected `yes`. Both Claude scenes do exactly that, and both name the
+batteries on the windowsill as the ones brought from the River ward after 03:05, which is where the Garden's spare
+stock came from (turn 15); the judge read "a Garden battery" as origin rather than stock and answered `no` twice for
+each. So of the four frontier scene misses on `hospital`, two are the judge's reading and two are a resolution the
+question does not accept; none contradicts the world. Haiku's three misses: `key_in_klim_pocket` is a real error (at
+04:02 the key comes out of Klim's pocket, and he has none), `order_explained` has Klim, who knows the new place, tell
+Boris instead of Polina (consistent, not the designed teller), and `garden_lamp_lit` is the same reading again, with
+the battery taken from the reserve cupboard and no ward named. One Haiku scene runs past its end into a fabricated
+next author turn in the request's JSON syntax; the judge's question did not touch it. The table keeps the judge's
+numbers; the reading is recorded as a limitation in the pack's README.
+
+Spread of the judge: every `hospital` cell was judged twice by Opus 5.5 from the same scenes. Ministral 9 and 9, mini
+6 and 5, Opus 5.5 10 and 10 (the same two questions), Fable 10 and 10 (the same two), GPT-6 12 and 12, Haiku 9 and 9.
+One judging of Haiku's `carnival` scenes ended with the CLI reporting an API refusal (`stopReason: refusal`) and
+scored 0/12; the repeat scored 12/12. A judge call that fails looks like a bad scene score, and only the log says
+which it was.
+
+Where the scale stands at the end of the day. Below the frontier the three scenarios order the models the same
+way, and `hospital` spreads them furthest: 2/12 for the small hosted models against 12/12 at the top. Above the
+production model's 8/12 on `assault` and `carnival` (its `hospital` cell needs a card) the whole distance to
+12/12 is real, because a compactor that reasons keeps all of it through the same increments and the same 4-scene
+window. A memory limit of the frontier was not found today: `hospital` is hard to read in one pass without
+reasoning, and it is not yet hard to remember for a compactor that reasons. The next scenario that separates the
+frontier has to defeat the compaction step itself, not the reading.
 
 Limitations:
 - One run per cell; no temperature control on the CLI models (Claude CLI and Codex run on subscriptions and
   report no token counts).
+- The production build was not measured on `hospital`: the card was deleted before the scenario existed, and a
+  new rental needs the owner's yes. GPT-6 designed `hospital` and is also measured on it.
 - Results are outside the repository: `~/simple-story-chat-runs/2026-09-22/*.json` (run summaries) and the
   re-judge lines in `rejudge-opus55.jsonl`.
 - The local runs went through a rented card that was deleted at 17:07 UTC; the instance list was empty afterwards.
