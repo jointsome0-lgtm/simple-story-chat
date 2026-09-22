@@ -147,7 +147,10 @@ async function judgeScene(directory: string, depth: number, judges: string[], mi
   }).map(({ turn: _turn, number: _number, ...f }) => f);
   const dissent = Object.values(votes).filter(v => v === 'inconsistent').length;
   const { agreed, against } = agree(votes, checksByJudge, depth, listed.length);
-  return { votes, row, standing, dissent, accepted: agreed, against, judged: judges.filter(judge => votes[judge] !== 'error'), listed, checksByJudge };
+  // A judge whose probe failed (no verdict, or no checks when there was something to check) is against the scene at
+  // the gate, but its silence is the provider's, not a reading: the callers keep such a judging out of the ledger.
+  const missing = judges.filter(judge => votes[judge] === 'error' || (listed.length > 0 && checks[judge] === null));
+  return { votes, row, standing, dissent, accepted: agreed, against, judged: judges.filter(judge => votes[judge] !== 'error'), listed, checksByJudge, missing };
 }
 
 async function write(spec: string) {
@@ -317,9 +320,9 @@ if (positionals[0] === 'watch') {
           // The council on the new scene alone: the prefix was agreed already. What the judges pointed at in the
           // prefix goes to the ledger of those nodes, and every node of the prefix has been read once more.
           const verdict = await judgeScene(directory, depth, judges, minutes, writer, { scenario, mode: 'gold' });
-          noteLater(tree, pathIds, verdict.listed, verdict.checksByJudge, depth, writer); noteSeen(tree, pathIds);
-          record({ event: 'gold_attempt', scenario, depth, attempt, repair: !!task.repair, accepted: verdict.accepted, against: verdict.against.length, verdict: verdict.row.verdict, dissent: verdict.dissent, findings: verdict.row.findings, confirmed: verdict.row.confirmed, disputed: verdict.row.disputed, truncated: scene.truncated, model: writer });
-          console.log(JSON.stringify({ event: 'gold_attempt', scenario, model: writer, depth, attempt, repair: !!task.repair, accepted: verdict.accepted, against: verdict.against.length, verdict: verdict.row.verdict, dissent: verdict.dissent, findings: verdict.row.findings, confirmed: verdict.row.confirmed, disputed: verdict.row.disputed }));
+          if (!verdict.missing.length) { noteLater(tree, pathIds, verdict.listed, verdict.checksByJudge, depth, writer); noteSeen(tree, pathIds); }
+          record({ event: 'gold_attempt', scenario, depth, attempt, repair: !!task.repair, accepted: verdict.accepted, against: verdict.against.length, missing: verdict.missing.length, verdict: verdict.row.verdict, dissent: verdict.dissent, findings: verdict.row.findings, confirmed: verdict.row.confirmed, disputed: verdict.row.disputed, truncated: scene.truncated, model: writer });
+          console.log(JSON.stringify({ event: 'gold_attempt', scenario, model: writer, depth, attempt, repair: !!task.repair, accepted: verdict.accepted, against: verdict.against.length, missing: verdict.missing.length, verdict: verdict.row.verdict, dissent: verdict.dissent, findings: verdict.row.findings, confirmed: verdict.row.confirmed, disputed: verdict.row.disputed }));
           return { writer, failed: false as const, scene, verdict, task };
         }));
         pending = [];
@@ -327,7 +330,11 @@ if (positionals[0] === 'watch') {
           if (outcome.failed) continue;
           const { writer, scene, verdict } = outcome;
           if (verdict.accepted) accepted.push({ writer, text: scene.text, input: scene.input, truncated: scene.truncated, attempt, dissent: verdict.dissent, findings: verdict.row.findings, judged: verdict.judged });
-          else {
+          else if (verdict.missing.length && !verdict.standing.length) {
+            // Refused by a silent judge only: not a verdict on the text, so nothing to repair and nothing to keep.
+            repairs[writer] = undefined;
+            pending.push(writer);
+          } else {
             tree.rejected.push({ parent, step, text: scene.text, author: writer, at: new Date().toISOString(), findings: verdict.standing });
             repairs[writer] = { text: scene.text, findings: verdict.standing };
             pending.push(writer);
@@ -386,8 +393,9 @@ if (positionals[0] === 'watch') {
     record(line); console.log(JSON.stringify(line));
   }
 } else if (positionals[0] === 'gold-recheck') {
-  // The gate's own noise: every trunk node (or the nodes named with --nodes) is judged again by the council, fresh,
-  // and the report says how many the judges agree to again. The tree is not changed.
+  // The gate's own noise: every node of the tree (or the nodes named with --nodes) is judged again by the council,
+  // fresh, and the report says how many the judges agree to again. Each node's ledger gets the recheck and what the
+  // judges pointed at in its prefix; a recheck with a silent judge is not held, and the run stops when all are silent.
   const judges = (values.judges ?? '').split(',').filter(Boolean);
   const minutes = values.minutes ?? '60';
   if (judges.length < 2 || new Set(judges).size !== judges.length || !/^\d{1,3}$/.test(minutes)) throw new Error('Use: eval gold-recheck --judges <host>:<id>,... [--scenarios a] [--pack directory] [--nodes g1,g2] [--minutes 1..180] [--out directory]');
@@ -398,7 +406,8 @@ if (positionals[0] === 'watch') {
     const ids = values.nodes ? values.nodes.split(',').filter(Boolean) : Object.keys(tree.nodes);
     if (!ids.length) throw new Error('No nodes to recheck; grow a trunk with eval walk-gold');
     const paths = goldPaths(root, scenario, pack);
-    const rows: { id: string; depth: number; author: string; again: boolean; against: string[]; verdict: PanelRow['verdict']; dissent: number; findings: number; confirmed: number; disputed: number }[] = [];
+    const rows: { id: string; depth: number; author: string; held: boolean; again: boolean; against: string[]; verdict: PanelRow['verdict']; dissent: number; findings: number; confirmed: number; disputed: number }[] = [];
+    let stopped = false;
     for (const id of ids) {
       const node = tree.nodes[id];
       if (!node) throw new Error('Unknown gold node');
@@ -407,18 +416,25 @@ if (positionals[0] === 'watch') {
       const report: WalkReport = { scenario, model: node.author, provider: 'gold', startedAt: new Date().toISOString(), seed: walk.seed, authors: walk.authors,
         steps: pathOf(tree, id).map(({ id: _id, ...s }) => ({ ...s, truncated: false, ms: 0 })), compactions: [] };
       writeFileSync(join(directory, 'report.json'), JSON.stringify(report, null, 2));
-      const { row, dissent, accepted, against, listed, checksByJudge } = await judgeScene(directory, node.depth, judges, minutes, node.author, { scenario, mode: 'recheck' });
+      const { row, dissent, accepted, against, listed, checksByJudge, missing } = await judgeScene(directory, node.depth, judges, minutes, node.author, { scenario, mode: 'recheck' });
+      if (missing.length) {
+        rows.push({ id, depth: node.depth, author: node.author, held: false, again: false, against: missing, verdict: row.verdict, dissent, findings: row.findings, confirmed: row.confirmed, disputed: row.disputed });
+        const line = { event: 'node_recheck_failed', scenario, id, depth: node.depth, missing: missing.length, model: node.author };
+        record(line); console.log(JSON.stringify(line));
+        if (missing.length === judges.length) { stopped = true; break; }
+        continue;
+      }
       const prefixIds = pathOf(tree, node.parent).map(s => s.id);
       noteLater(tree, prefixIds, listed, checksByJudge, node.depth, node.author); noteSeen(tree, prefixIds);
       (node.reviews ??= []).push({ kind: 'recheck', at: new Date().toISOString(), agreed: accepted, against });
       saveGold(paths.tree, tree); writeFileSync(paths.story, renderGold(tree, walk));
-      rows.push({ id, depth: node.depth, author: node.author, again: accepted, against, verdict: row.verdict, dissent, findings: row.findings, confirmed: row.confirmed, disputed: row.disputed });
+      rows.push({ id, depth: node.depth, author: node.author, held: true, again: accepted, against, verdict: row.verdict, dissent, findings: row.findings, confirmed: row.confirmed, disputed: row.disputed });
       const line = { event: 'node_rechecked', scenario, id, depth: node.depth, again: accepted, verdict: row.verdict, dissent, findings: row.findings, confirmed: row.confirmed, disputed: row.disputed, model: node.author };
       record(line); console.log(JSON.stringify(line));
     }
-    const summary = { at: new Date().toISOString(), scenario, judges, nodes: rows.length, again: rows.filter(r => r.again).length, rows };
+    const summary = { at: new Date().toISOString(), scenario, judges, nodes: rows.length, held: rows.filter(r => r.held).length, again: rows.filter(r => r.again).length, stopped, rows };
     writeFileSync(join(out, scenario, 'recheck.json'), JSON.stringify(summary, null, 2));
-    const line = { event: 'gold_recheck', scenario, out: join(out, scenario), nodes: rows.length, again: summary.again, failed: rows.filter(r => !r.again).map(r => r.id) };
+    const line = { event: 'gold_recheck', scenario, out: join(out, scenario), nodes: rows.length, held: summary.held, again: summary.again, stopped, failed: rows.filter(r => r.held && !r.again).map(r => r.id), unheld: rows.filter(r => !r.held).map(r => r.id) };
     record(line); console.log(JSON.stringify(line));
   }
 } else if (positionals[0] === 'gold-promote') {
@@ -499,8 +515,8 @@ if (positionals[0] === 'watch') {
         const kind = task.step ? 'intervention' as const : 'continue' as const;
         if (!scene || written.status !== 0) { rows.push({ parent: task.parent, depth, kind, verdict: 'unjudged', dissent: 0, findings: 0, confirmed: 0, disputed: 0, accepted: false, truncated: false, error: written.code || report?.error || 'probe_failed', directory }); continue; }
         reports.push({ texts: prefix.map(s => s.text), directory });
-        const { row, dissent, accepted, judged, listed, checksByJudge } = await judgeScene(directory, depth, judges, minutes, spec, { scenario, mode: 'nodes' });
-        noteLater(tree, pathOf(tree, task.parent).map(s => s.id), listed, checksByJudge, depth, spec); noteSeen(tree, pathOf(tree, task.parent).map(s => s.id));
+        const { row, dissent, accepted, judged, listed, checksByJudge, missing } = await judgeScene(directory, depth, judges, minutes, spec, { scenario, mode: 'nodes' });
+        if (!missing.length) { noteLater(tree, pathOf(tree, task.parent).map(s => s.id), listed, checksByJudge, depth, spec); noteSeen(tree, pathOf(tree, task.parent).map(s => s.id)); }
         rows.push({ parent: task.parent, depth, kind, verdict: row.verdict, dissent, findings: row.findings, confirmed: row.confirmed, disputed: row.disputed, accepted, judged, truncated: scene.truncated, directory });
         record({ event: 'node_judged', scenario, depth, kind, verdict: row.verdict, dissent, findings: row.findings, confirmed: row.confirmed, disputed: row.disputed, accepted, model: spec });
         console.log(JSON.stringify({ event: 'node_judged', scenario, model: spec, depth, kind, verdict: row.verdict, dissent, findings: row.findings, confirmed: row.confirmed, disputed: row.disputed, accepted }));
