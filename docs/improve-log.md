@@ -2,6 +2,76 @@
 
 Every step of the loop from [improve-loop.md](improve-loop.md): date, hypothesis, change, numbers before and after per model, decision. Rejected hypotheses are recorded too. New entries go on top.
 
+## 2026-09-22 · Fable 5.1 · two scenarios built to separate, and a scale of models on them (hospital in progress)
+
+Not a step of the loop: nothing in `local/` that shapes prompts or memory was changed, and no decision on a prompt
+is taken here. The owner's task for the day: the benchmarks should trouble the frontier models too, not only Gemma,
+and we need a scale to know how far the story system can still go. This entry is that scale.
+
+Two scenarios of one design: `assault` in the public pack (`~/simple-story-chat-eval/assault/`, JSON pack format,
+not in `examples/`) and `carnival` in the holdout (its content is not described here). Each: 12 checks, 9 of them
+numbers or clock times that accumulate or change across the three compactions; 10 traps, 4 of them mid-story; 12
+judge questions, 6 expecting `yes` and 6 `no`. Seeds, turns, checks and traps were designed by GPT-6 (`gpt-6-astra`
+through Codex, `high`) from a written brief and checked by Fable, who re-derived every answer from the turns; the
+16 scenes of each by a clean Opus 5 agent from a per-turn ledger (what the scene must state, what it must not);
+`authors` lists all three. `ceiling` with `openai:gpt-5.4` answers 12/12 on both, so every check is readable from
+the text.
+
+The scale. Mode `plain`, judge `claude:claude-opus-5-5`, one run per cell, memory / scenes:
+
+| Model | `assault` | `carnival` |
+| --- | --- | --- |
+| `mistral:ministral-14b-2512` | 8/12, 8/12 | 8/12, 10/12 |
+| `gpu:gemma-4-31b-heretic-q6k` (the production build, through the tunnel) | 8/12, 11/12 | 8/12, 11/12 |
+| `openrouter:google/gemma-4-31b-it` | failed `unauthorized` | 10/12, 12/12 |
+| `openai:gpt-5.4-mini` | 10/12, 10/12 | 8/12, 7/12 |
+| `claude:claude-haiku-4-5-20251001` | failed `provider_failed` | failed `provider_failed` |
+| `claude:claude-sonnet-5` | 12/12, 12/12 | 12/12, 12/12 (second run) |
+| `claude:claude-opus-5` | 12/12, 12/12 | not run |
+| `claude:claude-opus-5-5` | 12/12, 12/12 | 12/12, 12/12 |
+| `claude:claude-fable-5-1` | 12/12, 12/12 | 12/12, 12/12 |
+| `codex:gpt-6-astra` | 12/12, 12/12 | 12/12, 12/12 |
+
+- Every memory miss of the small models is an accumulated count: on `assault` the barriers per site and the stock
+  that only decreases (all four for Ministral and the local Gemma, two for `gpt-5.4-mini`), on `carnival` four
+  counts of the same kind. Nobody misses a location, a holder or a "who learned what when" question. This is the
+  holdout finding of 09-18 again (sums across increments), now on a public scenario where it can be debugged.
+- The production build on the three older scenarios, same judge: `battle` 8/8 and 15/15, `chess` 6/7 (the known
+  ceiling) and 4/4, `dance` 13/13 and 6/6. Saturated, as recorded on 09-20. `sgr` on the two new scenarios:
+  `invalid_memory` (quote) for the production build, as in every earlier entry.
+- The judge: the first cells were judged by Opus 5 and all of them were judged again by Opus 5.5 after the owner
+  asked for it; the only verdict that moved is Ministral's `carnival` scenes, 9 to 10. Opus 5.5 judges its own
+  scenes and Fable's, so the 12/12 scene rows at the top are not an independent measurement.
+- Failures. Haiku through the Claude CLI fails at the recall call after the third compaction on both scenarios,
+  2 of 2; the CLI's own verdict was not being logged, so `cliResult` and `cliError` were added to the log whitelist
+  (07ee814) for the next run. Sonnet failed once during the second compaction of `carnival` and passed the repeat.
+  The OpenRouter key reached its $2 limit during the hosted Gemma cell of `assault`; that channel was stopped and
+  the limit was not raised.
+
+Conclusion: the two scenarios separate the small models from the frontier, and they separate nothing at the top:
+five models sit at 12/12 and 12/12 on both. A scale with no room above the production model's target is not a
+scale, so a third scenario, `hospital`, was designed by GPT-6 at `max` to defeat a careful compactor without
+overflowing the fact limit: dependent quantities carried across all three compactions, a cuff marking that stands
+for membership in the original group and survives transfers, two clocks with constant offsets that are swapped
+mid-story, two identical keys from two hooks that are exchanged, a route that returns to its first value through
+sheet bookkeeping, the scope of a refutation and a later partial restoration, and negative knowledge from an
+exhaustive list of recipients. Same shape as the other two: 12 checks, 10 traps, 6 `yes` and 6 `no`. Fable
+re-derived all 12 answers by hand; the design is in the public pack (`hospital/scenario.json`, `authors`
+`gpt-6-astra`, `fable-5.1`), the scenes are being written by a clean Opus 5 agent. Ceiling and the scale on it
+follow in this entry.
+
+Limitations:
+- One run per cell; no temperature control on the CLI models (Claude CLI and Codex run on subscriptions and
+  report no token counts).
+- Results are outside the repository: `~/simple-story-chat-runs/2026-09-22/*.json` (run summaries) and the
+  re-judge lines in `rejudge-opus55.jsonl`.
+- The local runs went through a rented card that was deleted at 17:07 UTC; the instance list was empty afterwards.
+- This session opened the holdout to write `carnival`, so it does not run the loop; the next step of the loop
+  belongs to another session.
+- Beside the eval, the production build described the 24 frames of the pictures run `run24` through the same
+  tunnel (`exports/illustrations-2026-09-21/run24-local/`): the descriptions match the hosted Gemma's in length
+  and in the counts the probe logs; nothing was drawn, because no picture card was rented that day.
+
 ## 2026-09-20 · Opus 5 · Qwen3.8-27B as a replacement for Gemma 4 31B (decision open)
 
 Not a step of the loop: nothing in `local/` was changed and the main group was not run. The tester proposed the
