@@ -511,9 +511,10 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         // a slot again, and the drawing takes none at all, so neither may sit inside the turn.
         const task: Promise<unknown> = generate(userId, chat, plan.job, controller, releaseGpu, picture.signal)
           .then(picture => picture && illustrator?.illustrate(picture))
-          // The picture step reports its own outcomes; this is the net under it, so that one throw cannot take the
-          // shutdown of the bot (`idle`) with it.
-          .catch(error => log('picture_step_failed', errorCode(error)))
+          // The net under the whole chain, so that one throw cannot take the shutdown of the bot (`idle`) with it.
+          // The turn reports its own failures to the reader and the picture its own outcomes, so a row here is
+          // something neither of them expected — and on an install with no pictures it is never about one.
+          .catch(error => log('turn_task_failed', errorCode(error)))
           .finally(() => {
             if (running.get(userId) === entry) running.delete(userId);
             inFlight.delete(task);
