@@ -158,3 +158,27 @@ export function parseIssues(text: string): Issue[] {
 export const auditFileName = (label: string) => `seed-audit-${label.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.json`;
 
 export const crossFileName = (label: string) => `walk-cross-${label.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.json`;
+
+// The audit of a whole story: the seed and every scene at once, for contradictions between scenes that a judge reading
+// one scene at a time may have let through, and for facts the scenes introduce that can be read two ways and would
+// divide a judge and a model continuing from the tree.
+export type StoryIssue = Issue & { scene: number };
+export type StoryAuditFile = { judge: string; model: string; at: string; issues: StoryIssue[]; error?: string };
+const STORY_AUDIT_RULES = `Ты проверяешь готовую часть интерактивной истории целиком: сид и все сцены по порядку (на каждом шаге вмешательство автора или знак продолжать, и сцена). Дальше из любой сцены другая модель будет писать продолжение, а судьи будут искать в продолжении противоречия с этим текстом. Найди (а) противоречия: утверждения сцен, несовместимые с сидом или с более ранними сценами, включая числа, время, места, предметы, кто где, кто что знает; (б) неясности, которые сцены вносят в мир: новый факт, который можно прочитать двумя способами (число, время, место, чьё знание), так что рассказчик продолжения и судья разойдутся. Не оценивай стиль, не предлагай сюжет, не повторяй одно и то же под разными цитатами. На каждую находку укажи номер сцены (scene), короткую точную цитату из неё (quote) и одну фразу, в чём проблема (note); для противоречия в note назови, с чем оно расходится (сид или номер сцены). Если чисто, верни пустой список. Отвечай только JSON по схеме.`;
+export function storyAuditRequest(seed: string, steps: Step[]): ModelRequest {
+  const label = (step: Step) => step.kind === 'continue' ? 'знак продолжать' : 'вмешательство автора';
+  const body = steps.map(step => `ШАГ ${step.turn} (${label(step)}): ${step.input}\nСЦЕНА ${step.turn}:\n${step.text}`).join('\n\n');
+  return { system: STORY_AUDIT_RULES, messages: [{ role: 'user', content: `СИД:\n${seed}\n\nИСТОРИЯ:\n${body}` }], maxOutputTokens: 16384, purpose: 'memory',
+    outputSchema: { type: 'object', required: ['issues'], additionalProperties: false, properties: { issues: { type: 'array', maxItems: 40, items: { type: 'object',
+      required: ['kind', 'scene', 'quote', 'note'], additionalProperties: false, properties: { kind: { type: 'string', enum: ['contradiction', 'ambiguity'] }, scene: { type: 'integer', minimum: 1 },
+        quote: { type: 'string', maxLength: 300 }, note: { type: 'string', maxLength: 400 } } } } } } };
+}
+export function parseStoryIssues(text: string, scenes: number): StoryIssue[] {
+  const trimmed = text.trim();
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
+  const parsed = JSON.parse(fenced ? fenced[1] : trimmed) as { issues?: unknown };
+  if (!Array.isArray(parsed.issues)) throw Object.assign(new Error(), { code: 'invalid_audit' });
+  return (parsed.issues as Partial<StoryIssue>[]).filter(i => i && (i.kind === 'contradiction' || i.kind === 'ambiguity') && Number.isInteger(i.scene) && i.scene! >= 1 && i.scene! <= scenes && typeof i.quote === 'string' && typeof i.note === 'string')
+    .slice(0, 40).map(i => ({ kind: i.kind!, scene: i.scene!, quote: i.quote!.slice(0, 300), note: i.note!.slice(0, 400) }));
+}
+export const storyAuditFileName = (label: string) => `story-audit-${label.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.json`;

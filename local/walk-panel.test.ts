@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { judgeRequest, parseVerdict, panel, summarize, compactsAfter, judgeFileName, findings, crossRequest, parseCross, council, seedAuditRequest, parseIssues } from './walk-panel.ts';
+import { judgeRequest, parseVerdict, panel, summarize, compactsAfter, judgeFileName, findings, crossRequest, parseCross, council, seedAuditRequest, parseIssues, storyAuditRequest, parseStoryIssues, storyAuditFileName } from './walk-panel.ts';
 
 test('the judge of a scene sees the seed, every earlier step and the new scene, and answers by schema', () => {
   const steps = [{ turn: 1, kind: 'continue' as const, input: 'Продолжай.', text: 'Сцена один.' }, { turn: 2, kind: 'intervention' as const, input: 'Гаснет свет.', text: 'Сцена два.' }];
@@ -73,4 +73,14 @@ test('the seed audit asks for contradictions and ambiguities with quotes, and dr
     [{ kind: 'ambiguity', quote: 'q', note: 'n' }]);
   assert.deepEqual(parseIssues('```json\n{"issues":[]}\n```'), []);
   assert.throws(() => parseIssues('{"nothing":true}'), { code: 'invalid_audit' });
+});
+
+test('the story audit puts the seed and every scene in one request and keeps only issues that name a scene', () => {
+  const steps = [{ turn: 1, kind: 'continue' as const, input: 'Начни.', text: '2026-01-01 10:05\n\nПервая.' }, { turn: 2, kind: 'intervention' as const, input: 'Гаснет свет.', text: '2026-01-01 10:10\n\nВторая.' }];
+  const request = storyAuditRequest('Сид\n2026-01-01 10:00\nМир.', steps);
+  assert.match(request.messages[0].content, /СИД:\nСид[\s\S]*ШАГ 1 \(знак продолжать\): Начни\.\nСЦЕНА 1:[\s\S]*ШАГ 2 \(вмешательство автора\): Гаснет свет\.\nСЦЕНА 2:/);
+  const issues = parseStoryIssues('```json\n{"issues":[{"kind":"contradiction","scene":2,"quote":"Вторая.","note":"расходится со сценой 1"},{"kind":"ambiguity","scene":3,"quote":"x","note":"нет такой сцены"},{"kind":"style","scene":1,"quote":"x","note":"x"}]}\n```', 2);
+  assert.deepEqual(issues, [{ kind: 'contradiction', scene: 2, quote: 'Вторая.', note: 'расходится со сценой 1' }]);
+  assert.throws(() => parseStoryIssues('{"verdict":"consistent"}', 2), (e: { code?: string }) => e.code === 'invalid_audit');
+  assert.equal(storyAuditFileName('codex:gpt-6-sol'), 'story-audit-codex-gpt-6-sol.json');
 });

@@ -13,8 +13,8 @@ import { createModel } from './model.ts';
 import type { ModelRequest } from './model.ts';
 import { safeErrorDetails } from './model-error.ts';
 import type { WalkReport } from './walk-probe.ts';
-import { judgeRequest, parseVerdict, judgeFileName, findings, crossRequest, parseCross, crossFileName, seedAuditRequest, parseIssues, auditFileName } from './walk-panel.ts';
-import type { JudgeFile, CrossFile, Verdict, AuditFile } from './walk-panel.ts';
+import { judgeRequest, parseVerdict, judgeFileName, findings, crossRequest, parseCross, crossFileName, seedAuditRequest, parseIssues, auditFileName, storyAuditRequest, parseStoryIssues, storyAuditFileName } from './walk-panel.ts';
+import type { JudgeFile, CrossFile, Verdict, AuditFile, StoryAuditFile } from './walk-panel.ts';
 import { loadWalk } from './scenarios.ts';
 
 // Codes are read from ModelError or Node errors, which use strings.
@@ -22,12 +22,12 @@ type Failure = { code?: string };
 
 process.umask(0o077);
 const { values } = parseArgs({ options: { report: { type: 'string' }, label: { type: 'string' }, minutes: { type: 'string', default: '90' }, cross: { type: 'boolean', default: false },
-  'audit-seed': { type: 'string' }, pack: { type: 'string' }, out: { type: 'string' }, only: { type: 'string' } } });
+  'audit-seed': { type: 'string' }, 'audit-story': { type: 'boolean', default: false }, pack: { type: 'string' }, out: { type: 'string' }, only: { type: 'string' } } });
 // --only judges one scene of the report: the new scene of a gold attempt, whose prefix the council accepted already.
 const only = values.only === undefined ? undefined : Number(values.only);
 if (only !== undefined && (!Number.isInteger(only) || only < 1)) throw new Error('--only takes a scene number');
 const minutes = Number(values.minutes);
-if ((!values.report && !values['audit-seed']) || !values.label || !Number.isInteger(minutes) || minutes < 1 || minutes > 180) throw new Error('Use --report directory --label <host>:<id> [--minutes 1..180] [--cross] [--only scene], or --audit-seed <walk> --label <host>:<id> --out directory [--pack directory]');
+if ((!values.report && !values['audit-seed']) || !values.label || !Number.isInteger(minutes) || minutes < 1 || minutes > 180) throw new Error('Use --report directory --label <host>:<id> [--minutes 1..180] [--cross] [--only scene] [--audit-story], or --audit-seed <walk> --label <host>:<id> --out directory [--pack directory]');
 // With --audit-seed there is no report: the seed of the named walk is read instead, and the file goes to --out.
 const directory = resolve(values.report ?? values.out ?? '.');
 const report: WalkReport = values.report ? JSON.parse(readFileSync(join(directory, 'report.json'), 'utf8')) : { scenario: '', model: '', provider: '', startedAt: '', seed: '', authors: [], steps: [], compactions: [] };
@@ -66,6 +66,18 @@ if (values['audit-seed']) {
     const reply = await generate(seedAuditRequest(fixture.seed));
     file.issues = parseIssues(reply.text); save();
     progress({ event: 'seed_audited', issues: file.issues.length, contradictions: file.issues.filter(i => i.kind === 'contradiction').length, truncated: reply.finishReason !== 'stop', directory });
+  } catch (error) { finish(codeOf(error), file, save); progress({ event: 'failure_details', ...safeErrorDetails(error) }); }
+} else if (values['audit-story']) {
+  // The whole story at once: contradictions between scenes and the ambiguities the scenes themselves introduce.
+  const path = join(directory, storyAuditFileName(values.label));
+  const file: StoryAuditFile = { judge: values.label, model: config.model, at: new Date().toISOString(), issues: [] };
+  const save = () => writeFileSync(path, JSON.stringify(file, null, 2));
+  progress({ event: 'started', directory, model: config.model, scenes: report.steps.length, audit: true });
+  try {
+    await judge.check?.({ signal: deadline });
+    const reply = await generate(storyAuditRequest(report.seed, report.steps));
+    file.issues = parseStoryIssues(reply.text, report.steps.length); save();
+    progress({ event: 'story_audited', scenes: report.steps.length, issues: file.issues.length, contradictions: file.issues.filter(i => i.kind === 'contradiction').length, truncated: reply.finishReason !== 'stop', directory });
   } catch (error) { finish(codeOf(error), file, save); progress({ event: 'failure_details', ...safeErrorDetails(error) }); }
 } else if (!values.cross) {
   const path = join(directory, judgeFileName(values.label));
