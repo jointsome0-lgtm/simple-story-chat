@@ -98,6 +98,18 @@ export function defaultWorkflow(): Graph {
   };
 }
 
+// A graph the bot draws a reader's scene with, with every saving node turned into a preview one. Whatever writes
+// the file writes ComfyUI's prompt and the whole workflow into its text chunks, and `SaveImage` writes it into the
+// server's permanent output directory, which no route of the HTTP API deletes: the card would keep a copy of a
+// picture of somebody's scene until the card itself is gone. `PreviewImage` writes the same picture to the temp
+// directory the server empties at startup, and `/view` serves it from the type the history entry reports, so
+// nothing else about the drawing changes. The graphs pinned on a card end in `SaveImage` — that is what the batch
+// harness on a rented card wants, and it draws synthetic scenes; the bot draws a reader's, and rewrites it.
+export function previewOnly(graph: Graph): Graph {
+  return Object.fromEntries(Object.entries(graph).map(([id, node]) => [id, node.class_type === 'SaveImage'
+    ? { ...node, class_type: 'PreviewImage', inputs: { images: node.inputs.images } } : node]));
+}
+
 export type WorkflowValues = {
   checkpoint: string; prompt: string; negative: string; seed: number; steps: number;
   sampler: string; scheduler: string; width: number; height: number; cfg: number;

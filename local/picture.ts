@@ -12,12 +12,18 @@
 //     The language model's card is 22-25 GB full; the image model needs its own, and `SIMPLE_CHAT_IMAGE_URL` is
 //     checked against the model's own server in local/config.ts.
 // Nothing here is stored or logged but counts: not the description, not the prompt, not the bytes. The picture is
-// stripped of its PNG text chunks by `drawOne` before it is sent, because ComfyUI writes the whole prompt into them.
+// stripped of its PNG text chunks by `drawOne` before it is sent, because ComfyUI writes the whole prompt into
+// them, and the card is left with no copy of it either: the job record is cleared and a saving node in the
+// workflow is loaded as a preview one, which writes to the directory ComfyUI empties (`previewOnly`).
+//
+// A picture in flight is stopped by the reader's next message and by `/cancel`. It is not offered as a button of
+// its own: by the time it is being drawn the job lock is clear, so the bot shows no cancel control, and moving
+// around the menus does not stop it either — it ends with the next scene the reader asks for, or with the photo.
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { Library } from '../lib/library.ts';
 import type { ImageConfig } from './config.ts';
-import { SAMPLER_DEFAULTS, apiGraph, applyToWorkflow, drawOne, latentSizeOf, samplerSettingsOf } from './image-batch.ts';
+import { SAMPLER_DEFAULTS, apiGraph, applyToWorkflow, drawOne, latentSizeOf, previewOnly, samplerSettingsOf } from './image-batch.ts';
 import type { Comfy, Graph } from './image-batch.ts';
 import { STYLE, askJson, assemblePrompt, frameRequest, sheetOf, sheetRequest } from './illustrate.ts';
 import type { Character, Description } from './illustrate.ts';
@@ -69,7 +75,9 @@ export function createIllustrator(config: ImageConfig, deps: {
   // The graph is read once, here, so that a workflow that is not a ComfyUI API export fails when the bot starts
   // rather than under the first reader. Its own size and sampler settings are what it was pinned at on the card,
   // and the bot overrides none of them: this is the graph somebody measured.
-  const graph: Graph = apiGraph(JSON.parse(readFileSync(config.workflow, 'utf8')));
+  // A saving node becomes a preview one: a graph pinned on the card would otherwise leave a copy of the picture,
+  // with the prompt in its text chunks, in a directory the API cannot empty (`previewOnly`).
+  const graph: Graph = previewOnly(apiGraph(JSON.parse(readFileSync(config.workflow, 'utf8'))));
   const latent = latentSizeOf(graph);
   if (!latent) throw new Error('SIMPLE_CHAT_IMAGE_WORKFLOW needs a sampler whose latent_image comes from a node with a width and a height');
   const size = latent;

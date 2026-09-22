@@ -135,6 +135,10 @@ export function gpuConfig(env: Env, provider: string): GpuConfig | undefined {
 //   SIMPLE_CHAT_IMAGE_WAIT_SECONDS=180                        # optional; how long one picture may take
 //
 // Without SIMPLE_CHAT_IMAGE_URL nothing is described and nothing is drawn: no second model call, no status line.
+// The graphs in gpu/ end in a node that saves the picture into ComfyUI's own output directory, where nothing of
+// ours can delete it again; the bot loads such a node as a preview one, so the card keeps no copy of a reader's
+// scene (local/image-batch.ts `previewOnly`). The batch harness on a rented card draws synthetic scenes and keeps
+// whatever its --workflow says.
 //
 // The three names of this computer, and one card as the two tunnels name it: a host and a port, with the port the
 // scheme implies when the address leaves it out.

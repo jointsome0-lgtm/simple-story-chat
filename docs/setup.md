@@ -33,6 +33,14 @@ After the rename to `simple-story-chat`, the `SIMPLE_CHAT_*` variables, the data
 | `SIMPLE_CHAT_MEMORY_MODE` | `plain` (the default) or the experimental `sgr` |
 | `SIMPLE_CHAT_BUDGET_REQUESTS`, `SIMPLE_CHAT_BUDGET_TOKENS` | Daily limits for `openai-compatible`; without them the values of the channel from the [table](model-providers.md#daily-limits-of-hosted-apis) apply |
 | `SIMPLE_CHAT_VAST_INSTANCE_ID`, `SIMPLE_CHAT_VAST_API_KEY` | Optional: the Vast.ai instance that the bot starts and stops by itself ([instructions](gpu.md)) |
+| `SIMPLE_CHAT_IMAGE_URL` | Optional: a picture under each scene ([plan](illustrations-plan.md)). Without this variable the feature is off — no second model call, no status line, no picture. It is the loopback end of the ssh tunnel to the card that draws, such as `http://127.0.0.1:8188` (`bash gpu/tunnel.sh --pictures`), never a published address and never the language model's own server: one card cannot hold both models |
+| `SIMPLE_CHAT_IMAGE_WORKFLOW` | The ComfyUI graph to draw with, exported in API format (Workflow > Export (API)), such as `gpu/image-workflow-qwen.json`; a relative path is read beside `.env`. The bot loads a saving node as a preview one, so the card keeps no copy of the picture. Required when the URL is set, and checked at startup |
+| `SIMPLE_CHAT_IMAGE_CHECKPOINT` | The name of the checkpoint file on the picture card, as its `checkpoints` folder writes it. Required when the URL is set |
+| `SIMPLE_CHAT_IMAGE_USERS` | Numeric Telegram IDs separated by commas, all of them from `SIMPLE_CHAT_ALLOWED_USER_IDS`. **Empty by default: nobody gets pictures.** Everybody else reads exactly as before, and their scenes never reach the picture card |
+| `SIMPLE_CHAT_IMAGE_STYLE` | Optional: one line, the fixed style sentence at the end of every image prompt. Without it the line the [six steps](illustrations-plan.md) were measured with is used. It is the only part of that prompt written by hand |
+| `SIMPLE_CHAT_IMAGE_WAIT_SECONDS` | Optional: how long one picture may take, 180 by default (5 to 1800). A picture that outlives it is stopped on the card; the story is not affected either way |
+
+The `SIMPLE_CHAT_IMAGE_*` variables above belong to the bot on this computer. The picture card has one of its own: `SIMPLE_CHAT_IMAGE_QWEN` is read by [the bootstrap on the card](gpu.md#qwen-image-21-opt-in) and decides which checkpoints it downloads; the bot never reads it.
 
 For Gemma on a rented GPU there are [a separate `.env.gpu` profile and instructions](gpu.md). The `npm run start:gpu` command uses the same Telegram settings and database, and replaces the model connection. First you must prepare the server and pass `npm run model:probe`.
 

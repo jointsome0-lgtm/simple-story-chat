@@ -136,6 +136,8 @@ type Options = {
   // `scheduler` puts the real queue between the bot and the model, which is where a picture takes its slot;
   // `compactAtTokens` and `keepScenes` are what makes the bot prepare the next compaction while the reader reads.
   holdFinal?: number; scheduler?: boolean; compactAtTokens?: number; keepScenes?: number;
+  // A workflow pinned on a card the way the ones in gpu/ are: it ends in SaveImage.
+  saveImage?: boolean;
   // What the model says the scene cost. Above `compactAtTokens` the bot prepares the next compaction while the
   // reader reads; the numbers are the model's own and say nothing about the size of these synthetic scenes.
   usage?: { inputTokens: number; outputTokens: number };
@@ -146,7 +148,9 @@ function fixture(t: TestContext, options: Options = {}) {
   const store = new Store(join(directory, 'story.sqlite'));
   t.after(() => store.close());
   const workflow = join(directory, 'workflow.json');
-  writeFileSync(workflow, JSON.stringify(defaultWorkflow()));
+  const graph = defaultWorkflow();
+  if (options.saveImage) graph['7'] = { class_type: 'SaveImage', inputs: { images: ['6', 0], filename_prefix: 'frame' } };
+  writeFileSync(workflow, JSON.stringify(graph));
 
   const sent: Sent[] = [];
   const rows: Row[] = [];
@@ -436,6 +440,22 @@ test('a sheet the model answers with nothing still describes the frame, and the 
   const row = f.rows.find(one => one.event === 'picture')!;
   assert.equal(row.outcome, 'ready');
   assert.equal(row.withoutLook, 0);
+});
+
+// The graphs pinned on a card end in SaveImage, which writes the picture — with the prompt in its text chunks —
+// into the directory ComfyUI never empties and the HTTP API cannot reach. A reader's scene is not left there.
+test('a workflow that saves its picture is loaded as one that previews it', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root, saveImage: true });
+  await f.start();
+  await f.bot.idle();
+  assert.equal(photos(f.sent).length, 1, 'the picture is drawn and sent as before');
+  const sink = comfy.submitted[0]['7'];
+  assert.equal(sink.class_type, 'PreviewImage');
+  assert.deepEqual(Object.keys(sink.inputs), ['images'], 'and it is wired to the same picture, with no prefix to write');
+  assert.equal(f.rows.find(row => row.event === 'picture')!.outcome, 'ready');
 });
 
 test('the picture configuration is off by default, loopback only, and never the language model\'s own card', () => {
