@@ -14,7 +14,14 @@ export type ModelConfig = {
   budget: { requests: number | undefined; tokens: number | undefined };
 };
 export type GpuConfig = { instanceId: string; apiKey: string; sshHost: string; idleMinutes: number };
-export type Config = ModelConfig & { gpu: GpuConfig | undefined; token: string; allowedUsers: Set<string>; ownerId: string; dbPath: string };
+// A picture under each scene (docs/illustrations-plan.md), off unless SIMPLE_CHAT_IMAGE_URL is set. `style` is the
+// one fixed style line of every prompt; without it the line the six steps were measured with is used
+// (local/illustrate.ts `STYLE`). `users` are the Telegram IDs whose scenes may be drawn — nobody by default.
+export type ImageConfig = {
+  url: string; workflow: string; checkpoint: string; style: string | undefined; users: Set<string>;
+  waitMs: number; timeoutMs: number;
+};
+export type Config = ModelConfig & { gpu: GpuConfig | undefined; images: ImageConfig | undefined; token: string; allowedUsers: Set<string>; ownerId: string; dbPath: string };
 // The agent interface (docs/agent-interface.md): its own library file, and the bot's model queue if the bot serves one.
 // `agentId` names the library inside that file when the client does not pass one.
 export type AgentConfig = ModelConfig & { dbPath: string; modelSocket: string; waitSeconds: number; agentId: string | undefined };
@@ -114,6 +121,58 @@ export function gpuConfig(env: Env, provider: string): GpuConfig | undefined {
   return { instanceId, apiKey, sshHost, idleMinutes };
 }
 
+// The picture lane, which is a second card and never this computer's or the language model's (the plan's "Two
+// constraints that do not bend": the language model holds 22-25 GB of the 32, and the image model needs its own).
+// `SIMPLE_CHAT_IMAGE_URL` is therefore the loopback end of the ssh tunnel to that other machine, as
+// `gpu/tunnel.sh --pictures` forwards it (127.0.0.1:8188), and never a published address: a scene is drawn from a
+// reader's own text, so it may leave this computer only through a tunnel to a card we run.
+//
+//   SIMPLE_CHAT_IMAGE_URL=http://127.0.0.1:8188
+//   SIMPLE_CHAT_IMAGE_WORKFLOW=gpu/image-workflow-qwen.json   # the graph, in ComfyUI's API format
+//   SIMPLE_CHAT_IMAGE_CHECKPOINT=qwen_image_2.1_int8_convrot.safetensors
+//   SIMPLE_CHAT_IMAGE_USERS=123456789                         # the readers who get pictures; nobody by default
+//   SIMPLE_CHAT_IMAGE_STYLE=...                               # optional; the measured style line is the default
+//   SIMPLE_CHAT_IMAGE_WAIT_SECONDS=180                        # optional; how long one picture may take
+//
+// Without SIMPLE_CHAT_IMAGE_URL nothing is described and nothing is drawn: no second model call, no status line.
+export function imageConfig(env: Env, directory: string, allowedUsers: Set<string>, modelUrl: string | undefined): ImageConfig | undefined {
+  const raw = env.SIMPLE_CHAT_IMAGE_URL?.trim();
+  if (!raw) return undefined;
+  let url;
+  try { url = new URL(raw); } catch { throw new Error('Set SIMPLE_CHAT_IMAGE_URL to the tunnelled ComfyUI root, such as http://127.0.0.1:8188'); }
+  if (url.protocol !== 'http:' || !['127.0.0.1', '[::1]', 'localhost'].includes(url.hostname)
+      || url.pathname !== '/' || url.search || url.hash || url.username || url.password) {
+    throw new Error('SIMPLE_CHAT_IMAGE_URL must be a loopback HTTP root: ComfyUI is reached through an ssh tunnel, never published');
+  }
+  // One card cannot hold both models, and a picture drawn on the language model's card stops the stories while it
+  // draws. The two tunnels are two ports on loopback, so the same origin means the same card.
+  if (modelUrl && url.origin === new URL(modelUrl).origin) {
+    throw new Error('SIMPLE_CHAT_IMAGE_URL must be the second card\'s tunnel, not the language model\'s own server');
+  }
+  const workflow = env.SIMPLE_CHAT_IMAGE_WORKFLOW?.trim();
+  if (!workflow) throw new Error('Set SIMPLE_CHAT_IMAGE_WORKFLOW to a ComfyUI graph exported in API format, such as gpu/image-workflow-qwen.json');
+  const checkpoint = env.SIMPLE_CHAT_IMAGE_CHECKPOINT?.trim();
+  // The name of a file in the card's own checkpoints directory: a name, never a path of ours.
+  if (!checkpoint || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(checkpoint)) {
+    throw new Error('Set SIMPLE_CHAT_IMAGE_CHECKPOINT to the checkpoint file name on the picture card');
+  }
+  const style = env.SIMPLE_CHAT_IMAGE_STYLE?.trim() || undefined;
+  if (style && /[\r\n]/.test(style)) throw new Error('SIMPLE_CHAT_IMAGE_STYLE must be one line');
+  // Whose scenes may be drawn. Everyone else reads as before: no status line, no description call, no picture.
+  // A reader not on the access list could never have a scene here at all, so a stray ID is a typo, not a wish.
+  const users = new Set((env.SIMPLE_CHAT_IMAGE_USERS || '').split(',').map(one => one.trim()).filter(Boolean));
+  for (const user of users) {
+    if (!/^\d+$/.test(user)) throw new Error('SIMPLE_CHAT_IMAGE_USERS must be numeric Telegram IDs');
+    if (!allowedUsers.has(user)) throw new Error('Every SIMPLE_CHAT_IMAGE_USERS entry must be one of SIMPLE_CHAT_ALLOWED_USER_IDS');
+  }
+  const seconds = Number(env.SIMPLE_CHAT_IMAGE_WAIT_SECONDS || 180);
+  if (!Number.isSafeInteger(seconds) || seconds < 5 || seconds > 1800) throw new Error('Invalid SIMPLE_CHAT_IMAGE_WAIT_SECONDS');
+  // One HTTP request of the picture lane is a submit, a poll or a download through the tunnel, never the drawing
+  // itself: it may be short even when a picture may take minutes.
+  return { url: url.origin, workflow: resolve(directory, workflow), checkpoint, style, users,
+    waitMs: seconds * 1000, timeoutMs: Math.min(60000, seconds * 1000) };
+}
+
 // A hosted API or a consumer Codex account may log requests and train on them. By default they serve synthetic probes
 // and never the bot's real stories; the one who runs the bot may accept that for their own stories in so many words.
 // The agent interface asks the same: an agent co-author may be given real text as easily as a Telegram user.
@@ -165,6 +224,6 @@ export function loadConfig(directory = process.cwd(), inherited: Env = process.e
   // The bot log marks the owner's rows with this ID. A mistyped one would mark them as someone else's without a word.
   const ownerId = env.SIMPLE_CHAT_OWNER_ID?.trim() || '';
   if (ownerId && !allowedUsers.has(ownerId)) throw new Error('SIMPLE_CHAT_OWNER_ID must be one of SIMPLE_CHAT_ALLOWED_USER_IDS');
-  return { ...model, gpu, token, allowedUsers, ownerId,
+  return { ...model, gpu, images: imageConfig(env, directory, allowedUsers, model.baseUrl), token, allowedUsers, ownerId,
     dbPath: resolve(directory, env.SIMPLE_CHAT_DB_PATH || 'data/simple-chat.sqlite') };
 }
