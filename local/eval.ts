@@ -12,7 +12,7 @@ import type { WalkReport } from './walk-probe.ts';
 import { loadScenario, packScenarios, loadWalk, packWalks } from './scenarios.ts';
 import { panel, summarize, judgeFileName, council, findings, crossFileName, auditFileName, storyAuditFileName } from './walk-panel.ts';
 import type { JudgeFile, CrossFile, CouncilRow, PanelRow, Vote, AuditFile, StoryAuditFile, Contradiction } from './walk-panel.ts';
-import { loadGold, saveGold, pathOf, trunk, addNode, agree, renderGold, goldPaths, trunkTasks } from './walk-gold.ts';
+import { loadGold, saveGold, pathOf, trunk, addNode, agree, renderGold, goldPaths, trunkTasks, noteLater, noteSeen, promote, stats } from './walk-gold.ts';
 import type { Task } from './walk-gold.ts';
 import type { TaskFile } from './walk-step.ts';
 import { channelFor, capsFor, readUsage } from './budget.ts';
@@ -50,13 +50,13 @@ process.umask(0o077);
 const { values, positionals } = parseArgs({ allowPositionals: true, options: { model: { type: 'string' }, models: { type: 'string' },
   scenarios: { type: 'string' }, pack: { type: 'string' }, out: { type: 'string' }, resume: { type: 'string' }, mode: { type: 'string' },
   judge: { type: 'string' }, judges: { type: 'string' }, minutes: { type: 'string' }, cross: { type: 'boolean', default: false },
-  writers: { type: 'string' }, nodes: { type: 'string' }, depth: { type: 'string' }, attempts: { type: 'string', default: '4' }, branches: { type: 'string', default: '4' }, grow: { type: 'boolean', default: true } }, allowNegative: true });
+  writers: { type: 'string' }, nodes: { type: 'string' }, rechecks: { type: 'string', default: '2' }, exposures: { type: 'string', default: '4' }, depth: { type: 'string' }, attempts: { type: 'string', default: '4' }, branches: { type: 'string', default: '4' }, grow: { type: 'boolean', default: true } }, allowNegative: true });
 // --pack names a directory of scenarios kept outside the repository, so the one who improves the prompts never reads
 // them. Its scenarios replace the built-in ones; every pack scenario names its authors.
 const pack = values.pack ? resolve(values.pack) : undefined;
 // `walk` and `walk-judge` take walk scenarios, which have their own files and loader.
 const walking = positionals[0] === 'walk' || positionals[0] === 'walk-judge' || positionals[0] === 'seed-audit' || positionals[0] === 'walk-gold' || positionals[0] === 'walk-nodes'
-  || positionals[0] === 'gold-audit' || positionals[0] === 'gold-recheck' || positionals[0] === 'gold-read';
+  || positionals[0] === 'gold-audit' || positionals[0] === 'gold-recheck' || positionals[0] === 'gold-read' || positionals[0] === 'gold-promote' || positionals[0] === 'gold-stats';
 const scenarios = values.scenarios?.split(',') ?? (pack ? (walking ? packWalks(pack) : packScenarios(pack)) : walking ? ['lighthouse'] : ['battle', 'chess', 'dance']);
 // --mode replays one memory mode, for a cheap look at a single failure.
 if (values.mode !== undefined && !ALL_MODES.includes(values.mode as 'plain')) throw new Error('Unknown memory mode');
@@ -147,7 +147,7 @@ async function judgeScene(directory: string, depth: number, judges: string[], mi
   }).map(({ turn: _turn, number: _number, ...f }) => f);
   const dissent = Object.values(votes).filter(v => v === 'inconsistent').length;
   const { agreed, against } = agree(votes, checksByJudge, depth, listed.length);
-  return { votes, row, standing, dissent, accepted: agreed, against, judged: judges.filter(judge => votes[judge] !== 'error') };
+  return { votes, row, standing, dissent, accepted: agreed, against, judged: judges.filter(judge => votes[judge] !== 'error'), listed, checksByJudge };
 }
 
 async function write(spec: string) {
@@ -294,6 +294,7 @@ if (positionals[0] === 'watch') {
       const parent = chain.at(-1) ?? null;
       const depth = chain.length + 1;
       const step = walk.steps[chain.length];
+      const pathIds = pathOf(tree, parent).map(s => s.id);
       const prefix = pathOf(tree, parent).map(({ id: _id, ...s }) => s);
       type Candidate = { writer: string; text: string; input: string; truncated: boolean; attempt: number; dissent: number; findings: number; judged: string[] };
       const accepted: Candidate[] = [];
@@ -313,8 +314,10 @@ if (positionals[0] === 'watch') {
           const report = read<WalkReport>(join(directory, 'report.json'));
           const scene = report?.steps.find(s => s.turn === depth);
           if (!scene || written.status !== 0) { record({ event: 'gold_write_failed', scenario, depth, attempt, code: written.code || report?.error || 'probe_failed', model: writer }); return { writer, failed: true as const }; }
-          // The council on the new scene alone: the prefix is gold already.
+          // The council on the new scene alone: the prefix was agreed already. What the judges pointed at in the
+          // prefix goes to the ledger of those nodes, and every node of the prefix has been read once more.
           const verdict = await judgeScene(directory, depth, judges, minutes, writer, { scenario, mode: 'gold' });
+          noteLater(tree, pathIds, verdict.listed, verdict.checksByJudge, depth, writer); noteSeen(tree, pathIds);
           record({ event: 'gold_attempt', scenario, depth, attempt, repair: !!task.repair, accepted: verdict.accepted, against: verdict.against.length, verdict: verdict.row.verdict, dissent: verdict.dissent, findings: verdict.row.findings, confirmed: verdict.row.confirmed, disputed: verdict.row.disputed, truncated: scene.truncated, model: writer });
           console.log(JSON.stringify({ event: 'gold_attempt', scenario, model: writer, depth, attempt, repair: !!task.repair, accepted: verdict.accepted, against: verdict.against.length, verdict: verdict.row.verdict, dissent: verdict.dissent, findings: verdict.row.findings, confirmed: verdict.row.confirmed, disputed: verdict.row.disputed }));
           return { writer, failed: false as const, scene, verdict, task };
@@ -338,7 +341,7 @@ if (positionals[0] === 'watch') {
       accepted.sort((a, b) => a.dissent - b.dissent || a.findings - b.findings || authored(a.writer) - authored(b.writer) || writers.indexOf(a.writer) - writers.indexOf(b.writer));
       for (const [index, candidate] of accepted.entries()) {
         const id = addNode(tree, { parent, depth, step, input: candidate.input, text: candidate.text, author: candidate.writer, attempts: candidate.attempt,
-          approved: { at: new Date().toISOString(), judges: candidate.judged, dissent: candidate.dissent }, read: false });
+          approved: { at: new Date().toISOString(), judges: candidate.judged, dissent: candidate.dissent }, read: false, status: 'candidate' });
         record({ event: 'gold_node', scenario, depth, id, attempts: candidate.attempt, trunk: index === 0, model: candidate.writer });
       }
       save();
@@ -372,6 +375,10 @@ if (positionals[0] === 'watch') {
     await Promise.all(judges.map(judge => probe('walk-judge.ts', ['--report', directory, '--label', judge, '--minutes', minutes, '--audit-story'], modelEnv(judge), 'gold', { scenario, mode: 'gold-audit', judge })));
     const issues = judges.flatMap(judge => { try { return (JSON.parse(readFileSync(join(directory, storyAuditFileName(judge)), 'utf8')) as StoryAuditFile).issues.map(issue => ({ judge, ...issue })); } catch { return []; } });
     writeFileSync(join(directory, 'issues.json'), JSON.stringify({ scenario, scenes: chain.length, judges, issues }, null, 2));
+    const at = new Date().toISOString();
+    for (const issue of issues) (tree.nodes[chain[issue.scene - 1]].reviews ??= []).push({ kind: 'audit', at, by: issue.judge, issue: issue.kind, quote: issue.quote, note: issue.note });
+    const paths = goldPaths(root, scenario, pack);
+    saveGold(paths.tree, tree); writeFileSync(paths.story, renderGold(tree, walk));
     const byScene: Record<number, number> = {};
     for (const issue of issues) byScene[issue.scene] = (byScene[issue.scene] ?? 0) + 1;
     const line = { event: 'gold_audit', scenario, out: directory, scenes: chain.length, issues: issues.length, contradictions: issues.filter(issue => issue.kind === 'contradiction').length,
@@ -388,9 +395,10 @@ if (positionals[0] === 'watch') {
   for (const scenario of scenarios) {
     const walk = walks[scenario];
     const tree = loadGold(goldPaths(root, scenario, pack).tree, scenario, walk.seed);
-    const ids = values.nodes ? values.nodes.split(',').filter(Boolean) : trunk(tree, walk.steps);
+    const ids = values.nodes ? values.nodes.split(',').filter(Boolean) : Object.keys(tree.nodes);
     if (!ids.length) throw new Error('No nodes to recheck; grow a trunk with eval walk-gold');
-    const rows: { id: string; depth: number; author: string; again: boolean; verdict: PanelRow['verdict']; dissent: number; findings: number; confirmed: number; disputed: number }[] = [];
+    const paths = goldPaths(root, scenario, pack);
+    const rows: { id: string; depth: number; author: string; again: boolean; against: string[]; verdict: PanelRow['verdict']; dissent: number; findings: number; confirmed: number; disputed: number }[] = [];
     for (const id of ids) {
       const node = tree.nodes[id];
       if (!node) throw new Error('Unknown gold node');
@@ -399,8 +407,12 @@ if (positionals[0] === 'watch') {
       const report: WalkReport = { scenario, model: node.author, provider: 'gold', startedAt: new Date().toISOString(), seed: walk.seed, authors: walk.authors,
         steps: pathOf(tree, id).map(({ id: _id, ...s }) => ({ ...s, truncated: false, ms: 0 })), compactions: [] };
       writeFileSync(join(directory, 'report.json'), JSON.stringify(report, null, 2));
-      const { row, dissent, accepted } = await judgeScene(directory, node.depth, judges, minutes, node.author, { scenario, mode: 'recheck' });
-      rows.push({ id, depth: node.depth, author: node.author, again: accepted, verdict: row.verdict, dissent, findings: row.findings, confirmed: row.confirmed, disputed: row.disputed });
+      const { row, dissent, accepted, against, listed, checksByJudge } = await judgeScene(directory, node.depth, judges, minutes, node.author, { scenario, mode: 'recheck' });
+      const prefixIds = pathOf(tree, node.parent).map(s => s.id);
+      noteLater(tree, prefixIds, listed, checksByJudge, node.depth, node.author); noteSeen(tree, prefixIds);
+      (node.reviews ??= []).push({ kind: 'recheck', at: new Date().toISOString(), agreed: accepted, against });
+      saveGold(paths.tree, tree); writeFileSync(paths.story, renderGold(tree, walk));
+      rows.push({ id, depth: node.depth, author: node.author, again: accepted, against, verdict: row.verdict, dissent, findings: row.findings, confirmed: row.confirmed, disputed: row.disputed });
       const line = { event: 'node_rechecked', scenario, id, depth: node.depth, again: accepted, verdict: row.verdict, dissent, findings: row.findings, confirmed: row.confirmed, disputed: row.disputed, model: node.author };
       record(line); console.log(JSON.stringify(line));
     }
@@ -409,6 +421,21 @@ if (positionals[0] === 'watch') {
     const line = { event: 'gold_recheck', scenario, out: join(out, scenario), nodes: rows.length, again: summary.again, failed: rows.filter(r => !r.again).map(r => r.id) };
     record(line); console.log(JSON.stringify(line));
   }
+} else if (positionals[0] === 'gold-promote') {
+  // A candidate becomes gold by its ledger: --rechecks agreed rechecks, --exposures deeper scenes judged over it with
+  // no later finding that stood, and nothing from the audit. Prints who was promoted and the ledger's numbers.
+  const rule = { rechecks: Number(values.rechecks), exposures: Number(values.exposures) };
+  if (!Number.isInteger(rule.rechecks) || rule.rechecks < 1 || !Number.isInteger(rule.exposures) || rule.exposures < 0) throw new Error('Use: eval gold-promote --scenarios <walk> [--pack directory] [--rechecks n] [--exposures n]');
+  for (const scenario of scenarios) {
+    const paths = goldPaths(root, scenario, pack);
+    const tree = loadGold(paths.tree, scenario, walks[scenario].seed);
+    const promoted = promote(tree, rule);
+    saveGold(paths.tree, tree); writeFileSync(paths.story, renderGold(tree, walks[scenario]));
+    const line = { event: 'gold_promoted', scenario, rule, promoted, ...stats(tree), perNode: undefined };
+    record(line); console.log(JSON.stringify(line));
+  }
+} else if (positionals[0] === 'gold-stats') {
+  for (const scenario of scenarios) console.log(JSON.stringify({ event: 'gold_stats', scenario, ...stats(loadGold(goldPaths(root, scenario, pack).tree, scenario, walks[scenario].seed)) }));
 } else if (positionals[0] === 'gold-read') {
   // A person has read these nodes: the tree records it and the rendering stops marking them.
   const ids = (values.nodes ?? '').split(',').filter(Boolean);
@@ -472,7 +499,8 @@ if (positionals[0] === 'watch') {
         const kind = task.step ? 'intervention' as const : 'continue' as const;
         if (!scene || written.status !== 0) { rows.push({ parent: task.parent, depth, kind, verdict: 'unjudged', dissent: 0, findings: 0, confirmed: 0, disputed: 0, accepted: false, truncated: false, error: written.code || report?.error || 'probe_failed', directory }); continue; }
         reports.push({ texts: prefix.map(s => s.text), directory });
-        const { row, dissent, accepted, judged } = await judgeScene(directory, depth, judges, minutes, spec, { scenario, mode: 'nodes' });
+        const { row, dissent, accepted, judged, listed, checksByJudge } = await judgeScene(directory, depth, judges, minutes, spec, { scenario, mode: 'nodes' });
+        noteLater(tree, pathOf(tree, task.parent).map(s => s.id), listed, checksByJudge, depth, spec); noteSeen(tree, pathOf(tree, task.parent).map(s => s.id));
         rows.push({ parent: task.parent, depth, kind, verdict: row.verdict, dissent, findings: row.findings, confirmed: row.confirmed, disputed: row.disputed, accepted, judged, truncated: scene.truncated, directory });
         record({ event: 'node_judged', scenario, depth, kind, verdict: row.verdict, dissent, findings: row.findings, confirmed: row.confirmed, disputed: row.disputed, accepted, model: spec });
         console.log(JSON.stringify({ event: 'node_judged', scenario, model: spec, depth, kind, verdict: row.verdict, dissent, findings: row.findings, confirmed: row.confirmed, disputed: row.disputed, accepted }));
@@ -490,12 +518,13 @@ if (positionals[0] === 'watch') {
         const scene = report?.steps.find(s => s.turn === row.depth);
         if (!scene) continue;
         row.added = addNode(tree, { parent: row.parent, depth: row.depth, step: tasks.find(t => t.parent === row.parent)?.step ?? '', input: scene.input, text: scene.text, author: spec, attempts: 1,
-          approved: { at: new Date().toISOString(), judges: row.judged ?? [], dissent: row.dissent }, read: false });
+          approved: { at: new Date().toISOString(), judges: row.judged ?? [], dissent: row.dissent }, read: false, status: 'candidate' });
         added++;
       }
-      if (added) { saveGold(paths.tree, tree); writeFileSync(paths.story, renderGold(tree, walk)); }
       record({ event: 'gold_grown', scenario, added, nodes: Object.keys(tree.nodes).length });
     }
+    // The ledger is saved whether or not the tree grew.
+    saveGold(paths.tree, tree); writeFileSync(paths.story, renderGold(tree, walk));
   }
   const share = (spec: string) => {
     const decided = scenarios.reduce((sum, scenario) => sum + results[spec][scenario].decided, 0);
