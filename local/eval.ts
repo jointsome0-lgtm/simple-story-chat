@@ -8,7 +8,10 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import type { ReplayReport, ModeReport } from './memory-probe.ts';
-import { loadScenario, packScenarios } from './scenarios.ts';
+import type { WalkReport } from './walk-probe.ts';
+import { loadScenario, packScenarios, loadWalk, packWalks } from './scenarios.ts';
+import { panel, summarize, judgeFileName, council, findings, crossFileName } from './walk-panel.ts';
+import type { JudgeFile, CrossFile, CouncilRow, PanelRow, Vote } from './walk-panel.ts';
 import { channelFor, capsFor, readUsage } from './budget.ts';
 import { BUDGET_PATH } from './model.ts';
 
@@ -18,6 +21,13 @@ type Env = NodeJS.Dict<string>;
 type Cell = { passed: number; total: number; error?: string; failedKeys: string[]; readingMisses?: string[]; scene?: Part; compactionRetries?: number };
 // With --judge: the verdicts on the trap scenes this model wrote after the replay.
 type Part = { passed: number; total: number; error?: string; failedKeys: string[] };
+// A cell of a walk: one model, one walk scenario, with the panel's verdict on every scene and each judge's own counts.
+// `directory` is the probe's own directory, so that a judge can be added to the panel with `eval walk-judge`.
+// The cell's own numbers are the council's (second round); `votes` is the first round's majority, kept for comparison.
+type WalkCell = ReturnType<typeof summarize> & { votes: ReturnType<typeof summarize>; findings: number; confirmed: number; refuted: number; disputed: number;
+  truncated: number; error?: string; compactionRetries?: number; directory?: string;
+  judges: Record<string, { consistent: number; inconsistent: number; errors: number; error?: string; checks?: number; confirmed?: number; crossError?: string }>;
+  rows: (CouncilRow & { votes: PanelRow['votes'] })[] };
 
 const HOSTS = {
   openrouter: { baseUrl: 'https://openrouter.ai/api/v1', key: 'OPENROUTER_API_KEY' },
@@ -36,18 +46,21 @@ const record = (event: object) => { mkdirSync(join(root, 'logs'), { recursive: t
 process.umask(0o077);
 const { values, positionals } = parseArgs({ allowPositionals: true, options: { model: { type: 'string' }, models: { type: 'string' },
   scenarios: { type: 'string' }, pack: { type: 'string' }, out: { type: 'string' }, resume: { type: 'string' }, mode: { type: 'string' },
-  judge: { type: 'string' } } });
+  judge: { type: 'string' }, judges: { type: 'string' }, minutes: { type: 'string' }, cross: { type: 'boolean', default: false } } });
 // --pack names a directory of scenarios kept outside the repository, so the one who improves the prompts never reads
 // them. Its scenarios replace the built-in ones; every pack scenario names its authors.
 const pack = values.pack ? resolve(values.pack) : undefined;
-const scenarios = values.scenarios?.split(',') ?? (pack ? packScenarios(pack) : ['battle', 'chess', 'dance']);
+// `walk` and `walk-judge` take walk scenarios, which have their own files and loader.
+const walking = positionals[0] === 'walk' || positionals[0] === 'walk-judge';
+const scenarios = values.scenarios?.split(',') ?? (pack ? (walking ? packWalks(pack) : packScenarios(pack)) : walking ? ['lighthouse'] : ['battle', 'chess', 'dance']);
 // --mode replays one memory mode, for a cheap look at a single failure.
 if (values.mode !== undefined && !ALL_MODES.includes(values.mode as 'plain')) throw new Error('Unknown memory mode');
 const MODES = values.mode ? [values.mode as typeof ALL_MODES[number]] : ALL_MODES;
 if (!scenarios.length) throw new Error('Unknown synthetic scenario');
 // The loader throws on a name that is neither built in nor in the pack.
-const fixtures = Object.fromEntries(await Promise.all(scenarios.map(async name => [name, await loadScenario(name, pack)] as const)));
-const checks = Object.fromEntries(scenarios.map(name => [name, fixtures[name].checks]));
+const fixtures = Object.fromEntries(walking ? [] : await Promise.all(scenarios.map(async name => [name, await loadScenario(name, pack)] as const)));
+const walks = Object.fromEntries(walking ? await Promise.all(scenarios.map(async name => [name, await loadWalk(name, pack)] as const)) : []);
+const checks = Object.fromEntries(scenarios.map(name => [name, fixtures[name]?.checks ?? []]));
 const packArgs = pack ? ['--pack', pack] : [];
 let keys: Env = {};
 try { keys = parseEnv(readFileSync(join(root, '.env.eval'), 'utf8')); }
@@ -78,7 +91,7 @@ function modelEnv(spec: string): Env {
 }
 
 // Runs a probe and returns its exit code, its directory and its last failure code. Probes print metadata only.
-function probe(script: string, args: string[], env: Env, label: string, tags: { scenario: string; mode?: string }) {
+function probe(script: string, args: string[], env: Env, label: string, tags: { scenario: string; mode?: string; judge?: string }) {
   const inherited = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('SIMPLE_CHAT_')));
   const child = spawn(process.execPath, [join(root, 'local', script), ...args],
     { cwd: mkdtempSync(join(tmpdir(), 'simple-chat-eval-cwd-')), env: { ...inherited, ...Object.fromEntries(Object.entries(env).filter(([, value]) => value !== undefined)) }, stdio: ['ignore', 'pipe', 'inherit'] });
@@ -157,20 +170,21 @@ async function replay(spec: string): Promise<Record<string, Record<string, Cell>
 
 if (positionals[0] === 'watch') {
   // A live table of the current run: the last event of every model, scenario and mode, and today's counters.
-  const label = (e: { event?: string; code?: string; passed?: number; total?: number; turn?: number; afterTurn?: number }, waits: number) =>
+  const label = (e: { event?: string; code?: string; passed?: number; total?: number; turn?: number; afterTurn?: number; confirmed?: number; findings?: number }, waits: number) =>
     e.event === 'mode_complete' ? `память ${e.passed}/${e.total}` : e.event === 'judged' ? `сцены ${e.passed}/${e.total}`
       : e.event === 'trap_scene' || e.event === 'trap_judged' ? 'сцены-ловушки' : e.event === 'deferred_or_failed' || e.event === 'failed' ? `сбой: ${e.code}`
       : e.event === 'yielded' ? `ждёт (${e.code}) ×${waits}` : e.event === 'compacted' || e.event === 'compaction' ? `сжатие после сцены ${e.afterTurn}`
-        : e.event === 'scene' ? `сцена ${e.turn}` : e.event === 'complete' ? 'записано' : 'идёт';
+        : e.event === 'scene' ? `сцена ${e.turn}` : e.event === 'scene_judged' ? `судья: сцена ${e.turn}` : e.event === 'scene_crossed' ? `консилиум: сцена ${e.turn}`
+        : e.event === 'crossed' ? `консилиум: ${e.confirmed} из ${e.findings}` : e.event === 'complete' ? 'записано' : 'идёт';
   for (;;) {
     let lines: string[] = [];
     try { lines = readFileSync(EVENTS, 'utf8').trim().split('\n'); } catch { /* no run yet */ }
-    const events = lines.map(line => JSON.parse(line) as { at: string; event: string; model?: string; scenario?: string; mode?: string; score?: object });
+    const events = lines.map(line => JSON.parse(line) as { at: string; event: string; model?: string; scenario?: string; mode?: string; judge?: string; score?: object });
     const run = events.slice(events.findLastIndex(e => e.event === 'run_started') + 1);
     const rows = new Map<string, { last: typeof run[number]; waits: number }>();
     for (const e of run) {
       if (!e.model || !e.scenario || e.event === 'model_request') continue;
-      const key = `${e.model}  ${e.scenario}  ${e.mode ?? 'write'}`;
+      const key = `${e.model}  ${e.scenario}  ${e.mode ?? 'write'}${e.judge ? ` ${e.judge}` : ''}`;
       rows.set(key, { last: e, waits: (rows.get(key)?.waits ?? 0) + (e.event === 'yielded' ? 1 : 0) });
     }
     const done = run.findLast(e => e.event === 'eval');
@@ -203,6 +217,104 @@ if (positionals[0] === 'watch') {
   // Judges the trap scenes of a finished replay again, to compare judges or question wordings on the same scenes.
   if (!values.judge || !values.resume || !values.mode) throw new Error('Use: eval judge --judge <host>:<id> --resume directory --mode plain|sgr');
   await probe('scene-judge.ts', ['--report', values.resume, '--mode', values.mode], modelEnv(values.judge), values.judge, { scenario: 'judge', mode: values.mode });
+} else if (positionals[0] === 'walk-judge') {
+  // One more judge over a finished walk, for a panel that grew or a judge that failed. Its file lands next to the report.
+  if (!values.judge || !values.resume) throw new Error('Use: eval walk-judge --judge <host>:<id> --resume directory [--minutes 1..180] [--cross]');
+  await probe('walk-judge.ts', ['--report', values.resume, '--label', values.judge, ...(values.minutes ? ['--minutes', values.minutes] : []), ...(values.cross ? ['--cross'] : [])], modelEnv(values.judge), values.judge, { scenario: 'walk-judge', mode: values.cross ? 'walk-cross' : 'walk-judge' });
+} else if (positionals[0] === 'walk') {
+  // The walk: every model writes each walk scenario itself, one scene per step, and every judge of the panel reads every
+  // scene. The number is the share of scenes the panel's majority found consistent, for the worst model.
+  const models = (values.models ?? '').split(',').filter(Boolean);
+  const judges = (values.judges ?? '').split(',').filter(Boolean);
+  const minutes = values.minutes ?? '60';
+  if (!models.length || !judges.length || new Set(judges).size !== judges.length || !/^\d{1,3}$/.test(minutes)) throw new Error('Use: eval walk --models <host>:<id>,... --judges <host>:<id>,... [--scenarios a,b] [--pack directory] [--minutes 1..180] [--out file]');
+  record({ event: 'run_started', models, scenarios, judges });
+  // Every model walks every scenario, models in parallel, each on its own provider limits.
+  const walked = Object.fromEntries(await Promise.all(models.map(async spec => {
+    const env = modelEnv(spec);
+    const runs: Record<string, { directory: string; code: string; report: WalkReport | null }> = {};
+    for (const scenario of scenarios) {
+      const run = await probe('walk-probe.ts', ['--scenario', scenario, '--minutes', minutes, ...packArgs], env, spec, { scenario, mode: 'walk' });
+      let report: WalkReport | null = null;
+      try { report = JSON.parse(readFileSync(join(run.directory, 'report.json'), 'utf8')); } catch { /* counted as failed below */ }
+      runs[scenario] = { directory: run.directory, code: run.code, report };
+    }
+    return [spec, runs] as const;
+  })));
+  // Every judge reads every walk that has scenes, judges in parallel and each judge's walks one after another. An
+  // unfinished walk is judged on the scenes it has; the scenes it lacks count against the model.
+  const files: Record<string, Record<string, Record<string, JudgeFile | null>>> = {};
+  await Promise.all(judges.map(async judgeSpec => {
+    const env = modelEnv(judgeSpec);
+    for (const spec of models) for (const scenario of scenarios) {
+      const { directory, report } = walked[spec][scenario];
+      let file: JudgeFile | null = null;
+      if (report?.steps.length) {
+        const judged = await probe('walk-judge.ts', ['--report', directory, '--label', judgeSpec, '--minutes', minutes], env, spec, { scenario, mode: 'walk-judge', judge: judgeSpec });
+        try { file = JSON.parse(readFileSync(join(directory, judgeFileName(judgeSpec)), 'utf8')); } catch { /* no verdicts */ }
+        if (file && judged.status !== 0) file.error ??= judged.code || 'probe_failed';
+      }
+      ((files[spec] ??= {})[scenario] ??= {})[judgeSpec] = file;
+    }
+  }));
+  // The council's second round: every finding of the first round goes to every judge, once all first-round files of a
+  // walk exist. A walk nobody found anything in needs no second round.
+  const crossed: Record<string, Record<string, Record<string, CrossFile | null>>> = {};
+  await Promise.all(judges.map(async judgeSpec => {
+    const env = modelEnv(judgeSpec);
+    for (const spec of models) for (const scenario of scenarios) {
+      const { directory, report } = walked[spec][scenario];
+      let file: CrossFile | null = null;
+      const listed = Object.values(files[spec]?.[scenario] ?? {}).some(f => f?.verdicts.some(v => v.contradictions.length));
+      if (report?.steps.length && listed) {
+        const run = await probe('walk-judge.ts', ['--report', directory, '--label', judgeSpec, '--minutes', minutes, '--cross'], env, spec, { scenario, mode: 'walk-cross', judge: judgeSpec });
+        try { file = JSON.parse(readFileSync(join(directory, crossFileName(judgeSpec)), 'utf8')); } catch { /* no checks */ }
+        if (file && run.status !== 0) file.error ??= run.code || 'probe_failed';
+      }
+      ((crossed[spec] ??= {})[scenario] ??= {})[judgeSpec] = file;
+    }
+  }));
+  const cells: Record<string, Record<string, WalkCell>> = {};
+  for (const spec of models) {
+    cells[spec] = {};
+    for (const scenario of scenarios) {
+      const { directory, code, report } = walked[spec][scenario];
+      const verdicts = files[spec]?.[scenario] ?? {};
+      const checks = crossed[spec]?.[scenario] ?? {};
+      const byJudge = Object.fromEntries(judges.map(judge => [judge, verdicts[judge]?.verdicts ?? []]));
+      const votes = panel(walks[scenario].steps.length, byJudge);
+      const rows = council(walks[scenario].steps.length, byJudge, Object.fromEntries(judges.map(judge => [judge, checks[judge]?.checks ?? []])))
+        .map((row, i) => ({ ...row, votes: votes[i].votes }));
+      const count = (file: JudgeFile | null, vote: Vote) => file?.verdicts.filter(v => v.verdict === vote).length ?? 0;
+      const sum = (key: 'findings' | 'confirmed' | 'refuted' | 'disputed') => rows.reduce((total, row) => total + row[key], 0);
+      cells[spec][scenario] = { ...summarize(rows), votes: summarize(votes), findings: sum('findings'), confirmed: sum('confirmed'), refuted: sum('refuted'), disputed: sum('disputed'),
+        truncated: report?.steps.filter(step => step.truncated).length ?? 0,
+        ...(report?.completedAt ? {} : { error: report?.error ?? (code || 'probe_failed') }),
+        ...(report?.compactionRetries ? { compactionRetries: report.compactionRetries } : {}), ...(directory ? { directory } : {}),
+        judges: Object.fromEntries(judges.map(judge => {
+          const file = verdicts[judge] ?? null;
+          const cross = checks[judge] ?? null;
+          return [judge, { consistent: count(file, 'consistent'), inconsistent: count(file, 'inconsistent'), errors: rows.length - count(file, 'consistent') - count(file, 'inconsistent'),
+            ...(file && !file.error ? {} : { error: file?.error ?? 'no_verdicts' }),
+            ...(cross ? { checks: cross.checks.length, confirmed: cross.checks.filter(c => c.confirmed).length, ...(cross.error ? { crossError: cross.error } : {}) } : {}) }];
+        })), rows };
+    }
+  }
+  // The worst model decides, as in the replay; a scene the panel split on or could not judge is not consistent.
+  const rate = (spec: string) => scenarios.reduce((sum, scenario) => sum + cells[spec][scenario].consistent, 0) / scenarios.reduce((sum, scenario) => sum + cells[spec][scenario].total, 0);
+  // `votes` is the same number from the first round alone, for a look at what the council changed.
+  const voteRate = (spec: string) => scenarios.reduce((sum, scenario) => sum + cells[spec][scenario].votes.consistent, 0) / scenarios.reduce((sum, scenario) => sum + cells[spec][scenario].total, 0);
+  const score = { walk: Math.min(...models.map(rate)), votes: Math.min(...models.map(voteRate)) };
+  const brief = (spec: string) => Object.fromEntries(scenarios.map(scenario => {
+    const { consistent, split, inconsistent, unjudged, total, firstInconsistent, findings, confirmed, error, votes } = cells[spec][scenario];
+    return [scenario, { consistent, split, inconsistent, unjudged, total, firstInconsistent, findings, confirmed, votes: votes.consistent, error }];
+  }));
+  const summary = { at: new Date().toISOString(), kind: 'walk', scenarios, ...(pack ? { pack: true } : {}), authors: Object.fromEntries(scenarios.map(name => [name, walks[name].authors])),
+    judges, minutes: Number(minutes), score, models: Object.fromEntries(models.map(spec => [spec, { walk: rate(spec), votes: voteRate(spec), cells: cells[spec] }])) };
+  const out = resolve(values.out ?? join(mkdtempSync(join(tmpdir(), 'simple-chat-eval-')), 'walk.json'));
+  writeFileSync(out, JSON.stringify(summary, null, 2));
+  record({ event: 'eval', out, score });
+  console.log(JSON.stringify({ event: 'eval', out, score, models: Object.fromEntries(models.map(spec => [spec, { walk: rate(spec), cells: brief(spec) }])) }));
 } else if (positionals[0] === 'write') {
   if (!values.model || (values.resume && scenarios.length !== 1)) throw new Error('Use: eval write --model <host>:<id> [--scenarios a,b] [--scenarios a --resume directory]');
   await write(values.model);

@@ -54,6 +54,8 @@ Opus agents are started at `max` reasoning effort, always; GPT-6 sessions at `hi
 7. Compare with the baseline. The edit is accepted if `score` or `sceneScore` grew by more than the noise (see below), the other measure did not fall, and no model of the main group fell. Commit an accepted edit as a separate commit in the working branch; revert a rejected edit with `git checkout -- <file>`.
 8. Record the step in `docs/improve-log.md`: date, hypothesis, what was changed, numbers before and after per model, decision. Record rejected hypotheses too: they save runs for the next executor.
 
+The walk (`npm run eval -- walk`, described in `docs/model-providers.md`) is the second measure: the model writes a story from a seed on its own, with the bot's continue signal or the author's intervention at each step, and a panel of judge models reads every scene for contradictions with what came before. Its `score.walk` is the share of scenes the panel found consistent, for the worst model. It is compared the same way as `sceneScore`, and it needs several walks per side: the story differs from run to run.
+
 ## Noise
 
 Memory is generated at temperature 0.2, and OpenAI generates at its own default temperature, so two runs of the same code give different numbers. The spread on `battle` was measured on 18 September (entry in the log): for `gpt-5.4-mini` up to three questions out of eight between runs, for Gemma one question, Ministral is stable. Therefore, on one scenario compare at least three runs per side. An improvement smaller than this spread does not count as an improvement; check a disputed result with a repeated run, do not declare it a win.

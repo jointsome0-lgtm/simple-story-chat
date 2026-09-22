@@ -131,6 +131,16 @@ With `--judge openai:gpt-5.4`, after the memory questions each model writes one 
 
 The final `score` for each mode equals the share of correct answers of the worst model: a change cannot win because of the most obedient model. An unfinished mode gives zero answers, and its error code stays in the report. The full report with the failed keys is written to `eval.json`; the path is printed in the last line. The checks are fixed, without a judge model; they do not measure the quality of the prose.
 
+### The walk: `npm run eval -- walk`
+
+The replay measures what a model keeps of a story someone else wrote. The walk measures whether a model keeps its own story straight: from a seed it writes every scene itself, one per step of `examples/walk/<name>.json` (in a pack, `<name>/walk.json`). An empty step is the bot's own continue signal; any other step is the author's intervention, given to the narrator as a player's message. Memory is compacted after scene 7 and every fourth scene after it, as in the replay. Afterwards a panel of judges reads each scene against the seed and everything before it and lists the contradictions it finds, with quotes (`local/walk-judge.ts`). A listed contradiction is an inconsistent verdict whatever the flag says; an inconsistent flag without one is an abstention. Then the council: every contradiction anyone listed goes back to every judge, with the same seed, history and scene, to confirm or refute by the text; the judge that listed it checks it too and may take it back. A finding stands when more judges confirm it than refute it, and a scene with a standing finding is inconsistent; a scene whose findings are all refuted is consistent although a judge had flagged it; a tie on a finding, with nothing confirmed, is `split`; a scene nobody voted on is `unjudged`. `score.walk` is the share of scenes the council found consistent, for the worst model, and `score.votes` is the same share from the first round's majority alone. An unfinished walk is judged on the scenes it has, and the scenes it lacks count against the model.
+
+```
+npm run eval -- walk --models claude:claude-haiku-4-5-20251001,claude:claude-opus-5-5 --judges claude:claude-opus-5-5,claude:claude-fable-5-1,codex:gpt-6-astra --out walk.json
+```
+
+Every judge's verdicts with their quotes stay next to the probe's report (`walk-judge-<judge>.json`, the council's checks in `walk-cross-<judge>.json`; the report directory is in the cell), and `npm run eval -- walk-judge --judge <model> --resume <directory>` adds a judge to a finished walk (`--cross` for its second round). Several judges are the point: one judge misreads a quote or has a taste of its own, and a model under test may also sit on the panel, so no scene is judged by one model alone. A walk is not a fixed set of questions: the model writes a different story each run, so compare walks the way the noise section of `docs/improve-loop.md` compares scenes, several runs per side.
+
 ## Daily limits of hosted APIs
 
 Every `openai-compatible` request goes through `local/budget.ts`. The counter is in `eval-usage.sqlite` in the project root and is shared by parallel probes; it holds the day in UTC, the channel name, the number of requests and tokens, without text. `npm run eval -- usage` shows today's spending and the limits in effect.
