@@ -4,11 +4,12 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Step, Verdict, CouncilRow, Contradiction } from './walk-panel.ts';
+import type { Step, Verdict, Check, Contradiction } from './walk-panel.ts';
 
 export type GoldNode = {
   parent: string | null; depth: number; step: string; input: string; text: string; author: string; attempts: number;
-  // Who sat on the council that accepted the node, how many dissented in the first round, and whether a person has read it.
+  // Who sat on the council that agreed to the node, how many had listed findings in the first round before taking
+  // them back, and whether a person has read it.
   approved: { at: string; judges: string[]; dissent: number }; read: boolean;
 };
 export type Rejected = { parent: string | null; step: string; text: string; author: string; at: string; findings: (Contradiction & { by: string })[] };
@@ -57,12 +58,16 @@ export function addNode(tree: GoldTree, node: GoldNode): string {
   return id;
 }
 
-// The gate to gold is stricter than the eval's majority: at most one dissenter in the first round, and after the
-// council's second round nothing confirmed and nothing disputed. A disputed finding means "no" for gold.
-export function gate(votes: Record<string, Verdict['verdict']>, row: Pick<CouncilRow, 'confirmed' | 'disputed'>): boolean {
-  const cast = Object.values(votes).filter(v => v !== 'error');
-  const dissent = cast.filter(v => v === 'inconsistent').length;
-  return cast.length >= 2 && dissent <= 1 && row.confirmed === 0 && row.disputed === 0;
+// The gate to gold is the agreement of every judge, not the eval's majority. Without findings a judge agrees by its
+// first-round verdict; with findings the second round decides, and a judge agrees when it confirms none of them, its
+// own included, which it may take back. A judge with no verdict, or with no checks when there were findings, does not
+// agree: nobody is overruled and nobody is presumed.
+export function agree(votes: Record<string, Verdict['verdict']>, checksByJudge: Record<string, Check[]>, turn: number, found: number): { agreed: boolean; against: string[] } {
+  const against = Object.keys(votes).filter(judge => {
+    const checks = (checksByJudge[judge] ?? []).filter(c => c.turn === turn);
+    return found ? checks.length !== found || checks.some(c => c.confirmed) : votes[judge] !== 'consistent';
+  });
+  return { agreed: Object.keys(votes).length > 0 && !against.length, against };
 }
 
 // The tasks of a per-step eval: from every trunk node (and the seed), the trunk's next step. A model is compared with
@@ -92,6 +97,6 @@ export function renderGold(tree: GoldTree, walk: { seed: string; steps: string[]
   const branches = Object.keys(tree.nodes).filter(id => !chain.includes(id)).sort((a, b) => tree.nodes[a].depth - tree.nodes[b].depth || a.localeCompare(b));
   const rejected = tree.rejected.length ? `\n## Отклонённые попытки: ${tree.rejected.length}\n\n${tree.rejected.map(r => `- от ${r.parent ?? 'сида'}, шаг: ${r.step || 'знак продолжать'}, ${r.author}, ${r.at}: ${r.findings.length} находок, из них ${r.findings.map(f => f.kind).join(', ')}`).join('\n')}\n` : '';
   return `# ${title} · золотое дерево\n\nУзлов: ${Object.keys(tree.nodes).length}, ствол: ${chain.length} из ${walk.steps.length} шагов, ветвей: ${branches.length}. Сид: sha256 ${tree.seedHash.slice(0, 12)}.\n`
-    + `Сцену принимает совет судей (не больше одного против в первом круге, ничего подтверждённого и спорного во втором); «не вычитано» — человек её ещё не читал.\n\n`
+    + `Сцена входит в дерево, только когда с ней согласны все судьи: без находок в первом круге или после того, как во втором круге никто не подтвердил ни одной находки, своей в том числе; «не вычитано» — человек её ещё не читал.\n\n`
     + `## Сид\n\n${walk.seed}\n\n## Ствол\n\n${chain.map(heading).join('\n') || '_пусто_\n'}\n## Ветви\n\n${branches.map(heading).join('\n') || '_пока нет_\n'}${rejected}`;
 }

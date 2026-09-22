@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { emptyGold, loadGold, saveGold, pathOf, trunk, addNode, gate, trunkTasks, renderGold, goldPaths } from './walk-gold.ts';
+import { emptyGold, loadGold, saveGold, pathOf, trunk, addNode, agree, trunkTasks, renderGold, goldPaths } from './walk-gold.ts';
 
 const node = (parent: string | null, depth: number, step: string, text: string) => ({ parent, depth, step, input: step || 'Продолжай.', text, author: 'x', attempts: 1,
   approved: { at: 't', judges: ['a', 'b', 'c', 'd'], dissent: 0 }, read: false });
@@ -34,14 +34,22 @@ test('the trunk follows the walk steps, and the per-step tasks continue from the
   assert.deepEqual(trunkTasks(emptyGold('w', 'seed'), steps), [{ parent: null, step: '' }]);
 });
 
-test('the gate to gold allows one dissenter and nothing confirmed or disputed', () => {
+test('the gate to gold is the agreement of every judge, a judge may take back its own finding, nobody is overruled', () => {
   const all = (v: 'consistent' | 'inconsistent' | 'error') => ({ a: v, b: v, c: v, d: v });
-  assert.equal(gate(all('consistent'), { confirmed: 0, disputed: 0 }), true);
-  assert.equal(gate({ ...all('consistent'), d: 'inconsistent' }, { confirmed: 0, disputed: 0 }), true);
-  assert.equal(gate({ ...all('consistent'), c: 'inconsistent', d: 'inconsistent' }, { confirmed: 0, disputed: 0 }), false);
-  assert.equal(gate(all('consistent'), { confirmed: 0, disputed: 1 }), false);
-  assert.equal(gate({ ...all('consistent'), d: 'inconsistent' }, { confirmed: 1, disputed: 0 }), false);
-  assert.equal(gate({ a: 'consistent', b: 'error', c: 'error', d: 'error' }, { confirmed: 0, disputed: 0 }), false);
+  const check = (confirmed: boolean) => [{ turn: 3, finding: 1, confirmed, note: '' }];
+  assert.deepEqual(agree(all('consistent'), {}, 3, 0), { agreed: true, against: [] });
+  assert.deepEqual(agree({ ...all('consistent'), d: 'inconsistent' }, {}, 3, 0), { agreed: false, against: ['d'] });
+  assert.deepEqual(agree({ ...all('consistent'), d: 'error' }, {}, 3, 0), { agreed: false, against: ['d'] });
+  // d listed one finding and takes it back; everyone refutes it: agreed.
+  assert.deepEqual(agree({ ...all('consistent'), d: 'inconsistent' }, { a: check(false), b: check(false), c: check(false), d: check(false) }, 3, 1), { agreed: true, against: [] });
+  // d stands by its finding although three refute it: not gold.
+  assert.deepEqual(agree({ ...all('consistent'), d: 'inconsistent' }, { a: check(false), b: check(false), c: check(false), d: check(true) }, 3, 1), { agreed: false, against: ['d'] });
+  // d takes it back but a confirms it: not gold; c gave no checks: not gold either.
+  assert.deepEqual(agree({ ...all('consistent'), d: 'inconsistent' }, { a: check(true), b: check(false), c: check(false), d: check(false) }, 3, 1).against, ['a']);
+  assert.deepEqual(agree({ ...all('consistent'), d: 'inconsistent' }, { a: check(false), b: check(false), d: check(false) }, 3, 1).against, ['c']);
+  // Checks of another scene do not count for this one.
+  assert.deepEqual(agree(all('consistent'), { a: [{ turn: 2, finding: 1, confirmed: false, note: '' }], b: check(false), c: check(false), d: check(false) }, 3, 1).against, ['a']);
+  assert.equal(agree({}, {}, 1, 0).agreed, false);
 });
 
 test('the rendering lists the trunk in order, then the branches, and marks what nobody has read', () => {

@@ -12,7 +12,7 @@ import type { WalkReport } from './walk-probe.ts';
 import { loadScenario, packScenarios, loadWalk, packWalks } from './scenarios.ts';
 import { panel, summarize, judgeFileName, council, findings, crossFileName, auditFileName, storyAuditFileName } from './walk-panel.ts';
 import type { JudgeFile, CrossFile, CouncilRow, PanelRow, Vote, AuditFile, StoryAuditFile, Contradiction } from './walk-panel.ts';
-import { loadGold, saveGold, pathOf, trunk, addNode, gate, renderGold, goldPaths, trunkTasks } from './walk-gold.ts';
+import { loadGold, saveGold, pathOf, trunk, addNode, agree, renderGold, goldPaths, trunkTasks } from './walk-gold.ts';
 import type { Task } from './walk-gold.ts';
 import type { TaskFile } from './walk-step.ts';
 import { channelFor, capsFor, readUsage } from './budget.ts';
@@ -122,8 +122,8 @@ function probe(script: string, args: string[], env: Env, label: string, tags: { 
 }
 
 // The council on one scene of a walk-shaped report whose earlier scenes are gold already: every judge's first round,
-// the second round where anything was listed, the gate, and the findings that stand against the text (confirmed or
-// unsettled; a refuted one is forgotten). `label` names the model that wrote the scene.
+// the second round where anything was listed, the agreement of every judge that is the gate to gold, and the findings
+// that stand against the text (anything one judge still confirms, or nobody checked). `label` names the writer.
 async function judgeScene(directory: string, depth: number, judges: string[], minutes: string, label: string, tags: { scenario: string; mode: string }) {
   const read = <T,>(file: string): T | null => { try { return JSON.parse(readFileSync(file, 'utf8')) as T; } catch { return null; } };
   const files: Record<string, JudgeFile | null> = {};
@@ -140,12 +140,14 @@ async function judgeScene(directory: string, depth: number, judges: string[], mi
   }));
   const votes = panel(depth, byJudge)[depth - 1].votes;
   const row = council(depth, byJudge, Object.fromEntries(judges.map(judge => [judge, checks[judge]?.checks ?? []])))[depth - 1];
+  const checksByJudge = Object.fromEntries(judges.map(judge => [judge, checks[judge]?.checks ?? []]));
   const standing: (Contradiction & { by: string })[] = listed.filter(f => {
-    const cast = Object.values(checks).flatMap(c => c?.checks ?? []).filter(c => c.turn === depth && c.finding === f.number);
-    return cast.filter(c => c.confirmed).length >= cast.filter(c => !c.confirmed).length;
+    const cast = Object.values(checksByJudge).flat().filter(c => c.turn === depth && c.finding === f.number);
+    return !cast.length || cast.some(c => c.confirmed);
   }).map(({ turn: _turn, number: _number, ...f }) => f);
   const dissent = Object.values(votes).filter(v => v === 'inconsistent').length;
-  return { votes, row, standing, dissent, accepted: gate(votes, row), judged: judges.filter(judge => votes[judge] !== 'error') };
+  const { agreed, against } = agree(votes, checksByJudge, depth, listed.length);
+  return { votes, row, standing, dissent, accepted: agreed, against, judged: judges.filter(judge => votes[judge] !== 'error') };
 }
 
 async function write(spec: string) {
@@ -264,11 +266,11 @@ if (positionals[0] === 'watch') {
   }
 } else if (positionals[0] === 'walk-gold') {
   // The gold tree grows one depth at a time: every writer continues the accepted trunk with the walk's next step, the
-  // council reads each new scene, and the gate is stricter than the eval's: at most one dissenter in the first round,
-  // nothing confirmed and nothing disputed in the second. Of the accepted scenes one becomes the trunk (the fewest
-  // dissenters and findings, then the writer with the fewest trunk nodes so far, so the trunk is not one author's) and
-  // the others are branches at once. A rejected scene is kept with its findings and its writer tries again, every
-  // second round as a repair of its last rejected text. The tree is saved after every depth.
+  // council reads each new scene, and the gate is the agreement of every judge: no finding that anyone still stands
+  // by after the second round. Of the agreed scenes one becomes the trunk (the fewest first-round dissenters and
+  // findings, then the writer with the fewest trunk nodes so far, so the trunk is not one author's) and the others are
+  // branches at once. A rejected scene is kept with its findings and its writer tries again, every second round as a
+  // repair of its last rejected text. The tree is saved after every depth.
   const writers = (values.writers ?? values.model ?? '').split(',').filter(Boolean);
   const judges = (values.judges ?? '').split(',').filter(Boolean);
   const minutes = values.minutes ?? '60';
@@ -313,8 +315,8 @@ if (positionals[0] === 'watch') {
           if (!scene || written.status !== 0) { record({ event: 'gold_write_failed', scenario, depth, attempt, code: written.code || report?.error || 'probe_failed', model: writer }); return { writer, failed: true as const }; }
           // The council on the new scene alone: the prefix is gold already.
           const verdict = await judgeScene(directory, depth, judges, minutes, writer, { scenario, mode: 'gold' });
-          record({ event: 'gold_attempt', scenario, depth, attempt, repair: !!task.repair, accepted: verdict.accepted, verdict: verdict.row.verdict, dissent: verdict.dissent, findings: verdict.row.findings, confirmed: verdict.row.confirmed, disputed: verdict.row.disputed, truncated: scene.truncated, model: writer });
-          console.log(JSON.stringify({ event: 'gold_attempt', scenario, model: writer, depth, attempt, repair: !!task.repair, accepted: verdict.accepted, verdict: verdict.row.verdict, dissent: verdict.dissent, findings: verdict.row.findings, confirmed: verdict.row.confirmed, disputed: verdict.row.disputed }));
+          record({ event: 'gold_attempt', scenario, depth, attempt, repair: !!task.repair, accepted: verdict.accepted, against: verdict.against.length, verdict: verdict.row.verdict, dissent: verdict.dissent, findings: verdict.row.findings, confirmed: verdict.row.confirmed, disputed: verdict.row.disputed, truncated: scene.truncated, model: writer });
+          console.log(JSON.stringify({ event: 'gold_attempt', scenario, model: writer, depth, attempt, repair: !!task.repair, accepted: verdict.accepted, against: verdict.against.length, verdict: verdict.row.verdict, dissent: verdict.dissent, findings: verdict.row.findings, confirmed: verdict.row.confirmed, disputed: verdict.row.disputed }));
           return { writer, failed: false as const, scene, verdict, task };
         }));
         pending = [];
@@ -378,7 +380,7 @@ if (positionals[0] === 'watch') {
   }
 } else if (positionals[0] === 'gold-recheck') {
   // The gate's own noise: every trunk node (or the nodes named with --nodes) is judged again by the council, fresh,
-  // and the report says how many pass the gate again. The tree is not changed.
+  // and the report says how many the judges agree to again. The tree is not changed.
   const judges = (values.judges ?? '').split(',').filter(Boolean);
   const minutes = values.minutes ?? '60';
   if (judges.length < 2 || new Set(judges).size !== judges.length || !/^\d{1,3}$/.test(minutes)) throw new Error('Use: eval gold-recheck --judges <host>:<id>,... [--scenarios a] [--pack directory] [--nodes g1,g2] [--minutes 1..180] [--out directory]');
