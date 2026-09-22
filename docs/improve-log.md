@@ -2,6 +2,62 @@
 
 Every step of the loop from [improve-loop.md](improve-loop.md): date, hypothesis, change, numbers before and after per model, decision. Rejected hypotheses are recorded too. New entries go on top.
 
+## 2026-09-22 · Fable 5.1 · the walk: the model writes its own story, and a council of four reads every scene
+
+Not a step of the loop. The owner redirected the day's task: what matters is consistency, not details, and the eval
+should judge every step, not only the final answers. The subject gets a seed and writes the world bit by bit; at each
+step it receives either the bot's own "continue" signal or an outside intervention (an event the author states) and goes
+on; afterwards a council of the strongest models judges every stretch, because one judge may be biased. Built as
+`npm run eval -- walk` (commit `c535515`): `local/walk-probe.ts` writes the walk with the production narrator prompt and
+the replay's compaction schedule (after scenes 7, 11 and 15, four scenes kept), `local/walk-judge.ts` is one judge,
+`local/walk-panel.ts` holds the pure parts with tests. Two rounds: each judge reads a scene against the seed and every
+scene before it and lists contradictions with quotes (a listed contradiction is an inconsistent verdict whatever the
+flag says; an inconsistent flag without one abstains); then every finding goes back to every judge, the finder
+included, to confirm or refute by the text, and a finding stands when more judges confirm than refute it. A scene with a
+standing finding is inconsistent, a scene whose findings were all refuted is consistent, a tie is `split`. `score.walk`
+is the share of consistent scenes for the worst model; `score.votes` the same from the first round's majority alone. The
+judge sees the story a reader sees, not the subject's memory; the memory increments stay in the report for a later
+layer. Described in `docs/model-providers.md` ("The walk").
+
+Calibration on `lighthouse` (`examples/walk/lighthouse.json`, public: a storm night on a lighthouse cut off by the
+tide; seed and 16 steps by Fable, six interventions at steps 3, 6, 9, 12, 14 and 16, the last a dawn summary). Panel:
+`claude:claude-opus-5-5`, `claude:claude-fable-5-1`, `codex:gpt-6-astra`, `codex:gpt-6-sol` (Sol 6 answers through
+the Codex subscription since CLI 0.156.0; the paid API is not used). One walk per model, late evening:
+
+| Model | Council: consistent / split / inconsistent | First round, consistent per judge (Opus, Fable, Astra, Sol) | Findings: listed / confirmed / refuted / disputed | Kinds |
+| --- | --- | --- | --- | --- |
+| `claude:claude-haiku-4-5-20251001` | 5 / 0 / 11 of 16 | 4, 6, 5, 4 | 115 / 83 / 18 / 14 | number 41, time 38, item 11, knowledge 11, place 7, other 7 |
+| `claude:claude-opus-5-5` | 7 / 1 / 8 of 16 | 8, 8, 5, 11 | 39 / 26 / 8 / 5 | time 20, knowledge 7, place 5, number 4, other 3 |
+
+What the numbers say:
+
+- Both are far below the ceiling, and the frontier is at the level the owner asked for: Opus 5.5 keeps 7 scenes of 16
+  consistent, Haiku 5. The gap between them is small in scenes and large in findings (26 confirmed against 83) and in
+  kind. Haiku breaks the seed's numbers in scene 1 already (110 steps for 112; the lagging clock read as running ahead),
+  fits fifteen scenes into 42 minutes of story time, and ends with a dawn dated the same day and "47 litres burned, 41
+  left" from a 14-litre tank and a 20-litre canister. Opus keeps the clock (20:30 to 23:21, dawn on the next date); its
+  standing findings are bookkeeping: a log entry whose interval ends before the event it records, "ten minutes at the
+  window" that the previous scene's timing does not allow, a fuel gauge that stands at the neck after the canister had
+  brought it to just above half, and two things a character says that earlier scenes contradict.
+- The council moves single verdicts both ways. On Haiku's scenes 5, 13 and 15 one judge's lone finding was refuted by
+  the other three, and the scene stands as consistent. On Opus's scene 11 all four judges had flagged the same clock
+  reading in the first round, and on re-reading three of the four refuted it (time passes within a scene; only Opus the
+  judge insisted). Opus's scene 16 is split 2:2 on whether «полшестого» is a rounding of 05:40. In scene counts the
+  council and the first-round majority agree here (5/16 and 7/16); the second round changed which findings stand, not
+  the score.
+- The judges differ in strictness on the stronger story: Sol 6 the most lenient (11 consistent of 16 on Opus), Astra
+  the strictest (5), Opus and Fable between (8 and 8); on Haiku all four are close (4 to 6). The first round was
+  unanimous on 11 of Haiku's scenes and 8 of Opus's. A contradiction found by three judges is three findings, so the
+  finding counts overstate distinct errors by up to the size of the panel.
+- Time: Haiku's walk 14 minutes, Opus's 8 (earlier in the evening Opus ran at about 90 seconds per scene under load);
+  the four judges' two rounds about 15 minutes per walk, in parallel. One incident: the first Opus walk died at its
+  first compaction with `ENOSPC`, the root filesystem was full for a few minutes; the probe saves its report after
+  every step, a cut-off report is not resumable, and the walk was rerun.
+- Open: the spread between two walks of the same model (the story differs each run; `docs/improve-loop.md` asks for
+  several walks per side), and whether a memory change shows on the walk at all. A hidden walk, `quince`, was written
+  by an Opus agent straight into the holdout (16 steps, 7 interventions at steps 3, 6, 8, 10, 12, 14 and 16, three of
+  them the first scene after a compaction); this session has not read it. Nothing was pushed to Hugging Face.
+
 ## 2026-09-22 · Fable 5.1 · three scenarios built to separate, and a scale of models on them
 
 Not a step of the loop: nothing in `local/` that shapes prompts or memory was changed, and no decision on a prompt
