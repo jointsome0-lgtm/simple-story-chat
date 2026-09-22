@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createChat } from './telegram.ts';
+import { createChat, multipartBody } from './telegram.ts';
+import type { TelegramPayload } from './telegram.ts';
 
 // A Telegram that answers when told to, so a test can hold a request in flight the way the network does.
 function pending() {
@@ -53,4 +54,38 @@ test('a failure pushes the next draft away instead of retrying at once', async (
   onText(' два');
   await settle();
   assert.equal(failures.length, 1);
+});
+
+// A picture under a scene: what the chat asks the Bot API for, and how the bytes are packed for it.
+test('a picture is sent as a photo under the message it belongs to, and the line above it is removed by id', async () => {
+  const calls: { method: string; payload: TelegramPayload | undefined }[] = [];
+  const api = (async (method: string, payload?: TelegramPayload) => {
+    calls.push({ method, payload });
+    return { message_id: calls.length };
+  }) as unknown as Parameters<typeof createChat>[0];
+  const one = createChat(api, 7);
+  const bytes = new Uint8Array([137, 80, 78, 71, 1, 2, 3]);
+  await one.photo(bytes, 42);
+  await one.remove(11);
+  assert.deepEqual(calls.map(call => call.method), ['sendPhoto', 'deleteMessage']);
+  assert.deepEqual(calls[0]!.payload, { chat_id: 7, photo: bytes, reply_parameters: { message_id: 42, allow_sending_without_reply: true } });
+  assert.deepEqual(calls[1]!.payload, { chat_id: 7, message_id: 11 });
+  // A scene whose own message is not known still gets its picture, just not as a reply to it.
+  await one.photo(bytes, undefined);
+  assert.deepEqual(calls[2]!.payload, { chat_id: 7, photo: bytes });
+});
+
+test('an upload carries the bytes and every other field beside them, as the Bot API reads them', () => {
+  const bytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 255]);
+  const body = multipartBody({ chat_id: 7, photo: bytes, reply_parameters: { message_id: 42 } }, 'BOUNDARY');
+  const text = body.toString('latin1');
+  assert.ok(text.startsWith('--BOUNDARY\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n7\r\n'));
+  // The file part is the only one with a name and a type, and the bytes are copied, not re-encoded.
+  assert.ok(text.includes('Content-Disposition: form-data; name="photo"; filename="scene.png"\r\nContent-Type: image/png\r\n\r\n'));
+  assert.ok(body.includes(bytes), 'the picture travels byte for byte');
+  // An object field is JSON, which is how reply_parameters and reply_markup are sent beside a file.
+  assert.ok(text.includes('name="reply_parameters"\r\n\r\n{"message_id":42}\r\n'));
+  assert.ok(text.endsWith('--BOUNDARY--\r\n'));
+  // A field nobody set adds no part at all.
+  assert.ok(!multipartBody({ chat_id: 7, photo: bytes, caption: undefined }, 'B').toString('latin1').includes('caption'));
 });
