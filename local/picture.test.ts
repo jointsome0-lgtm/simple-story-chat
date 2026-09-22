@@ -13,6 +13,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createBot } from './bot.ts';
 import type { Update } from './bot.ts';
 import { imageConfig } from './config.ts';
+import { createScheduler } from './scheduler.ts';
 import type { ImageConfig } from './config.ts';
 import { defaultWorkflow } from './image-batch.ts';
 import type { Graph } from './image-batch.ts';
@@ -129,7 +130,17 @@ const kindOf = (request: ModelRequest) => {
   return !properties ? 'scene' : 'characters' in properties ? 'sheet' : 'frame';
 };
 
-function fixture(t: TestContext, options: { comfy?: string; users?: string[]; style?: string; offsetMs?: number; sheetReply?: object } = {}) {
+type Options = {
+  comfy?: string; users?: string[]; style?: string; offsetMs?: number; sheetReply?: object;
+  // How many scene deliveries to hold, so that a test can send the next message while one is still in flight;
+  // `scheduler` puts the real queue between the bot and the model, which is where a picture takes its slot;
+  // `compactAtTokens` and `keepScenes` are what makes the bot prepare the next compaction while the reader reads.
+  holdFinal?: number; scheduler?: boolean; compactAtTokens?: number; keepScenes?: number;
+  // What the model says the scene cost. Above `compactAtTokens` the bot prepares the next compaction while the
+  // reader reads; the numbers are the model's own and say nothing about the size of these synthetic scenes.
+  usage?: { inputTokens: number; outputTokens: number };
+};
+function fixture(t: TestContext, options: Options = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'simple-chat-picture-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const store = new Store(join(directory, 'story.sqlite'));
@@ -142,21 +153,36 @@ function fixture(t: TestContext, options: { comfy?: string; users?: string[]; st
   const requests: ModelRequest[] = [];
   const deleted: number[] = [];
   let sequence = 0;
+  const holding: (() => void)[] = [];
+  let heldFinals = 0;
   const api = async (method: string, fields?: TelegramPayload) => {
     const payload = fields as Payload;
     if (method === 'deleteMessage') deleted.push(payload.message_id);
     sent.push({ method, payload });
-    return { message_id: sent.length };
+    const id = sent.length;
+    // A scene that is still being delivered: the story is already committed and its job lock clear, so the reader
+    // can answer here, which is the moment the bot has to get right.
+    if (method === 'sendRichMessage' && heldFinals++ < (options.holdFinal ?? 0)) await new Promise<void>(go => holding.push(go));
+    return { message_id: id };
   };
-  const provider: Provider = { async generate(request, controls?: GenerateControls) {
+  const model: Provider = { async generate(request, controls?: GenerateControls) {
     requests.push(request);
     const kind = kindOf(request);
     if (kind === 'sheet') return { text: JSON.stringify(options.sheetReply ?? SHEET), finishReason: 'stop' };
     if (kind === 'frame') return { text: JSON.stringify(FRAME), finishReason: 'stop' };
-    await controls!.onText!('2026-08-02 20:00\n\n');
+    // A compaction prepared ahead asks with no stream and no schema; its answer is not a memory and is dropped by
+    // the check, which is all this test needs from it — that it took the model's slot on the way.
+    await controls?.onText?.('2026-08-02 20:00\n\n');
     return { text: `2026-08-02 20:00\n\nСинтетическая сцена ${requests.length}.`, finishReason: 'stop',
-      usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 } };
+      usage: { ...(options.usage ?? { inputTokens: 100, outputTokens: 50 }),
+        totalTokens: (options.usage?.inputTokens ?? 100) + (options.usage?.outputTokens ?? 50) } };
   } };
+  // The queue the bot really runs on, when a test needs the slot itself: one slot, as one llama-server has.
+  const scheduler = options.scheduler
+    ? createScheduler(model as { generate: Provider['generate'] }, { pollMs: 2, quietMs: 0, log: (event, code, details) => rows.push({ event, ...(code === undefined ? {} : { code }), ...safeErrorDetails(details) }) })
+    : undefined;
+  if (scheduler) t.after(() => scheduler.close());
+  const provider: Provider = scheduler ? scheduler.foreground : model;
 
   const images: ImageConfig | undefined = options.comfy === undefined ? undefined : {
     url: options.comfy, workflow, checkpoint: 'synthetic.safetensors', style: options.style,
@@ -168,6 +194,7 @@ function fixture(t: TestContext, options: { comfy?: string; users?: string[]; st
     { store, provider, pollMs: 2, now: () => Date.now() + (options.offsetMs ?? 0) });
   const bot = createBot({ store, api, provider, illustrator, allowedUsers: new Set(['1', '2']), maxOutputTokens: 4096,
     render, scenePrefix, sceneKeyboard, model: 'test-model', ownerId: '1',
+    compactAtTokens: options.compactAtTokens, keepScenes: options.keepScenes,
     log: (event, code, details) => { rows.push({ event, ...(code === undefined ? {} : { code }), ...safeErrorDetails(details) }); } });
 
   const message = (text: string, user = 1): Update => ({ update_id: ++sequence,
@@ -181,7 +208,9 @@ function fixture(t: TestContext, options: { comfy?: string; users?: string[]; st
     const seedId = Object.keys(store.read(user).seeds)[0];
     await bot.handle(click(`start:${seedId}`, user));
   }
-  return { bot, store, sent, rows, requests, deleted, provider, message, click, start, workflow, directory };
+  // Lets every held delivery through, the way Telegram answers when the network comes back.
+  const release = () => { for (const go of holding.splice(0)) go(); };
+  return { bot, store, sent, rows, requests, deleted, provider, message, click, start, release, workflow, directory };
 }
 
 // Waits for something the fake server or the bot does on its own; the whole file runs in milliseconds.
@@ -350,6 +379,46 @@ test('the reader\'s next message ends the picture of the scene they have read pa
   assert.equal(f.requests.filter(request => kindOf(request) === 'scene').length, 2);
   const state = f.store.read('1');
   assert.equal(Object.keys(state.stories[state.active!.storyId].nodes).length, 2);
+});
+
+// The bot prepares the next compaction while the reader reads (local/bot.ts `prepareNext`), on a turn of its own
+// that takes the reader's slot and leaves it marked for nobody (local/scheduler.ts `start`). The description
+// continues the scene cached in that slot and runs there or nowhere, so it has to go first.
+test('the description keeps the reader\'s own slot, and the compaction prepared ahead follows it', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root, scheduler: true, keepScenes: 1, compactAtTokens: 30000, usage: { inputTokens: 29000, outputTokens: 2000 } });
+  await f.start();
+  await f.bot.idle();
+  // The second scene is the one that gives the preparation something to extract, and its picture is the one that
+  // used to end as `skipped` every time, on a card that was free.
+  await f.bot.handle(f.message('Осмотреться'));
+  await f.bot.idle();
+  await f.bot.idle();
+
+  const pictures = f.rows.filter(row => row.event === 'picture');
+  assert.equal(pictures.length, 2);
+  for (const row of pictures) assert.equal(row.outcome, 'ready');
+  assert.equal(photos(f.sent).length, 2);
+  assert.ok(f.rows.some(row => row.event === 'compaction_prepare_started'), 'the work ahead still runs');
+  assert.ok(!f.rows.some(row => row.event === 'background_unavailable'), 'and it no longer takes the slot first');
+});
+
+// Pictures off, and the bot as it was: a reader who answers while the scene they asked for is still being
+// delivered must not cancel the turn that wrote it. Its job lock is already clear, so their message starts a new
+// turn beside it, and the old one still has a status message to close and the next compaction to start.
+test('a message sent while the scene is on its way leaves the turn that wrote it alone', async t => {
+  const f = fixture(t, { holdFinal: 1, compactAtTokens: 30000, usage: { inputTokens: 29000, outputTokens: 2000 } });
+  await f.start();
+  await until(() => f.sent.some(one => one.method === 'sendRichMessage'), 'the first scene to reach delivery');
+  await f.bot.handle(f.message('Осмотреться'));
+  f.release();
+  await f.bot.idle();
+  await f.bot.idle();
+  assert.equal(f.rows.filter(row => row.event === 'scene_saved_and_sent').length, 2);
+  assert.equal(f.rows.filter(row => row.event === 'compaction_prepare_started').length, 2,
+    'each turn prepared the next compaction; neither was cancelled by the other');
 });
 
 test('a sheet the model answers with nothing still describes the frame, and the people keep their own look', async t => {

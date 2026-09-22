@@ -55,7 +55,12 @@ type Plan = {
 };
 // One reader's turn, for as long as it can still be cancelled. What it leaves behind — a picture being stopped on
 // the other card — outlives the entry and is awaited through `inFlight` instead.
-type Running = { controller: AbortController };
+//
+// `picture` is the stop of that picture alone. The turn's own controller feeds it — a /cancel or a shutdown ends
+// both — but the reader's next message ends only the picture, because by then the turn itself is over in every way
+// that matters: the scene is committed, the job lock is clear, and what is left of it is a message being delivered
+// and the work it starts afterwards for the reader's next turn.
+type Running = { controller: AbortController; picture: AbortController };
 // Library IDs are a prefix and a sequence number, as id() in lib/library.ts creates them.
 const ID = { seed: /^s\d+$/, story: /^h\d+$/, branch: /^b\d+$/, checkpoint: /^c\d+$/ };
 // A refusal in the user's language. The key stays on the error, so it can still be shown in another language.
@@ -258,8 +263,8 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
 
   // Runs the turn and, when the scene has been delivered, says what its picture would be drawn from. The picture
   // itself is not made here: it must not hold the model slot or the GPU of this turn (see `handle`).
-  async function generate(userId: string, chat: Chat, job: Job, controller: AbortController, releaseGpu: (() => void) | undefined):
-  Promise<PictureRequest | undefined> {
+  async function generate(userId: string, chat: Chat, job: Job, controller: AbortController, releaseGpu: (() => void) | undefined,
+    pictureSignal: AbortSignal): Promise<PictureRequest | undefined> {
     const log = logFor(userId);
     let prepare = false;
     let picture: PictureRequest | undefined;
@@ -370,9 +375,13 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         log('scene_saved_and_sent');
         // The wait for the picture starts here, at the scene the reader is now reading. A scene that was not
         // delivered is not illustrated: the photo would hang under nothing.
-        if (illustrator?.enabledFor(userId) && !controller.signal.aborted) {
+        if (illustrator?.enabledFor(userId) && !pictureSignal.aborted) {
           picture = { userId, chat, storyId: ref.storyId, nodeId: ref.nodeId, branchId: ref.branchId,
-            sceneMessageId: sent.message_id, sceneAt: Date.now(), signal: controller.signal, log, hold: () => gpu?.acquire() };
+            sceneMessageId: sent.message_id, sceneAt: Date.now(), signal: pictureSignal, log, hold: () => gpu?.acquire(),
+            // Work prepared ahead opens a turn of its own that takes this reader's slot and leaves it marked for
+            // nobody (local/scheduler.ts `start`), and the description continues the scene that is cached there. So
+            // it waits for the description to be over — which is before the drawing, not after it.
+            afterDescribe: () => { if (prepare && !controller.signal.aborted) prepareNext(userId); } };
         }
         if (node.truncated) await safeSend(chat, { text: notices().truncated }, log);
       } catch (error) {
@@ -391,7 +400,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     } finally {
       await progress.finish();
       releaseGpu?.();
-      if (prepare && !controller.signal.aborted) prepareNext(userId);
+      if (prepare && !controller.signal.aborted && !picture) prepareNext(userId);
     }
     return picture;
   }
@@ -487,16 +496,20 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
           return;
         }
         const controller = new AbortController();
-        const entry: Running = { controller };
+        const picture = new AbortController();
+        controller.signal.addEventListener('abort', () => picture.abort(), { once: true });
+        const entry: Running = { controller, picture };
         const earlier = running.get(userId);
         running.set(userId, entry);
         // This reader's own previous turn is over — the job lock saw to that — but its picture may still be on the
         // other card. They have answered, so that picture belongs to a scene they have read past: it is dropped,
-        // and the card is told to stop drawing it (local/picture.ts, local/image-batch.ts `stopJob`).
-        earlier?.controller.abort();
+        // and the card is told to stop drawing it (local/picture.ts, local/image-batch.ts `stopJob`). Only the
+        // picture: the turn behind it may still be delivering a message, and its own controller stands for a scene
+        // the reader was never given, which this is not.
+        earlier?.picture.abort();
         // The picture is made after the turn's model work is over and its GPU hold released: the second call takes
         // a slot again, and the drawing takes none at all, so neither may sit inside the turn.
-        const task: Promise<unknown> = generate(userId, chat, plan.job, controller, releaseGpu)
+        const task: Promise<unknown> = generate(userId, chat, plan.job, controller, releaseGpu, picture.signal)
           .then(picture => picture && illustrator?.illustrate(picture))
           // The picture step reports its own outcomes; this is the net under it, so that one throw cannot take the
           // shutdown of the bot (`idle`) with it.
