@@ -10,6 +10,9 @@ if [[ -n "${SIMPLE_CHAT_SSH_PUBLIC_KEY:-}" ]]; then
   [[ "$SIMPLE_CHAT_SSH_PUBLIC_KEY" = ssh-ed25519\ * && "$SIMPLE_CHAT_SSH_PUBLIC_KEY" != *$'\n'* ]] || exit 1
   mkdir -p /root/.ssh
   chmod 700 /root/.ssh
+  # Some hosts write this file as the host's own user (2026-09-22, instance 52079556: owner `vastai_kaalia`), and sshd's
+  # StrictModes then refuses every key in it, the account key included. A file that root does not own is replaced.
+  [[ ! -e /root/.ssh/authorized_keys || -O /root/.ssh/authorized_keys ]] || rm -f /root/.ssh/authorized_keys
   touch /root/.ssh/authorized_keys
   grep -Fqx -- "$SIMPLE_CHAT_SSH_PUBLIC_KEY" /root/.ssh/authorized_keys || printf '%s\n' "$SIMPLE_CHAT_SSH_PUBLIC_KEY" >> /root/.ssh/authorized_keys
   chmod 600 /root/.ssh/authorized_keys
