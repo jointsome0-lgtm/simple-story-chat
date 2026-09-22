@@ -18,6 +18,7 @@ import { createProgress } from './progress.ts';
 import { renderCompaction } from './compact-view.ts';
 import type { CompactionStatus } from './compact-view.ts';
 import type { GpuController } from './gpu.ts';
+import type { Illustrator, PictureRequest } from './picture.ts';
 import type { Log } from './model-error.ts';
 import { errorCode, member, safeErrorDetails } from './model-error.ts';
 import type { GenerationResult, Provider } from './model.ts';
@@ -28,6 +29,9 @@ import type { Messages } from './text.ts';
 
 export type BotOptions = {
   store: Store; api: TelegramApi; provider: Provider; gpu?: GpuController;
+  // Pictures under the scenes (local/picture.ts), for the readers its own configuration names. Absent by default:
+  // without it nothing is described and nothing is drawn.
+  illustrator?: Illustrator;
   readSeedFile?: (document: TelegramDocument) => Promise<string>;
   render: (state: Library, route: string, details: RenderDetails) => Screen;
   scenePrefix?: (stats: ContextStats | null, provenance: ModelInfo | undefined, lang?: unknown) => string;
@@ -49,8 +53,9 @@ type Plan = {
   screen?: Screen; cancel?: boolean; gpuAction?: string; modelStatus?: boolean;
   savedText?: { text: string; modelInfo: SceneNode['modelInfo'] }; job?: Job;
 };
-// `promise` is set as soon as the entry is registered.
-type Running = { controller: AbortController; promise?: Promise<void> };
+// One reader's turn, for as long as it can still be cancelled. What it leaves behind — a picture being stopped on
+// the other card — outlives the entry and is awaited through `inFlight` instead.
+type Running = { controller: AbortController };
 // Library IDs are a prefix and a sequence number, as id() in lib/library.ts creates them.
 const ID = { seed: /^s\d+$/, story: /^h\d+$/, branch: /^b\d+$/, checkpoint: /^c\d+$/ };
 // A refusal in the user's language. The key stays on the error, so it can still be shown in another language.
@@ -59,9 +64,12 @@ const refuse = (t: Messages, key: keyof Messages['errors']) => new UserError(t.e
 const errorText = (t: Messages, error: UserError) =>
   (error.key !== undefined && Object.hasOwn(t.errors, error.key) ? t.errors[error.key as keyof Messages['errors']] : error.message);
 
-export function createBot({ store, api, provider, gpu, readSeedFile, render: renderUi, scenePrefix = () => '', sceneKeyboard, allowedUsers, ownerId = '', maxOutputTokens,
+export function createBot({ store, api, provider, gpu, illustrator, readSeedFile, render: renderUi, scenePrefix = () => '', sceneKeyboard, allowedUsers, ownerId = '', maxOutputTokens,
   contextTokens = 65536, compactAtTokens = 54000, keepScenes = 4, memoryMode = 'plain', repairCoverage = false, model = 'unknown', providerName = 'claude-code', log = () => {} }: BotOptions) {
   const running = new Map<string, Running>();
+  // Every turn's work, whether or not its entry is still the reader's current one: a replaced turn is aborted, and
+  // what it is unwinding (the picture it had on the other card) still has to finish before the bot may stop.
+  const inFlight = new Set<Promise<unknown>>();
   const prepared = new Map<string, Prepared>();
   const preparing = new Set<Promise<void>>();
   const preparedFor = (userId: string) => prepared.get(userId) ?? prepared.set(userId, createPrepared()).get(userId)!;
@@ -248,9 +256,13 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
     preparing.add(done);
   }
 
-  async function generate(userId: string, chat: Chat, job: Job, controller: AbortController, releaseGpu: (() => void) | undefined) {
+  // Runs the turn and, when the scene has been delivered, says what its picture would be drawn from. The picture
+  // itself is not made here: it must not hold the model slot or the GPU of this turn (see `handle`).
+  async function generate(userId: string, chat: Chat, job: Job, controller: AbortController, releaseGpu: (() => void) | undefined):
+  Promise<PictureRequest | undefined> {
     const log = logFor(userId);
     let prepare = false;
+    let picture: PictureRequest | undefined;
     // The language at the start of the job serves its status message and the labels it stores; later messages read it again.
     const language = store.read(userId).language;
     const labels = texts(language).labels;
@@ -356,6 +368,12 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
           if (saved) { saved.delivery = 'sent'; saved.messageId = sent.message_id; }
         });
         log('scene_saved_and_sent');
+        // The wait for the picture starts here, at the scene the reader is now reading. A scene that was not
+        // delivered is not illustrated: the photo would hang under nothing.
+        if (illustrator?.enabledFor(userId) && !controller.signal.aborted) {
+          picture = { userId, chat, storyId: ref.storyId, nodeId: ref.nodeId, branchId: ref.branchId,
+            sceneMessageId: sent.message_id, sceneAt: Date.now(), signal: controller.signal, log, hold: () => gpu?.acquire() };
+        }
         if (node.truncated) await safeSend(chat, { text: notices().truncated }, log);
       } catch (error) {
         log('scene_delivery_unconfirmed', errorCode(error));
@@ -375,6 +393,7 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
       releaseGpu?.();
       if (prepare && !controller.signal.aborted) prepareNext(userId);
     }
+    return picture;
   }
 
   return {
@@ -469,13 +488,27 @@ export function createBot({ store, api, provider, gpu, readSeedFile, render: ren
         }
         const controller = new AbortController();
         const entry: Running = { controller };
+        const earlier = running.get(userId);
         running.set(userId, entry);
-        entry.promise = generate(userId, chat, plan.job, controller, releaseGpu).finally(() => {
-          if (running.get(userId) === entry) running.delete(userId);
-        });
+        // This reader's own previous turn is over — the job lock saw to that — but its picture may still be on the
+        // other card. They have answered, so that picture belongs to a scene they have read past: it is dropped,
+        // and the card is told to stop drawing it (local/picture.ts, local/image-batch.ts `stopJob`).
+        earlier?.controller.abort();
+        // The picture is made after the turn's model work is over and its GPU hold released: the second call takes
+        // a slot again, and the drawing takes none at all, so neither may sit inside the turn.
+        const task: Promise<unknown> = generate(userId, chat, plan.job, controller, releaseGpu)
+          .then(picture => picture && illustrator?.illustrate(picture))
+          // The picture step reports its own outcomes; this is the net under it, so that one throw cannot take the
+          // shutdown of the bot (`idle`) with it.
+          .catch(error => log('picture_step_failed', errorCode(error)))
+          .finally(() => {
+            if (running.get(userId) === entry) running.delete(userId);
+            inFlight.delete(task);
+          });
+        inFlight.add(task);
       }
     },
-    async idle() { await Promise.all([...[...running.values()].map(entry => entry.promise), ...preparing]); },
+    async idle() { await Promise.all([...inFlight, ...preparing]); },
     async stop() {
       for (const entry of prepared.values()) entry.stop();
       for (const entry of running.values()) entry.controller.abort();
