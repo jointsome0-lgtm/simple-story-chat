@@ -4,7 +4,7 @@
 // the model that wrote the scenes. Several judges write separate files next to the report; local/eval.ts combines
 // them. Prints counts and codes only.
 import { parseArgs } from 'node:util';
-import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as wait } from 'node:timers/promises';
@@ -13,18 +13,21 @@ import { createModel } from './model.ts';
 import type { ModelRequest } from './model.ts';
 import { safeErrorDetails } from './model-error.ts';
 import type { WalkReport } from './walk-probe.ts';
-import { judgeRequest, parseVerdict, judgeFileName, findings, crossRequest, parseCross, crossFileName } from './walk-panel.ts';
-import type { JudgeFile, CrossFile, Verdict } from './walk-panel.ts';
+import { judgeRequest, parseVerdict, judgeFileName, findings, crossRequest, parseCross, crossFileName, seedAuditRequest, parseIssues, auditFileName } from './walk-panel.ts';
+import type { JudgeFile, CrossFile, Verdict, AuditFile } from './walk-panel.ts';
+import { loadWalk } from './scenarios.ts';
 
 // Codes are read from ModelError or Node errors, which use strings.
 type Failure = { code?: string };
 
 process.umask(0o077);
-const { values } = parseArgs({ options: { report: { type: 'string' }, label: { type: 'string' }, minutes: { type: 'string', default: '90' }, cross: { type: 'boolean', default: false } } });
+const { values } = parseArgs({ options: { report: { type: 'string' }, label: { type: 'string' }, minutes: { type: 'string', default: '90' }, cross: { type: 'boolean', default: false },
+  'audit-seed': { type: 'string' }, pack: { type: 'string' }, out: { type: 'string' } } });
 const minutes = Number(values.minutes);
-if (!values.report || !values.label || !Number.isInteger(minutes) || minutes < 1 || minutes > 180) throw new Error('Use --report directory --label <host>:<id> [--minutes 1..180] [--cross]');
-const directory = resolve(values.report);
-const report: WalkReport = JSON.parse(readFileSync(join(directory, 'report.json'), 'utf8'));
+if ((!values.report && !values['audit-seed']) || !values.label || !Number.isInteger(minutes) || minutes < 1 || minutes > 180) throw new Error('Use --report directory --label <host>:<id> [--minutes 1..180] [--cross], or --audit-seed <walk> --label <host>:<id> --out directory [--pack directory]');
+// With --audit-seed there is no report: the seed of the named walk is read instead, and the file goes to --out.
+const directory = resolve(values.report ?? values.out ?? '.');
+const report: WalkReport = values.report ? JSON.parse(readFileSync(join(directory, 'report.json'), 'utf8')) : { scenario: '', model: '', provider: '', startedAt: '', seed: '', authors: [], steps: [], compactions: [] };
 const config = { ...loadModelConfig(), dbPath: join(tmpdir(), 'simple-chat-direct', 'unused.sqlite') };
 const judge = createModel(config);
 const deadline = AbortSignal.timeout(minutes * 60000);
@@ -47,7 +50,21 @@ const finish = (code: string, file: { error?: string }, save: () => void) => {
 };
 const codeOf = (error: unknown) => deadline.aborted ? 'deadline' : /^[a-z_]{1,40}$/.test((error as Failure).code ?? '') ? (error as Failure).code! : 'probe_failed';
 
-if (!values.cross) {
+if (values['audit-seed']) {
+  // The seed audit: contradictions and ambiguities of the seed itself, before it grows a gold tree.
+  const fixture = await loadWalk(values['audit-seed'], values.pack);
+  mkdirSync(directory, { recursive: true });
+  const path = join(directory, auditFileName(values.label));
+  const file: AuditFile = { judge: values.label, model: config.model, at: new Date().toISOString(), issues: [] };
+  const save = () => writeFileSync(path, JSON.stringify(file, null, 2));
+  progress({ event: 'started', directory, model: config.model, audit: true });
+  try {
+    await judge.check?.({ signal: deadline });
+    const reply = await generate(seedAuditRequest(fixture.seed));
+    file.issues = parseIssues(reply.text); save();
+    progress({ event: 'seed_audited', issues: file.issues.length, contradictions: file.issues.filter(i => i.kind === 'contradiction').length, truncated: reply.finishReason !== 'stop', directory });
+  } catch (error) { finish(codeOf(error), file, save); progress({ event: 'failure_details', ...safeErrorDetails(error) }); }
+} else if (!values.cross) {
   const path = join(directory, judgeFileName(values.label));
   // A rerun keeps the verdicts already given and asks again only where the judge itself had failed.
   const file = read<JudgeFile>(path, { judge: values.label, model: config.model, at: new Date().toISOString(), verdicts: [] });

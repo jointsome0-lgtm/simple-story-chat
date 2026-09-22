@@ -10,8 +10,8 @@ import { setTimeout as wait } from 'node:timers/promises';
 import type { ReplayReport, ModeReport } from './memory-probe.ts';
 import type { WalkReport } from './walk-probe.ts';
 import { loadScenario, packScenarios, loadWalk, packWalks } from './scenarios.ts';
-import { panel, summarize, judgeFileName, council, findings, crossFileName } from './walk-panel.ts';
-import type { JudgeFile, CrossFile, CouncilRow, PanelRow, Vote } from './walk-panel.ts';
+import { panel, summarize, judgeFileName, council, findings, crossFileName, auditFileName } from './walk-panel.ts';
+import type { JudgeFile, CrossFile, CouncilRow, PanelRow, Vote, AuditFile } from './walk-panel.ts';
 import { channelFor, capsFor, readUsage } from './budget.ts';
 import { BUDGET_PATH } from './model.ts';
 
@@ -51,7 +51,7 @@ const { values, positionals } = parseArgs({ allowPositionals: true, options: { m
 // them. Its scenarios replace the built-in ones; every pack scenario names its authors.
 const pack = values.pack ? resolve(values.pack) : undefined;
 // `walk` and `walk-judge` take walk scenarios, which have their own files and loader.
-const walking = positionals[0] === 'walk' || positionals[0] === 'walk-judge';
+const walking = positionals[0] === 'walk' || positionals[0] === 'walk-judge' || positionals[0] === 'seed-audit';
 const scenarios = values.scenarios?.split(',') ?? (pack ? (walking ? packWalks(pack) : packScenarios(pack)) : walking ? ['lighthouse'] : ['battle', 'chess', 'dance']);
 // --mode replays one memory mode, for a cheap look at a single failure.
 if (values.mode !== undefined && !ALL_MODES.includes(values.mode as 'plain')) throw new Error('Unknown memory mode');
@@ -217,6 +217,19 @@ if (positionals[0] === 'watch') {
   // Judges the trap scenes of a finished replay again, to compare judges or question wordings on the same scenes.
   if (!values.judge || !values.resume || !values.mode) throw new Error('Use: eval judge --judge <host>:<id> --resume directory --mode plain|sgr');
   await probe('scene-judge.ts', ['--report', values.resume, '--mode', values.mode], modelEnv(values.judge), values.judge, { scenario: 'judge', mode: values.mode });
+} else if (positionals[0] === 'seed-audit') {
+  // Every judge reads the seed of a walk for contradictions and ambiguities; the merged list is written per scenario.
+  const judges = (values.judges ?? '').split(',').filter(Boolean);
+  if (!judges.length) throw new Error('Use: eval seed-audit --judges <host>:<id>,... [--scenarios a,b] [--pack directory] [--out directory]');
+  const out = resolve(values.out ?? mkdtempSync(join(tmpdir(), 'simple-chat-seed-audit-')));
+  for (const scenario of scenarios) {
+    const directory = join(out, scenario);
+    await Promise.all(judges.map(judge => probe('walk-judge.ts', ['--audit-seed', scenario, '--label', judge, '--out', directory, ...packArgs], modelEnv(judge), judge, { scenario, mode: 'seed-audit' })));
+    const issues = judges.flatMap(judge => { try { return (JSON.parse(readFileSync(join(directory, auditFileName(judge)), 'utf8')) as AuditFile).issues.map(issue => ({ judge, ...issue })); } catch { return []; } });
+    writeFileSync(join(directory, 'issues.json'), JSON.stringify({ scenario, judges, issues }, null, 2));
+    console.log(JSON.stringify({ event: 'seed_audit', scenario, out: directory, issues: issues.length, contradictions: issues.filter(issue => issue.kind === 'contradiction').length,
+      byJudge: Object.fromEntries(judges.map(judge => [judge, issues.filter(issue => issue.judge === judge).length])) }));
+  }
 } else if (positionals[0] === 'walk-judge') {
   // One more judge over a finished walk, for a panel that grew or a judge that failed. Its file lands next to the report.
   if (!values.judge || !values.resume) throw new Error('Use: eval walk-judge --judge <host>:<id> --resume directory [--minutes 1..180] [--cross]');
@@ -301,9 +314,15 @@ if (positionals[0] === 'watch') {
     }
   }
   // The worst model decides, as in the replay; a scene the panel split on or could not judge is not consistent.
-  const rate = (spec: string) => scenarios.reduce((sum, scenario) => sum + cells[spec][scenario].consistent, 0) / scenarios.reduce((sum, scenario) => sum + cells[spec][scenario].total, 0);
+  // A split scene is neither for nor against the model, so it leaves the denominator; a scene nobody judged, or that
+  // was never written, still counts against it.
+  const share = (spec: string, part: (cell: WalkCell) => number) => {
+    const decided = scenarios.reduce((sum, scenario) => sum + cells[spec][scenario].total - cells[spec][scenario].split, 0);
+    return decided ? scenarios.reduce((sum, scenario) => sum + part(cells[spec][scenario]), 0) / decided : 0;
+  };
+  const rate = (spec: string) => share(spec, cell => cell.consistent);
   // `votes` is the same number from the first round alone, for a look at what the council changed.
-  const voteRate = (spec: string) => scenarios.reduce((sum, scenario) => sum + cells[spec][scenario].votes.consistent, 0) / scenarios.reduce((sum, scenario) => sum + cells[spec][scenario].total, 0);
+  const voteRate = (spec: string) => share(spec, cell => cell.votes.consistent);
   const score = { walk: Math.min(...models.map(rate)), votes: Math.min(...models.map(voteRate)) };
   const brief = (spec: string) => Object.fromEntries(scenarios.map(scenario => {
     const { consistent, split, inconsistent, unjudged, total, firstInconsistent, findings, confirmed, error, votes } = cells[spec][scenario];

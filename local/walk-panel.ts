@@ -16,8 +16,8 @@ export const compactsAfter = (turn: number) => turn >= 7 && (turn - 7) % 4 === 0
 export const judgeFileName = (label: string) => `walk-judge-${label.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.json`;
 
 const RULES = `Ты один из судей согласованности интерактивной истории. Тебе даны сид, все предыдущие шаги (на каждом шаге вмешательство автора или знак продолжать, и сцена) и новая сцена с её шагом.
-Найди в новой сцене противоречия с уже установленным: (а) с явными утверждениями сида и предыдущих сцен: числа и количества, предметы и где они находятся, кто где находится, кто жив, ранен, что умеет, кто что знает и с какого момента, время суток и порядок событий, имена и роли, договорённости и запреты; (б) с вмешательством автора на этом шаге: сцена обязана его выполнить, расхождение с его явным условием тоже противоречие.
-Не считай противоречием: развитие событий, если сцена показывает или объясняет переход; новые детали, которые ничему прежнему не противоречат; качество и стиль прозы; то, что сцена о чём-то не упоминает.
+Найди в новой сцене противоречия с уже установленным: (а) с явными утверждениями сида и предыдущих сцен: числа и количества, предметы и где они находятся, кто где находится, кто жив, ранен, что умеет, кто что знает и с какого момента, время суток и порядок событий, имена и роли, договорённости и запреты; (б) с вмешательством автора на этом шаге: сцена обязана его учесть. Если оно выполнимо в установленном мире, сцена его исполняет; если оно опирается на то, чего в мире нет или что противоречит установленному, правильно показать попытку и честный исход, поправку или удивление персонажей, а не исполнить буквально. Противоречие (kind author_step) — только когда сцена вмешательство игнорирует или молча меняет его условие.
+Не считай противоречием: развитие событий, если сцена показывает или объясняет переход; новые детали, которые ничему прежнему не противоречат; честный ответ мира на невыполнимое вмешательство; ошибочные слова персонажа, если сцена показывает, что он ошибается или не знает; качество и стиль прозы; то, что сцена о чём-то не упоминает. Сомнение толкуй в пользу сцены: противоречие должно опираться на явные слова текста, а не на догадку.
 На каждое противоречие приведи короткую цитату из новой сцены (now), короткую цитату из сида, более ранней сцены или шага (before), место этой цитаты (where: «сид», «сцена 3» или «шаг 9») и тип (kind). Если противоречий нет, verdict = consistent и пустой список. Отвечай только JSON по схеме.`;
 
 export function judgeRequest(seed: string, steps: Step[], index: number): ModelRequest {
@@ -136,5 +136,25 @@ export function council(total: number, byJudge: Record<string, Verdict[]>, cross
       verdict: count('confirmed') ? 'inconsistent' : count('disputed') ? 'split' : 'consistent' };
   });
 }
+
+// A seed is audited before it grows anything: an ambiguity in the seed is a false finding later, on every scene.
+export type Issue = { kind: 'contradiction' | 'ambiguity'; quote: string; note: string };
+export type AuditFile = { judge: string; model: string; at: string; issues: Issue[]; error?: string };
+const AUDIT_RULES = `Ты проверяешь сид интерактивной истории: исходное описание мира, из которого модель-рассказчик будет писать сцены, а судьи потом будут искать в сценах противоречия с сидом. Найди в сиде (а) внутренние противоречия: утверждения, которые не могут быть верны одновременно, включая числа, время, места, кто что знает; (б) двусмысленности: места, которые можно прочитать двумя способами так, что судья и рассказчик разойдутся (например, показание часов и реальное время, «сейчас» по каким часам, чей предмет, кто именно знает). Не предлагай улучшений стиля и не придумывай сюжет. На каждую находку приведи короткую точную цитату из сида и одну фразу, в чём проблема. Если сид чист, верни пустой список. Отвечай только JSON по схеме.`;
+export function seedAuditRequest(seed: string): ModelRequest {
+  return { system: AUDIT_RULES, messages: [{ role: 'user', content: `СИД:\n${seed}` }], maxOutputTokens: 8192, purpose: 'memory',
+    outputSchema: { type: 'object', required: ['issues'], additionalProperties: false, properties: { issues: { type: 'array', maxItems: 20, items: { type: 'object',
+      required: ['kind', 'quote', 'note'], additionalProperties: false, properties: { kind: { type: 'string', enum: ['contradiction', 'ambiguity'] },
+        quote: { type: 'string', maxLength: 300 }, note: { type: 'string', maxLength: 400 } } } } } } };
+}
+export function parseIssues(text: string): Issue[] {
+  const trimmed = text.trim();
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
+  const parsed = JSON.parse(fenced ? fenced[1] : trimmed) as { issues?: unknown };
+  if (!Array.isArray(parsed.issues)) throw Object.assign(new Error(), { code: 'invalid_audit' });
+  return (parsed.issues as Partial<Issue>[]).filter(i => i && (i.kind === 'contradiction' || i.kind === 'ambiguity') && typeof i.quote === 'string' && typeof i.note === 'string')
+    .slice(0, 20).map(i => ({ kind: i.kind!, quote: i.quote!.slice(0, 300), note: i.note!.slice(0, 400) }));
+}
+export const auditFileName = (label: string) => `seed-audit-${label.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.json`;
 
 export const crossFileName = (label: string) => `walk-cross-${label.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.json`;

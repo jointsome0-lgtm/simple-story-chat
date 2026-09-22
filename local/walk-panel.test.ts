@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { judgeRequest, parseVerdict, panel, summarize, compactsAfter, judgeFileName, findings, crossRequest, parseCross, council } from './walk-panel.ts';
+import { judgeRequest, parseVerdict, panel, summarize, compactsAfter, judgeFileName, findings, crossRequest, parseCross, council, seedAuditRequest, parseIssues } from './walk-panel.ts';
 
 test('the judge of a scene sees the seed, every earlier step and the new scene, and answers by schema', () => {
   const steps = [{ turn: 1, kind: 'continue' as const, input: 'Продолжай.', text: 'Сцена один.' }, { turn: 2, kind: 'intervention' as const, input: 'Гаснет свет.', text: 'Сцена два.' }];
@@ -64,4 +64,13 @@ test('the council numbers every listed contradiction per scene, asks about each,
   assert.equal(council(2, byJudge, { a: [check(1, false), check(2, false), check(3, false)], b: [check(1, false), check(2, false), check(3, false)] })[1].verdict, 'consistent');
   assert.equal(council(2, byJudge, { a: [check(1, true), check(2, false), check(3, false)], b: [check(1, false), check(2, false), check(3, false)] })[1].verdict, 'split');
   assert.deepEqual(council(2, byJudge, {})[1], { turn: 2, findings: 3, confirmed: 0, refuted: 0, disputed: 3, verdict: 'inconsistent' });
+});
+
+test('the seed audit asks for contradictions and ambiguities with quotes, and drops malformed issues', () => {
+  const request = seedAuditRequest('Сид.\n2026-01-01 10:00\nМир.');
+  assert.ok(request.messages[0].content.startsWith('СИД:\nСид.'));
+  assert.deepEqual(parseIssues('{"issues":[{"kind":"ambiguity","quote":"q","note":"n"},{"kind":"style","quote":"x","note":"y"},{"kind":"contradiction","quote":"a"}]}'),
+    [{ kind: 'ambiguity', quote: 'q', note: 'n' }]);
+  assert.deepEqual(parseIssues('```json\n{"issues":[]}\n```'), []);
+  assert.throws(() => parseIssues('{"nothing":true}'), { code: 'invalid_audit' });
 });
