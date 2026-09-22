@@ -135,18 +135,27 @@ export function gpuConfig(env: Env, provider: string): GpuConfig | undefined {
 //   SIMPLE_CHAT_IMAGE_WAIT_SECONDS=180                        # optional; how long one picture may take
 //
 // Without SIMPLE_CHAT_IMAGE_URL nothing is described and nothing is drawn: no second model call, no status line.
+//
+// The three names of this computer, and one card as the two tunnels name it: a host and a port, with the port the
+// scheme implies when the address leaves it out.
+const LOOPBACK = ['127.0.0.1', 'localhost', '[::1]', '::1'];
+const cardOf = (url: URL) =>
+  `${LOOPBACK.includes(url.hostname) ? '127.0.0.1' : url.hostname}:${url.port || (url.protocol === 'https:' ? '443' : '80')}`;
 export function imageConfig(env: Env, directory: string, allowedUsers: Set<string>, modelUrl: string | undefined): ImageConfig | undefined {
   const raw = env.SIMPLE_CHAT_IMAGE_URL?.trim();
   if (!raw) return undefined;
   let url;
   try { url = new URL(raw); } catch { throw new Error('Set SIMPLE_CHAT_IMAGE_URL to the tunnelled ComfyUI root, such as http://127.0.0.1:8188'); }
-  if (url.protocol !== 'http:' || !['127.0.0.1', '[::1]', 'localhost'].includes(url.hostname)
+  if (url.protocol !== 'http:' || !LOOPBACK.includes(url.hostname)
       || url.pathname !== '/' || url.search || url.hash || url.username || url.password) {
     throw new Error('SIMPLE_CHAT_IMAGE_URL must be a loopback HTTP root: ComfyUI is reached through an ssh tunnel, never published');
   }
   // One card cannot hold both models, and a picture drawn on the language model's card stops the stories while it
-  // draws. The two tunnels are two ports on loopback, so the same origin means the same card.
-  if (modelUrl && url.origin === new URL(modelUrl).origin) {
+  // draws. The two tunnels are two ports on loopback, so the card is the host and the port — and loopback has three
+  // spellings, which is why `localhost:8080` and `[::1]:8080` must not pass as a second card for `127.0.0.1:8080`.
+  let ownCard: string | undefined;
+  try { ownCard = modelUrl ? cardOf(new URL(modelUrl)) : undefined; } catch { ownCard = undefined; }
+  if (ownCard && cardOf(url) === ownCard) {
     throw new Error('SIMPLE_CHAT_IMAGE_URL must be the second card\'s tunnel, not the language model\'s own server');
   }
   const workflow = env.SIMPLE_CHAT_IMAGE_WORKFLOW?.trim();

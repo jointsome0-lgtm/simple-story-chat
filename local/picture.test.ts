@@ -388,6 +388,17 @@ test('the picture configuration is off by default, loopback only, and never the 
   assert.throws(() => imageConfig({ ...on, SIMPLE_CHAT_IMAGE_URL: 'https://comfy.example.com' }, '/nowhere', allowed, undefined), /loopback/);
   assert.throws(() => imageConfig({ ...on, SIMPLE_CHAT_IMAGE_URL: 'http://10.0.0.5:8188' }, '/nowhere', allowed, undefined), /loopback/);
   assert.throws(() => imageConfig(on, '/nowhere', allowed, 'http://127.0.0.1:8188'), /second card/);
+  // One card, three spellings: the language model's own server is the same card however its address writes loopback.
+  for (const own of ['http://127.0.0.1:8080', 'http://localhost:8080', 'http://[::1]:8080']) {
+    for (const pictures of ['http://127.0.0.1:8080', 'http://localhost:8080', 'http://[::1]:8080']) {
+      assert.throws(() => imageConfig({ ...on, SIMPLE_CHAT_IMAGE_URL: pictures }, '/nowhere', allowed, own), /second card/);
+    }
+  }
+  // A second port on the same computer is a second card: that is what the tunnel forwards.
+  assert.ok(imageConfig({ ...on, SIMPLE_CHAT_IMAGE_URL: 'http://localhost:8188' }, '/nowhere', allowed, 'http://127.0.0.1:8080'));
+  // A hosted model is not on this computer at all, and an address that is not one leaves the check with nothing to say.
+  assert.ok(imageConfig(on, '/nowhere', allowed, 'https://api.example.com/v1'));
+  assert.ok(imageConfig(on, '/nowhere', allowed, 'not a url'));
   // A reader who cannot use the bot at all cannot be drawn by it either, and a typo says so at startup.
   assert.throws(() => imageConfig({ ...on, SIMPLE_CHAT_IMAGE_USERS: '3' }, '/nowhere', allowed, undefined), /SIMPLE_CHAT_ALLOWED_USER_IDS/);
   assert.throws(() => imageConfig({ ...on, SIMPLE_CHAT_IMAGE_USERS: 'PRIVATE' }, '/nowhere', allowed, undefined),
