@@ -310,18 +310,44 @@ export function portraitsFor(one: Case, references: References): string[] {
   return found;
 }
 
+// What the card is drawing now and what waits behind it. A queue entry is an array whose second element is the
+// prompt id; a server that answers with anything else, or does not answer at all, is read as an empty queue, and
+// then `stopJob` below does the one thing that is safe on an unknown card.
+const promptIds = (list: unknown): string[] => (Array.isArray(list) ? list : [])
+  .flatMap(one => (Array.isArray(one) && typeof one[1] === 'string' ? [one[1]] : []));
+async function readQueue(comfy: Comfy): Promise<{ running: string[]; pending: string[] }> {
+  try {
+    const seen = await (await call(comfy, '/queue')).json() as { queue_running?: unknown; queue_pending?: unknown };
+    return { running: promptIds(seen.queue_running), pending: promptIds(seen.queue_pending) };
+  } catch { return { running: [], pending: [] }; }
+}
+
 // A picture that outlives the wait is still the card's. ComfyUI runs one job at a time, so the next cell would
 // queue behind the abandoned one and inherit its seconds — and the seconds are what the rental is decided on — and
 // its history entry, which holds the whole prompt and the workflow, is written when it finishes, which is after the
 // delete in `drawOne`'s `finally` has already run. So: out of the queue if it is still waiting, interrupted if it is
 // drawing, and then waited for, so that there is a record for the delete to remove.
+//
+// `/interrupt` carries no id: it stops whatever the card is drawing. With one card and two readers that is somebody
+// else's picture as often as ours, and they would get the failure line under a scene they never touched. So the
+// queue is read first and the interrupt is sent only while the card says this job is the one it is drawing. A job
+// that was still waiting is gone with the delete and will never write a record, so there is nothing to wait for
+// either; a card that did not answer the queue is left alone, because a wrong interrupt costs another reader their
+// picture and a missed one costs this reader's job a few more seconds of a card we are already paying for.
 async function stopJob(comfy: Comfy, promptId: string, pollMs: number) {
+  const queue = await readQueue(comfy);
   await post(comfy, '/queue', { delete: [promptId] }).catch(() => undefined);
+  if (!queue.running.includes(promptId)) return;
   await call(comfy, '/interrupt', { method: 'POST' }).catch(() => undefined);
+  let missing = 0;
   for (let poll = 0; poll < 10; poll++) {
     const seen: Record<string, HistoryEntry> = await call(comfy, `/history/${promptId}`)
       .then(response => response.json() as Promise<Record<string, HistoryEntry>>).catch(() => ({}));
     if (seen[promptId]) return;
+    // An interrupted job leaves the queue a moment before its record appears, so one more poll is given to it; a
+    // card that then still has neither is writing no record at all, and the rest of the wait would buy nothing.
+    const gone = await readQueue(comfy);
+    if (![...gone.running, ...gone.pending].includes(promptId) && ++missing > 1) return;
     await delay(pollMs);
   }
 }
