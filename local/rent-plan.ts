@@ -22,6 +22,10 @@ const STORAGE_PER_GB_MONTH = 0.207;
 // The machine measured in docs/gpu.md ($0.519/h) is tried first when it is in the list and still fits the ceiling.
 const PREFERRED_HOST = 402342;
 const IMAGE = 'vastai/base-image:cuda-13.0.3-cudnn-devel-ubuntu24.04-py312-2026-09-07';
+// The host driver has to run the CUDA the image carries: a 570 driver stops at 12.8, and llama-server built by the
+// image's nvcc 13 would then refuse to start on a card it compiled for. `cuda_max_good` is Vast's name for the
+// highest CUDA a host's driver runs; this floor moves with the image above and is tied to it by a test.
+const CUDA_FLOOR = 13.0;
 // The pinned files below (57.2 GB), the build tree, about 6 GB of wheels and packages, and room for the pictures
 // and logs the session writes beside them. A single-card session downloads the same files and only runs the two
 // lanes one after the other.
@@ -94,7 +98,7 @@ export function offerQuery(plan: RentPlan) {
   return {
     gpu_name: { eq: 'RTX 5090' }, num_gpus: { eq: plan.gpus }, gpu_ram: { gte: 32000 },
     disk_space: { gte: plan.diskGb }, cpu_ram: { gte: plan.minRamGb * 1000 },
-    cuda_max_good: { gte: 12.8 }, rentable: { eq: true }, verified: { eq: true },
+    cuda_max_good: { gte: CUDA_FLOOR }, rentable: { eq: true }, verified: { eq: true },
     rented: { eq: false }, reliability2: { gte: 0.97 }, inet_down: { gte: 300 },
     direct_port_count: { gte: plan.minDirectPorts }, geolocation: { notin: plan.blockedCountries },
     type: 'on-demand', order: [['dph_total', 'asc']], limit: 60,

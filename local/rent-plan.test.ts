@@ -310,3 +310,13 @@ test('an answer that names no instance stops the loop instead of renting the nex
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test('the offer query asks for a driver that runs the CUDA the pinned image carries', () => {
+  const plan = rentPlan({ gpus: 1 });
+  const imageCuda = /cuda-(\d+)\.(\d+)/.exec(plan.image);
+  assert.ok(imageCuda, 'the image name carries its CUDA version');
+  const major = Number(imageCuda![1]), minor = Number(imageCuda![2]);
+  // A 570 driver stops at 12.8 and would pass a 12.8 floor, and llama-server built by nvcc 13 would not start on it.
+  assert.equal(offerQuery(plan).cuda_max_good.gte, major + minor / 10);
+  assert.equal(offerQuery(plan).cuda_max_good.gte, 13.0);
+});

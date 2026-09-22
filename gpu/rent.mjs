@@ -25,16 +25,19 @@ const printBody = args.includes('--print-body');
 const rest = args.filter(argument => argument !== '--print-body');
 // `--lane text` and `--lane pictures` rent one single-card machine for one lane: a session on two machines runs
 // this script twice. Without it the machine is for both lanes, with one card or two.
-const options = { '--gpus': '1', '--lane': 'both' };
+// `--avoid-host ID` leaves out one host: the second machine of a two-machine session must not be the first one's
+// twin on the same box, or the "two independent machines" the owner asked for share a link, a disk and a failure.
+const options = { '--gpus': '1', '--lane': 'both', '--avoid-host': '' };
 let known = rest.length % 2 === 0;
 for (let at = 0; known && at < rest.length; at += 2) {
   if (Object.hasOwn(options, rest[at])) options[rest[at]] = rest[at + 1]; else known = false;
 }
-const gpus = Number(options['--gpus']), lane = options['--lane'];
+const gpus = Number(options['--gpus']), lane = options['--lane'], avoidHost = options['--avoid-host'];
+if (avoidHost !== '' && !/^[1-9]\d*$/.test(avoidHost)) known = false;
 let plan = null;
 try { if (known && MAX_DPH_BY_GPUS[gpus]) plan = rentPlan({ gpus, lane }); } catch { /* reported below */ }
 if (!plan) {
-  console.log(JSON.stringify({ event: 'bad_arguments', usage: 'rent.mjs [--gpus 1|2] [--lane both|text|pictures] [--print-body]' }));
+  console.log(JSON.stringify({ event: 'bad_arguments', usage: 'rent.mjs [--gpus 1|2] [--lane both|text|pictures] [--avoid-host ID] [--print-body]' }));
   process.exit(1);
 }
 // --print-body is reviewed before a rental, so it must not need the API key to be exported.
@@ -81,17 +84,22 @@ if (offers === null) { console.log(JSON.stringify({ event: 'search_failed', stat
 // The port count and the container's share of the machine's RAM are checked here too: a query field the API does not
 // know is ignored silently, and those two rules are each worth more than a rental.
 const choice = chooseOffers(offers, plan);
-const { candidates, offered, withinPrice, droppedForUnknownPrice, droppedForCountry, droppedForFewCores,
+const { offered, withinPrice, droppedForUnknownPrice, droppedForCountry, droppedForFewCores,
   droppedForProxyOnly, droppedForRam } = choice;
+const candidates = avoidHost === '' ? choice.candidates : choice.candidates.filter(offer => String(offer.host) !== avoidHost);
+const droppedForHost = choice.candidates.length - candidates.length;
 // A rule that drops offers says so: silence would read as "nothing was excluded". The counts are a chain -- what
 // the search returned, what the price left, then each later rule -- and `chosen` is what is left to try, which is
 // not `withinPrice`: the price is only the first rule of four.
 console.log(JSON.stringify({ event: 'candidates', offered, withinPrice, chosen: candidates.length,
   maxHour: plan.maxHour, gpus: plan.gpus, lane: plan.lane, droppedForUnknownPrice, droppedForCountry, droppedForFewCores, droppedForProxyOnly,
-  minDirectPorts: plan.minDirectPorts, droppedForRam, minRamGb: plan.minRamGb }));
+  minDirectPorts: plan.minDirectPorts, droppedForRam, minRamGb: plan.minRamGb, droppedForHost, avoidHost: avoidHost || null }));
 // Which rule emptied the list, so that a session lost to an empty search, to cores, to ports or to RAM is not read
 // as a price to raise.
-if (!candidates.length) { console.log(JSON.stringify({ event: emptyReason(choice) })); process.exit(1); }
+if (!candidates.length) {
+  console.log(JSON.stringify({ event: choice.candidates.length ? 'only_the_avoided_host' : emptyReason(choice) }));
+  process.exit(1);
+}
 
 // SIMPLE_CHAT_RENT_DRY_RUN=1 shows what would be taken and spends nothing. Checking a change to this script by
 // running it would otherwise mean renting a machine, and the offers it would have chosen are what the owner is
