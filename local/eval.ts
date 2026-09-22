@@ -50,7 +50,7 @@ process.umask(0o077);
 const { values, positionals } = parseArgs({ allowPositionals: true, options: { model: { type: 'string' }, models: { type: 'string' },
   scenarios: { type: 'string' }, pack: { type: 'string' }, out: { type: 'string' }, resume: { type: 'string' }, mode: { type: 'string' },
   judge: { type: 'string' }, judges: { type: 'string' }, minutes: { type: 'string' }, cross: { type: 'boolean', default: false },
-  writers: { type: 'string' }, nodes: { type: 'string' }, rechecks: { type: 'string', default: '2' }, exposures: { type: 'string', default: '4' }, depth: { type: 'string' }, attempts: { type: 'string', default: '4' }, branches: { type: 'string', default: '4' }, grow: { type: 'boolean', default: true } }, allowNegative: true });
+  writers: { type: 'string' }, nodes: { type: 'string' }, rechecks: { type: 'string', default: '2' }, exposures: { type: 'string', default: '8' }, depth: { type: 'string' }, attempts: { type: 'string', default: '4' }, branches: { type: 'string', default: '4' }, grow: { type: 'boolean', default: true } }, allowNegative: true });
 // --pack names a directory of scenarios kept outside the repository, so the one who improves the prompts never reads
 // them. Its scenarios replace the built-in ones; every pack scenario names its authors.
 const pack = values.pack ? resolve(values.pack) : undefined;
