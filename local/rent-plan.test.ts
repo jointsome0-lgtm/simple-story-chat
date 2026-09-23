@@ -20,7 +20,7 @@ const pinned = (file: string): Record<string, string> => Object.fromEntries(
 // A plausible cheap offer; every test changes only the field it is about.
 const offer = (fields: RawOffer = {}): RawOffer => ({
   id: 1, host_id: 7, geolocation: 'PL', driver_version: '580.95.05', direct_port_count: 12,
-  cpu_cores_effective: 30.72, cpu_ram: 256000, gpu_frac: 0.5, inet_down: 900, reliability2: 0.99,
+  cpu_cores_effective: 30.72, cpu_ram: 128000, inet_down: 900, reliability2: 0.99,
   dph_total: 0.9, storage_cost: 0.1, inet_down_cost: 0.0026, ...fields,
 });
 
@@ -113,8 +113,8 @@ test('the card count drives the query, the ceiling and the RAM floor, and an unp
   const one = rentPlan(), two = rentPlan({ gpus: 2 });
   assert.equal(offerQuery(one).num_gpus.eq, 1);
   assert.equal(offerQuery(two).num_gpus.eq, 2);
-  // $0.55 and $1.00 for the machine, plus what this plan's disk costs beside it at the measured storage rate.
-  assert.equal(one.maxHour, 0.593);
+  // $0.65 and $1.00 for the machine, plus what this plan's disk costs beside it at the measured storage rate.
+  assert.equal(one.maxHour, 0.693);
   assert.equal(two.maxHour, 1.043);
   assert.equal(two.minRamGb, 64);
   assert.equal(offerQuery(two).cpu_ram.gte, 64000);
@@ -123,16 +123,16 @@ test('the card count drives the query, the ceiling and the RAM floor, and an unp
 
 test('the ceiling carries the disk at the rate a real disk costs, not only at the kind one', () => {
   const rentable = (gpus: number, dph: number, storage: number) =>
-    chooseOffers([offer({ dph_total: dph, storage_cost: storage, gpu_frac: gpus / 8, cpu_ram: 1024000 })],
+    chooseOffers([offer({ dph_total: dph, storage_cost: storage })],
       rentPlan({ gpus })).candidates.length === 1;
   // $0.10 per GB per month is the rate commonly quoted; $0.207 is what the 60 GB rental in docs/gpu.md was billed
-  // ($0.017 an hour). The quoted range for one card is $0.44-0.53 with the measured machine at $0.519, and
-  // $0.89-0.96 for two in one machine. All of it must stay rentable at 150 GB of disk on a host charging either
-  // rate: against a flat ceiling the storage term alone refused the top of the range.
+  // ($0.017 an hour). The quoted range for one card is $0.44-0.53 with the measured machine at $0.519, widened to
+  // $0.65 on 2026-09-24, and $0.89-0.96 for two in one machine. All of it must stay rentable at 150 GB of disk on a
+  // host charging either rate: against a flat ceiling the storage term alone refused the top of the range.
   for (const storage of [0.1, 0.207]) {
     const disk = `, disk at $${storage}`;
-    for (const dph of [0.44, 0.519, 0.52, 0.53]) assert.ok(rentable(1, dph, storage), `one card at $${dph}/h${disk}`);
-    assert.ok(!rentable(1, 0.6, storage), `a card above the range is still refused${disk}`);
+    for (const dph of [0.44, 0.519, 0.53, 0.548, 0.6, 0.65]) assert.ok(rentable(1, dph, storage), `one card at $${dph}/h${disk}`);
+    assert.ok(!rentable(1, 0.7, storage), `a card above the range is still refused${disk}`);
     for (const dph of [0.89, 0.96, 1.0]) assert.ok(rentable(2, dph, storage), `two cards at $${dph}/h${disk}`);
     assert.ok(!rentable(2, 1.1, storage), `a dearer pair is still refused${disk}`);
   }
@@ -193,7 +193,7 @@ test('an empty list names the rule that emptied it', () => {
   assert.equal(reason([offer({ cpu_cores_effective: 2 })]), 'none_with_enough_cores');
   assert.equal(reason([offer({ direct_port_count: 1 })]), 'none_with_direct_ports');
   // Affordable and reachable, but the container's share of the machine's RAM is under the floor: not a price.
-  assert.equal(reason([offer({ cpu_ram: 64000, gpu_frac: 0.5 })]), 'none_with_enough_ram');
+  assert.equal(reason([offer({ cpu_ram: 32000 })]), 'none_with_enough_ram');
 });
 
 test('the measured host is tried first while it fits the ceiling', () => {
@@ -213,10 +213,10 @@ test('price, cores, ports and container RAM each drop offers and each says how m
     offer({ id: 'too-dear', dph_total: 1.4 }),
     offer({ id: 'too-few-cores', cpu_cores_effective: 2 }),
     offer({ id: 'proxy-only', direct_port_count: 1 }),
-    // 64 GB of RAM on the machine, half of it in this offer's share: below the 64 GB floor.
-    offer({ id: 'too-little-ram', cpu_ram: 64000, gpu_frac: 0.5 }),
-    // An offer that does not report its share is not dropped for a number nobody knows.
-    offer({ id: 'ram-unknown', gpu_frac: null }),
+    // 32 GB in this offer's share: below the 64 GB floor of two cards.
+    offer({ id: 'too-little-ram', cpu_ram: 32000 }),
+    // An offer that does not report its RAM is not dropped for a number nobody knows.
+    offer({ id: 'ram-unknown', cpu_ram: null }),
   ], plan);
   assert.deepEqual(choice.candidates.map(o => o.id).sort(), ['good', 'ram-unknown']);
   assert.equal(choice.offered, 6);
@@ -226,7 +226,19 @@ test('price, cores, ports and container RAM each drop offers and each says how m
   assert.equal(choice.droppedForFewCores, 1);
   assert.equal(choice.droppedForProxyOnly, 1);
   assert.equal(choice.droppedForRam, 1);
-  assert.equal(describeOffer(offer({ cpu_ram: 256000, gpu_frac: 0.5 }), plan).ramGb, 128);
+  assert.equal(describeOffer(offer({ cpu_ram: 256000 }), plan).ramGb, 256);
+});
+
+test('the RAM of an offer is its own share as Vast answers it, and is not divided by the cards a second time', () => {
+  // The measured host's offer of one card of eight on 2026-09-23: the console shows "64/516 GB" and the search
+  // answers `cpu_ram` 64469 beside `gpu_frac` 0.125. Read as the machine's RAM times the share, it was 8 GB, and
+  // every machine of several cards fell under the 32 GB floor.
+  const measured = { host_id: 402342, cpu_ram: 64469, gpu_frac: 0.125, dph_total: 0.508, storage_cost: 0.133 };
+  for (const lane of ['text', 'pictures'] as const) {
+    const plan = rentPlan({ lane });
+    assert.equal(describeOffer(offer(measured), plan).ramGb, 64);
+    assert.deepEqual(chooseOffers([offer(measured)], plan).candidates.map(o => o.host), [402342], lane);
+  }
 });
 
 test('the create body asks for direct ssh, and --print-body shows it without the key or the script', () => {

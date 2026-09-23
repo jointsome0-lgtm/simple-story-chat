@@ -10,8 +10,9 @@
 // owner quoted from the live list when this session was planned (one 5090 $0.44-0.53, the machine measured in
 // docs/gpu.md inside it at $0.519; two cards in one machine $0.89-0.96, which is cheaper per card than two
 // rentals), rounded up so that the top of each range and its immediate neighbours are admitted and nothing dearer
-// is. A count with no agreed rate is refused rather than guessed.
-export const MAX_DPH_BY_GPUS: Record<number, number> = { 1: 0.55, 2: 1.0 };
+// is. A count with no agreed rate is refused rather than guessed. One card went up to $0.65 on 2026-09-24: the only
+// offer left under $0.55 was on a host whose card another tenant was already loading.
+export const MAX_DPH_BY_GPUS: Record<number, number> = { 1: 0.65, 2: 1.0 };
 // Vast bills the disk by the hour beside the machine and offers are judged on the two together, so the ceiling has
 // to carry the disk too. Otherwise growing DISK_GB quietly lowers the card price allowed: at 60 GB the old flat
 // $0.55 left room for a $0.541 card, at 150 GB the same number refuses the $0.53 top of the quoted range. The rate
@@ -109,7 +110,7 @@ export function offerQuery(plan: RentPlan) {
 export type RawOffer = {
   id?: unknown; host_id?: unknown; geolocation?: unknown; driver_version?: unknown;
   direct_port_count?: number | null; cpu_cores_effective?: number | null; cpu_ram?: number | null;
-  gpu_frac?: number | null; inet_down?: number | null; reliability2?: number | null;
+  inet_down?: number | null; reliability2?: number | null;
   dph_total?: number | null; storage_cost?: number | null; inet_down_cost?: number | null;
 };
 export type Offer = {
@@ -123,16 +124,16 @@ const price = (rate: unknown): number => typeof rate === 'number' && Number.isFi
 // `storage_cost` is dollars per GB per month, `inet_down_cost` dollars per GB, so both are priced for this session's
 // disk and this session's downloads rather than for a constant that no longer describes either.
 export function describeOffer(offer: RawOffer, plan: RentPlan): Offer {
-  const frac = typeof offer.gpu_frac === 'number' && offer.gpu_frac > 0 ? offer.gpu_frac : null;
   return {
     id: offer.id, host: offer.host_id, geo: offer.geolocation, driver: offer.driver_version,
     directPorts: Number(offer.direct_port_count ?? 0),
     cpus: offer.cpu_cores_effective ? Math.round(offer.cpu_cores_effective) : null,
-    // The machine's RAM times this offer's share of its cards: Vast's field reference calls `cpu_ram` the whole
-    // machine's memory in MB and `gpu_frac` the fraction of it being offered, while `cpu_cores_effective` is already
-    // the offer's own share -- the measured host's 30.72 cores are that field, not a quarter of 256. An estimate,
-    // so an offer that states no share is kept below; rounded down, because a floor is a floor.
-    ramGb: typeof offer.cpu_ram === 'number' && frac !== null ? Math.floor(offer.cpu_ram * frac / 1000) : null,
+    // `cpu_ram` in a search answer is already this offer's own share of the machine, in MB, like
+    // `cpu_cores_effective`: the measured host's one card of eight answers 64469, which the console shows as
+    // "64/516 GB". Until 2026-09-23 it was multiplied by `gpu_frac` a second time, which read those 64 GB as 8 and
+    // dropped every offer on a machine of several cards, the measured host included. An offer that states no RAM
+    // is kept below; rounded down, because a floor is a floor.
+    ramGb: typeof offer.cpu_ram === 'number' ? Math.floor(offer.cpu_ram / 1000) : null,
     inetDownMbps: Math.round(offer.inet_down ?? 0), reliability: Math.round((offer.reliability2 ?? 0) * 1000) / 1000,
     // A missing or non-numeric price -- for the machine, for the disk or for the link -- makes the whole offer NaN,
     // which no ceiling admits and chooseOffers counts. Read as zero, the one offer whose cost is unknown would look
