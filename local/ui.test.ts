@@ -8,7 +8,7 @@ import { render, renderContext, scenePrefix, sceneKeyboard } from './ui.ts';
 import { PRESETS } from './picture-style.ts';
 import { texts } from './text.ts';
 
-const ACTION = /^(view:.+|new-seed|save-seed:[^:]+|start:[^:]+|use:[^:]+:[^:]+|fork:[^:]+:[^:]+|remove-seed:[^:]+|remove-branch:[^:]+:[^:]+|continue|cancel|last|compact|gpu:start|gpu:pause|lang:[a-z]{2}|style:[a-z0-9]+|style-new|style-edit:y\d+|remove-style:y\d+|style-sample:[a-z0-9]+)$/;
+const ACTION = /^(view:.+|new-seed|save-seed:[^:]+|start:[^:]+|use:[^:]+:[^:]+|fork:[^:]+:[^:]+|remove-seed:[^:]+|remove-branch:[^:]+:[^:]+|continue|cancel|last|compact|gpu:start|gpu:pause|lang:[a-z]{2}|style:[a-z0-9]+|style-new|style-edit:y\d+|remove-style:y\d+|style-sample:[a-z0-9]+|style-samples)$/;
 
 function node(id: string, parent: string | null, time: string, body: string, input = 'Ввод'): SceneNode {
   return { id, parent, input, text: `${time}\n\n${body}`, time, truncated: false, delivery: 'sent' };
@@ -110,11 +110,13 @@ test('picture styles: a picker of cards, the prompt of each to copy, a library o
   assert.ok(!callbacks(render(state, 'home')).includes('view:style'));
   const { routes, callbacks: all } = crawl(state, semi);
   for (const route of ['style', ...presets.map(key => `style:${key}`)]) assert.ok(routes.has(route), route);
-  for (const action of ['style-new', 'style:film', 'style-sample:semi']) assert.ok(all.includes(action), action);
+  for (const action of ['style-new', 'style:film', 'style-sample:semi', 'style-samples']) assert.ok(all.includes(action), action);
 
   // The standard line is the semi preset here: it has no button of its own, and semi is marked as the current style.
   const picker = render(state, 'style', semi);
-  assert.deepEqual(callbacks(picker), [...presets.map(key => `view:style:${key}`), 'style-new', 'view:home']);
+  assert.deepEqual(callbacks(picker), [...presets.map(key => `view:style:${key}`), 'style-new', 'style-samples', 'view:home']);
+  // All styles at once is offered only to a reader whose scenes are drawn, like a single sample.
+  assert.ok(!callbacks(render(state, 'style')).includes('style-samples'));
   assert.match(picker.text, /Сейчас: 🖌 Полуреализм/);
   assert.deepEqual(picker.reply_markup!.inline_keyboard.flat().filter(button => button.text.startsWith('✅ ')).map(button => button.callback_data), ['view:style:semi']);
   // A standard line of the owner's own has a button, and is the current style of a reader who chose nothing.
@@ -143,7 +145,7 @@ test('picture styles: a picker of cards, the prompt of each to copy, a library o
   assert.match(own.text, /^✍️ Масло при свечах\n✅/);
   assert.match(own.text, /Концовку промпта бот добавляет/);
   assert.deepEqual(callbacks(own), ['style-sample:y7', 'style-edit:y7', 'view:delete-style:y7', 'view:style']);
-  assert.deepEqual(callbacks(render(state, 'style', semi)).slice(-3), ['view:style:y7', 'style-new', 'view:home']);
+  assert.deepEqual(callbacks(render(state, 'style', semi)).slice(-4), ['view:style:y7', 'style-new', 'style-samples', 'view:home']);
   assert.match(render(state, 'style', semi).text, /Сейчас: ✍️ Масло при свечах/);
 
   // Deleting the chosen style says where the pictures go next.
@@ -177,7 +179,7 @@ test('picture styles: a picker of cards, the prompt of each to copy, a library o
   assert.ok(!callbacks(render(state, 'style', semi)).includes('style-new'));
   state.pictureStyles = { y1: { id: 'y1', name: ' ', line: 'Ink.' }, x2: { id: 'x2', name: 'X', line: 'Ink.' } };
   state.pictureStyle = 'y1';
-  assert.deepEqual(callbacks(render(state, 'style', semi)), [...presets.map(key => `view:style:${key}`), 'style-new', 'view:home']);
+  assert.deepEqual(callbacks(render(state, 'style', semi)), [...presets.map(key => `view:style:${key}`), 'style-new', 'style-samples', 'view:home']);
   assert.deepEqual(callbacks(render(state, 'style:x2', semi)), callbacks(render(state, 'style', semi)));
 });
 

@@ -145,6 +145,7 @@ export const ko: Messages = {
     tailNote: '프롬프트의 끝부분은 봇이 내 글 뒤에 직접 붙여요. 인물은 성인으로 그려지고, 그림에 글자가 들어가지 않아요.',
     choose: '✅ 이 스타일로 그리기',
     sample: '🖼 마지막 장면으로 예시 보기',
+    sampleAll: '🖼 마지막 장면으로 모든 스타일 보기',
     edit: '✏️ 수정',
     remove: '🗑 삭제',
     back: '↩️ 스타일 목록으로',
@@ -163,6 +164,8 @@ export const ko: Messages = {
     backToStyle: '↩️ 스타일로 돌아가기',
     sampleCaption: name => `스타일 예시: ${name}`,
     drawingSample: '🎨 예시를 그리는 중…',
+    // `count` is how many styles are drawn, one picture each.
+    drawingAll: (count: number) => `🎨 마지막 장면을 모든 스타일(${count}개)로 그리는 중이에요. 그림은 한 장씩 도착하고, 이야기에서 다음 행동을 하면 그리기가 멈춰요.`,
   },
 
   model: {

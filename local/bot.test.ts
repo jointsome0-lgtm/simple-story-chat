@@ -971,14 +971,38 @@ test('a reader keeps a library of picture styles: writes one, finds it chosen, e
   const where = state().active!;
   assert.deepEqual({ storyId: drawn[0].storyId, branchId: drawn[0].branchId, nodeId: drawn[0].nodeId },
     { storyId: where.storyId, branchId: where.branchId, nodeId: state().stories[where.storyId].branches[where.branchId].head });
-  assert.equal(drawn[0].line, 'White chalk on a blackboard. Adults with natural adult proportions and faces. No captions, logos or watermarks.');
-  assert.equal(drawn[0].pictureStyle, 'custom');
-  assert.equal(drawn[0].caption.text, 'Пример стиля: ✍️ Мел');
+  assert.equal(drawn[0].styles.length, 1);
+  assert.equal(drawn[0].styles[0].line, 'White chalk on a blackboard. Adults with natural adult proportions and faces. No captions, logos or watermarks.');
+  assert.equal(drawn[0].styles[0].pictureStyle, 'custom');
+  assert.equal(drawn[0].styles[0].caption.text, 'Пример стиля: ✍️ Мел');
   assert.equal(drawn[0].status, '🎨 Рисую пример…');
   assert.equal(state().pictureStyle, undefined, 'a sample chooses nothing');
+
+  // All styles at once: the picker's styles in its order, the standard one only as the preset it is, each with its
+  // own whole line and caption, under one status that says how many are coming.
+  await f.bot.handle(f.message('/style'));
+  const picker = f.sent.at(-1)!.payload as unknown as { reply_markup: { inline_keyboard: { callback_data: string }[][] } };
+  assert.ok(picker.reply_markup.inline_keyboard.flat().some(button => button.callback_data === 'style-samples'));
+  await f.bot.handle(f.click('style-samples'));
+  await f.bot.idle();
+  assert.equal(drawn.length, 2);
+  const all = drawn[1];
+  const keys = ['semi', 'novel', 'film', 'graphic', 'watercolor', id, ...Array.from({ length: 9 }, (_, n) => `y${900 + n}`)];
+  assert.deepEqual(all.styles.map(style => style.pictureStyle), keys.map(key => key.startsWith('y') ? 'custom' : key));
+  assert.equal(all.styles[0].line, PRESETS.semi);
+  assert.equal(all.styles[2].line, PRESETS.film);
+  assert.equal(all.styles[5].line, drawn[0].styles[0].line);
+  assert.deepEqual(all.styles.slice(0, 6).map(style => style.caption.text),
+    ['🖌 Полуреализм', '📖 Визуальная новелла', '🎬 Кинокадр', '🖋 Графический роман', '💧 Акварель', '✍️ Мел'].map(name => `Пример стиля: ${name}`));
+  assert.equal(all.status, texts('ru').pictureStyle.drawingAll(15));
+  assert.match(all.status, /во всех стилях \(15\)/);
+  assert.equal(all.nodeId, drawn[0].nodeId);
+  assert.equal(state().pictureStyle, undefined, 'drawing every style chooses none of them');
   // Another reader is not drawn for, and the card never hears of them.
   await f.start(2);
   await f.bot.handle(f.click('style-sample:film', 2));
   assert.equal(shown(), texts('ru').errors.sampleOff);
-  assert.equal(drawn.length, 1);
+  await f.bot.handle(f.click('style-samples', 2));
+  assert.equal(shown(), texts('ru').errors.sampleOff);
+  assert.equal(drawn.length, 2);
 });

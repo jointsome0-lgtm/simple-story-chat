@@ -126,6 +126,7 @@ export const en: Messages = {
     tailNote: 'The bot adds the ending of the prompt to your text itself: people stay adults, and the picture has no lettering.',
     choose: '✅ Draw in this style',
     sample: '🖼 Sample on the last scene',
+    sampleAll: '🖼 All styles on the last scene',
     edit: '✏️ Edit',
     remove: '🗑 Delete',
     back: '↩️ Back to styles',
@@ -144,6 +145,8 @@ export const en: Messages = {
     backToStyle: '↩️ Back to the style',
     sampleCaption: name => `Style sample: ${name}`,
     drawingSample: '🎨 Drawing a sample…',
+    // `count` is how many styles are drawn, one picture each.
+    drawingAll: (count: number) => `🎨 Drawing the last scene in all ${count} styles. The pictures arrive one by one; your next move in the story stops the drawing.`,
   },
 
   model: {

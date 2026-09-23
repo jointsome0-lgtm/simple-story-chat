@@ -46,6 +46,12 @@ export function presetOf(line: string | undefined): Preset | undefined {
   return PRESET_KEYS.find(key => PRESETS[key] === line);
 }
 
+// Every style of the picker, in its order: the bot's own line when it is not a preset, the presets, then the reader's
+// own. A sample of all styles draws them in this order too (local/bot.ts).
+export function pickerKeys(state: Partial<Library>, standard?: string): string[] {
+  return [...(presetOf(standard) ? [] : ['standard']), ...PRESET_KEYS, ...ownStyles(state).map(style => style.id)];
+}
+
 // The reader's own styles, in the order they were made. Stored values are not trusted: an entry under a key that is
 // not an id, or without a name or a line, is left out.
 export function ownStyles(state: Partial<Library>): OwnStyle[] {

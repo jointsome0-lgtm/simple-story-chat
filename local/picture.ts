@@ -53,12 +53,14 @@ export type PictureRequest = {
   // the reader's next turn's work here rather than after the photo (local/bot.ts `prepareNext`).
   afterDescribe?: () => void;
 };
-// A sample of a style, asked for from its card (local/ui.ts): the scene the reader is at, drawn once more in `line`.
-// `status` stands in the chat while it is drawn and `caption` goes under the photo, both from the reader's catalog;
-// `pictureStyle` is the word its log row names the style with.
+// One style of a sample: the line that ends its prompt, the word its log row names it with, and the caption that
+// goes under its photo, from the reader's catalog.
+export type SampleStyle = { line: string; pictureStyle: StyleChoice; caption: Screen };
+// A sample of styles, asked for from a style's card or for all of them from the picker (local/ui.ts): the scene the
+// reader is at, drawn once more in each of `styles`, in their order. `status` stands in the chat while they are drawn.
 export type SampleRequest = {
-  userId: string; chat: Chat; storyId: string; branchId: string; nodeId: string; line: string;
-  pictureStyle: StyleChoice; status: string; caption: Screen; signal: AbortSignal; log: Log;
+  userId: string; chat: Chat; storyId: string; branchId: string; nodeId: string; styles: SampleStyle[];
+  status: string; signal: AbortSignal; log: Log;
   hold?: () => (() => void) | undefined;
 };
 export type Illustrator = ReturnType<typeof createIllustrator>;
@@ -244,26 +246,30 @@ export function createIllustrator(config: ImageConfig, deps: {
       try { await drawPicture(request, described); } finally { described(); }
     },
 
-    // A sample of a style (`SampleRequest`). The frame of the scene is the one described for its own picture while
+    // A sample of styles (`SampleRequest`). The frame of the scene is the one described for its own picture while
     // the bot still holds it, so that a sample costs the picture card alone; otherwise the scene is described again,
-    // as a request of this reader, in their own slot when it is free. The reader asked for this one and waits for it,
-    // so a failure is told; their next move in the story stops it (local/bot.ts).
+    // as a request of this reader, in their own slot when it is free. Every style is then drawn from that one frame,
+    // with the story's seed, and sent the moment it is there. The reader asked for these and waits for them, so a
+    // failure is told and ends the rest, which would most likely fail the same way; their next move in the story
+    // stops it (local/bot.ts).
     async sample(request: SampleRequest): Promise<void> {
-      const { userId, chat, storyId, branchId, nodeId, signal, log, pictureStyle } = request;
-      if (signal.aborted) return;
+      const { userId, chat, storyId, branchId, nodeId, signal, log, styles } = request;
+      if (signal.aborted || !styles.length) return;
       const t = texts(store.read(userId).language);
       const clear = await statusLine(chat, request.status, log);
       // A frame is reused only for the very scene it was described from, and only while that scene still exists.
       const kept = frames.get(userId);
-      const frameReused = kept?.storyId === storyId && kept.nodeId === nodeId && !!store.read(userId).stories[storyId]?.nodes[nodeId];
+      let frameReused = kept?.storyId === storyId && kept.nodeId === nodeId && !!store.read(userId).stories[storyId]?.nodes[nodeId];
+      const stylesAsked = styles.length;
       let describeMs = 0;
+      let pictureStyle = styles[0].pictureStyle;
       try {
         let frame: { description: Description; sheet: Character[] } | undefined = frameReused ? kept : undefined;
         if (!frame) {
           let release: (() => void) | undefined;
           try { release = request.hold?.(); }
           catch {
-            log('picture_sample', 'gpu_not_ready', { outcome: 'skipped', frameReused, pictureStyle });
+            log('picture_sample', 'gpu_not_ready', { outcome: 'skipped', frameReused, pictureStyle, stylesAsked });
             await clear(t.notices.gpuPaused);
             return;
           }
@@ -272,20 +278,26 @@ export function createIllustrator(config: ImageConfig, deps: {
           finally { release?.(); }
           describeMs = Math.max(0, now() - describeStarted);
         }
-        if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
-        const { assembled, drawn } = await drawFrame(storyId, frame, request.line, signal);
-        if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
-        await chat.photo(drawn.bytes, undefined, request.caption);
+        for (const style of styles) {
+          pictureStyle = style.pictureStyle;
+          if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
+          const { assembled, drawn } = await drawFrame(storyId, frame, style.line, signal);
+          if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
+          await chat.photo(drawn.bytes, undefined, style.caption);
+          log('picture_sample', undefined, { outcome: 'ready', frameReused, describeMs, imageMs: drawn.totalMs, imageSteps: steps,
+            namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook, pictureStyle, stylesAsked });
+          // The styles after the first are drawn from the frame already in hand.
+          frameReused = true;
+          describeMs = 0;
+        }
         await clear();
-        log('picture_sample', undefined, { outcome: 'ready', frameReused, describeMs, imageMs: drawn.totalMs, imageSteps: steps,
-          namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook, pictureStyle });
       } catch (error) {
         const code = errorCode(error);
         const cancelled = signal.aborted || code === 'cancelled';
         const outcome = cancelled ? 'cancelled' : GAVE_WAY.includes(String(code)) ? 'skipped' : 'failed';
         await clear(cancelled ? undefined : t.notices.sampleFailed);
         log('picture_sample', cancelled ? 'cancelled' : safeCode(code),
-          { ...safeErrorDetails(error), outcome, cancelled, frameReused, describeMs, pictureStyle });
+          { ...safeErrorDetails(error), outcome, cancelled, frameReused, describeMs, pictureStyle, stylesAsked });
       }
     },
   };

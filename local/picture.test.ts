@@ -473,6 +473,83 @@ test('a sample is drawn only on request, one at a time, and a move in the story 
   assert.ok(comfy.seen.cleared.includes('p2'));
 });
 
+test('all styles at once: one frame, every style of the picker in its order, each photo with its own caption', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  // The bot's own line is not a preset here, so the picker, and the batch, start with it.
+  const f = fixture(t, { comfy: root, style: STYLE_LINE });
+  await f.start();
+  await f.bot.idle();
+  const calls = f.requests.length;
+  await f.bot.handle(f.click('style-samples'));
+  await f.bot.idle();
+
+  assert.equal(f.requests.length, calls, 'the frame of the scene\'s own picture is drawn again, without the model');
+  const lines = [STYLE_LINE, PRESETS.semi, PRESETS.novel, PRESETS.film, PRESETS.graphic, PRESETS.watercolor];
+  assert.equal(comfy.submitted.length, 1 + lines.length);
+  const [own, ...samples] = comfy.submitted.map(promptOf);
+  samples.forEach((prompt, index) => {
+    assert.ok(prompt.endsWith(lines[index]), `style ${index} in the picker's order`);
+    assert.equal(prompt.slice(0, -lines[index].length), own.slice(0, -STYLE_LINE.length), 'the same frame every time');
+  });
+  assert.ok(comfy.submitted.every(graph => seedIn(graph) === seedIn(comfy.submitted[0])), 'and the story\'s one seed');
+
+  // One photo per style, sent as it is drawn, each with its caption and the way to choose it; one status line for all.
+  const captions = photos(f.sent).slice(1).map(photo => photo.payload.caption);
+  assert.deepEqual(captions, ['⚙️ Стандартный', '🖌 Полуреализм', '📖 Визуальная новелла', '🎬 Кинокадр', '🖋 Графический роман', '💧 Акварель']
+    .map(name => `Пример стиля: ${name}`));
+  assert.deepEqual(photos(f.sent)[2].payload.reply_markup?.inline_keyboard.flat().map(button => button.callback_data), ['style:semi', 'view:style']);
+  const statuses = f.sent.filter(one => one.method === 'sendMessage' && /во всех стилях/.test(one.payload.text ?? ''));
+  assert.equal(statuses.length, 1);
+  assert.match(statuses[0].payload.text!, /во всех стилях \(6\)/);
+  assert.ok(f.deleted.includes(f.sent.indexOf(statuses[0]) + 1), 'the status line goes once the last one is there');
+  assert.equal(f.store.read('1').pictureStyle, undefined, 'drawing every style chooses none of them');
+
+  const rows = f.rows.filter(one => one.event === 'picture_sample');
+  assert.deepEqual(rows.map(row => row.pictureStyle), ['standard', 'semi', 'novel', 'film', 'graphic', 'watercolor']);
+  assert.ok(rows.every(row => row.outcome === 'ready' && row.stylesAsked === 6 && row.frameReused === true && row.describeMs === 0));
+  assert.doesNotMatch(JSON.stringify(f.rows), /Элин|hair|Photorealistic|Watercolor|Synthetic test style/);
+  assert.ok(['p2', 'p3', 'p4', 'p5', 'p6', 'p7'].every(id => comfy.seen.cleared.includes(id)), 'no job is left on the card');
+});
+
+test('all styles stop at the reader\'s next move, and at the first style the card cannot draw', async t => {
+  const comfy = fakeComfy({ jobMs: 60000 });
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root, users: ['1'] });
+  await f.start();
+  await until(() => comfy.submitted.length === 1, 'the scene\'s own picture to reach the card');
+  await f.bot.handle(f.click('style-samples'));
+  await until(() => comfy.submitted.length === 2, 'the first style to reach the card');
+  await f.bot.handle(f.click('style-sample:film'));
+  assert.ok(told(f.sent, 'Уже рисую пример. Следующий можно попросить, когда он придёт.'));
+  await f.bot.handle(f.message('Осмотреться'));
+  await until(() => f.rows.some(one => one.event === 'picture_sample'), 'the styles to stop');
+  await f.bot.stop();
+  const rows = f.rows.filter(one => one.event === 'picture_sample');
+  assert.deepEqual(rows.map(row => [row.outcome, row.pictureStyle, row.stylesAsked]), [['cancelled', 'semi', 5]]);
+  // The scenes' own pictures end with the standard line, which is the novel preset here; the batch began with semi.
+  assert.equal(comfy.submitted.filter(graph => promptOf(graph).endsWith(PRESETS.semi)).length, 1);
+  assert.ok(!comfy.submitted.some(graph => [PRESETS.film, PRESETS.graphic, PRESETS.watercolor].some(line => promptOf(graph).endsWith(line))),
+    'no style after the one being drawn reaches the card');
+  assert.ok(!photos(f.sent).some(one => one.payload.caption), 'no sample of a scene the reader has moved past');
+
+  // A card that fails: the first style says so once, and the rest are not tried.
+  const broken = fakeComfy({ failing: true });
+  const brokenRoot = await broken.listen();
+  t.after(() => broken.server.close());
+  const g = fixture(t, { comfy: brokenRoot });
+  await g.start();
+  await g.bot.idle();
+  const before = broken.submitted.length;
+  await g.bot.handle(g.click('style-samples'));
+  await g.bot.idle();
+  assert.equal(broken.submitted.length, before + 1);
+  assert.equal(g.sent.filter(one => one.method === 'editMessageText' && one.payload.text === 'Не получилось нарисовать пример. Попробуй ещё раз чуть позже.').length, 1);
+  assert.deepEqual(g.rows.filter(one => one.event === 'picture_sample').map(row => [row.outcome, row.pictureStyle]), [['failed', 'semi']]);
+});
+
 test('the sheet is written once per story and reused by the next scene', async t => {
   const comfy = fakeComfy();
   const root = await comfy.listen();

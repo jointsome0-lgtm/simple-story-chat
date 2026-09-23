@@ -49,7 +49,10 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   // holds (one for a whole story is almost certainly a wrong sheet), how many names the assembly had to cut out of
   // a field the instruction forbids them in, and how many people reached the prompt with no appearance at all.
   'describeMs', 'imageQueueMs', 'imageMs', 'imageSteps', 'pictureAfterSceneMs', 'pictureSeconds',
-  'sheetCharacters', 'namesStripped', 'withoutLook'] as const;
+  'sheetCharacters', 'namesStripped', 'withoutLook',
+  // A sample of styles (local/picture.ts `sample`): how many styles one press of the reader asked for, one on a
+  // style's own card and every style of the picker for "all styles".
+  'stylesAsked'] as const;
 
 export type ErrorDetails = {
   httpStatus?: number; phase?: typeof PHASES[number]; operation?: typeof OPERATIONS[number];

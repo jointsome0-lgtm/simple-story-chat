@@ -6,7 +6,7 @@ import type { ContextStats } from './context.ts';
 import type { GpuStatus } from './gpu.ts';
 import type { InlineButton, InlineKeyboard, Screen } from './telegram.ts';
 import { STYLE } from './illustrate.ts';
-import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX, PRESETS, PRESET_KEYS, lineOf, ownStyle, ownStyles, presetOf, styleKey } from './picture-style.ts';
+import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX, PRESETS, lineOf, ownStyle, ownStyles, pickerKeys, presetOf, styleKey } from './picture-style.ts';
 import { LANGS, LANGUAGE_BUTTON, REGISTERED, shownLang, texts } from './text.ts';
 import type { Messages } from './text.ts';
 
@@ -182,8 +182,8 @@ function languageScreen(state: State) {
 }
 
 // The look of the reader's pictures (local/picture-style.ts): the presets, the reader's own styles, and the bot's own
-// line when it is not one of the presets. Every style opens its card. A reader who is not drawn for may still choose:
-// the choice waits in their library.
+// line when it is not one of the presets. Every style opens its card, and a reader who is drawn for may ask for the
+// last scene in all of them at once. A reader who is not drawn for may still choose: the choice waits in their library.
 function styleScreen(state: State, details: RenderDetails) {
   const t = texts(state.language);
   const s = t.pictureStyle;
@@ -192,10 +192,9 @@ function styleScreen(state: State, details: RenderDetails) {
   const own = ownStyles(state);
   const open = (key: string) => btn(`${key === current ? '✅ ' : ''}${styleLabel(t, state, key)}`, `view:style:${key}`);
   return payload([s.title, '', s.current(styleLabel(t, state, current)), '', s.note, details.pictures ? null : '', details.pictures ? null : s.off], [
-    presetOf(standard) ? null : [open('standard')],
-    ...PRESET_KEYS.map(key => [open(key)]),
-    ...own.map(style => [open(style.id)]),
+    ...pickerKeys(state, standard).map(key => [open(key)]),
     own.length < OWN_STYLES_MAX ? [btn(s.add, 'style-new')] : null,
+    details.pictures ? [btn(s.sampleAll, 'style-samples')] : null,
     [btn(t.buttons.menu, 'view:home')],
   ]);
 }

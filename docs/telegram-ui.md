@@ -24,7 +24,7 @@ Stories made from the same seed share its title, so they are called «Истор
 
 Only a reader whose scenes are drawn (`SIMPLE_CHAT_IMAGE_USERS`) has «🎨 Стиль картинок» ("Picture style") in the menu and `/style` in the command list; both open the picker (`view:style`). A style is the last sentence of every picture's prompt (`local/picture-style.ts`) and changes only the pictures still to come. Nothing is drawn by opening a screen.
 
-- **Picker:** a button per style, ✅ on the current one. First the standard style, which is the bot's own line (`SIMPLE_CHAT_IMAGE_STYLE`) and gets a button only when that line is none of the presets; otherwise the preset it is stands for it. Then the five presets and the reader's own styles in the order they were made. Last come «➕ Новый стиль» ("New style"), while the reader has fewer than 10 own styles, and Menu. Every style opens its card (`view:style:<key>`).
+- **Picker:** a button per style, ✅ on the current one. First the standard style, which is the bot's own line (`SIMPLE_CHAT_IMAGE_STYLE`) and gets a button only when that line is none of the presets; otherwise the preset it is stands for it. Then the five presets and the reader's own styles in the order they were made. Last come «➕ Новый стиль» ("New style"), while the reader has fewer than 10 own styles, «🖼 Все стили на последней сцене» ("All styles on the last scene", `style-samples`), while pictures are on, and Menu. Every style opens its card (`view:style:<key>`).
 - **Card:** the style's whole prompt in a `pre` block, which Telegram copies in one tap, so any style can start one of the reader's own. The buttons:
   - «✅ Рисовать в этом стиле» ("Draw in this style", `style:<key>`), unless it is the current style;
   - «🖼 Пример на последней сцене» ("Sample on the last scene", `style-sample:<key>`), while pictures are on;
@@ -41,6 +41,7 @@ Only a reader whose scenes are drawn (`SIMPLE_CHAT_IMAGE_USERS`) has «🎨 Ст
   - «🎨 Рисую пример…» stands while the sample is drawn. The photo comes with the caption «Пример стиля: <name>» and, unless it is the chosen style, the choose button.
   - One sample at a time per reader. The reader's next move, /cancel or a new job stops it.
   - A sample is refused while pictures are off, while a scene is being written, before the first scene, and while another sample is drawn.
+- **All styles:** the same sample in every style of the picker, in its order, from one frame and the story's seed. Each photo is sent as soon as it is drawn, with its own caption and choose button, under one status line that says how many are coming. It counts as one sample: it is refused and stopped by the same rules, a style that fails ends the rest, and each picture's log row carries `stylesAsked`. Every style costs the picture card a full drawing, about 17 s on the current card.
 
 ## Interface language
 

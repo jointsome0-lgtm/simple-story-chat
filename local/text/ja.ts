@@ -135,6 +135,7 @@ export const ja: Messages = {
     tailNote: 'プロンプトの結びはボットがあなたの文に自動で付け加えます。人物は大人のまま描かれ、絵に文字は入りません。',
     choose: '✅ このスタイルで描く',
     sample: '🖼 最新のシーンでサンプル',
+    sampleAll: '🖼 最新のシーンで全スタイル',
     edit: '✏️ 編集',
     remove: '🗑 削除',
     back: '↩️ スタイル一覧へ',
@@ -153,6 +154,8 @@ export const ja: Messages = {
     backToStyle: '↩️ スタイルに戻る',
     sampleCaption: name => `スタイルのサンプル：${name}`,
     drawingSample: '🎨 サンプルを描いています…',
+    // `count` is how many styles are drawn, one picture each.
+    drawingAll: (count: number) => `🎨 最新のシーンを全${count}スタイルで描いています。画像は1枚ずつ届きます。物語で次の行動をすると描画は止まります。`,
   },
 
   model: {

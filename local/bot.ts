@@ -23,7 +23,7 @@ import type { Log } from './model-error.ts';
 import { errorCode, member, safeErrorDetails } from './model-error.ts';
 import type { GenerationResult, Provider } from './model.ts';
 import { STYLE } from './illustrate.ts';
-import { OWN_STYLE_CHARS, OWN_STYLES_MAX, choiceOf, lineOf, ownStyle, ownStyleInput, ownStyles, styleKey, styleName } from './picture-style.ts';
+import { OWN_STYLE_CHARS, OWN_STYLES_MAX, choiceOf, lineOf, ownStyle, ownStyleInput, ownStyles, pickerKeys, styleKey, styleName } from './picture-style.ts';
 import type { Store } from './store.ts';
 import type { GpuInfo, ModelInfo, RenderDetails } from './ui.ts';
 import { isRegistered, langFromTelegram, texts } from './text.ts';
@@ -54,8 +54,9 @@ type FileInput = { draftId: string; text: string; error?: undefined } | { error:
 type Plan = {
   screen?: Screen; cancel?: boolean; gpuAction?: string; modelStatus?: boolean;
   savedText?: { text: string; modelInfo: SceneNode['modelInfo'] }; job?: Job;
-  // A sample of a style the reader asked for: what to draw and what to say under it (local/picture.ts `sample`).
-  sample?: Pick<SampleRequest, 'storyId' | 'branchId' | 'nodeId' | 'line' | 'pictureStyle' | 'caption'>;
+  // A sample of styles the reader asked for: what to draw, what to say under each picture and while they are drawn
+  // (local/picture.ts `sample`).
+  sample?: Pick<SampleRequest, 'storyId' | 'branchId' | 'nodeId' | 'styles' | 'status'>;
 };
 // One reader's turn, for as long as it can still be cancelled. What it leaves behind — a picture being stopped on
 // the other card — outlives the entry and is awaited through `inFlight` instead.
@@ -229,18 +230,22 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       state.ui = null;
       return { screen: render(state, 'style', pictureInfo) };
     }
-    // A sample is the reader's last scene drawn once more in the style they are looking at, on request only.
-    if (action?.startsWith('style-sample:')) {
-      const key = action.slice(13);
-      const line = lineOf(state, key, standardStyle);
-      if (line === null) throw refuse(t, 'staleButton');
+    // A sample is the reader's last scene drawn once more in the style they are looking at, or in every style of the
+    // picker, on request only.
+    if (action?.startsWith('style-sample:') || action === 'style-samples') {
+      const all = action === 'style-samples';
+      const styles = (all ? pickerKeys(state, standardStyle) : [action.slice(13)]).flatMap(key => {
+        const line = lineOf(state, key, standardStyle);
+        return line === null ? [] : [{ line, pictureStyle: choiceOf(key), caption: render(state, `sample:${key}`, pictureInfo) }];
+      });
+      if (!styles.length) throw refuse(t, 'staleButton');
       if (!pictureInfo.pictures) throw refuse(t, 'sampleOff');
       if (state.job) throw refuse(t, 'sampleBusy');
       const where = state.active;
       const nodeId = where ? state.stories[where.storyId]?.branches[where.branchId]?.head : null;
       if (!where || !nodeId) throw refuse(t, 'sampleNoScene');
-      return { sample: { storyId: where.storyId, branchId: where.branchId, nodeId, line, pictureStyle: choiceOf(key),
-        caption: render(state, `sample:${key}`, pictureInfo) } };
+      return { sample: { storyId: where.storyId, branchId: where.branchId, nodeId, styles,
+        status: all ? t.pictureStyle.drawingAll(styles.length) : t.pictureStyle.drawingSample } };
     }
     // While a style is being written, text is the style, never a move in the story; buttons and commands leave. The
     // first line of a message of several is the style's name.
@@ -569,7 +574,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
           const stop = new AbortController();
           sampling.set(userId, stop);
           const task: Promise<unknown> = illustrator.sample({ ...plan.sample, userId, chat, signal: stop.signal, log,
-            status: t.pictureStyle.drawingSample, hold: () => gpu?.acquire() })
+            hold: () => gpu?.acquire() })
             .catch(error => log('turn_task_failed', errorCode(error)))
             .finally(() => {
               if (sampling.get(userId) === stop) sampling.delete(userId);

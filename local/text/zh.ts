@@ -136,6 +136,7 @@ export const zh: Messages = {
     tailNote: '提示词的结尾由机器人自动加在你的文字后面：人物保持成年人的样子，画面上没有文字。',
     choose: '✅ 用这个风格画',
     sample: '🖼 用最近一幕画示例',
+    sampleAll: '🖼 用最近一幕画全部风格',
     edit: '✏️ 修改',
     remove: '🗑 删除',
     back: '↩️ 返回风格列表',
@@ -154,6 +155,8 @@ export const zh: Messages = {
     backToStyle: '↩️ 返回该风格',
     sampleCaption: name => `风格示例：${name}`,
     drawingSample: '🎨 正在绘制示例…',
+    // `count` is how many styles are drawn, one picture each.
+    drawingAll: (count: number) => `🎨 正在用最近一幕绘制全部 ${count} 种风格。图片会逐张发来；在故事里继续行动会停止绘制。`,
   },
 
   model: {

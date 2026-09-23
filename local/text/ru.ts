@@ -169,6 +169,7 @@ export const ru = {
     tailNote: 'Концовку промпта бот добавляет к твоему тексту сам: люди остаются взрослыми, а на картинке нет надписей.',
     choose: '✅ Рисовать в этом стиле',
     sample: '🖼 Пример на последней сцене',
+    sampleAll: '🖼 Все стили на последней сцене',
     edit: '✏️ Изменить',
     remove: '🗑 Удалить',
     back: '↩️ К стилям',
@@ -191,6 +192,8 @@ export const ru = {
     // Under a sample picture; `name` is the style as its button names it.
     sampleCaption: (name: string) => `Пример стиля: ${name}`,
     drawingSample: '🎨 Рисую пример…',
+    // `count` is how many styles are drawn, one picture each.
+    drawingAll: (count: number) => `🎨 Рисую последнюю сцену во всех стилях (${count}). Картинки придут по одной; следующий ход в истории остановит рисование.`,
   },
 
   model: {
