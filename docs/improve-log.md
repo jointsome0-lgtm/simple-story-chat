@@ -129,6 +129,20 @@ measured noise, private) is written in `docs/improve-loop.md`, "The gold tree, v
 to revision `d72c1b1374ed` (5 scenarios, the walk and its tree, 14 files); the uploader had to learn that a pack holds
 walks and gold trees beside replay scenarios.
 
+**Six models over version 1** (`walk-nodes --branches 4 --no-grow --max-path-tokens 54000`, the same council, 47 minutes,
+20 tasks per model: the sixteen trunk steps and four branch continuations; the owner's order, the OpenRouter limit raised
+by the owner for Gemma and Qwen). Consistent of decided: Sol 16/19 and Opus 5.5 16/20 (both on the council), Luna 7/16
+with 4 splits, Gemma 4 31B 7/20, Qwen 3.8 27B 2/17 with 2 splits and one scene unjudged (Fable silent by timeout), Haiku
+4.5 1/20; the run's score 0.05. The cap admitted every task: the longest prefix is 12 524 `o200k_base` tokens, the seed
+alone 882. Every model lost trunk depth 8 and five of six depth 5, both on time across the scene boundary: the trunk's
+scene 7 (`g24`, Fable) is stamped 21:24 and narrates several minutes more, and every scene 8 sets its clock at 21:24 to
+21:26; scene 5 (`g17`, Opus) records 20:54 and 20:59, and the depth-6 continuations go back to 20:52 or 20:58. The run
+wrote 271 `later` entries into the ledgers of 19 nodes, 259 of them confirmed; `g17` collected 60 (59 confirmed), `g24`
+41 (41). Findings against the weakest writers are many and confirmed (Qwen 119, Haiku 110), against the council members
+few (Sol 5, Opus 9). Open: whether minutes narrated past a scene's own stamp are a fair test or something the seed's
+clock rule should say; that belongs to the seed of version 2. The results are in the public README; the pack (the tree
+with the new ledger, 14 files) was pushed to revision `229ac84a1956`.
+
 ## 2026-09-22 · Fable 5.1 · the walk: the model writes its own story, and a council of four reads every scene
 
 Not a step of the loop. The owner redirected the day's task: what matters is consistency, not details, and the eval
