@@ -4,6 +4,7 @@
 // which illustrates a reader's scene in the bot, and local/illustrate-probe.ts, which describes the frozen synthetic
 // stories on a hosted model — so that what the six steps measured is what the bot sends. Nothing is drawn here.
 import type { ChatMessage, GenerateControls, ModelRequest, Provider } from './model.ts';
+import { estimateTokens } from './context.ts';
 
 // One recurring person of a story: the name as the story writes it, and the fixed appearance line the assembly puts
 // in wherever a described person is that name. The sheet is written once per story and reused for all its frames.
@@ -208,6 +209,9 @@ export type Excerpt = { system: string; messages: ChatMessage[] };
 // The runaway of JSON mode is answered with a low limit and one retry, not with a longer wait: step 1 measured a
 // reply that filled 700 tokens with newlines, and the same scene parsed on the next attempt.
 export const DESCRIBE_TOKENS = 900;
+// What each instruction adds to the request it ends, by the estimate of local/context.ts, worked out once. The text is
+// Russian, which that estimate counts a third or more over; a frame's instruction adds the sheet's names on top.
+export const INSTRUCTION_TOKENS = { sheet: estimateTokens(SHEET), frame: estimateTokens(instruction([])) };
 
 // The sheet of a whole story, from its history up to the scene named in `context`.
 export function sheetRequest(context: Excerpt): ModelRequest {

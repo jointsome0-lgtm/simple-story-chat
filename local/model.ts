@@ -10,9 +10,12 @@ import { resolve } from 'node:path';
 export const BUDGET_PATH = resolve(import.meta.dirname, '..', 'eval-usage.sqlite');
 
 export type ChatMessage = { role: 'user' | 'assistant'; content: string };
+// `trustEstimate`: the caller's estimate is far enough below its limit that a provider which counts input exactly
+// may send the request without counting it first (local/llama.ts); the count the server reports while generating
+// still decides whether the result stands.
 export type ModelRequest = {
   system: string; messages: ChatMessage[]; maxOutputTokens: number;
-  purpose?: 'memory'; outputSchema?: object; estimatedInputTokens?: number;
+  purpose?: 'memory'; outputSchema?: object; estimatedInputTokens?: number; trustEstimate?: boolean;
 };
 // `onWait`: a shared model's queue reports how many calls are ahead of this one, each time the number changes.
 // `onStart`: the call has left a shared model's queue and runs.

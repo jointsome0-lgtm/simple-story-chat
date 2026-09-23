@@ -18,6 +18,7 @@ import type { ImageConfig } from './config.ts';
 import { defaultWorkflow } from './image-batch.ts';
 import type { Graph } from './image-batch.ts';
 import { STYLE } from './illustrate.ts';
+import { createLlama } from './llama.ts';
 import type { ErrorDetails } from './model-error.ts';
 import { safeErrorDetails } from './model-error.ts';
 import type { GenerateControls, GenerationResult, ModelRequest, Provider } from './model.ts';
@@ -132,6 +133,26 @@ const kindOf = (request: ModelRequest) => {
   return !properties ? 'scene' : 'characters' in properties ? 'sheet' : 'frame';
 };
 
+// llama-server as the bot's provider meets it (local/llama.ts): the count endpoint, and a stream whose usage repeats
+// the count. A scene costs what `scene` says; a description repeats that scene and adds its instruction. Every count
+// asked for is noted in `counted` by the kind of request it was for.
+function fakeLlama(scene: { inputTokens: number; outputTokens: number }, counted: string[]) {
+  return createLlama({ baseUrl: 'http://127.0.0.1:8080', model: 'test-model', contextTokens: 65536 }, { fetch: async (url, init) => {
+    const body = JSON.parse(init.body as string) as { response_format?: { schema: object } };
+    const kind = kindOf({ system: '', messages: [], maxOutputTokens: 1, outputSchema: body.response_format?.schema });
+    const promptTokens = kind === 'scene' ? scene.inputTokens : scene.inputTokens + scene.outputTokens + (kind === 'sheet' ? 200 : 1200);
+    if (new URL(url).pathname.endsWith('/input_tokens')) {
+      counted.push(kind);
+      return new Response(JSON.stringify({ input_tokens: promptTokens }), { headers: { 'content-type': 'application/json' } });
+    }
+    const text = kind === 'scene' ? '2026-08-02 20:00\n\nСинтетическая сцена.' : JSON.stringify(kind === 'sheet' ? SHEET : FRAME);
+    const events = [{ choices: [{ index: 0, delta: { content: text }, finish_reason: 'stop' }] },
+      { choices: [], usage: { prompt_tokens: promptTokens, completion_tokens: kind === 'scene' ? scene.outputTokens : 50 } }];
+    return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n',
+      { headers: { 'content-type': 'text/event-stream' } });
+  } });
+}
+
 type Options = {
   comfy?: string; users?: string[]; style?: string; offsetMs?: number; sheetReply?: object;
   // How many scene deliveries to hold, so that a test can send the next message while one is still in flight;
@@ -145,6 +166,9 @@ type Options = {
   // What the model says the scene cost. Above `compactAtTokens` the bot prepares the next compaction while the
   // reader reads; the numbers are the model's own and say nothing about the size of these synthetic scenes.
   usage?: { inputTokens: number; outputTokens: number };
+  // The real llama.cpp provider in front of `fakeLlama`, with what the server counts for the scene; `illustratorModel`
+  // names the story model to the illustrator otherwise than the scenes' stamps do.
+  llama?: { inputTokens: number; outputTokens: number; illustratorModel?: string };
 };
 function fixture(t: TestContext, options: Options = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'simple-chat-picture-'));
@@ -177,7 +201,8 @@ function fixture(t: TestContext, options: Options = {}) {
     if (method === 'sendRichMessage' && heldFinals++ < (options.holdFinal ?? 0)) await new Promise<void>(go => holding.push(go));
     return { message_id: id };
   };
-  const model: Provider = { async generate(request, controls?: GenerateControls) {
+  const counted: string[] = [];
+  const fake: Provider = { async generate(request, controls?: GenerateControls) {
     requests.push(request);
     const kind = kindOf(request);
     if (kind === 'sheet' && options.sheetError) throw Object.assign(new Error(options.sheetError), { code: options.sheetError });
@@ -190,6 +215,8 @@ function fixture(t: TestContext, options: Options = {}) {
       usage: { ...(options.usage ?? { inputTokens: 100, outputTokens: 50 }),
         totalTokens: (options.usage?.inputTokens ?? 100) + (options.usage?.outputTokens ?? 50) } };
   } };
+  const llama = options.llama && fakeLlama(options.llama, counted);
+  const model: Provider = llama ? { ...llama, generate: (request, controls) => { requests.push(request); return llama.generate(request, controls); } } : fake;
   // The queue the bot really runs on, when a test needs the slot itself: one slot, as one llama-server has.
   const scheduler = options.scheduler
     ? createScheduler(model as { generate: Provider['generate'] }, { pollMs: 2, quietMs: 0, log: (event, code, details) => rows.push({ event, ...(code === undefined ? {} : { code }), ...safeErrorDetails(details) }) })
@@ -205,8 +232,8 @@ function fixture(t: TestContext, options: Options = {}) {
   // one forward by a fixed offset instead of pretending time stands still. `restart` builds the bot and its
   // illustrator again over the same store and Telegram, and so forgets whatever they kept in memory.
   const boot = () => {
-    const illustrator = images && createIllustrator(images,
-      { store, provider, pollMs: 2, now: () => Date.now() + (options.offsetMs ?? 0) });
+    const illustrator = images && createIllustrator(images, { store, provider, pollMs: 2, now: () => Date.now() + (options.offsetMs ?? 0),
+      model: { model: options.llama?.illustratorModel ?? 'test-model', provider: 'claude-code', contextTokens: 65536 } });
     const bot = createBot({ store, api, provider, illustrator, allowedUsers: new Set(['1', '2']), maxOutputTokens: 4096,
       render, scenePrefix, sceneKeyboard, model: 'test-model', ownerId: '1',
       compactAtTokens: options.compactAtTokens, keepScenes: options.keepScenes,
@@ -230,7 +257,7 @@ function fixture(t: TestContext, options: Options = {}) {
   const release = () => { for (const go of holding.splice(0)) go(); };
   const restart = async () => { await running.bot.stop(); running = boot(); };
   return { get bot() { return running.bot; }, get illustrator() { return running.illustrator; }, restart,
-    store, sent, rows, requests, deleted, provider, message, click, start, release, workflow, directory };
+    store, sent, rows, requests, counted, deleted, provider, message, click, start, release, workflow, directory };
 }
 
 // Waits for something the fake server or the bot does on its own; the whole file runs in milliseconds.
@@ -566,6 +593,33 @@ test('the sheet is written once per story and reused by the next scene', async t
   assert.deepEqual(f.requests.map(kindOf), ['scene', 'sheet', 'frame', 'scene', 'frame']);
   assert.equal(f.rows.filter(row => row.event === 'picture_sheet_written').length, 1);
   assert.equal(photos(f.sent).length, 2);
+});
+
+// A description repeats the scene's own request, so what the server counted for the scene and its answer, plus the
+// instruction, says what it will count now. Far from the limit that is enough and the description goes without a
+// count of its own; near it, or when the scene's stamp names another model, the server counts it first as before.
+test('a description far from the limit is not counted first; near it, or without the scene\'s anchor, it is', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  // Nine tenths of what a description may take, 65536 less its 900 tokens of answer, is 58172. A scene that cost 57000
+  // leaves room under it for the sheet's short instruction and not for the frame's long one; 58200 leaves none.
+  for (const { llama, counted, trusted } of [
+    { llama: { inputTokens: 100, outputTokens: 50 }, counted: [], trusted: ['scene', 'sheet', 'frame'] },
+    { llama: { inputTokens: 52000, outputTokens: 5000 }, counted: ['frame'], trusted: ['scene', 'sheet'] },
+    { llama: { inputTokens: 53000, outputTokens: 5200 }, counted: ['sheet', 'frame'], trusted: ['scene'] },
+    { llama: { inputTokens: 100, outputTokens: 50, illustratorModel: 'another-model' }, counted: ['sheet', 'frame'], trusted: ['scene'] },
+  ]) {
+    // The threshold stays above the scene and its answer, so no compaction is prepared on the way.
+    const f = fixture(t, { comfy: root, llama, scheduler: true, compactAtTokens: 64000 });
+    await f.start();
+    await f.bot.idle();
+    // The scene itself is far below its threshold and is never counted first.
+    assert.deepEqual(f.counted, counted);
+    assert.deepEqual(f.requests.map(kindOf), ['scene', 'sheet', 'frame']);
+    assert.deepEqual(f.requests.filter(request => request.trustEstimate).map(kindOf), trusted);
+    assert.equal(f.rows.find(one => one.event === 'picture')!.outcome, 'ready');
+  }
 });
 
 test('a card that cannot draw the frame replaces the status line with one line, and the story is untouched', async t => {

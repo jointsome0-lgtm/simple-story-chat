@@ -197,20 +197,34 @@ export async function generateScene({ store, userId, jobId, provider, config, si
   const load = () => loadTarget(store, userId, jobId, signal);
   const storyRequest = (target: ReturnType<typeof load>) => {
     const request = makeRequest(target.state, target.job, config.maxOutputTokens);
-    request.estimatedInputTokens = estimateRequest(target.state, target.job, request, config).tokens;
-    return request;
+    const estimate = estimateRequest(target.state, target.job, request, config);
+    request.estimatedInputTokens = estimate.tokens;
+    return { request, anchored: estimate.source === 'usage' };
   };
   prepared?.keep(load().job);
   for (let pass = 0; pass <= 4; pass++) {
     const target = load();
-    const request = storyRequest(target);
+    const { request, anchored } = storyRequest(target);
+    const estimateTokens = request.estimatedInputTokens!;
+    const threshold = compactionThreshold(config);
+    // Far below the threshold a provider that counts input exactly is not asked to: the count costs about a second
+    // on the card's tunnel, and the server reports the number while it generates, which decides as before
+    // (local/llama.ts). Anchored on the last scene's measured input, the estimate guesses only the new scene and
+    // message, and there plain bytes / 4 counts Chinese 10% and Korean 7% short (Gemma 4's tokenizer on synthetic
+    // scenes, September 2026; Japanese, English and Russian not short at all): a few hundred tokens against the tenth
+    // of the threshold that 0.9 leaves, 4400 at the default. Without an anchor (a story's first scene, the first after
+    // a compaction or a change of model) the whole request is guessed, Korean came out about 5% short there, and only
+    // half the threshold is trusted: a tokenizer would have to need twice the tokens the estimate allows for a
+    // skipped count to matter. Even then the request is not lost: the server's own count ends it as `context_limit`,
+    // which compacts below.
+    if (provider.countInput && estimateTokens < threshold * (anchored ? 0.9 : 0.5)) request.trustEstimate = true;
+    const counted = !!provider.countInput && !request.trustEstimate;
     // The token count's time in the queue goes to `waitMs`, only its own run to `countMs`.
     const counting = Date.now();
     let countStart = counting;
-    if (provider.countInput) request.estimatedInputTokens = await provider.countInput(request, { signal, onWait: waiting, onStart: () => { countStart = Date.now(); } });
-    const countMs = provider.countInput ? Date.now() - countStart : undefined;
+    if (counted) request.estimatedInputTokens = await provider.countInput!(request, { signal, onWait: waiting, onStart: () => { countStart = Date.now(); } });
+    const countMs = counted ? Date.now() - countStart : undefined;
     const countWaitMs = countStart - counting;
-    const threshold = compactionThreshold(config);
     // storyRequest has set the estimate.
     if (request.estimatedInputTokens! < threshold) {
       try {
@@ -222,13 +236,13 @@ export async function generateScene({ store, userId, jobId, provider, config, si
         });
         // Counts and durations only: where the time of a scene went (queue, token count, prefill, decoding).
         log?.('scene_request_completed', undefined, { ...result.timings, waitMs: waitMs === undefined ? undefined : countWaitMs + waitMs, countMs, elapsedMs: Date.now() - asked,
-          inputTokens: result.usage?.inputTokens ?? undefined, outputTokens: result.usage?.outputTokens ?? undefined });
+          estimateTokens, inputTokens: result.usage?.inputTokens ?? undefined, outputTokens: result.usage?.outputTokens ?? undefined });
         load();
         // The threshold is above a non-negative estimate here, so a missing count never reaches it.
         if ((result.usage?.inputTokens ?? 0) >= threshold) throw new ModelError('context_limit');
         return { result, request };
       } catch (error) {
-        // A live input count can correct the estimate before any text is shown.
+        // A live input count can correct the estimate: before any text is shown, or with the scene when it was skipped.
         if (errorCode(error) !== 'context_limit') throw error;
       }
     }

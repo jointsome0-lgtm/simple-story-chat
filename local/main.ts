@@ -86,7 +86,8 @@ try {
   // Pictures under the scenes, if this computer has a second card tunnelled for them (docs/illustrations-plan.md).
   // The graph is read and checked here, at startup: a workflow that is not a ComfyUI API export must fail now and
   // not under the first reader who gets a scene.
-  const illustrator = config.images ? createIllustrator(config.images, { store, provider }) : undefined;
+  const illustrator = config.images ? createIllustrator(config.images,
+    { store, provider, model: { model: config.model, provider: config.provider, contextTokens: config.contextTokens } }) : undefined;
   if (config.images) log('pictures_configured');
   bot = createBot({ store, api, provider, gpu, illustrator, providerName: config.provider, readSeedFile: createSeedFileReader(config.token, api), render, scenePrefix, sceneKeyboard,
     allowedUsers: config.allowedUsers, ownerId: config.ownerId, maxOutputTokens: config.maxOutputTokens,

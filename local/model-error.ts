@@ -37,6 +37,9 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   // One model request: time in the queue and in token counting, then llama-server's own timings (local/model.ts Timings).
   'waitMs', 'countMs', 'cacheTokens', 'promptTokens', 'promptMs', 'predictedTokens', 'predictedMs', 'draftTokens',
   'draftAcceptedTokens', 'slot',
+  // The scene request's size as the bot estimated it before any count (local/generation.ts): beside `inputTokens` it
+  // shows how far the estimate that let a request skip the count was from the server's own.
+  'estimateTokens',
   // Which run of local/prepare.ts a row belongs to, counted from the start of the process.
   'prepareRun',
   // One illustrated scene (docs/illustrations-plan.md): the description call, then the image server from submit to

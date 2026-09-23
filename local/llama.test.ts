@@ -109,6 +109,72 @@ test('length finishes remain marked, missing output usage remains unknown', asyn
   assert.equal(result.usage!.outputTokens, null);
 });
 
+// A caller far below its limit may send a request on its own estimate (ModelRequest `trustEstimate`): the count is a
+// round trip of its own, and the server reports the real number while it generates.
+const trusted = (estimatedInputTokens = 100): ModelRequest => ({ ...request(), estimatedInputTokens, trustEstimate: true });
+
+test('a trusted estimate is sent without a count, and the server\'s count in the stream replaces it', async () => {
+  const f = fixture();
+  const result = await f.provider.generate(trusted());
+  assert.deepEqual(f.calls.map(call => call.path), ['/v1/chat/completions']);
+  // The server counted 120 where the estimate said 100: that is no mismatch, and its count is the usage.
+  assert.equal(result.usage!.inputTokens, 120);
+  assert.equal(result.usage!.totalTokens, 128);
+  // Only an estimate that is a count is trusted: none, zero or a fraction is counted first as before.
+  for (const estimatedInputTokens of [undefined, 0, 99.5]) {
+    const g = fixture();
+    await g.provider.generate({ ...request(), estimatedInputTokens, trustEstimate: true });
+    assert.deepEqual(g.calls.map(call => call.path), ['/v1/chat/completions/input_tokens', '/v1/chat/completions']);
+  }
+  // A caller that asks for the count gets it, trusted or not, and generation then holds the server to it.
+  const g = fixture(() => stream([chunk({ content: 'Текст.' }, 'stop'), { choices: [], usage: { ...usage, prompt_tokens: 121 } }]));
+  const counted = trusted();
+  assert.equal(await g.provider.countInput(counted), 120);
+  await assert.rejects(g.provider.generate(counted), { code: 'unexpected_context' });
+  assert.deepEqual(g.calls.map(call => call.path), ['/v1/chat/completions/input_tokens', '/v1/chat/completions']);
+});
+
+test('a trusted request the server counts over the limit is a context_limit; one it does not count is not taken', async () => {
+  for (const finish of ['stop', 'length']) {
+    const f = fixture(() => stream([chunk({ content: 'Текст.' }, finish), { choices: [], usage: { ...usage, prompt_tokens: 54000 } }]));
+    await assert.rejects(f.provider.generate(trusted(30000), { inputLimitTokens: 53999 }), { code: 'context_limit' });
+    assert.equal(f.calls.length, 1);
+  }
+  // Without the server's count nothing says the request fitted.
+  const f = fixture(() => stream([chunk({ content: 'Текст.' }, 'stop')]));
+  await assert.rejects(f.provider.generate(trusted()), { code: 'usage_unavailable' });
+  // An estimate over the limit is refused before anything is sent, as a count over it is.
+  const g = fixture();
+  await assert.rejects(g.provider.generate(trusted(54000), { inputLimitTokens: 53999 }), { code: 'context_limit' });
+  assert.equal(g.calls.length, 0);
+});
+
+// llama-server started with --no-context-shift answers a prompt as long as its context with 400, before generating.
+test('a trusted request the server refuses makes the count it skipped, and over the limit it is a context_limit', async () => {
+  for (const [exact, code] of [[70000, 'context_limit'], [120, 'provider_failed'], [null, 'provider_failed']] as const) {
+    const paths: string[] = [];
+    const provider = createLlama(config, { fetch: async url => {
+      const path = new URL(url).pathname;
+      paths.push(path);
+      if (!path.endsWith('/input_tokens')) return new Response('{"error":{"code":400,"message":"PRIVATE_RAW_ERROR"}}', { status: 400 });
+      // The count that follows can fail too; the refusal is then reported as it came.
+      return exact === null ? new Response('PRIVATE_RAW_ERROR', { status: 500 }) : json({ input_tokens: exact });
+    } });
+    await assert.rejects(provider.generate(trusted(30000)), (error: ModelError) => {
+      assert.equal(error.code, code);
+      assert.equal(error.phase, 'generate');
+      assert.equal(error.httpStatus, 400);
+      assert.doesNotMatch(JSON.stringify(error), /PRIVATE/);
+      return true;
+    });
+    assert.deepEqual(paths, ['/v1/chat/completions', '/v1/chat/completions/input_tokens']);
+  }
+  // A request counted before it was sent is not counted again.
+  const f = fixture(() => new Response('PRIVATE_RAW_ERROR', { status: 400 }));
+  await assert.rejects(f.provider.generate(request()), { code: 'provider_failed', httpStatus: 400 });
+  assert.deepEqual(f.calls.map(call => call.path), ['/v1/chat/completions/input_tokens', '/v1/chat/completions']);
+});
+
 test('HTTP failure returns a safe code without retries or raw error disclosure', async () => {
   for (const [status, code] of [[401, 'unauthorized'], [429, 'rate_limited'], [503, 'model_unavailable'], [404, 'unsupported_server']] as const) {
     let calls = 0;

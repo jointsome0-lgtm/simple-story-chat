@@ -23,15 +23,16 @@
 // around the menus does not stop it either — it ends with the next scene the reader asks for, or with the photo.
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import type { Library } from '../lib/library.ts';
+import type { Library, SceneNode } from '../lib/library.ts';
 import type { ImageConfig } from './config.ts';
+import { estimateTokens, requestStamp, sameContext } from './context.ts';
 import { SAMPLER_DEFAULTS, apiGraph, applyToWorkflow, drawOne, latentSizeOf, previewOnly, samplerSettingsOf } from './image-batch.ts';
 import type { Comfy, Graph } from './image-batch.ts';
-import { STYLE, askJson, assemblePrompt, frameRequest, sheetOf, sheetRequest } from './illustrate.ts';
-import type { Character, Description } from './illustrate.ts';
+import { INSTRUCTION_TOKENS, STYLE, askJson, assemblePrompt, frameRequest, sheetOf, sheetRequest } from './illustrate.ts';
+import type { Character, Description, Excerpt } from './illustrate.ts';
 import type { Log } from './model-error.ts';
 import { errorCode, safeErrorDetails } from './model-error.ts';
-import type { Provider } from './model.ts';
+import type { ModelRequest, Provider } from './model.ts';
 import { styleChoice, styleLine } from './picture-style.ts';
 import type { StyleChoice } from './picture-style.ts';
 import { contextParts, storyNarration } from './prompt.ts';
@@ -81,6 +82,9 @@ const seedOf = (storyId: string) => parseInt(createHash('sha256').update(storyId
 
 export function createIllustrator(config: ImageConfig, deps: {
   store: Store; provider: Provider;
+  // The story model as the bot names it in each scene's request stamp, and its context. Without it every description
+  // is counted by the server before it is sent (`trusted` below).
+  model?: { model: string; provider: string; contextTokens: number };
   // The clock and the poll interval of the picture lane, named here so that a test can run the whole step against a
   // fake ComfyUI in milliseconds. ComfyUI has no event to wait for; `drawOne` polls its history.
   now?: () => number; pollMs?: number;
@@ -115,8 +119,35 @@ export function createIllustrator(config: ImageConfig, deps: {
   // The scene's own request, once more: the same system prompt and the same history up to this scene, so that a
   // server with a prefix cache pays for the appended instruction alone (the plan's "What the second call costs").
   const excerpt = (state: Library, storyId: string, nodeId: string, branchId: string) => {
-    const parts = contextParts(state, { storyId, head: nodeId, memory: state.stories[storyId].branches[branchId]?.memory ?? null });
-    return { system: storyNarration(state, storyId).system, messages: [...parts.seed, ...parts.memory, ...parts.tail] };
+    const memory = state.stories[storyId].branches[branchId]?.memory ?? null;
+    const parts = contextParts(state, { storyId, head: nodeId, memory });
+    return { system: storyNarration(state, storyId).system, messages: [...parts.seed, ...parts.memory, ...parts.tail], memory };
+  };
+
+  // What the server will count for a description of `node`, without asking it. A description is the scene's own
+  // request once more, with the scene appended and an instruction last, and without the narrator's rule that request
+  // ended with (local/prompt.ts). That rule, 150 tokens and more in every story language, is longer than what the
+  // description adds besides: the chat template's marks around two more messages, and the date line a scene may have
+  // been given when it was saved. So the scene's measured input and output plus the instruction's estimate is at least
+  // that count. It holds only for the model, provider, memory and system prompt the scene was written with, as a
+  // scene's own anchor does (local/context.ts).
+  const anchorOf = (node: SceneNode, context: Excerpt & { memory: string | null }) => {
+    const input = node.usage?.inputTokens ?? -1;
+    const output = node.usage?.outputTokens ?? -1;
+    if (!deps.model || !node.requestContext || !Number.isSafeInteger(input) || !Number.isSafeInteger(output) || input < 0 || output < 0) return null;
+    const stamp = requestStamp({ system: context.system, messages: context.messages, maxOutputTokens: 0 }, deps.model.model, context.memory, deps.model.provider);
+    return sameContext(node.requestContext, stamp) ? input + output : null;
+  };
+  // Far below the limit a description goes without a count of its own (local/llama.ts), which saves a round trip of
+  // about a second to the card each; the server's count while it answers still decides. Near the limit, or with no
+  // anchor, the server counts first as before. The margin needs no allowance for dense scripts: the scene is counted
+  // by the server, and the Russian instruction is counted a third or more over.
+  const trusted = (model: Provider, request: ModelRequest, anchor: number | null, instruction: number) => {
+    if (anchor !== null && deps.model && model.countInput && anchor + instruction < 0.9 * (deps.model.contextTokens - request.maxOutputTokens)) {
+      request.estimatedInputTokens = anchor + instruction;
+      request.trustEstimate = true;
+    }
+    return request;
   };
 
   // The frame of each reader's latest described scene, in memory only and only until the next one: a sample of a
@@ -133,6 +164,7 @@ export function createIllustrator(config: ImageConfig, deps: {
     const story = state.stories[storyId];
     if (!story?.nodes[nodeId]) throw Object.assign(new Error('scene_gone'), { code: 'scene_gone' });
     const context = excerpt(state, storyId, nodeId, branchId);
+    const anchor = anchorOf(story.nodes[nodeId], context);
     let sheet: Character[] = [];
     // Both calls continue the request the scene itself was written from, so right after the scene they belong in the
     // slot where that prefix is cached and nowhere else: `sharesPrefix` is the scheduler's word for it, and it also
@@ -143,12 +175,13 @@ export function createIllustrator(config: ImageConfig, deps: {
       // verbatim, which is the only thing that made a character recognisable across pictures (step 6).
       sheet = story.sheet ?? [];
       if (!story.sheet) {
-        sheet = sheetOf((await askJson(model, sheetRequest(context), { signal })).value);
+        sheet = sheetOf((await askJson(model, trusted(model, sheetRequest(context), anchor, INSTRUCTION_TOKENS.sheet), { signal })).value);
         store.mutate(userId, saved => { const one = saved.stories[storyId]; if (one && !one.sheet) one.sheet = sheet; });
         log('picture_sheet_written', undefined, { sheetCharacters: sheet.length });
       }
-      return (await askJson(model, frameRequest(context, sheet.map(one => one.name)), { signal }))
-        .value as unknown as Description;
+      const names = sheet.map(one => one.name);
+      const frame = trusted(model, frameRequest(context, names), anchor, INSTRUCTION_TOKENS.frame + estimateTokens(names.join(', ')));
+      return (await askJson(model, frame, { signal })).value as unknown as Description;
     }, sharesPrefix ? { holder: userId, sharesPrefix } : { holder: userId });
     frames.set(userId, { storyId, nodeId, description, sheet });
     return { description, sheet };

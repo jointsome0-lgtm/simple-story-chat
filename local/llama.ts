@@ -175,22 +175,41 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
     catch { throw new ModelError('invalid_response'); }
   }
 
-  async function prepare(request: ModelRequest, signal: AbortSignal) {
-    if (prepared.has(request)) return prepared.get(request)!;
+  // `counted`: the number is our server's own count. `trust` lets a generate call take the estimate of a request whose
+  // caller trusts it (ModelRequest `trustEstimate`) instead: the count is a round trip of its own, about a second
+  // over the tunnel to the card, and the server reports the same number while it generates. That estimate is not kept.
+  async function prepare(request: ModelRequest, signal: AbortSignal, trust = false) {
+    const known = prepared.get(request);
+    if (known) return { ...known, counted: !hosted };
     const body = bodyFor(request);
+    const estimate = count(request.estimatedInputTokens);
+    if (trust && !hosted && request.trustEstimate === true && estimate) return { body, inputTokens: estimate, counted: false };
     // A hosted API counts input only while generating; until then the caller's estimate or bytes / 4 stands in.
-    const result = hosted ? { input_tokens: count(request.estimatedInputTokens) ?? Math.ceil(Buffer.byteLength(JSON.stringify(body.messages)) / 4) }
+    const result = hosted ? { input_tokens: estimate ?? Math.ceil(Buffer.byteLength(JSON.stringify(body.messages)) / 4) }
       : await json('/chat/completions/input_tokens', body, signal) as { input_tokens?: unknown };
     const inputTokens = count(result.input_tokens);
     if (inputTokens === null || inputTokens === 0) throw new ModelError('usage_unavailable');
     const value = { body, inputTokens };
     prepared.set(request, value);
-    return value;
+    return { ...value, counted: !hosted };
+  }
+
+  // llama-server refuses a prompt that does not fit its context with 400, before it generates anything. A request sent
+  // on an estimate makes the count it skipped, so that a prompt over the limit is a `context_limit`, which compacts,
+  // rather than a failure that every retry with the same estimate would meet again.
+  async function refused(error: unknown, body: object, limit: number, signal: AbortSignal): Promise<never> {
+    if ((error as Thrown)?.httpStatus === 400) {
+      const exact = await json('/chat/completions/input_tokens', body, signal)
+        .then(result => count((result as { input_tokens?: unknown }).input_tokens), () => null);
+      if (exact !== null && exact > limit) throw new ModelError('context_limit', { phase: 'generate', httpStatus: 400 });
+    }
+    throw error;
   }
 
   return {
     // llama.cpp 0.4.1 uses the same template and tokenizer for this endpoint
-    // and chat generation. No heuristic fallback to another protocol.
+    // and chat generation. No heuristic fallback to another protocol. A caller that asks for the count gets it, trusted
+    // estimate or not: a pool admits a call by this number (local/scheduler.ts).
     countInput(request: ModelRequest, { signal }: Controls = {}) {
       return operation(signal, 'count_input', async current => (await prepare(request, current)).inputTokens);
     },
@@ -211,13 +230,14 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
     },
     generate(request: ModelRequest, { onText = async () => {}, signal, inputLimitTokens, slot }: GenerateControls = {}) {
       return operation(signal, 'generate', async (current): Promise<GenerationResult> => {
-        const { body, inputTokens: preparedTokens } = await prepare(request, current);
+        const { body, inputTokens: preparedTokens, counted } = await prepare(request, current, true);
         let inputTokens = preparedTokens;
         prepared.delete(request);
         const limit = Math.min(config.contextTokens - request.maxOutputTokens, inputLimitTokens ?? Infinity);
         if (inputTokens > limit) throw new ModelError('context_limit');
         const spend = hosted ? budget?.begin(inputTokens + request.maxOutputTokens) : undefined;
-        const response = await http('/chat/completions', !hosted && slot !== undefined ? { ...body, id_slot: slot } : body, current);
+        const response = await http('/chat/completions', !hosted && slot !== undefined ? { ...body, id_slot: slot } : body, current)
+          .catch(error => (counted || hosted) ? Promise.reject(error) : refused(error, body, limit, current));
         if (!response.headers.get('content-type')?.includes('text/event-stream')) {
           await response.body?.cancel();
           throw new ModelError('invalid_stream');
@@ -229,7 +249,7 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
         let cachedInputTokens: number | null = null;
         let reasoningCharacters = 0;
         let timings: Timings | undefined;
-        let measured = !hosted;
+        let measured = counted;
         for await (const data of events(response.body)) {
           if (data === '[DONE]') { done = true; break; }
           let event: StreamEvent;
@@ -239,7 +259,8 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
           if (!hosted && event.model && event.model !== config.model) throw new ModelError('unexpected_model');
           if (event.usage) {
             const reported = count(event.usage.prompt_tokens);
-            if (hosted && reported) { inputTokens = reported; measured = true; }
+            // Without a count of our own the server's is the measure; after one, the two must agree.
+            if (!counted && reported) { inputTokens = reported; measured = true; }
             else if (reported !== null && reported !== inputTokens) throw new ModelError('unexpected_context');
             outputTokens = count(event.usage.completion_tokens);
             cachedInputTokens = count(event.usage.prompt_tokens_details?.cached_tokens);

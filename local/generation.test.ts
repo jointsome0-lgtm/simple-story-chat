@@ -6,7 +6,8 @@ import type { GenerationConfig } from './generation.ts';
 import { generateScene, compactBranch } from './generation.ts';
 import { ModelError } from './claude.ts';
 import { makeRequest } from './prompt.ts';
-import { requestBudget } from './context.ts';
+import { requestBudget, requestStamp } from './context.ts';
+import { createLlama } from './llama.ts';
 import type { CompactionStatus } from './compact-view.ts';
 import type { ErrorDetails } from './model-error.ts';
 import { safeErrorDetails } from './model-error.ts';
@@ -83,7 +84,8 @@ test('compaction at the threshold keeps four recent scenes and both reversible c
 test('server token counts decide compaction even when the byte estimate disagrees', async t => {
   for (const needsCompaction of [false, true]) {
     const f = fixture(t);
-    f.config.compactAtTokens = needsCompaction ? 54000 : f.config.compactAtTokens;
+    // Just above the estimate: it says the request fits, and it is too close to the threshold to go uncounted.
+    f.config.compactAtTokens = needsCompaction ? f.config.compactAtTokens! + 1 : f.config.compactAtTokens;
     let counts = 0;
     f.provider.countInput = async () => (++counts === 1 && needsCompaction ? 54000 : 1000);
     await f.run();
@@ -393,7 +395,8 @@ test('an automatic compaction that succeeds leaves rows with its sizes and count
   await generateScene({ store: f.store, userId: '1', jobId: f.job.id, provider: f.provider, config: f.config, log: rowsOf(rows) });
   assert.deepEqual(rows.map(row => row.event), ['compaction_request_started', 'compaction_request_completed', 'memory_compacted', 'scene_request_completed']);
   const [started, completed, saved, scene] = rows;
-  assert.deepEqual(Object.keys(scene).sort(), ['elapsedMs', 'event']);
+  // A provider that cannot count has no `countMs`; the estimate is logged all the same.
+  assert.deepEqual(Object.keys(scene).sort(), ['elapsedMs', 'estimateTokens', 'event']);
   // The size of the extraction request itself: the three scenes it carries are most of it.
   const requestBytes = requestBudget(extraction!, f.config.contextTokens).inputBytes;
   assert.ok(requestBytes > 3 * 300 * Buffer.byteLength('ветер '));
@@ -442,5 +445,98 @@ test('a failed compaction carries its numbers on the error, so its one log row t
     assert.equal(rows.at(-1)!.repairSceneCount, type === 'supplement' ? 3 : 0);
     assert.equal(calls, type === 'supplement' ? 2 : 1);
     assert.doesNotMatch(JSON.stringify([rows, safeErrorDetails(error)]), /PRIVATE/);
+  }
+});
+
+// A provider that counts input exactly is asked to only near the threshold: below half of it for an estimate of the
+// whole request, below nine tenths for one anchored on the last scene's measured input.
+test('far below the threshold a scene is sent uncounted, and from the trusted share of it on it is counted', async t => {
+  for (const anchored of [false, true]) for (const counted of [false, true]) {
+    const f = fixture(t);
+    // The fixture's threshold is the byte estimate of its request, which has no anchor.
+    let estimate = f.config.compactAtTokens!;
+    if (anchored) {
+      // The head scene measured 30000 tokens for a request this one repeats byte for byte: the estimate is just that.
+      estimate = 30000;
+      const request = makeRequest(f.store.read('1'), f.job, f.config.maxOutputTokens);
+      f.store.mutate('1', state => Object.assign(state.stories[f.job.storyId].nodes[f.job.head!], {
+        usage: { inputTokens: estimate, outputTokens: 20, totalTokens: estimate + 20 },
+        requestContext: requestStamp(request, f.config.model, f.job.memory, f.config.provider) }));
+    }
+    const share = anchored ? 0.9 : 0.5;
+    f.config.compactAtTokens = Math.floor(estimate / share) + (counted ? 0 : 1);
+    let counts = 0;
+    f.provider.countInput = async request => { counts++; return request.estimatedInputTokens!; };
+    const rows: Row[] = [];
+    await generateScene({ store: f.store, userId: '1', jobId: f.job.id, provider: f.provider, config: f.config, log: rowsOf(rows) });
+    assert.equal(counts, counted ? 1 : 0);
+    assert.equal(f.calls.length, 1, 'the scene, and no compaction');
+    assert.equal(f.calls[0].request.trustEstimate, counted ? undefined : true);
+    assert.equal(f.calls[0].request.estimatedInputTokens, estimate);
+    // The estimate goes to the row either way; a skipped count leaves no duration rather than a zero.
+    const row = rows.find(one => one.event === 'scene_request_completed')!;
+    assert.equal(row.estimateTokens, estimate);
+    assert.equal('countMs' in row, counted);
+  }
+});
+
+test('a scene sent uncounted that the server counts over the threshold still compacts and is written again', async t => {
+  for (const late of ['usage', 'context_limit'] as const) {
+    const f = fixture(t);
+    f.config.compactAtTokens = 54000;
+    let counts = 0;
+    f.provider.countInput = async request => { counts++; return request.estimatedInputTokens!; };
+    const original = f.provider.generate;
+    const scenes: ModelRequest[] = [];
+    f.provider.generate = async (request, controls) => {
+      if (request.system.startsWith('Извлеки')) return original(request, controls);
+      scenes.push(request);
+      if (scenes.length > 1) return original(request, controls);
+      // The server's count of the first scene is over the threshold: in the usage it reports with the scene, or found
+      // by the provider itself, as local/llama.ts finds it.
+      if (late === 'context_limit') throw new ModelError('context_limit');
+      return { text: '2026-08-02 20:00\n\nНовая сцена.', finishReason: 'stop', usage: { inputTokens: 54000, outputTokens: 20, totalTokens: 54020 } };
+    };
+    const { result } = await f.run();
+    assert.equal(counts, 0);
+    assert.equal(scenes.length, 2);
+    assert.ok(scenes.every(scene => scene.trustEstimate));
+    assert.equal(Object.keys(f.store.read('1').stories[f.job.storyId].memories).length, 1);
+    assert.equal(result.usage!.inputTokens, 1000);
+  }
+});
+
+// The same all the way down to llama-server: the server's count of an uncounted scene, in the usage of its stream or
+// through a prompt it refuses as longer than its context, ends in a compaction and a new scene, never in a failure.
+test('an uncounted scene that llama-server finds too long compacts the branch and is written again', async t => {
+  for (const refused of [false, true]) {
+    const f = fixture(t);
+    f.config.compactAtTokens = 54000;
+    const calls: string[] = [];
+    let scenes = 0;
+    const fetch = async (url: string, init: RequestInit) => {
+      const counting = new URL(url).pathname.endsWith('/input_tokens');
+      const messages = (JSON.parse(init.body as string) as { messages: { role: string; content: string }[] }).messages;
+      const summary = messages[0].content.startsWith('Извлеки');
+      if (!summary && !counting) scenes++;
+      calls.push(`${summary ? 'summary' : 'scene'} ${counting ? 'count' : 'generate'}`);
+      // The first scene is over the threshold by the server's count, and when refused longer than the whole context.
+      const tokens = summary ? 2000 : scenes > 1 ? 1000 : refused ? 70000 : 60000;
+      if (counting) return new Response(JSON.stringify({ input_tokens: tokens }), { headers: { 'Content-Type': 'application/json' } });
+      if (refused && !summary && scenes === 1) return new Response('{"error":{"code":400}}', { status: 400 });
+      const text = summary ? f.summary({ system: messages[0].content, messages: messages.slice(1) as ModelRequest['messages'], maxOutputTokens: 1 }).text
+        : '2026-08-02 20:00\n\nНовая сцена.';
+      const events = [{ choices: [{ index: 0, delta: { content: text }, finish_reason: 'stop' }] },
+        { choices: [], usage: { prompt_tokens: tokens, completion_tokens: 20 } }];
+      return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n',
+        { headers: { 'Content-Type': 'text/event-stream' } });
+    };
+    const provider = createLlama({ baseUrl: 'http://127.0.0.1:8080', model: 'test-model', contextTokens: 65536 }, { fetch });
+    const { result } = await generateScene({ store: f.store, userId: '1', jobId: f.job.id, provider, config: f.config, signal: f.controller.signal });
+    // Neither scene is counted first; only the refused one is counted after, and the extraction as ever.
+    assert.deepEqual(calls, [...refused ? ['scene generate', 'scene count'] : ['scene generate'],
+      'summary count', 'summary generate', 'scene generate']);
+    assert.equal(result.usage!.inputTokens, 1000);
+    assert.equal(Object.keys(f.store.read('1').stories[f.job.storyId].memories).length, 1);
   }
 });

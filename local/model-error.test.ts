@@ -28,6 +28,15 @@ test('bot log rows may name the actor class and carry sizes and counts, never an
     inputTokens: null, outputCharacters: Number.MAX_SAFE_INTEGER + 1 }), {});
 });
 
+// A scene request's row (local/generation.ts): the estimate beside the server's count, and the count's own duration
+// only when the count was made.
+test('a scene row carries the estimate it was sent on as a count, and nothing else in its place', () => {
+  assert.deepEqual(safeErrorDetails({ estimateTokens: 30120, inputTokens: 30087, waitMs: 0, elapsedMs: 5400 }),
+    { estimateTokens: 30120, inputTokens: 30087, waitMs: 0, elapsedMs: 5400 });
+  assert.deepEqual(safeErrorDetails({ estimateTokens: 'PRIVATE', countMs: undefined }), {});
+  for (const estimateTokens of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, null]) assert.deepEqual(safeErrorDetails({ estimateTokens }), {});
+});
+
 test('an illustrated scene logs its durations and the checkpoint role, never the seed, the prompt or the file', () => {
   assert.deepEqual(safeErrorDetails({ imageRole: 'alternate', cancelled: true, describeMs: 6200, imageQueueMs: 40,
     imageMs: 9500, imageSteps: 8, pictureAfterSceneMs: 16000 }),
