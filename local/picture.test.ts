@@ -517,7 +517,9 @@ test('a workflow that saves its picture is loaded as one that previews it', asyn
   assert.equal(photos(f.sent).length, 1, 'the picture is drawn and sent as before');
   const sink = comfy.submitted[0]['7'];
   assert.equal(sink.class_type, 'PreviewImage');
-  assert.deepEqual(Object.keys(sink.inputs), ['images'], 'and it is wired to the same picture, with no prefix to write');
+  // Wired to the same picture, with no prefix to write; the key beside it only makes the job's file its own (`drawOne`).
+  assert.deepEqual(Object.keys(sink.inputs).sort(), ['images', 'nonce']);
+  assert.deepEqual(sink.inputs.images, ['6', 0]);
   assert.equal(f.rows.find(row => row.event === 'picture')!.outcome, 'ready');
 });
 

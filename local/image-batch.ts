@@ -3,8 +3,8 @@
 // GET /view. Two rules come from docs/illustrations-plan.md and AGENTS.md and are not options:
 //   - a picture is derived from somebody's scene, so every PNG we keep is rewritten without its text chunks. ComfyUI
 //     puts the whole prompt and workflow into tEXt/iTXt/zTXt, and the server's /history keeps every job until it is
-//     cleared. What this harness can reach it clears; what it cannot is named at `drawOne` and must be wiped with
-//     the card.
+//     cleared. What this harness can reach it clears; what it cannot, the file a node writes, is named at `drawOne`:
+//     a preview's goes from the card's RAM seconds later (gpu/image-sweeper.py), a saved one stays with the card.
 //   - a review bundle never names the checkpoint that drew a picture; the key stays on our side of the bundle.
 // The prompts of the frozen synthetic stories are the only input; no reader's story is drawn here. `--references`
 // adds reference portraits for a model that keeps a face across frames (Qwen Image 2.1): they are uploaded under
@@ -12,7 +12,7 @@
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, copyFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -92,8 +92,9 @@ export function defaultWorkflow(): Graph {
     '6': { class_type: 'VAEDecode', inputs: { samples: ['5', 0], vae: ['1', 2] } },
     // Not SaveImage. Whatever node writes the file writes ComfyUI's prompt and workflow into its text chunks, and
     // nothing in the HTTP API deletes a file afterwards; SaveImage would leave that copy in the server's permanent
-    // output directory. PreviewImage writes the same picture to the temp directory the server empties at startup,
-    // and /view serves it the same way, from the type the history entry reports.
+    // output directory. PreviewImage writes the same picture to the temp directory, which gpu/image-serve.sh keeps
+    // in RAM and gpu/image-sweeper.py empties once no job record names the file, and /view serves it the same way,
+    // from the type the history entry reports.
     '7': { class_type: 'PreviewImage', inputs: { images: ['6', 0] } },
   };
 }
@@ -102,9 +103,11 @@ export function defaultWorkflow(): Graph {
 // the file writes ComfyUI's prompt and the whole workflow into its text chunks, and `SaveImage` writes it into the
 // server's permanent output directory, which no route of the HTTP API deletes: the card would keep a copy of a
 // picture of somebody's scene until the card itself is gone. `PreviewImage` writes the same picture to the temp
-// directory the server empties at startup, and `/view` serves it from the type the history entry reports, so
-// nothing else about the drawing changes. The graphs pinned on a card end in `SaveImage` — that is what the batch
-// harness on a rented card wants, and it draws synthetic scenes; the bot draws a reader's, and rewrites it.
+// directory, which no route deletes either, but which gpu/image-serve.sh puts on a tmpfs and gpu/image-sweeper.py
+// empties a few seconds after `drawOne` has deleted the job record; `/view` serves it from the type the history
+// entry reports, so nothing else about the drawing changes. The graphs pinned on a card end in `SaveImage` — that
+// is what the batch harness on a rented card wants, and it draws synthetic scenes; the bot draws a reader's, and
+// rewrites it.
 export function previewOnly(graph: Graph): Graph {
   return Object.fromEntries(Object.entries(graph).map(([id, node]) => [id, node.class_type === 'SaveImage'
     ? { ...node, class_type: 'PreviewImage', inputs: { images: node.inputs.images } } : node]));
@@ -366,25 +369,52 @@ async function stopJob(comfy: Comfy, promptId: string, pollMs: number) {
 
 // One picture: submit, poll until the server has it, download it, forget the job. The elapsed time is measured from
 // the submit, which is what the reader waits for; never from a timestamp in the server's own reply.
+// A preview node (`previewOnly`) gets a key of its own for every job. ComfyUI answers a graph it has run before from
+// its cache, and the cached output names the earlier job's file, which gpu/image-sweeper.py deleted seconds after that
+// job: /view answered 404 to the second sample of one style on one scene. The key is part of the node's cache
+// signature and of nothing else, since the pinned server hands a node only the inputs it declares: the sampler's result
+// still comes from the cache, and only the file is written again.
+function freshPreviews(graph: Graph): Graph {
+  const nonce = randomUUID();
+  return Object.fromEntries(Object.entries(graph).map(([id, node]) =>
+    [id, node.class_type === 'PreviewImage' ? { ...node, inputs: { ...node.inputs, nonce } } : node]));
+}
+
+// Polls of a job's record that may fail in a row before the picture is given up. The card went on drawing through each:
+// the one failure seen, on the first job after a restart, came while the server loaded the model.
+const POLL_RETRIES = 3;
+
 export async function drawOne(comfy: Comfy, graph: Graph, options: { pollMs?: number; waitMs?: number } = {}) {
   const pollMs = options.pollMs ?? 500;
   const started = performance.now();
   // The submit itself is never cut short, however early the caller lets go: a job the card has taken and we have no
   // id for is a job nobody can stop, and it would draw a whole picture for a reader who has already left. It is one
-  // request to loopback, and the abort is answered on the next line, with an id in hand.
+  // request to loopback, and the abort is answered on the next line, with an id in hand. It is not repeated either:
+  // a submit that failed may still have reached the card.
   const submitted = await (await call(afterAbort(comfy), '/prompt', { method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ prompt: graph }) })).json() as { prompt_id?: string; error?: unknown };
+    body: JSON.stringify({ prompt: freshPreviews(graph) }) })).json() as { prompt_id?: string; error?: unknown };
   const promptId = submitted.prompt_id;
   if (!promptId) throw Object.assign(new Error('comfy_rejected_prompt'), { code: 'comfy_rejected_prompt' });
   const vram: Vram[] = [];
   try {
     const deadline = started + (options.waitMs ?? 600000);
     let entry: HistoryEntry | undefined;
+    let failures = 0;
     for (let poll = 0; ; poll++) {
       // Asked before the poll rather than after it: a caller who has let go is answered without another request,
       // and `stopJob` below takes the card off the job it is drawing.
       if (comfy.signal?.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
-      const seen = await (await call(comfy, `/history/${promptId}`)).json() as Record<string, HistoryEntry>;
+      let seen: Record<string, HistoryEntry>;
+      try {
+        seen = await (await call(comfy, `/history/${promptId}`)).json() as Record<string, HistoryEntry>;
+        failures = 0;
+      } catch (error) {
+        // A poll that did not arrive is asked again; one the server answered with an error status is its answer.
+        if (comfy.signal?.aborted || (error as { code?: unknown }).code === 'comfy_http_error' || ++failures > POLL_RETRIES
+          || performance.now() > deadline) throw error;
+        await delay(pollMs);
+        continue;
+      }
       entry = seen[promptId];
       if (entry?.status?.completed || entry?.status?.status_str === 'error') break;
       if (performance.now() > deadline) throw Object.assign(new Error('image_timeout'), { code: 'image_timeout' });
@@ -408,9 +438,12 @@ export async function drawOne(comfy: Comfy, graph: Graph, options: { pollMs?: nu
     throw cancelled ? Object.assign(new Error('cancelled'), { code: 'cancelled' }) : error;
   } finally {
     // The server keeps the prompt, the workflow and the outputs of every job it has run until history is cleared.
-    // This clears the job record, and that is all it can clear: the file the saving node wrote stays in ComfyUI's
-    // own directory, with its text chunks, and the API has no route that deletes it. The picture on our disk is
-    // stripped; the card's copy goes when the card does, which is why only synthetic scenes are drawn on a rental.
+    // This clears the job record, and that is all the API can clear: the file the node wrote stays in ComfyUI's own
+    // directory, with its text chunks, and no route deletes it. Beside a server started by gpu/image-serve.sh,
+    // gpu/image-sweeper.py deletes a preview's file from RAM a few seconds after this record is gone, and the file
+    // and the record both after ten minutes should this delete never arrive. A saving node's file stays until the
+    // card goes, which is why the harness, whose graphs save, draws only synthetic scenes. The picture on our disk
+    // is stripped.
     await post(afterAbort(comfy), '/history', { delete: [promptId] }).catch(() => undefined);
   }
 }

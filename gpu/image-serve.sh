@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# ComfyUI for the picture lane: headless, loopback only, one chosen card, no custom nodes, no SageAttention.
+# ComfyUI for the picture lane: headless, loopback only, one chosen card, no custom nodes, no SageAttention, and
+# every picture in RAM for seconds (image-sweeper.py).
 set -euo pipefail
 umask 077
 task_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,15 +48,42 @@ if [[ "${COMFYUI_ARGS:-}${CLI_ARGS:-}${COMFYUI_EXTRA_ARGS:-}" = *sage* ]]; then
   echo 'SageAttention is requested in the environment; Krea 2 breaks under it. Clear COMFYUI_ARGS/CLI_ARGS first.' >&2
   exit 1
 fi
+# The picture of a reader's scene is written to ComfyUI's temp directory before /view hands it to the bot, and no
+# route of the HTTP API deletes that file: the server empties the directory only when it starts. So the directory is
+# on a tmpfs, which a stopped instance's disk never holds, and image-sweeper.py beside the server deletes a picture a
+# few seconds after the bot has deleted its job record (local/image-batch.ts `drawOne`), and every picture and record
+# after ten minutes whatever happened. A /dev/shm that is not a writable tmpfs would put the pictures back on the
+# disk, so the server is refused rather than started without it. SIMPLE_CHAT_IMAGE_TEMP_ROOT moves the directory,
+# to another tmpfs only. The pinned main.py appends `temp` to --temp-directory and empties that at startup
+# (start_comfyui, cleanup_temp_filesystem), which is why the sweeper is pointed at `$temp_root/temp`.
+temp_root="${SIMPLE_CHAT_IMAGE_TEMP_ROOT:-/dev/shm/simple-chat-comfy}"
+on_tmpfs() { [[ "$(stat -f -c %T -- "$1" 2>/dev/null)" = tmpfs ]]; }
+temp_parent="$(dirname -- "$temp_root")"
+if ! on_tmpfs "$temp_parent" || [[ ! -w "$temp_parent" ]]; then
+  echo "$temp_parent is not a writable tmpfs, and the pictures of scenes would land on the disk. Refusing to start." >&2
+  exit 1
+fi
+mkdir -p -- "$temp_root"
+if [[ -L "$temp_root" || ! -d "$temp_root" || ! -O "$temp_root" ]] || ! on_tmpfs "$temp_root"; then
+  echo "$temp_root is not a directory of this user on a tmpfs. Refusing to start." >&2
+  exit 1
+fi
+chmod 700 -- "$temp_root"
+sweeper="$task_dir/image-sweeper.py"
+[[ -f "$sweeper" ]] || { echo "Missing $sweeper; copy it beside this script." >&2; exit 1; }
 export CUDA_VISIBLE_DEVICES="$device"
 ulimit -c 0
-echo "Starting ComfyUI $COMFYUI_VERSION for $IMAGE_MODEL_NAME on GPU $device, loopback port $port; post $workflow."
+echo "Starting ComfyUI $COMFYUI_VERSION for $IMAGE_MODEL_NAME on GPU $device, loopback port $port, temp in $temp_root; post $workflow."
+# The sweeper starts before the exec, with this shell's PID, which the exec hands to ComfyUI, and it stops by itself
+# once that PID is gone. Its rows are counts and codes, in this script's log beside the server's own lines.
+"$comfy_dir/.venv/bin/python" "$sweeper" --pid "$$" --temp "$temp_root/temp" --port "$port" &
 # --disable-metadata: ComfyUI writes the whole prompt into the PNG by default, and a picture leaves the card.
 # --disable-all-custom-nodes and --disable-api-nodes: only the pinned core runs, and nothing calls a paid endpoint.
 # --preview-method none: previews cost VRAM on the card the language model does not share.
 # The attention implementation is left at the pinned build's default, which is the same on every run of this commit;
 # ComfyUI prints which one it chose at startup, and that line belongs with the seconds-per-picture number.
-# /history and the output folder hold story text — do not copy them home.
+# /history holds a prompt until the bot or the sweeper deletes its record, and output/ holds what the batch harness
+# drew — do not copy either home.
 exec "$comfy_dir/.venv/bin/python" "$comfy_dir/main.py" \
-  --listen 127.0.0.1 --port "$port" --disable-auto-launch \
+  --listen 127.0.0.1 --port "$port" --disable-auto-launch --temp-directory "$temp_root" \
   --disable-metadata --disable-all-custom-nodes --disable-api-nodes --preview-method none

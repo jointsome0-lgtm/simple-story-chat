@@ -526,6 +526,83 @@ test('a picture given up while it waits in the queue leaves the one being drawn 
   assert.ok((await busy).bytes.length > 0, 'the picture on the card was drawn and delivered');
 });
 
+// ComfyUI as the picture card runs it: a graph identical to the one it ran last is answered from the cache, whose output
+// names the earlier job's file, and gpu/image-sweeper.py deletes a preview's file once no record names it (`sweep`).
+// `dropPolls` closes that many polls of a job's record without an answer, as a tunnel does when it drops one.
+function cachingComfy(options: { dropPolls?: number } = {}) {
+  const graphs: Graph[] = [];
+  const files = new Set<string>();
+  const outputs = new Map<string, string>();
+  const history = new Map<string, string>();
+  let last: { signature: string; file: string } | null = null;
+  let dropped = 0;
+  const server = createServer((request, response) => {
+    const url = new URL(request.url!, 'http://127.0.0.1');
+    const body = async () => { const parts = []; for await (const part of request) parts.push(part as Buffer); return JSON.parse(Buffer.concat(parts).toString('utf8')); };
+    const json = (value: unknown) => { response.setHeader('content-type', 'application/json'); response.end(JSON.stringify(value)); };
+    void (async () => {
+      if (request.method === 'POST' && url.pathname === '/prompt') {
+        const graph = (await body()).prompt as Graph;
+        graphs.push(graph);
+        const id = `p${graphs.length}`;
+        const signature = JSON.stringify(graph);
+        if (last?.signature !== signature) { last = { signature, file: `${id}.png` }; files.add(last.file); }
+        outputs.set(id, last.file);
+        history.set(id, last.file);
+        return json({ prompt_id: id });
+      }
+      if (request.method === 'POST' && url.pathname === '/history') {
+        for (const id of ((await body()).delete as string[]) ?? []) history.delete(id);
+        return json({});
+      }
+      if (url.pathname === '/system_stats') return json({});
+      if (url.pathname.startsWith('/history/')) {
+        if (dropped < (options.dropPolls ?? 0)) { dropped++; request.socket.destroy(); return; }
+        const id = url.pathname.slice('/history/'.length);
+        if (!history.has(id)) return json({});
+        return json({ [id]: { status: { completed: true, status_str: 'success' }, outputs: { 7: { images: [{ filename: outputs.get(id), subfolder: '', type: 'temp' }] } } } });
+      }
+      if (url.pathname === '/view' && files.has(String(url.searchParams.get('filename')))) {
+        response.setHeader('content-type', 'image/png');
+        return response.end(pngWithMetadata('{}'));
+      }
+      response.statusCode = 404;
+      response.end();
+    })();
+  });
+  const sweep = () => { for (const file of [...files]) if (![...history.values()].includes(file)) files.delete(file); };
+  return { server, graphs, sweep, listen: () => new Promise<string>(done => server.listen(0, '127.0.0.1', () => done(`http://127.0.0.1:${(server.address() as AddressInfo).port}`))) };
+}
+
+test('a graph drawn again writes a file of its own, and the one the sweeper took is never asked for', async t => {
+  const comfy = cachingComfy();
+  const url = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const graph = defaultWorkflow();
+  await drawOne({ baseUrl: url, timeoutMs: 5000 }, graph, { pollMs: 5, waitMs: 5000 });
+  comfy.sweep();
+  // The same frame in the same style: without a key of its own the card answered from its cache with a deleted file.
+  assert.ok((await drawOne({ baseUrl: url, timeoutMs: 5000 }, graph, { pollMs: 5, waitMs: 5000 })).bytes.length > 0);
+  const [first, second] = comfy.graphs;
+  assert.notEqual(first['7'].inputs.nonce, second['7'].inputs.nonce);
+  // Nothing else of the graph differs, so the card still takes the sampler's result from its cache.
+  const without = (drawn: Graph) => ({ ...drawn, 7: { ...drawn['7'], inputs: { images: drawn['7'].inputs.images } } });
+  assert.deepEqual(without(first), graph);
+  assert.deepEqual(without(second), graph);
+  assert.equal(graph['7'].inputs.nonce, undefined, 'the caller\'s graph is left as it was');
+});
+
+test('a poll the tunnel drops is asked again, and a card that stops answering still ends the picture', async t => {
+  const flaky = cachingComfy({ dropPolls: 3 });
+  const url = await flaky.listen();
+  t.after(() => flaky.server.close());
+  assert.ok((await drawOne({ baseUrl: url, timeoutMs: 5000 }, defaultWorkflow(), { pollMs: 5, waitMs: 5000 })).bytes.length > 0);
+  const gone = cachingComfy({ dropPolls: 4 });
+  const goneUrl = await gone.listen();
+  t.after(() => gone.server.close());
+  await assert.rejects(drawOne({ baseUrl: goneUrl, timeoutMs: 5000 }, defaultWorkflow(), { pollMs: 5, waitMs: 5000 }));
+});
+
 // The file ComfyUI's Save menu writes is the UI format ({nodes:[...],links:[...]}), not the API format the harness
 // fills. It used to throw a TypeError inside applyToWorkflow and be written down as `image_failed`, once a cell.
 test('a workflow saved in the UI format is refused by name before anything is drawn', async t => {
