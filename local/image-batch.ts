@@ -1,6 +1,7 @@
 // Draws the assembled prompts of local/illustrate-probe.ts on a rented card and prepares blind review bundles.
-// It talks to one ComfyUI server over its HTTP API through an ssh tunnel on loopback: POST /prompt, poll /history,
-// GET /view. Two rules come from docs/illustrations-plan.md and AGENTS.md and are not options:
+// It talks to one ComfyUI server through an ssh tunnel on loopback: POST /prompt, then its websocket and a poll of the
+// job's /history record until the job is over, then GET /view. Two rules come from docs/illustrations-plan.md and
+// AGENTS.md and are not options:
 //   - a picture is derived from somebody's scene, so every PNG we keep is rewritten without its text chunks. ComfyUI
 //     puts the whole prompt and workflow into tEXt/iTXt/zTXt, and the server's /history keeps every job until it is
 //     cleared. What this harness can reach it clears; what it cannot, the file a node writes, is named at `drawOne`:
@@ -286,6 +287,18 @@ const mergeVram = (into: Vram[], seen: Vram[]) => {
 const post = (comfy: Comfy, path: string, body?: object) => call(comfy, path, { method: 'POST',
   headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}) });
 
+// What `drawOne` leaves running once it has the picture or has failed: the delete of the job's record and the samples
+// of video memory. The picture waits for neither, and nothing of it is dropped either: `settled` waits for all of it.
+// The bot waits there once the photo is out (local/picture.ts), so that `idle` and `stop` in local/bot.ts cannot end
+// with a delete still on its way; the harness waits before it records a cell, whose video memory it keeps.
+const trailing = new Set<Promise<unknown>>();
+const leave = (work: Promise<unknown>) => {
+  const kept = work.catch(() => undefined);
+  trailing.add(kept);
+  void kept.finally(() => trailing.delete(kept));
+};
+export async function settled() { await Promise.all([...trailing]); }
+
 // A reference picture into the server's input directory, where LoadImage reads it by name. The name is the hash of
 // the bytes and nothing else: a portrait is a face, and the sheet name it was drawn for must not be written onto
 // the rented disk. The bytes are stripped like every other picture here — a portrait comes off this same card and
@@ -367,8 +380,9 @@ async function stopJob(comfy: Comfy, promptId: string, pollMs: number) {
   }
 }
 
-// One picture: submit, poll until the server has it, download it, forget the job. The elapsed time is measured from
-// the submit, which is what the reader waits for; never from a timestamp in the server's own reply.
+// One picture: submit, wait until the server has it, download it, forget the job. The elapsed time is measured from
+// the submit, which is what the reader waits for; never from a timestamp in the server's own reply. `vram` fills in
+// as its samples land, the last of them after the picture: `settled` waits for it.
 // A preview node (`previewOnly`) gets a key of its own for every job. ComfyUI answers a graph it has run before from
 // its cache, and the cached output names the earlier job's file, which gpu/image-sweeper.py deleted seconds after that
 // job: /view answered 404 to the second sample of one style on one scene. The key is part of the node's cache
@@ -384,7 +398,86 @@ function freshPreviews(graph: Graph): Graph {
 // the one failure seen, on the first job after a restart, came while the server loaded the model.
 const POLL_RETRIES = 3;
 
+// A job as the websocket has told it. ComfyUI sends a client's messages only to a socket that is connected when they
+// are sent (server.py:1392), so `started` is what says this socket heard the job from its beginning: one that opened
+// later has missed messages, and the `outputs` it heard may not be all of the job's.
+type Told = { started: boolean; succeeded: boolean; over: boolean; outputs: NonNullable<HistoryEntry['outputs']> };
+
+// ComfyUI's websocket (`/ws?clientId=`, server.py:269), for one picture: it says when the job is over, so that the
+// wait ends then rather than at the next poll. Everything about it is optional. A socket that cannot open, closes early
+// or says nothing useful leaves the wait to the polls in `drawOne`, which end it exactly as they did before there was
+// a socket. What it carries names the job's file, so none of it is logged, and none of it outlives the job. The line
+// numbers here are those of the revision gpu/image-manifest.env pins.
+function watchJob(comfy: Comfy) {
+  const clientId = randomUUID();
+  const jobs = new Map<string, Told>();
+  let heard = 0;
+  let wake: () => void = () => undefined;
+  // `executing` with no node is the one message that means "over": the server sends it once it has written the job's
+  // record, whether the job succeeded, failed or was interrupted (main.py:367-374). `execution_success` comes a moment
+  // before the record (execution.py:824), so it is noted and the wait goes on until the record is there: a delete
+  // sent on it could reach the card first and leave the record behind. An error or an interrupt sends the wait to the
+  // record at once, which says what became of the job; an error there need not be the end of it (execution.py:538).
+  const notice = () => { heard++; wake(); };
+  let socket: WebSocket | undefined;
+  try {
+    const url = new URL('/ws', comfy.baseUrl);
+    url.protocol = 'ws:';
+    url.searchParams.set('clientId', clientId);
+    socket = new WebSocket(url);
+    socket.addEventListener('message', event => {
+      let message: { type?: unknown; data?: { prompt_id?: unknown; node?: unknown; output?: unknown } } | null;
+      try { message = typeof event.data === 'string' ? JSON.parse(event.data) : null; } catch { return; }
+      const data = message?.data;
+      if (!message || !data || typeof data.prompt_id !== 'string') return;
+      let job = jobs.get(data.prompt_id);
+      if (!job) jobs.set(data.prompt_id, job = { started: false, succeeded: false, over: false, outputs: {} });
+      if (message.type === 'execution_start') job.started = true;
+      else if (message.type === 'executed' && typeof data.node === 'string' && data.output && typeof data.output === 'object') {
+        job.outputs[data.node] = data.output as Told['outputs'][string];
+      } else if (message.type === 'execution_success') job.succeeded = true;
+      else if (message.type === 'execution_error' || message.type === 'execution_interrupted') notice();
+      else if (message.type === 'executing' && data.node === null) { job.over = true; notice(); }
+    });
+  } catch { socket = undefined; }
+  return {
+    clientId,
+    // How often the socket has had news: `drawOne` compares it across a poll to know whether to wait again.
+    get heard() { return heard; },
+    // The job's record without a read of it, once the socket has heard the whole job succeed. The record's outputs
+    // are the very objects the `executed` messages carried (execution.py:826-834), from a node that ran
+    // (execution.py:574-577) and from one the cache answered alike (comfy_execution/asset_enrichment.py:102-115), and
+    // a job that succeeded is recorded as completed with `success`. Nothing, whenever the socket cannot vouch for it.
+    record(promptId: string): HistoryEntry | undefined {
+      const job = jobs.get(promptId);
+      return job?.started && job.succeeded && job.over ? { status: { completed: true, status_str: 'success' }, outputs: job.outputs } : undefined;
+    },
+    // Until the socket has news, `ms` pass or `signal` fires, whichever comes first.
+    wait(ms: number, signal?: AbortSignal) {
+      return new Promise<void>(done => {
+        const finish = () => { clearTimeout(timer); signal?.removeEventListener('abort', finish); wake = () => undefined; done(); };
+        const timer = setTimeout(finish, ms);
+        wake = finish;
+        signal?.addEventListener('abort', finish, { once: true });
+        if (signal?.aborted) finish();
+      });
+    },
+    close() { socket?.close(); },
+  };
+}
+type Watch = ReturnType<typeof watchJob>;
+
 export async function drawOne(comfy: Comfy, graph: Graph, options: { pollMs?: number; waitMs?: number } = {}) {
+  // Opened before the submit: the card tells a job's news only to a socket that is already there to hear it.
+  const watch = watchJob(comfy);
+  try { return await drawWatched(comfy, graph, watch, options); }
+  finally { watch.close(); }
+}
+
+async function drawWatched(comfy: Comfy, graph: Graph, watch: Watch, options: { pollMs?: number; waitMs?: number }) {
+  // The socket says when the job is over. The polls are what the picture falls back on when it says nothing, and
+  // meanwhile they keep the tunnel's connection open for `/view`, where a new one would cost another ssh channel, about
+  // 0.3-0.6 s. Half a second does both, and the retries below still span the seconds they always did.
   const pollMs = options.pollMs ?? 500;
   const started = performance.now();
   // The submit itself is never cut short, however early the caller lets go: a job the card has taken and we have no
@@ -392,10 +485,25 @@ export async function drawOne(comfy: Comfy, graph: Graph, options: { pollMs?: nu
   // request to loopback, and the abort is answered on the next line, with an id in hand. It is not repeated either:
   // a submit that failed may still have reached the card.
   const submitted = await (await call(afterAbort(comfy), '/prompt', { method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ prompt: freshPreviews(graph) }) })).json() as { prompt_id?: string; error?: unknown };
+    body: JSON.stringify({ prompt: freshPreviews(graph), client_id: watch.clientId }) })).json() as { prompt_id?: string; error?: unknown };
   const promptId = submitted.prompt_id;
   if (!promptId) throw Object.assign(new Error('comfy_rejected_prompt'), { code: 'comfy_rejected_prompt' });
   const vram: Vram[] = [];
+  // Video memory is sampled without waiting for the answer, and one request at a time: a card that stops answering
+  // would otherwise gather another hanging request every few polls.
+  let sampling = false;
+  const sampleVram = () => {
+    if (sampling) return;
+    sampling = true;
+    leave(readVram(comfy).then(seen => mergeVram(vram, seen)).finally(() => { sampling = false; }));
+  };
+  // The delete of the job's record: sent once, whichever way this ends, and never waited for (`settled`).
+  let forgotten = false;
+  const forget = () => {
+    if (forgotten) return;
+    forgotten = true;
+    leave(post(afterAbort(comfy), '/history', { delete: [promptId] }));
+  };
   try {
     const deadline = started + (options.waitMs ?? 600000);
     let entry: HistoryEntry | undefined;
@@ -404,6 +512,10 @@ export async function drawOne(comfy: Comfy, graph: Graph, options: { pollMs?: nu
       // Asked before the poll rather than after it: a caller who has let go is answered without another request,
       // and `stopJob` below takes the card off the job it is drawing.
       if (comfy.signal?.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
+      const heard = watch.heard;
+      // A socket that heard the whole job succeed has its record already; the poll is for everything else.
+      entry = watch.record(promptId);
+      if (entry) break;
       let seen: Record<string, HistoryEntry>;
       try {
         seen = await (await call(comfy, `/history/${promptId}`)).json() as Record<string, HistoryEntry>;
@@ -412,15 +524,17 @@ export async function drawOne(comfy: Comfy, graph: Graph, options: { pollMs?: nu
         // A poll that did not arrive is asked again; one the server answered with an error status is its answer.
         if (comfy.signal?.aborted || (error as { code?: unknown }).code === 'comfy_http_error' || ++failures > POLL_RETRIES
           || performance.now() > deadline) throw error;
-        await delay(pollMs);
+        if (watch.heard === heard) await watch.wait(pollMs, comfy.signal);
         continue;
       }
       entry = seen[promptId];
       if (entry?.status?.completed || entry?.status?.status_str === 'error') break;
       if (performance.now() > deadline) throw Object.assign(new Error('image_timeout'), { code: 'image_timeout' });
       // Video memory is sampled while the card works, not after it has freed the weights.
-      if (poll % 4 === 0) mergeVram(vram, await readVram(comfy));
-      await delay(pollMs);
+      if (poll % 4 === 0) sampleVram();
+      // News that came while the poll was out is acted on at once. A poll is never cut short for it: an aborted
+      // request takes its connection with it, and `/view` would pay for a new one.
+      if (watch.heard === heard) await watch.wait(pollMs, comfy.signal);
     }
     const image = Object.values(entry.outputs ?? {}).flatMap(output => output.images ?? [])[0];
     if (!image || entry.status?.status_str === 'error') throw Object.assign(new Error('image_failed'), { code: 'image_failed' });
@@ -428,7 +542,9 @@ export async function drawOne(comfy: Comfy, graph: Graph, options: { pollMs?: nu
     const query = new URLSearchParams({ filename: image.filename, subfolder: image.subfolder ?? '', type: image.type ?? 'output' });
     const bytes = new Uint8Array(await (await call(comfy, `/view?${query}`)).arrayBuffer());
     const viewMs = Math.round(performance.now() - viewStarted);
-    mergeVram(vram, await readVram(comfy));
+    // The record goes first, on the connection `/view` has just left open, and the last sample after it.
+    forget();
+    sampleVram();
     return { bytes: stripPngMetadata(bytes), totalMs: Math.round(performance.now() - started), viewMs, vram };
   } catch (error) {
     // The wait ran out or the caller let go, but the card did not stop by itself: see `stopJob`. A fetch cut by the
@@ -443,8 +559,8 @@ export async function drawOne(comfy: Comfy, graph: Graph, options: { pollMs?: nu
     // gpu/image-sweeper.py deletes a preview's file from RAM a few seconds after this record is gone, and the file
     // and the record both after ten minutes should this delete never arrive. A saving node's file stays until the
     // card goes, which is why the harness, whose graphs save, draws only synthetic scenes. The picture on our disk
-    // is stripped.
-    await post(afterAbort(comfy), '/history', { delete: [promptId] }).catch(() => undefined);
+    // is stripped. The delete leaves here on every way out, and nothing waits for its answer but `settled`.
+    forget();
   }
 }
 
@@ -578,6 +694,8 @@ export async function draw(options: DrawOptions): Promise<BatchIndex> {
       const filled = applyToWorkflow(graph, { checkpoint: cell.checkpoint, prompt: one.prompt, negative: options.negative,
         seed: cell.seed, steps, sampler, scheduler, width, height, cfg, references: bound });
       const drawn = await drawOne(comfy, filled, { pollMs: options.pollMs, waitMs: options.waitMs });
+      // The last sample of video memory lands after the picture does, and this cell's row records it.
+      await settled();
       mkdirSync(join(directory, 'pictures', safeName(cell.checkpoint)), { recursive: true, mode: 0o700 });
       writeFileSync(join(directory, file), drawn.bytes, { mode: 0o600 });
       const picture: Picture = { ...cell, steps, sampler, scheduler,
@@ -605,6 +723,8 @@ export async function draw(options: DrawOptions): Promise<BatchIndex> {
       if (stopsTheRun(code)) { index.error = code; log({ event: 'batch_stopped', code, httpStatus }); break; }
     }
   }
+  // A failed cell's delete may still be on its way, and the run is not over before the card has had it.
+  await settled();
   index.completedAt = new Date().toISOString();
   save();
   return index;

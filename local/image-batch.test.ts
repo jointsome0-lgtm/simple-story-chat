@@ -1,12 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import type { IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import type { Duplex } from 'node:stream';
+import { createHash } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { deflateSync, inflateSync, crc32 } from 'node:zlib';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { draw, buildBundles, bundlesOf, applyToWorkflow, defaultWorkflow, drawOne, latentSizeOf, parseSeeds, portraitsFor, referenceSlots, samplerSettingsOf, stripPngMetadata, taskMarkdown, REVIEW } from './image-batch.ts';
+import { draw, buildBundles, bundlesOf, applyToWorkflow, defaultWorkflow, drawOne, latentSizeOf, parseSeeds, portraitsFor, referenceSlots, samplerSettingsOf, settled, stripPngMetadata, taskMarkdown, REVIEW } from './image-batch.ts';
 import type { Graph, Picture, References } from './image-batch.ts';
 import type { Case } from './illustrate-probe.ts';
 
@@ -601,6 +605,273 @@ test('a poll the tunnel drops is asked again, and a card that stops answering st
   const goneUrl = await gone.listen();
   t.after(() => gone.server.close());
   await assert.rejects(drawOne({ baseUrl: goneUrl, timeoutMs: 5000 }, defaultWorkflow(), { pollMs: 5, waitMs: 5000 }));
+});
+
+// The server's half of a websocket (RFC 6455), as much of it as a fake ComfyUI needs: the handshake, unmasked text
+// frames, and an answer to the client's close. A close left unanswered keeps undici's WebSocket, and with it the test
+// process, alive for a minute.
+const CLOSE_FRAME = Buffer.from([0x88, 0]);
+function acceptSocket(request: IncomingMessage, socket: Duplex) {
+  socket.on('error', () => undefined);
+  const accept = createHash('sha1').update(`${request.headers['sec-websocket-key']}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
+  socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+  // The client only ever sends its close frame (opcode 8).
+  socket.on('data', (chunk: Buffer) => { if ((chunk[0] & 0x0f) === 8) { if (socket.writable) socket.end(CLOSE_FRAME); else socket.destroy(); } });
+  return {
+    send(message: object) {
+      const data = Buffer.from(JSON.stringify(message), 'utf8');
+      // FIN and the text opcode, then the length in seven bits or in sixteen; ComfyUI's messages here are short.
+      const head = data.length < 126 ? Buffer.from([0x81, data.length]) : Buffer.from([0x81, 126, data.length >> 8, data.length & 255]);
+      if (socket.writable) socket.write(Buffer.concat([head, data]));
+    },
+    hangUp() { if (socket.writable) socket.end(CLOSE_FRAME); },
+  };
+}
+
+// ComfyUI with its websocket, as the picture card runs it: a job's messages go to the socket of the client id it was
+// submitted with, in the order execution.py and main.py send them — `execution_start`, `executed` with the node's
+// output, `execution_success` (or `execution_error`, or `execution_interrupted`), then the record is written, then
+// `executing` with no node. `socket` is what the socket does: 'open' hears the whole job, which waits for it as it
+// would behind a socket quicker than the submit; 'late' opened after the job began and missed its start; 'silent' is
+// accepted and never spoken to; 'closing' hears the start and is hung up on; 'refused' is answered 404. `quietEnd`
+// leaves out the last message, and `statsMs` and `deleteMs` hold /system_stats and the delete back that long. Every
+// /history request that is not one `drawOne` may make, a read or a delete of one job by its id, is kept in `bare`.
+function pushingComfy(options: { socket?: 'open' | 'late' | 'silent' | 'closing' | 'refused';
+  outcome?: 'success' | 'error' | 'interrupted'; quietEnd?: boolean; jobMs?: number; statsMs?: number; deleteMs?: number } = {}) {
+  const mode = options.socket ?? 'open';
+  const records = new Map<string, object>();
+  const files = new Set<string>();
+  const clientOf = new Map<string, string>();
+  const speakers = new Map<string, ReturnType<typeof acceptSocket>>();
+  const waiting = new Map<string, () => void>();
+  const upgraded = new Set<Duplex>();
+  const seen = { posted: [] as string[], connected: [] as string[], reads: [] as string[], cleared: [] as string[],
+    bare: [] as string[], said: [] as { type: string; at: number }[], interrupts: 0 };
+  let running: string | undefined;
+  let count = 0;
+  const tell = (id: string, type: string, data: object = {}) => {
+    const speaker = speakers.get(clientOf.get(id)!);
+    if (!speaker) return;
+    speaker.send({ type, data: { ...data, prompt_id: id } });
+    seen.said.push({ type: type === 'executing' && (data as { node?: unknown }).node === null ? 'over' : type, at: performance.now() });
+  };
+  const finish = (id: string, outcome: 'success' | 'error' | 'interrupted') => {
+    if (running !== id) return;
+    running = undefined;
+    const file = { filename: `${id}.png`, subfolder: '', type: 'temp' };
+    if (outcome === 'success') {
+      tell(id, 'executing', { node: '7' });
+      // A socket that opened late missed the start, so what it did hear is not vouched for: here the output it hears
+      // names a file /view does not have, and a picture drawn from it fails.
+      tell(id, 'executed', { node: '7', output: { images: [mode === 'late' ? { ...file, filename: 'elsewhere.png' } : file] } });
+      tell(id, 'execution_success');
+      files.add(file.filename);
+    } else tell(id, `execution_${outcome}`, { node_id: '5', node_type: 'KSampler', executed: [] });
+    records.set(id, outcome === 'success' ? { status: { completed: true, status_str: 'success' }, outputs: { 7: { images: [file] } } }
+      : { status: { completed: false, status_str: 'error' }, outputs: {} });
+    if (!options.quietEnd) tell(id, 'executing', { node: null });
+  };
+  const begin = (id: string) => {
+    running = id;
+    if (mode !== 'late') tell(id, 'execution_start');
+    tell(id, 'execution_cached', { nodes: [] });
+    tell(id, 'progress', { value: 1, max: 8, node: '5' });
+    if (mode === 'closing') { speakers.get(clientOf.get(id)!)?.hangUp(); speakers.delete(clientOf.get(id)!); }
+    // Unreferenced, so that a job nobody waits for any more does not keep the test process alive.
+    setTimeout(() => finish(id, options.outcome ?? 'success'), options.jobMs ?? 0).unref();
+  };
+  const server = createServer((request, response) => {
+    const url = new URL(request.url!, 'http://127.0.0.1');
+    const body = async () => { const parts = []; for await (const part of request) parts.push(part as Buffer); return JSON.parse(Buffer.concat(parts).toString('utf8')); };
+    const json = (value: unknown) => { response.setHeader('content-type', 'application/json'); response.end(JSON.stringify(value)); };
+    void (async () => {
+      if (request.method === 'POST' && url.pathname === '/prompt') {
+        const clientId = String((await body() as { client_id?: unknown }).client_id);
+        const id = `p${++count}`;
+        seen.posted.push(clientId);
+        clientOf.set(id, clientId);
+        if (mode === 'open' && !speakers.has(clientId)) waiting.set(clientId, () => begin(id));
+        else begin(id);
+        return json({ prompt_id: id, number: count });
+      }
+      if (url.pathname === '/system_stats') {
+        await delay(options.statsMs ?? 0);
+        return json({ devices: [{ index: 0, vram_total: 32 * 1024 ** 3, vram_free: 2 * 1024 ** 3 }] });
+      }
+      if (request.method === 'GET' && /^\/history\/p\d+$/.test(url.pathname)) {
+        const id = url.pathname.slice('/history/'.length);
+        seen.reads.push(id);
+        return json(records.has(id) ? { [id]: records.get(id) } : {});
+      }
+      if (request.method === 'POST' && url.pathname === '/history') {
+        const asked = await body() as { delete?: unknown };
+        const ids = Array.isArray(asked.delete) ? asked.delete as string[] : [];
+        if (Object.keys(asked).join() !== 'delete' || ids.length !== 1 || !clientOf.has(ids[0])) seen.bare.push(`POST ${JSON.stringify(asked)}`);
+        await delay(options.deleteMs ?? 0);
+        for (const id of ids) { records.delete(id); seen.cleared.push(id); }
+        return json({});
+      }
+      if (url.pathname.includes('history')) { seen.bare.push(`${request.method} ${url.pathname}`); return json({}); }
+      if (url.pathname === '/queue' && request.method === 'GET') return json({ queue_running: running ? [[0, running]] : [], queue_pending: [] });
+      if (url.pathname === '/queue') { await body(); return json({}); }
+      if (url.pathname === '/interrupt') {
+        seen.interrupts++;
+        if (running) finish(running, 'interrupted');
+        return json({});
+      }
+      if (url.pathname === '/view' && files.has(String(url.searchParams.get('filename')))) {
+        response.setHeader('content-type', 'image/png');
+        return response.end(pngWithMetadata('{"prompt":"PRIVATE_SCENE_TEXT"}'));
+      }
+      response.statusCode = 404;
+      response.end();
+    })();
+  });
+  // Without a listener for it, the upgrade reaches the handler above as a plain request, and /ws is answered 404.
+  if (mode !== 'refused') server.on('upgrade', (request: IncomingMessage, socket: Duplex) => {
+    upgraded.add(socket);
+    socket.on('close', () => upgraded.delete(socket));
+    const speaker = acceptSocket(request, socket);
+    const clientId = new URL(request.url!, 'http://127.0.0.1').searchParams.get('clientId') ?? '';
+    seen.connected.push(clientId);
+    if (mode === 'silent') return;
+    // The greeting ComfyUI sends every socket first (server.py:287); it names no job.
+    speaker.send({ type: 'status', data: { status: { exec_info: { queue_remaining: running ? 1 : 0 } }, sid: clientId } });
+    speakers.set(clientId, speaker);
+    socket.on('close', () => { if (speakers.get(clientId) === speaker) speakers.delete(clientId); });
+    waiting.get(clientId)?.();
+    waiting.delete(clientId);
+  });
+  const over = () => seen.said.find(one => one.type === 'over');
+  return { seen, over,
+    listen: () => new Promise<string>(done => server.listen(0, '127.0.0.1', () => done(`http://127.0.0.1:${(server.address() as AddressInfo).port}`))),
+    close: () => { for (const socket of upgraded) socket.destroy(); server.close(); } };
+}
+
+// The poll interval is ten seconds in the tests below that time the wait, so that nothing but the socket can end it
+// in time.
+test('the socket\'s word that a job is over ends the wait at once, and a socket that heard all of it spares a read', async t => {
+  const comfy = pushingComfy({ jobMs: 150 });
+  const url = await comfy.listen();
+  t.after(comfy.close);
+  const drawn = await drawOne({ baseUrl: url, timeoutMs: 5000 }, defaultWorkflow(), { pollMs: 10000, waitMs: 20000 });
+  const late = performance.now() - comfy.over()!.at;
+  assert.ok(late < 100, `the picture came ${Math.round(late)} ms after the card said the job was over`);
+  // One read of the record, right after the submit. The outputs the socket heard are the record's own, so the record
+  // is not read again once the job is over.
+  assert.deepEqual(comfy.seen.reads, ['p1']);
+  assert.deepEqual(chunksOf(drawn.bytes).map(one => one.type), ['IHDR', 'IDAT', 'IEND']);
+  assert.ok(!Buffer.from(drawn.bytes).includes('PRIVATE_SCENE_TEXT'));
+  // The socket listens under the client id the job was submitted with, or it would hear nothing of it.
+  assert.equal(comfy.seen.posted.length, 1);
+  assert.deepEqual(comfy.seen.connected, comfy.seen.posted);
+  await settled();
+  assert.deepEqual(comfy.seen.cleared, ['p1']);
+  assert.deepEqual(comfy.seen.bare, []);
+});
+
+test('a socket that opened after the job began is not taken at its word for the outputs: the record is read', async t => {
+  const comfy = pushingComfy({ socket: 'late', jobMs: 150 });
+  const url = await comfy.listen();
+  t.after(comfy.close);
+  // The output it heard names a file the card does not have; drawn from it, the picture would be a 404.
+  const drawn = await drawOne({ baseUrl: url, timeoutMs: 5000 }, defaultWorkflow(), { pollMs: 10000, waitMs: 20000 });
+  const late = performance.now() - comfy.over()!.at;
+  assert.ok(late < 100, `the picture came ${Math.round(late)} ms after the card said the job was over`);
+  assert.deepEqual(comfy.seen.reads, ['p1', 'p1']);
+  assert.deepEqual(chunksOf(drawn.bytes).map(one => one.type), ['IHDR', 'IDAT', 'IEND']);
+  await settled();
+  assert.deepEqual(comfy.seen.cleared, ['p1']);
+  assert.deepEqual(comfy.seen.bare, []);
+});
+
+test('a socket that is refused, says nothing or hangs up leaves the picture to the polls, as before the socket', async t => {
+  for (const socket of ['refused', 'silent', 'closing'] as const) {
+    const comfy = pushingComfy({ socket, jobMs: 100 });
+    const url = await comfy.listen();
+    t.after(comfy.close);
+    const started = performance.now();
+    const drawn = await drawOne({ baseUrl: url, timeoutMs: 5000 }, defaultWorkflow(), { pollMs: 20, waitMs: 5000 });
+    // A poll every 20 ms finds a job of 100 ms in about that; waiting on a socket with nothing to say would not.
+    const took = performance.now() - started;
+    assert.ok(took < 1000, `${socket}: the picture took ${Math.round(took)} ms`);
+    assert.deepEqual(chunksOf(drawn.bytes).map(one => one.type), ['IHDR', 'IDAT', 'IEND'], socket);
+    assert.equal(comfy.seen.connected.length, socket === 'refused' ? 0 : 1, socket);
+    assert.equal(comfy.over(), undefined, `${socket}: the card told the socket nothing of the end`);
+    assert.ok(comfy.seen.reads.length > 1, `${socket}: the polls found the record`);
+    await settled();
+    assert.deepEqual(comfy.seen.cleared, ['p1'], socket);
+    assert.deepEqual(comfy.seen.bare, [], socket);
+  }
+});
+
+test('a slow /system_stats holds up nothing, and its answer joins the video memory when it lands', async t => {
+  // No socket, so the wait is the polls', and a sample waited for inside it would hold the next poll back.
+  const comfy = pushingComfy({ socket: 'refused', jobMs: 100, statsMs: 1500 });
+  const url = await comfy.listen();
+  t.after(comfy.close);
+  const started = performance.now();
+  const drawn = await drawOne({ baseUrl: url, timeoutMs: 5000 }, defaultWorkflow(), { pollMs: 10, waitMs: 5000 });
+  const took = performance.now() - started;
+  assert.ok(took < 1000, `the picture took ${Math.round(took)} ms behind a /system_stats of 1500`);
+  assert.deepEqual(drawn.vram, [], 'nothing has answered yet');
+  await settled();
+  assert.deepEqual(drawn.vram, [{ index: 0, totalMiB: 32768, usedMiBMax: 30720 }]);
+});
+
+test('the job\'s record is deleted whichever way the picture ends, and the picture never waits for the delete', async t => {
+  // Drawn, with a delete the card takes a second to answer.
+  const drawnComfy = pushingComfy({ jobMs: 50, deleteMs: 1000 });
+  const drawnUrl = await drawnComfy.listen();
+  t.after(drawnComfy.close);
+  const started = performance.now();
+  await drawOne({ baseUrl: drawnUrl, timeoutMs: 5000 }, defaultWorkflow(), { pollMs: 10000, waitMs: 20000 });
+  const took = performance.now() - started;
+  assert.ok(took < 800, `the picture took ${Math.round(took)} ms behind a delete of 1000`);
+  assert.deepEqual(drawnComfy.seen.cleared, [], 'the delete is still on its way');
+  await settled();
+  assert.deepEqual(drawnComfy.seen.cleared, ['p1']);
+
+  // Failed on the card.
+  const failing = pushingComfy({ outcome: 'error', jobMs: 50 });
+  const failingUrl = await failing.listen();
+  t.after(failing.close);
+  await assert.rejects(drawOne({ baseUrl: failingUrl, timeoutMs: 5000 }, defaultWorkflow(), { pollMs: 10000, waitMs: 20000 }),
+    { code: 'image_failed' });
+  await settled();
+  assert.deepEqual(failing.seen.cleared, ['p1']);
+
+  // Given up by the caller while the card draws: stopped on the card first, as before, then forgotten.
+  const slow = pushingComfy({ jobMs: 60000 });
+  const slowUrl = await slow.listen();
+  t.after(slow.close);
+  const stop = new AbortController();
+  const drawing = drawOne({ baseUrl: slowUrl, timeoutMs: 5000, signal: stop.signal }, defaultWorkflow(), { pollMs: 10000, waitMs: 20000 });
+  for (let attempt = 0; attempt < 500 && !slow.seen.said.some(one => one.type === 'execution_start'); attempt++) await delay(2);
+  stop.abort();
+  await assert.rejects(drawing, { code: 'cancelled' });
+  assert.equal(slow.seen.interrupts, 1, 'the card was told to stop drawing it');
+  await settled();
+  assert.deepEqual(slow.seen.cleared, ['p1']);
+  // Never a list of the whole history, and never a clear of all of it: only the sweeper on the card reads that.
+  for (const one of [drawnComfy, failing, slow]) assert.deepEqual(one.seen.bare, []);
+});
+
+test('an error or an interrupt on the socket sends the wait to the record at once, and the record says how it ended', async t => {
+  for (const outcome of ['error', 'interrupted'] as const) {
+    // Without the closing `executing` message, so that only the error itself can end a ten-second wait in time.
+    const comfy = pushingComfy({ outcome, quietEnd: true, jobMs: 100 });
+    const url = await comfy.listen();
+    t.after(comfy.close);
+    await assert.rejects(drawOne({ baseUrl: url, timeoutMs: 5000 }, defaultWorkflow(), { pollMs: 10000, waitMs: 20000 }),
+      { code: 'image_failed' });
+    const late = performance.now() - comfy.seen.said.find(one => one.type === `execution_${outcome}`)!.at;
+    assert.ok(late < 100, `${outcome}: the failure came ${Math.round(late)} ms after the card's word`);
+    assert.deepEqual(comfy.seen.reads, ['p1', 'p1'], outcome);
+    await settled();
+    assert.deepEqual(comfy.seen.cleared, ['p1'], outcome);
+    assert.deepEqual(comfy.seen.bare, [], outcome);
+  }
 });
 
 // The file ComfyUI's Save menu writes is the UI format ({nodes:[...],links:[...]}), not the API format the harness

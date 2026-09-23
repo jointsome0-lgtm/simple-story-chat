@@ -55,7 +55,10 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   'sheetCharacters', 'namesStripped', 'withoutLook',
   // A sample of styles (local/picture.ts `sample`): how many styles one press of the reader asked for, one on a
   // style's own card and every style of the picker for "all styles".
-  'stylesAsked'] as const;
+  'stylesAsked',
+  // The photo's upload to Telegram, its time and its size: what decides whether a JPEG from the card, one more lossy
+  // step before Telegram's own, would be worth it.
+  'photoMs', 'photoBytes'] as const;
 
 export type ErrorDetails = {
   httpStatus?: number; phase?: typeof PHASES[number]; operation?: typeof OPERATIONS[number];

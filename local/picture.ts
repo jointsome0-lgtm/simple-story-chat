@@ -26,7 +26,7 @@ import { readFileSync } from 'node:fs';
 import type { Library, SceneNode } from '../lib/library.ts';
 import type { ImageConfig } from './config.ts';
 import { estimateTokens, requestStamp, sameContext } from './context.ts';
-import { SAMPLER_DEFAULTS, apiGraph, applyToWorkflow, drawOne, latentSizeOf, previewOnly, samplerSettingsOf } from './image-batch.ts';
+import { SAMPLER_DEFAULTS, apiGraph, applyToWorkflow, drawOne, latentSizeOf, previewOnly, samplerSettingsOf, settled } from './image-batch.ts';
 import type { Comfy, Graph } from './image-batch.ts';
 import { INSTRUCTION_TOKENS, STYLE, askJson, assemblePrompt, frameRequest, sheetOf, sheetRequest } from './illustrate.ts';
 import type { Character, Description, Excerpt } from './illustrate.ts';
@@ -86,7 +86,8 @@ export function createIllustrator(config: ImageConfig, deps: {
   // is counted by the server before it is sent (`trusted` below).
   model?: { model: string; provider: string; contextTokens: number };
   // The clock and the poll interval of the picture lane, named here so that a test can run the whole step against a
-  // fake ComfyUI in milliseconds. ComfyUI has no event to wait for; `drawOne` polls its history.
+  // fake ComfyUI in milliseconds. `drawOne` waits for ComfyUI's websocket to say the job is over and polls the job's
+  // record beside it; a fake without the socket is answered by the polls alone.
   now?: () => number; pollMs?: number;
 }) {
   const { store, provider, now = Date.now, pollMs } = deps;
@@ -247,10 +248,13 @@ export function createIllustrator(config: ImageConfig, deps: {
       const { assembled, drawn } = await drawFrame(storyId, frame, styleLine(reader, standard), signal);
       if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
       // The photo hangs under the scene it belongs to, and the status line goes only once the photo is there.
+      const photoStarted = now();
       await chat.photo(drawn.bytes, request.sceneMessageId);
+      const photoMs = Math.max(0, now() - photoStarted);
       await clear();
-      log('picture', undefined, { outcome: 'ready', describeMs, imageMs: drawn.totalMs, imageSteps: steps,
-        namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook, pictureStyle, ...elapsed() });
+      log('picture', undefined, { outcome: 'ready', describeMs, imageMs: drawn.totalMs, imageSteps: steps, photoMs,
+        photoBytes: drawn.bytes.length, namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook,
+        pictureStyle, ...elapsed() });
     } catch (error) {
       const code = errorCode(error);
       const cancelled = signal.aborted || code === 'cancelled';
@@ -276,7 +280,13 @@ export function createIllustrator(config: ImageConfig, deps: {
       // Runs once, however this ends: the caller has work that waits for the model's slot, not for the picture.
       let told = false;
       const described = () => { if (!told) { told = true; try { request.afterDescribe?.(); } catch { /* the caller's own */ } } };
-      try { await drawPicture(request, described); } finally { described(); }
+      try { await drawPicture(request, described); }
+      finally {
+        described();
+        // The delete of the job's record went out before the photo did and nobody waited for it (local/image-batch.ts
+        // `settled`); the picture is over once it has arrived as well, so that stopping the bot cannot drop it.
+        await settled();
+      }
     },
 
     // A sample of styles (`SampleRequest`). The frame of the scene is the one described for its own picture while
@@ -332,6 +342,8 @@ export function createIllustrator(config: ImageConfig, deps: {
         log('picture_sample', cancelled ? 'cancelled' : safeCode(code),
           { ...safeErrorDetails(error), outcome, cancelled, frameReused, describeMs, pictureStyle, stylesAsked });
       }
+      // As under a scene: over once the delete of its job's record has arrived too.
+      await settled();
     },
   };
 }

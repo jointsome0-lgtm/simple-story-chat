@@ -48,11 +48,12 @@ test('an illustrated scene logs its durations and the checkpoint role, never the
 // The row the bot writes for one reader's picture (local/picture.ts): how it ended, how long they waited, and the
 // three counts that are all anybody may know about the description.
 test('a picture of a scene ends in one of four words, with whole seconds and counts beside it', () => {
-  assert.deepEqual(safeErrorDetails({ outcome: 'ready', pictureSeconds: 14, sheetCharacters: 4, namesStripped: 2, withoutLook: 0 }),
-    { outcome: 'ready', pictureSeconds: 14, sheetCharacters: 4, namesStripped: 2, withoutLook: 0 });
+  assert.deepEqual(safeErrorDetails({ outcome: 'ready', pictureSeconds: 14, sheetCharacters: 4, namesStripped: 2, withoutLook: 0,
+    photoMs: 640, photoBytes: 2150000 }),
+    { outcome: 'ready', pictureSeconds: 14, sheetCharacters: 4, namesStripped: 2, withoutLook: 0, photoMs: 640, photoBytes: 2150000 });
   for (const outcome of ['failed', 'cancelled', 'skipped']) assert.equal(safeErrorDetails({ outcome }).outcome, outcome);
   assert.deepEqual(safeErrorDetails({ outcome: 'PRIVATE_SCENE', pictureSeconds: -1, sheetCharacters: 1.5,
-    description: 'PRIVATE_DESCRIPTION', who: 'PRIVATE_NAME' }), {});
+    description: 'PRIVATE_DESCRIPTION', who: 'PRIVATE_NAME', photoMs: -3, photoBytes: '2 MB' }), {});
 });
 
 // A picture names its style by a word of a closed set: every style of a reader's own is `custom`, and neither its

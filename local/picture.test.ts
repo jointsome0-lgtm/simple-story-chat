@@ -348,6 +348,9 @@ test('an illustrated scene: a status line, one description call, a prompt with o
   assert.equal(row.pictureSeconds, 3, 'the seconds from the end of the scene to the photo, rounded');
   assert.ok(Number.isSafeInteger(row.pictureAfterSceneMs!) && row.pictureAfterSceneMs! >= 3400);
   assert.ok(Number.isSafeInteger(row.describeMs!) && Number.isSafeInteger(row.imageMs!));
+  // The photo's own leg: the upload's time, and the size of what was uploaded, the stripped picture.
+  assert.ok(Number.isSafeInteger(row.photoMs!) && row.photoMs! >= 0);
+  assert.equal(row.photoBytes, bytes.length);
   assert.equal(row.imageSteps, 8);
   assert.equal(row.namesStripped, 2, 'the names that got through the instruction were cut out of both fields');
   assert.equal(row.withoutLook, 0);
