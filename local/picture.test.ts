@@ -370,13 +370,13 @@ test('a sample of a style is the last scene drawn once more: its frame and seed,
   assert.doesNotMatch(JSON.stringify(f.rows), /Элин|hair|door|Photorealistic|Synthetic test style/);
   assert.ok(comfy.seen.cleared.includes('p2'), 'the sample\'s job is off the card\'s history as well');
 
-  // A style of the reader's own is drawn with the sentences the bot adds, and logged as custom, never by its words.
+  // A style of the reader's own is drawn with the sentence the bot adds, and logged as custom, never by its words.
   await f.bot.handle(f.click('style-new'));
   await f.bot.handle(f.message('Уголь\nCharcoal sketch on rough paper'));
   const styleId = f.store.read('1').pictureStyle!;
   await f.bot.handle(f.click(`style-sample:${styleId}`));
   await f.bot.idle();
-  assert.ok(promptOf(comfy.submitted[2]).endsWith('Charcoal sketch on rough paper. Adults with natural adult proportions and faces. No captions, logos or watermarks.'));
+  assert.ok(promptOf(comfy.submitted[2]).endsWith('Charcoal sketch on rough paper. All people are adults.'));
   assert.equal(photos(f.sent)[2].payload.caption, 'Пример стиля: ✍️ Уголь');
   assert.deepEqual(photos(f.sent)[2].payload.reply_markup?.inline_keyboard.flat().map(button => button.callback_data), ['view:style']);
   assert.equal(f.rows.filter(one => one.event === 'picture_sample').at(-1)!.pictureStyle, 'custom');

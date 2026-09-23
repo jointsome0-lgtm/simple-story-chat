@@ -31,10 +31,11 @@ export const PRESET_KEYS = Object.keys(PRESETS) as Preset[];
 export const OWN_STYLE_CHARS = 400;
 export const OWN_NAME_CHARS = 40;
 export const OWN_STYLES_MAX = 10;
-// Follows a reader's own line, which takes the place of everything a preset keeps: the people stay adults with
-// natural proportions, and the picture stays free of lettering. Each of its sentences is added only when the line
-// does not say it already, as a line copied from a preset's card does.
-export const OWN_STYLE_TAIL = 'Adults with natural adult proportions and faces. No captions, logos or watermarks.';
+// The one thing the bot adds to a reader's own line: whatever look a reader writes, the people of the picture stay
+// adults. Nothing of the presets' other rules is added: natural proportions and no lettering fought a line that
+// wanted a look of its own, and the owner took them off on 2026-09-24, so the rest of the prompt's end is the
+// reader's line as written. The sentence is added only when the line does not say it already.
+export const OWN_STYLE_TAIL = 'All people are adults.';
 const TAIL_PARTS = OWN_STYLE_TAIL.split(/(?<=\.) /);
 // The id of an own style, as `id(state, 'y')` makes it (lib/library.ts).
 export const OWN_STYLE_ID = /^y\d+$/;
@@ -92,7 +93,7 @@ function flat(text: string): string {
 
 // The whole line a key stands for, as it ends a prompt, or null for a key this library has no style under.
 // `standard` is the bot's own line. A reader's own line is cut to the limit it was accepted under — a longer one
-// came from somewhere other than the bot — and followed by the sentences of OWN_STYLE_TAIL it does not have.
+// came from somewhere other than the bot — and followed by OWN_STYLE_TAIL when it does not say it already.
 export function lineOf(state: Partial<Library>, key: string, standard: string): string | null {
   if (key === 'standard') return standard;
   if (Object.hasOwn(PRESETS, key)) return PRESETS[key as Preset];

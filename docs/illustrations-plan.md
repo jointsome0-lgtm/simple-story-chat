@@ -496,7 +496,9 @@ last sentence of the prompt, never seen by the describing model. `local/picture-
 - `film`, `graphic` and `watercolor`.
 
 The same file keeps the rules for a reader's own line: 400 characters under a name of 40, at most 10 in a library,
-and followed by the sentences of `OWN_STYLE_TAIL` it does not say itself (adult proportions, no lettering). Every own
+and followed by `OWN_STYLE_TAIL`, that all people are adults, unless it says so itself. Until 2026-09-24 the tail also
+asked for natural proportions and no lettering; the owner took those off, because they fought a line that wanted a
+look of its own. Every own
 style is logged as `custom`, never by its words or its id. A sample reuses the frame of the scene's own picture from
 memory, so it costs the picture card alone, and draws it with the story's seed: two samples of one scene differ in
 the style sentence only. The row is `picture_sample`, with `frameReused` beside the fields of `picture`.

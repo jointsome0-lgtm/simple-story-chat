@@ -41,8 +41,8 @@ test('a style of the reader\'s own ends with the sentences it lacks of the bot\'
   assert.equal(choiceOf('film'), 'film');
   assert.equal(choiceOf('standard'), 'standard');
   assert.equal(styleLine(state, OWNER), `Charcoal sketch on rough paper. ${OWN_STYLE_TAIL}`);
-  // A preset copied into the library: only the sentence it does not say is added.
-  assert.equal(lineOf(state, 'y5', OWNER), `${PRESETS.film} Adults with natural adult proportions and faces.`);
+  // A preset copied into the library keeps its own rules and gets the one sentence it does not say.
+  assert.equal(lineOf(state, 'y5', OWNER), `${PRESETS.film} ${OWN_STYLE_TAIL}`);
   assert.equal(lineOf(state, 'y6', OWNER), `Ink. ${OWN_STYLE_TAIL}`);
   // A line longer than the bot accepts came from elsewhere, and is cut to the limit.
   assert.equal(lineOf(state, 'y7', OWNER), `${'z'.repeat(OWN_STYLE_CHARS)}. ${OWN_STYLE_TAIL}`);
@@ -71,7 +71,8 @@ test('what a reader sends: the first of several lines is the name, control chara
   assert.deepEqual(ownStyleInput('Уголь Charcoal sketch'), { name: 'Уголь', line: 'Charcoal sketch' });
   assert.deepEqual(ownStyleInput('\n\nУголь\n\n  \nCharcoal​ sketch\t\n'), { name: 'Уголь', line: 'Charcoal sketch' });
   assert.deepEqual(ownStyleInput(`Ink wash. ${OWN_STYLE_TAIL}`), { name: null, line: 'Ink wash.' });
-  assert.deepEqual(ownStyleInput(`Имя\nInk wash. No captions, logos or watermarks.`), { name: 'Имя', line: 'Ink wash.' });
+  // A preset's own sentence is the reader's to keep: only what the bot adds comes off.
+  assert.deepEqual(ownStyleInput(`Имя\nInk wash. No captions, logos or watermarks.`), { name: 'Имя', line: 'Ink wash. No captions, logos or watermarks.' });
   assert.equal(ownStyleInput(' \n\t '), null);
   assert.equal(ownStyleInput(`Имя\n${OWN_STYLE_TAIL}`), null);
 });

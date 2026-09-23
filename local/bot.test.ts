@@ -935,8 +935,8 @@ test('a reader keeps a library of picture styles: writes one, finds it chosen, e
   await f.bot.handle(f.message(undefined));
   assert.equal(shown(), texts('ru').errors.styleNeedsText);
   assert.deepEqual(state().ui, { input: 'style' });
-  // The whole prompt copied from a card fits again: the sentences the bot adds are taken off.
-  const copied = `${'x'.repeat(390)}. Adults with natural adult proportions and faces. No captions, logos or watermarks.`;
+  // The whole prompt copied from a card fits again: the sentence the bot adds is taken off.
+  const copied = `${'x'.repeat(390)}. All people are adults.`;
   await f.bot.handle(f.message(copied));
   const copy = state().pictureStyle!;
   assert.equal(state().pictureStyles![copy].line, `${'x'.repeat(390)}.`);
@@ -972,7 +972,7 @@ test('a reader keeps a library of picture styles: writes one, finds it chosen, e
   assert.deepEqual({ storyId: drawn[0].storyId, branchId: drawn[0].branchId, nodeId: drawn[0].nodeId },
     { storyId: where.storyId, branchId: where.branchId, nodeId: state().stories[where.storyId].branches[where.branchId].head });
   assert.equal(drawn[0].styles.length, 1);
-  assert.equal(drawn[0].styles[0].line, 'White chalk on a blackboard. Adults with natural adult proportions and faces. No captions, logos or watermarks.');
+  assert.equal(drawn[0].styles[0].line, 'White chalk on a blackboard. All people are adults.');
   assert.equal(drawn[0].styles[0].pictureStyle, 'custom');
   assert.equal(drawn[0].styles[0].caption.text, 'Пример стиля: ✍️ Мел');
   assert.equal(drawn[0].status, '🎨 Рисую пример…');

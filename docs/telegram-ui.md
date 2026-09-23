@@ -33,7 +33,7 @@ Only a reader whose scenes are drawn (`SIMPLE_CHAT_IMAGE_USERS`) has «🎨 Ст
 - **Own styles** live in `pictureStyles` in the library, with ids `y<n>`; `pictureStyle` holds the chosen key.
   - «➕ Новый стиль» sets `ui = {input:'style'}`, and the next text message is the style, never a move in the story. Any button or command leaves without a change.
   - A message of several lines is a name (the first line, cut to 40 characters) and a style (the rest). A single line is the style, named by its start. The style may be up to 400 characters.
-  - The bot appends its own sentences: adults with natural proportions, no lettering. The own style's card says so. They are taken off the end of a pasted card prompt, so a copied prompt fits again, and put back when the picture's prompt is assembled.
+  - The bot appends one sentence of its own, that all people are adults, unless the style says it already; nothing else is added, so the rest is the reader's line as written. The own style's card says so. The sentence is taken off the end of a pasted card prompt, so a copied prompt fits again, and put back when the picture's prompt is assembled.
   - A new style becomes the chosen one.
   - Editing (`ui = {input:'style', styleId}`) shows the current text; a first line renames the style.
 - **Sample:** the reader's last scene, the head of the active branch, drawn once more in the card's style with the story's seed. Only the style differs from the scene's own picture.
