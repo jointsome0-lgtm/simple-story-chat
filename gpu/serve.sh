@@ -4,6 +4,16 @@ umask 077
 task_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$task_dir/manifest.env"
 gpu_dir="${SIMPLE_CHAT_GPU_DIR:-/workspace/simple-chat-gpu}"
+# Settings this machine keeps for every start, whoever makes it. The bot's reconnect runs ensure-server.sh with an
+# empty environment, so a choice made once for a rental (SIMPLE_CHAT_GPU_DRAFT=true after a bootstrap that fetched the
+# draft) would otherwise end at the server's first restart. One NAME=value per line, SIMPLE_CHAT_GPU_* names only;
+# a value the caller set wins, so a measurement's profile is never overridden by the file.
+if [[ -f "$gpu_dir/serve.env" ]]; then
+  while IFS='=' read -r name value || [[ -n "$name" ]]; do
+    [[ "$name" =~ ^SIMPLE_CHAT_GPU_[A-Z_]+$ && "$name" != SIMPLE_CHAT_GPU_DIR ]] || continue
+    [[ -n "${!name+set}" ]] || export "$name=$value"
+  done <"$gpu_dir/serve.env"
+fi
 port="${SIMPLE_CHAT_GPU_PORT:-8080}"
 # The cells one request may use, matching the bot's SIMPLE_CHAT_CONTEXT_TOKENS.
 context="${SIMPLE_CHAT_GPU_CONTEXT:-65536}"

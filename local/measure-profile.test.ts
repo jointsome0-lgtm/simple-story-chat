@@ -189,6 +189,25 @@ test('serve.sh started with a profile environment passes that profile check and 
   }
 });
 
+// The bot's reconnect starts the server with an empty environment (local/gpu-connection.ts), so what a rental was set
+// up with lives in a file on the machine: serve.sh reads it for every start, and the caller's own values win.
+test('serve.sh takes the machine\'s own settings from serve.env, and the caller\'s environment still wins', t => {
+  const machine = fakeMachine(t);
+  const start = (environment: NodeJS.ProcessEnv = {}) => spawnSync('bash', [resolve('gpu/serve.sh')],
+    { encoding: 'utf8', timeout: 30000, env: { PATH: machine.path, SIMPLE_CHAT_GPU_DIR: machine.directory, ...environment } });
+  const argv = () => readFileSync(machine.cmdline, 'utf8').split('\0');
+  assert.equal(start().status, 0);
+  assert.ok(!argv().includes('--spec-draft-model'), 'no draft without being asked');
+  writeFileSync(join(machine.directory, 'serve.env'),
+    'SIMPLE_CHAT_GPU_DRAFT=true\n# a comment\nPATH=/nowhere\nSIMPLE_CHAT_GPU_DIR=/elsewhere\nSIMPLE_CHAT_GPU_UBATCH=256');
+  const started = start();
+  assert.equal(started.status, 0, started.stderr);
+  assert.ok(argv().includes('--spec-draft-model'), 'the machine\'s setting turned the draft on');
+  assert.equal(argv()[argv().indexOf('--ubatch-size') + 1], '256', 'a last line without a newline is read too');
+  assert.equal(start({ SIMPLE_CHAT_GPU_DRAFT: 'false' }).status, 0);
+  assert.ok(!argv().includes('--spec-draft-model'), 'the caller\'s own value wins');
+});
+
 // The two lanes of the session share a box and not a card: gpu/image-serve.sh pins ComfyUI to one, and nothing
 // pinned llama-server, whose `--gpu-layers 99` under llama.cpp's default split mode spreads the layers and the whole
 // KV pool over every visible card. Fourteen GiB of Gemma on the picture card is an out-of-memory in the middle of
