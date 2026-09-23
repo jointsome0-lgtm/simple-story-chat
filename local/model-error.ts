@@ -58,7 +58,10 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   'stylesAsked',
   // The photo's upload to Telegram, its time and its size: what decides whether a JPEG from the card, one more lossy
   // step before Telegram's own, would be worth it.
-  'photoMs', 'photoBytes'] as const;
+  'photoMs', 'photoBytes',
+  // Pictures whose scenes were deleted (local/bot.ts, lib/library.ts `forgetLostPictures`): those taken out of the
+  // chat, and those Telegram would not delete or was no longer asked to after a failure (local/telegram.ts `removeAll`).
+  'picturesRemoved', 'picturesNotRemoved'] as const;
 
 export type ErrorDetails = {
   httpStatus?: number; phase?: typeof PHASES[number]; operation?: typeof OPERATIONS[number];

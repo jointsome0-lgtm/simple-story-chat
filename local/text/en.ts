@@ -354,7 +354,7 @@ export const en: Messages = {
   },
 
   deletion: {
-    note: 'This removes it from the library the bot keeps, and it cannot be restored. Messages already sent to this chat stay.',
+    note: 'This cannot be undone. The bot removes the pictures of the deleted scenes from this chat if they were sent in the last two days. The scene texts stay in the chat.',
     seedTitle: name => `🗑 Delete seed ${name}?`,
     withSeed: 'Deleted with it, for good:',
     scenesAndCheckpoints: n => `${count(n, 'scene', 'scenes')} and all checkpoints`,

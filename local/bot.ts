@@ -1,5 +1,5 @@
 import { UserError, id, active, addSeed, newStory, fork, beginJob,
-  deleteSeed, deleteBranch, context, jobTarget, setLanguage } from '../lib/library.ts';
+  deleteSeed, deleteBranch, forgetLostPictures, context, jobTarget, setLanguage } from '../lib/library.ts';
 import type { Job, Library, SceneNode } from '../lib/library.ts';
 import { storyNarration } from './prompt.ts';
 import { createChat } from './telegram.ts';
@@ -57,6 +57,9 @@ type Plan = {
   // A sample of styles the reader asked for: what to draw, what to say under each picture and while they are drawn
   // (local/picture.ts `sample`).
   sample?: Pick<SampleRequest, 'storyId' | 'branchId' | 'nodeId' | 'styles' | 'status'>;
+  // The messages of the pictures whose scenes a deletion took with it (lib/library.ts `forgetLostPictures`), to be
+  // deleted from the chat once the deletion screen is out.
+  lostPictures?: number[];
 };
 // One reader's turn, for as long as it can still be cancelled. What it leaves behind — a picture being stopped on
 // the other card — outlives the entry and is awaited through `inFlight` instead.
@@ -81,7 +84,8 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
   // bot's stop end it: the scene's own picture goes first, and a sample is only ever a look.
   const sampling = new Map<string, AbortController>();
   // Every turn's work, whether or not its entry is still the reader's current one: a replaced turn is aborted, and
-  // what it is unwinding (the picture it had on the other card) still has to finish before the bot may stop.
+  // what it is unwinding (the picture it had on the other card) still has to finish before the bot may stop. A sample
+  // and the removal of a deletion's pictures are awaited the same way.
   const inFlight = new Set<Promise<unknown>>();
   const prepared = new Map<string, Prepared>();
   const preparing = new Set<Promise<void>>();
@@ -292,7 +296,9 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       if (state.ui?.confirm !== action) throw refuse(t, 'staleConfirmation');
       if (verb === 'remove-seed') deleteSeed(state, a);
       else deleteBranch(state, a, b);
-      return { screen: render(state, 'seeds:0') };
+      // The pictures of the scenes that went leave the chat too. A branch takes only the scenes that no other branch
+      // or checkpoint reaches (`deleteBranch`), so the picture of a scene another branch still has stays with it.
+      return { screen: render(state, 'seeds:0'), lostPictures: forgetLostPictures(state, Date.now()) };
     }
     if (verb === 'use') {
       const story = state.stories[a];
@@ -567,6 +573,16 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         catch (error) { log('saved_scene_delivery_unconfirmed', errorCode(error)); }
       }
       if (plan.screen) await safeSend(chat, plan.screen, log);
+      // After the deletion screen and apart from it: the reader has seen the deletion whatever Telegram answers, and
+      // is told nothing more. It runs beside the next updates, which local/main.ts handles one at a time, so that a
+      // chat slow to answer for a hundred messages holds up nobody.
+      if (plan.lostPictures?.length) {
+        const messageIds = plan.lostPictures;
+        const task: Promise<unknown> = chat.removeAll(messageIds)
+          .then(removed => log('pictures_removed', undefined, { picturesRemoved: removed, picturesNotRemoved: messageIds.length - removed }))
+          .finally(() => inFlight.delete(task));
+        inFlight.add(task);
+      }
       if (plan.sample && illustrator) {
         const t = texts(store.read(userId).language);
         if (sampling.has(userId)) await safeSend(chat, { text: t.errors.sampleInFlight }, log);

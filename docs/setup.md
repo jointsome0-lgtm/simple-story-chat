@@ -62,7 +62,7 @@ Open your bot with the link `https://t.me/<bot_name>` and send `/start`. Press *
 
 Check several continuations: free text, an author's instruction, the **Продолжить** ("Continue") button. Then open **Чекпоинты** ("Checkpoints"), choose an early scene and press **Продолжить отсюда** ("Continue from here"). Write a different action. Through **Ветки** ("Branches") you can return to the original line of events.
 
-Deleting a seed deletes it from the library together with all its stories. Deleting a branch keeps the other branches and the scenes they share. These actions do not erase Telegram messages that were already sent.
+Deleting a seed deletes it from the library together with all its stories. Deleting a branch keeps the other branches and the scenes they share. The texts of scenes already sent to Telegram stay in the chat. The pictures of the deleted scenes are deleted from it if they were sent less than two days ago: Telegram lets a bot delete its own messages for 48 hours only.
 
 If a reply was not delivered, `/last` shows the saved scene without generating it again. `/cancel` cancels the current input, compaction or generation. Before a continuation, when the input token threshold is reached, the bot compacts old scenes into a new memory increment and keeps the last four scenes in full. The threshold and the number of scenes are set by the variables above. The original seed is not compacted. The checkpoints before and after a compaction let you continue from any of these states; all the original scenes remain in the archive.
 

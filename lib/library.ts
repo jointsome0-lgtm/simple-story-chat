@@ -46,6 +46,9 @@ export type DeleteConfirmation = { confirm: string; input?: undefined };
 export type StyleInput = { input: 'style'; styleId?: string; confirm?: undefined };
 // One of the reader's own picture styles: the name on its button and the line that ends the prompt.
 export type OwnStyle = { id: string; name: string; line: string };
+// A picture the local bot sent into its reader's chat (local/picture.ts): the scene it shows, the message it is, and
+// when it was sent, in milliseconds since the epoch.
+export type SentPicture = { storyId: string; nodeId: string; messageId: number; at: number };
 // Interface language of the bot, never of the stories. A library without it predates the choice and is shown in Russian.
 export type Language = 'ru' | 'en' | 'zh' | 'ko' | 'ja';
 export type Library = {
@@ -56,6 +59,9 @@ export type Library = {
   // the local bot reads them (local/picture-style.ts), and only for a reader it draws for; without a choice the bot's
   // own style is used.
   pictureStyle?: string; pictureStyles?: Record<string, OwnStyle>;
+  // The pictures in this reader's chat that Telegram would still let the bot delete, so that deleting a seed or a
+  // branch takes the pictures of its scenes out of the chat too (`forgetLostPictures`). Only the local bot writes them.
+  sentPictures?: SentPicture[];
 };
 // Names the library gives to what it creates. They are stored as written and never translated afterwards.
 export type Labels = { firstBranch: string; seedCheckpoint: string; forkBranch: (from: string) => string; forkCheckpoint: string; afterCompaction: string };
@@ -245,4 +251,31 @@ export function deleteSeed(state: Library, seedId: string): void {
   }
   delete state.seeds[seedId];
   state.ui = null;
+}
+
+// Telegram lets a bot delete a message of its own for 48 hours after sending it and never later (Bot API
+// `deleteMessage`). A record older than that can no longer be used, so every write of the list drops it.
+export const MESSAGE_DELETABLE_MS = 48 * 60 * 60 * 1000;
+// A backstop: the library is read and written whole on every update, and the 48 hours alone do not bound the list.
+// A thousand pictures is some five hours of the picture card drawing without a pause.
+export const SENT_PICTURES_MAX = 1000;
+
+// Records a picture the moment it is sent, beside the others that may still be deleted, newest last.
+export function recordPicture(state: Library, picture: SentPicture): void {
+  const deletable = (state.sentPictures ?? []).filter(one => picture.at - one.at < MESSAGE_DELETABLE_MS);
+  state.sentPictures = [...deletable, picture].slice(-SENT_PICTURES_MAX);
+}
+
+// After a deletion: forgets the pictures whose story or scene is gone and returns their messages, for the caller to
+// delete from the chat. A record too old to be deleted is dropped and not returned.
+export function forgetLostPictures(state: Library, now: number): number[] {
+  if (!state.sentPictures) return [];
+  const lost: number[] = [];
+  state.sentPictures = state.sentPictures.filter(picture => {
+    if (now - picture.at >= MESSAGE_DELETABLE_MS) return false;
+    if (state.stories[picture.storyId]?.nodes[picture.nodeId]) return true;
+    lost.push(picture.messageId);
+    return false;
+  });
+  return lost;
 }

@@ -436,7 +436,8 @@ export const ru = {
 
   // Both delete confirmations.
   deletion: {
-    note: 'Удаляется из сохранённой библиотеки бота, восстановить будет нельзя. Уже отправленные сообщения в этом чате останутся.',
+    // Two days: Telegram lets a bot delete its own messages for 48 hours only. The texts of scenes are never deleted.
+    note: 'Восстановить будет нельзя. Картинки к удалённым сценам бот уберёт из этого чата, если с отправки прошло меньше двух суток. Тексты сцен в чате останутся.',
     seedTitle: (name: string) => `🗑 Удалить сид ${name}?`,
     // Heads a bulleted list of count.stories, count.branches and scenesAndCheckpoints.
     withSeed: 'Вместе с ним навсегда удалятся:',

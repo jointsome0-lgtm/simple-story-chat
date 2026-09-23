@@ -21,8 +21,13 @@
 // A picture in flight is stopped by the reader's next message and by `/cancel`. It is not offered as a button of
 // its own: by the time it is being drawn the job lock is clear, so the bot shows no cancel control, and moving
 // around the menus does not stop it either — it ends with the next scene the reader asks for, or with the photo.
+//
+// A picture goes with its scene. Every photo is recorded in the reader's library as it is sent, and deleting the
+// scene with its seed or branch deletes the photo from the chat (local/bot.ts); a picture whose scene is deleted
+// while it is being made is not sent at all (`sendPhoto`).
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { recordPicture } from '../lib/library.ts';
 import type { Library, SceneNode } from '../lib/library.ts';
 import type { ImageConfig } from './config.ts';
 import { estimateTokens, requestStamp, sameContext } from './context.ts';
@@ -74,6 +79,11 @@ const safeCode = (value: unknown) =>
 // A description call that was stopped because somebody else needed the model (local/scheduler.ts): a picture is the
 // one thing here that may be given up, and giving it up is not a failure of the feature.
 const GAVE_WAY = ['background_preempted', 'background_unavailable', 'background_timeout'];
+
+// The scene of a picture is no longer in its reader's library: they deleted it, with its seed or its branch. That
+// ends the picture the way their next message does, without a word; the row keeps this code, so that the two can
+// still be told apart. `details` are the counts of a photo that had to be taken back (`sendPhoto`).
+const sceneGone = (details?: object) => Object.assign(new Error('scene_gone'), { code: 'scene_gone', ...details });
 
 // One seed per story, from the story's id. Free sampling redraws the world from nothing in every scene; a seed that
 // stays put holds a place steadier between visits, and costs nothing (the plan, "What survives without reference
@@ -163,7 +173,7 @@ export function createIllustrator(config: ImageConfig, deps: {
     sharesPrefix: boolean) {
     const state = store.read(userId);
     const story = state.stories[storyId];
-    if (!story?.nodes[nodeId]) throw Object.assign(new Error('scene_gone'), { code: 'scene_gone' });
+    if (!story?.nodes[nodeId]) throw sceneGone();
     const context = excerpt(state, storyId, nodeId, branchId);
     const anchor = anchorOf(story.nodes[nodeId], context);
     let sheet: Character[] = [];
@@ -210,6 +220,28 @@ export function createIllustrator(config: ImageConfig, deps: {
     };
   }
 
+  // A photo goes out only while its scene is in the reader's library, and is recorded there the moment it is sent,
+  // so that deleting the scene deletes the photo too (local/bot.ts). A deletion that lands while the photo is on its
+  // way finds no record of it yet; the record then finds no scene, and the photo is taken back at once. The two
+  // writes of the library cannot interleave, so one of them always sees the other.
+  async function sendPhoto(request: { userId: string; chat: Chat; storyId: string; nodeId: string }, bytes: Uint8Array,
+    replyTo?: number, caption?: Screen) {
+    const { userId, chat, storyId, nodeId } = request;
+    if (!store.read(userId).stories[storyId]?.nodes[nodeId]) throw sceneGone();
+    const messageId = await chat.photo(bytes, replyTo, caption);
+    // A photo whose id did not come back can be neither recorded nor taken back.
+    if (messageId === undefined) return;
+    const kept = store.mutate(userId, state => {
+      if (!state.stories[storyId]?.nodes[nodeId]) return false;
+      recordPicture(state, { storyId, nodeId, messageId, at: now() });
+      return true;
+    });
+    if (kept) return;
+    let removed = 0;
+    try { await chat.remove(messageId); removed = 1; } catch { /* counted in the row */ }
+    throw sceneGone({ picturesRemoved: removed, picturesNotRemoved: 1 - removed });
+  }
+
   // One picture, from the status line to the photo. `described` is called the moment the language model is out
   // of it, so that the caller may start the work that was waiting for its slot while the card still draws.
   async function drawPicture(request: PictureRequest, described: () => void): Promise<void> {
@@ -249,7 +281,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
       // The photo hangs under the scene it belongs to, and the status line goes only once the photo is there.
       const photoStarted = now();
-      await chat.photo(drawn.bytes, request.sceneMessageId);
+      await sendPhoto(request, drawn.bytes, request.sceneMessageId);
       const photoMs = Math.max(0, now() - photoStarted);
       await clear();
       log('picture', undefined, { outcome: 'ready', describeMs, imageMs: drawn.totalMs, imageSteps: steps, photoMs,
@@ -257,14 +289,14 @@ export function createIllustrator(config: ImageConfig, deps: {
         pictureStyle, ...elapsed() });
     } catch (error) {
       const code = errorCode(error);
-      const cancelled = signal.aborted || code === 'cancelled';
+      const cancelled = signal.aborted || code === 'cancelled' || code === 'scene_gone';
       // The scheduler gave the slot to somebody who is waiting for a scene, which is the order the plan asks for:
       // nothing failed, this reader simply gets no picture for this scene.
       const gaveWay = GAVE_WAY.includes(String(code));
       const outcome = cancelled ? 'cancelled' : gaveWay ? 'skipped' : 'failed';
       // A reader who has moved on gets no apology, only their own next scene; a reader still waiting is told once.
       await clear(outcome === 'failed' ? t.notices.pictureFailed : undefined);
-      log('picture', cancelled ? 'cancelled' : safeCode(code),
+      log('picture', signal.aborted ? 'cancelled' : safeCode(code),
         { ...safeErrorDetails(error), outcome, cancelled, describeMs, pictureStyle, ...elapsed() });
     }
   }
@@ -326,7 +358,7 @@ export function createIllustrator(config: ImageConfig, deps: {
           if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
           const { assembled, drawn } = await drawFrame(storyId, frame, style.line, signal);
           if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
-          await chat.photo(drawn.bytes, undefined, style.caption);
+          await sendPhoto(request, drawn.bytes, undefined, style.caption);
           log('picture_sample', undefined, { outcome: 'ready', frameReused, describeMs, imageMs: drawn.totalMs, imageSteps: steps,
             namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook, pictureStyle, stylesAsked });
           // The styles after the first are drawn from the frame already in hand.
@@ -336,10 +368,10 @@ export function createIllustrator(config: ImageConfig, deps: {
         await clear();
       } catch (error) {
         const code = errorCode(error);
-        const cancelled = signal.aborted || code === 'cancelled';
+        const cancelled = signal.aborted || code === 'cancelled' || code === 'scene_gone';
         const outcome = cancelled ? 'cancelled' : GAVE_WAY.includes(String(code)) ? 'skipped' : 'failed';
         await clear(cancelled ? undefined : t.notices.sampleFailed);
-        log('picture_sample', cancelled ? 'cancelled' : safeCode(code),
+        log('picture_sample', signal.aborted ? 'cancelled' : safeCode(code),
           { ...safeErrorDetails(error), outcome, cancelled, frameReused, describeMs, pictureStyle, stylesAsked });
       }
       // As under a scene: over once the delete of its job's record has arrived too.

@@ -373,7 +373,7 @@ export const ko: Messages = {
   },
 
   deletion: {
-    note: '봇에 저장된 라이브러리에서 삭제되며 되돌릴 수 없어요. 이 채팅에 이미 보낸 메시지는 남아요.',
+    note: '삭제하면 되돌릴 수 없어요. 삭제된 장면의 삽화는 보낸 지 이틀이 안 됐다면 봇이 이 채팅에서 지워요. 채팅에 있는 장면 텍스트는 남아요.',
     seedTitle: name => `🗑 시드 ${name}${josa(name, '을', '를')} 삭제할까요?`,
     withSeed: '함께 영구 삭제되는 항목:',
     scenesAndCheckpoints: n => `장면 ${n}개와 모든 체크포인트`,

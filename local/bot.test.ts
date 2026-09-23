@@ -19,7 +19,7 @@ import type { TelegramPayload } from './telegram.ts';
 import { render, scenePrefix, sceneKeyboard } from './ui.ts';
 import { texts } from './text.ts';
 import { UserError, addSeed, history, newStory, beginJob, commitTurn, context } from '../lib/library.ts';
-import type { Job, SeedDraft } from '../lib/library.ts';
+import type { Job, SeedDraft, SentPicture } from '../lib/library.ts';
 
 // Scene and memory requests from the bot always pass a text callback.
 type TextControls = GenerateControls & Required<Pick<GenerateControls, 'onText'>>;
@@ -34,7 +34,7 @@ type FixtureOptions = {
 // A log row as main.ts writes it: the event, a code and the allowed details.
 type Row = { event: string; code?: string | number } & ErrorDetails;
 // Fields of sent payloads that the tests read; each is present for the methods where it is read.
-type Payload = { chat_id: number; message_id: number; text: string; rich_message: { markdown: string }; draft_id: number };
+type Payload = { chat_id: number; message_id: number; message_ids: number[]; text: string; rich_message: { markdown: string }; draft_id: number };
 // A synthetic private message; tests may replace its chat or add rich content, a document or a caption.
 type MessageUpdate = Update & { message: NonNullable<Update['message']> & { chat: { id: number; type: string }; caption?: string } };
 // Summary requests carry their scenes as JSON in the first message.
@@ -327,6 +327,122 @@ test('fork uses only the checkpoint past; deletion preserves another branch and 
   assert.equal(Object.keys(f.store.read(1).stories).length, 0);
   assert.equal(Object.keys(f.store.read(1).seeds).length, 0);
   assert.equal(Object.keys(f.store.read(2).stories).length, 1);
+});
+
+// The bot tests draw no pictures, so each library below is given the records local/picture.ts would have left in it.
+const HOUR = 60 * 60 * 1000;
+
+test('deleting a seed takes the pictures of its stories out of the chat, a hundred to a call, and no other picture', async t => {
+  const f = fixture(t, { ownerId: '1' });
+  await f.start();
+  await f.start(2);
+  const story = Object.values(f.store.read(1).stories)[0];
+  const [scene] = Object.keys(story.nodes);
+  // A second seed of the same reader, with a scene of its own.
+  let harbour = { storyId: '', nodeId: '' };
+  f.store.mutate(1, state => {
+    const { story: other } = newStory(state, addSeed(state, seedText.replace('Маяк', 'Порт')).id);
+    const job = beginJob(state, 'Синтетический ход.', 0);
+    harbour = { storyId: other.id, nodeId: commitTurn(state, job.id, '2026-08-02 20:00\n\nСинтетическая гавань.')!.nodeId };
+  });
+  const now = Date.now();
+  const kept: SentPicture = { ...harbour, messageId: 9001, at: now - HOUR };
+  f.store.mutate(1, state => {
+    state.sentPictures = [
+      // Sent before the 48 hours in which Telegram lets the bot delete it: forgotten, and never asked for.
+      { storyId: story.id, nodeId: scene, messageId: 7001, at: now - 49 * HOUR },
+      ...Array.from({ length: 250 }, (_, n) => ({ storyId: story.id, nodeId: scene, messageId: 8000 + n, at: now - 24 * HOUR + n })),
+      kept,
+    ];
+  });
+  // The other reader's library has the same ids, and is not touched.
+  const their = Object.values(f.store.read(2).stories)[0];
+  const theirs: SentPicture = { storyId: their.id, nodeId: Object.keys(their.nodes)[0], messageId: 8000, at: now };
+  f.store.mutate(2, state => { state.sentPictures = [theirs]; });
+
+  await f.bot.handle(f.click(`view:delete-seed:${story.seedId}`));
+  const before = f.sent.length;
+  await f.bot.handle(f.click(`remove-seed:${story.seedId}`));
+  await f.bot.idle();
+  const calls = f.sent.slice(before);
+  // The screen every deletion shows, then the pictures a hundred to a call; the one past its 48 hours is not among them.
+  assert.deepEqual(calls.map(call => call.method), ['answerCallbackQuery', 'sendMessage', 'deleteMessages', 'deleteMessages', 'deleteMessages']);
+  assert.equal(calls[1].payload.text, render(f.store.read(1), 'seeds:0').text);
+  assert.deepEqual(calls.slice(2).map(call => [call.payload.chat_id, call.payload.message_ids.length]), [[1, 100], [1, 100], [1, 50]]);
+  assert.deepEqual(calls.slice(2).flatMap(call => call.payload.message_ids), Array.from({ length: 250 }, (_, n) => 8000 + n));
+  assert.deepEqual(f.store.read(1).sentPictures, [kept]);
+  assert.deepEqual(f.store.read(2).sentPictures, [theirs]);
+  // One row, in counts: no message, story or scene id.
+  assert.deepEqual(f.rows.filter(row => row.event === 'pictures_removed'),
+    [{ event: 'pictures_removed', picturesRemoved: 250, picturesNotRemoved: 0, actor: 'owner' }]);
+});
+
+test('deleting a branch takes out only the pictures of the scenes that no other branch has', async t => {
+  const f = fixture(t, { ownerId: '1' });
+  await f.start();
+  const story = Object.values(f.store.read(1).stories)[0];
+  const first = f.store.read(1).active!.branchId;
+  const checkpoint = Object.values(story.checkpoints).find(cp => cp.kind === 'scene')!;
+  await f.bot.handle(f.message('Смотритель поднимается на башню.'));
+  await f.bot.idle();
+  await f.bot.handle(f.click(`fork:${story.id}:${checkpoint.id}`));
+  const fork = f.store.read(1).active!.branchId;
+  await f.bot.handle(f.message('Смотритель остаётся внизу.'));
+  await f.bot.idle();
+  // One more fork from the same scene, with no scene of its own.
+  await f.bot.handle(f.click(`fork:${story.id}:${checkpoint.id}`));
+  const bare = f.store.read(1).active!.branchId;
+  const [shared, onlyFirst, onlyFork] = Object.keys(f.store.read(1).stories[story.id].nodes);
+  const now = Date.now();
+  const sent = (messageId: number, nodeId: string): SentPicture => ({ storyId: story.id, nodeId, messageId, at: now });
+  // The shared first scene's picture, the second scene's picture and a sample of it, and the fork's scene's picture.
+  f.store.mutate(1, state => { state.sentPictures = [sent(501, shared), sent(502, onlyFirst), sent(503, onlyFirst), sent(504, onlyFork)]; });
+  const removed = () => f.sent.filter(call => call.method === 'deleteMessages').map(call => call.payload.message_ids);
+  const remove = async (branchId: string) => {
+    await f.bot.handle(f.click(`view:delete-branch:${story.id}:${branchId}`));
+    await f.bot.handle(f.click(`remove-branch:${story.id}:${branchId}`));
+    await f.bot.idle();
+  };
+  // A branch with no scene of its own takes no picture, and leaves no row.
+  await remove(bare);
+  assert.deepEqual(removed(), []);
+  assert.ok(!f.rows.some(row => row.event === 'pictures_removed'));
+  await remove(first);
+  assert.deepEqual(removed(), [[502, 503]]);
+  assert.deepEqual(f.store.read(1).sentPictures, [sent(501, shared), sent(504, onlyFork)]);
+  // The last branch is the whole story, and every picture left goes with it.
+  await remove(fork);
+  assert.deepEqual(removed(), [[502, 503], [501, 504]]);
+  assert.deepEqual(f.store.read(1).sentPictures, []);
+  assert.deepEqual(f.rows.filter(row => row.event === 'pictures_removed').map(row => [row.picturesRemoved, row.picturesNotRemoved]), [[2, 0], [2, 0]]);
+});
+
+test('a batch Telegram refuses goes message by message, and nothing of it reaches the reader or holds up the deletion', async t => {
+  let refuse: (() => void) | undefined;
+  const refusal = () => Object.assign(new Error('synthetic'), { code: 400 });
+  const f = fixture(t, { ownerId: '1', hold: (method, payload) => {
+    // The batch is answered when the test says so, with a refusal; one message on its own is refused as well.
+    if (method === 'deleteMessages') return new Promise<void>((_, reject) => { refuse = () => reject(refusal()); });
+    if (method === 'deleteMessage' && payload.message_id === 8002) return Promise.reject(refusal());
+    return undefined;
+  } });
+  await f.start();
+  const story = Object.values(f.store.read(1).stories)[0];
+  const [scene] = Object.keys(story.nodes);
+  f.store.mutate(1, state => { state.sentPictures = [8001, 8002, 8003].map(messageId => ({ storyId: story.id, nodeId: scene, messageId, at: Date.now() })); });
+  await f.bot.handle(f.click(`view:delete-seed:${story.seedId}`));
+  const before = f.sent.length;
+  await f.bot.handle(f.click(`remove-seed:${story.seedId}`));
+  // The update is handled, the library written and the screen out while Telegram still holds the batch.
+  assert.equal(Object.keys(f.store.read(1).seeds).length, 0);
+  assert.deepEqual(f.sent.slice(before).map(call => call.method), ['answerCallbackQuery', 'sendMessage']);
+  assert.equal(f.sent[before + 1].payload.text, render(f.store.read(1), 'seeds:0').text);
+  refuse!();
+  await f.bot.idle();
+  assert.deepEqual(f.sent.slice(before + 2).map(call => [call.method, call.payload.message_id]), [['deleteMessage', 8001], ['deleteMessage', 8003]]);
+  assert.deepEqual(f.store.read(1).sentPictures, []);
+  assert.deepEqual(f.rows.filter(row => row.event === 'pictures_removed'),
+    [{ event: 'pictures_removed', picturesRemoved: 2, picturesNotRemoved: 1, actor: 'owner' }]);
 });
 
 test('private state cannot be reached from another user, group or unconfirmed delete callback', async t => {

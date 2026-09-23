@@ -7,6 +7,8 @@ export type TelegramPayload = { timeout?: number; [field: string]: unknown };
 // Bot API results are not validated; each caller reads only what its method returns.
 export type TelegramApi = (method: string, payload?: TelegramPayload) => Promise<unknown>;
 export type Chat = ReturnType<typeof createChat>;
+// `deleteMessages` takes from 1 to 100 message ids in one call.
+const DELETE_BATCH = 100;
 
 export class TelegramError extends Error {
   declare code: number | string;
@@ -72,12 +74,38 @@ export function createChat(api: TelegramApi, chatId: number | string) {
     send: (screen: Screen) => api('sendMessage', { chat_id: chatId, ...screen }),
     edit: (messageId: number, screen: Screen) => api('editMessageText', { chat_id: chatId, message_id: messageId, ...screen }),
     remove: (messageId: number) => api('deleteMessage', { chat_id: chatId, message_id: messageId }),
+    // Messages of this chat, a hundred to a call (`deleteMessages`, which skips any message it cannot find). A call
+    // that fails is tried again message by message, so that one message Telegram will not delete (gone already, or
+    // past its 48 hours) costs only itself. A failure of any other kind (the network, the rate limit, a chat closed to
+    // the bot) would meet every message after it as well, and ends the attempt. Resolves to how many messages went,
+    // and never throws: the caller has nothing more to do about the rest.
+    async removeAll(messageIds: number[]) {
+      let removed = 0;
+      for (let at = 0; at < messageIds.length; at += DELETE_BATCH) {
+        const batch = messageIds.slice(at, at + DELETE_BATCH);
+        try {
+          await api('deleteMessages', { chat_id: chatId, message_ids: batch });
+          removed += batch.length;
+          continue;
+        } catch { /* tried one by one below */ }
+        for (const messageId of batch) {
+          try { await api('deleteMessage', { chat_id: chatId, message_id: messageId }); removed++; }
+          catch (error) { if ((error as { code?: unknown }).code !== 400) return removed; }
+        }
+      }
+      return removed;
+    },
     // The picture of a scene, uploaded from memory as PNG bytes and hung under the message it belongs to. A text
     // message cannot become a photo by an edit — editMessageMedia needs a message that already carries media — so
     // the status line that stood here is a message of its own, and the caller removes it once this one lands.
-    photo: (bytes: Uint8Array, replyTo?: number, caption?: Screen) => api('sendPhoto', { chat_id: chatId, photo: bytes,
-      ...(caption ? { caption: caption.text, ...(caption.reply_markup ? { reply_markup: caption.reply_markup } : {}) } : {}),
-      ...(replyTo ? { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } } : {}) }),
+    // Resolves to the photo's own message id, by which a deletion of its scene takes it out of the chat again.
+    async photo(bytes: Uint8Array, replyTo?: number, caption?: Screen) {
+      const sent = await api('sendPhoto', { chat_id: chatId, photo: bytes,
+        ...(caption ? { caption: caption.text, ...(caption.reply_markup ? { reply_markup: caption.reply_markup } : {}) } : {}),
+        ...(replyTo ? { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } } : {}) });
+      // Bot API results are not validated; the id is read as returned.
+      return (sent as { message_id?: number } | undefined)?.message_id;
+    },
     async final(text: string, replyMarkup?: InlineKeyboard) {
       return api('sendRichMessage', { chat_id: chatId, rich_message: { markdown: text },
         ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });

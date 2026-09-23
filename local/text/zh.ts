@@ -364,7 +364,7 @@ export const zh: Messages = {
   },
 
   deletion: {
-    note: '将从机器人保存的故事库中删除，无法恢复。已经发到这个聊天里的消息会保留。',
+    note: '删除后无法恢复。已删除场景的插图如果发出还不到两天，机器人会把它们从这个聊天中移除。聊天里的场景文本会保留。',
     seedTitle: name => `🗑 删除种子${name}？`,
     withSeed: '以下内容会一并永久删除：',
     scenesAndCheckpoints: n => `${sceneCount(n)}及所有存档点`,

@@ -79,7 +79,12 @@ function exercise(domain: typeof source) {
   keep([domain.jobTarget(state, 'j20'), domain.jobTarget(state, 'j0')]);
   reject(() => domain.beginJob(state, 'Ещё раз.', 6000));
   reject(() => domain.commitTurn(state, 'j20', 'Без даты.\n\nСцена 4.'));
-  keep(domain.commitTurn(state, 'j20', '2026-08-02 20:04\n\nСцена 4.'));
+  const turn = domain.commitTurn(state, 'j20', '2026-08-02 20:04\n\nСцена 4.')!;
+  keep(turn);
+  // Pictures in the chat: of a scene both branches share, and of the scene just written on one of them.
+  domain.recordPicture(state, { storyId: story.id, nodeId: 'n6', messageId: 501, at: 1000 });
+  domain.recordPicture(state, { storyId: story.id, nodeId: turn.nodeId, messageId: 502, at: 2000 });
+  keep(state.sentPictures);
   keep(domain.saveCheckpoint(state, story, branch, 'Сцена 4', 'scene'));
   const job = domain.beginJob(state, 'Продолжай.', 7000);
   reject(() => domain.commitMemory(state, job.id, ['n9'], { facts: [] }));
@@ -90,8 +95,10 @@ function exercise(domain: typeof source) {
   reject(() => domain.addSeed(state, 'Без даты'));
   keep(domain.newStory(state, domain.addSeed(state, 'Порт\n2026-08-03 09:00\nСинтетическая гавань.').id));
   keep(domain.deleteBranch(state, story.id, branch.id));
+  keep(domain.forgetLostPictures(state, 3000));
   reject(() => domain.deleteBranch(state, story.id, branch.id));
   keep(domain.deleteSeed(state, seed.id));
+  keep(domain.forgetLostPictures(state, 3000));
   reject(() => domain.deleteSeed(state, seed.id));
   // Names in another interface language are stored as given; the defaults above are the Russian ones.
   const labels = { firstBranch: 'Start', seedCheckpoint: 'Seed', forkBranch: (from: string) => `From ${from}`, forkCheckpoint: 'Fork point', afterCompaction: 'After' };
@@ -101,6 +108,40 @@ function exercise(domain: typeof source) {
   keep([domain.emptyLibrary(), domain.id(state, 'x')]);
   return { results, state };
 }
+
+test('pictures are recorded as sent, and a deletion forgets those of its lost scenes and those too old to delete', () => {
+  const state: Library = JSON.parse(payload);
+  const hour = 60 * 60 * 1000;
+  const now = 1_790_000_000_000;
+  // The list is read through a call: an assertion narrows the field it names, and the calls below change it.
+  const pictures = () => state.sentPictures;
+  const ids = () => pictures()?.map(one => one.messageId);
+  // A library that never had a picture gets no list from a deletion either.
+  assert.deepEqual(source.forgetLostPictures(state, now), []);
+  assert.equal(pictures(), undefined);
+  // Scene 4 is written on b18 alone; n6 is on both branches.
+  const { nodeId } = source.commitTurn(state, 'j20', '2026-08-02 20:04\n\nСцена 4.')!;
+  const sent = (messageId: number, scene: string, at: number) => ({ storyId: 'h2', nodeId: scene, messageId, at });
+  source.recordPicture(state, sent(1, 'n6', now - 50 * hour));
+  source.recordPicture(state, sent(2, nodeId, now - 47 * hour));
+  assert.deepEqual(ids(), [1, 2]);
+  // Every record drops what Telegram would no longer delete by then.
+  source.recordPicture(state, sent(3, 'n6', now - hour));
+  source.recordPicture(state, sent(4, nodeId, now - hour / 2));
+  assert.deepEqual(ids(), [2, 3, 4]);
+  // The branch takes scene 4 with it: its picture of half an hour ago is returned for the chat, the one from 48 hours
+  // ago is only forgotten, and the picture of the shared scene stays.
+  source.deleteBranch(state, 'h2', 'b18');
+  assert.deepEqual(source.forgetLostPictures(state, now + hour), [4]);
+  assert.deepEqual(pictures(), [sent(3, 'n6', now - hour)]);
+  source.deleteSeed(state, 's1');
+  assert.deepEqual(source.forgetLostPictures(state, now + hour), [3]);
+  assert.deepEqual(pictures(), []);
+  // However many are sent within the 48 hours, the library keeps the newest thousand.
+  for (let n = 0; n < source.SENT_PICTURES_MAX + 5; n++) source.recordPicture(state, sent(100 + n, 'n6', now + n));
+  assert.equal(ids()?.length, source.SENT_PICTURES_MAX);
+  assert.equal(ids()?.[0], 105);
+});
 
 test('the generated cloud domain behaves like lib/library.ts on a stored v1 library', () => {
   assert.notEqual(artifact.UserError, source.UserError);

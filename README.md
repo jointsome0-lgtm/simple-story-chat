@@ -14,7 +14,7 @@ After setup and start, send the bot `/start` or `/menu`.
 2. Wait until all parts are accepted and press **Сохранить сид** ("Save seed"), then **Начать новую историю** ("Start a new story").
 3. Answer with ordinary text or press **Продолжить** ("Continue").
 4. The **Чекпоинты** ("Checkpoints") button opens the saved scenes. **Продолжить отсюда** ("Continue from here") creates a new branch; the text that follows continues the chosen moment.
-5. **Меню → Сиды** ("Menu → Seeds") leads back to other stories and branches. Deleting a seed deletes all its stories from the bot's library. Deleting a branch keeps the other branches. The bot asks for confirmation before deleting; messages already sent to Telegram stay in the chat.
+5. **Меню → Сиды** ("Menu → Seeds") leads back to other stories and branches. Deleting a seed deletes all its stories from the bot's library. Deleting a branch keeps the other branches. The bot asks for confirmation before deleting. The texts of scenes already sent to Telegram stay in the chat; the pictures of the deleted scenes leave it, if they were sent less than two days ago.
 
 Scenes are saved automatically. `/last` shows the last scene again without calling the model. `/cancel` cancels seed input, generation or compaction. If delivery fails, the finished answer stays in the database; a repeated delivery of the incoming event does not start another model call.
 

@@ -65,7 +65,8 @@ test('a picture is sent as a photo under the message it belongs to, and the line
   }) as unknown as Parameters<typeof createChat>[0];
   const one = createChat(api, 7);
   const bytes = new Uint8Array([137, 80, 78, 71, 1, 2, 3]);
-  await one.photo(bytes, 42);
+  // The photo's own message id comes back, for a deletion of its scene to take it out of the chat again.
+  assert.equal(await one.photo(bytes, 42), 1);
   await one.remove(11);
   assert.deepEqual(calls.map(call => call.method), ['sendPhoto', 'deleteMessage']);
   assert.deepEqual(calls[0]!.payload, { chat_id: 7, photo: bytes, reply_parameters: { message_id: 42, allow_sending_without_reply: true } });
@@ -73,6 +74,37 @@ test('a picture is sent as a photo under the message it belongs to, and the line
   // A scene whose own message is not known still gets its picture, just not as a reply to it.
   await one.photo(bytes, undefined);
   assert.deepEqual(calls[2]!.payload, { chat_id: 7, photo: bytes });
+});
+
+test('messages go a hundred to a call, one by one when a call fails, and no further past a failure of the chat itself', async () => {
+  const calls: { method: string; payload: TelegramPayload }[] = [];
+  const refused = (code: number | string): never => { throw Object.assign(new Error('synthetic'), { code }); };
+  let answer = (method: string, payload: TelegramPayload): unknown => true;
+  const api = (async (method: string, payload: TelegramPayload) => {
+    calls.push({ method, payload });
+    return answer(method, payload);
+  }) as unknown as Parameters<typeof createChat>[0];
+  const chat = createChat(api, 7);
+  const ids = Array.from({ length: 250 }, (_, n) => n + 1);
+  assert.equal(await chat.removeAll(ids), 250);
+  assert.deepEqual(calls.map(call => [call.method, call.payload.chat_id, (call.payload.message_ids as number[]).length]),
+    [['deleteMessages', 7, 100], ['deleteMessages', 7, 100], ['deleteMessages', 7, 50]]);
+  assert.deepEqual(calls.flatMap(call => call.payload.message_ids as number[]), ids);
+
+  // A call Telegram refuses: each message is tried alone, and one it will not delete costs only itself.
+  calls.length = 0;
+  answer = (method, payload) => (method === 'deleteMessages' || payload.message_id === 2 ? refused(400) : true);
+  assert.equal(await chat.removeAll([1, 2, 3]), 2);
+  assert.deepEqual(calls.map(call => [call.method, call.payload.message_id]),
+    [['deleteMessages', undefined], ['deleteMessage', 1], ['deleteMessage', 2], ['deleteMessage', 3]]);
+
+  // The network, the rate limit or a chat closed to the bot would meet every message after it the same way.
+  for (const code of ['network', 429, 403]) {
+    calls.length = 0;
+    answer = () => refused(code);
+    assert.equal(await chat.removeAll(ids), 0);
+    assert.deepEqual(calls.map(call => call.method), ['deleteMessages', 'deleteMessage'], String(code));
+  }
 });
 
 test('an upload carries the bytes and every other field beside them, as the Bot API reads them', () => {

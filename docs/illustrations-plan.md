@@ -526,3 +526,29 @@ Measured on that run: the text card with MTP decoding, one slot, the picture car
 | A sample of a reader's own style with the frame reused | drawing 17.6 s, no language-model call |
 | Right after each sample, on the card | 0 temp files, 0 history records, nothing on its disk |
 
+## Pictures go with their scenes (2026-09-24)
+
+Deleting a seed or a branch used to leave the pictures of its scenes in the chat. Now every photo the bot sends — a
+scene's own picture and every sample, the all-styles batch included — is recorded in the reader's library as
+`sentPictures`: story, scene, message id and the time it was sent (`recordPicture` in `lib/library.ts`). Telegram
+lets a bot delete its own message for 48 hours only, so every write drops the older entries, and the newest 1000 are
+kept at most, because the library is read and written whole on every update.
+
+After `remove-seed` or `remove-branch`, `forgetLostPictures` takes the pictures whose story or scene is gone out of
+the list. Once the deletion screen is out, `removeAll` in `local/telegram.ts` deletes them with `deleteMessages`, 100
+to a call. A call that fails is tried message by message with `deleteMessage`: a message Telegram refuses (400) costs
+only itself, and any other failure — the network, the rate limit, a chat closed to the bot — ends the attempt. The
+reader is told nothing, and the removal runs beside the next updates, so the deletion screen neither waits for it nor
+changes. A deleted branch takes only the pictures of the scenes that no other branch has.
+
+A picture must not arrive after its scene is gone. `sendPhoto` in `local/picture.ts` looks at the library just
+before sending, and records the photo in a write that looks for the scene once more; a deletion that landed while
+the photo was on its way is found there, and the photo is deleted at once. Either way the picture ends as cancelled,
+without a word, and its row keeps the code `scene_gone`. Before this, a scene deleted while its frame was being
+described ended as a failure with a notice to the reader; it is now cancelled the same way. The drawing itself is not
+stopped, so a deletion can still cost the card one picture that nobody sees.
+
+One `pictures_removed` row per deletion that took pictures carries `picturesRemoved` and `picturesNotRemoved` beside
+`actor`; a photo taken back on its way puts the same two counts into its own `picture` or `picture_sample` row. No
+message id, story id or text is logged. All of this has met the fake Bot API only: how a real chat answers a batch
+that holds a message just past its 48 hours is not measured, and the message-by-message fallback is there for it.

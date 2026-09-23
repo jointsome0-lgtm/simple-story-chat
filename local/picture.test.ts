@@ -107,6 +107,8 @@ function fakeComfy(options: { jobMs?: number; failing?: boolean } = {}) {
     })();
   });
   return { server, submitted, seen,
+    // Ends every job on the card at once: a slow card, done at last.
+    finish: () => { for (const id of finishAt.keys()) finishAt.set(id, 0); },
     listen: () => new Promise<string>(ready => server.listen(0, '127.0.0.1', () => ready(`http://127.0.0.1:${(server.address() as AddressInfo).port}`))) };
 }
 
@@ -123,8 +125,8 @@ const FRAME = {
 const STYLE_LINE = 'Synthetic test style line, one sentence and no more.';
 const seedText = 'Маяк\n2026-08-02 20:00\nСмотритель встречает лодку. Кодовая фраза: СЕВЕР.';
 type Row = { event: string; code?: string | number } & ErrorDetails;
-type Payload = { chat_id: number; message_id: number; text: string; rich_message: { markdown: string }; photo: Uint8Array; reply_parameters?: { message_id: number };
-  caption?: string; reply_markup?: { inline_keyboard: { text: string; callback_data: string }[][] } };
+type Payload = { chat_id: number; message_id: number; message_ids?: number[]; text: string; rich_message: { markdown: string }; photo: Uint8Array;
+  reply_parameters?: { message_id: number }; caption?: string; reply_markup?: { inline_keyboard: { text: string; callback_data: string }[][] } };
 type Sent = { method: string; payload: Payload };
 // Which of the three calls a request is: a scene streams and has no schema, the other two are told apart by the
 // field their schema asks for.
@@ -159,6 +161,8 @@ type Options = {
   // `scheduler` puts the real queue between the bot and the model, which is where a picture takes its slot;
   // `compactAtTokens` and `keepScenes` are what makes the bot prepare the next compaction while the reader reads.
   holdFinal?: number; scheduler?: boolean; compactAtTokens?: number; keepScenes?: number;
+  // How many photos to hold on their way, so that a test can delete their scene while Telegram has them.
+  holdPhotos?: number;
   // A workflow pinned on a card the way the ones in gpu/ are: it ends in SaveImage.
   saveImage?: boolean;
   // A model that refuses the sheet with this code, and a Telegram that will not delete a message.
@@ -186,7 +190,7 @@ function fixture(t: TestContext, options: Options = {}) {
   const deleted: number[] = [];
   let sequence = 0;
   const holding: (() => void)[] = [];
-  let heldFinals = 0;
+  let heldFinals = 0, heldPhotos = 0;
   const api = async (method: string, fields?: TelegramPayload) => {
     const payload = fields as Payload;
     if (method === 'deleteMessage') {
@@ -199,6 +203,7 @@ function fixture(t: TestContext, options: Options = {}) {
     // A scene that is still being delivered: the story is already committed and its job lock clear, so the reader
     // can answer here, which is the moment the bot has to get right.
     if (method === 'sendRichMessage' && heldFinals++ < (options.holdFinal ?? 0)) await new Promise<void>(go => holding.push(go));
+    if (method === 'sendPhoto' && heldPhotos++ < (options.holdPhotos ?? 0)) await new Promise<void>(go => holding.push(go));
     return { message_id: id };
   };
   const counted: string[] = [];
@@ -302,7 +307,7 @@ test('an illustrated scene: a status line, one description call, a prompt with o
   const comfy = fakeComfy();
   const root = await comfy.listen();
   t.after(() => comfy.server.close());
-  const f = fixture(t, { comfy: root, style: STYLE_LINE, offsetMs: 3400 });
+  const f = fixture(t, { comfy: root, style: STYLE_LINE, offsetMs: 3000 });
   await f.start();
   await f.bot.idle();
 
@@ -345,8 +350,11 @@ test('an illustrated scene: a status line, one description call, a prompt with o
   assert.equal(row.outcome, 'ready');
   assert.equal(row.code, undefined);
   assert.equal(row.actor, 'owner');
+  // Three seconds on the bot's clock, plus the real time of the fakes and of the library's writes, which is tens of
+  // milliseconds and which a loaded machine can stretch several times over: rounded, that is still 3, where a
+  // ceiling would make it 4.
   assert.equal(row.pictureSeconds, 3, 'the seconds from the end of the scene to the photo, rounded');
-  assert.ok(Number.isSafeInteger(row.pictureAfterSceneMs!) && row.pictureAfterSceneMs! >= 3400);
+  assert.ok(Number.isSafeInteger(row.pictureAfterSceneMs!) && row.pictureAfterSceneMs! >= 3000);
   assert.ok(Number.isSafeInteger(row.describeMs!) && Number.isSafeInteger(row.imageMs!));
   // The photo's own leg: the upload's time, and the size of what was uploaded, the stripped picture.
   assert.ok(Number.isSafeInteger(row.photoMs!) && row.photoMs! >= 0);
@@ -678,6 +686,100 @@ test('the reader\'s next message ends the picture of the scene they have read pa
   assert.equal(f.requests.filter(request => kindOf(request) === 'scene').length, 2);
   const state = f.store.read('1');
   assert.equal(Object.keys(state.stories[state.active!.storyId].nodes).length, 2);
+});
+
+// A picture goes with its scene: the reader deletes the seed, and the photos of its scenes leave the chat.
+async function deleteTheSeed(f: ReturnType<typeof fixture>) {
+  const seedId = Object.keys(f.store.read('1').seeds)[0];
+  await f.bot.handle(f.click(`view:delete-seed:${seedId}`));
+  await f.bot.handle(f.click(`remove-seed:${seedId}`));
+}
+
+test('every photo is recorded as it is sent, and deleting the seed takes them all out of the chat', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root, style: STYLE_LINE });
+  await f.start();
+  await f.bot.idle();
+  await f.bot.handle(f.click('style-sample:film'));
+  await f.bot.idle();
+  await f.bot.handle(f.click('style-samples'));
+  await f.bot.idle();
+  const state = f.store.read('1');
+  const { storyId, branchId } = state.active!;
+  const nodeId = state.stories[storyId].branches[branchId].head!;
+  // The scene's own picture, one sample and all six styles, each recorded by its message beside its scene.
+  const ids = photos(f.sent).map(photo => f.sent.indexOf(photo) + 1);
+  assert.equal(ids.length, 8);
+  assert.deepEqual(state.sentPictures!.map(({ at, ...picture }) => picture), ids.map(messageId => ({ storyId, nodeId, messageId })));
+  assert.ok(state.sentPictures!.every(picture => Number.isSafeInteger(picture.at) && Math.abs(Date.now() - picture.at) < 60_000));
+
+  await deleteTheSeed(f);
+  await f.bot.idle();
+  assert.deepEqual(f.sent.filter(one => one.method === 'deleteMessages').map(one => one.payload.message_ids), [ids]);
+  assert.deepEqual(f.store.read('1').sentPictures, []);
+  assert.deepEqual(f.rows.filter(one => one.event === 'pictures_removed'),
+    [{ event: 'pictures_removed', picturesRemoved: 8, picturesNotRemoved: 0, actor: 'owner' }]);
+});
+
+test('a picture whose scene is deleted while it is drawn is not sent, and one already on its way is taken back', async t => {
+  const slow = fakeComfy({ jobMs: 60000 });
+  const slowRoot = await slow.listen();
+  t.after(() => slow.server.close());
+  const f = fixture(t, { comfy: slowRoot });
+  await f.start();
+  await until(() => slow.submitted.length === 1, 'the picture to reach the card');
+  await deleteTheSeed(f);
+  slow.finish();
+  await f.bot.idle();
+  assert.equal(photos(f.sent).length, 0, 'the card finished it, and nothing was sent');
+  assert.ok(f.deleted.includes(f.sent.indexOf(statuses(f.sent)[0]) + 1), 'its status line goes without a word');
+  assert.ok(!f.sent.some(one => one.method === 'editMessageText'));
+  const row = f.rows.find(one => one.event === 'picture')!;
+  assert.deepEqual([row.outcome, row.code, row.cancelled], ['cancelled', 'scene_gone', true]);
+
+  // The photo is with Telegram when the deletion lands, so the deletion finds no record of it; the photo is taken
+  // back the moment it is there.
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const g = fixture(t, { comfy: root, holdPhotos: 1 });
+  await g.start();
+  await until(() => photos(g.sent).length === 1, 'the photo to be on its way');
+  await deleteTheSeed(g);
+  g.release();
+  await g.bot.idle();
+  assert.ok(g.deleted.includes(g.sent.indexOf(photos(g.sent)[0]) + 1), 'the photo is taken back');
+  assert.ok(!g.sent.some(one => one.method === 'deleteMessages'));
+  assert.equal(g.store.read('1').sentPictures, undefined);
+  const taken = g.rows.find(one => one.event === 'picture')!;
+  assert.deepEqual([taken.outcome, taken.code, taken.picturesRemoved, taken.picturesNotRemoved], ['cancelled', 'scene_gone', 1, 0]);
+});
+
+test('a sample whose scene is deleted ends with the style on the card, silently, and the scene\'s own photo goes', async t => {
+  const comfy = fakeComfy({ jobMs: 60000 });
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root });
+  await f.start();
+  await until(() => comfy.submitted.length === 1, 'the scene\'s own picture to reach the card');
+  comfy.finish();
+  await f.bot.idle();
+  const own = f.sent.indexOf(photos(f.sent)[0]) + 1;
+  await f.bot.handle(f.click('style-samples'));
+  await until(() => comfy.submitted.length === 2, 'the first style to reach the card');
+  await deleteTheSeed(f);
+  comfy.finish();
+  await f.bot.idle();
+  assert.deepEqual(f.sent.filter(one => one.method === 'deleteMessages').map(one => one.payload.message_ids), [[own]]);
+  assert.equal(photos(f.sent).length, 1, 'the style the card finished is not sent');
+  assert.equal(comfy.submitted.length, 2, 'and no style after it is drawn');
+  const status = f.sent.find(one => one.method === 'sendMessage' && /во всех стилях/.test(one.payload.text ?? ''))!;
+  assert.ok(f.deleted.includes(f.sent.indexOf(status) + 1), 'its status line goes without a word');
+  assert.ok(!f.sent.some(one => one.method === 'editMessageText'));
+  assert.deepEqual(f.rows.filter(one => one.event === 'picture_sample').map(row => [row.outcome, row.code, row.pictureStyle, row.stylesAsked]),
+    [['cancelled', 'scene_gone', 'semi', 5]]);
 });
 
 // The bot prepares the next compaction while the reader reads (local/bot.ts `prepareNext`), on a turn of its own
