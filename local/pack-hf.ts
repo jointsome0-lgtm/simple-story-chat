@@ -6,7 +6,19 @@
 import { parseArgs, parseEnv } from 'node:util';
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, copyFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
-import { loadScenario, packScenarios } from './scenarios.ts';
+import { loadScenario, packScenarios, packWalks, loadWalk } from './scenarios.ts';
+import { loadGold } from './walk-gold.ts';
+
+// A pack holds replay scenarios (scenario.json) and walks (walk.json, with a gold tree beside it when one has been
+// grown); every one of them must load, and a gold tree must match its walk's seed, before the pack is published or
+// after it is pulled. Returns the counts only.
+async function checkPack(directory: string) {
+  const walks = packWalks(directory);
+  const scenarios = packScenarios(directory).filter(name => !walks.includes(name));
+  for (const name of scenarios) await loadScenario(name, directory);
+  for (const name of walks) { const walk = await loadWalk(name, directory); loadGold(join(resolve(directory), name, 'gold.json'), name, walk.seed); }
+  return { scenarios: scenarios.length, walks: walks.length };
+}
 
 type Entry = { type?: string; path?: string };
 
@@ -49,16 +61,15 @@ function files(directory: string): string[] {
 
 if (command === 'push') {
   // A pack that the eval cannot load is not published.
-  const scenarios = packScenarios(pack);
-  for (const name of scenarios) await loadScenario(name, pack);
+  const counts = await checkPack(pack);
   const paths = files(pack);
-  const lines = [{ key: 'header', value: { summary: `Pack of ${scenarios.length} scenarios`, description: '' } },
+  const lines = [{ key: 'header', value: { summary: `Pack of ${counts.scenarios} scenarios and ${counts.walks} walks`, description: '' } },
     ...paths.map(path => ({ key: 'file', value: { path: relative(pack, path).split(sep).join('/'), encoding: 'base64', content: readFileSync(path).toString('base64') } }))];
   const response = ok(await fetch(`${api}/commit/main`, { method: 'POST', headers: { ...headers, 'content-type': 'application/x-ndjson' },
     body: lines.map(line => JSON.stringify(line)).join('\n') }), 'commit');
   // The reply of the hub is not typed; only the commit is read from it.
   const result = await response.json() as { commitOid?: string };
-  console.log(JSON.stringify({ event: 'pushed', repo: values.repo, scenarios: scenarios.length, files: paths.length, revision: result.commitOid }));
+  console.log(JSON.stringify({ event: 'pushed', repo: values.repo, ...counts, files: paths.length, revision: result.commitOid }));
 } else {
   const listing = await ok(await fetch(`${api}/tree/${values.revision}?recursive=true`, { headers }), 'listing').json() as Entry[];
   const paths = listing.filter(entry => entry.type === 'file' && typeof entry.path === 'string' && /^[\w./-]+\.(json|md)$/.test(entry.path) && !entry.path.includes('..')).map(entry => entry.path!);
@@ -68,7 +79,6 @@ if (command === 'push') {
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, Buffer.from(await response.arrayBuffer()));
   }
-  const scenarios = packScenarios(pack);
-  for (const name of scenarios) await loadScenario(name, pack);
-  console.log(JSON.stringify({ event: 'pulled', repo: values.repo, revision: values.revision, scenarios: scenarios.length, files: paths.length }));
+  const counts = await checkPack(pack);
+  console.log(JSON.stringify({ event: 'pulled', repo: values.repo, revision: values.revision, ...counts, files: paths.length }));
 }

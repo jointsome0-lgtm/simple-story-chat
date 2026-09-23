@@ -125,8 +125,9 @@ What the numbers say:
   session" times out at 120 s; it passes when the machine is quiet.
 
 The plan for version 2 (a seed audited until clean, growth in width by the ledger, several gold paths, thresholds from
-measured noise, private) is written in `docs/improve-loop.md`, "The gold tree, version 2". Nothing was pushed to Hugging Face or to the remote; the gold files are committed next to the walk and copied into
-the dataset directory for a later push.
+measured noise, private) is written in `docs/improve-loop.md`, "The gold tree, version 2". On the owner's order the branch was pushed to GitHub and the public dataset `Teadomi/simple-story-chat-eval`
+to revision `d72c1b1374ed` (5 scenarios, the walk and its tree, 14 files); the uploader had to learn that a pack holds
+walks and gold trees beside replay scenarios.
 
 ## 2026-09-22 · Fable 5.1 · the walk: the model writes its own story, and a council of four reads every scene
 
