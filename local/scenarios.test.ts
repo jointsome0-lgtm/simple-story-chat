@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { loadScenario, packScenarios } from './scenarios.ts';
+import { loadScenario, packScenarios, loadWalk, packWalks } from './scenarios.ts';
 
 const scenario = { authors: ['fable-5.1'], seed: 'Синтетика\n2026-01-01 10:00\nТекст сида.', turns: Array.from({ length: 16 }, (_, i) => `Ход ${i + 1}`),
   checks: [['total', 'Сколько всего? Целое число.', '7']], facts: '- Факт.', traps: [{ key: 'mid', afterTurn: 9, questions: [['mid_ok', 'Показано ли это?', 'yes']] }] };
@@ -38,4 +38,24 @@ test('a pack scenario without authors, with too few turns or with a malformed tr
   await assert.rejects(loadScenario('hidden', pack({ ...scenario, turns: scenario.turns.slice(0, 15) })), /Invalid scenario/);
   await assert.rejects(loadScenario('hidden', pack({ ...scenario, traps: [{ key: 'end', questions: [['q', 'Вопрос?', 'maybe']] }] })), /Invalid scenario/);
   await assert.rejects(loadScenario('hidden', pack({ ...scenario, traps: [{ key: 'end', questions: [['q', 'Вопрос?', 'yes']] }] })), /Invalid scenario/);
+});
+
+test('a walk loads from examples or from a pack; the empty step is the continue signal, a bad seed time or name is refused', async () => {
+  const lighthouse = await loadWalk('lighthouse');
+  assert.equal(lighthouse.steps.length, 16);
+  assert.ok(lighthouse.steps.some(step => step === '') && lighthouse.steps.some(step => step !== ''));
+  assert.deepEqual(lighthouse.authors, ['fable-5.1']);
+  await assert.rejects(loadWalk('../lighthouse'), /Unknown synthetic walk/);
+  await assert.rejects(loadWalk('nothing'), /Unknown synthetic walk/);
+  // A pack directory holds replay scenarios and walks side by side; only a directory with walk.json is a walk.
+  const directory = pack(scenario);
+  mkdirSync(join(directory, 'night'));
+  const walk = { authors: ['gpt-6-astra'], seed: 'Ночь\n2026-01-01 10:00\nТекст сида.', steps: ['', 'Гаснет свет.', '', '', '', '', '', ''] };
+  writeFileSync(join(directory, 'night', 'walk.json'), JSON.stringify(walk));
+  assert.deepEqual(packWalks(directory), ['night']);
+  assert.equal((await loadWalk('night', directory)).steps[1], 'Гаснет свет.');
+  writeFileSync(join(directory, 'night', 'walk.json'), JSON.stringify({ ...walk, seed: 'Ночь\nвчера\nТекст сида.' }));
+  await assert.rejects(loadWalk('night', directory), /Invalid walk.json/);
+  writeFileSync(join(directory, 'night', 'walk.json'), JSON.stringify({ ...walk, steps: walk.steps.slice(0, 7) }));
+  await assert.rejects(loadWalk('night', directory), /Invalid walk.json/);
 });

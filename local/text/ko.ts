@@ -451,6 +451,8 @@ export const ko: Messages = {
     failed: command => `작업을 끝내지 못했어요. 완성된 장면과 체크포인트는 저장되어 있어요. 다시 시도: ${command}.`,
     gpuNotConfigured: 'GPU 임대 제어가 아직 설정되지 않았어요. 현재 모델 보기: /model',
     gpuPaused: 'GPU가 일시정지됐어요. /model 명령으로 GPU를 시작한 뒤 행동을 다시 보내 주세요.',
+    drawing: '🎨 삽화를 그리는 중…',
+    pictureFailed: '삽화를 그리지 못했어요. 장면은 저장되어 있어요.',
   },
 
   errors: {

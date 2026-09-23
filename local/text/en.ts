@@ -432,6 +432,8 @@ export const en: Messages = {
     failed: command => `Could not finish the operation. Finished scenes and checkpoints are saved. Try again: ${command}.`,
     gpuNotConfigured: 'GPU rental control is not set up yet. /model shows the current model.',
     gpuPaused: 'The GPU has gone on pause. Open /model and start it, then send your action again.',
+    drawing: '🎨 Drawing the illustration…',
+    pictureFailed: 'The illustration did not work out. The scene is saved.',
   },
 
   errors: {

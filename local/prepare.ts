@@ -14,8 +14,15 @@ type Config = { keepScenes?: number; memoryMode?: 'plain' | 'sgr'; repairCoverag
 // The branch state a run reads: a turn from any other point cannot use it.
 type Point = { storyId: string; branchId: string; head: string | null; memory: string | null };
 const POINT = ['storyId', 'branchId', 'head', 'memory'] as const;
-// Each entry settles with a result that passed its check, or null: the turn then asks the model itself.
-type Run = { controller: AbortController; started: boolean; point: Point; entries: Map<string, Promise<GenerationResult | null>> };
+// Each entry settles with a result that passed its check, or null: the turn then asks the model itself. `id` numbers the
+// runs of this process in the log; `settle` writes the run's one outcome row.
+type Run = { controller: AbortController; started: boolean; point: Point; entries: Map<string, Promise<GenerationResult | null>>;
+  id: number; settle: (outcome: Outcome) => void };
+// What became of a run. `used`: a turn took a result that passed its check, and `memory_compacted` then says whether it
+// was saved. `asked_again`: a turn took it and it had failed or did not pass its check. `unstarted`: stopped before it reached the model. `discarded`: it reached the model and no turn
+// took it, because the branch point changed or another run replaced it. A run with no row was still waiting at the end.
+type Outcome = 'used' | 'asked_again' | 'unstarted' | 'discarded';
+let runs = 0;
 export type Prepared = ReturnType<typeof createPrepared>;
 
 const keyOf = (request: ModelRequest) => createHash('sha256').update(JSON.stringify(request)).digest('hex');
@@ -24,6 +31,7 @@ const keyOf = (request: ModelRequest) => createHash('sha256').update(JSON.string
 export function createPrepared() {
   let run: Run | null = null;
   function stop() {
+    run?.settle(run.started ? 'discarded' : 'unstarted');
     run?.controller.abort();
     run = null;
   }
@@ -44,6 +52,8 @@ export function createPrepared() {
         return undefined;
       }
       run.entries.delete(key);
+      const { settle } = run;
+      void result.then(value => settle(value ? 'used' : 'asked_again'));
       return result;
     },
     // Runs the extraction of the active branch and, if its result misses scenes, the supplement for them, as
@@ -56,8 +66,12 @@ export function createPrepared() {
       if (!nodes.length) return;
       const turn = provider.openTurn?.({ holder, yields: true });
       // Without a shared model there is no turn to wait behind.
-      const current: Run = { controller: new AbortController(), started: !turn, entries: new Map(),
-        point: { storyId: story.id, branchId: branch.id, head: branch.head, memory: branch.memory } };
+      const id = ++runs;
+      let settled = false;
+      const current: Run = { controller: new AbortController(), started: !turn, entries: new Map(), id,
+        point: { storyId: story.id, branchId: branch.id, head: branch.head, memory: branch.memory },
+        // The first outcome stands: a run whose extraction was used is not discarded by the turn that follows.
+        settle: outcome => { if (!settled) log('compaction_prepare_outcome', outcome, { prepareRun: id }); settled = true; } };
       run = current;
       const target = { seed, story, branch };
       const lang = seedLanguage(seed);
@@ -70,7 +84,7 @@ export function createPrepared() {
         const checked = (turn ?? provider).generate(request, { signal: current.controller.signal,
           onStart: () => { current.started = true; waitMs = Date.now() - asked; } })
           .then(result => {
-            log('compaction_prepare_request_completed', undefined, { ...result.timings, waitMs, elapsedMs: Date.now() - asked,
+            log('compaction_prepare_request_completed', undefined, { ...result.timings, prepareRun: id, waitMs, elapsedMs: Date.now() - asked,
               inputTokens: result.usage?.inputTokens ?? undefined, outputTokens: result.usage?.outputTokens ?? undefined });
             try { check(result); return result; } catch { return null; }
           }, () => null);

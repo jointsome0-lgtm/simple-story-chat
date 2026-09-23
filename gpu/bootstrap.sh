@@ -65,22 +65,54 @@ connections="${SIMPLE_CHAT_DOWNLOAD_CONNECTIONS:-16}"
 fetch_model &
 fetch_pid=$!
 # The draft model for speculative decoding is half a gigabyte, so it arrives over one connection beside the weights.
-# Without SIMPLE_CHAT_GPU_DRAFT=true nothing uses it and it is not fetched.
+# Without SIMPLE_CHAT_GPU_DRAFT=true nothing uses it and it is not fetched. Like the weights it is fetched in the
+# background: run in the foreground it shared the throttled link with the weights, crawled at 1 MiB/s and held the
+# clone and the build behind it for the five minutes it took.
 draft_path="$gpu_dir/models/$DRAFT_FILE"
-if [[ "${SIMPLE_CHAT_GPU_DRAFT:-false}" = true && ! -f "$draft_path" ]]; then
-  curl --fail --location --silent --show-error --retry 2 --continue-at - \
-    "https://huggingface.co/$DRAFT_REPO/resolve/$DRAFT_REVISION/$DRAFT_FILE" -o "$draft_path.part"
+# The here-document inside ends at the start of a line, so its own body stays unindented.
+# A file already in place is checked like a fresh one, as the weights are: a file left by an earlier attempt is not
+# evidence of its content, and threshold 6 is a claim about these weights. Only a .part is thrown away when the
+# check fails — deleting the file that is already there would turn a wrong pin into a second download.
+fetch_draft() {
+  if [[ ! -f "$draft_path" ]]; then
+    curl --fail --location --silent --show-error --retry 2 --continue-at - \
+      "https://huggingface.co/$DRAFT_REPO/resolve/$DRAFT_REVISION/$DRAFT_FILE" -o "$draft_path.part"
+  fi
   python3 - "$draft_path" "$DRAFT_SHA256" "$DRAFT_BYTES" <<'PY'
 import hashlib,pathlib,sys
-target=pathlib.Path(sys.argv[1]); current=pathlib.Path(str(target)+'.part')
-if current.stat().st_size != int(sys.argv[3]): current.unlink(); raise SystemExit('Draft model size mismatch.')
+target=pathlib.Path(sys.argv[1]); current=target if target.exists() else pathlib.Path(str(target)+'.part')
+def mismatch(message):
+    if current != target: current.unlink()
+    raise SystemExit(message)
+if current.stat().st_size != int(sys.argv[3]): mismatch('Draft model size mismatch.')
 with current.open('rb') as f: digest=hashlib.file_digest(f,'sha256').hexdigest()
-if digest != sys.argv[2]: current.unlink(); raise SystemExit('Draft model SHA256 mismatch.')
-current.rename(target)
+if digest != sys.argv[2]: mismatch('Draft model SHA256 mismatch.')
+if current != target: current.rename(target)
 print('Draft model SHA256 verified.')
 PY
+}
+draft_pid=''
+if [[ "${SIMPLE_CHAT_GPU_DRAFT:-false}" = true ]]; then
+  fetch_draft &
+  draft_pid=$!
 fi
 source_dir="$gpu_dir/llama.cpp"
+# The verified CUDA image ships a gcc whose cc1 cannot start: libisl.so.23 is absent, so every compilation fails and
+# CMake reports only that the C compiler "is not able to compile a simple test program". Repairing it by hand has now
+# cost two rentals, so test the compiler first and reinstall the packages that carry the missing libraries. A working
+# image skips this in the time of one empty compile.
+printf 'int main(void){return 0;}\n' > "$gpu_dir/.cc-probe.c"
+if ! cc "$gpu_dir/.cc-probe.c" -o "$gpu_dir/.cc-probe" 2>/dev/null; then
+  echo 'The C compiler is broken; reinstalling the toolchain packages.'
+  DEBIAN_FRONTEND=noninteractive apt-get update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --reinstall -qq \
+    libisl23 libmpc3 libmpfr6 libgmp10 gcc-13 g++-13 build-essential
+  cc "$gpu_dir/.cc-probe.c" -o "$gpu_dir/.cc-probe" \
+    || { echo 'The C compiler is still broken after the reinstall.' >&2; exit 1; }
+  # A configure that already failed leaves a cache saying so, and CMake trusts it over the repaired compiler.
+  rm -rf "$source_dir/build"
+fi
+rm -f "$gpu_dir/.cc-probe.c" "$gpu_dir/.cc-probe"
 if [[ ! -d "$source_dir/.git" ]]; then
   git init -q "$source_dir"
   git -C "$source_dir" remote add origin https://github.com/ggml-org/llama.cpp.git
@@ -97,15 +129,38 @@ cmake -S "$source_dir" -B "$source_dir/build" -G Ninja \
 # the smaller of the cores and what memory allows; SIMPLE_CHAT_BUILD_JOBS still overrides it.
 jobs="${SIMPLE_CHAT_BUILD_JOBS:-}"
 if [[ -z "$jobs" ]]; then
+  # `nproc` and /proc/meminfo describe the whole machine, and a rented container is a slice of one: on the measured
+  # 5090 host they said 256 cores and 454 GiB while the container held 30.72 cores and 183 GB. Building to the
+  # machine's size asks for hundreds of jobs, which the 1..99 check below then refuses outright. Ask the cgroup.
   cores="$(nproc)"
-  by_memory="$(awk '/MemAvailable/ {print int($2 / 1024 / 1024 / 2)}' /proc/meminfo)"
+  if [[ -r /sys/fs/cgroup/cpu.max ]]; then
+    read -r quota period < /sys/fs/cgroup/cpu.max || true
+    [[ "$quota" = max ]] || { [[ "$quota$period" =~ ^[0-9]+$ ]] && (( period > 0 )) && cores=$(( quota / period )); }
+  elif [[ -r /sys/fs/cgroup/cpu/cpu.cfs_quota_us && -r /sys/fs/cgroup/cpu/cpu.cfs_period_us ]]; then
+    quota="$(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us)"
+    period="$(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us)"
+    (( quota > 0 && period > 0 )) && cores=$(( quota / period ))
+  fi
+  # Memory the same way: the container's limit when it is lower than what the machine reports free.
+  by_memory="$(awk '/MemAvailable/ {print int($2 * 1024)}' /proc/meminfo)"
+  for limit in /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory/memory.limit_in_bytes; do
+    if [[ -r "$limit" ]]; then
+      value="$(cat "$limit")"
+      [[ "$value" =~ ^[0-9]+$ ]] && (( value < by_memory )) && by_memory="$value"
+      break
+    fi
+  done
+  # CUDA compilation takes about 2 GiB per job.
+  by_memory=$(( by_memory / 2147483648 ))
   jobs=$(( cores < by_memory ? cores : by_memory ))
   (( jobs >= 1 )) || jobs=1
+  (( jobs <= 99 )) || jobs=99
 fi
 [[ "$jobs" =~ ^[1-9][0-9]?$ ]] || { echo 'Use SIMPLE_CHAT_BUILD_JOBS from 1 to 99.' >&2; exit 1; }
 echo "Building llama-server with $jobs jobs."
 cmake --build "$source_dir/build" --target llama-server -j "$jobs"
 wait "$fetch_pid" || { echo 'Model download failed.' >&2; exit 1; }
+[[ -z "$draft_pid" ]] || wait "$draft_pid" || { echo 'The draft model did not download or did not verify.' >&2; exit 1; }
 python3 - "$model_path" "$MODEL_SHA256" "$MODEL_BYTES" <<'PY'
 import hashlib,pathlib,sys
 target=pathlib.Path(sys.argv[1]); current=target if target.exists() else pathlib.Path(str(target)+'.part')

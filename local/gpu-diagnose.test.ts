@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter, once } from 'node:events';
+import { setTimeout as delay } from 'node:timers/promises';
 import { PassThrough } from 'node:stream';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -9,7 +10,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, wr
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { diagnose, save, watch } from './gpu-diagnose.ts';
+import { diagnose, remoteOf, save, watch } from './gpu-diagnose.ts';
 import type { Options, Report } from './gpu-diagnose.ts';
 
 // What a healthy instance reports, with fields a changed or hostile remote side could add.
@@ -20,7 +21,8 @@ const remote = (models: object = { httpStatus: 200, seconds: 0.01, modelId: 'syn
   sockets: { established: 3, synRecv: 0, closeWait: 1, listen: 1 },
   processes: { llamaServer: [{ pid: 108, ageSeconds: 5321, state: 'S', cmdline: 'PRIVATE_ARGUMENTS' }],
     sshd: { sessions: 2, unauthenticated: 4, startups: 4, dropFrom: 10, dropAllAt: 100 } },
-  gpus: [{ memoryUsedMiB: 28394, memoryTotalMiB: 32607, utilizationPercent: 97, temperatureC: 61, name: 'PRIVATE_NAME' }, { memoryUsedMiB: 1000 }],
+  // The free memory is its own number here, not total minus used: the driver's reserve is counted in neither.
+  gpus: [{ memoryUsedMiB: 28394, memoryFreeMiB: 3715, memoryTotalMiB: 32607, utilizationPercent: 97, temperatureC: 61, name: 'PRIVATE_NAME' }, { memoryUsedMiB: 1000 }],
   machine: { load1: 1.5, cpus: 16, memoryAvailableMiB: 50000, kernel: 'PRIVATE_KERNEL' },
   container: { throttledPeriods: 12, throttledSeconds: 3, memoryMiB: 30000, memoryLimitMiB: 64000, pressure: { scope: 'machine', cpu: 41.5, io: 0, memory: 'PRIVATE' } },
   serverEvents: { mode: '0o600', total: 3, rows: [
@@ -59,7 +61,7 @@ test('a snapshot compares the forwarded port with the server loopback and keeps 
   finally { delete process.env.SIMPLE_CHAT_SYNTHETIC_SECRET; }
   assert.equal(report.reading, 'ok');
   assert.equal(report.at, '1970-01-01T00:00:00.000Z');
-  assert.deepEqual([report.tunnel.models.httpStatus, report.tunnel.props?.httpStatus, report.direct.failure], [200, 200, undefined]);
+  assert.deepEqual([report.tunnel!.models.httpStatus, report.tunnel!.props?.httpStatus, report.direct.failure], [200, 200, undefined]);
   assert.deepEqual(f.calls[0].args.slice(-2), ['synthetic-host', 'python3 - --events 25']);
   for (const option of ['StrictHostKeyChecking=yes', 'BatchMode=yes', 'ControlPath=none']) assert.ok(f.calls[0].args.includes(option));
   assert.equal(await f.calls[0].script, 'print(1)');
@@ -67,7 +69,7 @@ test('a snapshot compares the forwarded port with the server loopback and keeps 
   assert.deepEqual(report.remote!.processes, { llamaServer: [{ pid: 108, ageSeconds: 5321, state: 'S' }],
     sshd: { sessions: 2, unauthenticated: 4, startups: 4, dropFrom: 10, dropAllAt: 100 } });
   assert.deepEqual([report.remote!.failed, report.remote!.http.models.modelId], [['gpus'], 'synthetic-model']);
-  assert.deepEqual(JSON.parse(JSON.stringify(report.remote!.gpus)), [{ memoryUsedMiB: 28394, memoryTotalMiB: 32607, utilizationPercent: 97, temperatureC: 61 }, { memoryUsedMiB: 1000 }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(report.remote!.gpus)), [{ pids: [], memoryUsedMiB: 28394, memoryFreeMiB: 3715, memoryTotalMiB: 32607, utilizationPercent: 97, temperatureC: 61 }, { pids: [], memoryUsedMiB: 1000 }]);
   assert.deepEqual(report.remote!.http.props, { httpStatus: 200, failure: undefined, seconds: 0.01, contextTokens: 65536, slots: 1 });
   assert.deepEqual(JSON.parse(JSON.stringify([report.remote!.machine, report.remote!.container])), [{ load1: 1.5, cpus: 16, memoryAvailableMiB: 50000 },
     { throttledPeriods: 12, throttledSeconds: 3, memoryMiB: 30000, memoryLimitMiB: 64000, pressure: { scope: 'machine', cpu: 41.5, io: 0 } }]);
@@ -96,10 +98,10 @@ test('the reading separates a missing tunnel, a failing SSH path and a server th
   const paths: string[] = [];
   const second = await diagnose({ script: '', spawn: fixture(succeed(remote())).spawn,
     request: async url => { paths.push(new URL(url).pathname); return paths.length === 1 ? answers() : stalls(); } });
-  assert.deepEqual([paths, second.reading, second.tunnel.props?.failure], [['/v1/models', '/props'], 'ssh_path', 'timeout']);
+  assert.deepEqual([paths, second.reading, second.tunnel!.props?.failure], [['/v1/models', '/props'], 'ssh_path', 'timeout']);
   const stalled = await diagnose({ script: '', spawn: fixture(succeed(remote())).spawn, request: stalls });
-  assert.deepEqual([stalled.tunnel.models.failure, stalled.tunnel.props], ['timeout', undefined]);
-  assert.equal((await diagnose({ script: '', spawn: fixture(succeed(remote())).spawn, request: resets })).tunnel.models.failure, 'UND_ERR_SOCKET');
+  assert.deepEqual([stalled.tunnel!.models.failure, stalled.tunnel!.props], ['timeout', undefined]);
+  assert.equal((await diagnose({ script: '', spawn: fixture(succeed(remote())).spawn, request: resets })).tunnel!.models.failure, 'UND_ERR_SOCKET');
   assert.doesNotMatch(JSON.stringify([second, stalled]), /PRIVATE/);
 });
 
@@ -162,7 +164,7 @@ test('a watching session that goes quiet is reported as stalled; stopping the wa
     reports.push(report);
     if (reports.length === 3) stopped.abort();
   });
-  assert.deepEqual(reports.map(report => [report.reading, report.direct.failure, report.tunnel.models.failure]),
+  assert.deepEqual(reports.map(report => [report.reading, report.direct.failure, report.tunnel!.models.failure]),
     [['ssh_path', undefined, 'timeout'], ['ssh_stalled', 'ssh_silent', 'timeout'], ['ssh_stalled', 'ssh_silent', 'timeout']]);
   // The exit of a stopped session is not reported, and no new session follows.
   assert.deepEqual(f.calls.map(call => call.killed), [true]);
@@ -191,8 +193,56 @@ test('a watching session that goes quiet is reported as stalled; stopping the wa
   await assert.rejects(watch({ every: 30, retryMs: 1, script: '', spawn: unsaved.spawn, request: answers, signal: new AbortController().signal },
     () => { throw new Error('synthetic_disk_full'); }), { message: 'synthetic_disk_full' });
   assert.deepEqual(unsaved.calls.map(call => call.killed), [true]);
-  await assert.rejects(watch({ every: 5, spawn: f.spawn, request: answers, signal: stopped.signal }, () => {}), { message: 'invalid_interval' });
+  // A second is the shortest watch, for the seconds after a server starts; less is no interval at all.
+  await assert.rejects(watch({ every: 0, spawn: f.spawn, request: answers, signal: stopped.signal }, () => {}), { message: 'invalid_interval' });
   await assert.rejects(watch({ host: '-oProxyCommand=synthetic', every: 30, spawn: f.spawn, request: answers, signal: stopped.signal }, () => {}), { message: 'invalid_host' });
+});
+
+test('a counters-only watcher probes no path and asks the instance for the parts it reads', async () => {
+  // The video-memory sampler runs beside a measurement: a probe of the forwarded port would be one more request in
+  // the latency it is there to measure, and every part it does not ask for is work the instance does not do.
+  const f = fixture(worker => { worker.stdout.write(`${remote()}\n`); });
+  const stopped = new AbortController();
+  const reports: Report[] = [];
+  let probes = 0;
+  const counted: NonNullable<Options['request']> = () => { probes++; return answers(); };
+  await watch({ every: 2, events: 0, parts: 'gpus,processes', probeTunnel: false, retryMs: 1, script: '',
+    spawn: f.spawn, request: counted, signal: stopped.signal }, report => { reports.push(report); stopped.abort(); });
+  assert.deepEqual(reports.map(report => [report.reading, report.tunnel]), [['counters', undefined]]);
+  assert.equal(probes, 0);
+  assert.equal(f.calls[0].args.at(-1), 'python3 - --events 0 --every 2 --parts gpus,processes');
+  assert.equal(reports[0].remote!.gpus.length, 2);
+  await assert.rejects(watch({ every: 2, parts: 'gpus,PRIVATE_PART', script: '', spawn: f.spawn, request: answers,
+    signal: stopped.signal }, () => {}), { message: 'invalid_parts' });
+});
+
+test('a reading that arrived before the watcher was stopped is delivered, however long its tunnel check takes', async () => {
+  // The peak a sampler exists for can be in the last line of a session. Stopping ends the reporting; it does not
+  // throw away a reading that was already in hand while its paired tunnel check was still running.
+  let worker: Worker | undefined;
+  const f = fixture(started => { worker = started; started.stdout.write(`${remote()}\n`); });
+  const stopped = new AbortController();
+  const reports: Report[] = [];
+  let probes = 0, release = () => {};
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const slow: NonNullable<Options['request']> = async () => {
+    // The first line's two probes answer; the second line's first probe is still running when the stop arrives.
+    if (++probes === 3) await held;
+    return answers();
+  };
+  const until = async (ready: () => boolean) => {
+    for (let attempt = 0; attempt < 1000 && !ready(); attempt++) await delay(2);
+    assert.ok(ready(), 'the watcher reached the state the test waits for');
+  };
+  const watching = watch({ every: 30, retryMs: 1, script: '', spawn: f.spawn, request: slow, signal: stopped.signal },
+    report => { reports.push(report); });
+  await until(() => reports.length === 1);
+  worker!.stdout.write(`${remote({ httpStatus: 503, seconds: 0.01 })}\n`);
+  await until(() => probes === 3);
+  stopped.abort();
+  release();
+  await watching;
+  assert.deepEqual(reports.map(report => report.remote!.http.models.httpStatus), [200, 503]);
 });
 
 test('a host or an event count that is not plain is refused before SSH starts', async () => {
@@ -271,4 +321,36 @@ test('the remote script reports a synthetic server and retained events without a
   // A watcher prints a line per interval and ends by itself at its time limit.
   const lines = await run('0', '--every', '1', '--limit', '2');
   assert.deepEqual(lines.map(line => line.http.health.httpStatus), [200, 200]);
+  // --parts leaves out the work the caller did not ask for: no requests at the server it is watching, no walk of
+  // /proc and no re-reading of the server's whole log, which a sampler would otherwise repeat every two seconds.
+  const [counters] = await run('0', '--parts', 'gpus,processes');
+  assert.deepEqual(Object.keys(counters).filter(key => ['http', 'serverEvents', 'sockets', 'machine', 'container'].includes(key)), []);
+  // The cards are asked for; whether this machine has a driver to answer decides between a reading and `failed`.
+  assert.ok(counters.processes && ('gpus' in counters || counters.failed.includes('gpus')));
+});
+
+test('every card is reported under the driver\'s own index, so two cards can be told apart', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'simple-chat-diagnose-cards-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  // A stand-in for the driver's own tool, printing the queried columns in the order they were asked for. A value
+  // the driver does not report comes as [N/A] and is left out of the reading. The card UUIDs join the two queries
+  // and must not leave the machine themselves.
+  writeFileSync(join(directory, 'nvidia-smi'), ['#!/bin/sh',
+    'case "$1" in',
+    '  --query-compute-apps=*) printf "GPU-bbbb, 8801\\nGPU-aaaa, 108\\n" ;;',
+    '  *) printf "GPU-aaaa, 0, 28394, 3715, 32607, 97, 61\\nGPU-bbbb, 1, 12500, 20000, 32607, [N/A], 44\\n" ;;',
+    'esac', ''].join('\n'), { mode: 0o700 });
+  const child = spawn('python3', ['-', '--dir', directory, '--port', '1', '--events', '0'],
+    { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, PATH: `${directory}:${process.env.PATH}` } });
+  let output = '', errors = '';
+  child.stdout.on('data', chunk => { output += chunk; });
+  child.stderr.on('data', chunk => { errors += chunk; });
+  child.stdin.end(readFileSync(fileURLToPath(new URL('../gpu/diagnose-remote.py', import.meta.url)), 'utf8'));
+  const [status] = await once(child, 'close');
+  assert.deepEqual([status, errors], [0, '']);
+  const remote = remoteOf(JSON.parse(output.trim().split('\n').at(-1)!));
+  assert.deepEqual(JSON.parse(JSON.stringify(remote.gpus)), [
+    { index: 0, pids: [108], memoryUsedMiB: 28394, memoryFreeMiB: 3715, memoryTotalMiB: 32607, utilizationPercent: 97, temperatureC: 61 },
+    { index: 1, pids: [8801], memoryUsedMiB: 12500, memoryFreeMiB: 20000, memoryTotalMiB: 32607, temperatureC: 44 }]);
+  assert.doesNotMatch(output, /GPU-[ab]/);
 });

@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import type { Readable, Writable } from 'node:stream';
 import type { ModelConfig } from './config.ts';
 import { requestBudget } from './context.ts';
-import { ModelError } from './model-error.ts';
+import { CLI_RESULTS, ModelError, member, STOP_REASONS } from './model-error.ts';
 import type { GenerateControls, GenerationResult, ModelRequest } from './model.ts';
 
 export { ModelError } from './model-error.ts';
@@ -165,7 +165,12 @@ export function createClaude(config: ClaudeConfig, { launch = spawn }: { launch?
         }
         const exitCode = await closed;
         if (signal?.aborted) throw new ModelError('cancelled');
-        if (!initialized || exitCode !== 0 || !result || result.is_error || result.subtype !== 'success') throw new ModelError('provider_failed');
+        if (!initialized || exitCode !== 0 || !result || result.is_error || result.subtype !== 'success') {
+          // The row of this failure says how the CLI ended: a subtype it named, no result at all, or no init line.
+          const cliResult = !initialized ? 'no_init' : !result ? 'missing' : member(CLI_RESULTS, result.subtype) ? result.subtype : 'other';
+          throw new ModelError('provider_failed', { exitCode: exitCode ?? undefined, cliResult, cliError: result?.is_error === true,
+            stopReason: stopReason === undefined ? undefined : member(STOP_REASONS, stopReason) ? stopReason : 'other' });
+        }
         // Some CLI versions put only one text block in result.result. The text
         // stream contains the complete answer; result still confirms success.
         const structured = request.outputSchema && result.structured_output && typeof result.structured_output === 'object';

@@ -23,6 +23,21 @@ How the evaluation, the adapter and the daily limits work is described in [model
 
 Editing any item from this list makes the comparison of versions meaningless. If it seems that you cannot do without such an edit, stop and write to the owner.
 
+**Owner's word, 2026-09-21: the freeze is lifted for one purpose, building stronger evals.** The present instruments
+saturate: almost every model scores full marks, a constant "yes" outscores the judge, and a change to the prompts
+cannot be seen as progress. `local/eval.ts`, `local/scene-judge.ts`, `local/scenarios.ts`, `local/pack-hf.ts`, the
+probes and new fixtures may change for that work, including an optional seed for `--lab` runs. It is not a licence
+to edit a check because a prompt fails it: within one step of the loop the list below still binds, the old checks
+and traps stay as a separately scored legacy set so the log stays readable, and `local/budget.ts`, the limits in
+`.env.eval`, the holdout and the privacy rules are not part of the lift.
+
+Measured in Russian only for now: the tester reads Russian, and the other four catalogs in `local/story-text/` wait.
+A change to the narrator's rule is made in the catalog, not only in `local/prompt.ts`, which interpolates it.
+
+Who does the work: Opus agents, paired with the local model, for the bulk; Fable and GPT-6 only at the steps that
+decide something — a design, a review of core code, a verdict on pictures — because they cost much more.
+Opus agents are started at `max` reasoning effort, always; GPT-6 sessions at `high`.
+
 - `examples/memory-checks.ts`, `examples/scene-traps.ts`, `examples/*-probe.ts`, `examples/frozen/` — questions, answers, scenarios and frozen scenes. Describe an error in a check to the owner; do not fix it yourself.
 - `local/eval.ts`, `local/scene-judge.ts`, `local/scenarios.ts`, `local/pack-hf.ts`, `local/budget.ts`, the judge model, the limit values in `.env.eval` — the eval and the safety guard.
 - The ban on the providers `openai-compatible` and `codex-cli` for the bot without the explicit consent of the instance owner (`SIMPLE_CHAT_ALLOW_HOSTED`) in `local/config.ts`, and the privacy rules from `AGENTS.md`. Do not open `.env`, `.env.eval`, `data/`, `backups/`; get a needed fact from them with code that prints booleans, numbers and sizes.
@@ -38,6 +53,43 @@ Editing any item from this list makes the comparison of versions meaningless. If
 6. Run the eval with the same list of models and scenarios.
 7. Compare with the baseline. The edit is accepted if `score` or `sceneScore` grew by more than the noise (see below), the other measure did not fall, and no model of the main group fell. Commit an accepted edit as a separate commit in the working branch; revert a rejected edit with `git checkout -- <file>`.
 8. Record the step in `docs/improve-log.md`: date, hypothesis, what was changed, numbers before and after per model, decision. Record rejected hypotheses too: they save runs for the next executor.
+
+The walk (`npm run eval -- walk`, described in `docs/model-providers.md`) is the second measure: the model writes a story from a seed on its own, with the bot's continue signal or the author's intervention at each step, and a panel of judge models reads every scene for contradictions with what came before. Its `score.walk` is the share of scenes the panel found consistent, for the worst model. It is compared the same way as `sceneScore`, and it needs several walks per side: the story differs from run to run.
+
+The gold tree (`eval walk-gold`, `eval walk-nodes` in `docs/model-providers.md`) is the walk with fixed prefixes: scenes the council accepted, grown from the seed as a tree, so that every model continues from the same accepted story and is judged scene by scene at a known depth. The gate is the agreement of every judge, not the eval's majority: a finding one judge stands by keeps a scene out. An agreed scene is a candidate; it becomes gold by its ledger (rechecks, deeper scenes judged over it, the whole-story audit), and the tree's rendering marks what no person has read. The eval's number and the score by depth come from the same council as the walk; a model on the council still is not measured independently.
+
+### The gold tree, version 2: the owner's decisions of 2026-09-23
+
+Version 1 (`examples/walk/lighthouse.gold.json`, public, the log entry of 2026-09-23) is a draft: 63 scenes at 16
+depths, every one agreed by four judges once, none promoted. Version 2 is the one meant to become gold, and it is
+built differently. Written here so that it is not forgotten when the next seed is made.
+
+- **The seed is audited until the council finds nothing**, and only then does anything grow. Version 1 grew on a seed
+  rewritten after one audit and never audited again; the depth of the water over the spit was missing. A seed may be
+  any size the model's window allows (it goes whole into every request, untouched by compaction), and the eval
+  should have the same world in several sizes, about 5, 15 and 37 KB, to see whether consistency moves with the seed.
+- **Growth in width, not one trunk.** At every depth the k best nodes by their ledger (k about 2 or 3) are continued,
+  each by all four writers; every agreed scene stays in the tree; no trunk is chosen on the way. The ledger ranks a
+  node by what happens below it: how many deeper scenes were judged over it against how many later findings pointed
+  back at it, how many attempts its continuations cost (a node that is hard to continue hides a trap: an ambiguity
+  the scene itself does not show), the whole-story audit and the fresh rechecks. Gold is the set of nodes whose
+  ledger passes the thresholds, and the paths through them are several: different worlds, each consistent with the
+  seed and with itself, not with each other. The eval continues from every gold node; the reading for people shows
+  several stories with a common beginning.
+- **Length is never scored.** Consistency is the only measure; the rule on the author's step guards against saying
+  nothing. A writer that puts more claims into a scene pays more attempts, not a penalty.
+- **Thresholds come from measured noise, not from guesses.** Version 1's recheck says how often a scene agreed once
+  is refused on a fresh reading, and why (a lone judge insisting, or a real finding); the rule should ask for k of n
+  rechecks rather than all of them, and count an audit issue only when a second audit repeats it. Version 1's
+  numbers are in the log entry.
+- **The tree grows without a cap; the eval limits what it measures.** A weaker model is measured on the nodes whose
+  path from the seed fits its limit, about 50k tokens counted with tiktoken (`o200k_base`) as the one ruler that does
+  not depend on the model under test; the frontier is measured on the whole tree; one limit per run, named in the
+  report with the nodes it admitted. Done on 2026-09-23: `gold-stats` writes `pathTokens` into every node and the reading shows it,
+  `walk-nodes --max-path-tokens` admits the tasks that fit, the `tiktoken` package (the WASM build of OpenAI's own
+  core, the same counts as the Python package) is a dependency of the eval only.
+- **Version 2 grows on a private seed into the private pack**, by a session that does not run the improvement loop;
+  version 1 stays public. A person reads the gold paths (`eval gold-read`) before anything is called gold.
 
 ## Noise
 
@@ -68,6 +120,7 @@ The open scenarios from `examples/` are visible to whoever improves the prompts,
 - Running: `npm run eval -- --pack ~/simple-story-chat-holdout --models … --mode plain --judge claude:claude-opus-5`; `ceiling --pack …` checks the story the same way as an open story. `eval write` is forbidden for a pack.
 - Storage: `node local/pack-hf.ts push --pack ~/simple-story-chat-holdout --repo Teadomi/simple-story-chat-holdout` uploads the pack and prints the revision; `pull … --revision <commit>` downloads exactly that revision to another machine (for example, to the GPU). `HF_TOKEN` is in `.env.eval`. The accepted revision as of 18 September: `a24e6c75f29a7499013ea009233c9ab628f1f106`. Numbers are comparable only within one revision; record a new revision in the log.
 - The open part (`battle`, `chess`, `dance`) is published in the same format in the public dataset `Teadomi/simple-story-chat-eval`, revision `632a57972119766464167651c3ad8726db8e92f1`; it can be read without a token. The source of truth remains in `examples/`: after editing the open scenarios repeat `node local/pack-hf.ts export --pack ~/simple-story-chat-eval --authors <authors>` and `push`; the owner publishes.
+- Since 22 September the public pack also holds scenarios that exist only in pack format: `assault` and `hospital` (see the log). They are run with `--pack ~/simple-story-chat-eval --scenarios assault,hospital`; `export` rewrites only the three `examples/` scenarios and leaves them alone, so the pack directory is their source of truth. They were built to separate: 12 checks, 9 of them numbers that accumulate across the compactions, judge questions balanced 6 `yes` / 6 `no`. The 09-22 entry of the log is the scale of models on them; a model at 12/12 there is at the top of what the eval can currently see.
 - The holdout score is run by the owner or by Fable, no more often than once per accepted change: it confirms that the growth on the open scenarios is not fitting. Growth on the open scenarios together with a fall on the holdout scenarios is a reason to revert the change.
 
 ## What was verified live as of 18 September 2026
@@ -93,7 +146,7 @@ Not verified: behaviour when the limit is exhausted. The first one who verifies 
 
 ## Acceptance on the GPU
 
-The bot runs on an uncensored Gemma 4 31B Q6K on its own GPU; hosted models are only a test ground. Hosted Gemma is an optimistic substitute: after refusal removal and quantization the model follows the format worse. An edit counts as finally accepted after `npm run memory:probe` on the GPU through the queue of the running bot. The rental costs money, so only what is already selected is checked on the GPU, once every few steps, and only on the owner's word. Adult content is never sent to hosted APIs: the test-ground scenarios stay clean.
+The bot runs on an uncensored Gemma 4 31B Q6K on its own GPU; hosted models are only a test ground. Hosted Gemma is an optimistic substitute: after refusal removal and quantization the model follows the format worse. An edit counts as finally accepted after `npm run memory:probe` on the GPU through the queue of the running bot. The rental costs money, so only what is already selected is checked on the GPU, once every few steps, and only on the owner's word. Adult content is never sent to hosted APIs: the test-ground scenarios stay clean. The owner's one exception, 2026-09-21, is for judging pictures: the hand-written "sharp" prompt set (battlefield, wounds, an execution, an interrogation, a harem, a bath) is drawn on the rented card only, its prompts are written by hand and never pass a hosted text model, and its pictures may be shown to a GPT-6 session for the blind comparison as long as a picture has no explicit nudity. A picture that has it is judged by the owner alone.
 
 ## When to stop and write to the owner
 

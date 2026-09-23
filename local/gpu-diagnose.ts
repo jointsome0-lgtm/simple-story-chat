@@ -1,6 +1,7 @@
 // Read-only diagnostics for the rented GPU, run on the bot host while a problem is happening:
 //   npm run gpu:diagnose                 one snapshot through a new SSH session
 //   npm run gpu:diagnose -- --watch 30   a snapshot every 30 seconds through one SSH session that stays open, until Ctrl+C
+//                                        (down to --watch 1, for the seconds in which a starting server runs out of memory)
 //   npm run gpu:diagnose -- --pull       also save every retained server event under logs/
 // It asks the same question twice at the same moment: through the bot's forwarded port, and on the server's own
 // loopback through a separate SSH session. No Telegram, story DB, prompts or server output are read. Hosts, raw
@@ -36,7 +37,10 @@ export type Remote = {
   sockets: { established?: number; synRecv?: number; closeWait?: number; listen?: number };
   processes: { llamaServer: { pid?: number; ageSeconds?: number; state?: string }[];
     sshd: { sessions?: number; unauthenticated?: number; startups?: number; dropFrom?: number; dropAllAt?: number } };
-  gpus: { memoryUsedMiB?: number; memoryTotalMiB?: number; utilizationPercent?: number; temperatureC?: number }[];
+  // `index` is the driver's own card number and `pids` the compute processes on it: a reading from a box with
+  // several cards belongs to one of them, and only the pids say which card llama-server occupies.
+  gpus: { index?: number; pids: number[]; memoryUsedMiB?: number; memoryFreeMiB?: number; memoryTotalMiB?: number;
+    utilizationPercent?: number; temperatureC?: number }[];
   machine: { load1?: number; cpus?: number; memoryAvailableMiB?: number };
   // `pressure.scope` is `machine` when the kernel offers the numbers only for the whole machine, other tenants included.
   container: { throttledPeriods?: number; throttledSeconds?: number; memoryMiB?: number; memoryLimitMiB?: number;
@@ -50,10 +54,11 @@ type Direct = { seconds: number; failure?: 'ssh_failed' | 'ssh_timeout' | 'ssh_s
 // ok: both paths answer. no_tunnel: nothing listens on the forwarded port. ssh_path: the server answers on its own
 // loopback while the forwarded port does not. server: it does not answer even there. ssh_unreachable: no separate
 // SSH session either. ssh_stalled: the watching session stopped delivering. unclear: the session worked, yet it
-// returned no report.
-export type Reading = 'ok' | 'no_tunnel' | 'ssh_path' | 'server' | 'ssh_unreachable' | 'ssh_stalled' | 'unclear';
-// `tunnel.props` is absent when `models` failed: the bot's check stops there as well.
-export type Report = { at: string; reading: Reading; tunnel: { models: Probe; props?: Probe }; direct: Direct; remote?: Remote };
+// returned no report. counters: the reading was asked for counters alone and probed neither path.
+export type Reading = 'ok' | 'no_tunnel' | 'ssh_path' | 'server' | 'ssh_unreachable' | 'ssh_stalled' | 'unclear' | 'counters';
+// `tunnel.props` is absent when `models` failed: the bot's check stops there as well, and the whole field is absent
+// from a counters-only reading, which probes nothing.
+export type Report = { at: string; reading: Reading; tunnel?: { models: Probe; props?: Probe }; direct: Direct; remote?: Remote };
 export type Options = {
   host?: string; events?: number | 'all'; script?: string; timeoutMs?: number;
   spawn?: SpawnSsh; request?: Request; now?: () => Date;
@@ -61,7 +66,12 @@ export type Options = {
 // `every` is in seconds. A lost session is reopened after `retryMs`. A session gets `startMs` to deliver its first
 // line; after that a line later than `silenceMs` counts as missing.
 export type WatchOptions = Pick<Options, 'host' | 'script' | 'spawn' | 'request' | 'now'> &
-  { every: number; signal: AbortSignal; retryMs?: number; startMs?: number; silenceMs?: number };
+// `events` is how many retained server events each line carries; a watcher that only wants counters asks for none.
+// `parts` limits the snapshot to the parts named, so a frequent watcher does not walk /proc or re-read the server's
+// log every line. `probeTunnel` off drops the probe of the forwarded port that is paired with each line: a sampler
+// running beside a measurement must not add requests to the path whose latency is being measured.
+  { every: number; signal: AbortSignal; retryMs?: number; startMs?: number; silenceMs?: number; events?: number;
+    parts?: string; probeTunnel?: boolean };
 
 const script = () => readFileSync(new URL('../gpu/diagnose-remote.py', import.meta.url), 'utf8');
 
@@ -99,7 +109,10 @@ export function remoteOf(value: unknown): Remote {
         ({ pid: count(server.pid), ageSeconds: count(server.ageSeconds), state: text(server.state, /^[A-Za-z]$/) })),
       sshd: { sessions: count(sshd.sessions), unauthenticated: count(sshd.unauthenticated), startups: count(sshd.startups),
         dropFrom: count(sshd.dropFrom), dropAllAt: count(sshd.dropAllAt) } },
-    gpus: list(report.gpus).slice(0, 16).map(fields).map(gpu => ({ memoryUsedMiB: count(gpu.memoryUsedMiB), memoryTotalMiB: count(gpu.memoryTotalMiB),
+    gpus: list(report.gpus).slice(0, 16).map(fields).map(gpu => ({ index: count(gpu.index),
+      pids: list(gpu.pids).slice(0, 64).map(count).filter((pid): pid is number => pid !== undefined),
+      memoryUsedMiB: count(gpu.memoryUsedMiB),
+      memoryFreeMiB: count(gpu.memoryFreeMiB), memoryTotalMiB: count(gpu.memoryTotalMiB),
       utilizationPercent: count(gpu.utilizationPercent), temperatureC: count(gpu.temperatureC) })),
     machine: { load1: amount(machine.load1), cpus: count(machine.cpus), memoryAvailableMiB: count(machine.memoryAvailableMiB) },
     container: { throttledPeriods: count(container.throttledPeriods), throttledSeconds: count(container.throttledSeconds),
@@ -181,9 +194,11 @@ function direct(host: string, events: number | 'all', source: string, spawnChild
 
 function reading(tunnel: Report['tunnel'], session: Direct, remote: Remote | undefined): Reading {
   // Both steps of the bot's check. How long they took is in `seconds`; a slow answer is still an answer.
-  const passes = (check: Report['tunnel']) => check.models.httpStatus === 200 && check.props?.httpStatus === 200;
+  const passes = (check: NonNullable<Report['tunnel']>) => check.models.httpStatus === 200 && check.props?.httpStatus === 200;
   if (!remote) return session.failure === 'ssh_silent' ? 'ssh_stalled'
     : session.failure === 'ssh_failed' || session.failure === 'ssh_timeout' ? 'ssh_unreachable' : 'unclear';
+  // A line asked for counters alone probed neither path and answers nothing about which of them is broken.
+  if (!tunnel) return 'counters';
   if (!passes(remote.http)) return 'server';
   if (passes(tunnel)) return 'ok';
   return tunnel.models.failure === 'ECONNREFUSED' ? 'no_tunnel' : 'ssh_path';
@@ -200,26 +215,36 @@ export async function diagnose({ host = 'simple-chat-vast', events = 25, script:
 
 // On 17 September sessions that were already open kept working while new ones hung. A watcher therefore keeps one
 // session open and the remote script reports through it, so a failure that starts later can still be seen from the
-// server's side. Every line is paired with a probe of the forwarded port made on its arrival.
-export async function watch({ host = 'simple-chat-vast', every, script: source = script(), retryMs = every * 1000, startMs = 30000, silenceMs = every * 1000 + 20000,
-  spawn: spawnChild = spawn, request = fetch, now = () => new Date(), signal: stopped }: WatchOptions, emit: (report: Report) => void): Promise<void> {
+// server's side. Every line is paired with a probe of the forwarded port made on its arrival, unless the watcher
+// asked for counters alone: a sampler beside a measurement would otherwise measure a path it is adding requests to.
+export async function watch({ host = 'simple-chat-vast', every, script: source = script(), retryMs = Math.max(5000, every * 1000), startMs = 30000, silenceMs = every * 1000 + 20000,
+  spawn: spawnChild = spawn, request = fetch, now = () => new Date(), signal: stopped, events = 5,
+  parts, probeTunnel = true }: WatchOptions, emit: (report: Report) => void): Promise<void> {
   if (!HOST.test(host)) throw new Error('invalid_host');
-  if (!(Number.isSafeInteger(every) && every >= 10 && every <= 3600)) throw new Error('invalid_interval');
+  // A second between lines is allowed: a server that runs out of memory does it within seconds of its start, and a
+  // slower watch reports nothing but the exit. A lost session is still reopened no faster than every five seconds.
+  if (!(Number.isSafeInteger(every) && every >= 1 && every <= 3600)) throw new Error('invalid_interval');
+  if (!(Number.isSafeInteger(events) && events >= 0 && events <= 9999)) throw new Error('invalid_events');
+  if (parts !== undefined && !parts.split(',').every(part => PARTS.includes(part))) throw new Error('invalid_parts');
+  const asked = parts === undefined ? '' : ` --parts ${parts}`;
   const session = () => new Promise<void>((resolve, reject) => {
     const started = performance.now();
     const age = () => Math.round(performance.now() - started) / 1000;
     // Keepalives end a session whose path is dead, as they do for the bot's tunnel; the exit is then reported.
     const child = spawnChild('ssh', [...SSH, '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3', host,
-      `python3 - --events 5 --every ${every}`], { stdio: ['pipe', 'pipe', 'pipe'], env: sshEnvironment() });
+      `python3 - --events ${events} --every ${every}${asked}`], { stdio: ['pipe', 'pipe', 'pipe'], env: sshEnvironment() });
     let pending = '';
     let diagnostic = '';
     let sshReason: SshReason | undefined;
     let reports = Promise.resolve();
     const report = (direct: Direct, remote?: Remote) => {
       const at = now().toISOString();
+      // Whether this line arrived before the watcher was stopped. Stopping ends the reporting, it does not throw
+      // away what has already been read: the peak a sampler exists for can be in the last line of a session.
+      const arrived = !stopped.aborted;
       reports = reports.then(async () => {
-        const tunnel = await tunnelCheck(request, stopped);
-        if (!stopped.aborted) emit({ at, reading: reading(tunnel, direct, remote), tunnel, direct, remote });
+        const tunnel = probeTunnel ? await tunnelCheck(request, stopped) : undefined;
+        if (arrived) emit({ at, reading: reading(tunnel, direct, remote), ...(tunnel ? { tunnel } : {}), direct, remote });
       });
       // A snapshot that cannot be written ends the watch with that error: a quiet terminal would pass for a healthy one.
       reports.catch(() => { closed(undefined); child.kill(); });
@@ -296,8 +321,8 @@ async function main(args: string[]) {
     const arg = args.shift();
     if (arg === '--pull') pull = true;
     else if (arg === '--host' && args.length) host = args.shift();
-    else if (arg === '--watch' && /^\d{2,4}$/.test(args[0] ?? '') && Number(args[0]) >= 10 && Number(args[0]) <= 3600) every = Number(args.shift());
-    else throw new Error('Usage: npm run gpu:diagnose -- [--host SSH_ALIAS] [--watch SECONDS(10-3600)] [--pull]');
+    else if (arg === '--watch' && /^\d{1,4}$/.test(args[0] ?? '') && Number(args[0]) >= 1 && Number(args[0]) <= 3600) every = Number(args.shift());
+    else throw new Error('Usage: npm run gpu:diagnose -- [--host SSH_ALIAS] [--watch SECONDS(1-3600)] [--pull]');
   }
   if (pull && every) throw new Error('Use --pull for a single snapshot, not with --watch');
   const directory = fileURLToPath(new URL('../logs', import.meta.url));

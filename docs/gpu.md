@@ -10,13 +10,35 @@ We use [Gemma 4 31B IT Uncensored Heretic, GGUF](https://huggingface.co/llmfan46
 
 [manifest.env](../gpu/manifest.env) pins the model revision, the file name, the size and the SHA256, and also the commit of [llama.cpp 0.4.1](https://github.com/ggml-org/llama.cpp/commit/b29c606e28a01b1bc8c1351026a0fa6e616bf6c4). The script verifies the file after the download. A version update is a separate change of the manifest and a repeated check.
 
-For the first run we choose one RTX 5090 with 32 GB VRAM, at least 32 GB RAM and 60 GB of disk. You need a CUDA development image with `nvcc`, CUDA 12.8 or newer and a compatible driver; the build architecture for the 5090 is `120`. An On-demand rental fits a short test without a monthly commitment. The exact price, the disk fee and the traffic fee are checked on the chosen offer. The traffic price on Vast differs between machines by a factor of twenty: from $2.6 to $52 per TB. Downloading the weights (25 GB) on a machine with $39/TB cost about one dollar, which is more than an hour of the rental itself; on a machine with $2.6/TB it costs seven cents. So compare offers by the sum "hour + download", not by the hourly price alone.
+For the first run we choose one RTX 5090 with 32 GB VRAM, at least 32 GB RAM and 60 GB of disk. You need a CUDA development image with `nvcc`, CUDA 12.8 or newer and a driver that runs the image's CUDA (the pinned image is CUDA 13, so the offer query asks for a host whose driver runs 13.0; a 570 driver stops at 12.8); the build architecture for the 5090 is `120`. An On-demand rental fits a short test without a monthly commitment. The exact price, the disk fee and the traffic fee are checked on the chosen offer. The traffic price on Vast differs between machines by a factor of twenty: from $2.6 to $52 per TB. Downloading the weights (25 GB) on a machine with $39/TB cost about one dollar, which is more than an hour of the rental itself; on a machine with $2.6/TB it costs seven cents. So compare offers by the sum "hour + download", not by the hourly price alone.
 
 The run was done on the image `vastai/base-image:cuda-13.0.3-cudnn-devel-ubuntu24.04-py312-2026-09-07`, digest `sha256:c1d2b5326fae806b04d2c2d97a2b3948d0ccb0026dd3085e9a2ad55e304193f8`, with driver 580.142 and nvcc 13.0.88. The launch was SSH direct, 60 GB of disk, with no published HTTP ports. The CUDA 12.8 template seen earlier does not describe this verified launch.
 
 The configuration of the parent model has 60 layers: 50 with a local window of 1024 and 10 with full attention. We run one slot with a context of 65536, Flash Attention and a Q8 KV cache. We do not enable the full KV cache for the local layers. [Model configuration](https://huggingface.co/llmfan46/gemma-4-31B-it-uncensored-heretic/blob/main/config.json).
 
 With microbatch 128, Q4 used about 22206 MiB of VRAM and Q6 used 28394 MiB; Q6 had about 4213 MiB left. For an input of 59097 tokens the first text arrived after 33.8 s on Q4 and 38.4 s on Q6. The repeated request used 59093 cached tokens and gave the first text after 5.1 and 4.4 s respectively. These are single measurements, not a guaranteed speed. The long probe found a violation of the instruction about the fixed scene time on the repeated request; the whole run cannot be counted as free of errors.
+
+## Renting
+
+[rent.mjs](../gpu/rent.mjs) takes one offer that matches the paragraph above. It exists because an offer id on Vast lives only a few minutes: a price read out of a list, agreed to, and then used is a price for an offer that no longer exists, so the script searches live and tries its candidates in order until one is taken. `SIMPLE_CHAT_VAST_API_KEY` comes from the environment and is never printed; the public key named in the script is installed by [trial-onstart.sh](../gpu/trial-onstart.sh), which also arms a three-hour guard that deletes the instance.
+
+Run it dry first. That names the offers it would take at their present prices, which is the thing worth agreeing to, and it spends nothing.
+
+```sh
+SIMPLE_CHAT_RENT_DRY_RUN=1 node --env-file-if-exists=.env.gpu gpu/rent.mjs
+node --env-file-if-exists=.env.gpu gpu/rent.mjs
+```
+
+A session that runs both lanes may be one machine (`--gpus 2`, or one card with the lanes in turn) or two machines with one card each, which is what the owner chose on 2026-09-22: on that day two whole single-card machines cost less than one two-card machine with the same memory, each lane keeps a machine's RAM to itself, and the two downloads run over two links at once. Rent each lane with its own call; the language machine asks for 60 GB of disk and is priced by Gemma's download, the picture machine for 100 GB and by the image files. The two tunnels are `bash gpu/tunnel.sh ALIAS` for the language machine and `bash gpu/tunnel.sh --pictures-only ALIAS` for the other. Each machine arms its own three-hour guard. Rent the second machine with `--avoid-host` and the first machine's host id: the same box often lists both of its cards, and two rentals on it would share one link, one disk and one failure, which is not the two machines the owner asked for.
+
+```sh
+SIMPLE_CHAT_RENT_DRY_RUN=1 node --env-file-if-exists=.env.gpu gpu/rent.mjs --lane text
+SIMPLE_CHAT_RENT_DRY_RUN=1 node --env-file-if-exists=.env.gpu gpu/rent.mjs --lane pictures
+```
+
+Machines in mainland China are not asked for and are dropped from the answer (`droppedForCountry`): Hugging Face and CivitAI are not reliably reachable from there, and a session is mostly a download.
+
+Offers are sorted by `hour * 2.5 + download`, the cost of the session the instance is billed for, with the measured host first. Offers with fewer than two direct ports are dropped and the count of them is reported: an offer with no ports can only be reached through Vast's proxy. That rule has never yet excluded anything — every 5090 within this price has had ports — so treat it as a guard, not as an explanation of any failure.
 
 ## Preparing the server
 
@@ -33,13 +55,21 @@ Host simple-chat-vast
 
 On the first `ssh simple-chat-vast` verify the host key. After that the tunnel requires the already known key and does not accept a replaced key automatically.
 
-From the project root upload only the scripts:
+The public key must be on the Vast **account**, under Account → SSH Keys, before the instance is created. Many machines offer no direct ports (`direct_port_start` 65535 with `direct_port_end` -1), and then the only route is Vast's proxy, `sshN.vast.ai`. The proxy admits account keys alone, so a key placed only inside the container, by an onstart script or by hand, never gets the chance to be used: the connection is closed before the container's own sshd sees it. The symptom is `Connection closed by <address> port <port>` on every attempt, with no mention of authentication. Adding the key to the account fixes a running instance without recreating it.
+
+**An account key is necessary and it is not sufficient.** On 2026-09-20 instance 51669851 refused it with `Permission denied (publickey)` for its whole life. The key was the account's one key (compared body to body), the API answered `SSH key already associated with instance`, the stored onstart still carried the line that writes it into `authorized_keys`, and `ssh -vvv` showed that single key offered and turned down. Detaching and reattaching the key, rebooting the container and twenty minutes of retries all changed nothing, and the container cannot be told to install the key from outside: `PUT /instances/command/{id}/` answers `Invalid command given` to anything outside its own small set (`ls`, `rm`, `du`) and `Execute command only avail on stopped instances` while the instance runs. The rental was deleted unused, and its cause is not known. On 2026-09-22 instance 52079556 (a Taiwan host) refused the same way for an hour, and the container log (`PUT /instances/request_logs/{id}/`, then the `result_url`) named the cause: `Authentication refused: bad ownership or modes for file /root/.ssh/authorized_keys`. The host had written the file as its own user, `vastai_kaalia:docker`, and sshd's StrictModes refuses a key file that root does not own; the onstart script's `chmod 600` cannot change the owner. The repair from outside: stop the instance, `PUT /instances/command/{id}/` with `{"command":"rm /root/.ssh/authorized_keys"}` (the answer's `result_url` shows the output a few seconds later), start it again; the onstart script recreates the file as root and ssh works at once. The script now does that by itself when the file it finds is not root's. A stopped instance is billed for its disk only, and the stop, the command and the start took two minutes.
+
+What the instance reported is worth reading carefully before blaming the machine. It showed `direct_port_start` 65535 with `direct_port_end` -1, the empty range, while the offer it was created from advertised twelve direct ports. That range describes the ports **this rental asked for**, not the ones the machine has, and a creation request that names none gets none. So an empty range is not evidence of a proxy-only machine, and filtering offers by `direct_port_count` would not have avoided that rental: every candidate within the price had ports. Whether a rental that asks for a direct port avoids the refusal is untested.
+
+From the project root upload only the scripts. `/workspace` is a convention of some Vast images, not of all of them: the verified CUDA 13 image has one 60 GB overlay on `/` and no `/workspace` at all, so create the directory rather than assume it.
 
 ```sh
 ssh simple-chat-vast 'mkdir -p /workspace/simple-chat/gpu'
-scp gpu/*.sh gpu/server-log.py gpu/manifest.env simple-chat-vast:/workspace/simple-chat/gpu/
+tar -cf - -C gpu . | ssh simple-chat-vast 'tar -xf - -C /workspace/simple-chat/gpu'
 ssh simple-chat-vast
 ```
+
+`scp` through the proxy hung with no output and had to be killed; one `tar` over the same SSH session copied the scripts at once.
 
 The container needs `git`, `cmake`, `ninja`, `curl`, `python3`, a C++ toolchain and a CUDA compiler. For an Ubuntu image you can install the missing packages like this:
 
@@ -50,7 +80,7 @@ bash /workspace/simple-chat/gpu/bootstrap.sh
 bash /workspace/simple-chat/gpu/ensure-server.sh
 ```
 
-`nvcc` must be part of the chosen development image. The host driver is not installed this way. The preparation downloads about 25.2 GB of weights and builds `llama-server`. By default the weights go through `aria2c` with 16 connections (if the image does not have it, the script installs it through `apt-get`; if that fails, the script downloads with a single `curl`). The download runs in the background while `llama-server` is built, and the script waits for it after the build; on an 850 Mbit/s link the weights arrived in six minutes, before the end of the build. `SIMPLE_CHAT_BUILD_JOBS` sets the number of build threads; by default it is the machine's cores, or fewer if memory is short (CUDA compilation takes about 2 GiB per job). The build is worth no rented minutes of its own as long as it ends before the weights arrive, which is what that default is for. `SIMPLE_CHAT_DOWNLOAD_CONNECTIONS=1..16` changes the number of connections, and `1` brings back the single download. An interrupted parallel download continues from the place where it stopped; SHA256 is verified as before. By default the files are in `/workspace/simple-chat-gpu`; `ensure-server.sh` leaves one process under `flock` after SSH disconnects. In the verified image we had to restore the missing `libisl.so.23` by reinstalling `libisl23 libmpc3 libmpfr6 libgmp10 gcc-13 g++-13 build-essential`, and then configure CMake again with `--fresh`.
+`nvcc` must be part of the chosen development image. The host driver is not installed this way. The preparation downloads about 25.2 GB of weights and builds `llama-server`. By default the weights go through `aria2c` with 16 connections (if the image does not have it, the script installs it through `apt-get`; if that fails, the script downloads with a single `curl`). The download runs in the background while `llama-server` is built, and the script waits for it after the build; on an 850 Mbit/s link the weights arrived in six minutes, before the end of the build. `SIMPLE_CHAT_BUILD_JOBS` sets the number of build threads; by default it is the container's share of the cores, or fewer if its memory is short (CUDA compilation takes about 2 GiB per job). The share is read from the cgroup, because a container sees the whole machine otherwise: the measured 5090 host reported 256 cores and 454 GiB of free memory to a container that held 30.72 cores and 183 GB. The build is worth no rented minutes of its own as long as it ends before the weights arrive, which is what that default is for. `SIMPLE_CHAT_DOWNLOAD_CONNECTIONS=1..16` changes the number of connections, and `1` brings back the single download. An interrupted parallel download continues from the place where it stopped; SHA256 is verified as before. By default the files are in `/workspace/simple-chat-gpu`; `ensure-server.sh` leaves one process under `flock` after SSH disconnects. In the verified image we had to restore the missing `libisl.so.23` by reinstalling `libisl23 libmpc3 libmpfr6 libgmp10 gcc-13 g++-13 build-essential`, and then configure CMake again with `--fresh`.
 
 It is convenient to watch the preparation from the bot's computer: `ssh -t simple-chat-vast bash /workspace/simple-chat/gpu/progress.sh`. The screen refreshes once every three seconds and shows the downloaded amount of weights, the speed over the last half minute and the remaining time, and for the build it shows the completed steps out of the total number and the remaining time. The script only reads, and it exits by itself when the weights are verified and `llama-server` is built. The link speed stated in the offer promises nothing: on a machine with "1171 Mbit/s" the weights came from Hugging Face at 115 Mbit/s, about half an hour.
 
@@ -150,24 +180,149 @@ On the RX 580 with Gemma 3 1B (3 slots, 12288 cells) a 6.4K-token tester kept it
 
 ### Measurement session
 
-The rented card is paid by the minute, so what to keep is decided by a script and not by an impression. `npm run gpu:measure -- --profile <name>` measures one server profile and writes `measurements/<name>/report.json`; `npm run gpu:measure -- --decide measurements` reads every report and prints one answer. The prompts are synthetic, and a report holds counters only, never text.
+`npm run gpu:measure -- --profile <name>` measures one running server profile and writes
+`measurements/<name>/report.json`. `npm run gpu:measure -- --decide measurements` compares saved reports.
+Run it only during an authorized GPU session. Reports contain counts, timings and fixture hashes, never story text.
 
-A run has two phases with the same synthetic tester, who writes a scene, reads it for `--read-seconds` and writes the next, so its history grows and its cache is what the work beside it must not evict:
+Start with `npm run gpu:measure -- --smoke --profile smoke-<name>`. This runs one small case, one cold call and one
+warm call, without reading pauses, agents or probes, under a two-minute budget. It prints the observed cache states
+and exits unsuccessfully unless they are `cold` then `warm`. This checks the running server's treatment of
+`cache_prompt:false` and subsequent reuse before committing to a full measurement. The default target is 4,000;
+`--history-tokens` may choose a smaller target and `--fixture` may choose one fixture. Smoke results do not choose a profile.
 
-- **solo** — the tester alone, the card idling while it reads, which is how the bot runs today;
-- **loaded** — the same tester with agent turns (a compaction and a scene) and probes filling the card.
+The workload uses `makeRequest` and the checked-in synthetic stories in `examples/frozen/`. The default is `battle`;
+`--fixture chess`, `--fixture dance` and `--fixture all` select the others. Whole frozen scenes are repeated until the
+server's real `countInput` reaches the largest complete history below each target: about 4,000, 24,000 and 43,000
+input tokens. The report records the actual count, scene count, request hash, fixture hash, and the fixture's minimum
+and maximum scene lengths. This is a performance replay; repeated scenes do not test story consistency.
+
+The selected `compactAtTokens`, memory mode and kept-scene count are recorded. A target at or above the configured
+compaction threshold is refused; use `--history-tokens N` to select a smaller single target. The default llama.cpp
+threshold is 44,000, but the measurement uses the loaded configuration. Scene output uses the bot's ordinary prompt
+and output allowance. An output shorter than the frozen fixture's minimum makes the workload checks unknown;
+a short response cannot establish that full scenes meet the time budget. A longer complete response remains valid:
+it costs more work, so it cannot flatter the time result. The fixture maximum is recorded for comparison only.
+An output cut off at the token limit still fails the format check.
+
+Both phases replay identical branch points. Generated output is measured and discarded, so the history does not
+grow past the selected size. In `solo`, only the tester runs. In `loaded`, agent turns and disposable probes run
+beside it. An agent turn extracts memory with `summaryRequest`, validates it with `parseMemory`, commits it to a
+synthetic clone and requests the next scene from that memory. The increment must shorten the request. Its output
+tokens count as useful only when the following valid scene uses it; probes, failed scenes and abandoned increments
+do not count. Completed probes record their output-token total separately; an unavailable count remains null.
+This load does not exercise the bot's complete automatic-compaction retry/repair path.
+
+Each size has `--cold-runs 2` cycles by default. A cycle forces a cold generation with `cache_prompt:false`, then
+replays the identical request for `--scenes 1` warm call, after `--read-seconds 15`. The switch prevents prompt
+reuse in that request's slot; it does not clear the whole server. See llama.cpp's
+[cache-prompt branch](https://github.com/ggml-org/llama.cpp/blob/b29c606e28a01b1bc8c1351026a0fa6e616bf6c4/tools/server/server-context.cpp#L2892-L3000).
+Every call records both its intended and observed cache condition. Cold requires zero cached tokens and full
+prefill within the existing 256-token tolerance; warm requires the prefix retained with at most 256 tokens of
+prefill. Missing `cacheTokens` or `promptTokens` leaves the condition unknown. Warm calls that lose the cache fail
+retention. Cold calls whose cold prefill cannot be confirmed cannot validate a profile.
+
+That identical warm replay is the best case, a lower bound on the work of a normal turn. Each cycle also measures
+`next`: it independently primes the branch through scene k-1, waits for reading, then requests the branch through
+the frozen scene k. The previous request includes the last action and narrator rule; the next contains the stored
+raw action and scene, exactly as `makeRequest` renders them. The primer's generated alternative is discarded, so
+every profile receives the same frozen next scene. The primer is recorded separately and earns no useful tokens.
+
+The server counts both requests and their common complete-message prefix. The prefix count includes an empty user
+suffix to make a valid chat template; the existing 256-token tolerance covers that small template boundary.
+`expectedCacheTokens`, `expectedPromptTokens` and `cacheMatched` show whether the observed mixed prefill matches
+the expected new remainder. Lost prefix tokens fail retention. Missing counters, an unconfirmed primer, or an
+unexpectedly absent new prefill leave the checks unknown. This measures one controlled transition below the
+compaction threshold, not an indefinitely growing story.
+
+The report separates `countMs`, the full token-count operation, from `countQueueMs`, its dispatch wait.
+`queueMs` sums the counting and generation dispatch waits. `elapsedMs` starts when generation is dispatched.
+`firstTextFromStartMs` and `firstTextFromRequestMs` end at the first nonempty `onText` delta, while
+`totalRequestMs` ends at the completed response. The first delta is observed in the local adapter; Telegram's
+draft cadence and delivery are outside this measurement. `decodeTokensPerSecond` uses server decode time.
+`unattributedMs` is generation wall time minus server prefill and decode time, a signed residual which also includes
+server work outside those timers. It is not an isolated measurement of the tunnel. Missing observations are `null`.
+
+Summaries show sample count, median and maximum separately for each history size and cold, warm or next condition.
+The 10-second generation gate applies only to warm replay medians. Cold and next timings remain visible separately;
+a passing warm replay does not establish the response time of an ordinary next turn.
+
+Before contacting the model, the script prints a plan and rejects one that uses more than 70% of the selected budget.
+The planning allowance is reading pauses plus 10 seconds per model call, reusing the existing warm-generation
+budget. This is an allowance, not a measured duration; cold prefill and setup can take longer. With the defaults,
+three sizes and two cycles in each of two phases make 48 calls including primers, six minutes of reading and eight
+minutes of call allowance: 14 of the 30 minutes. The remaining time is available for setup, longer cold prefill and
+queue variation. Larger fixture/cycle selections need shorter pauses or a larger explicit budget and may still time out.
+The 30-minute default budget covers setup, counts, queues, reading waits and both phases. Expiry aborts pending work
+and saves a partial report. Incomplete series cannot pass. Cross-profile comparisons require the same workload
+fingerprint, model, prompt configuration and reading cadence; draft comparisons also require the same slot/pool
+configuration. Legacy short-prompt reports remain readable, but cannot establish the new workload checks.
+An unreachable server or interrupted run is not proof of a VRAM shortage. Without measured insufficient headroom,
+the combined pool/draft memory check stays unknown. A pending read-only VRAM sample can take up to 30 seconds to
+finish during cleanup; the budget has already cancelled model work.
 
 The owner's thresholds, agreed on 20 September 2026 and encoded in `THRESHOLDS` in `local/gpu-measure.ts`:
 
 | # | What is decided | Threshold |
 |---|-----------------|-----------|
 | 1 | Free video memory at the peak | at least 1 GiB |
-| 2 | The tester's cache while others work | kept, 32 tokens of tolerance |
+| 2 | The tester's cache while others work | kept, 256 tokens of tolerance |
 | 3 | Useful work per hour with lanes beside the tester | at least 1.2× |
-| 4 | The tester's scene beside that work | no more than 1.5× slower |
-| 5 | The tester's longest wait for the queue | 120 seconds |
-| 6 | The draft model (MTP) | at least 1.2×, without a format regression |
+| 4 | Warm replay beside other work, from dispatch to completion | each history's warm median at most 10 seconds; excludes counting and queues; cold/next reported separately |
+| 5 | The tester's longest total dispatch wait | counting queue plus generation queue at most 120 seconds |
+| 6 | The draft model's server decode speed | at least 1.2× in each matching history/cache series, without a format regression |
 | 7 | The pool and the draft model do not fit together | keep the pool, drop the draft model |
+
+No budget for cold startup, first text, total request time, or minimum absolute decode speed has been agreed.
+The script reports those measurements without assigning new pass/fail numbers. The 10-second gate concerns warm
+generation time after dispatch; it is not a claim about first visible text or total user wait.
+
+Thresholds 2 and 4 were reshaped by the owner on 2026-09-20, after the first live run and before the reports were
+re-read. The cache tolerance was 32 tokens, which the tester crossed by re-reading 1 to 219 tokens of a 39,700-token
+history: that is the template boundary moving under load, not a cache being lost, and the failure it guards against
+(the whole history coming back, as measured on the RX 580 below) is two orders of magnitude larger. Threshold 4 was
+"no more than 1.5× slower", a ratio; a person waits in seconds, and a ratio tightens by itself every time the card
+gets faster, so the same experience would fail the check on better hardware.
+
+#### Measured on a rented RTX 5090, 2026-09-20
+
+These historical results used the earlier short synthetic scene prompt. They do not measure the frozen-story
+workload described above. One 32607 MiB card, Gemma 4 31B heretic Q6_K, context 65536, pool 98304 cells, `--kv-unified`. The decision was
+`pool-3` over `single`, "take the pool without the draft model".
+
+| Profile | Slots | Draft | Useful tokens/hour | 1: free | 2: cache | 3: gain | 4: scene | 5: wait |
+|---------|-------|-------|--------------------|---------|----------|---------|----------|---------|
+| pool-3  | 3 | no  | 22215 | 1717 MiB | 223 tokens of margin | 2.52× | 6.5 s | 2.5 s |
+| pool-2  | 2 | no  | 18690 | 2141 MiB | 123 tokens of margin | 2.27× | 9.5 s | 6.6 s |
+| single  | 1 | no  | 9065  | 4191 MiB | — | — | — | 0 s |
+| single-mtp | 1 | yes | 11805 | 3157 MiB | — | — | — | 0 s |
+| pool-3-mtp | 3 | yes | — | the server did not start | — | — | — | — |
+
+Fewer slots did not mean a calmer card: `pool-2` was worse than `pool-3` on every axis, waits included. The draft
+model doubled the writing speed on one slot (40.5 → 80.8 tokens a second by the server's own timings, 49 to 70 per
+cent of draft tokens accepted, no format failures), which is threshold 6; with three slots llama-server died with
+`out_of_memory` twelve seconds after each start, which is threshold 7 and why the draft model is off.
+
+Two numbers in this table are read with care. `single`'s throughput carries the SSH proxy inside it — the tunnel was
+measured at 1.4 ms one hour and 1.5 s the next, against 1.4 ms for the same call on the instance — so wall-clock
+speed compares the tunnel's mood and threshold 6 is judged on the server's timings instead. And the free memory was
+computed as total minus used, which hands back the driver's own 498 MiB reserve as headroom that does not exist:
+`pool-3`'s 1717 MiB was really about 1219. The harness now asks the card for `memory.free`.
+
+The card is also not always the whole card. Later the same session, with the identical profile running, 1035 MiB were
+held by something outside the container: no process in the container had `/dev/nvidia*` open, `--query-compute-apps`
+listed only llama-server's 30858 MiB, and the memory survived llama-server exiting. The headroom fell from 1219 MiB
+to 217. Who owns that gigabyte was not established — `/proc/driver/nvidia/clients` is absent inside the container and
+`dmesg` is unreadable, so neither a driver leak nor a neighbour is proven, and from inside there is no way to take it
+back. Whatever a rented GPU reports as total, a profile measured with a gigabyte to spare can lose it.
+
+#### The pool has a floor, and it is the scheduler's
+
+Shrinking the pool is the obvious answer to a card that lost memory, and it is bounded from below: the scheduler
+admits a call only if the pool can hold it, so the pool must cover the tester's history, the output cap and the
+margin. For the measured run — 39815 tokens for the tester, 23795 for the agent, a 4096 output cap and 2048 of
+margin — that is 73850 cells while the tester is working and 78970 to keep its cache alive while it reads. A pool of
+73728 buys video memory with exactly the eviction threshold 2 exists to prevent. Below 78970 the pool is not a
+smaller pool, it is a different bargain, and thresholds 2 and 3 have to be measured again to know what it cost.
 
 On the RX 580 with Gemma 3 1B, three slots and the same load in each run, the script answered the question the flags raise:
 
@@ -196,6 +351,37 @@ npm run memory:probe -- --source /path/to/synthetic/dance/evidence.json --resume
 ```
 
 The probe is limited to the given time, from 1 to 30 minutes. A busy or stopped GPU can leave it unfinished. This is not a result of a quality check. A comparison needs both modes completed on one source file and one model. Such a run evaluates the whole compaction scheme, including the different output budget; it does not isolate the effect of one SGR instruction and does not check quality at 44K.
+
+## The picture card
+
+The second card of a two-card rental runs ComfyUI instead of llama.cpp: [image-bootstrap.sh](../gpu/image-bootstrap.sh) prepares it from [image-manifest.env](../gpu/image-manifest.env), [image-serve.sh](../gpu/image-serve.sh) starts it on loopback with `CUDA_VISIBLE_DEVICES=1`, and `npm run image:batch` draws the frames of the synthetic stories through the tunnel. Why any of this exists is in [illustrations-plan.md](illustrations-plan.md); what follows is only what a rental has to know.
+
+A default run downloads the two Krea checkpoints, the encoder and the VAE: 31.46 GB, about 21 minutes at the 200 Mbit/s floor the bootstrap enforces and 4 minutes at 1 Gbit/s. With Gemma's 25.72 GB on the other lane that is 57.18 GB of weights over one shared link, and with the wheels beside them 63.18 GB, which is the number [rent-plan.ts](../local/rent-plan.ts) prices an offer's traffic by: 42 minutes at the floor, 8 at 1 Gbit/s.
+
+### Qwen-Image 2.1, opt-in
+
+`SIMPLE_CHAT_IMAGE_QWEN=true` adds a third checkpoint, pinned in the same manifest and verified by the same code path. It is off by default because the traffic term above is the default run's, and a session that has not asked for this comparison should not pay for it.
+
+```sh
+SIMPLE_CHAT_IMAGE_QWEN=true bash /workspace/simple-chat/gpu/image-bootstrap.sh --dry-run   # names the files, downloads nothing
+SIMPLE_CHAT_IMAGE_QWEN=true bash /workspace/simple-chat/gpu/image-bootstrap.sh
+SIMPLE_CHAT_IMAGE_QWEN=true bash /workspace/simple-chat/gpu/image-serve.sh
+```
+
+What it adds:
+
+| | bytes | at 200 Mbit/s | at 1 Gbit/s |
+|---|---|---|---|
+| `qwen_image_2.1_int8_convrot.safetensors` | 7 256 783 064 | 4.8 min | 58 s |
+| `qwen3vl_8b_int8_convrot.safetensors` | 9 350 798 360 | 6.2 min | 75 s |
+| `qwen_image_2.1_vae_bf16.safetensors` | 675 509 688 | 27 s | 5 s |
+| **together** | **17 283 091 112** (17.28 GB) | **11.5 min** | **2.3 min** |
+
+The session's whole download becomes 80.46 GB, about 54 minutes at 200 Mbit/s and 11 at 1 Gbit/s, and the 150 GB disk the plan rents still holds it with room for torch and the pictures. The link is measured once while the downloads run, and a machine below 200 Mbit/s is meant to be destroyed rather than waited for — with the opt-in on, that decision is worth twelve more minutes than without it.
+
+The same three files in bf16 would be 32.44 GB, which does not fit one 32 GB card anyway; the reasoning is written out in the manifest beside the pins. Nothing of Krea's is replaced, so one prepared box draws both and the blind comparison has something to compare.
+
+The bootstrap writes two graphs beside the Krea one: `image-workflow-qwen.json` draws frames, `image-workflow-qwen-edit.json` takes reference portraits. One run has one workflow, so Qwen is its own `image:batch` run directory, and `npm run image:blind -- build --run a,b --out <directory>` reads several of them.
 
 ## Diagnosing connection failures
 

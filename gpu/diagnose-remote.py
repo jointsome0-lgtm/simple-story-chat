@@ -3,6 +3,7 @@
 
 local/gpu-diagnose.ts pipes this file to `python3 -` over a separate SSH session, so it needs no deployment.
 With --every it keeps printing one line per interval through that session until --limit seconds have passed.
+With --parts it reports only the parts named, for a watcher that reads one of them often.
 It reads no request bodies, server output, environment or process arguments. Every string it prints comes from
 a fixed list or matches a strict pattern; everything else is a number.
 """
@@ -147,15 +148,41 @@ def processes():
     return {'llamaServer': sorted(servers, key=lambda server: server['pid']), 'sshd': ssh}
 
 
+def compute_pids():
+    """Which processes hold memory on which card, keyed by the card's UUID. The UUID identifies a rented machine's
+    hardware and stays here; only the driver's index and the pids leave."""
+    result = subprocess.run(['nvidia-smi', '--query-compute-apps=gpu_uuid,pid', '--format=csv,noheader,nounits'],
+                            capture_output=True, text=True, timeout=5)
+    by_uuid = {}
+    for line in result.stdout.strip().splitlines()[:256]:
+        values = [value.strip() for value in line.split(',')]
+        if len(values) == 2 and values[1].isdigit():
+            by_uuid.setdefault(values[0], []).append(int(values[1]))
+    return by_uuid
+
+
 def gpus():
-    """One entry per GPU. A value the driver does not report, printed as [N/A], is left out."""
-    keys = ('memoryUsedMiB', 'memoryTotalMiB', 'utilizationPercent', 'temperatureC')
-    result = subprocess.run(['nvidia-smi', '--query-gpu=memory.used,memory.total,utilization.gpu,temperature.gpu',
+    """One entry per GPU, carrying the driver's own index and the pids computing on it: on a two-card box one card
+    runs the model server and the other something else, and a reading without an index cannot say which, nor which
+    of them llama-server sits on. A value the driver does not report, printed as [N/A], is left out."""
+    # memory.free is asked for rather than derived: in this output the driver's own reserve is a third number beside
+    # used and total, so total minus used overstates what is left by that reserve. On the measured 5090 the reserve is
+    # 498 MiB, and the headroom threshold is 1024 - large enough to turn a fail into a pass.
+    keys = ('index', 'memoryUsedMiB', 'memoryFreeMiB', 'memoryTotalMiB', 'utilizationPercent', 'temperatureC')
+    result = subprocess.run(['nvidia-smi', '--query-gpu=uuid,index,memory.used,memory.free,memory.total,utilization.gpu,temperature.gpu',
                              '--format=csv,noheader,nounits'], capture_output=True, text=True, timeout=5)
+    # A driver that cannot list the compute processes (an old one, or a container without the privilege) still
+    # reports memory; the cards then carry no pids and the card in use has to be named by hand.
+    try:
+        by_uuid = compute_pids()
+    except Exception:
+        by_uuid = {}
     cards = []
     for line in result.stdout.strip().splitlines()[:16]:
-        values = [value.strip() for value in line.split(',')]
-        cards.append({key: int(value) for key, value in zip(keys, values) if value.isdigit()})
+        uuid, *values = [value.strip() for value in line.split(',')]
+        card = {key: int(value) for key, value in zip(keys, values) if value.isdigit()}
+        card['pids'] = sorted(by_uuid.get(uuid, []))
+        cards.append(card)
     return cards
 
 
@@ -286,13 +313,27 @@ def events_limit(value):
     return int(value)
 
 
+PARTS = ('sockets', 'processes', 'gpus', 'machine', 'container', 'http', 'serverEvents')
+
+
+def part_names(value):
+    names = [name for name in value.split(',') if name]
+    if not names or any(name not in PARTS for name in names):
+        raise argparse.ArgumentTypeError('expected parts out of ' + ','.join(PARTS))
+    return set(names)
+
+
 def snapshot(options):
     report = {'at': datetime.datetime.now(datetime.timezone.utc).isoformat()}
     # Sockets and processes are counted before this script opens its own connections. A part that fails is left out
-    # and named, so the rest of the snapshot still arrives.
+    # and named, so the rest of the snapshot still arrives. --parts keeps only the parts asked for: a watcher reading
+    # the cards every couple of seconds has no use for a walk of /proc, three requests at the server it is watching
+    # and a re-read of the whole server log, thirty times a minute.
     for key, part in (('sockets', lambda: sockets(options.port)), ('processes', processes), ('gpus', gpus), ('machine', machine),
                       ('container', container), ('http', lambda: http(options.port)),
                       ('serverEvents', lambda: server_events(Path(options.dir), options.events))):
+        if options.parts and key not in options.parts:
+            continue
         try:
             report[key] = part()
         except Exception:
@@ -305,6 +346,7 @@ if __name__ == '__main__':
     parser.add_argument('--dir', default='/workspace/simple-chat-gpu')
     parser.add_argument('--port', type=int, default=8080)
     parser.add_argument('--events', type=events_limit, default=25)
+    parser.add_argument('--parts', type=part_names, default=None)
     parser.add_argument('--every', type=int, default=0)
     parser.add_argument('--limit', type=int, default=3600)
     options = parser.parse_args()
