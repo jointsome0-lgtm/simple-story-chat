@@ -19,6 +19,9 @@ export type Review =
 export type GoldNode = {
   parent: string | null; depth: number; step: string; input: string; text: string; author: string; attempts: number; reviews?: Review[];
   status?: 'candidate' | 'gold'; seen?: number;
+  // The tokens of the path to the node (seed, steps and scenes from the root, see pathText) by the eval's ruler,
+  // local/tokens.ts; filled by gold-stats when the package is installed, shown to whoever picks nodes for a model.
+  pathTokens?: number;
   // Who sat on the council that agreed to the node, how many had listed findings in the first round before taking
   // them back, and whether a person has read it.
   approved: { at: string; judges: string[]; dissent: number }; read: boolean;
@@ -124,6 +127,7 @@ export function stats(tree: GoldTree) {
     recheckAgreed: nodes.filter(([id]) => rechecks(id).length && rechecks(id).every(r => r.agreed)).length,
     read: nodes.filter(([, n]) => n.read).length,
     gold: nodes.filter(([, n]) => n.status === 'gold').length,
+    pathTokens: { counted: nodes.filter(([, n]) => n.pathTokens !== undefined).length, max: Math.max(0, ...nodes.map(([, n]) => n.pathTokens ?? 0)) },
     byJudge,
     perNode: Object.fromEntries(nodes.map(([id, n]) => [id, { status: n.status ?? 'candidate', seen: n.seen ?? 0, later: later(id).length, confirmed: later(id).filter(r => r.confirmed).length, refuted: later(id).filter(r => r.confirmed === false).length, audit: audit(id).length, rechecks: rechecks(id).length, agreedAgain: rechecks(id).filter(r => r.agreed).length }])),
   };
@@ -150,6 +154,11 @@ export function agree(votes: Record<string, Verdict['verdict']>, checksByJudge: 
 
 // The tasks of a per-step eval: from every trunk node (and the seed), the trunk's next step. A model is compared with
 // another on the same prefixes, and its accepted scenes join the tree as branches.
+// What a reader of the node has read: the seed, then every step and scene from the root down to the node.
+export function pathText(tree: GoldTree, walk: { seed: string }, id: string | null): string {
+  return [walk.seed, ...pathOf(tree, id).flatMap(s => [s.input, s.text])].join('\n\n');
+}
+
 export function trunkTasks(tree: GoldTree, steps: string[]): Task[] {
   const chain = trunk(tree, steps);
   return steps.slice(0, chain.length + 1).map((step, depth) => ({ parent: depth ? chain[depth - 1] : null, step }));
@@ -172,7 +181,7 @@ export function renderGold(tree: GoldTree, walk: { seed: string; steps: string[]
     const gate = `судей ${node.approved.judges.length}, против ${node.approved.dissent}, попытка ${node.attempts}`;
     const s = stats(tree).perNode[id];
     const ledger = [s.later ? `позже указывали ${s.later} (устояло ${s.confirmed}, снято ${s.refuted})` : '', s.audit ? `аудит: ${s.audit}` : '', s.rechecks ? `перепроверок ${s.rechecks}, согласны снова ${s.agreedAgain}` : ''].filter(Boolean).join(' · ');
-    return `### Сцена ${node.depth} · ${id}${node.parent ? ` (от ${node.parent})` : ''} · ${step}\n\n_${node.status === 'gold' ? 'золото' : 'кандидат'} · ${node.author} · ${gate} · над ним прочитано ${node.seen ?? 0}${ledger ? ` · ${ledger}` : ''} · ${node.read ? 'вычитано' : 'не вычитано'}_\n\n${node.text}\n`;
+    return `### Сцена ${node.depth} · ${id}${node.parent ? ` (от ${node.parent})` : ''} · ${step}\n\n_${node.status === 'gold' ? 'золото' : 'кандидат'} · ${node.author} · ${gate} · над ним прочитано ${node.seen ?? 0}${node.pathTokens !== undefined ? ` · путь ${node.pathTokens} токенов` : ''}${ledger ? ` · ${ledger}` : ''} · ${node.read ? 'вычитано' : 'не вычитано'}_\n\n${node.text}\n`;
   };
   const branches = Object.keys(tree.nodes).filter(id => !chain.includes(id)).sort((a, b) => tree.nodes[a].depth - tree.nodes[b].depth || a.localeCompare(b));
   const rejected = tree.rejected.length ? `\n## Отклонённые попытки: ${tree.rejected.length}\n\n${tree.rejected.map(r => `- от ${r.parent ?? 'сида'}, шаг: ${r.step || 'знак продолжать'}, ${r.author}, ${r.at}: ${r.findings.length} находок, из них ${r.findings.map(f => f.kind).join(', ')}`).join('\n')}\n` : '';

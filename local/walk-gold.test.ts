@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { emptyGold, loadGold, saveGold, pathOf, trunk, addNode, agree, trunkTasks, renderGold, goldPaths, noteLater, stats, noteSeen, promote } from './walk-gold.ts';
+import { emptyGold, loadGold, saveGold, pathOf, trunk, addNode, agree, trunkTasks, renderGold, goldPaths, noteLater, stats, noteSeen, promote, pathText } from './walk-gold.ts';
 
 const node = (parent: string | null, depth: number, step: string, text: string) => ({ parent, depth, step, input: step || 'Продолжай.', text, author: 'x', attempts: 1,
   approved: { at: 't', judges: ['a', 'b', 'c', 'd'], dissent: 0 }, read: false });
@@ -120,4 +120,19 @@ test('a candidate becomes gold by its ledger: agreed rechecks, enough deeper sce
   tree.nodes[g2].reviews = [agreed, agreed, { kind: 'audit', at: 't', by: 'j', issue: 'ambiguity', quote: 'q', note: 'n' }];
   assert.deepEqual(promote(tree, { rechecks: 2, exposures: 4 }), []);
   assert.equal(stats(tree).gold, 2);
+});
+
+test('the path text is the seed, then every step and scene down to the node, and a counted path shows in the reading', () => {
+  const walk = { seed: 'Заголовок\n2026-01-01 10:00\nСид.', steps: ['', 'Стук в дверь.', ''] };
+  const tree = emptyGold('t', walk.seed);
+  const a = addNode(tree, { parent: null, depth: 1, step: '', input: 'Продолжай', text: 'Сцена один.', author: 'x:a', attempts: 1, approved: { at: 't', judges: ['j'], dissent: 0 }, read: false, status: 'candidate' });
+  const b = addNode(tree, { parent: a, depth: 2, step: 'Стук в дверь.', input: 'Стук в дверь.', text: 'Сцена два.', author: 'x:b', attempts: 1, approved: { at: 't', judges: ['j'], dissent: 0 }, read: false, status: 'candidate' });
+  assert.equal(pathText(tree, walk, null), walk.seed);
+  assert.equal(pathText(tree, walk, b), `${walk.seed}\n\nПродолжай\n\nСцена один.\n\nСтук в дверь.\n\nСцена два.`);
+  tree.nodes[b].pathTokens = 42;
+  const story = renderGold(tree, walk);
+  assert.match(story, /Сцена 2 · g2[^\n]*\n\n_кандидат[^\n]*путь 42 токенов/);
+  assert.doesNotMatch(story, /Сцена 1 · g1[^\n]*\n\n_кандидат[^\n]*путь \d+ токенов/);
+  assert.equal(stats(tree).pathTokens.counted, 1);
+  assert.equal(stats(tree).pathTokens.max, 42);
 });

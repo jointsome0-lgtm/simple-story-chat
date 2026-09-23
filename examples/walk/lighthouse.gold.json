@@ -29,7 +29,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 1854
     },
     "g2": {
       "parent": null,
@@ -57,7 +58,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 2407
     },
     "g3": {
       "parent": null,
@@ -85,7 +87,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 1400
     },
     "g4": {
       "parent": null,
@@ -113,7 +116,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 1162
     },
     "g5": {
       "parent": "g1",
@@ -142,7 +146,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 2585
     },
     "g6": {
       "parent": "g1",
@@ -170,7 +175,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 2466
     },
     "g7": {
       "parent": "g1",
@@ -198,7 +204,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 2394
     },
     "g8": {
       "parent": "g1",
@@ -226,7 +233,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 3032
     },
     "g9": {
       "parent": "g5",
@@ -255,7 +263,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 3066
     },
     "g10": {
       "parent": "g5",
@@ -283,7 +292,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 3236
     },
     "g11": {
       "parent": "g5",
@@ -311,7 +321,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 3420
     },
     "g12": {
       "parent": "g5",
@@ -339,7 +350,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 3545
     },
     "g13": {
       "parent": "g9",
@@ -368,7 +380,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 3563
     },
     "g14": {
       "parent": "g9",
@@ -396,7 +409,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 4100
     },
     "g15": {
       "parent": "g9",
@@ -424,7 +438,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 3705
     },
     "g16": {
       "parent": "g9",
@@ -452,7 +467,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 3861
     },
     "g17": {
       "parent": "g13",
@@ -550,7 +566,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 4640
     },
     "g18": {
       "parent": "g13",
@@ -579,7 +596,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 4393
     },
     "g19": {
       "parent": "g13",
@@ -608,7 +626,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 3989
     },
     "g20": {
       "parent": "g13",
@@ -637,7 +656,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 3994
     },
     "g21": {
       "parent": "g17",
@@ -697,7 +717,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 5078
     },
     "g22": {
       "parent": "g17",
@@ -726,7 +747,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 5050
     },
     "g23": {
       "parent": "g17",
@@ -755,7 +777,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 6109
     },
     "g24": {
       "parent": "g21",
@@ -935,7 +958,8 @@
           "now": "21:26 … — Молчит, — сказал он. — Три раза вызывал.",
           "before": "21:24 … Марта слушала двигатель … целую минуту, потом ещё одну. … Он поднялся за минуту с небольшим."
         }
-      ]
+      ],
+      "pathTokens": 6092
     },
     "g25": {
       "parent": "g21",
@@ -964,7 +988,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 5592
     },
     "g26": {
       "parent": "g21",
@@ -993,7 +1018,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 6354
     },
     "g27": {
       "parent": "g21",
@@ -1022,7 +1048,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 5703
     },
     "g28": {
       "parent": "g24",
@@ -1082,7 +1109,8 @@
             "codex:gpt-6-sol"
           ]
         }
-      ]
+      ],
+      "pathTokens": 6466
     },
     "g29": {
       "parent": "g24",
@@ -1116,7 +1144,8 @@
             "codex:gpt-6-sol"
           ]
         }
-      ]
+      ],
+      "pathTokens": 7050
     },
     "g30": {
       "parent": "g24",
@@ -1145,7 +1174,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 7099
     },
     "g31": {
       "parent": "g24",
@@ -1174,7 +1204,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 6597
     },
     "g32": {
       "parent": "g28",
@@ -1228,7 +1259,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 7614
     },
     "g33": {
       "parent": "g28",
@@ -1257,7 +1289,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 7544
     },
     "g34": {
       "parent": "g28",
@@ -1286,7 +1319,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 6863
     },
     "g35": {
       "parent": "g28",
@@ -1315,7 +1349,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 6888
     },
     "g36": {
       "parent": "g32",
@@ -1415,7 +1450,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 8570
     },
     "g37": {
       "parent": "g32",
@@ -1444,7 +1480,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 8281
     },
     "g38": {
       "parent": "g32",
@@ -1473,7 +1510,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 8054
     },
     "g39": {
       "parent": "g32",
@@ -1502,7 +1540,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 8531
     },
     "g40": {
       "parent": "g36",
@@ -1578,7 +1617,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 9057
     },
     "g41": {
       "parent": "g36",
@@ -1607,7 +1647,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 9177
     },
     "g42": {
       "parent": "g36",
@@ -1636,7 +1677,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 9707
     },
     "g43": {
       "parent": "g36",
@@ -1665,7 +1707,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 9675
     },
     "g44": {
       "parent": "g40",
@@ -1731,7 +1774,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 9482
     },
     "g45": {
       "parent": "g40",
@@ -1760,7 +1804,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 10239
     },
     "g46": {
       "parent": "g40",
@@ -1789,7 +1834,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 10132
     },
     "g47": {
       "parent": "g40",
@@ -1818,7 +1864,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 9561
     },
     "g48": {
       "parent": "g44",
@@ -1954,7 +2001,8 @@
           "against": []
         }
       ],
-      "seen": 30
+      "seen": 30,
+      "pathTokens": 10658
     },
     "g49": {
       "parent": "g44",
@@ -1983,7 +2031,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 10453
     },
     "g50": {
       "parent": "g44",
@@ -2012,7 +2061,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 9905
     },
     "g51": {
       "parent": "g44",
@@ -2041,7 +2091,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 10062
     },
     "g52": {
       "parent": "g48",
@@ -2103,7 +2154,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 12026
     },
     "g53": {
       "parent": "g48",
@@ -2132,7 +2184,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 11055
     },
     "g54": {
       "parent": "g48",
@@ -2161,7 +2214,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 11059
     },
     "g55": {
       "parent": "g48",
@@ -2190,7 +2244,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 11714
     },
     "g56": {
       "parent": "g52",
@@ -2228,7 +2283,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 12524
     },
     "g57": {
       "parent": "g52",
@@ -2257,7 +2313,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 12444
     },
     "g58": {
       "parent": "g52",
@@ -2286,7 +2343,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 12905
     },
     "g59": {
       "parent": "g52",
@@ -2315,7 +2373,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 13227
     },
     "g60": {
       "parent": "g56",
@@ -2368,7 +2427,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 14287
     },
     "g61": {
       "parent": "g56",
@@ -2397,7 +2457,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 13946
     },
     "g62": {
       "parent": "g56",
@@ -2426,7 +2487,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 13318
     },
     "g63": {
       "parent": "g56",
@@ -2455,7 +2517,8 @@
           "agreed": true,
           "against": []
         }
-      ]
+      ],
+      "pathTokens": 13217
     }
   },
   "rejected": [

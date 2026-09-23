@@ -12,7 +12,8 @@ import type { WalkReport } from './walk-probe.ts';
 import { loadScenario, packScenarios, loadWalk, packWalks } from './scenarios.ts';
 import { panel, summarize, judgeFileName, council, findings, crossFileName, auditFileName, storyAuditFileName } from './walk-panel.ts';
 import type { JudgeFile, CrossFile, CouncilRow, PanelRow, Vote, AuditFile, StoryAuditFile, Contradiction } from './walk-panel.ts';
-import { loadGold, saveGold, pathOf, trunk, addNode, agree, renderGold, goldPaths, trunkTasks, noteLater, noteSeen, promote, stats } from './walk-gold.ts';
+import { loadGold, saveGold, pathOf, pathText, trunk, addNode, agree, renderGold, goldPaths, trunkTasks, noteLater, noteSeen, promote, stats } from './walk-gold.ts';
+import { tokenCounter, TOKEN_RULER } from './tokens.ts';
 import type { Task } from './walk-gold.ts';
 import type { TaskFile } from './walk-step.ts';
 import { channelFor, capsFor, readUsage } from './budget.ts';
@@ -50,7 +51,7 @@ process.umask(0o077);
 const { values, positionals } = parseArgs({ allowPositionals: true, options: { model: { type: 'string' }, models: { type: 'string' },
   scenarios: { type: 'string' }, pack: { type: 'string' }, out: { type: 'string' }, resume: { type: 'string' }, mode: { type: 'string' },
   judge: { type: 'string' }, judges: { type: 'string' }, minutes: { type: 'string' }, cross: { type: 'boolean', default: false },
-  writers: { type: 'string' }, nodes: { type: 'string' }, rechecks: { type: 'string', default: '2' }, exposures: { type: 'string', default: '8' }, depth: { type: 'string' }, attempts: { type: 'string', default: '4' }, branches: { type: 'string', default: '4' }, grow: { type: 'boolean', default: true } }, allowNegative: true });
+  writers: { type: 'string' }, nodes: { type: 'string' }, rechecks: { type: 'string', default: '2' }, exposures: { type: 'string', default: '8' }, 'max-path-tokens': { type: 'string' }, depth: { type: 'string' }, attempts: { type: 'string', default: '4' }, branches: { type: 'string', default: '4' }, grow: { type: 'boolean', default: true } }, allowNegative: true });
 // --pack names a directory of scenarios kept outside the repository, so the one who improves the prompts never reads
 // them. Its scenarios replace the built-in ones; every pack scenario names its authors.
 const pack = values.pack ? resolve(values.pack) : undefined;
@@ -451,7 +452,17 @@ if (positionals[0] === 'watch') {
     record(line); console.log(JSON.stringify(line));
   }
 } else if (positionals[0] === 'gold-stats') {
-  for (const scenario of scenarios) console.log(JSON.stringify({ event: 'gold_stats', scenario, ...stats(loadGold(goldPaths(root, scenario, pack).tree, scenario, walks[scenario].seed)) }));
+  // The ledger's numbers; and, when the tiktoken package is installed, the tokens of every node's path (seed, steps and
+  // scenes from the root) by the eval's ruler, written into the tree for the reading and the dataset to show.
+  const counter = await tokenCounter();
+  for (const scenario of scenarios) {
+    const paths = goldPaths(root, scenario, pack);
+    const walk = walks[scenario];
+    const tree = loadGold(paths.tree, scenario, walk.seed);
+    if (counter) { for (const id of Object.keys(tree.nodes)) tree.nodes[id].pathTokens = counter(pathText(tree, walk, id)); saveGold(paths.tree, tree); writeFileSync(paths.story, renderGold(tree, walk)); }
+    const line = { event: 'gold_stats', scenario, ...stats(tree), ruler: counter ? TOKEN_RULER : null };
+    record(line); console.log(JSON.stringify(line));
+  }
 } else if (positionals[0] === 'gold-read') {
   // A person has read these nodes: the tree records it and the rendering stops marking them.
   const ids = (values.nodes ?? '').split(',').filter(Boolean);
@@ -472,6 +483,13 @@ if (positionals[0] === 'watch') {
   const judges = (values.judges ?? '').split(',').filter(Boolean);
   const minutes = values.minutes ?? '60';
   const branches = Number(values.branches);
+  // --max-path-tokens keeps only the tasks whose prefix, seed and all, fits a weaker model: one limit per run, by the
+  // eval's ruler (local/tokens.ts), so that the models measured under it are comparable with each other.
+  const maxPathTokens = values['max-path-tokens'] === undefined ? undefined : Number(values['max-path-tokens']);
+  if (maxPathTokens !== undefined && (!Number.isInteger(maxPathTokens) || maxPathTokens < 1000)) throw new Error('--max-path-tokens takes a whole number of tokens, at least 1000');
+  const counter = maxPathTokens ? await tokenCounter() : null;
+  if (maxPathTokens && !counter) throw new Error('--max-path-tokens needs the tiktoken package: npm install');
+  const taskInfo: Record<string, { parent: string | null; depth: number; pathTokens: number | null }[]> = {};
   if (!models.length || judges.length < 2 || new Set(judges).size !== judges.length || !/^\d{1,3}$/.test(minutes) || !Number.isInteger(branches) || branches < 0 || branches > 40) throw new Error('Use: eval walk-nodes --models <host>:<id>,... --judges <host>:<id>,... [--scenarios a] [--pack directory] [--branches 0..40] [--no-grow] [--minutes 1..180] [--out file]');
   const out = resolve(values.out ?? join(mkdtempSync(join(tmpdir(), 'simple-chat-nodes-')), 'walk-nodes.json'));
   const work = join(out, '..', 'walk-nodes-runs');
@@ -489,10 +507,14 @@ if (positionals[0] === 'watch') {
     const chain = trunk(tree, walk.steps);
     const pool = Object.keys(tree.nodes).filter(id => !chain.includes(id) && tree.nodes[id].depth < walk.steps.length);
     for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
-    const tasks: Task[] = [...trunkTasks(tree, walk.steps), ...pool.slice(0, branches).map(id => ({ parent: id, step: walk.steps[tree.nodes[id].depth] }))];
-    if (!tasks.length) throw new Error('No gold tree to continue from; grow one with eval walk-gold');
+    const drawn: Task[] = [...trunkTasks(tree, walk.steps), ...pool.slice(0, branches).map(id => ({ parent: id, step: walk.steps[tree.nodes[id].depth] }))];
+    if (!drawn.length) throw new Error('No gold tree to continue from; grow one with eval walk-gold');
+    const tokensOf = (task: Task) => counter ? counter(pathText(tree, walk, task.parent)) : null;
+    const tasks = maxPathTokens ? drawn.filter(task => tokensOf(task)! <= maxPathTokens) : drawn;
+    if (!tasks.length) throw new Error('No gold node fits --max-path-tokens');
+    taskInfo[scenario] = tasks.map(task => ({ parent: task.parent, depth: task.parent ? tree.nodes[task.parent].depth + 1 : 1, pathTokens: tokensOf(task) }));
     const prefixes = tasks.map(task => pathOf(tree, task.parent).map(({ id: _id, ...s }) => s));
-    record({ event: 'nodes_tasks', scenario, tasks: tasks.length, trunk: chain.length, branches: Math.min(branches, pool.length) });
+    record({ event: 'nodes_tasks', scenario, tasks: tasks.length, trunk: chain.length, branches: Math.min(branches, pool.length), skipped: drawn.length - tasks.length, maxPathTokens: maxPathTokens ?? 0 });
     // Models in parallel, each over its tasks in order of depth, so that a task reuses the memory the model built over
     // a shorter prefix of the same path: the compaction request is the same, so the reuse changes nothing but the cost.
     await Promise.all(models.map(async spec => {
@@ -517,11 +539,12 @@ if (positionals[0] === 'watch') {
         reports.push({ texts: prefix.map(s => s.text), directory });
         const { row, dissent, accepted, judged, listed, checksByJudge, missing } = await judgeScene(directory, depth, judges, minutes, spec, { scenario, mode: 'nodes' });
         if (!missing.length) { noteLater(tree, pathOf(tree, task.parent).map(s => s.id), listed, checksByJudge, depth, spec); noteSeen(tree, pathOf(tree, task.parent).map(s => s.id)); }
-        rows.push({ parent: task.parent, depth, kind, verdict: row.verdict, dissent, findings: row.findings, confirmed: row.confirmed, disputed: row.disputed, accepted, judged, truncated: scene.truncated, directory });
+        rows.push({ parent: task.parent, depth, kind, verdict: row.verdict, dissent, findings: row.findings, confirmed: row.confirmed, disputed: row.disputed, accepted, judged, truncated: scene.truncated, directory, ...(missing.length ? { verdict: 'unjudged' as const, accepted: false, error: 'judge_missing' } : {}) });
         record({ event: 'node_judged', scenario, depth, kind, verdict: row.verdict, dissent, findings: row.findings, confirmed: row.confirmed, disputed: row.disputed, accepted, model: spec });
         console.log(JSON.stringify({ event: 'node_judged', scenario, model: spec, depth, kind, verdict: row.verdict, dissent, findings: row.findings, confirmed: row.confirmed, disputed: row.disputed, accepted }));
       }
-      const decided = rows.filter(r => r.verdict !== 'split').length;
+      // A scene with a silent judge is nobody's verdict: it is reported as failed and leaves the denominator.
+      const decided = rows.filter(r => r.verdict !== 'split' && r.error !== 'judge_missing').length;
       (results[spec] ??= {})[scenario] = { rows, consistent: rows.filter(r => r.verdict === 'consistent').length, split: rows.length - decided, decided,
         byDepth: Object.fromEntries(rows.filter(r => !r.parent || chain.includes(r.parent)).map(r => [r.depth, r.verdict])) };
     }));
@@ -547,7 +570,8 @@ if (positionals[0] === 'watch') {
     return decided ? scenarios.reduce((sum, scenario) => sum + results[spec][scenario].consistent, 0) / decided : 0;
   };
   const score = { nodes: Math.min(...models.map(share)) };
-  const summary = { at: new Date().toISOString(), kind: 'walk-nodes', scenarios, ...(pack ? { pack: true } : {}), judges, minutes: Number(minutes), branches, grow: values.grow, score,
+  const summary = { at: new Date().toISOString(), kind: 'walk-nodes', scenarios, ...(pack ? { pack: true } : {}), judges, minutes: Number(minutes), branches, grow: values.grow,
+    maxPathTokens: maxPathTokens ?? null, ruler: counter ? TOKEN_RULER : null, tasks: taskInfo, score,
     models: Object.fromEntries(models.map(spec => [spec, { nodes: share(spec), cells: results[spec] }])) };
   writeFileSync(out, JSON.stringify(summary, null, 2));
   record({ event: 'eval', out, score });
