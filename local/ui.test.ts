@@ -5,8 +5,10 @@ import type { ContextStats } from './context.ts';
 import type { Screen } from './telegram.ts';
 import type { GpuInfo, ModelInfo, RenderDetails } from './ui.ts';
 import { render, renderContext, scenePrefix, sceneKeyboard } from './ui.ts';
+import { PRESETS } from './picture-style.ts';
+import { texts } from './text.ts';
 
-const ACTION = /^(view:.+|new-seed|save-seed:[^:]+|start:[^:]+|use:[^:]+:[^:]+|fork:[^:]+:[^:]+|remove-seed:[^:]+|remove-branch:[^:]+:[^:]+|continue|cancel|last|compact|gpu:start|gpu:pause|lang:[a-z]{2})$/;
+const ACTION = /^(view:.+|new-seed|save-seed:[^:]+|start:[^:]+|use:[^:]+:[^:]+|fork:[^:]+:[^:]+|remove-seed:[^:]+|remove-branch:[^:]+:[^:]+|continue|cancel|last|compact|gpu:start|gpu:pause|lang:[a-z]{2}|style:[a-z0-9]+|style-new|style-edit:y\d+|remove-style:y\d+|style-sample:[a-z0-9]+)$/;
 
 function node(id: string, parent: string | null, time: string, body: string, input = 'Ввод'): SceneNode {
   return { id, parent, input, text: `${time}\n\n${body}`, time, truncated: false, delivery: 'sent' };
@@ -65,7 +67,7 @@ function checkPayload(message: Screen & { parse_mode?: unknown }, route: string)
 }
 
 // Renders every screen reachable through view: buttons.
-function crawl(state: Library) {
+function crawl(state: Library, details: RenderDetails = {}) {
   const seen = new Set<string>();
   const queue = ['home', 'new-seed'];
   const all: string[] = [];
@@ -73,7 +75,7 @@ function crawl(state: Library) {
     const route = queue.shift()!;
     if (seen.has(route)) continue;
     seen.add(route);
-    const message = render(state, route);
+    const message = render(state, route, details);
     checkPayload(message, route);
     for (const data of callbacks(message)) {
       all.push(data);
@@ -91,6 +93,92 @@ test('every reachable screen is a valid payload', () => {
   for (const action of ['continue', 'last', 'new-seed', 'start:s1', 'use:h2:b8', 'fork:h2:c5', 'remove-seed:s1', 'remove-branch:h2:b3', 'compact']) {
     assert.ok(all.includes(action), action);
   }
+});
+
+// A card's prompt: the text under its `pre` entity.
+function preText(message: Screen) {
+  const entity = message.entities?.find(one => one.type === 'pre');
+  return entity ? message.text.slice(entity.offset, entity.offset + entity.length) : null;
+}
+
+test('picture styles: a picker of cards, the prompt of each to copy, a library of the reader\'s own, and samples only on request', () => {
+  const state = fixture();
+  const semi = { pictures: true, standardStyle: PRESETS.semi };
+  const presets = Object.keys(PRESETS);
+  // The way in exists only for a reader whose scenes are drawn.
+  assert.ok(callbacks(render(state, 'home', semi)).includes('view:style'));
+  assert.ok(!callbacks(render(state, 'home')).includes('view:style'));
+  const { routes, callbacks: all } = crawl(state, semi);
+  for (const route of ['style', ...presets.map(key => `style:${key}`)]) assert.ok(routes.has(route), route);
+  for (const action of ['style-new', 'style:film', 'style-sample:semi']) assert.ok(all.includes(action), action);
+
+  // The standard line is the semi preset here: it has no button of its own, and semi is marked as the current style.
+  const picker = render(state, 'style', semi);
+  assert.deepEqual(callbacks(picker), [...presets.map(key => `view:style:${key}`), 'style-new', 'view:home']);
+  assert.match(picker.text, /Сейчас: 🖌 Полуреализм/);
+  assert.deepEqual(picker.reply_markup!.inline_keyboard.flat().filter(button => button.text.startsWith('✅ ')).map(button => button.callback_data), ['view:style:semi']);
+  // A standard line of the owner's own has a button, and is the current style of a reader who chose nothing.
+  const custom = render(state, 'style', { pictures: true, standardStyle: 'An owner line.' });
+  assert.deepEqual(callbacks(custom).slice(0, 2), ['view:style:standard', 'view:style:semi']);
+  assert.equal(preText(render(state, 'style:standard', { pictures: true, standardStyle: 'An owner line.' })), 'An owner line.');
+  assert.deepEqual(callbacks(render(state, 'style:standard', semi)), callbacks(picker));
+
+  // A card: the whole prompt in a pre block, to be copied; the sample is a button, and nothing is drawn by opening it.
+  const film = render(state, 'style:film', semi);
+  assert.equal(preText(film), PRESETS.film);
+  assert.deepEqual(callbacks(film), ['style:film', 'style-sample:film', 'view:style']);
+  assert.deepEqual(callbacks(render(state, 'style:semi', semi)), ['style-sample:semi', 'view:style']);
+  assert.match(render(state, 'style:semi', semi).text, /✅ Картинки рисуются в этом стиле/);
+  // Without pictures a style may still be chosen, but no sample is offered.
+  const off = render(state, 'style:film');
+  assert.deepEqual(callbacks(off), ['style:film', 'view:style']);
+  assert.match(off.text, /пока не включены/);
+
+  // A style of the reader's own: its line, then the sentences the bot adds, and the ways to change or delete it.
+  state.pictureStyles = { y7: { id: 'y7', name: 'Масло при свечах', line: 'Oil painting, warm candlelight' } };
+  state.pictureStyle = 'y7';
+  const own = render(state, 'style:y7', semi);
+  checkPayload(own, 'style:y7');
+  assert.equal(preText(own), 'Oil painting, warm candlelight. Adults with natural adult proportions and faces. No captions, logos or watermarks.');
+  assert.match(own.text, /^✍️ Масло при свечах\n✅/);
+  assert.match(own.text, /Концовку промпта бот добавляет/);
+  assert.deepEqual(callbacks(own), ['style-sample:y7', 'style-edit:y7', 'view:delete-style:y7', 'view:style']);
+  assert.deepEqual(callbacks(render(state, 'style', semi)).slice(-3), ['view:style:y7', 'style-new', 'view:home']);
+  assert.match(render(state, 'style', semi).text, /Сейчас: ✍️ Масло при свечах/);
+
+  // Deleting the chosen style says where the pictures go next.
+  const remove = render(state, 'delete-style:y7', semi);
+  assert.match(remove.text, /Удалить стиль «Масло при свечах»\?/);
+  assert.match(remove.text, /в стиле «🖌 Полуреализм»/);
+  assert.deepEqual(callbacks(remove), ['remove-style:y7', 'view:style:y7']);
+  assert.deepEqual(callbacks(render(state, 'delete-style:y8', semi)), callbacks(render(state, 'style', semi)));
+
+  // Writing a style: only while the bot waits for one, a new one with a copyable example, an edit with the line as it is.
+  assert.deepEqual(callbacks(render(state, 'style-input', semi)), callbacks(render(state, 'style', semi)));
+  state.ui = { input: 'style' };
+  const fresh = render(state, 'style-input', semi);
+  checkPayload(fresh, 'style-input new');
+  assert.equal(preText(fresh), texts('ru').pictureStyle.exampleText);
+  assert.match(fresh.text, /до 400 знаков/);
+  assert.deepEqual(callbacks(fresh), ['view:style']);
+  state.ui = { input: 'style', styleId: 'y7' };
+  const edit = render(state, 'style-input', semi);
+  assert.equal(preText(edit), 'Oil painting, warm candlelight');
+  assert.deepEqual(callbacks(edit), ['view:style:y7']);
+  state.ui = null;
+
+  // The caption of a sample offers the style unless it is the chosen one.
+  assert.deepEqual(render(state, 'sample:film', semi), { text: 'Пример стиля: 🎬 Кинокадр',
+    reply_markup: { inline_keyboard: [[{ text: '✅ Рисовать в этом стиле', callback_data: 'style:film' }], [{ text: '↩️ К стилям', callback_data: 'view:style' }]] } });
+  assert.deepEqual(callbacks(render(state, 'sample:y7', semi)), ['view:style']);
+
+  // A full library offers no new style; stored entries that are not styles are left out.
+  state.pictureStyles = Object.fromEntries(Array.from({ length: 10 }, (_, n) => [`y${n + 1}`, { id: `y${n + 1}`, name: `Стиль ${n + 1}`, line: 'Ink.' }]));
+  assert.ok(!callbacks(render(state, 'style', semi)).includes('style-new'));
+  state.pictureStyles = { y1: { id: 'y1', name: ' ', line: 'Ink.' }, x2: { id: 'x2', name: 'X', line: 'Ink.' } };
+  state.pictureStyle = 'y1';
+  assert.deepEqual(callbacks(render(state, 'style', semi)), [...presets.map(key => `view:style:${key}`), 'style-new', 'view:home']);
+  assert.deepEqual(callbacks(render(state, 'style:x2', semi)), callbacks(render(state, 'style', semi)));
 });
 
 test('empty library guides to seed creation', () => {

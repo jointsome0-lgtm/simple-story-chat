@@ -41,12 +41,21 @@ export type Job = {
 // keep those fallbacks for older or incomplete v1 data.
 export type SeedDraft = { input: 'seed'; draftId: string; parts: string[]; confirm?: undefined };
 export type DeleteConfirmation = { confirm: string; input?: undefined };
+// A reader writing a picture style of their own (local/picture-style.ts): their next text message is the style, not a
+// move. With `styleId` it is a new version of that style; without it, a new style.
+export type StyleInput = { input: 'style'; styleId?: string; confirm?: undefined };
+// One of the reader's own picture styles: the name on its button and the line that ends the prompt.
+export type OwnStyle = { id: string; name: string; line: string };
 // Interface language of the bot, never of the stories. A library without it predates the choice and is shown in Russian.
 export type Language = 'ru' | 'en' | 'zh' | 'ko' | 'ja';
 export type Library = {
   version: 1; seq: number; seeds: Record<string, Seed>; stories: Record<string, Story>;
-  active: { storyId: string; branchId: string } | null; job: Job | null; ui: SeedDraft | DeleteConfirmation | null; seen: number[];
+  active: { storyId: string; branchId: string } | null; job: Job | null; ui: SeedDraft | DeleteConfirmation | StyleInput | null; seen: number[];
   interrupted?: boolean; language?: Language;
+  // The look of this reader's pictures: a preset's key or the id of one of their own styles, and those styles. Only
+  // the local bot reads them (local/picture-style.ts), and only for a reader it draws for; without a choice the bot's
+  // own style is used.
+  pictureStyle?: string; pictureStyles?: Record<string, OwnStyle>;
 };
 // Names the library gives to what it creates. They are stored as written and never translated afterwards.
 export type Labels = { firstBranch: string; seedCheckpoint: string; forkBranch: (from: string) => string; forkCheckpoint: string; afterCompaction: string };

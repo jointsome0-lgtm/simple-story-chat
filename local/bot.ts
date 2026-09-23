@@ -18,10 +18,12 @@ import { createProgress } from './progress.ts';
 import { renderCompaction } from './compact-view.ts';
 import type { CompactionStatus } from './compact-view.ts';
 import type { GpuController } from './gpu.ts';
-import type { Illustrator, PictureRequest } from './picture.ts';
+import type { Illustrator, PictureRequest, SampleRequest } from './picture.ts';
 import type { Log } from './model-error.ts';
 import { errorCode, member, safeErrorDetails } from './model-error.ts';
 import type { GenerationResult, Provider } from './model.ts';
+import { STYLE } from './illustrate.ts';
+import { OWN_STYLE_CHARS, OWN_STYLES_MAX, choiceOf, lineOf, ownStyle, ownStyleInput, ownStyles, styleKey, styleName } from './picture-style.ts';
 import type { Store } from './store.ts';
 import type { GpuInfo, ModelInfo, RenderDetails } from './ui.ts';
 import { isRegistered, langFromTelegram, texts } from './text.ts';
@@ -52,6 +54,8 @@ type FileInput = { draftId: string; text: string; error?: undefined } | { error:
 type Plan = {
   screen?: Screen; cancel?: boolean; gpuAction?: string; modelStatus?: boolean;
   savedText?: { text: string; modelInfo: SceneNode['modelInfo'] }; job?: Job;
+  // A sample of a style the reader asked for: what to draw and what to say under it (local/picture.ts `sample`).
+  sample?: Pick<SampleRequest, 'storyId' | 'branchId' | 'nodeId' | 'line' | 'pictureStyle' | 'caption'>;
 };
 // One reader's turn, for as long as it can still be cancelled. What it leaves behind — a picture being stopped on
 // the other card — outlives the entry and is awaited through `inFlight` instead.
@@ -72,6 +76,9 @@ const errorText = (t: Messages, error: UserError) =>
 export function createBot({ store, api, provider, gpu, illustrator, readSeedFile, render: renderUi, scenePrefix = () => '', sceneKeyboard, allowedUsers, ownerId = '', maxOutputTokens,
   contextTokens = 65536, compactAtTokens = 54000, keepScenes = 4, memoryMode = 'plain', repairCoverage = false, model = 'unknown', providerName = 'claude-code', log = () => {} }: BotOptions) {
   const running = new Map<string, Running>();
+  // One sample of a style at a time per reader (local/picture.ts `sample`). A move in the story, /cancel and the
+  // bot's stop end it: the scene's own picture goes first, and a sample is only ever a look.
+  const sampling = new Map<string, AbortController>();
   // Every turn's work, whether or not its entry is still the reader's current one: a replaced turn is aborted, and
   // what it is unwinding (the picture it had on the other card) still has to finish before the bot may stop.
   const inFlight = new Set<Promise<unknown>>();
@@ -92,10 +99,10 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
   const stats = (state: Library, selection?: ContextSelection) => {
     try { return contextStats(state, contextConfig, selection); } catch { return null; }
   };
-  const screen = (state: Library, route: string) => {
+  const screen = (state: Library, route: string, details: RenderDetails = {}) => {
     const [name, storyId, checkpointId] = route.split(':');
     const selection = checkpointId ? { storyId, checkpointId } : undefined;
-    return render(state, route, { contextStats: name === 'context' || name === 'checkpoint' ? stats(state, selection) : undefined });
+    return render(state, route, { ...details, contextStats: name === 'context' || name === 'checkpoint' ? stats(state, selection) : undefined });
   };
   // A row about one user's request says whether that user is the owner, never who it is. Only the owner allowed
   // reading the owner's own stories for debugging, so a row without `owner` points at a library that stays closed.
@@ -111,7 +118,9 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     const node = story.nodes[branch.head as string];
     return { text: node?.text ?? `${seed.startTime}\n\n${seed.text}`, modelInfo: node?.modelInfo };
   };
-  function prepare(state: Library, update: Update, fileInput: FileInput | undefined): Plan {
+  // `pictureInfo`: whether this reader's scenes are illustrated, so that their menu offers the picture style, and the
+  // bot's own style line (local/ui.ts `RenderDetails`).
+  function prepare(state: Library, update: Update, fileInput: FileInput | undefined, pictureInfo: RenderDetails): Plan {
     let action = update.callback_query?.data;
     const t = texts(state.language);
     if (fileInput?.error) throw fileInput.error;
@@ -123,7 +132,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       const commands: Record<string, string> = {
         '/start': 'view:home', '/menu': 'view:home', '/seeds': 'view:seeds:0',
         '/new': 'new-seed', '/continue': 'continue', '/cancel': 'cancel', '/last': 'last',
-        '/context': 'view:context', '/compact': 'compact', '/model': 'view:model', '/language': 'view:language',
+        '/context': 'view:context', '/compact': 'compact', '/model': 'view:model', '/language': 'view:language', '/style': 'view:style',
         '/gpu': 'view:model', '/gpu_pause': 'gpu:pause', '/gpu_start': 'gpu:start',
         '/checkpoints': current ? `view:checkpoints:${current.storyId}:${current.branchId}:0` : 'view:seeds:0',
       };
@@ -131,11 +140,15 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       action = command !== undefined && Object.hasOwn(commands, command) ? commands[command] : undefined;
       if (!action && text?.startsWith('/') && state.ui?.input !== 'seed') return { screen: { text: t.notices.unknownCommand } };
     }
+    // Writing a picture style ends with any button or command, so that no later message is kept as a style by
+    // surprise (/last or /model would otherwise leave the next move to be taken for one).
+    if (action && state.ui?.input === 'style') state.ui = null;
     if (action === 'cancel') {
       const hadJob = !!state.job;
       state.job = null;
       state.ui = null;
-      return { cancel: true, screen: { ...render(state, 'home'), text: (hadJob ? t.notices.cancelled + '\n\n' : '') + render(state, 'home').text } };
+      const menu = render(state, 'home', pictureInfo);
+      return { cancel: true, screen: { ...menu, text: (hadJob ? t.notices.cancelled + '\n\n' : '') + menu.text } };
     }
     // Power controls remain available during a seed draft or a model job.
     if (action === 'gpu:pause' || action === 'gpu:start') return { gpuAction: action.slice(4) };
@@ -148,7 +161,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       const lang = action.slice(5);
       if (!isRegistered(lang)) throw refuse(t, 'staleButton');
       setLanguage(state, lang);
-      return { screen: render(state, draft ? 'new-seed' : 'home') };
+      return { screen: render(state, draft ? 'new-seed' : 'home', pictureInfo) };
     }
     // A paste may arrive as many ordinary Telegram messages. Keep the draft
     // open until an explicit, draft-specific save; navigation must not turn
@@ -180,8 +193,70 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     if (action?.startsWith('view:')) {
       const route = action.slice(5);
       state.ui = route.startsWith('delete-seed:') ? { confirm: route.replace('delete-seed:', 'remove-seed:') }
-        : route.startsWith('delete-branch:') ? { confirm: route.replace('delete-branch:', 'remove-branch:') } : null;
-      return { screen: screen(state, route) };
+        : route.startsWith('delete-branch:') ? { confirm: route.replace('delete-branch:', 'remove-branch:') }
+        : route.startsWith('delete-style:') ? { confirm: route.replace('delete-style:', 'remove-style:') } : null;
+      return { screen: screen(state, route, pictureInfo) };
+    }
+    // The picture style is the reader's own setting (local/picture-style.ts). It changes at any moment, also while a
+    // scene is being written, and only the pictures still to come follow it.
+    const standardStyle = pictureInfo.standardStyle ?? STYLE;
+    if (action?.startsWith('style:')) {
+      const key = action.slice(6);
+      if (lineOf(state, key, standardStyle) === null) throw refuse(t, 'staleButton');
+      if (key === 'standard') delete state.pictureStyle; else state.pictureStyle = key;
+      state.ui = null;
+      return { screen: render(state, `style:${styleKey(state, standardStyle)}`, pictureInfo) };
+    }
+    if (action === 'style-new') {
+      if (ownStyles(state).length >= OWN_STYLES_MAX) throw refuse(t, 'stylesFull');
+      state.ui = { input: 'style' };
+      return { screen: render(state, 'style-input', pictureInfo) };
+    }
+    if (action?.startsWith('style-edit:')) {
+      const own = ownStyle(state, action.slice(11));
+      if (!own) throw refuse(t, 'staleButton');
+      state.ui = { input: 'style', styleId: own.id };
+      return { screen: render(state, 'style-input', pictureInfo) };
+    }
+    if (action?.startsWith('remove-style:')) {
+      if (state.ui?.confirm !== action) throw refuse(t, 'staleConfirmation');
+      const key = action.slice(13);
+      if (!ownStyle(state, key)) throw refuse(t, 'staleButton');
+      const kept = { ...state.pictureStyles };
+      delete kept[key];
+      state.pictureStyles = kept;
+      if (state.pictureStyle === key) delete state.pictureStyle;
+      state.ui = null;
+      return { screen: render(state, 'style', pictureInfo) };
+    }
+    // A sample is the reader's last scene drawn once more in the style they are looking at, on request only.
+    if (action?.startsWith('style-sample:')) {
+      const key = action.slice(13);
+      const line = lineOf(state, key, standardStyle);
+      if (line === null) throw refuse(t, 'staleButton');
+      if (!pictureInfo.pictures) throw refuse(t, 'sampleOff');
+      if (state.job) throw refuse(t, 'sampleBusy');
+      const where = state.active;
+      const nodeId = where ? state.stories[where.storyId]?.branches[where.branchId]?.head : null;
+      if (!where || !nodeId) throw refuse(t, 'sampleNoScene');
+      return { sample: { storyId: where.storyId, branchId: where.branchId, nodeId, line, pictureStyle: choiceOf(key),
+        caption: render(state, `sample:${key}`, pictureInfo) } };
+    }
+    // While a style is being written, text is the style, never a move in the story; buttons and commands leave. The
+    // first line of a message of several is the style's name.
+    if (state.ui?.input === 'style' && !action) {
+      const sent = ownStyleInput(text ?? '');
+      if (!sent) throw refuse(t, 'styleNeedsText');
+      if ([...sent.line].length > OWN_STYLE_CHARS) throw refuse(t, 'styleTooLong');
+      const editing = state.ui.styleId === undefined ? undefined : ownStyle(state, state.ui.styleId);
+      if (state.ui.styleId !== undefined && !editing) { state.ui = null; throw refuse(t, 'staleButton'); }
+      if (!editing && ownStyles(state).length >= OWN_STYLES_MAX) { state.ui = null; throw refuse(t, 'stylesFull'); }
+      const styleId = editing?.id ?? id(state, 'y');
+      state.pictureStyles = { ...state.pictureStyles,
+        [styleId]: { id: styleId, name: styleName(sent.name ?? editing?.name ?? sent.line), line: sent.line } };
+      if (!editing) state.pictureStyle = styleId;
+      state.ui = null;
+      return { screen: render(state, `style:${styleId}`, pictureInfo) };
     }
     if (action === 'last') return { savedText: last(state) };
     if (action === 'new-seed') {
@@ -235,7 +310,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     } else if (action === 'continue') input = continueInput(state, active(state).story.id);
     else if (action) throw refuse(t, 'staleButton');
     if (!input) return { screen: { text: t.notices.textOnly } };
-    if (!state.active) return { screen: render(state, 'home') };
+    if (!state.active) return { screen: render(state, 'home', pictureInfo) };
     requireGpu(t);
     state.ui = null;
     state.interrupted = false;
@@ -447,7 +522,8 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         // already exists keeps what it has; without a stored language it stays Russian (text.ts).
         if (state.language === undefined && !state.seen.length && !state.seq) setLanguage(state, langFromTelegram(from?.language_code));
         state.seen = [...state.seen.slice(-511), update.update_id];
-        try { return prepare(state, update, fileInput); }
+        const pictureInfo = { pictures: illustrator?.enabledFor(userId) ?? false, standardStyle: illustrator?.standardStyle };
+        try { return prepare(state, update, fileInput, pictureInfo); }
         catch (error) {
           if (error instanceof UserError) return { screen: { text: errorText(texts(state.language), error) } };
           throw error;
@@ -479,13 +555,29 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         }
         await safeSend(chat, render(store.read(userId), 'model'), log);
       }
-      if (plan.cancel) running.get(userId)?.controller.abort();
+      if (plan.cancel) { running.get(userId)?.controller.abort(); sampling.get(userId)?.abort(); }
       if (plan.savedText) {
         const snapshot = store.read(userId);
         try { await chat.final(scenePrefix(stats(snapshot), plan.savedText.modelInfo, snapshot.language) + plan.savedText.text, sceneKeyboard(snapshot)); }
         catch (error) { log('saved_scene_delivery_unconfirmed', errorCode(error)); }
       }
       if (plan.screen) await safeSend(chat, plan.screen, log);
+      if (plan.sample && illustrator) {
+        const t = texts(store.read(userId).language);
+        if (sampling.has(userId)) await safeSend(chat, { text: t.errors.sampleInFlight }, log);
+        else {
+          const stop = new AbortController();
+          sampling.set(userId, stop);
+          const task: Promise<unknown> = illustrator.sample({ ...plan.sample, userId, chat, signal: stop.signal, log,
+            status: t.pictureStyle.drawingSample, hold: () => gpu?.acquire() })
+            .catch(error => log('turn_task_failed', errorCode(error)))
+            .finally(() => {
+              if (sampling.get(userId) === stop) sampling.delete(userId);
+              inFlight.delete(task);
+            });
+          inFlight.add(task);
+        }
+      }
       if (plan.job) {
         let releaseGpu: (() => void) | undefined;
         try { releaseGpu = gpu?.acquire(); }
@@ -507,6 +599,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         // picture: the turn behind it may still be delivering a message, and its own controller stands for a scene
         // the reader was never given, which this is not.
         earlier?.picture.abort();
+        sampling.get(userId)?.abort();
         // The picture is made after the turn's model work is over and its GPU hold released: the second call takes
         // a slot again, and the drawing takes none at all, so neither may sit inside the turn.
         const task: Promise<unknown> = generate(userId, chat, plan.job, controller, releaseGpu, picture.signal)
@@ -526,6 +619,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     async stop() {
       for (const entry of prepared.values()) entry.stop();
       for (const entry of running.values()) entry.controller.abort();
+      for (const stop of sampling.values()) stop.abort();
       await this.idle();
     },
   };

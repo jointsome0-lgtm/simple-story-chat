@@ -39,11 +39,12 @@ export function langFromTelegram(code: string | undefined): Lang {
   return primary === 'ru' || primary === 'zh' || primary === 'ko' || primary === 'ja' ? primary : 'en';
 }
 
-const COMMANDS = ['menu', 'seeds', 'new', 'checkpoints', 'continue', 'last', 'context', 'compact', 'model', 'language', 'gpu_pause', 'gpu_start', 'cancel'] as const;
+const COMMANDS = ['menu', 'seeds', 'new', 'checkpoints', 'continue', 'last', 'context', 'compact', 'model', 'language', 'style', 'gpu_pause', 'gpu_start', 'cancel'] as const;
 
-// Payloads for setMyCommands: the default list in English, then one list per registered language.
-export function commandSets(gpu: boolean): { language_code?: Lang; commands: { command: string; description: string }[] }[] {
-  const list = (t: Messages) => COMMANDS.filter(command => gpu || !command.startsWith('gpu_'))
+// Payloads for setMyCommands: the default list in English, then one list per registered language. The GPU commands
+// need a GPU, and /style needs pictures.
+export function commandSets(gpu: boolean, pictures = false): { language_code?: Lang; commands: { command: string; description: string }[] }[] {
+  const list = (t: Messages) => COMMANDS.filter(command => (gpu || !command.startsWith('gpu_')) && (pictures || command !== 'style'))
     .map(command => ({ command, description: t.commands[command] }));
   return [{ commands: list(en) }, ...REGISTERED.map(lang => ({ language_code: lang, commands: list(texts(lang)) }))];
 }

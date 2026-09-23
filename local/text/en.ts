@@ -51,6 +51,7 @@ export const en: Messages = {
     previous: '⬅️ Previous',
     next: 'Next ➡️',
     keep: '↩️ Keep it',
+    pictureStyle: '🎨 Picture style',
   },
 
   common: {
@@ -103,6 +104,46 @@ export const en: Messages = {
   language: {
     title: '🌐 Interface language',
     note: 'This changes only the menus and messages of the bot. The language of a story comes from its seed and from what you write.',
+  },
+
+  pictureStyle: {
+    title: '🎨 Picture style',
+    current: name => `Now: ${name}`,
+    note: 'Tap a style to see its prompt, choose it or ask for a sample. A style changes only the pictures still to come; the ones already drawn stay as they are. Characters keep their looks: hair, clothes, features.',
+    off: 'Pictures for your scenes are not switched on yet. Your choice is kept and applies once they are.',
+    standard: '⚙️ Standard',
+    presets: {
+      semi: '🖌 Semi-realism',
+      novel: '📖 Visual novel',
+      film: '🎬 Film still',
+      graphic: '🖋 Graphic novel',
+      watercolor: '💧 Watercolor',
+    },
+    own: name => `✍️ ${name}`,
+    add: '➕ New style',
+    chosen: '✅ Your pictures are drawn in this style.',
+    prompt: 'The style’s prompt (tap to copy):',
+    tailNote: 'The bot adds the ending of the prompt to your text itself: people stay adults, and the picture has no lettering.',
+    choose: '✅ Draw in this style',
+    sample: '🖼 Sample on the last scene',
+    edit: '✏️ Edit',
+    remove: '🗑 Delete',
+    back: '↩️ Back to styles',
+    removeTitle: quotedName => `🗑 Delete the style ${quotedName}?`,
+    removeChosen: name => `Your pictures are drawn in it now. Once it is deleted, they will be drawn in ${name}.`,
+    removeYes: '🗑 Yes, delete',
+    removeNo: '↩️ Keep it',
+    newTitle: '➕ New picture style',
+    editTitle: quotedName => `✏️ Style ${quotedName}`,
+    inputNote: (max, nameMax) => `Send one message saying how to draw: technique, colors, light, mood, up to ${max} characters. You may put a name on the first line, up to ${nameMax} characters. Leave out the plot and the characters: they come from the scene. The picture model understands English best.`,
+    editNote: max => `Send the new text in one message, up to ${max} characters. You may put a new name on the first line; otherwise the old one stays.`,
+    example: 'For example:',
+    exampleText: 'Oil by candlelight\nOil painting with visible impasto brushstrokes, warm candlelight and deep shadows.',
+    copyHint: 'You can copy the prompt of any style from its card and change it.',
+    nowText: 'Now:',
+    backToStyle: '↩️ Back to the style',
+    sampleCaption: name => `Style sample: ${name}`,
+    drawingSample: '🎨 Drawing a sample…',
   },
 
   model: {
@@ -434,6 +475,7 @@ export const en: Messages = {
     gpuPaused: 'The GPU has gone on pause. Open /model and start it, then send your action again.',
     drawing: '🎨 Drawing the illustration…',
     pictureFailed: 'The illustration did not work out. The scene is saved.',
+    sampleFailed: 'The sample did not work out. Try again a little later.',
   },
 
   errors: {
@@ -464,6 +506,13 @@ export const en: Messages = {
     fileType: 'Send a .txt or .md text file in UTF-8. PDF and DOCX are not supported yet.',
     fileEncoding: 'Could not read the file as UTF-8. Save it as UTF-8 and send it again; the draft is unchanged.',
     fileBinary: 'The file must be a non-empty .txt or .md text file with no binary data. The draft is unchanged.',
+    styleNeedsText: 'Send the style as text, in one message. To leave without a change, tap “↩️” or send /cancel.',
+    styleTooLong: 'Too long: a style has to fit in 400 characters. Shorten it and send it again.',
+    stylesFull: 'Your library already has 10 styles of your own. To add a new one, delete one of them.',
+    sampleOff: 'Pictures for your scenes are not switched on, so a sample cannot be drawn.',
+    sampleBusy: 'The scene is still being written. Ask for a sample once it arrives.',
+    sampleNoScene: 'A sample is drawn from your last scene. Start a story, and after its first scene you can ask for one.',
+    sampleInFlight: 'Already drawing a sample. You can ask for the next one once it arrives.',
   },
 
   labels: {
@@ -487,6 +536,7 @@ export const en: Messages = {
     compact: 'Compact early scenes into memory now',
     model: 'Current model and connection',
     language: 'Interface language',
+    style: 'Picture style for the scenes',
     gpu_pause: 'Pause the GPU once work is finished',
     gpu_start: 'Start the rented GPU',
     cancel: 'Cancel input or generation',

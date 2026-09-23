@@ -75,6 +75,8 @@ export const ru = {
     next: 'Следующие ➡️',
     // Answer «no» on both delete confirmations.
     keep: '↩️ Не удалять',
+    // In the menu of a reader whose scenes are illustrated.
+    pictureStyle: '🎨 Стиль картинок',
   },
 
   // Marks and notes shared by several screens.
@@ -139,6 +141,56 @@ export const ru = {
   language: {
     title: '🌐 Язык интерфейса',
     note: 'Меняется только язык меню и сообщений бота. Язык историй задают сид и твои сообщения.',
+  },
+
+  // The look of the pictures under the scenes (local/picture-style.ts): the picker, a card for every style with its
+  // prompt, and the reader's own styles. Style names are buttons: keep them short.
+  pictureStyle: {
+    title: '🎨 Стиль картинок',
+    // `name` is the chosen style as its button names it.
+    current: (name: string) => `Сейчас: ${name}`,
+    note: 'Нажми на стиль, чтобы увидеть его промпт, выбрать его или попросить пример. Стиль меняет только следующие картинки, уже нарисованные останутся как были. Персонажи сохранят свою внешность: волосы, одежду, приметы.',
+    off: 'Картинки к твоим сценам пока не включены. Выбор сохранится и заработает, когда их включат.',
+    standard: '⚙️ Стандартный',
+    presets: {
+      semi: '🖌 Полуреализм',
+      novel: '📖 Визуальная новелла',
+      film: '🎬 Кинокадр',
+      graphic: '🖋 Графический роман',
+      watercolor: '💧 Акварель',
+    },
+    // `name` is the name the reader gave a style of their own, already shortened.
+    own: (name: string) => `✍️ ${name}`,
+    add: '➕ Новый стиль',
+    // A style's card. The prompt under `prompt` stays in English, as the picture model reads it; `tailNote` is shown
+    // under the reader's own styles, whose last sentence is OWN_STYLE_TAIL in local/picture-style.ts.
+    chosen: '✅ Картинки рисуются в этом стиле.',
+    prompt: 'Промпт стиля (нажми, чтобы скопировать):',
+    tailNote: 'Концовку промпта бот добавляет к твоему тексту сам: люди остаются взрослыми, а на картинке нет надписей.',
+    choose: '✅ Рисовать в этом стиле',
+    sample: '🖼 Пример на последней сцене',
+    edit: '✏️ Изменить',
+    remove: '🗑 Удалить',
+    back: '↩️ К стилям',
+    // `quotedName` is already wrapped by `format.quote`; `name` is the style the pictures fall back to, quoted too.
+    removeTitle: (quotedName: string) => `🗑 Удалить стиль ${quotedName}?`,
+    removeChosen: (name: string) => `Сейчас картинки рисуются в нём. После удаления будут рисоваться в стиле ${name}.`,
+    removeYes: '🗑 Да, удалить',
+    removeNo: '↩️ Оставить',
+    // While the reader writes a style. `max` and `nameMax` are limits in characters.
+    newTitle: '➕ Новый стиль картинок',
+    editTitle: (quotedName: string) => `✏️ Стиль ${quotedName}`,
+    inputNote: (max: number, nameMax: number) => `Пришли одним сообщением, как рисовать: техника, цвета, свет, настроение, до ${max} знаков. Первой строкой можно дать название, до ${nameMax} знаков. Сюжет и персонажей не пиши, их возьмём из сцены. Модель картинок лучше всего понимает английский.`,
+    editNote: (max: number) => `Пришли новый текст одним сообщением, до ${max} знаков. Первой строкой можно дать новое название, иначе останется прежнее.`,
+    example: 'Например:',
+    // Two lines: a name in the reader's language, then the style in English, which the picture model reads best.
+    exampleText: 'Масло при свечах\nOil painting with visible impasto brushstrokes, warm candlelight and deep shadows.',
+    copyHint: 'Промпт любого стиля можно скопировать с его карточки и поправить.',
+    nowText: 'Сейчас:',
+    backToStyle: '↩️ К стилю',
+    // Under a sample picture; `name` is the style as its button names it.
+    sampleCaption: (name: string) => `Пример стиля: ${name}`,
+    drawingSample: '🎨 Рисую пример…',
   },
 
   model: {
@@ -525,6 +577,8 @@ export const ru = {
     // Стоит под сценой, пока рисуется картинка, и исчезает вместе с ней.
     drawing: '🎨 Рисую иллюстрацию…',
     pictureFailed: 'Иллюстрация не получилась. Сцена сохранена.',
+    // A sample of a style (local/picture.ts `sample`) that did not come out; the reader asked for it and waits.
+    sampleFailed: 'Не получилось нарисовать пример. Попробуй ещё раз чуть позже.',
   },
 
   // Refusals shown as a plain message. The key is what the code throws; keep the group flat, strings only.
@@ -557,6 +611,15 @@ export const ru = {
     fileType: 'Пришли текстовый файл .txt или .md в кодировке UTF-8. PDF и DOCX пока не поддерживаются.',
     fileEncoding: 'Не удалось прочитать UTF-8. Сохрани файл как UTF-8 и отправь снова; черновик не изменён.',
     fileBinary: 'Нужен непустой текстовый файл .txt или .md без двоичных данных. Черновик не изменён.',
+    // While the reader writes a picture style of their own, and on a style's card. The numbers are OWN_STYLE_CHARS and
+    // OWN_STYLES_MAX in local/picture-style.ts.
+    styleNeedsText: 'Пришли стиль текстом, одним сообщением. Выйти без изменений можно кнопкой «↩️» или командой /cancel.',
+    styleTooLong: 'Слишком длинно: стиль должен уложиться в 400 знаков. Сократи и пришли снова.',
+    stylesFull: 'В библиотеке уже 10 своих стилей. Чтобы добавить новый, удали один из них.',
+    sampleOff: 'Картинки к твоим сценам пока не включены, поэтому пример нарисовать нельзя.',
+    sampleBusy: 'Сцена ещё пишется. Попроси пример, когда она придёт.',
+    sampleNoScene: 'Пример рисуется по последней сцене. Начни историю, и после первой сцены его можно будет попросить.',
+    sampleInFlight: 'Уже рисую пример. Следующий можно попросить, когда он придёт.',
   },
 
   // Names the bot gives to branches and checkpoints it creates. They are stored with the story and keep the language
@@ -584,6 +647,7 @@ export const ru = {
     compact: 'Сжать ранние сцены в память сейчас',
     model: 'Текущая модель и подключение',
     language: 'Язык интерфейса',
+    style: 'Стиль картинок к сценам',
     gpu_pause: 'Пауза GPU после завершения работы',
     gpu_start: 'Запустить арендованную GPU',
     cancel: 'Отменить ввод или генерацию',

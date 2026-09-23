@@ -75,7 +75,8 @@ export function createChat(api: TelegramApi, chatId: number | string) {
     // The picture of a scene, uploaded from memory as PNG bytes and hung under the message it belongs to. A text
     // message cannot become a photo by an edit — editMessageMedia needs a message that already carries media — so
     // the status line that stood here is a message of its own, and the caller removes it once this one lands.
-    photo: (bytes: Uint8Array, replyTo?: number) => api('sendPhoto', { chat_id: chatId, photo: bytes,
+    photo: (bytes: Uint8Array, replyTo?: number, caption?: Screen) => api('sendPhoto', { chat_id: chatId, photo: bytes,
+      ...(caption ? { caption: caption.text, ...(caption.reply_markup ? { reply_markup: caption.reply_markup } : {}) } : {}),
       ...(replyTo ? { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } } : {}) }),
     async final(text: string, replyMarkup?: InlineKeyboard) {
       return api('sendRichMessage', { chat_id: chatId, rich_message: { markdown: text },

@@ -70,6 +70,7 @@ export const ko: Messages = {
     previous: '⬅️ 이전',
     next: '다음 ➡️',
     keep: '↩️ 삭제 안 함',
+    pictureStyle: '🎨 삽화 스타일',
   },
 
   common: {
@@ -122,6 +123,46 @@ export const ko: Messages = {
   language: {
     title: '🌐 인터페이스 언어',
     note: '봇의 메뉴와 메시지 언어만 바뀌어요. 이야기의 언어는 시드와 내가 보내는 메시지가 정해요.',
+  },
+
+  pictureStyle: {
+    title: '🎨 삽화 스타일',
+    current: name => `지금: ${name}`,
+    note: '스타일을 누르면 프롬프트를 보고, 그 스타일을 고르거나 예시를 요청할 수 있어요. 스타일은 앞으로 그릴 삽화에만 적용돼요. 이미 그린 삽화는 그대로예요. 인물의 외모(머리, 옷, 특징)는 바뀌지 않아요.',
+    off: '아직 내 장면에는 삽화가 켜져 있지 않아요. 선택은 저장되고, 삽화가 켜지면 적용돼요.',
+    standard: '⚙️ 기본',
+    presets: {
+      semi: '🖌 세미 리얼리즘',
+      novel: '📖 비주얼 노벨',
+      film: '🎬 영화 스틸',
+      graphic: '🖋 그래픽 노블',
+      watercolor: '💧 수채화',
+    },
+    own: name => `✍️ ${name}`,
+    add: '➕ 새 스타일',
+    chosen: '✅ 지금 삽화는 이 스타일로 그려져요.',
+    prompt: '스타일 프롬프트(누르면 복사돼요):',
+    tailNote: '프롬프트의 끝부분은 봇이 내 글 뒤에 직접 붙여요. 인물은 성인으로 그려지고, 그림에 글자가 들어가지 않아요.',
+    choose: '✅ 이 스타일로 그리기',
+    sample: '🖼 마지막 장면으로 예시 보기',
+    edit: '✏️ 수정',
+    remove: '🗑 삭제',
+    back: '↩️ 스타일 목록으로',
+    removeTitle: quotedName => `🗑 ${quotedName} 스타일을 삭제할까요?`,
+    removeChosen: name => `지금 삽화는 이 스타일로 그려지고 있어요. 삭제하면 ${name} 스타일로 그려져요.`,
+    removeYes: '🗑 네, 삭제할게요',
+    removeNo: '↩️ 그대로 두기',
+    newTitle: '➕ 새 삽화 스타일',
+    editTitle: quotedName => `✏️ ${quotedName} 스타일`,
+    inputNote: (max, nameMax) => `어떻게 그릴지 메시지 하나로 보내 주세요: 기법, 색, 빛, 분위기. 최대 ${max}자예요. 첫 줄에 이름을 쓸 수 있어요(최대 ${nameMax}자). 줄거리와 인물은 쓰지 마세요. 장면에서 가져와요. 삽화 모델은 영어를 가장 잘 이해해요.`,
+    editNote: max => `새 내용을 메시지 하나로 보내 주세요. 최대 ${max}자예요. 첫 줄에 새 이름을 쓸 수 있어요. 쓰지 않으면 지금 이름이 그대로 남아요.`,
+    example: '예:',
+    exampleText: '촛불 아래 유화\nOil painting with visible impasto brushstrokes, warm candlelight and deep shadows.',
+    copyHint: '어떤 스타일이든 카드에서 프롬프트를 복사해 고쳐 쓸 수 있어요.',
+    nowText: '지금:',
+    backToStyle: '↩️ 스타일로 돌아가기',
+    sampleCaption: name => `스타일 예시: ${name}`,
+    drawingSample: '🎨 예시를 그리는 중…',
   },
 
   model: {
@@ -453,6 +494,7 @@ export const ko: Messages = {
     gpuPaused: 'GPU가 일시정지됐어요. /model 명령으로 GPU를 시작한 뒤 행동을 다시 보내 주세요.',
     drawing: '🎨 삽화를 그리는 중…',
     pictureFailed: '삽화를 그리지 못했어요. 장면은 저장되어 있어요.',
+    sampleFailed: '예시를 그리지 못했어요. 조금 뒤에 다시 시도해 주세요.',
   },
 
   errors: {
@@ -483,6 +525,13 @@ export const ko: Messages = {
     fileType: 'UTF-8로 인코딩된 .txt 또는 .md 텍스트 파일을 보내 주세요. PDF와 DOCX는 아직 지원하지 않아요.',
     fileEncoding: 'UTF-8로 읽지 못했어요. 파일을 UTF-8로 저장해 다시 보내 주세요. 초안은 그대로예요.',
     fileBinary: '바이너리 데이터가 없고 비어 있지 않은 .txt 또는 .md 텍스트 파일이 필요해요. 초안은 그대로예요.',
+    styleNeedsText: '스타일을 텍스트 메시지 하나로 보내 주세요. 바꾸지 않고 나가려면 ‘↩️’를 누르거나 /cancel을 보내 주세요.',
+    styleTooLong: '너무 길어요. 스타일은 400자 안에 들어가야 해요. 줄여서 다시 보내 주세요.',
+    stylesFull: '보관함에 나만의 스타일이 이미 10개 있어요. 새로 추가하려면 하나를 삭제해 주세요.',
+    sampleOff: '아직 내 장면에는 삽화가 켜져 있지 않아서 예시를 그릴 수 없어요.',
+    sampleBusy: '장면을 아직 쓰고 있어요. 장면이 도착하면 예시를 요청해 주세요.',
+    sampleNoScene: '예시는 마지막 장면으로 그려요. 이야기를 시작하면 첫 장면 뒤부터 예시를 요청할 수 있어요.',
+    sampleInFlight: '이미 예시를 그리고 있어요. 도착하면 다음 예시를 요청할 수 있어요.',
   },
 
   labels: {
@@ -506,6 +555,7 @@ export const ko: Messages = {
     compact: '초반 장면을 지금 기억으로 압축',
     model: '현재 모델과 연결',
     language: '인터페이스 언어',
+    style: '장면 삽화 스타일',
     gpu_pause: '작업이 끝나면 GPU 일시정지',
     gpu_start: '임대한 GPU 시작',
     cancel: '입력 또는 생성 취소',

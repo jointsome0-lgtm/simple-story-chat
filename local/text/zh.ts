@@ -61,6 +61,7 @@ export const zh: Messages = {
     previous: '⬅️ 上一页',
     next: '下一页 ➡️',
     keep: '↩️ 不删除',
+    pictureStyle: '🎨 插图风格',
   },
 
   common: {
@@ -113,6 +114,46 @@ export const zh: Messages = {
   language: {
     title: '🌐 界面语言',
     note: '只会改变菜单和机器人消息的语言。故事的语言由种子和你发的消息决定。',
+  },
+
+  pictureStyle: {
+    title: '🎨 插图风格',
+    current: name => `当前：${name}`,
+    note: '点一个风格，可以查看它的提示词、选用它，或者请求一张示例。风格只影响之后的插图，已经画好的保持不变。人物的外貌（发型、服装、特征）不会改变。',
+    off: '你的场景还没有开启插图。选择会被保存，开启后生效。',
+    standard: '⚙️ 标准',
+    presets: {
+      semi: '🖌 半写实',
+      novel: '📖 视觉小说',
+      film: '🎬 电影剧照',
+      graphic: '🖋 图像小说',
+      watercolor: '💧 水彩',
+    },
+    own: name => `✍️ ${name}`,
+    add: '➕ 新建风格',
+    chosen: '✅ 你的插图正在使用这个风格。',
+    prompt: '风格提示词（点击即可复制）：',
+    tailNote: '提示词的结尾由机器人自动加在你的文字后面：人物保持成年人的样子，画面上没有文字。',
+    choose: '✅ 用这个风格画',
+    sample: '🖼 用最近一幕画示例',
+    edit: '✏️ 修改',
+    remove: '🗑 删除',
+    back: '↩️ 返回风格列表',
+    removeTitle: quotedName => `🗑 删除风格${quotedName}？`,
+    removeChosen: name => `你的插图现在正使用它。删除后将改用${name}风格。`,
+    removeYes: '🗑 是的，删除',
+    removeNo: '↩️ 保留',
+    newTitle: '➕ 新的插图风格',
+    editTitle: quotedName => `✏️ 风格${quotedName}`,
+    inputNote: (max, nameMax) => `用一条消息说明怎么画：技法、色彩、光线、氛围，最多 ${max} 个字符。第一行可以写名称，最多 ${nameMax} 个字符。不用写情节和人物，这些取自场景。插图模型最擅长理解英文。`,
+    editNote: max => `用一条消息发来新的文字，最多 ${max} 个字符。第一行可以写新名称，否则保留原来的名称。`,
+    example: '例如：',
+    exampleText: '烛光油画\nOil painting with visible impasto brushstrokes, warm candlelight and deep shadows.',
+    copyHint: '任何风格的提示词都可以从它的卡片上复制下来再修改。',
+    nowText: '当前：',
+    backToStyle: '↩️ 返回该风格',
+    sampleCaption: name => `风格示例：${name}`,
+    drawingSample: '🎨 正在绘制示例…',
   },
 
   model: {
@@ -444,6 +485,7 @@ export const zh: Messages = {
     gpuPaused: 'GPU 已进入暂停。打开 /model 启动它，然后重新发送你的行动。',
     drawing: '🎨 正在绘制插图…',
     pictureFailed: '插图没有画成。场景已保存。',
+    sampleFailed: '示例没有画成。请稍后再试。',
   },
 
   errors: {
@@ -474,6 +516,13 @@ export const zh: Messages = {
     fileType: '请发送 UTF-8 编码的 .txt 或 .md 文本文件。暂不支持 PDF 和 DOCX。',
     fileEncoding: '无法按 UTF-8 读取。请把文件另存为 UTF-8 后再发一次；草稿没有变化。',
     fileBinary: '需要一个非空的 .txt 或 .md 文本文件，且不含二进制数据。草稿没有变化。',
+    styleNeedsText: '请用一条文本消息发来风格。不做修改离开：点“↩️”或发送 /cancel。',
+    styleTooLong: '太长了：风格不能超过 400 个字符。请缩短后再发一次。',
+    stylesFull: '你的风格库里已经有 10 个自定义风格。要新建，请先删除其中一个。',
+    sampleOff: '你的场景还没有开启插图，所以无法绘制示例。',
+    sampleBusy: '场景还在写。等它发来后再请求示例。',
+    sampleNoScene: '示例按你最近的一幕来画。先开始一个故事，第一幕出来后就可以请求示例。',
+    sampleInFlight: '正在绘制示例。等它发来后可以再请求下一张。',
   },
 
   labels: {
@@ -497,6 +546,7 @@ export const zh: Messages = {
     compact: '立即把早期场景压缩进记忆',
     model: '当前模型和连接',
     language: '界面语言',
+    style: '场景插图的风格',
     gpu_pause: '任务结束后暂停 GPU',
     gpu_start: '启动租用的 GPU',
     cancel: '取消输入或生成',

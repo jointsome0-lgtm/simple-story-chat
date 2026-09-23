@@ -5,6 +5,8 @@ import type { Branch, Checkpoint, Library, SceneNode, Story } from '../lib/libra
 import type { ContextStats } from './context.ts';
 import type { GpuStatus } from './gpu.ts';
 import type { InlineButton, InlineKeyboard, Screen } from './telegram.ts';
+import { STYLE } from './illustrate.ts';
+import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX, PRESETS, PRESET_KEYS, lineOf, ownStyle, ownStyles, presetOf, styleKey } from './picture-style.ts';
 import { LANGS, LANGUAGE_BUTTON, REGISTERED, shownLang, texts } from './text.ts';
 import type { Messages } from './text.ts';
 
@@ -15,7 +17,11 @@ export type GpuInfo = {
   status?: GpuStatus; activeJobs?: number | null; idleMinutes?: number; idleRemainingSeconds?: number | null;
   canStart?: boolean; canPause?: boolean;
 };
-export type RenderDetails = { modelInfo?: ModelInfo | null; gpuInfo?: GpuInfo | null; contextStats?: ContextStats | null };
+// `pictures`: this reader's scenes are illustrated (local/picture.ts), so the menu offers the picture style.
+// `standardStyle`: the bot's own style line, when it draws for anybody.
+export type RenderDetails = {
+  modelInfo?: ModelInfo | null; gpuInfo?: GpuInfo | null; contextStats?: ContextStats | null; pictures?: boolean; standardStyle?: string;
+};
 // State is read defensively (docs/telegram-ui.md), so any library field may be missing.
 type State = Partial<Library>;
 type Row = (InlineButton | null)[];
@@ -96,9 +102,14 @@ function failure(t: Messages) {
 function screen(state: State, route: string, details: RenderDetails) {
   const [name, ...args] = route.split(':');
   switch (name) {
-    case 'home': return home(state, null, details.modelInfo, gpuFor(details));
+    case 'home': return home(state, null, details.modelInfo, gpuFor(details), details.pictures === true);
     case 'model': return modelScreen(texts(state.language), details.modelInfo, gpuFor(details));
     case 'language': return languageScreen(state);
+    case 'style': return args.length ? styleCard(state, args[0], details) : styleScreen(state, details);
+    // Only while the reader is writing a style: otherwise their next message would be taken as a move in the story.
+    case 'style-input': return styleInputScreen(state, details);
+    case 'delete-style': return deleteStyleScreen(state, args[0], details);
+    case 'sample': return sampleScreen(state, args[0], details);
     case 'seeds': return seedList(state, args[0]);
     case 'seed': return seedScreen(state, args[0], args[1]);
     case 'story': return storyScreen(state, args[0], args[1]);
@@ -111,13 +122,13 @@ function screen(state: State, route: string, details: RenderDetails) {
     case 'delete-seed': return deleteSeedScreen(state, args[0]);
     case 'delete-branch': return deleteBranchScreen(state, args[0], args[1]);
     case 'new-seed': return newSeedScreen(state);
-    default: return home(state, texts(state.language).home.unknownRoute, details.modelInfo, gpuFor(details));
+    default: return home(state, texts(state.language).home.unknownRoute, details.modelInfo, gpuFor(details), details.pictures === true);
   }
 }
 
 // Screens
 
-function home(state: State, note: string | null, modelInfo: ModelInfo | null | undefined, gpu: GpuInfo | null) {
+function home(state: State, note: string | null, modelInfo: ModelInfo | null | undefined, gpu: GpuInfo | null, pictures: boolean) {
   const t = texts(state.language);
   const seedCount = values(state.seeds).length;
   const ref = activeRef(state);
@@ -156,7 +167,7 @@ function home(state: State, note: string | null, modelInfo: ModelInfo | null | u
     lines.push(t.home.empty, t.common.whatIsSeed, '', t.home.createFirst);
   }
   rows.push([seedCount ? btn(t.buttons.seedsCount(seedCount), 'view:seeds:0') : null, btn(t.buttons.newSeed, 'new-seed'), btn(t.buttons.model, 'view:model')]);
-  rows.push([btn(LANGUAGE_BUTTON, 'view:language')]);
+  rows.push([btn(LANGUAGE_BUTTON, 'view:language'), pictures ? btn(t.buttons.pictureStyle, 'view:style') : null]);
   return payload(lines, rows);
 }
 
@@ -168,6 +179,102 @@ function languageScreen(state: State) {
     ...REGISTERED.map(lang => [btn(`${lang === current ? '✅ ' : ''}${LANGS[lang]}`, `lang:${lang}`)]),
     [btn(t.buttons.menu, 'view:home')],
   ]);
+}
+
+// The look of the reader's pictures (local/picture-style.ts): the presets, the reader's own styles, and the bot's own
+// line when it is not one of the presets. Every style opens its card. A reader who is not drawn for may still choose:
+// the choice waits in their library.
+function styleScreen(state: State, details: RenderDetails) {
+  const t = texts(state.language);
+  const s = t.pictureStyle;
+  const standard = details.standardStyle ?? STYLE;
+  const current = styleKey(state, standard);
+  const own = ownStyles(state);
+  const open = (key: string) => btn(`${key === current ? '✅ ' : ''}${styleLabel(t, state, key)}`, `view:style:${key}`);
+  return payload([s.title, '', s.current(styleLabel(t, state, current)), '', s.note, details.pictures ? null : '', details.pictures ? null : s.off], [
+    presetOf(standard) ? null : [open('standard')],
+    ...PRESET_KEYS.map(key => [open(key)]),
+    ...own.map(style => [open(style.id)]),
+    own.length < OWN_STYLES_MAX ? [btn(s.add, 'style-new')] : null,
+    [btn(t.buttons.menu, 'view:home')],
+  ]);
+}
+
+// A style's name as its button shows it.
+function styleLabel(t: Messages, state: State, key: string) {
+  const s = t.pictureStyle;
+  if (key === 'standard') return s.standard;
+  if (Object.hasOwn(PRESETS, key)) return s.presets[key as keyof typeof PRESETS];
+  return s.own(line(ownStyle(state, key)?.name, OWN_NAME_CHARS) || t.format.untitled);
+}
+
+// One style: the whole line it ends a prompt with, tap-to-copy, so that a reader can start a style of their own from
+// any of them. The sample is drawn only when the reader asks for it (local/picture.ts `sample`). A key this library has
+// no style under — a style deleted since, or the standard one where a preset stands for it — is the picker.
+function styleCard(state: State, key: string, details: RenderDetails) {
+  const t = texts(state.language);
+  const s = t.pictureStyle;
+  const standard = details.standardStyle ?? STYLE;
+  const full = lineOf(state, key, standard);
+  if (full === null || (key === 'standard' && presetOf(standard))) return styleScreen(state, details);
+  const own = ownStyle(state, key);
+  const chosen = styleKey(state, standard) === key;
+  const result = payload([styleLabel(t, state, key), chosen ? s.chosen : null, '', s.prompt, full, own ? '' : null, own ? s.tailNote : null,
+    details.pictures ? null : '', details.pictures ? null : s.off], [
+    chosen ? null : [btn(s.choose, `style:${key}`)],
+    details.pictures ? [btn(s.sample, `style-sample:${key}`)] : null,
+    own ? [btn(s.edit, `style-edit:${key}`), btn(s.remove, `view:delete-style:${key}`)] : null,
+    [btn(s.back, 'view:style')],
+  ]);
+  const offset = result.text.indexOf(full, result.text.indexOf(s.prompt));
+  if (offset >= 0) result.entities = [{ type: 'pre', offset, length: full.length }];
+  return result;
+}
+
+function deleteStyleScreen(state: State, key: string, details: RenderDetails) {
+  const t = texts(state.language);
+  const s = t.pictureStyle;
+  const own = ownStyle(state, key);
+  if (!own) return styleScreen(state, details);
+  const standard = details.standardStyle ?? STYLE;
+  const chosen = styleKey(state, standard) === key;
+  // After the deletion the pictures are drawn in the style a reader who never chose one gets.
+  const fallback = quote(t, styleLabel(t, state, presetOf(standard) ?? 'standard'), 60);
+  return payload([s.removeTitle(quote(t, own.name, OWN_NAME_CHARS)), chosen ? '' : null, chosen ? s.removeChosen(fallback) : null],
+    [[btn(s.removeYes, `remove-style:${key}`)], [btn(s.removeNo, `view:style:${key}`)]]);
+}
+
+// Waiting for a style of the reader's own: a new one, or a new version of the one `styleId` names. The next text
+// message is kept as it, and any button leaves. Without the wait this is the picker: otherwise the reader's next
+// message would be taken for a move in the story.
+function styleInputScreen(state: State, details: RenderDetails) {
+  const t = texts(state.language);
+  const s = t.pictureStyle;
+  const ui = state.ui?.input === 'style' ? state.ui : null;
+  if (!ui) return styleScreen(state, details);
+  if (ui.styleId) {
+    const own = ownStyle(state, ui.styleId);
+    if (!own) return styleScreen(state, details);
+    const result = payload([s.editTitle(quote(t, own.name, OWN_NAME_CHARS)), '', s.editNote(OWN_STYLE_CHARS), '', s.nowText, own.line],
+      [[btn(s.backToStyle, `view:style:${own.id}`)]]);
+    const offset = result.text.lastIndexOf(own.line);
+    if (offset >= 0) result.entities = [{ type: 'pre', offset, length: own.line.length }];
+    return result;
+  }
+  const example = s.exampleText;
+  const result = payload([s.newTitle, '', s.inputNote(OWN_STYLE_CHARS, OWN_NAME_CHARS), '', s.example, example, '', s.copyHint],
+    [[btn(s.back, 'view:style')]]);
+  const offset = result.text.indexOf(example);
+  if (offset >= 0) result.entities = [{ type: 'pre', offset, length: example.length }];
+  return result;
+}
+
+// The caption and the buttons of a sample of a style (local/picture.ts `sample`), as they stand when it is asked for.
+function sampleScreen(state: State, key: string, details: RenderDetails) {
+  const t = texts(state.language);
+  const s = t.pictureStyle;
+  const chosen = styleKey(state, details.standardStyle ?? STYLE) === key;
+  return payload([s.sampleCaption(styleLabel(t, state, key))], [chosen ? null : [btn(s.choose, `style:${key}`)], [btn(s.back, 'view:style')]]);
 }
 
 // Deployment is chosen by the owner in the bot's config, so there is no switch here.

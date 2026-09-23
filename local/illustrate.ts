@@ -120,9 +120,10 @@ export function sheetLooks(sheet: Character[]): Map<string, string> {
 
 // The order is the one the third reader asked for: shot, setting, the shared action once, each person, objects,
 // props, light, style. A person the sheet covers takes their look from the sheet alone — the model's own `look` for
-// them contradicts it, and in step 6 the contradiction was visible in the picture. The style line is ours and is
-// always the last sentence; the bot may carry its own in `SIMPLE_CHAT_IMAGE_STYLE`, which is the only part of this
-// prompt an operator writes.
+// them contradicts it, and in step 6 the contradiction was visible in the picture. The style line is always the
+// last sentence and never comes from the describing model: the bot may carry its own in `SIMPLE_CHAT_IMAGE_STYLE`,
+// and a reader may pick a preset or write a line of their own (local/picture-style.ts). Those are the only parts of
+// this prompt a person writes.
 export function assemblePrompt(description: Description, sheet: Character[], style = STYLE): Assembled {
   const looks = sheetLooks(sheet);
   const sheetNames = sheet.map(character => character.name);

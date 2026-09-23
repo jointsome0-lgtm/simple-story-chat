@@ -13,6 +13,8 @@ import type { GpuController } from './gpu.ts';
 import type { ErrorDetails } from './model-error.ts';
 import { ModelError, safeErrorDetails } from './model-error.ts';
 import type { Controls, GenerateControls, GenerationResult, ModelRequest, Provider } from './model.ts';
+import type { Illustrator, SampleRequest } from './picture.ts';
+import { PRESETS } from './picture-style.ts';
 import type { TelegramPayload } from './telegram.ts';
 import { render, scenePrefix, sceneKeyboard } from './ui.ts';
 import { texts } from './text.ts';
@@ -25,7 +27,7 @@ type FixtureOptions = {
   progressFailure?: boolean; contextFailure?: boolean; deliveryFailure?: boolean;
   generate?: (request: ModelRequest, controls: TextControls) => Promise<GenerationResult>;
   check?: Provider['check']; gpu?: GpuController; readSeedFile?: BotOptions['readSeedFile'];
-  model?: string; providerName?: string; compactAtTokens?: number; ownerId?: string;
+  model?: string; providerName?: string; compactAtTokens?: number; ownerId?: string; illustrator?: Illustrator;
   // Holds a Telegram call until the returned promise settles.
   hold?: (method: string, payload: Payload) => Promise<void> | undefined;
 };
@@ -72,7 +74,7 @@ function fixture(t: TestContext, options: FixtureOptions = {}) {
       usage: { inputTokens: 100 + requests.length, outputTokens: 50, totalTokens: 150 + requests.length } };
   } };
   if (options.check) provider.check = options.check;
-  const bot = createBot({ store, api, provider, gpu: options.gpu, allowedUsers: new Set(['1', '2']), maxOutputTokens: 4096,
+  const bot = createBot({ store, api, provider, gpu: options.gpu, illustrator: options.illustrator, allowedUsers: new Set(['1', '2']), maxOutputTokens: 4096,
     readSeedFile: options.readSeedFile, render, scenePrefix, sceneKeyboard, model: options.model ?? 'test-model',
     providerName: options.providerName ?? 'claude-code', compactAtTokens: options.compactAtTokens ?? 54000, ownerId: options.ownerId,
     log: (event, code, details) => { rows.push({ event, ...(code === undefined ? {} : { code }), ...safeErrorDetails(details) }); } });
@@ -880,4 +882,103 @@ test('the language can be changed from inside a seed draft without losing it', a
   await f.bot.handle(f.click('lang:en'));
   assert.match(f.sent.at(-1)!.payload.text, /^📝 Seed draft, not saved yet\nReceived: 1 part · /);
   assert.deepEqual((f.store.read(1).ui as SeedDraft).parts, [seedText]);
+});
+
+// A card that draws nothing: the bot's side of the picture styles, with the samples it asks for kept here.
+function sketchbook(drawn: SampleRequest[]) {
+  return { enabledFor: (userId: string) => userId === '1', standardStyle: PRESETS.semi,
+    illustrate: async () => {}, sample: async (request: SampleRequest) => { drawn.push(request); } } as unknown as Illustrator;
+}
+
+test('a reader keeps a library of picture styles: writes one, finds it chosen, edits it, and deletes it after a confirmation', async t => {
+  const drawn: SampleRequest[] = [];
+  const f = fixture(t, { illustrator: sketchbook(drawn) });
+  await f.start();
+  const calls = f.requests.length;
+  const shown = () => f.sent.at(-1)!.payload.text;
+  const state = () => f.store.read('1');
+
+  await f.bot.handle(f.message('/style'));
+  assert.match(shown(), /^🎨 Стиль картинок\n\nСейчас: 🖌 Полуреализм/);
+  await f.bot.handle(f.click('style:film'));
+  assert.equal(state().pictureStyle, 'film');
+  assert.match(shown(), /^🎬 Кинокадр\n✅/);
+  // The standard style is a preset here: choosing it is choosing the preset.
+  await f.bot.handle(f.click('style:standard'));
+  assert.equal(state().pictureStyle, undefined);
+  assert.match(shown(), /^🖌 Полуреализм\n✅/);
+
+  // While the bot waits for a style, the reader's text is the style and not a move in the story.
+  await f.bot.handle(f.click('style-new'));
+  assert.deepEqual(state().ui, { input: 'style' });
+  await f.bot.handle(f.message('Уголь\nCharcoal sketch on rough paper'));
+  const [id] = Object.keys(state().pictureStyles!);
+  assert.match(id, /^y\d+$/);
+  assert.deepEqual(state().pictureStyles![id], { id, name: 'Уголь', line: 'Charcoal sketch on rough paper' });
+  assert.equal(state().pictureStyle, id, 'a new style is the chosen one');
+  assert.equal(state().ui, null);
+  assert.equal(f.requests.length, calls, 'no scene was asked for');
+  assert.match(shown(), /^✍️ Уголь\n✅/);
+
+  // A new version of one line keeps the name; a first line renames it.
+  await f.bot.handle(f.click(`style-edit:${id}`));
+  await f.bot.handle(f.message('Charcoal and white chalk on grey paper'));
+  assert.deepEqual(state().pictureStyles![id], { id, name: 'Уголь', line: 'Charcoal and white chalk on grey paper' });
+  await f.bot.handle(f.click(`style-edit:${id}`));
+  await f.bot.handle(f.message('Мел\nWhite chalk on a blackboard'));
+  assert.deepEqual(state().pictureStyles![id], { id, name: 'Мел', line: 'White chalk on a blackboard' });
+
+  // What does not fit is refused and the bot keeps waiting; any button leaves without a change.
+  await f.bot.handle(f.click('style-new'));
+  await f.bot.handle(f.message('y'.repeat(401)));
+  assert.equal(shown(), texts('ru').errors.styleTooLong);
+  await f.bot.handle(f.message(undefined));
+  assert.equal(shown(), texts('ru').errors.styleNeedsText);
+  assert.deepEqual(state().ui, { input: 'style' });
+  // The whole prompt copied from a card fits again: the sentences the bot adds are taken off.
+  const copied = `${'x'.repeat(390)}. Adults with natural adult proportions and faces. No captions, logos or watermarks.`;
+  await f.bot.handle(f.message(copied));
+  const copy = state().pictureStyle!;
+  assert.equal(state().pictureStyles![copy].line, `${'x'.repeat(390)}.`);
+  assert.equal(state().pictureStyles![copy].name, `${'x'.repeat(39)}…`, 'a style sent without a name is named by its start');
+  await f.bot.handle(f.click('style-new'));
+  await f.bot.handle(f.click('view:style'));
+  assert.equal(state().ui, null);
+  assert.equal(f.requests.length, calls);
+
+  // A delete needs its confirmation; deleting the chosen style gives the pictures back to the standard one.
+  await f.bot.handle(f.click(`remove-style:${copy}`));
+  assert.ok(state().pictureStyles![copy]);
+  await f.bot.handle(f.click(`view:delete-style:${copy}`));
+  assert.match(shown(), /в стиле «🖌 Полуреализм»/);
+  await f.bot.handle(f.click(`remove-style:${copy}`));
+  assert.equal(state().pictureStyles![copy], undefined);
+  assert.equal(state().pictureStyle, undefined);
+  assert.deepEqual(Object.keys(state().pictureStyles!), [id]);
+  await f.bot.handle(f.click(`style:${copy}`));
+  assert.equal(shown(), texts('ru').errors.staleButton);
+
+  // A full library takes no new style.
+  f.store.mutate('1', library => { for (let n = 0; n < 9; n++) library.pictureStyles![`y${900 + n}`] = { id: `y${900 + n}`, name: `S${n}`, line: 'Ink.' }; });
+  await f.bot.handle(f.click('style-new'));
+  assert.equal(shown(), texts('ru').errors.stylesFull);
+  assert.equal(state().ui, null);
+
+  // A sample goes to the illustrator with the scene the reader is at, the whole line, and the caption to show.
+  await f.bot.handle(f.click(`style-sample:${id}`));
+  await f.bot.idle();
+  assert.equal(drawn.length, 1);
+  const where = state().active!;
+  assert.deepEqual({ storyId: drawn[0].storyId, branchId: drawn[0].branchId, nodeId: drawn[0].nodeId },
+    { storyId: where.storyId, branchId: where.branchId, nodeId: state().stories[where.storyId].branches[where.branchId].head });
+  assert.equal(drawn[0].line, 'White chalk on a blackboard. Adults with natural adult proportions and faces. No captions, logos or watermarks.');
+  assert.equal(drawn[0].pictureStyle, 'custom');
+  assert.equal(drawn[0].caption.text, 'Пример стиля: ✍️ Мел');
+  assert.equal(drawn[0].status, '🎨 Рисую пример…');
+  assert.equal(state().pictureStyle, undefined, 'a sample chooses nothing');
+  // Another reader is not drawn for, and the card never hears of them.
+  await f.start(2);
+  await f.bot.handle(f.click('style-sample:film', 2));
+  assert.equal(shown(), texts('ru').errors.sampleOff);
+  assert.equal(drawn.length, 1);
 });

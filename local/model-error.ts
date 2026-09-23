@@ -23,6 +23,9 @@ export const CLI_RESULTS = ['success', 'error_max_turns', 'error_during_executio
 // How one scene's picture ended (local/picture.ts): sent, failed with a code, ended by the reader's next message,
 // or not attempted at all because the card was paused. Four words; the scene and the picture stay out.
 const OUTCOMES = ['ready', 'failed', 'cancelled', 'skipped'] as const;
+// Which style a picture was drawn in (local/picture-style.ts): the bot's own line, a preset, or one of the reader's
+// own, whose words and names stay out of the row as the prompt does.
+const PICTURE_STYLES = ['standard', 'semi', 'novel', 'film', 'graphic', 'watercolor', 'custom'] as const;
 // Why the model's last message ended, as the API names it, for the row of a failed Claude CLI run: `max_tokens` there
 // means the run's output cap was hit, which the CLI reports as an error rather than a truncation.
 export const STOP_REASONS = ['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'refusal', 'other'] as const;
@@ -54,8 +57,10 @@ export type ErrorDetails = {
   exitCode?: number; signal?: typeof SIGNALS[number]; sshReason?: typeof SSH_REASONS[number];
   // Whose request a bot log row belongs to. Only the owner allowed reading the owner's own stories for debugging.
   actor?: typeof ACTORS[number]; automatic?: boolean; agentCall?: typeof AGENT_CALLS[number]; stage?: typeof STAGES[number];
-  // A picture: which checkpoint drew it, how it ended, and whether the reader's next message ended it before it arrived.
+  // A picture: which checkpoint drew it, how it ended, whether the reader's next message ended it before it arrived,
+  // in which style, and for a sample of a style whether the scene's frame was still in memory.
   imageRole?: typeof IMAGE_ROLES[number]; outcome?: typeof OUTCOMES[number]; cancelled?: boolean;
+  pictureStyle?: typeof PICTURE_STYLES[number]; frameReused?: boolean;
   // A failed Claude CLI run: how it ended and whether the CLI itself called the result an error.
   cliResult?: typeof CLI_RESULTS[number]; cliError?: boolean; stopReason?: typeof STOP_REASONS[number];
 } & { [Key in typeof COUNTS[number]]?: number };
@@ -88,6 +93,8 @@ export function safeErrorDetails(value: unknown = {}): ErrorDetails {
   if (member(IMAGE_ROLES, input?.imageRole)) result.imageRole = input.imageRole;
   if (member(OUTCOMES, input?.outcome)) result.outcome = input.outcome;
   if (typeof input?.cancelled === 'boolean') result.cancelled = input.cancelled;
+  if (member(PICTURE_STYLES, input?.pictureStyle)) result.pictureStyle = input.pictureStyle;
+  if (typeof input?.frameReused === 'boolean') result.frameReused = input.frameReused;
   if (member(CLI_RESULTS, input?.cliResult)) result.cliResult = input.cliResult;
   if (typeof input?.cliError === 'boolean') result.cliError = input.cliError;
   if (member(STOP_REASONS, input?.stopReason)) result.stopReason = input.stopReason;

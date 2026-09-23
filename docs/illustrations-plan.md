@@ -472,7 +472,11 @@ prefix shared, so the server pays for the appended instruction alone and the rea
 A picture in flight is stopped by the reader's next message and by `/cancel`; moving around the menus does not stop
 it, and no cancel button is offered, because by then the job lock is already clear. A workflow node that saves its
 picture is loaded as one that previews it: `SaveImage` writes the picture, with the prompt in its text chunks, into
-a directory no route of ComfyUI's API can empty, so the card is left with no copy of a reader's scene.
+a directory no route of ComfyUI's API can empty. This paragraph first said that left the card with no copy of a
+reader's scene. It did not: the preview's own file stayed in the temp directory until the server restarted. Since
+2026-09-23 that directory is in RAM and `gpu/image-sweeper.py` deletes the file seconds after the bot has deleted
+the job record; what the card still keeps, and for how long, is in
+[gpu.md](gpu.md#what-the-card-keeps-of-a-picture).
 
 What is not measured. All of this has met fakes only — a fake ComfyUI on loopback, a fake Bot API, a fake model —
 and never a real card or a real chat. In the tests the drawing is instant, so the seconds in the log rows are the
@@ -481,3 +485,42 @@ hosted measurement of step 2 plus an assumption about the second card. Nothing i
 of this is believed" is closed by this commit: the wait from the end of a scene to the photo, what the second call
 does to the turn that follows it, and how often a card fails or times out under a real reader are all open, and the
 first rental with the tunnel up is what closes them.
+
+## Picture styles and samples (2026-09-24)
+
+A reader chooses the style of their pictures, keeps a library of their own, and asks for a sample on request only; the
+screens are in [telegram-ui.md](telegram-ui.md#picture-styles). The style stays what this plan made it in step 1: the
+last sentence of the prompt, never seen by the describing model. `local/picture-style.ts` holds the presets:
+- `semi`, the line the owner approved on 2026-09-23;
+- `novel`, the `STYLE` the six steps were measured with;
+- `film`, `graphic` and `watercolor`.
+
+The same file keeps the rules for a reader's own line: 400 characters under a name of 40, at most 10 in a library,
+and followed by the sentences of `OWN_STYLE_TAIL` it does not say itself (adult proportions, no lettering). Every own
+style is logged as `custom`, never by its words or its id. A sample reuses the frame of the scene's own picture from
+memory, so it costs the picture card alone, and draws it with the story's seed: two samples of one scene differ in
+the style sentence only. The row is `picture_sample`, with `frameReused` beside the fields of `picture`.
+
+The first real run, on the owner's test bot and a test story of the owner's own, found two faults that
+the fakes had hidden. Both are fixed and each has a test that fails without its fix:
+- **A sample could not be described after a restart.** The description ran as the scene's picture does, in the turn
+  that shares the scene's prefix, which the scheduler runs only in the slot its reader last used (`sharesPrefix`).
+  After a restart, or once another reader's scene has taken that slot, there is no such slot, and the scheduler
+  refused the turn (`background_unavailable`). A sample is now described as an ordinary request of its reader: in
+  their own slot when it is free, otherwise in the slot that is.
+- **A second sample of the same style on the same scene failed with 404.** ComfyUI answered the identical graph from
+  its cache, whose output named the earlier job's file, which the sweeper had already deleted. `drawOne` now gives
+  the preview node a key of its own per job ([gpu.md](gpu.md#what-the-card-keeps-of-a-picture)).
+
+One more change came from the same run. The first job after ComfyUI's restart lost one status poll while the server
+loaded the model (`network`), and the picture was given up although the card finished it. `drawOne` now asks a
+dropped poll again, up to three times in a row.
+
+Measured on that run: the text card with MTP decoding, one slot, the picture card with Qwen Image 2.1 at 25 steps.
+
+| What | Time |
+|---|---|
+| A sample whose frame had to be described again | description 4.7 s, drawing 17.4 s |
+| A sample of a reader's own style with the frame reused | drawing 17.6 s, no language-model call |
+| Right after each sample, on the card | 0 temp files, 0 history records, nothing on its disk |
+

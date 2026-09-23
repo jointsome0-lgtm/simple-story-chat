@@ -20,6 +20,28 @@
 
 Stories made from the same seed share its title, so they are called «История N» (by creation order) within that seed.
 
+## Picture styles
+
+Only a reader whose scenes are drawn (`SIMPLE_CHAT_IMAGE_USERS`) has «🎨 Стиль картинок» ("Picture style") in the menu and `/style` in the command list; both open the picker (`view:style`). A style is the last sentence of every picture's prompt (`local/picture-style.ts`) and changes only the pictures still to come. Nothing is drawn by opening a screen.
+
+- **Picker:** a button per style, ✅ on the current one. First the standard style, which is the bot's own line (`SIMPLE_CHAT_IMAGE_STYLE`) and gets a button only when that line is none of the presets; otherwise the preset it is stands for it. Then the five presets and the reader's own styles in the order they were made. Last come «➕ Новый стиль» ("New style"), while the reader has fewer than 10 own styles, and Menu. Every style opens its card (`view:style:<key>`).
+- **Card:** the style's whole prompt in a `pre` block, which Telegram copies in one tap, so any style can start one of the reader's own. The buttons:
+  - «✅ Рисовать в этом стиле» ("Draw in this style", `style:<key>`), unless it is the current style;
+  - «🖼 Пример на последней сцене» ("Sample on the last scene", `style-sample:<key>`), while pictures are on;
+  - «✏️ Изменить» ("Edit", `style-edit:<id>`) and «🗑 Удалить» ("Delete", `view:delete-style:<id>`) for the reader's own style. The delete takes `remove-style:<id>` after a confirmation, which names the style the pictures go back to;
+  - «↩️ К стилям» ("Back to styles").
+- **Own styles** live in `pictureStyles` in the library, with ids `y<n>`; `pictureStyle` holds the chosen key.
+  - «➕ Новый стиль» sets `ui = {input:'style'}`, and the next text message is the style, never a move in the story. Any button or command leaves without a change.
+  - A message of several lines is a name (the first line, cut to 40 characters) and a style (the rest). A single line is the style, named by its start. The style may be up to 400 characters.
+  - The bot appends its own sentences: adults with natural proportions, no lettering. The own style's card says so. They are taken off the end of a pasted card prompt, so a copied prompt fits again, and put back when the picture's prompt is assembled.
+  - A new style becomes the chosen one.
+  - Editing (`ui = {input:'style', styleId}`) shows the current text; a first line renames the style.
+- **Sample:** the reader's last scene, the head of the active branch, drawn once more in the card's style with the story's seed. Only the style differs from the scene's own picture.
+  - The frame described for that picture is reused while the bot still holds it in memory. After a restart the scene is described again, as a request of this reader.
+  - «🎨 Рисую пример…» stands while the sample is drawn. The photo comes with the caption «Пример стиля: <name>» and, unless it is the chosen style, the choose button.
+  - One sample at a time per reader. The reader's next move, /cancel or a new job stops it.
+  - A sample is refused while pictures are off, while a scene is being written, before the first scene, and while another sample is drawn.
+
 ## Interface language
 
 What the bot itself says (screens, buttons, refusals, the compaction status, the command menu) comes from a catalog per language in `local/text/`. The button labels quoted in this document are the Russian ones. The language of a story is a separate choice, made by its seed, not by this picker: see "Story language" below.

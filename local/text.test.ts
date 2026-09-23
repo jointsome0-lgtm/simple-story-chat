@@ -5,6 +5,7 @@ import { contextStats } from './context.ts';
 import { renderCompaction } from './compact-view.ts';
 import type { CompactionStatus } from './compact-view.ts';
 import type { GpuStatus } from './gpu.ts';
+import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX } from './picture-style.ts';
 import type { Screen } from './telegram.ts';
 import { LANGS, LANGUAGE_BUTTON, REGISTERED, commandSets, isRegistered, langFromTelegram, shownLang, texts } from './text.ts';
 import type { Lang } from './text.ts';
@@ -61,6 +62,9 @@ const GPU_STATUSES: (GpuStatus | undefined)[] = ['ready', 'draining', 'stopping'
 const PROVIDERS = ['claude-code', 'llama-cpp', 'codex-cli', 'openai-compatible'];
 const MODEL_STATUSES = ['ready', 'unavailable', 'configured', 'other'];
 
+// One of the reader's own picture styles, in the same script as the rest of the library.
+const OWN = { id: 'y20', name: 'Candle oil', line: 'Oil painting with visible impasto brushstrokes, warm candlelight and deep shadows.' };
+
 // Every screen the interface can produce for one language: [what it is, the screen].
 function screens(lang: Lang | undefined): [string, Screen][] {
   const out: [string, Screen][] = [];
@@ -71,6 +75,11 @@ function screens(lang: Lang | undefined): [string, Screen][] {
     ['empty', { ...library(lang), seeds: {}, stories: {}, active: null }],
     ['no active', { ...library(lang), active: null }],
     ['draft', { ...library(lang), ui: { input: 'seed', draftId: 'd15', parts: ['Lighthouse', '2026-08-02 20:00\nAn island.'] } }],
+    ['own style', { ...library(lang), pictureStyles: { y20: OWN }, pictureStyle: 'y20' }],
+    ['full library', { ...library(lang), pictureStyles: Object.fromEntries(Array.from({ length: OWN_STYLES_MAX }, (_, n) => [`y${30 + n}`, { ...OWN, id: `y${30 + n}` }])) }],
+    ['new style', { ...library(lang), ui: { input: 'style' } }],
+    ['style edit', { ...library(lang), pictureStyles: { y20: OWN }, ui: { input: 'style', styleId: 'y20' } }],
+    ['style edit of a deleted style', { ...library(lang), ui: { input: 'style', styleId: 'y404' } }],
   ];
   for (const [name, state] of states) {
     const details = (route: string): RenderDetails => {
@@ -78,11 +87,13 @@ function screens(lang: Lang | undefined): [string, Screen][] {
       let stats = null;
       try { if (kind === 'context') stats = contextStats(state, config, checkpointId ? { storyId, checkpointId } : undefined); } catch {}
       return { contextStats: stats, modelInfo: { provider: 'llama-cpp', model: 'synthetic-model', status: 'ready', checkedAt: '2026-09-16T10:05:00Z' },
-        gpuInfo: { status: 'ready', activeJobs: 0, idleMinutes: 15, idleRemainingSeconds: 400, canStart: false, canPause: true } };
+        gpuInfo: { status: 'ready', activeJobs: 0, idleMinutes: 15, idleRemainingSeconds: 400, canStart: false, canPause: true },
+        pictures: true, standardStyle: 'A synthetic standard line of an owner.' };
     };
     // Crawl what the buttons reach, and add the routes no button leads to in this state.
     const queue = ['home', 'new-seed', 'model', 'language', 'nonsense', 'seed:s404', 'story:h404', 'tree:h404', 'log:h2:b404:0', 'branch:h2:b404',
-      'checkpoints:h2:b404:0', 'checkpoint:h2:c404', 'context:h2:c404', 'delete-seed:s404', 'delete-branch:h2:b404', 'delete-seed:s12', 'delete-branch:h2:b8'];
+      'checkpoints:h2:b404:0', 'checkpoint:h2:c404', 'context:h2:c404', 'delete-seed:s404', 'delete-branch:h2:b404', 'delete-seed:s12', 'delete-branch:h2:b8',
+      'style-input', 'style:y404', 'delete-style:y404', 'delete-style:y20', 'sample:film', 'sample:standard', 'sample:y20'];
     const seen = new Set<string>();
     while (queue.length) {
       const route = queue.shift()!;
@@ -93,6 +104,8 @@ function screens(lang: Lang | undefined): [string, Screen][] {
       for (const button of screen.reply_markup?.inline_keyboard.flat() ?? []) if (button.callback_data.startsWith('view:')) queue.push(button.callback_data.slice(5));
     }
     out.push([`${name}: context without stats`, render(state, 'context')]);
+    // The picker of a reader who is not drawn for, and a card with the standard line being one of the presets.
+    out.push([`${name}: style without pictures`, render(state, 'style')], [`${name}: style card without pictures`, render(state, 'style:film')]);
     const keyboard = sceneKeyboard(state);
     if (keyboard) out.push([`${name}: scene keyboard`, { text: '-', reply_markup: keyboard }]);
   }
@@ -211,6 +224,24 @@ test('command lists: English by default, then one per registered language, GPU c
   assert.ok(sets[0].commands.some(item => item.command === 'language'));
   assert.ok(!sets[0].commands.some(item => item.command.startsWith('gpu_')));
   assert.deepEqual(commandSets(true)[0].commands.filter(item => item.command.startsWith('gpu_')).map(item => item.command), ['gpu_pause', 'gpu_start']);
+  // /style is listed only where pictures are drawn at all.
+  assert.ok(!sets.some(set => set.commands.some(item => item.command === 'style')));
+  for (const set of commandSets(false, true)) assert.ok(set.commands.some(item => item.command === 'style'), String(set.language_code));
+});
+
+test('the style texts name the limits the code keeps', () => {
+  for (const lang of REGISTERED) {
+    const t = texts(lang);
+    assert.match(t.errors.styleTooLong, new RegExp(`\\b${OWN_STYLE_CHARS}\\b`), lang);
+    assert.match(t.errors.stylesFull, new RegExp(`\\b${OWN_STYLES_MAX}\\b`), lang);
+    const note = t.pictureStyle.inputNote(OWN_STYLE_CHARS, OWN_NAME_CHARS);
+    assert.ok(note.includes(String(OWN_STYLE_CHARS)) && note.includes(String(OWN_NAME_CHARS)), lang);
+    assert.ok(t.pictureStyle.editNote(OWN_STYLE_CHARS).includes(String(OWN_STYLE_CHARS)), lang);
+    // The example is a style as a reader would send it: a name, then the line in English.
+    const [name, line, ...rest] = t.pictureStyle.exampleText.split('\n');
+    assert.ok(name && [...name].length <= OWN_NAME_CHARS && line && [...line].length <= OWN_STYLE_CHARS && !rest.length, lang);
+    assert.doesNotMatch(line, /[^\x20-\x7e]/, lang);
+  }
 });
 
 // tsc already rejects a catalog with other keys; this also holds a catalog to the same kind of value and arity.

@@ -93,7 +93,7 @@ try {
     contextTokens: config.contextTokens, compactAtTokens: config.compactAtTokens,
     keepScenes: config.keepScenes, memoryMode: config.memoryMode, repairCoverage: config.repairCoverage, model: config.model, log });
   // Telegram shows the list that matches the language of the user's app, and the first, English one to everyone else.
-  for (const commands of commandSets(!!gpu)) await api('setMyCommands', commands);
+  for (const commands of commandSets(!!gpu, !!illustrator)) await api('setMyCommands', commands);
   log('bot_ready');
   // This is bot processing, not a developer transcript export. Only authorized
   // private chats reach storage; no incoming text is printed or logged.

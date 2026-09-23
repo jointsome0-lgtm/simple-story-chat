@@ -22,6 +22,7 @@ import type { ErrorDetails } from './model-error.ts';
 import { safeErrorDetails } from './model-error.ts';
 import type { GenerateControls, GenerationResult, ModelRequest, Provider } from './model.ts';
 import { createIllustrator } from './picture.ts';
+import { PRESETS } from './picture-style.ts';
 import { Store } from './store.ts';
 import type { TelegramPayload } from './telegram.ts';
 import { render, scenePrefix, sceneKeyboard } from './ui.ts';
@@ -121,7 +122,8 @@ const FRAME = {
 const STYLE_LINE = 'Synthetic test style line, one sentence and no more.';
 const seedText = 'Маяк\n2026-08-02 20:00\nСмотритель встречает лодку. Кодовая фраза: СЕВЕР.';
 type Row = { event: string; code?: string | number } & ErrorDetails;
-type Payload = { chat_id: number; message_id: number; text: string; rich_message: { markdown: string }; photo: Uint8Array; reply_parameters?: { message_id: number } };
+type Payload = { chat_id: number; message_id: number; text: string; rich_message: { markdown: string }; photo: Uint8Array; reply_parameters?: { message_id: number };
+  caption?: string; reply_markup?: { inline_keyboard: { text: string; callback_data: string }[][] } };
 type Sent = { method: string; payload: Payload };
 // Which of the three calls a request is: a scene streams and has no schema, the other two are told apart by the
 // field their schema asks for.
@@ -200,28 +202,35 @@ function fixture(t: TestContext, options: Options = {}) {
     users: new Set(options.users ?? ['1']), waitMs: 5000, timeoutMs: 5000,
   };
   // The reader's wait is measured against the real clock of the bot, so a test that wants whole seconds moves this
-  // one forward by a fixed offset instead of pretending time stands still.
-  const illustrator = images && createIllustrator(images,
-    { store, provider, pollMs: 2, now: () => Date.now() + (options.offsetMs ?? 0) });
-  const bot = createBot({ store, api, provider, illustrator, allowedUsers: new Set(['1', '2']), maxOutputTokens: 4096,
-    render, scenePrefix, sceneKeyboard, model: 'test-model', ownerId: '1',
-    compactAtTokens: options.compactAtTokens, keepScenes: options.keepScenes,
-    log: (event, code, details) => { rows.push({ event, ...(code === undefined ? {} : { code }), ...safeErrorDetails(details) }); } });
+  // one forward by a fixed offset instead of pretending time stands still. `restart` builds the bot and its
+  // illustrator again over the same store and Telegram, and so forgets whatever they kept in memory.
+  const boot = () => {
+    const illustrator = images && createIllustrator(images,
+      { store, provider, pollMs: 2, now: () => Date.now() + (options.offsetMs ?? 0) });
+    const bot = createBot({ store, api, provider, illustrator, allowedUsers: new Set(['1', '2']), maxOutputTokens: 4096,
+      render, scenePrefix, sceneKeyboard, model: 'test-model', ownerId: '1',
+      compactAtTokens: options.compactAtTokens, keepScenes: options.keepScenes,
+      log: (event, code, details) => { rows.push({ event, ...(code === undefined ? {} : { code }), ...safeErrorDetails(details) }); } });
+    return { bot, illustrator };
+  };
+  let running = boot();
 
   const message = (text: string, user = 1): Update => ({ update_id: ++sequence,
     message: { from: { id: user, language_code: 'ru' }, chat: { id: user, type: 'private' }, text } });
   const click = (data: string, user = 1): Update => ({ update_id: ++sequence,
     callback_query: { id: `q${sequence}`, from: { id: user, language_code: 'ru' }, message: { chat: { id: user, type: 'private' } }, data } });
   async function start(user = 1) {
-    await bot.handle(click('new-seed', user));
-    await bot.handle(message(seedText, user));
-    await bot.handle(click(`save-seed:${(store.read(user).ui as SeedDraft).draftId}`, user));
+    await running.bot.handle(click('new-seed', user));
+    await running.bot.handle(message(seedText, user));
+    await running.bot.handle(click(`save-seed:${(store.read(user).ui as SeedDraft).draftId}`, user));
     const seedId = Object.keys(store.read(user).seeds)[0];
-    await bot.handle(click(`start:${seedId}`, user));
+    await running.bot.handle(click(`start:${seedId}`, user));
   }
   // Lets every held delivery through, the way Telegram answers when the network comes back.
   const release = () => { for (const go of holding.splice(0)) go(); };
-  return { bot, store, sent, rows, requests, deleted, provider, illustrator, message, click, start, release, workflow, directory };
+  const restart = async () => { await running.bot.stop(); running = boot(); };
+  return { get bot() { return running.bot; }, get illustrator() { return running.illustrator; }, restart,
+    store, sent, rows, requests, deleted, provider, message, click, start, release, workflow, directory };
 }
 
 // Waits for something the fake server or the bot does on its own; the whole file runs in milliseconds.
@@ -233,6 +242,8 @@ async function until(condition: () => boolean, what: string) {
   assert.fail(`timed out waiting for ${what}`);
 }
 const statuses = (sent: Sent[]) => sent.filter(one => one.method === 'sendMessage' && one.payload.text?.includes('Рисую'));
+const told = (sent: Sent[], text: string) => sent.some(one => one.payload.text === text);
+const seedIn = (graph: Graph) => (Object.values(graph).find(node => node.class_type === 'KSampler')!.inputs as { seed: number }).seed;
 const photos = (sent: Sent[]) => sent.filter(one => one.method === 'sendPhoto');
 
 test('without the picture configuration a scene is written, sent and not described', async t => {
@@ -317,6 +328,149 @@ test('an illustrated scene: a status line, one description call, a prompt with o
   assert.doesNotMatch(JSON.stringify(f.rows), /Элин|Кодовая|СЕВЕР|hair|door|127\.0\.0\.1|safetensors/);
   // The job is not left on the card: its record is cleared, prompt and workflow with it.
   assert.deepEqual(comfy.seen.cleared, ['p1']);
+});
+
+test('a sample of a style is the last scene drawn once more: its frame and seed, another last sentence, and no model call', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root, style: STYLE_LINE });
+  await f.start();
+  await f.bot.idle();
+  const calls = f.requests.length;
+  await f.bot.handle(f.click('style-sample:film'));
+  await f.bot.idle();
+
+  // The frame described for the scene's own picture is drawn again; only the style sentence differs, and the seed
+  // is the story's, so the two pictures can be told apart by their style alone.
+  assert.equal(f.requests.length, calls, 'the language model is not asked again');
+  assert.equal(comfy.submitted.length, 2);
+  const [own, sample] = comfy.submitted.map(promptOf);
+  assert.ok(sample.endsWith(PRESETS.film));
+  assert.equal(sample.slice(0, -PRESETS.film.length), own.slice(0, -STYLE_LINE.length));
+  assert.equal(seedIn(comfy.submitted[1]), seedIn(comfy.submitted[0]));
+
+  // It arrives as a photo of its own, with a caption and the way to choose the style, and its status line goes.
+  const photo = photos(f.sent)[1];
+  assert.equal(photo.payload.caption, 'Пример стиля: 🎬 Кинокадр');
+  assert.equal(photo.payload.reply_parameters, undefined);
+  assert.deepEqual(photo.payload.reply_markup?.inline_keyboard.flat().map(button => button.callback_data), ['style:film', 'view:style']);
+  const status = f.sent.find(one => one.method === 'sendMessage' && one.payload.text === '🎨 Рисую пример…')!;
+  assert.ok(f.deleted.includes(f.sent.indexOf(status) + 1));
+  // Asking for a sample chooses nothing.
+  assert.equal(f.store.read('1').pictureStyle, undefined);
+
+  const row = f.rows.find(one => one.event === 'picture_sample')!;
+  assert.equal(row.outcome, 'ready');
+  assert.equal(row.frameReused, true);
+  assert.equal(row.describeMs, 0);
+  assert.equal(row.pictureStyle, 'film');
+  assert.equal(row.imageSteps, 8);
+  assert.equal(row.actor, 'owner');
+  assert.doesNotMatch(JSON.stringify(f.rows), /Элин|hair|door|Photorealistic|Synthetic test style/);
+  assert.ok(comfy.seen.cleared.includes('p2'), 'the sample\'s job is off the card\'s history as well');
+
+  // A style of the reader's own is drawn with the sentences the bot adds, and logged as custom, never by its words.
+  await f.bot.handle(f.click('style-new'));
+  await f.bot.handle(f.message('Уголь\nCharcoal sketch on rough paper'));
+  const styleId = f.store.read('1').pictureStyle!;
+  await f.bot.handle(f.click(`style-sample:${styleId}`));
+  await f.bot.idle();
+  assert.ok(promptOf(comfy.submitted[2]).endsWith('Charcoal sketch on rough paper. Adults with natural adult proportions and faces. No captions, logos or watermarks.'));
+  assert.equal(photos(f.sent)[2].payload.caption, 'Пример стиля: ✍️ Уголь');
+  assert.deepEqual(photos(f.sent)[2].payload.reply_markup?.inline_keyboard.flat().map(button => button.callback_data), ['view:style']);
+  assert.equal(f.rows.filter(one => one.event === 'picture_sample').at(-1)!.pictureStyle, 'custom');
+  assert.doesNotMatch(JSON.stringify(f.rows), /Charcoal|Уголь/);
+});
+
+test('a sample after a restart describes the scene again, and one that fails says so once', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root });
+  await f.start();
+  await f.bot.idle();
+  await f.restart();
+  await f.bot.handle(f.click('style-sample:watercolor'));
+  await f.bot.idle();
+  // The frame was kept in memory only: the scene is described again, from the sheet kept beside the story.
+  assert.deepEqual(f.requests.map(kindOf), ['scene', 'sheet', 'frame', 'frame']);
+  assert.ok(promptOf(comfy.submitted[1]).endsWith(PRESETS.watercolor));
+  const row = f.rows.find(one => one.event === 'picture_sample')!;
+  assert.equal(row.outcome, 'ready');
+  assert.equal(row.frameReused, false);
+  assert.ok(Number.isSafeInteger(row.describeMs!));
+
+  // A card that cannot draw: the status line turns into one line saying so.
+  const broken = fakeComfy({ failing: true });
+  const brokenRoot = await broken.listen();
+  t.after(() => broken.server.close());
+  const g = fixture(t, { comfy: brokenRoot });
+  await g.start();
+  await g.bot.idle();
+  await g.bot.handle(g.click('style-sample:film'));
+  await g.bot.idle();
+  assert.ok(g.sent.some(one => one.method === 'editMessageText' && one.payload.text === 'Не получилось нарисовать пример. Попробуй ещё раз чуть позже.'));
+  const failed = g.rows.find(one => one.event === 'picture_sample')!;
+  assert.equal(failed.outcome, 'failed');
+  assert.equal(failed.frameReused, true, 'the frame was described; it is the card that failed, twice');
+});
+
+// On the real queue a picture's description runs only in the slot where its scene is cached. A sample asked for later
+// cannot count on that slot: after a restart nobody holds it, and another reader's scene may have taken it since.
+test('a sample whose scene is no longer cached in its reader\'s slot is described in the slot that is free', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root, users: ['1', '2'], scheduler: true });
+  await f.start(1);
+  await f.bot.idle();
+  await f.start(2);
+  await f.bot.idle();
+  await f.restart();
+  await f.bot.handle(f.click('style-sample:graphic', 1));
+  await f.bot.idle();
+  const row = f.rows.find(one => one.event === 'picture_sample')!;
+  assert.equal(row.outcome, 'ready', String(row.code));
+  assert.equal(row.frameReused, false);
+  assert.equal(photos(f.sent).filter(one => one.payload.chat_id === 1 && one.payload.caption).length, 1);
+  assert.ok(promptOf(comfy.submitted.at(-1)!).endsWith(PRESETS.graphic));
+});
+
+test('a sample is drawn only on request, one at a time, and a move in the story stops it', async t => {
+  const comfy = fakeComfy({ jobMs: 60000 });
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root, users: ['1'] });
+  // Before any scene there is nothing to draw from.
+  await f.bot.handle(f.click('style-sample:film'));
+  assert.ok(told(f.sent, 'Пример рисуется по последней сцене. Начни историю, и после первой сцены его можно будет попросить.'));
+  // A reader who is not drawn for is told so, and the card never hears of them.
+  await f.bot.handle(f.click('style-sample:film', 2));
+  assert.ok(told(f.sent, 'Картинки к твоим сценам пока не включены, поэтому пример нарисовать нельзя.'));
+
+  await f.start();
+  await until(() => comfy.submitted.length === 1, 'the scene\'s own picture to reach the card');
+  // Opening the picker and the cards draws nothing.
+  await f.bot.handle(f.click('view:style'));
+  await f.bot.handle(f.click('view:style:film'));
+  assert.equal(comfy.submitted.length, 1);
+  await f.bot.handle(f.click('style-sample:film'));
+  await until(() => comfy.submitted.length === 2, 'the sample to reach the card');
+  await f.bot.handle(f.click('style-sample:graphic'));
+  assert.ok(told(f.sent, 'Уже рисую пример. Следующий можно попросить, когда он придёт.'));
+  assert.equal(comfy.submitted.length, 2);
+
+  await f.bot.handle(f.message('Осмотреться'));
+  await until(() => f.rows.some(one => one.event === 'picture_sample'), 'the sample to stop');
+  const row = f.rows.find(one => one.event === 'picture_sample')!;
+  assert.equal(row.outcome, 'cancelled');
+  assert.equal(row.code, 'cancelled');
+  await f.bot.stop();
+  assert.ok(!photos(f.sent).some(one => one.payload.caption), 'no sample of a scene the reader has moved past');
+  const status = f.sent.find(one => one.method === 'sendMessage' && one.payload.text === '🎨 Рисую пример…')!;
+  assert.ok(f.deleted.includes(f.sent.indexOf(status) + 1), 'its status line goes without a word');
+  assert.ok(comfy.seen.cleared.includes('p2'));
 });
 
 test('the sheet is written once per story and reused by the next scene', async t => {

@@ -60,6 +60,7 @@ export const ja: Messages = {
     previous: '⬅️ 前へ',
     next: '次へ ➡️',
     keep: '↩️ 削除しない',
+    pictureStyle: '🎨 挿絵のスタイル',
   },
 
   common: {
@@ -112,6 +113,46 @@ export const ja: Messages = {
   language: {
     title: '🌐 表示言語',
     note: '変わるのは、メニューとボットのメッセージの言語だけです。物語の言語は、シードと送るメッセージで決まります。',
+  },
+
+  pictureStyle: {
+    title: '🎨 挿絵のスタイル',
+    current: name => `現在：${name}`,
+    note: 'スタイルをタップすると、プロンプトを見たり、そのスタイルを選んだり、サンプルを頼んだりできます。スタイルが変わるのはこれから描く挿絵だけで、描き終えた挿絵はそのままです。登場人物の外見（髪、服装、特徴）は変わりません。',
+    off: 'あなたのシーンにはまだ挿絵が有効になっていません。選択は保存され、有効になると適用されます。',
+    standard: '⚙️ 標準',
+    presets: {
+      semi: '🖌 セミリアル',
+      novel: '📖 ビジュアルノベル',
+      film: '🎬 映画のワンシーン',
+      graphic: '🖋 グラフィックノベル',
+      watercolor: '💧 水彩',
+    },
+    own: name => `✍️ ${name}`,
+    add: '➕ 新しいスタイル',
+    chosen: '✅ 挿絵はこのスタイルで描かれています。',
+    prompt: 'スタイルのプロンプト（タップでコピー）：',
+    tailNote: 'プロンプトの結びはボットがあなたの文に自動で付け加えます。人物は大人のまま描かれ、絵に文字は入りません。',
+    choose: '✅ このスタイルで描く',
+    sample: '🖼 最新のシーンでサンプル',
+    edit: '✏️ 編集',
+    remove: '🗑 削除',
+    back: '↩️ スタイル一覧へ',
+    removeTitle: quotedName => `🗑 スタイル${quotedName}を削除しますか？`,
+    removeChosen: name => `いま挿絵はこのスタイルで描かれています。削除すると${name}で描かれます。`,
+    removeYes: '🗑 はい、削除します',
+    removeNo: '↩️ 残す',
+    newTitle: '➕ 新しい挿絵スタイル',
+    editTitle: quotedName => `✏️ スタイル${quotedName}`,
+    inputNote: (max, nameMax) => `どう描くかを1通のメッセージで送ってください。技法、色、光、雰囲気など、${max}文字までです。1行目に名前を書けます（${nameMax}文字まで）。あらすじや登場人物は書かないでください。シーンから取ります。挿絵のモデルは英語を最もよく理解します。`,
+    editNote: max => `新しい文を1通のメッセージで、${max}文字まで送ってください。1行目に新しい名前を書けます。書かなければ今の名前のままです。`,
+    example: '例：',
+    exampleText: 'ろうそくの油彩\nOil painting with visible impasto brushstrokes, warm candlelight and deep shadows.',
+    copyHint: 'どのスタイルのプロンプトも、そのカードからコピーして書き換えられます。',
+    nowText: '現在：',
+    backToStyle: '↩️ スタイルに戻る',
+    sampleCaption: name => `スタイルのサンプル：${name}`,
+    drawingSample: '🎨 サンプルを描いています…',
   },
 
   model: {
@@ -443,6 +484,7 @@ export const ja: Messages = {
     gpuPaused: 'GPUが一時停止しました。/model を開いて起動してから、行動をもう一度送ってください。',
     drawing: '🎨 挿絵を描いています…',
     pictureFailed: '挿絵は描けませんでした。シーンは保存されています。',
+    sampleFailed: 'サンプルは描けませんでした。少し時間をおいてもう一度お試しください。',
   },
 
   errors: {
@@ -473,6 +515,13 @@ export const ja: Messages = {
     fileType: 'UTF-8の .txt または .md テキストファイルを送ってください。PDFとDOCXには、まだ対応していません。',
     fileEncoding: 'UTF-8として読み込めませんでした。ファイルをUTF-8で保存して、もう一度送ってください。下書きは変更されていません。',
     fileBinary: 'バイナリデータを含まない、空でない .txt または .md テキストファイルが必要です。下書きは変更されていません。',
+    styleNeedsText: 'スタイルはテキストで、1通のメッセージで送ってください。変更せずに戻るには「↩️」を押すか、/cancel を送ってください。',
+    styleTooLong: '長すぎます。スタイルは400文字以内にしてください。短くしてもう一度送ってください。',
+    stylesFull: 'ライブラリには自分のスタイルがすでに10個あります。新しく追加するには、どれか1つを削除してください。',
+    sampleOff: 'あなたのシーンにはまだ挿絵が有効になっていないため、サンプルは描けません。',
+    sampleBusy: 'シーンはまだ執筆中です。届いてからサンプルを頼んでください。',
+    sampleNoScene: 'サンプルは最新のシーンをもとに描きます。物語を始めると、最初のシーンのあとから頼めます。',
+    sampleInFlight: 'サンプルを描いているところです。届いたら次のサンプルを頼めます。',
   },
 
   labels: {
@@ -496,6 +545,7 @@ export const ja: Messages = {
     compact: '初期のシーンを今すぐ記憶に圧縮',
     model: '現在のモデルと接続',
     language: '表示言語',
+    style: 'シーンの挿絵のスタイル',
     gpu_pause: '作業の完了後にGPUを一時停止',
     gpu_start: 'レンタルGPUを起動',
     cancel: '入力や生成を中止',

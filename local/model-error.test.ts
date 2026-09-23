@@ -46,6 +46,17 @@ test('a picture of a scene ends in one of four words, with whole seconds and cou
     description: 'PRIVATE_DESCRIPTION', who: 'PRIVATE_NAME' }), {});
 });
 
+// A picture names its style by a word of a closed set: every style of a reader's own is `custom`, and neither its
+// words nor its id reach a log. A sample of a style also says whether the scene's frame was drawn again as it was.
+test('a picture names its style by a word of a closed set, and a sample says whether it reused the frame', () => {
+  for (const pictureStyle of ['standard', 'semi', 'novel', 'film', 'graphic', 'watercolor', 'custom']) {
+    assert.equal(safeErrorDetails({ pictureStyle }).pictureStyle, pictureStyle);
+  }
+  assert.deepEqual(safeErrorDetails({ outcome: 'ready', frameReused: false, pictureStyle: 'custom' }), { outcome: 'ready', frameReused: false, pictureStyle: 'custom' });
+  assert.deepEqual(safeErrorDetails({ pictureStyle: 'Charcoal on rough paper', frameReused: 'yes' }), {});
+  assert.deepEqual(safeErrorDetails({ pictureStyle: 'y12' }), {});
+});
+
 test('a failed CLI run logs how it ended as an enum and a flag, never a subtype the list does not know', () => {
   assert.deepEqual(safeErrorDetails({ cliResult: 'error_max_structured_output_retries', cliError: true, exitCode: 0 }),
     { cliResult: 'error_max_structured_output_retries', cliError: true, exitCode: 0 });

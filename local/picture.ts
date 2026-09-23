@@ -13,8 +13,10 @@
 //     checked against the model's own server in local/config.ts.
 // Nothing here is stored or logged but counts: not the description, not the prompt, not the bytes. The picture is
 // stripped of its PNG text chunks by `drawOne` before it is sent, because ComfyUI writes the whole prompt into
-// them, and the card is left with no copy of it either: the job record is cleared and a saving node in the
-// workflow is loaded as a preview one, which writes to the directory ComfyUI empties (`previewOnly`).
+// them, and the card keeps no copy of it for long either: the job record is cleared, and a saving node in the
+// workflow is loaded as a preview one (`previewOnly`), whose file is in RAM and is deleted by gpu/image-sweeper.py
+// seconds later. The server's node cache still holds the last job in memory until the next one runs (docs/gpu.md,
+// "What the card keeps of a picture").
 //
 // A picture in flight is stopped by the reader's next message and by `/cancel`. It is not offered as a button of
 // its own: by the time it is being drawn the job lock is clear, so the bot shows no cancel control, and moving
@@ -30,9 +32,11 @@ import type { Character, Description } from './illustrate.ts';
 import type { Log } from './model-error.ts';
 import { errorCode, safeErrorDetails } from './model-error.ts';
 import type { Provider } from './model.ts';
+import { styleChoice, styleLine } from './picture-style.ts';
+import type { StyleChoice } from './picture-style.ts';
 import { contextParts, storyNarration } from './prompt.ts';
 import type { Store } from './store.ts';
-import type { Chat } from './telegram.ts';
+import type { Chat, Screen } from './telegram.ts';
 import { texts } from './text.ts';
 import { inTurn } from './turn.ts';
 
@@ -48,6 +52,14 @@ export type PictureRequest = {
   // answered, failed or was given up. What the drawing that follows needs is on the other card, so the bot starts
   // the reader's next turn's work here rather than after the photo (local/bot.ts `prepareNext`).
   afterDescribe?: () => void;
+};
+// A sample of a style, asked for from its card (local/ui.ts): the scene the reader is at, drawn once more in `line`.
+// `status` stands in the chat while it is drawn and `caption` goes under the photo, both from the reader's catalog;
+// `pictureStyle` is the word its log row names the style with.
+export type SampleRequest = {
+  userId: string; chat: Chat; storyId: string; branchId: string; nodeId: string; line: string;
+  pictureStyle: StyleChoice; status: string; caption: Screen; signal: AbortSignal; log: Log;
+  hold?: () => (() => void) | undefined;
 };
 export type Illustrator = ReturnType<typeof createIllustrator>;
 
@@ -95,6 +107,8 @@ export function createIllustrator(config: ImageConfig, deps: {
   const sampler = settings.sampler ?? SAMPLER_DEFAULTS.sampler;
   const scheduler = settings.scheduler ?? SAMPLER_DEFAULTS.scheduler;
   const cfg = settings.cfg ?? SAMPLER_DEFAULTS.cfg;
+  // The line of a reader who has not chosen a style.
+  const standard = config.style ?? STYLE;
 
   // The scene's own request, once more: the same system prompt and the same history up to this scene, so that a
   // server with a prefix cache pays for the appended instruction alone (the plan's "What the second call costs").
@@ -102,6 +116,63 @@ export function createIllustrator(config: ImageConfig, deps: {
     const parts = contextParts(state, { storyId, head: nodeId, memory: state.stories[storyId].branches[branchId]?.memory ?? null });
     return { system: storyNarration(state, storyId).system, messages: [...parts.seed, ...parts.memory, ...parts.tail] };
   };
+
+  // The frame of each reader's latest described scene, in memory only and only until the next one: a sample of a
+  // style is drawn from it without asking the language model again. Never stored and never logged.
+  const frames = new Map<string, { storyId: string; nodeId: string; description: Description; sheet: Character[] }>();
+
+  // The description of one scene: the story's sheet first if it has none yet, then the frame, both on the language
+  // model's card. `sharesPrefix` holds it to the slot where the scene's own request is cached, which is where the
+  // picture that follows the scene belongs; a sample asked for later may find that slot gone, after a restart or under
+  // another reader's scene, and is described like any request of its reader instead.
+  async function describeFrame(userId: string, storyId: string, nodeId: string, branchId: string, signal: AbortSignal, log: Log,
+    sharesPrefix: boolean) {
+    const state = store.read(userId);
+    const story = state.stories[storyId];
+    if (!story?.nodes[nodeId]) throw Object.assign(new Error('scene_gone'), { code: 'scene_gone' });
+    const context = excerpt(state, storyId, nodeId, branchId);
+    let sheet: Character[] = [];
+    // Both calls continue the request the scene itself was written from, so right after the scene they belong in the
+    // slot where that prefix is cached and nowhere else: `sharesPrefix` is the scheduler's word for it, and it also
+    // ends this turn the moment its own reader asks for the next scene (local/scheduler.ts).
+    const description = await inTurn(provider, async model => {
+      // One sheet per story, written from the whole history the first time a scene of it is illustrated and
+      // kept beside the story's memory afterwards: every later frame of this story repeats these lines
+      // verbatim, which is the only thing that made a character recognisable across pictures (step 6).
+      sheet = story.sheet ?? [];
+      if (!story.sheet) {
+        sheet = sheetOf((await askJson(model, sheetRequest(context), { signal })).value);
+        store.mutate(userId, saved => { const one = saved.stories[storyId]; if (one && !one.sheet) one.sheet = sheet; });
+        log('picture_sheet_written', undefined, { sheetCharacters: sheet.length });
+      }
+      return (await askJson(model, frameRequest(context, sheet.map(one => one.name)), { signal }))
+        .value as unknown as Description;
+    }, sharesPrefix ? { holder: userId, sharesPrefix } : { holder: userId });
+    frames.set(userId, { storyId, nodeId, description, sheet });
+    return { description, sheet };
+  }
+
+  // One frame on the picture card in one style line, with the story's seed: a sample of a style and the scene's own
+  // picture differ in their last sentence alone.
+  async function drawFrame(storyId: string, frame: { description: Description; sheet: Character[] }, line: string, signal: AbortSignal) {
+    const assembled = assemblePrompt(frame.description, frame.sheet, line);
+    const comfy: Comfy = { baseUrl: config.url, timeoutMs: config.timeoutMs, signal };
+    const filled = applyToWorkflow(graph, { checkpoint: config.checkpoint, prompt: assembled.prompt, negative: '',
+      seed: seedOf(storyId), steps, sampler, scheduler, cfg, width: size.width, height: size.height });
+    return { assembled, drawn: await drawOne(comfy, filled, { waitMs: config.waitMs, pollMs }) };
+  }
+
+  // A status line of its own, not the scene's draft: it has to outlive the message it stands under and be removed
+  // by id once the photo is there. A chat that refuses it is no reason to skip the picture.
+  async function statusLine(chat: Chat, text: string, log: Log) {
+    let status: number | undefined;
+    try { status = ((await chat.send({ text })) as { message_id?: number }).message_id; }
+    catch (error) { log('picture_status_unsent', errorCode(error)); }
+    return async (replacement?: string) => {
+      if (status === undefined) return;
+      try { await (replacement === undefined ? chat.remove(status) : chat.edit(status, { text: replacement })); } catch { /* a hint, never needed */ }
+    };
+  }
 
   // One picture, from the status line to the photo. `described` is called the moment the language model is out
   // of it, so that the caller may start the work that was waiting for its slot while the card still draws.
@@ -113,17 +184,10 @@ export function createIllustrator(config: ImageConfig, deps: {
       return { pictureAfterSceneMs: waited, pictureSeconds: Math.round(waited / 1000) };
     };
     const t = texts(store.read(userId).language);
-    // A status line of its own, not the scene's draft: it has to outlive the scene's message and be removed by id
-    // once the photo is there. A chat that refuses it is no reason to skip the picture.
-    let status: number | undefined;
-    try { status = ((await chat.send({ text: t.notices.drawing })) as { message_id?: number }).message_id; }
-    catch (error) { log('picture_status_unsent', errorCode(error)); }
-    const clear = async (text?: string) => {
-      if (status === undefined) return;
-      try { await (text === undefined ? chat.remove(status) : chat.edit(status, { text })); } catch { /* a hint, never needed */ }
-    };
+    const clear = await statusLine(chat, t.notices.drawing, log);
 
     let describeMs = 0;
+    let pictureStyle: StyleChoice | undefined;
     try {
       // The description call, on the language model's card, holding it the way a job holds it and no longer.
       const describeStarted = now();
@@ -134,46 +198,24 @@ export function createIllustrator(config: ImageConfig, deps: {
         await clear();
         return;
       }
-      let sheet: Character[] = [];
-      let description: Description;
-      try {
-        const state = store.read(userId);
-        const story = state.stories[storyId];
-        if (!story?.nodes[nodeId]) throw Object.assign(new Error('scene_gone'), { code: 'scene_gone' });
-        const context = excerpt(state, storyId, nodeId, branchId);
-        // Both calls continue the request the scene itself was written from, so they belong in the slot where that
-        // prefix is cached and nowhere else: `sharesPrefix` is the scheduler's word for it, and it also ends this
-        // turn the moment its own reader asks for the next scene (local/scheduler.ts).
-        description = await inTurn(provider, async model => {
-          // One sheet per story, written from the whole history the first time a scene of it is illustrated and
-          // kept beside the story's memory afterwards: every later frame of this story repeats these lines
-          // verbatim, which is the only thing that made a character recognisable across pictures (step 6).
-          sheet = story.sheet ?? [];
-          if (!story.sheet) {
-            sheet = sheetOf((await askJson(model, sheetRequest(context), { signal })).value);
-            store.mutate(userId, saved => { const one = saved.stories[storyId]; if (one && !one.sheet) one.sheet = sheet; });
-            log('picture_sheet_written', undefined, { sheetCharacters: sheet.length });
-          }
-          return (await askJson(model, frameRequest(context, sheet.map(one => one.name)), { signal }))
-            .value as unknown as Description;
-        }, { holder: userId, sharesPrefix: true });
-      } finally { release?.(); described(); }
+      let frame: { description: Description; sheet: Character[] };
+      try { frame = await describeFrame(userId, storyId, nodeId, branchId, signal, log, true); }
+      finally { release?.(); described(); }
       describeMs = Math.max(0, now() - describeStarted);
       if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
 
-      // The prompt is assembled here, from the fields, in the order the readers of step 3 asked for, and ends
-      // with our one style line. The names of the sheet select appearance lines and are cut out of every field.
-      const assembled = assemblePrompt(description, sheet, config.style ?? STYLE);
-      const comfy: Comfy = { baseUrl: config.url, timeoutMs: config.timeoutMs, signal };
-      const filled = applyToWorkflow(graph, { checkpoint: config.checkpoint, prompt: assembled.prompt, negative: '',
-        seed: seedOf(storyId), steps, sampler, scheduler, cfg, width: size.width, height: size.height });
-      const drawn = await drawOne(comfy, filled, { waitMs: config.waitMs, pollMs });
+      // The prompt is assembled from the fields, in the order the readers of step 3 asked for, and ends with one
+      // style line: the reader's choice as it stands now, which they may have changed while the description was
+      // written, or the bot's own. The names of the sheet select appearance lines and are cut out of every field.
+      const reader = store.read(userId);
+      pictureStyle = styleChoice(reader, standard);
+      const { assembled, drawn } = await drawFrame(storyId, frame, styleLine(reader, standard), signal);
       if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
       // The photo hangs under the scene it belongs to, and the status line goes only once the photo is there.
       await chat.photo(drawn.bytes, request.sceneMessageId);
       await clear();
       log('picture', undefined, { outcome: 'ready', describeMs, imageMs: drawn.totalMs, imageSteps: steps,
-        namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook, ...elapsed() });
+        namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook, pictureStyle, ...elapsed() });
     } catch (error) {
       const code = errorCode(error);
       const cancelled = signal.aborted || code === 'cancelled';
@@ -184,7 +226,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       // A reader who has moved on gets no apology, only their own next scene; a reader still waiting is told once.
       await clear(outcome === 'failed' ? t.notices.pictureFailed : undefined);
       log('picture', cancelled ? 'cancelled' : safeCode(code),
-        { ...safeErrorDetails(error), outcome, cancelled, describeMs, ...elapsed() });
+        { ...safeErrorDetails(error), outcome, cancelled, describeMs, pictureStyle, ...elapsed() });
     }
   }
 
@@ -192,12 +234,59 @@ export function createIllustrator(config: ImageConfig, deps: {
     // Off by default and per reader: the story text of a reader who did not ask for this is never drawn, not even
     // on a card we run (AGENTS.md, and the plan's second constraint).
     enabledFor(userId: string) { return config.users.has(userId); },
+    // The line of a reader who has not chosen a style; the picker marks the preset it is (local/ui.ts).
+    standardStyle: standard,
 
     async illustrate(request: PictureRequest): Promise<void> {
       // Runs once, however this ends: the caller has work that waits for the model's slot, not for the picture.
       let told = false;
       const described = () => { if (!told) { told = true; try { request.afterDescribe?.(); } catch { /* the caller's own */ } } };
       try { await drawPicture(request, described); } finally { described(); }
+    },
+
+    // A sample of a style (`SampleRequest`). The frame of the scene is the one described for its own picture while
+    // the bot still holds it, so that a sample costs the picture card alone; otherwise the scene is described again,
+    // as a request of this reader, in their own slot when it is free. The reader asked for this one and waits for it,
+    // so a failure is told; their next move in the story stops it (local/bot.ts).
+    async sample(request: SampleRequest): Promise<void> {
+      const { userId, chat, storyId, branchId, nodeId, signal, log, pictureStyle } = request;
+      if (signal.aborted) return;
+      const t = texts(store.read(userId).language);
+      const clear = await statusLine(chat, request.status, log);
+      // A frame is reused only for the very scene it was described from, and only while that scene still exists.
+      const kept = frames.get(userId);
+      const frameReused = kept?.storyId === storyId && kept.nodeId === nodeId && !!store.read(userId).stories[storyId]?.nodes[nodeId];
+      let describeMs = 0;
+      try {
+        let frame: { description: Description; sheet: Character[] } | undefined = frameReused ? kept : undefined;
+        if (!frame) {
+          let release: (() => void) | undefined;
+          try { release = request.hold?.(); }
+          catch {
+            log('picture_sample', 'gpu_not_ready', { outcome: 'skipped', frameReused, pictureStyle });
+            await clear(t.notices.gpuPaused);
+            return;
+          }
+          const describeStarted = now();
+          try { frame = await describeFrame(userId, storyId, nodeId, branchId, signal, log, false); }
+          finally { release?.(); }
+          describeMs = Math.max(0, now() - describeStarted);
+        }
+        if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
+        const { assembled, drawn } = await drawFrame(storyId, frame, request.line, signal);
+        if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
+        await chat.photo(drawn.bytes, undefined, request.caption);
+        await clear();
+        log('picture_sample', undefined, { outcome: 'ready', frameReused, describeMs, imageMs: drawn.totalMs, imageSteps: steps,
+          namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook, pictureStyle });
+      } catch (error) {
+        const code = errorCode(error);
+        const cancelled = signal.aborted || code === 'cancelled';
+        const outcome = cancelled ? 'cancelled' : GAVE_WAY.includes(String(code)) ? 'skipped' : 'failed';
+        await clear(cancelled ? undefined : t.notices.sampleFailed);
+        log('picture_sample', cancelled ? 'cancelled' : safeCode(code),
+          { ...safeErrorDetails(error), outcome, cancelled, frameReused, describeMs, pictureStyle });
+      }
     },
   };
 }
