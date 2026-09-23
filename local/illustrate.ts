@@ -19,7 +19,7 @@ export type Description = {
 export type Assembled = { prompt: string; namesStripped: number; fromSheet: number; withoutLook: number };
 
 // The style belongs to us, not to the describing model: step 1 measured it picking a different style every time.
-export const STYLE = 'Hand-painted visual novel illustration with soft opaque brushwork, muted natural colors and restrained shading. Naturalistic adult facial proportions, moderately sized eyes, simplified noses and mouths, and age-appropriate facial lines throughout. Clear silhouettes. No captions, logos or watermarks.';
+export const STYLE = 'Hand-painted visual novel illustration with soft opaque brushwork, muted natural colors and restrained shading. Naturalistic adult facial proportions, moderately sized eyes, simplified noses and mouths, and age-appropriate facial lines throughout. Clear silhouettes.';
 
 // An age as a number reached the prompt in step 1 ("48-year-old") against the rule that only the visible goes in, and
 // an image model reads a number worse than a word. Every field is cleaned, not only the sheet as in the scratch script.

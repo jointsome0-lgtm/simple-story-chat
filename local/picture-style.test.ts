@@ -21,10 +21,11 @@ test('the standard style is the bot\'s own line, and the preset it is when it is
   assert.equal(styleKey({ pictureStyle: 'y4' }, OWNER), 'standard');
   assert.equal(styleKey({ pictureStyle: 'toString' }, OWNER), 'standard');
   assert.equal(styleLine({ pictureStyle: 'y4' }, OWNER), OWNER);
-  // Every preset asks for natural proportions and for no lettering, and fits the limit of an own style.
+  // Every preset asks for natural proportions, no longer says anything about lettering, and fits the limit of an
+  // own style.
   for (const key of PRESET_KEYS) {
     assert.match(PRESETS[key], /proportions/, key);
-    assert.match(PRESETS[key], /No captions/, key);
+    assert.doesNotMatch(PRESETS[key], /captions|logos|watermarks/, key);
     assert.ok([...PRESETS[key]].length <= OWN_STYLE_CHARS, key);
   }
 });

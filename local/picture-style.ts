@@ -13,15 +13,16 @@ export type StyleChoice = NonNullable<ErrorDetails['pictureStyle']>;
 export type Preset = Exclude<StyleChoice, 'standard' | 'custom'>;
 
 // The presets, in the order of the picker. Every line keeps what the owner judged the pictures by first — adult
-// proportions and natural faces, since the big heads of the first run were the complaint — and asks for no
-// lettering, which the image model fills with nonsense. `semi` is the line the owner approved on 2026-09-23,
-// `novel` the one the six steps were measured with, `film` the photographic line tried the same evening.
+// proportions and natural faces, since the big heads of the first run were the complaint. They used to end by
+// asking for no captions, logos or watermarks too; the owner took that sentence out of every line on 2026-09-24.
+// `semi` is the line the owner approved on 2026-09-23, `novel` the one the six steps were measured with (then with
+// that sentence), `film` the photographic line tried the same evening.
 export const PRESETS: Record<Preset, string> = {
-  semi: 'Semi-realistic digital painting with cinematic lighting: realistic human anatomy and head-to-body proportions, natural faces with age-appropriate lines, painterly brushwork with soft visible strokes, rich but slightly muted colors, subtle painted texture instead of photographic detail. Clear silhouettes. No captions, logos or watermarks.',
+  semi: 'Semi-realistic digital painting with cinematic lighting: realistic human anatomy and head-to-body proportions, natural faces with age-appropriate lines, painterly brushwork with soft visible strokes, rich but slightly muted colors, subtle painted texture instead of photographic detail. Clear silhouettes.',
   novel: STYLE,
-  film: 'Photorealistic cinematic film still shot on 35mm, natural lens perspective. Real human anatomy and proportions: normal head-to-body ratio, natural skin texture, adult faces with age-appropriate lines. Realistic practical lighting, subtle film grain, shallow depth of field. No captions, logos or watermarks.',
-  graphic: 'Graphic novel illustration with confident ink outlines, dramatic chiaroscuro shading and a limited muted palette with one accent color. Realistic adult anatomy and head-to-body proportions, natural faces with age-appropriate lines. Clear silhouettes. No captions, speech bubbles, logos or watermarks.',
-  watercolor: 'Watercolor illustration with soft translucent washes, a loose pencil underdrawing and visible paper grain, gentle muted colors. Realistic adult anatomy and head-to-body proportions, natural faces with age-appropriate lines. Clear silhouettes. No captions, logos or watermarks.',
+  film: 'Photorealistic cinematic film still shot on 35mm, natural lens perspective. Real human anatomy and proportions: normal head-to-body ratio, natural skin texture, adult faces with age-appropriate lines. Realistic practical lighting, subtle film grain, shallow depth of field.',
+  graphic: 'Graphic novel illustration with confident ink outlines, dramatic chiaroscuro shading and a limited muted palette with one accent color. Realistic adult anatomy and head-to-body proportions, natural faces with age-appropriate lines. Clear silhouettes.',
+  watercolor: 'Watercolor illustration with soft translucent washes, a loose pencil underdrawing and visible paper grain, gentle muted colors. Realistic adult anatomy and head-to-body proportions, natural faces with age-appropriate lines. Clear silhouettes.',
 };
 export const PRESET_KEYS = Object.keys(PRESETS) as Preset[];
 
