@@ -142,6 +142,11 @@ wrote 271 `later` entries into the ledgers of 19 nodes, 259 of them confirmed; `
 few (Sol 5, Opus 9). Open: whether minutes narrated past a scene's own stamp are a fair test or something the seed's
 clock rule should say; that belongs to the seed of version 2. The results are in the public README; the pack (the tree
 with the new ledger, 14 files) was pushed to revision `229ac84a1956`.
+The owner asked for a chart of the run in the public README and chose between two drawn from the same extracted numbers,
+one by this session (an SVG rasterised with ImageMagick) and one by an Opus subagent (matplotlib in a scratch venv); the
+Opus one, `lighthouse/nodes-v1.png`, went into the pack and the README at revision `6be9e2a2c061`. The hub keeps images in
+LFS, so `pack-hf push` learned that flow (preupload, LFS batch, the blob by hash, `lfsFile` in the commit) and carries
+`png` and `svg` beside JSON and Markdown; the chart sources and the extracted numbers are archived with the run.
 
 ## 2026-09-22 · Fable 5.1 · the walk: the model writes its own story, and a council of four reads every scene
 

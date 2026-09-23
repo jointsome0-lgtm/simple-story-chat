@@ -3,8 +3,10 @@
 //   node local/pack-hf.ts pull --pack <directory> --repo <owner>/<dataset> --revision <commit>
 //   node local/pack-hf.ts export --pack <directory> --authors a,b   (the built-in scenarios of examples/ in pack format)
 // HF_TOKEN comes from .env.eval; a public dataset is pulled without it. Prints counts and the commit only, never file contents or the token.
+// A pack holds JSON and Markdown, and images (png, svg) for the README; the hub keeps images in LFS, and push does the same.
 import { parseArgs, parseEnv } from 'node:util';
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, copyFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, copyFileSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { loadScenario, packScenarios, packWalks, loadWalk } from './scenarios.ts';
 import { loadGold } from './walk-gold.ts';
@@ -56,23 +58,42 @@ const ok = (response: Response, step: string) => { if (!response.ok) throw new E
 
 function files(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => entry.name.startsWith('.') ? []
-    : entry.isDirectory() ? files(join(directory, entry.name)) : entry.isFile() && /\.(json|md)$/.test(entry.name) ? [join(directory, entry.name)] : []);
+    : entry.isDirectory() ? files(join(directory, entry.name)) : entry.isFile() && /\.(json|md|png|svg)$/.test(entry.name) ? [join(directory, entry.name)] : []);
 }
 
 if (command === 'push') {
   // A pack that the eval cannot load is not published.
   const counts = await checkPack(pack);
   const paths = files(pack);
-  const lines = [{ key: 'header', value: { summary: `Pack of ${counts.scenarios} scenarios and ${counts.walks} walks`, description: '' } },
-    ...paths.map(path => ({ key: 'file', value: { path: relative(pack, path).split(sep).join('/'), encoding: 'base64', content: readFileSync(path).toString('base64') } }))];
+  const rel = (path: string) => relative(pack, path).split(sep).join('/');
+  // The hub says which files its .gitattributes keeps in LFS (images, by default): those go up as blobs first and are
+  // committed by hash; the rest travel in the commit itself.
+  const modes = await ok(await fetch(`${api}/preupload/main`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' },
+    body: JSON.stringify({ files: paths.map(path => ({ path: rel(path), sample: readFileSync(path).subarray(0, 512).toString('base64'), size: statSync(path).size })) }) }), 'preupload')
+    .json() as { files?: { path?: string; uploadMode?: string }[] };
+  const lfs = new Set((modes.files ?? []).filter(file => file.uploadMode === 'lfs').map(file => file.path));
+  const lines: { key: string; value: object }[] = [{ key: 'header', value: { summary: `Pack of ${counts.scenarios} scenarios and ${counts.walks} walks`, description: '' } }];
+  for (const path of paths) {
+    const content = readFileSync(path);
+    if (!lfs.has(rel(path))) { lines.push({ key: 'file', value: { path: rel(path), encoding: 'base64', content: content.toString('base64') } }); continue; }
+    const oid = createHash('sha256').update(content).digest('hex');
+    const batch = await ok(await fetch(`https://huggingface.co/datasets/${values.repo}.git/info/lfs/objects/batch`, { method: 'POST',
+      headers: { ...headers, accept: 'application/vnd.git-lfs+json', 'content-type': 'application/vnd.git-lfs+json' },
+      body: JSON.stringify({ operation: 'upload', transfers: ['basic'], hash_algo: 'sha_256', ref: { name: 'refs/heads/main' }, objects: [{ oid, size: content.length }] }) }), 'lfs batch')
+      .json() as { objects?: { actions?: { upload?: { href?: string; header?: Record<string, string> } } }[] };
+    // No upload action means the hub already holds this blob.
+    const upload = batch.objects?.[0]?.actions?.upload;
+    if (upload?.href) ok(await fetch(upload.href, { method: 'PUT', headers: upload.header ?? {}, body: content }), 'lfs upload');
+    lines.push({ key: 'lfsFile', value: { path: rel(path), algo: 'sha256', oid, size: content.length } });
+  }
   const response = ok(await fetch(`${api}/commit/main`, { method: 'POST', headers: { ...headers, 'content-type': 'application/x-ndjson' },
     body: lines.map(line => JSON.stringify(line)).join('\n') }), 'commit');
   // The reply of the hub is not typed; only the commit is read from it.
   const result = await response.json() as { commitOid?: string };
-  console.log(JSON.stringify({ event: 'pushed', repo: values.repo, ...counts, files: paths.length, revision: result.commitOid }));
+  console.log(JSON.stringify({ event: 'pushed', repo: values.repo, ...counts, files: paths.length, lfs: lfs.size, revision: result.commitOid }));
 } else {
   const listing = await ok(await fetch(`${api}/tree/${values.revision}?recursive=true`, { headers }), 'listing').json() as Entry[];
-  const paths = listing.filter(entry => entry.type === 'file' && typeof entry.path === 'string' && /^[\w./-]+\.(json|md)$/.test(entry.path) && !entry.path.includes('..')).map(entry => entry.path!);
+  const paths = listing.filter(entry => entry.type === 'file' && typeof entry.path === 'string' && /^[\w./-]+\.(json|md|png|svg)$/.test(entry.path) && !entry.path.includes('..')).map(entry => entry.path!);
   for (const path of paths) {
     const response = ok(await fetch(`https://huggingface.co/datasets/${values.repo}/resolve/${values.revision}/${path}`, { headers }), 'download');
     const target = join(pack, ...path.split('/'));
