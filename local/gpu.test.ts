@@ -497,6 +497,33 @@ test('a model server whose checks fail does not hang a pause during an eval', as
   assert.deepEqual([f.gpu.snapshot().status, f.writes], ['stopping', ['stopped']]);
 });
 
+// A pool with a shared cache has the server count a call's size before the call waits for room. A probe refused
+// during that count holds the card until the count has ended on the server, so the pause stops the card after it.
+test("the owner's pause stops the card only once a refused probe's count has ended on the server", async t => {
+  const f = fixture(); await f.gpu.tick();
+  const counts: { signal: AbortSignal; unwind: () => void }[] = [];
+  const scheduler = createScheduler({
+    generate: (_request: string, { signal }: { signal: AbortSignal }) => new Promise<string>((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }),
+    // The count sees its abort at once but ends only when the test lets it, as a request still closing on the server.
+    countInput: (_request: string, { signal }: { signal: AbortSignal }) => new Promise<number>((_resolve, reject) => {
+      counts.push({ signal, unwind: () => reject(signal.reason) });
+    }),
+  }, { ...queueOptions(f.gpu, { pool: true }), now: f.now, pollMs: 100000, slots: 2, poolTokens: 100000, outputTokens: () => 100 });
+  t.after(() => { for (const count of counts) count.unwind(); return scheduler.close(); });
+  const refused = assert.rejects(scheduler.background.generate('eval'), { code: 'background_unavailable' });
+  await turn();
+  f.gpu.pause(); await f.gpu.tick();
+  scheduler.tick();
+  assert.equal(counts[0].signal.aborted, true);
+  await f.gpu.tick();
+  assert.deepEqual([f.gpu.snapshot().status, f.writes], ['draining', []]);
+  counts[0].unwind(); await refused;
+  await f.gpu.tick();
+  assert.deepEqual([f.gpu.snapshot().status, f.writes], ['stopping', ['stopped']]);
+});
+
 test("an agent's turn keeps the card up through the gaps between its calls, and its end starts the idle interval", async t => {
   const f = fixture(); await f.gpu.tick();
   const q = queue(t, f);

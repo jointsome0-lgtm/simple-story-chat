@@ -49,9 +49,10 @@ disposable probes:
   timeout;
 - an agent call stops a running probe;
 - a stopped or paused GPU gives `failed` / `gpu_not_ready` at once and is never woken for an agent. A started turn keeps
-  the GPU up from its first call to its end, the gaps between its calls included: the auto-pause counts from the
-  turn's end, and a manual pause waits for it (the bot shows the GPU draining). If the GPU stops or fails anyway, the
-  turn ends `preempted` (`background_unavailable`). It is never rerun silently; ask again with a new `requestId`.
+  the GPU up from its first call to its end, the gaps between its calls included, and past its end until its last call
+  has ended on the server: the auto-pause counts from then, and a manual pause waits for it (the bot shows the GPU
+  draining). If the GPU stops or fails anyway, the turn ends `preempted` (`background_unavailable`). It is never rerun
+  silently; ask again with a new `requestId`.
 
 The queue checks that it serves the configured model, so start the agent with the bot's model configuration
 (`npm run agent:gpu`, `npm run mcp:gpu`). Without the socket the agent calls the configured provider directly. The

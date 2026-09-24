@@ -1059,23 +1059,155 @@ test('a person waiting for an isolated slot still stops a probe holding it', asy
   f.calls[2].finish(); await tester;
   f.calls[1].finish(); await first; owner.end();
 });
-test('cancelling a queued call in a pool ends the token count it started', async t => {
-  let release: ((value: number) => void) | undefined;
-  const aborted: string[] = [];
+// A provider whose calls see their abort at once but end only when the test ends them, as a request still closing on
+// the server does. The count of a request named 'held …' waits for the test as well; any other is 100 tokens at once.
+function unwindFixture(t: TestContext, options: SchedulerOptions<string> = {}) {
+  type Call<T> = { name: string; signal: AbortSignal; finish: (value: T) => void; unwind: () => void };
+  const calls: Call<string>[] = [], counts: Call<number>[] = [];
+  const held = <T>(list: Call<T>[], name: string, signal: AbortSignal) => new Promise<T>((resolve, reject) => {
+    list.push({ name, signal, finish: resolve, unwind: () => reject(signal.reason) });
+  });
+  // How often each hold on the GPU was let go, in the order they were taken: a probe's lease and an agent turn's.
+  const probes: number[] = [], turns: number[] = [];
+  const hold = (list: number[]) => () => {
+    const index = list.push(0) - 1;
+    return () => { list[index]++; };
+  };
   const scheduler = createScheduler({
-    generate: (request: string) => new Promise<string>(() => {}),
-    countInput: (request: string, { signal }: { signal: AbortSignal }) => new Promise<number>((resolve, reject) => {
-      if (request.startsWith('slow')) { release = resolve; signal.addEventListener('abort', () => { aborted.push(request); reject(signal.reason); }, { once: true }); }
-      else resolve(100);
-    }),
-  }, { slots: 2, poolTokens: 100000, outputTokens: () => 100, pollMs: 100000 });
-  t.after(() => scheduler.close());
+    generate: (request: string, { signal }: { signal: AbortSignal }) => held(calls, request, signal),
+    countInput: (request: string, { signal }: { signal: AbortSignal }) =>
+      request.startsWith('held') ? held(counts, request, signal) : Promise.resolve(100),
+  }, { pollMs: 100000, slots: 2, poolTokens: 100000, outputTokens: () => 100,
+    holdBackgroundCall: hold(probes), holdAgentTurn: hold(turns), ...options });
+  // A failed assertion must not leave the shutdown waiting for a call nobody ends.
+  t.after(() => { for (const call of [...calls, ...counts]) call.unwind(); return scheduler.close(); });
+  return { scheduler, calls, counts, probes, turns };
+}
+// Whether a promise is still unsettled once everything already under way has run.
+async function unsettled(promise: Promise<unknown>) {
+  let open = true;
+  promise.then(() => { open = false; }, () => { open = false; });
+  await turn();
+  return open;
+}
+// What a call holds is let go only once the call has ended (local/gpu.ts), and a call stopped while a shared cache
+// counts its size ends only when that count has ended on the server.
+test('cancelling a queued call in a pool ends the token count it started, and the call settles after that count', async t => {
+  const f = unwindFixture(t);
   const controller = new AbortController();
-  const pending = scheduler.foreground.generate('slow request', { signal: controller.signal });
+  const pending = f.scheduler.foreground.generate('held request', { signal: controller.signal });
   await turn();
   controller.abort();
+  // The count was under way and is stopped, not left to finish on its own; the call waits for it to end.
+  assert.equal(f.counts[0].signal.aborted, true);
+  assert.equal(await unsettled(pending), true);
+  f.counts[0].unwind();
   await assert.rejects(pending, { code: 'cancelled' });
-  assert.deepEqual(aborted, ['slow request']);
-  // The count was under way and was stopped, not left to finish on its own.
-  assert.equal(typeof release, 'function');
+  assert.deepEqual(f.calls, []);
+});
+test('a probe stopped while its size is counted keeps its lease until that count has ended, however it is stopped', async t => {
+  let canWait = true;
+  const f = unwindFixture(t, { backgroundCanWait: () => canWait });
+  // Cancelled by whoever asked.
+  const controller = new AbortController();
+  const cancelled = f.scheduler.background.generate('held cancelled', { signal: controller.signal });
+  await turn();
+  controller.abort();
+  assert.deepEqual([f.counts[0].signal.aborted, await unsettled(cancelled), f.probes], [true, true, [0]]);
+  f.counts[0].unwind();
+  await assert.rejects(cancelled, { code: 'cancelled' });
+  assert.deepEqual(f.probes, [1]);
+  // Refused as the GPU pauses: the pause waits for the count as it would for the call.
+  const refused = f.scheduler.background.generate('held refused');
+  await turn();
+  canWait = false; f.scheduler.tick();
+  assert.equal(f.scheduler.snapshot().backgroundQueued, 0);
+  assert.deepEqual([f.counts[1].signal.aborted, await unsettled(refused), f.probes], [true, true, [1, 0]]);
+  f.counts[1].unwind();
+  await assert.rejects(refused, { code: 'background_unavailable' });
+  assert.deepEqual(f.probes, [1, 1]);
+  // Cancelled by the shutdown, which returns only once the count has ended.
+  canWait = true;
+  const shut = f.scheduler.background.generate('held shut');
+  await turn();
+  const closed = f.scheduler.close();
+  assert.deepEqual([f.counts[2].signal.aborted, await unsettled(closed), await unsettled(shut), f.probes], [true, true, true, [1, 1, 0]]);
+  f.counts[2].unwind();
+  await closed;
+  await assert.rejects(shut, { code: 'cancelled' });
+  assert.deepEqual([f.probes, f.calls], [[1, 1, 1], []]);
+});
+test('an ended agent turn lets the GPU go only once its calls have ended, a count of its own included', async t => {
+  const f = unwindFixture(t);
+  // Its first call takes a slot, and the GPU with it.
+  const agent = f.scheduler.agent.openTurn({ holder: 'agent' });
+  const first = agent.generate('first');
+  await turn();
+  f.calls[0].finish('first'); await first;
+  assert.deepEqual(f.turns, [0]);
+  // Ended while its next call is sized: the count is stopped, and the GPU is held until it has ended.
+  const next = agent.generate('held next');
+  await turn();
+  agent.end();
+  assert.deepEqual([f.counts[0].signal.aborted, await unsettled(next), f.turns], [true, true, [0]]);
+  f.counts[0].unwind();
+  await assert.rejects(next, { code: 'cancelled' });
+  assert.deepEqual(f.turns, [1]);
+  // Ended during a call: the call is stopped, and the GPU is held until it has ended.
+  const second = f.scheduler.agent.openTurn({ holder: 'agent' });
+  const running = second.generate('running');
+  await turn();
+  second.end();
+  assert.deepEqual([f.calls[1].signal.aborted, await unsettled(running), f.turns], [true, true, [1, 0]]);
+  f.calls[1].unwind();
+  await assert.rejects(running, { code: 'cancelled' });
+  assert.deepEqual(f.turns, [1, 1]);
+  // Ended while it counts beside the slots: nothing stops that count, and the GPU is held until it has ended.
+  const third = f.scheduler.agent.openTurn({ holder: 'agent' });
+  const call = third.generate('call');
+  await turn();
+  f.calls[2].finish('call'); await call;
+  const count = third.countInput!('held count');
+  third.end();
+  assert.deepEqual([await unsettled(count), f.turns], [true, [1, 1, 0]]);
+  f.counts[1].finish(4321);
+  assert.equal(await count, 4321);
+  assert.deepEqual(f.turns, [1, 1, 1]);
+});
+// A probe's count in a pool runs beside the slots, but it is a probe's call all the same (local/gpu.ts): it waits for
+// the GPU as a probe's generation does, holds its lease until it has ended, and stops when the GPU goes away.
+test("a probe's count in a pool keeps to the probes' rules beside the slots, and holds its lease until it has ended", async t => {
+  let allowed = false, canWait = false;
+  const f = unwindFixture(t, { sharedCache: false, backgroundAllowed: () => allowed, backgroundCanWait: () => canWait });
+  // While the GPU pauses, it is refused before the queue takes it, and the server hears nothing. That is checked before
+  // anything is awaited, so a count sent all the same fails here instead of hanging the test.
+  const refused = assert.rejects(f.scheduler.background.countInput!('held refused'), { code: 'background_unavailable' });
+  assert.deepEqual([f.counts.length, f.probes], [0, []]);
+  await refused;
+  // While the GPU is not ready, it waits in the probes' queue and holds its lease from the start.
+  canWait = true;
+  const waiting = f.scheduler.background.countInput!('held waiting');
+  f.scheduler.tick(); await turn();
+  assert.deepEqual([f.counts.length, f.scheduler.snapshot().backgroundQueued, f.probes], [0, 1, [0]]);
+  // Once a probe may run, it runs at once, though people hold every slot and one more waits for a slot: the count keeps
+  // nobody from a slot, so nobody stops it.
+  const people = ['owner', 'tester', 'reader'].map(name => f.scheduler.foreground.generate(name));
+  allowed = true; f.scheduler.tick(); await turn();
+  assert.deepEqual([f.calls.map(call => call.name), f.counts.map(count => count.name)], [['owner', 'tester'], ['held waiting']]);
+  assert.equal(f.counts[0].signal.aborted, false);
+  f.counts[0].finish(4321);
+  assert.equal(await waiting, 4321);
+  assert.deepEqual(f.probes, [1]);
+  // The GPU going away stops it, and the lease is held until the count has ended.
+  const stopped = f.scheduler.background.countInput!('held stopped');
+  await turn();
+  allowed = false; f.scheduler.tick();
+  assert.deepEqual([f.counts[1].signal.aborted, await unsettled(stopped), f.probes], [true, true, [1, 0]]);
+  f.counts[1].unwind();
+  await assert.rejects(stopped, { code: 'background_unavailable' });
+  assert.deepEqual(f.probes, [1, 1]);
+  f.calls[0].finish('owner'); f.calls[1].finish('tester');
+  await turn();
+  f.calls[2].finish('reader');
+  assert.deepEqual(await Promise.all(people), ['owner', 'tester', 'reader']);
 });

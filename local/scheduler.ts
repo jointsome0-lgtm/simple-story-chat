@@ -10,17 +10,20 @@ type Slot = { signal: AbortSignal; slot?: number };
 // counting, the scene). Opened by `openTurn`, closed by `end` in the caller's finally. `ended` is the code later calls
 // are refused with.
 // `sharesPrefix`: the turn continues its holder's own last request, so it runs in that holder's slot or nowhere.
+// `open`: its calls that have not settled yet. A turn that ends while some have not keeps its hold on the GPU,
+// `release`, until the last of them has.
 type Turn = { priority: Priority; ended: AbortCode | null; idleSince: number; holder?: string; yields?: boolean;
-  sharesPrefix?: boolean };
+  sharesPrefix?: boolean; open: number; release?: () => void };
 export type SchedulerOptions<Request = unknown> = {
   // Agent work starts under `agentCanStart` and is stopped only when `agentCanRun` turns false (the GPU is paused).
   backgroundAllowed?: () => boolean; agentCanStart?: () => boolean; agentCanRun?: () => boolean;
   // Whether a probe may wait for `backgroundAllowed`. While it may not (the GPU is pausing), the queue refuses the
   // probes that wait and takes no new ones.
   backgroundCanWait?: () => boolean;
-  // Called when an agent turn takes a slot; the returned function when the turn lets it go (gpu.ts `keepAwake`).
+  // Called when an agent turn takes a slot; the returned function once the turn has ended and its last call has
+  // settled (gpu.ts `keepAwake`).
   holdAgentTurn?: () => () => void;
-  // Called when the queue takes a probe's call; the returned function once, when the call settles, however it ends.
+  // Called when the queue takes a probe's call or count; the returned function once, when it settles, however it ends.
   holdBackgroundCall?: () => () => void;
   // A turn that holds a slot without calling the model this long is taken as lost: an emergency, never a normal end.
   turnIdleMs?: number;
@@ -36,7 +39,8 @@ type Item<Request> = {
   resolve: (value: unknown) => void; reject: (reason: unknown) => void; signal: AbortSignal | undefined;
   controller: AbortController; cancel: () => void; done?: Promise<void>; ahead?: number;
   // In a pool: the input the server counted, and the cache cells the call may fill (input and the whole output limit).
-  inputTokens?: number; claim?: number;
+  // `sizing` is that count while it runs: the call settles only after it, however the call ends.
+  inputTokens?: number; claim?: number; sizing?: Promise<void>;
 };
 // One server slot. `claim` is the most cache its last call could leave there; `person` whether that is a person's
 // scenes, which work prepared ahead leaves none of; `holder` whose.
@@ -86,6 +90,9 @@ export function createScheduler<Request, Result>(provider: {
   const shared = pool ? lanes.slice(0, -1) : lanes;
   // Open turns that yield to anybody but their holder.
   const yielding = new Set<Turn>();
+  // A probe's counts in a pool, which run beside the slots, and the counts a shared cache sizes calls by.
+  const beside = new Set<Item<Request>>();
+  const sizings = new Set<Promise<void>>();
   let closed = false;
   let lastForeground = now();
   const fail = (code: AbortCode | 'queue_full') => new ModelError(code);
@@ -103,7 +110,8 @@ export function createScheduler<Request, Result>(provider: {
   // waits those moments out instead of starting elsewhere, which would throw away the cache the picture kept for it.
   const leaving = (holder: string | undefined) => holder !== undefined && lanes.some(lane =>
     lane.holder === holder && !!lane.active?.turn?.sharesPrefix && lane.active.controller.signal.aborted);
-  const running = () => lanes.flatMap(lane => lane.active ? [lane.active] : []);
+  const inSlots = () => lanes.flatMap(lane => lane.active ? [lane.active] : []);
+  const running = () => [...inSlots(), ...beside];
   const snapshot = () => {
     const active = running();
     return { foregroundQueued: foreground.length, agentQueued: agent.length, backgroundQueued: background.length,
@@ -115,9 +123,19 @@ export function createScheduler<Request, Result>(provider: {
     const index = queue.indexOf(item);
     if (index >= 0) queue.splice(index, 1);
     item.signal?.removeEventListener('abort', item.cancel);
-    // The call never ran, but a pool may already be counting its input: that count ends with it.
+    // The call never ran, but a pool may already be counting its input: that count ends with it, and the call settles
+    // only once the count has, so nothing held for the call is let go while the server still counts for it.
     if (!item.controller.signal.aborted) item.controller.abort(error);
-    item.reject(error);
+    const settle = () => item.reject(error);
+    if (item.sizing) void item.sizing.then(settle, settle);
+    else settle();
+  }
+  // A call of a turn has settled. A turn that has ended lets the GPU go with its last call.
+  function settledIn(turn: Turn | null) {
+    if (!turn || --turn.open) return;
+    const release = turn.release;
+    turn.release = undefined;
+    release?.();
   }
   // Ends a turn: its waiting calls are refused, its running call is stopped, and its slot is free.
   function endTurn(turn: Turn, code: AbortCode) {
@@ -128,13 +146,19 @@ export function createScheduler<Request, Result>(provider: {
     const lane = laneOf(turn);
     if (lane?.active?.turn === turn && !lane.active.controller.signal.aborted) lane.active.controller.abort(fail(code));
     if (lane) {
-      lane.reserved!.release();
+      // The slot is the turn's no longer, but the GPU is let go only once its calls have settled: a call stopped here
+      // is still ending on the server.
+      if (turn.open) turn.release = lane.reserved!.release;
+      else lane.reserved!.release();
       lane.reserved = null;
     }
     pump();
   }
+  // Stops the running calls of a priority. A probe's count beside the slots keeps nobody from one, so it is not
+  // preempted: the GPU going away stops it.
   function stop(priority: 'agent' | 'background', code: AbortCode) {
-    for (const item of running()) if (item.priority === priority && !item.controller.signal.aborted) {
+    const calls = code === 'background_preempted' ? inSlots() : running();
+    for (const item of calls) if (item.priority === priority && !item.controller.signal.aborted) {
       item.controller.abort(fail(code));
       log(code);
     }
@@ -158,8 +182,9 @@ export function createScheduler<Request, Result>(provider: {
     if (closed || controls.signal?.aborted) return Promise.reject(fail('cancelled'));
     // A pool counts tokens beside the running calls: the count reads no cache and fills none, so it waits for no slot
     // and for no queue. It is a call of its turn all the same: a person's scene is counted before it is generated, and
-    // the picture in the slot that scene wants ends for the count, as it does with one slot.
-    const counting = pool && method === 'countInput';
+    // the picture in the slot that scene wants ends for the count, as it does with one slot. A probe's count waits for
+    // no slot either, but it keeps to the probes' queue and rules (step).
+    const counting = pool && method === 'countInput' && priority !== 'background';
     const queue = queues[priority];
     if (!counting && queue.length >= (priority === 'foreground' ? 32 : 4)) return Promise.reject(fail('queue_full'));
     if (priority === 'foreground') {
@@ -177,16 +202,21 @@ export function createScheduler<Request, Result>(provider: {
     if (turn?.ended) return Promise.reject(fail(turn.ended));
     if (counting) {
       try { controls.onStart?.(); } catch {}
-      return provider.countInput!(request, { ...controls, signal: controls.signal ?? new AbortController().signal, ...whose(priority, turn) });
+      if (turn) turn.open++;
+      return provider.countInput!(request, { ...controls, signal: controls.signal ?? new AbortController().signal, ...whose(priority, turn) })
+        .finally(() => settledIn(turn));
     }
     if (priority === 'background' && !backgroundCanWait()) return Promise.reject(fail('background_unavailable'));
     return new Promise((resolve, reject) => {
-      // A probe's call keeps the GPU up from here until it settles, whichever way it ends.
-      let release = priority === 'background' ? holdBackgroundCall() : null;
+      // A probe's call keeps the GPU up from here until it settles, whichever way it ends; a turn's stays open as long.
+      const release = priority === 'background' ? holdBackgroundCall() : null;
+      if (turn) turn.open++;
+      let pending = true;
       const settled = () => {
-        const held = release;
-        release = null;
-        held?.();
+        if (!pending) return;
+        pending = false;
+        release?.();
+        settledIn(turn);
       };
       const item: Item<Request> = { priority, method, request, controls, turn,
         resolve: value => { resolve(value); settled(); }, reject: reason => { reject(reason); settled(); },
@@ -199,13 +229,21 @@ export function createScheduler<Request, Result>(provider: {
       queue.push(item);
       // Optional observers cannot affect inference or receive request contents.
       try { controls.onQueued?.(); } catch {}
-      // A shared cache admits a call by its size, which the server counts first.
-      if (admits) {
+      // A shared cache admits a call by its size, which the server counts first. A count is sized by nothing.
+      if (admits && method === 'generate') {
         if (!provider.countInput) item.inputTokens = 0;
-        else provider.countInput(request, { signal: item.controller.signal, ...whose(priority, turn) }).then(tokens => {
-          item.inputTokens = tokens;
-          pump();
-        }, error => { if (queue.includes(item)) { rejectQueued(item, error); pump(); } });
+        else {
+          const sizing: Promise<void> = provider.countInput(request, { signal: item.controller.signal, ...whose(priority, turn) }).then(tokens => {
+            item.sizing = undefined;
+            item.inputTokens = tokens;
+            pump();
+          }, error => {
+            item.sizing = undefined;
+            if (queue.includes(item)) { rejectQueued(item, error); pump(); }
+          }).finally(() => sizings.delete(sizing));
+          item.sizing = sizing;
+          sizings.add(sizing);
+        }
       }
       pump();
     });
@@ -311,6 +349,13 @@ export function createScheduler<Request, Result>(provider: {
       log('background_unavailable');
       return endTurn(stuck.turn!, 'background_unavailable');
     }
+    // A probe's count in a pool takes no slot and keeps nobody from one: it runs beside them as soon as a probe may run
+    // at all, whoever waits for a slot.
+    if (pool && backgroundAllowed()) for (const item of background.filter(item => item.method === 'countInput')) {
+      background.splice(background.indexOf(item), 1);
+      beside.add(item);
+      run(item);
+    }
     // A reserved slot runs only the next call of its turn; an agent's is not held back by the quiet window. A turn kept
     // waiting there clears its own way below, unless it yields: such a turn preempts nothing and keeps nobody behind it.
     let held: Item<Request> | undefined;
@@ -376,6 +421,10 @@ export function createScheduler<Request, Result>(provider: {
       const scene = item.priority === 'foreground' && (shares || !item.turn?.yields);
       Object.assign(lane, { claim: item.claim, output: shares ? lane.output : output, person: scene });
     }
+    run(item, lane);
+  }
+  // Runs a call taken from its queue, in its slot or beside them, until the provider has settled, however it ends.
+  function run(item: Item<Request>, lane?: Lane<Request>) {
     const timer = item.priority === 'background'
       ? setTimeout(() => item.controller.abort(fail('background_timeout')), backgroundTimeoutMs) : undefined;
     if (item.priority !== 'foreground') log(`${item.priority}_started`);
@@ -384,7 +433,7 @@ export function createScheduler<Request, Result>(provider: {
         try { item.controls.onStart?.(); } catch {}
         // countInput is queued only when the provider has it.
         const result = await provider[item.method]!(item.request, { ...item.controls, signal: item.controller.signal,
-          ...whose(item.priority, item.turn), ...(pool ? { slot: lane.id } : {}) });
+          ...whose(item.priority, item.turn), ...(pool && lane ? { slot: lane.id } : {}) });
         item.controller.signal.throwIfAborted();
         item.resolve(result);
         if (item.priority !== 'foreground') log(`${item.priority}_completed`);
@@ -394,7 +443,8 @@ export function createScheduler<Request, Result>(provider: {
         clearTimeout(timer);
         item.signal?.removeEventListener('abort', item.cancel);
         if (item.priority === 'foreground') lastForeground = now();
-        lane.active = null;
+        if (lane) lane.active = null;
+        else beside.delete(item);
         if (item.turn) item.turn.idleSince = now();
         pump();
       }
@@ -425,7 +475,7 @@ export function createScheduler<Request, Result>(provider: {
     // the turn's running call.
     openTurn({ holder, yields = false, sharesPrefix = false }: TurnOptions = {}) {
       // A call that continues its holder's last request is prepared ahead of need too, so it yields like the rest.
-      const turn: Turn = { priority, ended: null, idleSince: Infinity, holder, yields: yields || sharesPrefix, sharesPrefix };
+      const turn: Turn = { priority, ended: null, idleSince: Infinity, holder, yields: yields || sharesPrefix, sharesPrefix, open: 0 };
       if (turn.yields) yielding.add(turn);
       return { ...calls(priority, turn), end: () => endTurn(turn, 'cancelled') };
     },
@@ -438,14 +488,12 @@ export function createScheduler<Request, Result>(provider: {
     async close() {
       closed = true;
       clearInterval(timer);
-      for (const lane of lanes) {
-        lane.reserved?.release();
-        lane.reserved = null;
-      }
+      // Each turn ends as it would on its own, and lets the GPU go once its calls have settled.
+      for (const lane of lanes) if (lane.reserved) endTurn(lane.reserved.turn, 'cancelled');
       for (const item of [...foreground, ...agent, ...background]) rejectQueued(item, fail('cancelled'));
       const active = running();
       for (const item of active) item.controller.abort(fail('cancelled'));
-      await Promise.all(active.map(item => item.done));
+      await Promise.all([...active.map(item => item.done), ...sizings]);
     },
   };
 }

@@ -34,7 +34,8 @@ export function createGpu({ api, connection, check, idleMinutes = 15, now = Date
   let status: GpuStatus = 'unknown';
   let activeJobs = 0;
   // The rest of the work that keeps the instance up while it lasts (`keepAwake`): an agent's turn from its first call
-  // to its end, a probe's call from the moment the queue takes it until it settles (local/scheduler.ts).
+  // to its end and the end of its last call, a probe's call from the moment the queue takes it until it settles
+  // (local/scheduler.ts).
   let awake = 0;
   // The start of the idle interval: null while any work lasts and while the instance is paused.
   let idleSince: number | null = null;
