@@ -45,7 +45,7 @@ import { SAMPLER_DEFAULTS, apiGraph, applyToWorkflow, drawOne, latentSizeOf, pre
 import type { Comfy, Graph } from './image-batch.ts';
 import { STYLE, askJson, assemblePrompt, frameRequest, matchSheet, sheetOf, sheetRequest, sheetWithoutOutfits } from './illustrate.ts';
 import type { Character, Description, Excerpt } from './illustrate.ts';
-import { portraitDescription } from './image-portraits.ts';
+import { PORTRAIT_CLOTHES, PORTRAIT_STYLE, portraitPrompt } from './image-portraits.ts';
 import type { Log } from './model-error.ts';
 import { errorCode, safeErrorDetails } from './model-error.ts';
 import type { ModelRequest, Provider } from './model.ts';
@@ -170,18 +170,6 @@ export function rewrittenSheet(before: SheetEntry[], written: Character[]): Shee
   return [...kept, ...before.filter(one => (one.edited || one.portrait) && !names.has(personKey(one.name))).map(one => ({ ...one, outfit: one.outfit ?? '' }))];
 }
 
-// A portrait to pick a reference by (`portrait`): the whole figure from the front, so that the build, the height, the
-// silhouette and every permanent mark show, in plain close-fitting clothes of the bot's own that hide none of it and
-// follow the person into no scene, standing without an expression put on them — a heavy brow or a hard stare is the
-// look's to say — and in a plain style of its own, never the reader's. Two portraits of one look differ by the seed.
-export const PORTRAIT_CLOTHES = 'wearing a plain close-fitting white tank top, close-fitting dark grey trousers and plain dark shoes';
-export const PORTRAIT_STYLE = 'Neutral character reference illustration with natural colors, realistic proportions and clean even rendering, the build, silhouette and permanent marks clearly readable.';
-export function portraitPrompt(name: string, look: string) {
-  const description = portraitDescription(name);
-  description.people = description.people.map(person => ({ ...person, clothes: PORTRAIT_CLOTHES,
-    action: 'stands upright facing the viewer, arms relaxed at the sides' }));
-  return assemblePrompt(description, [{ name, look, outfit: '' }], PORTRAIT_STYLE);
-}
 // The portrait a reader was shown last is held for its keep button this long, and only if Telegram would take it as
 // a photo at all.
 const PORTRAIT_HELD_MS = 30 * 60 * 1000;

@@ -411,9 +411,8 @@ drawing it again until it comes out would be choosing the picture.
 
 **The portraits carry the figure, by the bot's own recipe.** They are drawn on the card first, by the text-to-image
 graph, so that the references are the model's own people and not photographs of anybody. The recipe is the one the
-bot will draw its portraits with: `PORTRAIT_CLOTHES`, `PORTRAIT_STYLE`, `PORTRAIT_ACTION` and `portraitPrompt` in
-[image-portraits.ts](../local/image-portraits.ts) give the text the characters branch's `local/picture.ts` writes, and
-the bot takes them from there at the merge. Each portrait is:
+bot draws its portraits with: `PORTRAIT_CLOTHES`, `PORTRAIT_STYLE`, `PORTRAIT_ACTION` and `portraitPrompt` in
+[image-portraits.ts](../local/image-portraits.ts), which `local/picture.ts` takes them from. Each portrait is:
 
 - one per person, from that person's sheet line and nothing else;
 - the whole body in frame, seen from the front, before a plain grey backdrop;

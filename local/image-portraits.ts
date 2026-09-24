@@ -18,12 +18,12 @@ import type { BatchIndex, Graph, References } from './image-batch.ts';
 
 // A reference portrait carries the whole person, the figure as well as the face, so that a frame need not describe
 // the build every time: the owner's example is a man whose big muscles and barbarian menace should come from the
-// picture (2026-09-24). This is the bot's own recipe (`portraitPrompt` in local/picture.ts on the characters branch,
-// which takes it from here at the merge), fixed before the identity run and pinned by it: the whole figure from the
-// front, in plain close-fitting clothes of the bot's own that hide none of the build and follow the person into no
-// scene, standing, with no expression put on them — a grim face is the look's to say — in a neutral style of its own,
-// never a story's. `look` comes from the sheet through `assemblePrompt`, which strips names and ages here as in every
-// frame, and these clothes stand where a frame would put the sheet's outfit.
+// picture (2026-09-24). This is the recipe the bot draws its portraits by (local/picture.ts), fixed before the
+// identity run and pinned by it: the whole figure from the front, in plain close-fitting clothes of the bot's own
+// that hide none of the build and follow the person into no scene, standing, with no expression put on them — a grim
+// face is the look's to say — in a neutral style of its own, never a story's. `look` comes from the sheet through
+// `assemblePrompt`, which strips names and ages here as in every frame, and these clothes stand where a frame would
+// put the sheet's outfit. Two portraits of one look differ by the seed.
 export const PORTRAIT_CLOTHES = 'wearing a plain close-fitting white tank top, close-fitting dark grey trousers and plain dark shoes';
 export const PORTRAIT_STYLE = 'Neutral character reference illustration with natural colors, realistic proportions and clean even rendering, the build, silhouette and permanent marks clearly readable.';
 export const PORTRAIT_ACTION = 'stands upright facing the viewer, arms relaxed at the sides';
