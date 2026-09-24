@@ -3,12 +3,14 @@
 import test from 'node:test';
 import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { crc32, deflateSync } from 'node:zlib';
+import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createBot } from './bot.ts';
 import type { Update } from './bot.ts';
@@ -1093,6 +1095,21 @@ test('a portrait file whose library write is rolled back, or never came, is swep
   assert.equal(memory.sweepPortraits('1'), 0);
   assert.throws(() => memory.writePortrait('1', bytes), /database file/);
   memory.close();
+});
+
+// A kept portrait shows a reader's character, so it is story data wherever the database is put: `*.db` or `*.sqlite*`
+// covers the database, and `*.portraits/` the directory beside it. Asked of the rules alone, for paths that do not
+// exist, and only of this repository's own rules: a global ignore of the one who runs the test could pass it otherwise.
+test('git ignores the portraits beside a database of any name', t => {
+  const git = (...args: string[]) => execFileSync('git', ['-c', 'core.excludesFile=/dev/null', ...args],
+    { cwd: fileURLToPath(new URL('..', import.meta.url)), encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  try { git('rev-parse', '--is-inside-work-tree'); } catch { t.skip('not a git work tree'); return; }
+  const file = `${'0'.repeat(32)}/${'f'.repeat(32)}.png`;
+  const paths = [`story.db.portraits/${file}`, `story.sqlite.portraits/${file}`, `state/bot.db.portraits/${file}`];
+  const rules = git('check-ignore', '--no-index', '--verbose', ...paths).trim().split('\n');
+  assert.deepEqual(rules.map(one => one.split('\t')[1]), paths);
+  for (const rule of rules) assert.match(rule, /^\.gitignore:\d+:/);
+  assert.ok(paths.every(path => !existsSync(path.split('/')[0])), 'nothing was made to be asked about');
 });
 
 test('clothes are carried down one line of the story and never into another', () => {
