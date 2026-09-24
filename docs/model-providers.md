@@ -105,10 +105,10 @@ Every generation and count says whose it is. A reader's turn is class `reader` w
 Differences from llama.cpp:
 
 - The bot sends one request at a time. `SIMPLE_CHAT_GPU_SLOTS` and the pool settings do not apply.
-- The check reads `/v1/state` (contract `1`, status `ready`), then `/v1/models` (the model name, and a context of at least `SIMPLE_CHAT_CONTEXT_TOKENS`).
-- Every chunk of the stream must name the model. The stream ends with one finish, one usage chunk and `[DONE]`. An error event or a stream without `[DONE]` fails, and its text never becomes a scene.
+- The check reads `/v1/state` (contract `1`, status `ready`, the configured model), then `/v1/models` (the model name, and a context of at least `SIMPLE_CHAT_CONTEXT_TOKENS` that equals the state's `context_tokens`).
+- The bot checks this of the stream: every chunk names the model and holds one choice with index 0 or none; the text and the reasoning are strings, and a tool call is refused; one finish, `stop` or `length`, then only the usage chunk with `prompt_tokens` and `completion_tokens`, then `[DONE]`. A stream that breaks one of these fails, and so does one with an error event or without `[DONE]`; its text never becomes a scene.
 - A refusal is read by its code only; its body is never kept or logged. `class_not_allowed`, `scope_not_allowed` and `forbidden` become `unauthorized`, `queue_full` becomes `rate_limited`, `starting`, `draining`, `drained` and `engine_unavailable` become `model_unavailable`, and `not_found` becomes `unsupported_server`. `unauthorized`, `context_limit` and `timeout` keep their names, and a `context_limit` compacts the story without a second count. Every other code is `provider_failed`. The log row keeps the gateway's own code as `servingCode`.
-- The gateway's measurements go to the log rows as `servingWaitMs`, `servingFirstTokenMs` and `servingTotalMs`. `waitMs` stays the time in the bot's own queue.
+- The gateway's measurements go to the log rows as `servingWaitMs`, `servingFirstTokenMs` and `servingTotalMs`, all three or none: they are kept only when each is a whole number of milliseconds and they come in order. They never fail an answer. `waitMs` stays the time in the bot's own queue.
 
 GPU control comes later. With `SIMPLE_CHAT_VAST_INSTANCE_ID` set, the bot refuses to start with this provider: the card may stop only after the gateway has drained its requests (contract section 8), and the bot cannot drain it yet. Until then the gateway's card is started and stopped by hand. Without GPU control the bot serves no model socket, so the agent interface calls the gateway directly. Eval (`--model gpu:<label>`) and the probes with `--direct` call it directly in any case. All these calls are `internal`, and the bot does not see them.
 

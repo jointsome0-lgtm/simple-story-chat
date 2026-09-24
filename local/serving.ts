@@ -18,7 +18,9 @@ type Thrown = { phase?: unknown; httpStatus?: unknown; servingCode?: unknown; co
 type Options = { fetch?: (url: string, init: RequestInit) => Promise<Response> };
 
 const count = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
-const isObject = (value: unknown): value is { readonly [field: string]: unknown } => !!value && typeof value === 'object';
+// A JSON record: an array is none, wherever the contract asks for one.
+const isObject = (value: unknown): value is { readonly [field: string]: unknown } =>
+  !!value && typeof value === 'object' && !Array.isArray(value);
 
 // A reader's cache scope tells the gateway which reader a request is without saying who: an HMAC of the holder under
 // a secret this process makes once and never stores or logs, cut to 22 base64url characters (the contract allows 8 to
@@ -52,14 +54,15 @@ const CODES: { readonly [code: string]: string } = { unauthorized: 'unauthorized
   engine_unavailable: 'model_unavailable', timeout: 'timeout', not_found: 'unsupported_server' };
 export const codeFor = (servingCode: unknown) =>
   typeof servingCode === 'string' && Object.hasOwn(CODES, servingCode) ? CODES[servingCode] : 'provider_failed';
-// Each of our timing names for the gateway's own measurements in `usage.simple_serving` (contract section 11).
-const MEASUREMENTS = { servingWaitMs: 'wait_ms', servingFirstTokenMs: 'first_token_ms', servingTotalMs: 'total_ms' } as const;
+// The gateway's own measurements in `usage.simple_serving` (contract section 11), for the log only. All three count
+// from the moment it took the request, so they are kept together and in order, or not at all; they never fail an
+// answer.
 function timingsOf(usage: { readonly [field: string]: unknown }): Timings {
   const timings: Timings = {};
-  const measured = usage.simple_serving;
-  for (const [name, field] of Object.entries(MEASUREMENTS) as [keyof typeof MEASUREMENTS, string][]) {
-    const value = isObject(measured) ? count(measured[field]) : null;
-    if (value !== null) timings[name] = value;
+  const measured = isObject(usage.simple_serving) ? usage.simple_serving : {};
+  const [wait, firstToken, total] = [count(measured.wait_ms), count(measured.first_token_ms), count(measured.total_ms)];
+  if (wait !== null && firstToken !== null && total !== null && wait <= firstToken && firstToken <= total) {
+    Object.assign(timings, { servingWaitMs: wait, servingFirstTokenMs: firstToken, servingTotalMs: total });
   }
   // What the engine found cached of the prompt means what llama-server's `cache_n` does. Absent is unknown, not zero.
   const cached = isObject(usage.prompt_tokens_details) ? count(usage.prompt_tokens_details.cached_tokens) : null;
@@ -175,13 +178,16 @@ export function createServing(config: ServingConfig, { fetch: fetcher = globalTh
         const state = await json('/v1/state', null, current);
         if (!isObject(state) || state.contract !== '1') throw new ModelError('unsupported_server');
         if (state.status !== 'ready') throw new ModelError('model_unavailable');
+        if (state.model !== config.model) throw new ModelError('unexpected_model');
         const models = await json('/v1/models', null, current);
         const listed = isObject(models) && Array.isArray(models.data)
           ? (models.data as unknown[]).find(model => isObject(model) && model.id === config.model) : undefined;
         if (!isObject(listed)) throw new ModelError('unexpected_model');
-        // The gateway's effective context: the engine's, or its own smaller limit.
+        // The gateway's effective context: the engine's, or its own smaller limit. Its state shows the same number
+        // (contract section 6); a gateway that says two things is not one the bot understands.
         const contextTokens = count(listed.max_model_len);
-        if (contextTokens === null || contextTokens < config.contextTokens) throw new ModelError('context_limit');
+        if (contextTokens === null || count(state.context_tokens) !== contextTokens) throw new ModelError('unsupported_server');
+        if (contextTokens < config.contextTokens) throw new ModelError('context_limit');
         return { model: config.model, contextTokens };
       });
     },
@@ -203,8 +209,10 @@ export function createServing(config: ServingConfig, { fetch: fetcher = globalTh
         let done = false;
         let usage: { readonly [field: string]: unknown } | undefined;
         let reasoningCharacters = 0;
-        // Contract section 4: every chunk names the model; a chunk holds one choice with index 0, or none; exactly one
-        // finish, then exactly one usage chunk, then `[DONE]`.
+        // What this adapter checks of the stream (contract section 4): every chunk is a record that names the model and
+        // holds one choice or none; a choice has index 0 and a delta of text, reasoning or neither, never a tool; one
+        // finish, `stop` or `length`; after it only the usage chunk, and after that only `[DONE]`. An error event, or
+        // any of these broken, fails the stream, and so does a stream that ends before `[DONE]`.
         for await (const data of events(response.body)) {
           if (data === '[DONE]') { done = true; break; }
           let event: unknown;
@@ -224,13 +232,13 @@ export function createServing(config: ServingConfig, { fetch: fetcher = globalTh
             usage = event.usage;
             continue;
           }
+          if (finishReason) throw new ModelError('invalid_stream');
           const choice: unknown = event.choices[0];
           if (choice === undefined) continue;
           if (!isObject(choice) || choice.index !== 0 || !isObject(choice.delta)) throw new ModelError('invalid_stream');
           const { content, reasoning_content: reasoning } = choice.delta;
           if (choice.delta.tool_calls || choice.delta.function_call) throw new ModelError('unexpected_tools');
           if ((content != null && typeof content !== 'string') || (reasoning != null && typeof reasoning !== 'string')) throw new ModelError('invalid_stream');
-          if (finishReason && (content || reasoning)) throw new ModelError('invalid_stream');
           if (typeof reasoning === 'string') reasoningCharacters += reasoning.length;
           if (content) {
             text += content;
@@ -238,23 +246,23 @@ export function createServing(config: ServingConfig, { fetch: fetcher = globalTh
             await onText(content);
           }
           if (choice.finish_reason != null) {
-            if (finishReason || !member(['stop', 'length'] as const, choice.finish_reason)) throw new ModelError('invalid_stream');
+            if (!member(['stop', 'length'] as const, choice.finish_reason)) throw new ModelError('invalid_stream');
             finishReason = choice.finish_reason;
           }
         }
         current.throwIfAborted();
         if (!done || !finishReason) throw new ModelError('incomplete_stream');
         const inputTokens = count(usage?.prompt_tokens);
-        if (!usage || !inputTokens) throw new ModelError('usage_unavailable');
+        const outputTokens = count(usage?.completion_tokens);
+        if (!usage || !inputTokens || outputTokens === null) throw new ModelError('usage_unavailable');
         // The gateway's count and its engine's must agree, as llama-server's did (contract section 5).
         if (counted && inputTokens !== preparedTokens) throw new ModelError('unexpected_context');
         // Over the limit the result does not stand, whatever it says: the story compacts and asks again.
         if (inputTokens > limit) throw new ModelError('context_limit');
         if (!text.trim()) throw new ModelError('empty_response');
-        const outputTokens = count(usage.completion_tokens);
         const cachedInputTokens = isObject(usage.prompt_tokens_details) ? count(usage.prompt_tokens_details.cached_tokens) : null;
         return { text, finishReason, usage: { inputTokens, outputTokens, cachedInputTokens, reasoningCharacters,
-          totalTokens: outputTokens === null ? null : inputTokens + outputTokens }, timings: timingsOf(usage) };
+          totalTokens: inputTokens + outputTokens }, timings: timingsOf(usage) };
       });
     },
   };

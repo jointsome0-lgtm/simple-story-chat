@@ -95,7 +95,7 @@ test('a structured request asks for its schema as json_schema, and memory sample
 });
 
 test('every call says whose it is: a reader with a scope of their own, the agent, or internal work', async () => {
-  const f = fixture(path => path === '/v1/state' ? json({ contract: '1', status: 'ready' })
+  const f = fixture(path => path === '/v1/state' ? json({ contract: '1', status: 'ready', model: 'test-model', context_tokens: 65536 })
     : path === '/v1/models' ? json({ data: [{ id: 'test-model', max_model_len: 65536 }] }) : answer());
   await f.provider.generate(trusted(), { priority: 'foreground', holder: 'synthetic-reader' });
   await f.provider.countInput(request(), { priority: 'foreground', holder: 'synthetic-reader' });
@@ -219,23 +219,37 @@ test('a stream of text, reasoning and usage becomes the result, with the gateway
     reasoningCharacters: 'Скрытое рассуждение.'.length, totalTokens: 128 });
   // The gateway's own numbers go to fields of their own, never into llama-server's prompt and prediction times.
   assert.deepEqual(result.timings, { servingWaitMs: 3, servingFirstTokenMs: 420, servingTotalMs: 5100, cacheTokens: 100 });
-  // Without cached tokens the cache is unknown, not empty; malformed measurements are left out of the log.
-  const g = fixture(() => stream([chunk({ content: 'Текст.' }, 'length'),
-    { model: config.model, choices: [], usage: { prompt_tokens: 120, completion_tokens: 8, simple_serving: { wait_ms: -1, first_token_ms: 1.5, total_ms: 90 } } }]));
-  const cut = await g.provider.generate(request());
-  assert.equal(cut.finishReason, 'length');
-  assert.equal(cut.usage!.cachedInputTokens, null);
-  assert.deepEqual(cut.timings, { servingTotalMs: 90 });
+  // Without cached tokens the cache is unknown, not empty. The measurements are all three, in order, or none, and never
+  // fail an answer: absent, out of order, not whole milliseconds, not numbers, one missing or not a record.
+  for (const simple_serving of [undefined, { wait_ms: 3, first_token_ms: 2, total_ms: 1 }, { wait_ms: 3, first_token_ms: 420, total_ms: '5100' },
+    { wait_ms: -1, first_token_ms: 420, total_ms: 5100 }, { wait_ms: 3, first_token_ms: 1.5, total_ms: 5100 }, { wait_ms: 3, total_ms: 5100 },
+    [3, 420, 5100]]) {
+    const g = fixture(() => stream([chunk({ content: 'Текст.' }, 'length'),
+      { model: config.model, choices: [], usage: { prompt_tokens: 120, completion_tokens: 8, prompt_tokens_details: [100], simple_serving } }]));
+    const cut = await g.provider.generate(request());
+    assert.equal(cut.finishReason, 'length');
+    assert.equal(cut.usage!.cachedInputTokens, null);
+    assert.deepEqual(cut.timings, {}, JSON.stringify(simple_serving));
+  }
+  // An answer of no tokens at all, from a request that waited for nothing, is still in order.
+  const empty = await fixture(() => stream([chunk({ content: 'Текст.' }, 'length'),
+    closing({ completion_tokens: 0, simple_serving: { wait_ms: 0, first_token_ms: 0, total_ms: 0 } })])).provider.generate(request());
+  assert.deepEqual([empty.usage!.outputTokens, empty.usage!.totalTokens, empty.timings],
+    [0, 120, { servingWaitMs: 0, servingFirstTokenMs: 0, servingTotalMs: 0, cacheTokens: 100 }]);
 });
 
-test('a stream that breaks the contract never becomes an answer', async () => {
+test('a stream that fails what the adapter checks never becomes an answer', async () => {
   const text = chunk({ content: 'Текст.' });
   const stop = chunk({}, 'stop');
-  const cases: [string, (object | string)[], { done?: boolean }, string][] = [
+  type Case = [string, (object | string)[], { done?: boolean }, string];
+  const cases: Case[] = [
     ['another model', [{ ...text, model: 'other-model' }, stop, closing()], {}, 'unexpected_model'],
     ['a chunk without a model', [{ choices: text.choices }, stop, closing()], {}, 'invalid_stream'],
     ['no usage chunk', [text, stop], {}, 'usage_unavailable'],
     ['usage without prompt tokens', [text, stop, closing({ prompt_tokens: undefined })], {}, 'usage_unavailable'],
+    ...[undefined, null, -1, 1.5, '8'].map((value): Case =>
+      [`completion tokens of ${value}`, [text, stop, closing({ completion_tokens: value })], {}, 'usage_unavailable']),
+    ['usage that is not a record', [text, stop, { model: config.model, choices: [], usage: [usage] }], {}, 'invalid_stream'],
     ['usage before the finish', [text, closing(), stop], {}, 'invalid_stream'],
     ['usage beside a choice', [text, { ...stop, usage }], {}, 'invalid_stream'],
     ['a second usage chunk', [text, stop, closing(), closing()], {}, 'invalid_stream'],
@@ -244,6 +258,11 @@ test('a stream that breaks the contract never becomes an answer', async () => {
     ['an unknown finish', [text, chunk({}, 'tool_calls'), closing()], {}, 'invalid_stream'],
     ['content after the finish', [text, stop, chunk({ content: 'Ещё.' }), closing()], {}, 'invalid_stream'],
     ['reasoning after the finish', [text, stop, chunk({ reasoning_content: 'Ещё.' }), closing()], {}, 'invalid_stream'],
+    ['a role after the finish', [text, stop, chunk({ role: 'assistant' }), closing()], {}, 'invalid_stream'],
+    ['an empty delta after the finish', [text, stop, chunk({}), closing()], {}, 'invalid_stream'],
+    ['a chunk without a choice after the finish', [text, stop, { model: config.model, choices: [] }, closing()], {}, 'invalid_stream'],
+    ['a delta that is not a record', [chunk([]), text, stop, closing()], {}, 'invalid_stream'],
+    ['a choice that is not a record', [{ model: config.model, choices: [[text.choices[0]]] }, stop, closing()], {}, 'invalid_stream'],
     ['no finish', [text], {}, 'incomplete_stream'],
     ['no [DONE]', [text, stop, closing()], { done: false }, 'incomplete_stream'],
     ['two choices', [{ model: config.model, choices: [text.choices[0], text.choices[0]] }, stop, closing()], {}, 'invalid_stream'],
@@ -284,9 +303,12 @@ test('an error event ends a started stream with the gateway\'s code, and the tex
     });
     assert.deepEqual(parts, ['Начало ']);
   }
-  // An error event without a code of the contract's shape is no code at all.
-  await assert.rejects(fixture(() => stream([{ error: { message: 'PRIVATE_RAW_ERROR' } }], { done: false })).provider.generate(request()),
-    (error: ModelError) => error.code === 'provider_failed' && error.servingCode === undefined && !/PRIVATE/.test(JSON.stringify(error)));
+  // An error event without a code of the contract's shape is no code at all, and a list is no record: both still end
+  // the stream.
+  for (const error of [{ message: 'PRIVATE_RAW_ERROR' }, [{ code: 'draining' }]]) {
+    await assert.rejects(fixture(() => stream([chunk({ content: 'Начало ' }), { error }], { done: false })).provider.generate(request()),
+      (failure: ModelError) => failure.code === 'provider_failed' && failure.servingCode === undefined && !/PRIVATE/.test(JSON.stringify(failure)));
+  }
 });
 
 test('oversized streams and texts stop at the limits the bot keeps for every server', async () => {
@@ -375,26 +397,32 @@ test('a trusted estimate goes without a count, and the usage chunk decides; a co
   }
 });
 
-test('the check reads the state, then the model and its context', async () => {
+test('the check reads the state, then the model and its context, and the two must agree', async () => {
   const state = { contract: '1', boot_id: 'synthetic-boot', status: 'ready', model: 'test-model', context_tokens: 65536, drain_generation: 0 };
   const models = { object: 'list', data: [{ id: 'other-model', object: 'model', max_model_len: 65536 }, { id: 'test-model', object: 'model', max_model_len: 65536 }] };
   const checked = (stateAnswer: unknown, modelsAnswer: unknown) => fixture(path => path === '/v1/state' ? json(stateAnswer) : json(modelsAnswer));
   const f = checked(state, models);
   assert.deepEqual(await f.provider.check(), { model: 'test-model', contextTokens: 65536 });
   assert.deepEqual(f.calls.map(call => `${call.method} ${call.path}`), ['GET /v1/state', 'GET /v1/models']);
-  const cases: [unknown, unknown, string][] = [
-    [{ ...state, contract: '2' }, models, 'unsupported_server'], [{ ...state, contract: 1 }, models, 'unsupported_server'],
-    [[state], models, 'unsupported_server'],
-    [{ ...state, status: 'starting' }, models, 'model_unavailable'], [{ ...state, status: 'draining' }, models, 'model_unavailable'],
-    [{ ...state, status: 'drained' }, models, 'model_unavailable'], [{ ...state, status: 'failed' }, models, 'model_unavailable'],
-    [state, { data: [{ id: 'other-model', max_model_len: 65536 }] }, 'unexpected_model'], [state, { data: null }, 'unexpected_model'],
-    [state, { data: [{ id: 'test-model', max_model_len: 32768 }] }, 'context_limit'], [state, { data: [{ id: 'test-model' }] }, 'context_limit'],
+  // Each answer, and how many routes the check read: a service that is not ready, not of this contract or not serving
+  // this model is not asked for its models.
+  const cases: [unknown, unknown, string, number][] = [
+    [{ ...state, contract: '2' }, models, 'unsupported_server', 1], [{ ...state, contract: 1 }, models, 'unsupported_server', 1],
+    [[state], models, 'unsupported_server', 1],
+    [{ ...state, status: 'starting' }, models, 'model_unavailable', 1], [{ ...state, status: 'draining' }, models, 'model_unavailable', 1],
+    [{ ...state, status: 'drained' }, models, 'model_unavailable', 1], [{ ...state, status: 'failed' }, models, 'model_unavailable', 1],
+    [{ ...state, model: 'other-model' }, models, 'unexpected_model', 1], [{ ...state, model: undefined }, models, 'unexpected_model', 1],
+    [state, { data: [{ id: 'other-model', max_model_len: 65536 }] }, 'unexpected_model', 2], [state, { data: null }, 'unexpected_model', 2],
+    [state, [models], 'unexpected_model', 2], [state, { data: [[models.data[1]]] }, 'unexpected_model', 2],
+    // The state and the models route give two contexts, or one of them none.
+    [{ ...state, context_tokens: 32768 }, models, 'unsupported_server', 2], [{ ...state, context_tokens: undefined }, models, 'unsupported_server', 2],
+    [state, { data: [{ id: 'test-model' }] }, 'unsupported_server', 2],
+    [{ ...state, context_tokens: 32768 }, { data: [{ id: 'test-model', max_model_len: 32768 }] }, 'context_limit', 2],
   ];
-  for (const [stateAnswer, modelsAnswer, code] of cases) {
+  for (const [stateAnswer, modelsAnswer, code, routes] of cases) {
     const g = checked(stateAnswer, modelsAnswer);
     await assert.rejects(g.provider.check(), { code, phase: 'health' });
-    // A service that is not ready, or not of this contract, is not asked for its models.
-    if (code === 'unsupported_server' || code === 'model_unavailable') assert.equal(g.calls.length, 1);
+    assert.equal(g.calls.length, routes, JSON.stringify([stateAnswer, modelsAnswer]));
   }
   await assert.rejects(fixture(() => refusal(401, 'unauthorized')).provider.check(),
     { code: 'unauthorized', phase: 'health', httpStatus: 401, servingCode: 'unauthorized' });
