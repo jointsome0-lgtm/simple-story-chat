@@ -281,10 +281,13 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       return { screen: render(state, `style:${styleId}`, pictureInfo) };
     }
     // A variant of a scene's picture: the button under its prompt waits for a prompt, and the next text message is
-    // that prompt, drawn as it came. The wait keeps the scene alone, never the prompt.
+    // that prompt, drawn as it came. The wait keeps the scene alone, never the prompt. As with a sample, the picture
+    // of a scene being written goes first: no prompt is asked for while it is, and the one that arrives is refused if
+    // a scene is being written by then.
     if (action?.startsWith('prompt-edit:')) {
       const [storyId = '', nodeId = ''] = action.slice(12).split(':');
       variantTarget(state, storyId, nodeId, t, pictureInfo);
+      if (state.job) throw refuse(t, 'variantBusy');
       state.ui = { input: 'prompt', storyId, nodeId };
       return { screen: render(state, 'prompt-input', pictureInfo) };
     }
@@ -292,7 +295,6 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       const { storyId, nodeId } = state.ui;
       state.ui = null;
       variantTarget(state, storyId, nodeId, t, pictureInfo);
-      // As with a sample, the picture of the scene being written goes first.
       if (state.job) throw refuse(t, 'variantBusy');
       // A prompt that cannot be drawn leaves the wait open for the next try.
       const again = (key: 'promptNeedsText' | 'promptTooLong') => { state.ui = { input: 'prompt', storyId, nodeId }; return refuse(t, key); };

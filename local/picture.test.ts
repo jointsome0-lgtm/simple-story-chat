@@ -1148,12 +1148,25 @@ test('a variant is refused for a scene that is not the reader\'s own or has no p
   // Any command leaves, and the next message is a move in the story again.
   await f.bot.handle(f.message('/menu'));
   assert.equal(f.store.read('1').ui, null);
-  // While a scene is being written its own picture goes first, as it does before a sample.
+  // While a scene is being written its own picture goes first, as it does before a sample: the button is refused, and
+  // so is a prompt that finds a scene being written.
+  const writing = (job: boolean) => f.store.mutate('1', state => {
+    state.job = job ? { id: 'j99', storyId, branchId: state.active!.branchId, head: null, memory: null, input: 'x', started: 0 } : null;
+  });
+  const busy = 'Сцена ещё пишется. Попроси вариант, когда она придёт.';
+  writing(true);
+  const pressed = f.sent.length;
   await f.bot.handle(f.click(edit));
-  f.store.mutate('1', state => { state.job = { id: 'j99', storyId, branchId: state.active!.branchId, head: null, memory: null, input: 'x', started: 0 }; });
+  assert.ok(told(f.sent.slice(pressed), busy));
+  assert.equal(f.store.read('1').ui, null);
+  writing(false);
+  await f.bot.handle(f.click(edit));
+  writing(true);
+  const written = f.sent.length;
   await f.bot.handle(f.message('A synthetic prompt.'));
-  assert.ok(told(f.sent, 'Сцена ещё пишется. Попроси вариант, когда она придёт.'));
-  f.store.mutate('1', state => { state.job = null; });
+  assert.ok(told(f.sent.slice(written), busy));
+  assert.equal(f.store.read('1').ui, null);
+  writing(false);
   // A reader who is no longer drawn for is told so, for a picture of their own too.
   f.images!.users.delete('1');
   await f.bot.handle(f.click(edit));
