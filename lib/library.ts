@@ -50,9 +50,13 @@ export type DeleteConfirmation = { confirm: string; input?: undefined };
 export type StyleInput = { input: 'style'; styleId?: string; confirm?: undefined };
 // One of the reader's own picture styles: the name on its button and the line that ends the prompt.
 export type OwnStyle = { id: string; name: string; line: string };
+// How a picture was drawn, all but its prompt (local/picture.ts): its seed, a hash of the graph, the checkpoint's file
+// name, and the size and sampler settings the graph was filled with. A variant of it is drawn with the same.
+export type PictureRecipe = { seed: number; graph: string; checkpoint: string; width: number; height: number;
+  steps: number; cfg: number; sampler: string; scheduler: string };
 // A picture the local bot sent into its reader's chat (local/picture.ts): the scene it shows, the message it is, and
-// when it was sent, in milliseconds since the epoch.
-export type SentPicture = { storyId: string; nodeId: string; messageId: number; at: number };
+// when it was sent, in milliseconds since the epoch. A photo a variant may be drawn from keeps its recipe too.
+export type SentPicture = { storyId: string; nodeId: string; messageId: number; at: number; recipe?: PictureRecipe };
 // Interface language of the bot, never of the stories. A library without it predates the choice and is shown in Russian.
 export type Language = 'ru' | 'en' | 'zh' | 'ko' | 'ja';
 export type Library = {

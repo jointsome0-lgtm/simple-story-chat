@@ -926,8 +926,10 @@ test('every photo and the prompt under it are recorded as they are sent, and del
   // message beside its scene.
   const ids = [...photos(f.sent), ...notes(f.sent)].map(one => idOf(f.sent, one)).sort((one, other) => one - other);
   assert.equal(ids.length, 16);
-  assert.deepEqual(state.sentPictures!.map(({ at, ...picture }) => picture), ids.map(messageId => ({ storyId, nodeId, messageId })));
+  assert.deepEqual(state.sentPictures!.map(({ at, recipe, ...picture }) => picture), ids.map(messageId => ({ storyId, nodeId, messageId })));
   assert.ok(state.sentPictures!.every(picture => Number.isSafeInteger(picture.at) && Math.abs(Date.now() - picture.at) < 60_000));
+  // The scene's own photo alone keeps how it was drawn, for a variant of it: no sample's photo and no note does.
+  assert.deepEqual(state.sentPictures!.filter(picture => picture.recipe).map(picture => picture.messageId), [idOf(f.sent, photos(f.sent)[0])]);
 
   await deleteTheSeed(f);
   await f.bot.idle();

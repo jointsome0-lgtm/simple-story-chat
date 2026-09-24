@@ -11,13 +11,13 @@
 //   - the picture is drawn on a SECOND card, reached through an ssh tunnel on loopback (local/image-batch.ts).
 //     The language model's card is 22-25 GB full; the image model needs its own, and `SIMPLE_CHAT_IMAGE_URL` is
 //     checked against the model's own server in local/config.ts.
-// Nothing here is stored or logged but counts: not the description, not the prompt, not the bytes. The prompt goes
-// to the reader alone, folded under the photo it was drawn from (`foldedPrompt`), as their own. The picture is
-// stripped of its PNG text chunks by `drawOne` before it is sent, because ComfyUI writes the whole prompt into
-// them, and the card keeps no copy of it for long either: the job record is cleared, and a saving node in the
-// workflow is loaded as a preview one (`previewOnly`), whose file is in RAM and is deleted by gpu/image-sweeper.py
-// seconds later. The server's node cache still holds the last job in memory until the next one runs (docs/gpu.md,
-// "What the card keeps of a picture").
+// Nothing here is stored or logged but counts, and, beside a photo, the settings it was drawn with (`sendKept`): not
+// the description, not the prompt, not the bytes. The prompt goes to the reader alone, folded under the photo it was
+// drawn from (`foldedPrompt`), as their own. The picture is stripped of its PNG text chunks by `drawOne` before it is
+// sent, because ComfyUI writes the whole prompt into them, and the card keeps no copy of it for long either: the job
+// record is cleared, and a saving node in the workflow is loaded as a preview one (`previewOnly`), whose file is in
+// RAM and is deleted by gpu/image-sweeper.py seconds later. The server's node cache still holds the last job in
+// memory until the next one runs (docs/gpu.md, "What the card keeps of a picture").
 //
 // A picture in flight is stopped by the reader's next message and by `/cancel`. It is not offered as a button of
 // its own: by the time it is being drawn the job lock is clear, so the bot shows no cancel control, and moving
@@ -29,7 +29,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { recordPicture } from '../lib/library.ts';
-import type { Library, SceneNode, Story } from '../lib/library.ts';
+import type { Library, PictureRecipe, SceneNode, Story } from '../lib/library.ts';
 import type { ImageConfig } from './config.ts';
 import { estimateTokens, requestStamp, sameContext } from './context.ts';
 import { SAMPLER_DEFAULTS, apiGraph, applyToWorkflow, drawOne, latentSizeOf, previewOnly, referenceSlots, samplerSettingsOf, settled,
@@ -184,6 +184,12 @@ export function createIllustrator(config: ImageConfig, deps: {
   const cfg = settings.cfg ?? SAMPLER_DEFAULTS.cfg;
   // The line of a reader who has not chosen a style.
   const standard = config.style ?? STYLE;
+  // How a picture of the story `storyId` is drawn, all but its prompt (lib/library.ts `PictureRecipe`). The graph is
+  // named by a hash of itself as it was read here and the checkpoint by its file name, so that a picture drawn before
+  // either was changed is told from one drawn after.
+  const graphId = createHash('sha256').update(JSON.stringify(graph)).digest('hex').slice(0, 16);
+  const recipeOf = (storyId: string): PictureRecipe => ({ seed: seedOf(storyId), graph: graphId, checkpoint: config.checkpoint,
+    width: size.width, height: size.height, steps, cfg, sampler, scheduler });
 
   // The scene's own request, once more: the same system prompt and the same history up to this scene, so that a
   // server with a prefix cache pays for the appended instruction alone (the plan's "What the second call costs").
@@ -282,14 +288,19 @@ export function createIllustrator(config: ImageConfig, deps: {
     return { promptCharacters };
   };
 
+  // One picture on the picture card: a whole prompt, drawn by a recipe.
+  async function draw({ seed, checkpoint, width, height, steps, cfg, sampler, scheduler }: PictureRecipe, prompt: string, signal: AbortSignal) {
+    const comfy: Comfy = { baseUrl: config.url, timeoutMs: config.timeoutMs, signal };
+    const filled = applyToWorkflow(graph, { checkpoint, prompt, negative: '', seed, steps, sampler, scheduler, cfg, width, height });
+    return drawOne(comfy, filled, { waitMs: config.waitMs, pollMs });
+  }
+
   // One frame on the picture card in one style line, with the story's seed: a sample of a style and the scene's own
   // picture differ in their last sentence alone.
   async function drawFrame(storyId: string, frame: { description: Description; sheet: Character[] }, line: string, signal: AbortSignal) {
     const assembled = assemblePrompt(frame.description, frame.sheet, line);
-    const comfy: Comfy = { baseUrl: config.url, timeoutMs: config.timeoutMs, signal };
-    const filled = applyToWorkflow(graph, { checkpoint: config.checkpoint, prompt: assembled.prompt, negative: '',
-      seed: seedOf(storyId), steps, sampler, scheduler, cfg, width: size.width, height: size.height });
-    return { assembled, drawn: await drawOne(comfy, filled, { waitMs: config.waitMs, pollMs }) };
+    const recipe = recipeOf(storyId);
+    return { assembled, recipe, drawn: await draw(recipe, assembled.prompt, signal) };
   }
 
   // A status line of its own, not the scene's draft: it has to outlive the message it stands under and be removed
@@ -308,9 +319,10 @@ export function createIllustrator(config: ImageConfig, deps: {
   // reader's library, and is recorded there the moment it is sent, so that deleting the scene deletes it too
   // (local/bot.ts). A deletion that lands while it is on its way finds no record of it yet; the record then finds no
   // scene, and the message is taken back at once. The two writes of the library cannot interleave, so one of them
-  // always sees the other. Resolves to the id of the message.
+  // always sees the other. Resolves to the id of the message. A photo a variant may be drawn from keeps the `recipe`
+  // it was drawn with beside it, its prompt never.
   async function sendKept(request: { userId: string; chat: Chat; storyId: string; nodeId: string },
-    send: () => Promise<number | undefined>) {
+    send: () => Promise<number | undefined>, recipe?: PictureRecipe) {
     const { userId, chat, storyId, nodeId } = request;
     if (!store.read(userId).stories[storyId]?.nodes[nodeId]) throw sceneGone();
     const messageId = await send();
@@ -318,7 +330,7 @@ export function createIllustrator(config: ImageConfig, deps: {
     if (messageId === undefined) return undefined;
     const kept = store.mutate(userId, state => {
       if (!state.stories[storyId]?.nodes[nodeId]) return false;
-      recordPicture(state, { storyId, nodeId, messageId, at: now() });
+      recordPicture(state, { storyId, nodeId, messageId, at: now(), ...(recipe ? { recipe } : {}) });
       return true;
     });
     if (kept) return messageId;
@@ -376,12 +388,12 @@ export function createIllustrator(config: ImageConfig, deps: {
       const reader = store.read(userId);
       pictureStyle = styleChoice(reader, standard);
       const line = styleLine(reader, standard);
-      const { assembled, drawn } = await drawFrame(storyId, frame, line, signal);
+      const { assembled, recipe, drawn } = await drawFrame(storyId, frame, line, signal);
       if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
       // The photo hangs under the scene it belongs to, and the status line goes only once the photo is there; the
       // prompt follows it, folded.
       const photoStarted = now();
-      const photo = await sendKept(request, () => chat.photo(drawn.bytes, request.sceneMessageId));
+      const photo = await sendKept(request, () => chat.photo(drawn.bytes, request.sceneMessageId), recipe);
       const photoMs = Math.max(0, now() - photoStarted);
       await clear();
       const size = promptSize(assembled.prompt, line);
