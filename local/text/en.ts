@@ -164,7 +164,7 @@ export const en: Messages = {
     clothesSize: (tokens, chars) => textSize('Clothes text', tokens, chars),
     noClothes: 'No clothes are recorded yet.',
     clothesNote: 'Clothes are not edited here: the story itself changes them, and the pictures take them from the scenes.',
-    sizeNote: 'The numbers are for each text on its own. They are not the size of a prompt: in a picture the texts are shortened and joined with others. The exact size is under each picture.',
+    sizeNote: 'Each number is for its text alone. The prompt also holds the description of the scene and the style; its exact size is under the picture.',
     scope: 'A change to the look applies to the next pictures of every branch of this story. The story text, its memory and the pictures already drawn stay as they are, and a picture being drawn right now may still come out the old way.',
     portraitNone: '🖼 No portrait yet. A portrait draws the face and the whole figure, full length, from this look, which makes a reference easier to pick.',
     portraitKept: '🖼 Portrait kept: the face and figure from this look.',

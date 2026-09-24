@@ -226,7 +226,7 @@ test('characters: beside each story when pictures are drawn, a list, a card with
   assert.match(card.text, /\nТекст внешности: 10 токенов · 48 знаков\n/);
   assert.match(card.text, /\nОдежда на последней картинке ветки «Начало»:\na yellow raincoat\nТекст одежды: 3 токена · 17 знаков\n/);
   assert.doesNotMatch(card.text, /13 токенов|dark wool coat/);
-  assert.match(card.text, /не размер промпта/);
+  assert.match(card.text, /\n\nЧисла относятся к каждому тексту отдельно\. В промпт также входят описание сцены и стиль; точный размер указан под картинкой\.\n/);
   assert.match(card.text, /на следующие картинки всех веток этой истории/);
   assert.deepEqual(card.entities!.map(entity => card.text.slice(entity.offset, entity.offset + entity.length)), [look, 'a yellow raincoat']);
   assert.deepEqual(callbacks(card), [`look-edit:${mira}`, `portrait:${mira}`, 'view:characters:h2']);

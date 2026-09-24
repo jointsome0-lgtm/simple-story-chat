@@ -462,7 +462,8 @@ function charactersScreen(state: State, storyId: string | undefined) {
 }
 
 // One person: the whole look and clothes, tap-to-copy, each with its size as the picture model counts that text alone
-// (never their sum: the prompt they go into is cut and joined otherwise), where an edited look reaches, and the
+// (never their sum: a prompt takes names and ages out of them, joins them with the scene and adds the style), where an
+// edited look reaches, and the
 // portrait kept to pick a reference by. The clothes are the story's to change, so they are only shown: those of the
 // active branch's latest picture for the active story (local/picture.ts `wornAt`), the sheet's own otherwise.
 function characterScreen(state: State, storyId: string | undefined, rawIndex: string | undefined, tag: string | undefined,
