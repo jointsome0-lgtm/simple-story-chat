@@ -5,6 +5,7 @@ Updated 17 September 2026: one generation interface, separate adapters for diffe
 | Adapter | Example | How it is called |
 | --- | --- | --- |
 | `llama-cpp` | Gemma 4 on an own or rented GPU | HTTP request to the model server |
+| `simple-serving` | A model on our rented GPU behind our own gateway (vLLM) | HTTP request to the gateway |
 | `anthropic-api` | Haiku with an API key | HTTP request to Anthropic |
 | `claude-code` | Haiku through a Claude account | The official CLI/SDK in a process on a computer or server |
 | `openai-compatible` | Gemma 4 on OpenRouter, OpenAI models | HTTP request to a hosted API; by default only synthetic probes |
@@ -83,6 +84,35 @@ The count `/v1/chat/completions/input_tokens` and the generation `/v1/chat/compl
 Before the generation request is sent, the exact input is checked with a reserve for the output. The `prompt_tokens` reported at the end must match the preliminary count. A request whose caller trusts its estimate (`trustEstimate`, set only far below the limit) is sent without the preliminary count. Its reported `prompt_tokens` replace the estimate and are checked against the same limit after the stream. Without them the result is rejected with `usage_unavailable`. If the server answers such a request with 400, the adapter makes the count it skipped, so that a prompt over the limit becomes `context_limit`. The cache is part of the full input and is not added to it a second time. A break without a completion event, tools, and inconsistent counters are rejected. A cancellation and a timeout close the request; there is no automatic retry. [Pinned server documentation](https://github.com/ggml-org/llama.cpp/blob/b29c606e28a01b1bc8c1351026a0fa6e616bf6c4/tools/server/README.md).
 
 Technical sources: [Claude Code streaming output](https://code.claude.com/docs/en/headless#stream-responses), [Anthropic token counting](https://platform.claude.com/docs/en/build-with-claude/token-counting), [llama.cpp server](https://github.com/ggml-org/llama.cpp/tree/master/tools/server), [Telegram Serverless SDK](tgcloud-sdk.md).
+
+## simple-serving: our gateway
+
+`local/serving.ts` calls [simple-serving](https://github.com/jointsome0-lgtm/simple-serving), our own gateway in front of vLLM on a rented card. Its API is fixed by its contract v1 (`docs/contract-v1.md` there). The adapter was added on 24 September 2026 and is tested against the contract's shared cases. It has not met a live gateway yet.
+
+To point the bot at a gateway, set in `.env`:
+
+```sh
+SIMPLE_CHAT_PROVIDER=simple-serving
+SIMPLE_CHAT_BASE_URL=https://serving.example.com   # the gateway's root, or http://127.0.0.1:<port> through a tunnel
+SIMPLE_CHAT_API_KEY=...                            # the bot's key in the gateway's configuration
+SIMPLE_CHAT_MODEL=...                              # the name the gateway serves the model under, as /v1/models lists it
+```
+
+The address is a root without a path, as for llama.cpp: HTTPS, or HTTP on loopback. The key is the one the gateway's configuration gives the bot. It must allow the classes `reader`, `agent` and `internal` and the naming of cache scopes. It is required on loopback too. It is not the Vast key. The gateway runs on our own card, so the story does not go to a third party and `SIMPLE_CHAT_ALLOW_HOSTED` is not needed.
+
+Every generation and count says whose it is. A reader's turn is class `reader` with a cache scope of its own: an HMAC of the reader's Telegram ID under a secret that the bot makes at each start and never stores. The gateway never sees the ID, and readers never share a cache. After a restart every reader gets a new scope, so their first turn reads the whole prompt again. A turn of the agent interface that comes through the bot's queue is `agent`. Eval, probes and every call that does not come through the bot's queue are `internal`.
+
+Differences from llama.cpp:
+
+- The bot sends one request at a time. `SIMPLE_CHAT_GPU_SLOTS` and the pool settings do not apply.
+- The check reads `/v1/state` (contract `1`, status `ready`), then `/v1/models` (the model name, and a context of at least `SIMPLE_CHAT_CONTEXT_TOKENS`).
+- Every chunk of the stream must name the model. The stream ends with one finish, one usage chunk and `[DONE]`. An error event or a stream without `[DONE]` fails, and its text never becomes a scene.
+- A refusal is read by its code only; its body is never kept or logged. `class_not_allowed`, `scope_not_allowed` and `forbidden` become `unauthorized`, `queue_full` becomes `rate_limited`, `starting`, `draining`, `drained` and `engine_unavailable` become `model_unavailable`, and `not_found` becomes `unsupported_server`. `unauthorized`, `context_limit` and `timeout` keep their names, and a `context_limit` compacts the story without a second count. Every other code is `provider_failed`. The log row keeps the gateway's own code as `servingCode`.
+- The gateway's measurements go to the log rows as `servingWaitMs`, `servingFirstTokenMs` and `servingTotalMs`. `waitMs` stays the time in the bot's own queue.
+
+GPU control comes later. With `SIMPLE_CHAT_VAST_INSTANCE_ID` set, the bot refuses to start with this provider: the card may stop only after the gateway has drained its requests (contract section 8), and the bot cannot drain it yet. Until then the gateway's card is started and stopped by hand. Without GPU control the bot serves no model socket, so the agent interface calls the gateway directly. Eval (`--model gpu:<label>`) and the probes with `--direct` call it directly in any case. All these calls are `internal`, and the bot does not see them.
+
+The shared cases are pinned in `local/serving-contract/`: an exact copy of `contract/cases-v1.json` and `pin.json` with its commit and SHA-256. To update them, copy the file again from a commit of simple-serving, change the pin in the same commit, and correct the step counts in `local/serving-contract.test.ts` if they changed. The copy is never edited by hand.
 
 ## Codex CLI: `codex-cli`
 

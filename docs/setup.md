@@ -20,19 +20,19 @@ After the rename to `simple-story-chat`, the `SIMPLE_CHAT_*` variables, the data
 | `SIMPLE_CHAT_ALLOWED_USER_IDS` | Numeric IDs separated by commas, no public access |
 | `SIMPLE_CHAT_OWNER_ID` | The ID of the owner, who allowed their own messages to be read for debugging; it is not a permission to read other users. It must be on the access list. The bot uses it to mark log rows as `actor: owner`; the other rows get `other` |
 | `SIMPLE_CHAT_DB_PATH` | `data/simple-chat.sqlite` by default; you can choose a local path on the computer or on a server |
-| `SIMPLE_CHAT_PROVIDER` | `claude-code`, `llama-cpp`, `codex-cli` or `openai-compatible`. The last two send the story to a third-party service, and without the consent below they are suitable only for probes ([details](model-providers.md)) |
+| `SIMPLE_CHAT_PROVIDER` | `claude-code`, `llama-cpp`, `simple-serving`, `codex-cli` or `openai-compatible`. `simple-serving` is our own gateway on a rented card ([details](model-providers.md#simple-serving-our-gateway)). The last two send the story to a third-party service, and without the consent below they are suitable only for probes ([details](model-providers.md)) |
 | `SIMPLE_CHAT_ALLOW_HOSTED` | Exactly `stories-leave-this-computer`, so that the bot starts with `codex-cli` or `openai-compatible`. Only for your own stories; any other value does not count as consent |
-| `SIMPLE_CHAT_MODEL` | `claude-haiku-4-5-20251001` by default; required for `codex-cli` and `openai-compatible` |
+| `SIMPLE_CHAT_MODEL` | `claude-haiku-4-5-20251001` by default; required for `codex-cli`, `openai-compatible` and `simple-serving` |
 | `SIMPLE_CHAT_CONTEXT_TOKENS` | 65536, including the reserve for the reply; the CLI uses a conservative estimate of the input |
 | `SIMPLE_CHAT_MAX_OUTPUT_TOKENS` | The maximum size of the reply, 4096 by default |
-| `SIMPLE_CHAT_COMPACT_AT_TOKENS` | The threshold for automatic compaction of the input: 44000 for llama.cpp, 54000 for Claude Code and Codex CLI |
+| `SIMPLE_CHAT_COMPACT_AT_TOKENS` | The threshold for automatic compaction of the input: 44000 for llama.cpp and simple-serving, 54000 for Claude Code and Codex CLI |
 | `SIMPLE_CHAT_KEEP_SCENES` | How many of the latest scenes to keep in full, 4 by default |
-| `SIMPLE_CHAT_API_KEY`, `SIMPLE_CHAT_BASE_URL` | The key and the root address of llama.cpp or of a hosted API; empty for Claude Code and Codex CLI |
+| `SIMPLE_CHAT_API_KEY`, `SIMPLE_CHAT_BASE_URL` | The key and the root address of llama.cpp, of our gateway or of a hosted API; empty for Claude Code and Codex CLI. The gateway (`simple-serving`) needs its key even over a tunnel |
 | `SIMPLE_CHAT_MODEL_TIMEOUT_MS` | The timeout of a model call through the CLI or HTTP; 300000 ms by default, 600000 ms in the GPU example |
-| `SIMPLE_CHAT_TEMPERATURE` | The temperature of the fiction reply of llama.cpp, 0.8 by default |
+| `SIMPLE_CHAT_TEMPERATURE` | The temperature of the fiction reply of llama.cpp and simple-serving, 0.8 by default |
 | `SIMPLE_CHAT_MEMORY_MODE` | `plain` (the default) or the experimental `sgr` |
 | `SIMPLE_CHAT_BUDGET_REQUESTS`, `SIMPLE_CHAT_BUDGET_TOKENS` | Daily limits for `openai-compatible`; without them the values of the channel from the [table](model-providers.md#daily-limits-of-hosted-apis) apply |
-| `SIMPLE_CHAT_VAST_INSTANCE_ID`, `SIMPLE_CHAT_VAST_API_KEY` | Optional: the Vast.ai instance that the bot starts and stops by itself ([instructions](gpu.md)) |
+| `SIMPLE_CHAT_VAST_INSTANCE_ID`, `SIMPLE_CHAT_VAST_API_KEY` | Optional: the Vast.ai instance that the bot starts and stops by itself ([instructions](gpu.md)). Only with `llama-cpp` for now |
 | `SIMPLE_CHAT_IMAGE_URL` | Optional: a picture under each scene ([plan](illustrations-plan.md)). Without this variable the feature is off — no second model call, no status line, no picture. It is the loopback end of the ssh tunnel to the card that draws, such as `http://127.0.0.1:8188` (`bash gpu/tunnel.sh --pictures`), never a published address and never the language model's own server: one card cannot hold both models |
 | `SIMPLE_CHAT_IMAGE_WORKFLOW` | The ComfyUI graph to draw with, exported in API format (Workflow > Export (API)), such as `gpu/image-workflow-qwen.json`; a relative path is read beside `.env`. The bot loads a saving node as a preview one, so the card keeps no copy of the picture. Required when the URL is set, and checked at startup |
 | `SIMPLE_CHAT_IMAGE_CHECKPOINT` | The name of the checkpoint file on the picture card, as its `checkpoints` folder writes it. Required when the URL is set |
