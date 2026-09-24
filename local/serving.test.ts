@@ -497,10 +497,10 @@ test('configuration: the gateway\'s root, its key even over the tunnel, and the 
   const bot = { ...serving, TELEGRAM_BOT_TOKEN: '1:synthetic', SIMPLE_CHAT_ALLOWED_USER_IDS: '1' };
   assert.equal(loadConfig(nowhere, bot).gpu, undefined);
   assert.equal(loadAgentConfig(nowhere, serving).provider, 'simple-serving');
-  // GPU control would stop the card without the gateway's drain, which comes later.
+  // simple-serving runs its own card, so a Vast instance beside it stops the start.
   const vast = { SIMPLE_CHAT_VAST_INSTANCE_ID: '1', SIMPLE_CHAT_VAST_API_KEY: 'synthetic-key', SIMPLE_CHAT_BASE_URL: 'http://127.0.0.1:8080' };
-  assert.throws(() => loadConfig(nowhere, { ...bot, ...vast }), /GPU control does not work with simple-serving yet/);
-  assert.throws(() => gpuConfig(vast, 'simple-serving'), /GPU control does not work with simple-serving yet/);
+  assert.throws(() => loadConfig(nowhere, { ...bot, ...vast }), /simple-serving runs its own card, not the bot/);
+  assert.throws(() => gpuConfig(vast, 'simple-serving'), /simple-serving runs its own card, not the bot/);
   assert.equal(gpuConfig({}, 'simple-serving'), undefined);
   assert.equal(gpuConfig(vast, 'llama-cpp')!.instanceId, '1');
 });

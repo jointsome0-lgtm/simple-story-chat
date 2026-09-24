@@ -44,7 +44,7 @@ test('the pinned cases are the file the pin names, byte for byte', () => {
 });
 
 // The bot's code for each of the contract's, written out here apart from the adapter's own table (local/serving.ts),
-// so that a change to either shows. The control codes come only from routes the bot does not call yet.
+// so that a change to either shows. The control codes come only from routes the bot does not call.
 const BOT_CODES: { readonly [code: string]: string } = {
   unauthorized: 'unauthorized', class_not_allowed: 'unauthorized', scope_not_allowed: 'unauthorized', forbidden: 'unauthorized',
   context_limit: 'context_limit', queue_full: 'rate_limited', timeout: 'timeout', not_found: 'unsupported_server',
@@ -267,7 +267,7 @@ test('every public step of the pinned cases gives the bot the result the case ex
     for (const [index, step] of steps.entries()) {
       const label = `${name} #${index + 1}${step.name ? ` (${step.name})` : ''}`;
       // The two kinds of steps a client skips (contract/README.md there): the gateway's own, and those on the control
-      // listener, which the bot does not call yet.
+      // listener, which the bot does not call.
       if (step.only === 'gateway') { counted.gateway++; continue; }
       if (step.request.base === 'control') { counted.control++; continue; }
       assert.equal(step.request.base, 'public', label);

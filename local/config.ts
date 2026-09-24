@@ -116,9 +116,7 @@ export function loadModelConfig(directory = process.cwd(), inherited: Env = proc
 
 export function gpuConfig(env: Env, provider: string): GpuConfig | undefined {
   if (!env.SIMPLE_CHAT_VAST_INSTANCE_ID?.trim()) return undefined;
-  // A gateway's card may stop only after the gateway has drained its requests (simple-serving's contract, section 8),
-  // which the bot does not do yet. Until then that card is started and stopped by hand.
-  if (provider === 'simple-serving') throw new Error('GPU control does not work with simple-serving yet: unset SIMPLE_CHAT_VAST_INSTANCE_ID and run the card by hand');
+  if (provider === 'simple-serving') throw new Error('simple-serving runs its own card, not the bot: unset SIMPLE_CHAT_VAST_INSTANCE_ID and SIMPLE_CHAT_VAST_API_KEY');
   const instanceId = env.SIMPLE_CHAT_VAST_INSTANCE_ID.trim();
   const apiKey = env.SIMPLE_CHAT_VAST_API_KEY?.trim();
   const sshHost = env.SIMPLE_CHAT_GPU_SSH_HOST || 'simple-chat-vast';
