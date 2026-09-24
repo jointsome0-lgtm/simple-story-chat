@@ -25,9 +25,11 @@ import { safeErrorDetails } from './model-error.ts';
 import type { GenerateControls, GenerationResult, ModelRequest, Provider } from './model.ts';
 import { createServing, readerScope } from './serving.ts';
 import { clothesOf, createIllustrator, encoderTokens, foldedPrompt, wornAt } from './picture.ts';
-import { PRESETS } from './picture-style.ts';
+import { PRESETS, PROMPT_CHARS } from './picture-style.ts';
+import type { GpuController } from './gpu.ts';
 import { Store } from './store.ts';
 import type { TelegramPayload } from './telegram.ts';
+import { REGISTERED, texts } from './text.ts';
 import { loadTokenizers, qwenPromptTokens } from './tokenizer.ts';
 import { render, scenePrefix, sceneKeyboard } from './ui.ts';
 import type { SeedDraft, Story } from '../lib/library.ts';
@@ -206,6 +208,8 @@ type Options = {
   // The real llama.cpp provider in front of `fakeLlama`, with what the server counts for the scene; `illustratorModel`
   // names the story model to the illustrator otherwise than the scenes' stamps do.
   llama?: { inputTokens: number; outputTokens: number; illustratorModel?: string };
+  // The language model's card as the bot holds it for a scene.
+  gpu?: GpuController;
 };
 function fixture(t: TestContext, options: Options = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'simple-chat-picture-'));
@@ -281,7 +285,7 @@ function fixture(t: TestContext, options: Options = {}) {
     const illustrator = images && createIllustrator(images, { store, provider, pollMs: 2, now: () => Date.now() + (options.offsetMs ?? 0),
       model: { model: options.llama?.illustratorModel ?? 'test-model', provider: 'claude-code', contextTokens: 65536 },
       promptTokens: () => options.promptTokens });
-    const bot = createBot({ store, api, provider, illustrator, allowedUsers: new Set(['1', '2']), maxOutputTokens: 4096,
+    const bot = createBot({ store, api, provider, gpu: options.gpu, illustrator, allowedUsers: new Set(['1', '2']), maxOutputTokens: 4096,
       render, scenePrefix, sceneKeyboard, model: 'test-model', ownerId: '1',
       compactAtTokens: options.compactAtTokens, keepScenes: options.keepScenes,
       log: (event, code, details) => { rows.push({ event, ...(code === undefined ? {} : { code }), ...safeErrorDetails(details) }); } });
@@ -304,7 +308,7 @@ function fixture(t: TestContext, options: Options = {}) {
   const release = () => { for (const go of holding.splice(0)) go(); };
   const restart = async () => { await running.bot.stop(); running = boot(); };
   return { get bot() { return running.bot; }, get illustrator() { return running.illustrator; }, restart,
-    store, sent, rows, requests, counted, heard, deleted, provider, message, click, start, release, workflow, directory };
+    store, sent, rows, requests, counted, heard, deleted, provider, message, click, start, release, workflow, directory, images };
 }
 
 // Waits for something the fake server or the bot does on its own; the whole file runs in milliseconds.
@@ -560,6 +564,16 @@ test('a folded prompt is plain text a phone wraps, and nothing in it is read as 
   const folded = foldedPrompt('S & T', 'A sign reads </details> <summary>x</summary> & ```code```. Done.');
   assert.equal(folded, '<details><summary>S &amp; T</summary>A sign reads &lt;/details&gt; &lt;summary&gt;x&lt;/summary&gt; &amp; ```code```. Done.</details>');
   assert.equal(folded.match(/<\/details>/g)!.length, 1, 'only the fold itself closes');
+});
+
+// A rich message holds 32768 characters (docs/setup.md). Counted here in UTF-8 bytes, which are never fewer.
+test('the longest prompt a reader may write fits its note, every character escaped, under the summary of any language', () => {
+  for (const lang of REGISTERED) {
+    const summary = texts(lang).notices.promptSummary(PROMPT_CHARS, 999_999, null);
+    for (const prompt of ['&'.repeat(PROMPT_CHARS), '𝔄'.repeat(PROMPT_CHARS)]) {
+      assert.ok(Buffer.byteLength(foldedPrompt(summary, prompt), 'utf8') <= 32768, lang);
+    }
+  }
 });
 
 test('a sample after a restart describes the scene again, and one that fails says so once', async t => {
@@ -996,6 +1010,276 @@ test('a sample whose scene is deleted ends with the style on the card, silently,
   assert.ok(!f.sent.some(one => one.method === 'editMessageText'));
   assert.deepEqual(f.rows.filter(one => one.event === 'picture_sample').map(row => [row.outcome, row.code, row.pictureStyle, row.stylesAsked]),
     [['cancelled', 'scene_gone', 'semi', 5]]);
+});
+
+// A variant of a picture from a prompt the reader writes whole (local/picture.ts `variant`), for testing prompts
+// against each other: everything but the prompt has to be the picture's own. `unworded` is a filled graph without its
+// words, and without the key every job's preview gets (local/image-batch.ts `freshPreviews`).
+const unworded = (graph: Graph) => Object.fromEntries(Object.entries(graph).map(([id, node]) => [id, { ...node,
+  inputs: Object.fromEntries(Object.entries(node.inputs).filter(([key]) => key !== 'nonce').map(([key, value]) => [key, key === 'text' ? '' : value])) }]));
+const samplerIn = (graph: Graph) => Object.values(graph).find(node => node.class_type === 'KSampler')!.inputs as { seed: number; steps: number };
+
+test('a variant is the reader\'s whole prompt drawn as it came, by the picture\'s own seed and settings, under its scene', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  // A tokenizer of whole words, and the language model's card, which notes every hold and every start.
+  const words = (text: string) => text.split(/\s+/).filter(Boolean).length;
+  const touched: string[] = [];
+  const gpu = { acquire: () => { touched.push('acquire'); return () => {}; }, assertReady: () => { touched.push('assertReady'); },
+    resume: () => { touched.push('resume'); }, keepAwake: () => { touched.push('keepAwake'); return () => {}; },
+    snapshot: () => ({ status: 'ready', activeJobs: 0, idleMinutes: 15, idleRemainingSeconds: null, canStart: false, canPause: true }) } as unknown as GpuController;
+  const f = fixture(t, { comfy: root, style: STYLE_LINE, promptTokens: words, gpu });
+  await f.start();
+  await f.bot.idle();
+  await f.bot.handle(f.click('style-sample:film'));
+  await f.bot.idle();
+  const [own, sample] = photos(f.sent);
+  const [ownNote, sampleNote] = notes(f.sent);
+
+  // The button is on the prompt under the scene's own photo and nowhere else: not on the photo, not under a sample.
+  assert.deepEqual(ownNote.payload.reply_markup?.inline_keyboard,
+    [[{ text: '✏️ Изменить промпт и нарисовать вариант', callback_data: `prompt-edit:${idOf(f.sent, own)}` }]]);
+  assert.equal(own.payload.reply_markup, undefined);
+  assert.equal(sampleNote.payload.reply_markup, undefined);
+  assert.ok(!sample.payload.reply_markup?.inline_keyboard.flat().some(button => button.callback_data.startsWith('prompt-edit:')));
+  const stories = JSON.stringify(f.store.read('1').stories);
+  const calls = f.requests.length;
+  touched.length = 0;
+
+  // It asks for the whole prompt, style and all, and the reader's next message is that prompt.
+  await f.bot.handle(f.click(`prompt-edit:${idOf(f.sent, own)}`));
+  assert.match(f.sent.at(-1)!.payload.text, /Это весь промпт целиком, вместе со стилем/);
+  assert.deepEqual(f.store.read('1').ui, { input: 'prompt', messageId: idOf(f.sent, own) });
+  const prompt = 'Элин, 48 years old, waits at the lighthouse door at dawn. <b>Charcoal</b> & ink, no colour.';
+  await f.bot.handle(f.message(prompt));
+  await f.bot.idle();
+  assert.equal(f.store.read('1').ui, null, 'nothing of the prompt is kept');
+
+  // The card draws it as it came, with no style line after it and no name or age cut out, by the seed, the size and
+  // the sampler of the photo it varies; the language model is neither asked nor held for it.
+  assert.equal(comfy.submitted.length, 3);
+  assert.equal(promptOf(comfy.submitted[2]), prompt);
+  assert.deepEqual(unworded(comfy.submitted[2]), unworded(comfy.submitted[0]));
+  assert.equal(f.requests.length, calls);
+  assert.deepEqual(touched, []);
+
+  // A photo of its own under the same scene, with its prompt under it and the same button, and its status line gone.
+  const scene = f.sent.find(one => one.method === 'sendRichMessage' && !isNote(one))!;
+  const variant = photos(f.sent)[2];
+  assert.equal(variant.payload.reply_parameters?.message_id, idOf(f.sent, scene));
+  assert.equal(variant.payload.caption, undefined);
+  const note = notes(f.sent)[2];
+  assert.equal(note.payload.reply_parameters?.message_id, idOf(f.sent, variant));
+  assert.deepEqual(note.payload.reply_markup?.inline_keyboard.flat().map(button => button.callback_data), [`prompt-edit:${idOf(f.sent, variant)}`]);
+  const status = f.sent.find(one => one.method === 'sendMessage' && one.payload.text === '🎨 Рисую вариант…')!;
+  assert.ok(f.deleted.includes(idOf(f.sent, status)));
+  // Its size is the prompt that was drawn; what share of it is the style nobody knows, so the note does not say.
+  const summary = htmlOf(note).match(/^<details><summary>(.*)<\/summary>/)![1];
+  assert.equal(htmlOf(note), foldedPrompt(summary, prompt));
+  assert.match(summary, /^🖼 Промпт: \d+ токен\S* · [\d ]+ знак\S*$/u);
+  assert.deepEqual(summary.match(/\d[\d ]*/g)!.map(number => Number(number.replace(/ /g, ''))), [words(prompt), [...prompt].length]);
+
+  // Recorded with the recipe of the photo it varies: it leaves the chat with the scene, and it can be varied in turn.
+  const records = f.store.read('1').sentPictures!;
+  const recipe = (one: Sent) => records.find(picture => picture.messageId === idOf(f.sent, one))?.recipe;
+  assert.deepEqual(recipe(variant), recipe(own));
+  assert.ok(records.some(picture => picture.messageId === idOf(f.sent, note)));
+  await f.bot.handle(f.click(`prompt-edit:${idOf(f.sent, variant)}`));
+  await f.bot.handle(f.message('A second synthetic prompt.'));
+  await f.bot.idle();
+  assert.equal(promptOf(comfy.submitted[3]), 'A second synthetic prompt.');
+  assert.deepEqual(unworded(comfy.submitted[3]), unworded(comfy.submitted[0]));
+
+  // Nothing else changed: not the scene, not the sheet, not the clothes, and a sample still has the scene's own frame.
+  assert.equal(JSON.stringify(f.store.read('1').stories), stories);
+  await f.bot.handle(f.click('style-sample:graphic'));
+  await f.bot.idle();
+  assert.equal(promptOf(comfy.submitted[4]).slice(0, -PRESETS.graphic.length), promptOf(comfy.submitted[0]).slice(0, -STYLE_LINE.length));
+
+  // Its rows are counts and one flag, never a word of the prompt.
+  const rows = f.rows.filter(one => one.event === 'picture_variant');
+  assert.deepEqual(rows.map(row => [row.outcome, row.edited, row.actor]), [['ready', true, 'owner'], ['ready', true, 'owner']]);
+  assert.deepEqual([rows[0].promptCharacters, rows[0].pictureTokens, 'styleTokens' in rows[0], rows[0].imageSteps], [[...prompt].length, words(prompt), false, 8]);
+  assert.ok(Number.isSafeInteger(rows[0].imageMs!) && rows[0].photoBytes! > 0);
+  assert.doesNotMatch(JSON.stringify(f.rows), /Элин|lighthouse|Charcoal|second synthetic/);
+});
+
+test('a variant is refused for a picture that is not the reader\'s own or is gone, and for a prompt that is empty or too long', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root, users: ['1', '2'] });
+  await f.start(1);
+  await f.bot.idle();
+  await f.start(2);
+  await f.bot.idle();
+  await f.bot.handle(f.click('style-sample:film'));
+  await f.bot.idle();
+  const [own, sample] = photos(f.sent).filter(one => one.payload.chat_id === 1);
+  const theirs = photos(f.sent).find(one => one.payload.chat_id === 2)!;
+  const drawn = comfy.submitted.length;
+  const gone = 'Вариант этой картинки уже не нарисовать: её сцена удалена или картинке больше двух суток.';
+
+  // Another reader's picture, a sample, the note under a photo and a button nobody made are no picture of this reader.
+  for (const [data, user] of [[`prompt-edit:${idOf(f.sent, own)}`, 2], [`prompt-edit:${idOf(f.sent, sample)}`, 1],
+    [`prompt-edit:${idOf(f.sent, notes(f.sent)[0])}`, 1], ['prompt-edit:constructor', 1]] as const) {
+    const before = f.sent.length;
+    await f.bot.handle(f.click(data, user));
+    assert.ok(told(f.sent.slice(before), gone), data);
+    assert.equal(f.store.read(String(user)).ui, null, data);
+  }
+
+  // An empty prompt and one past the limit are refused, and the reader may send it again.
+  await f.bot.handle(f.click(`prompt-edit:${idOf(f.sent, own)}`));
+  await f.bot.handle(f.message('   '));
+  assert.ok(told(f.sent, 'Пришли промпт текстом, одним сообщением. Выйти без изменений можно кнопкой «↩️» или командой /cancel.'));
+  await f.bot.handle(f.message('x'.repeat(PROMPT_CHARS + 1)));
+  assert.ok(told(f.sent, 'Слишком длинно: промпт должен уложиться в 4000 знаков. Сократи и пришли снова.'));
+  assert.deepEqual(f.store.read('1').ui, { input: 'prompt', messageId: idOf(f.sent, own) });
+  // Any command leaves, and the next message is a move in the story again.
+  await f.bot.handle(f.message('/menu'));
+  assert.equal(f.store.read('1').ui, null);
+  // While a scene is being written its own picture goes first, as it does before a sample.
+  await f.bot.handle(f.click(`prompt-edit:${idOf(f.sent, own)}`));
+  f.store.mutate('1', state => { state.job = { id: 'j99', storyId: state.active!.storyId, branchId: state.active!.branchId, head: null, memory: null, input: 'x', started: 0 }; });
+  await f.bot.handle(f.message('A synthetic prompt.'));
+  assert.ok(told(f.sent, 'Сцена ещё пишется. Попроси вариант, когда она придёт.'));
+  f.store.mutate('1', state => { state.job = null; });
+  // A picture whose record is gone by the time the prompt arrives, as a record older than two days is.
+  await f.bot.handle(f.click(`prompt-edit:${idOf(f.sent, own)}`));
+  f.store.mutate('1', state => { state.sentPictures = []; });
+  const before = f.sent.length;
+  await f.bot.handle(f.message('A synthetic prompt.'));
+  assert.ok(told(f.sent.slice(before), gone));
+  assert.equal(f.store.read('1').ui, null);
+  // A reader who is no longer drawn for is told so, for a picture of their own too.
+  f.images!.users.delete('2');
+  await f.bot.handle(f.click(`prompt-edit:${idOf(f.sent, theirs)}`, 2));
+  assert.ok(told(f.sent, 'Картинки к твоим сценам пока не включены, поэтому вариант нарисовать нельзя.'));
+  assert.equal(comfy.submitted.length, drawn, 'nothing was drawn');
+  assert.ok(!f.rows.some(one => one.event === 'picture_variant'));
+});
+
+test('a variant stops at the reader\'s next move, is not sent once its scene is deleted, and a failure is told once', async t => {
+  const card: { jobMs: number; failing?: boolean } = { jobMs: 60000 };
+  const comfy = fakeComfy(card);
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root });
+  const vary = async (photo: number, prompt: string) => { await f.bot.handle(f.click(`prompt-edit:${photo}`)); await f.bot.handle(f.message(prompt)); };
+  const drawing = (prompt: string) => until(() => comfy.submitted.some(graph => promptOf(graph) === prompt), 'the variant to reach the card');
+  await f.start();
+  await until(() => comfy.submitted.length === 1, 'the scene\'s own picture to reach the card');
+  comfy.finish();
+  await f.bot.idle();
+  const first = idOf(f.sent, photos(f.sent)[0]);
+
+  // One at a time, and the reader's next move in the story stops it without a word.
+  await vary(first, 'A first synthetic prompt.');
+  await drawing('A first synthetic prompt.');
+  await vary(first, 'A second synthetic prompt.');
+  assert.ok(told(f.sent, 'Уже рисую вариант. Следующий можно попросить, когда он придёт.'));
+  await f.bot.handle(f.message('Осмотреться'));
+  await until(() => f.rows.some(one => one.event === 'picture_variant'), 'the variant to stop');
+  await until(() => comfy.submitted.length === 3, 'the next scene\'s picture to reach the card');
+  comfy.finish();
+  await f.bot.idle();
+  assert.deepEqual(f.rows.filter(one => one.event === 'picture_variant').map(row => [row.outcome, row.code, row.edited]), [['cancelled', 'cancelled', true]]);
+  assert.ok(!comfy.submitted.some(graph => promptOf(graph) === 'A second synthetic prompt.'), 'the one refused was never drawn');
+  assert.equal(photos(f.sent).length, 2, 'the next scene\'s picture, and no variant of the one before');
+  assert.ok(comfy.seen.cleared.includes('p2'));
+
+  // A reader taken off the picture list while the card draws gets no photo, and is told why.
+  const second = idOf(f.sent, photos(f.sent)[1]);
+  await vary(second, 'A third synthetic prompt.');
+  await drawing('A third synthetic prompt.');
+  f.images!.users.delete('1');
+  comfy.finish();
+  await f.bot.idle();
+  f.images!.users.add('1');
+  assert.equal(photos(f.sent).length, 2);
+  assert.ok(told(f.sent, 'Картинки к твоим сценам пока не включены, поэтому вариант нарисовать нельзя.'));
+
+  // The scene is deleted while its variant is on the card: the card finishes it, and nothing is sent or said.
+  await vary(second, 'A fourth synthetic prompt.');
+  await drawing('A fourth synthetic prompt.');
+  const edits = f.sent.filter(one => one.method === 'editMessageText').length;
+  await deleteTheSeed(f);
+  comfy.finish();
+  await f.bot.idle();
+  assert.equal(photos(f.sent).length, 2);
+  assert.equal(f.sent.filter(one => one.method === 'editMessageText').length, edits);
+  assert.deepEqual(f.rows.filter(one => one.event === 'picture_variant').map(row => [row.outcome, row.code]),
+    [['cancelled', 'cancelled'], ['skipped', 'pictures_off'], ['cancelled', 'scene_gone']]);
+
+  // A card that cannot draw it: the reader is told once, and it is not tried again.
+  const g = fixture(t, { comfy: root });
+  await g.start();
+  await until(() => comfy.submitted.length === 6, 'the scene\'s own picture to reach the card');
+  comfy.finish();
+  await g.bot.idle();
+  card.failing = true;
+  await g.bot.handle(g.click(`prompt-edit:${idOf(g.sent, photos(g.sent)[0])}`));
+  await g.bot.handle(g.message('A fifth synthetic prompt.'));
+  await drawing('A fifth synthetic prompt.');
+  comfy.finish();
+  await g.bot.idle();
+  assert.equal(comfy.submitted.filter(graph => promptOf(graph) === 'A fifth synthetic prompt.').length, 1);
+  assert.equal(g.sent.filter(one => one.method === 'editMessageText' && one.payload.text === 'Не получилось нарисовать вариант. Попробуй ещё раз чуть позже.').length, 1);
+  assert.deepEqual(g.rows.filter(one => one.event === 'picture_variant').map(row => [row.outcome, row.edited]), [['failed', true]]);
+});
+
+test('a variant is drawn by the recipe its picture was drawn with, and refused once the graph or the checkpoint changed', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root, style: STYLE_LINE });
+  await f.start();
+  await f.bot.idle();
+  const own = idOf(f.sent, photos(f.sent)[0]);
+  const vary = async (prompt: string) => { await f.bot.handle(f.click(`prompt-edit:${own}`)); await f.bot.handle(f.message(prompt)); await f.bot.idle(); };
+
+  // Another style line and a restart change neither the seed nor the settings of a variant.
+  f.images!.style = 'Another synthetic style line.';
+  await f.restart();
+  await vary('A synthetic prompt after a restart.');
+  assert.deepEqual(unworded(comfy.submitted[1]), unworded(comfy.submitted[0]));
+  // It is the picture's own record that is drawn by, not what the bot would draw the story with today.
+  f.store.mutate('1', state => Object.assign(state.sentPictures!.find(picture => picture.messageId === own)!.recipe!, { seed: 12345, steps: 3 }));
+  await vary('A synthetic prompt by the record.');
+  assert.deepEqual([samplerIn(comfy.submitted[2]).seed, samplerIn(comfy.submitted[2]).steps], [12345, 3]);
+
+  // Another checkpoint or another graph would make another picture: the reader is told so, and nothing is drawn,
+  // whether the change is there when the button is pressed or comes while the prompt is written.
+  const changed = 'С тех пор сменились граф или модель картинок, и эту картинку уже не повторить с теми же настройками. С другими рисовать не буду: это было бы уже не сравнение промптов.';
+  f.images!.checkpoint = 'another.safetensors';
+  await f.restart();
+  await f.bot.handle(f.click(`prompt-edit:${own}`));
+  assert.ok(told(f.sent, changed));
+  assert.equal(f.store.read('1').ui, null);
+  f.images!.checkpoint = 'synthetic.safetensors';
+  await f.restart();
+  await f.bot.handle(f.click(`prompt-edit:${own}`));
+  const graph = JSON.parse(readFileSync(f.workflow, 'utf8')) as Graph;
+  graph['5'].inputs.steps = 20;
+  writeFileSync(f.workflow, JSON.stringify(graph));
+  await f.restart();
+  const before = f.sent.length;
+  await f.bot.handle(f.message('A synthetic prompt for a graph that changed meanwhile.'));
+  assert.ok(told(f.sent.slice(before), changed));
+  assert.equal(comfy.submitted.length, 3);
+
+  // A picture drawn since has the new recipe, and its variant is drawn by it.
+  await f.bot.handle(f.message('Осмотреться'));
+  await f.bot.idle();
+  await f.bot.handle(f.click(`prompt-edit:${idOf(f.sent, photos(f.sent).at(-1)!)}`));
+  await f.bot.handle(f.message('A synthetic prompt for the new graph.'));
+  await f.bot.idle();
+  assert.equal(promptOf(comfy.submitted.at(-1)!), 'A synthetic prompt for the new graph.');
+  assert.equal(samplerIn(comfy.submitted.at(-1)!).steps, 20);
+  assert.equal(samplerIn(comfy.submitted.at(-1)!).seed, samplerIn(comfy.submitted[0]).seed, 'and the story\'s one seed');
+  assert.deepEqual(f.rows.filter(one => one.event === 'picture_variant').map(row => row.outcome), ['ready', 'ready', 'ready']);
 });
 
 // The bot prepares the next compaction while the reader reads (local/bot.ts `prepareNext`), on a turn of its own

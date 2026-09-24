@@ -18,12 +18,12 @@ import { createProgress } from './progress.ts';
 import { renderCompaction } from './compact-view.ts';
 import type { CompactionStatus } from './compact-view.ts';
 import type { GpuController } from './gpu.ts';
-import type { Illustrator, PictureRequest, SampleRequest } from './picture.ts';
+import type { Illustrator, PictureRequest, SampleRequest, VariantRequest } from './picture.ts';
 import type { Log } from './model-error.ts';
 import { errorCode, member, safeErrorDetails } from './model-error.ts';
 import type { GenerationResult, Provider } from './model.ts';
 import { STYLE } from './illustrate.ts';
-import { OWN_STYLE_CHARS, OWN_STYLES_MAX, choiceOf, lineOf, ownStyle, ownStyleInput, ownStyles, pickerKeys, styleKey, styleName } from './picture-style.ts';
+import { OWN_STYLE_CHARS, OWN_STYLES_MAX, PROMPT_CHARS, choiceOf, lineOf, ownStyle, ownStyleInput, ownStyles, pickerKeys, styleKey, styleName } from './picture-style.ts';
 import type { Store } from './store.ts';
 import type { GpuInfo, ModelInfo, RenderDetails } from './ui.ts';
 import { isRegistered, langFromTelegram, texts } from './text.ts';
@@ -57,6 +57,8 @@ type Plan = {
   // A sample of styles the reader asked for: what to draw, what to say under each picture and while they are drawn
   // (local/picture.ts `sample`).
   sample?: Pick<SampleRequest, 'storyId' | 'branchId' | 'nodeId' | 'styles' | 'status'>;
+  // A variant of a picture from the prompt the reader wrote for it (local/picture.ts `variant`).
+  variant?: Pick<VariantRequest, 'messageId' | 'prompt'>;
   // The messages of the pictures whose scenes a deletion took with it (lib/library.ts `forgetLostPictures`), to be
   // deleted from the chat once the deletion screen is out.
   lostPictures?: number[];
@@ -83,6 +85,8 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
   // One sample of a style at a time per reader (local/picture.ts `sample`). A move in the story, /cancel and the
   // bot's stop end it: the scene's own picture goes first, and a sample is only ever a look.
   const sampling = new Map<string, AbortController>();
+  // One variant of a picture at a time per reader (local/picture.ts `variant`), ended the same way.
+  const varying = new Map<string, AbortController>();
   // Every turn's work, whether or not its entry is still the reader's current one: a replaced turn is aborted, and
   // what it is unwinding (the picture it had on the other card) still has to finish before the bot may stop. A sample
   // and the removal of a deletion's pictures are awaited the same way.
@@ -123,6 +127,13 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     const node = story.nodes[branch.head as string];
     return { text: node?.text ?? `${seed.startTime}\n\n${seed.text}`, modelInfo: node?.modelInfo };
   };
+  // The picture a variant is drawn from, when its button is pressed and when its prompt arrives: one drawn for this
+  // reader, still in their library and still drawable the way it was drawn (local/picture.ts `variantOf`). The
+  // picture lane asks again before it draws and before it sends.
+  const variantTarget = (state: Library, messageId: number, t: Messages, pictureInfo: RenderDetails) => {
+    const found = pictureInfo.pictures && illustrator ? illustrator.variantOf(state, messageId) : 'off';
+    if (typeof found === 'string') throw refuse(t, found === 'off' ? 'variantOff' : found === 'gone' ? 'variantGone' : 'variantChanged');
+  };
   // `pictureInfo`: whether this reader's scenes are illustrated, so that their menu offers the picture style, and the
   // bot's own style line (local/ui.ts `RenderDetails`).
   function prepare(state: Library, update: Update, fileInput: FileInput | undefined, pictureInfo: RenderDetails): Plan {
@@ -145,9 +156,9 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       action = command !== undefined && Object.hasOwn(commands, command) ? commands[command] : undefined;
       if (!action && text?.startsWith('/') && state.ui?.input !== 'seed') return { screen: { text: t.notices.unknownCommand } };
     }
-    // Writing a picture style ends with any button or command, so that no later message is kept as a style by
-    // surprise (/last or /model would otherwise leave the next move to be taken for one).
-    if (action && state.ui?.input === 'style') state.ui = null;
+    // Writing a picture style, or the prompt of a variant, ends with any button or command, so that no later message
+    // is kept as one by surprise (/last or /model would otherwise leave the next move to be taken for one).
+    if (action && (state.ui?.input === 'style' || state.ui?.input === 'prompt')) state.ui = null;
     if (action === 'cancel') {
       const hadJob = !!state.job;
       state.job = null;
@@ -266,6 +277,26 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       if (!editing) state.pictureStyle = styleId;
       state.ui = null;
       return { screen: render(state, `style:${styleId}`, pictureInfo) };
+    }
+    // A variant of a picture: the button under its prompt waits for a prompt, and the next text message is that prompt,
+    // drawn as it came. The wait keeps the picture alone, never the prompt.
+    if (action?.startsWith('prompt-edit:')) {
+      const messageId = Number(action.slice(12));
+      variantTarget(state, messageId, t, pictureInfo);
+      state.ui = { input: 'prompt', messageId };
+      return { screen: render(state, 'prompt-input', pictureInfo) };
+    }
+    if (state.ui?.input === 'prompt' && !action) {
+      const { messageId } = state.ui;
+      state.ui = null;
+      variantTarget(state, messageId, t, pictureInfo);
+      // As with a sample, the picture of the scene being written goes first.
+      if (state.job) throw refuse(t, 'variantBusy');
+      // A prompt that cannot be drawn leaves the wait open for the next try.
+      const again = (key: 'promptNeedsText' | 'promptTooLong') => { state.ui = { input: 'prompt', messageId }; return refuse(t, key); };
+      if (!text?.trim()) throw again('promptNeedsText');
+      if ([...text].length > PROMPT_CHARS) throw again('promptTooLong');
+      return { variant: { messageId, prompt: text } };
     }
     if (action === 'last') return { savedText: last(state) };
     if (action === 'new-seed') {
@@ -566,7 +597,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         }
         await safeSend(chat, render(store.read(userId), 'model'), log);
       }
-      if (plan.cancel) { running.get(userId)?.controller.abort(); sampling.get(userId)?.abort(); }
+      if (plan.cancel) { running.get(userId)?.controller.abort(); sampling.get(userId)?.abort(); varying.get(userId)?.abort(); }
       if (plan.savedText) {
         const snapshot = store.read(userId);
         try { await chat.final(scenePrefix(stats(snapshot), plan.savedText.modelInfo, snapshot.language) + plan.savedText.text, sceneKeyboard(snapshot)); }
@@ -599,6 +630,21 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
           inFlight.add(task);
         }
       }
+      // Beside the sample, and with nothing held on the language model's card: a variant never asks it anything.
+      if (plan.variant && illustrator) {
+        if (varying.has(userId)) await safeSend(chat, { text: texts(store.read(userId).language).errors.variantInFlight }, log);
+        else {
+          const stop = new AbortController();
+          varying.set(userId, stop);
+          const task: Promise<unknown> = illustrator.variant({ ...plan.variant, userId, chat, signal: stop.signal, log })
+            .catch(error => log('turn_task_failed', errorCode(error)))
+            .finally(() => {
+              if (varying.get(userId) === stop) varying.delete(userId);
+              inFlight.delete(task);
+            });
+          inFlight.add(task);
+        }
+      }
       if (plan.job) {
         let releaseGpu: (() => void) | undefined;
         try { releaseGpu = gpu?.acquire(); }
@@ -621,6 +667,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         // the reader was never given, which this is not.
         earlier?.picture.abort();
         sampling.get(userId)?.abort();
+        varying.get(userId)?.abort();
         // The picture is made after the turn's model work is over and its GPU hold released: the second call takes
         // a slot again, and the drawing takes none at all, so neither may sit inside the turn.
         const task: Promise<unknown> = generate(userId, chat, plan.job, controller, releaseGpu, picture.signal)
@@ -641,6 +688,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       for (const entry of prepared.values()) entry.stop();
       for (const entry of running.values()) entry.controller.abort();
       for (const stop of sampling.values()) stop.abort();
+      for (const stop of varying.values()) stop.abort();
       await this.idle();
     },
   };

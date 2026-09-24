@@ -106,6 +106,15 @@ export const en: Messages = {
     note: 'This changes only the menus and messages of the bot. The language of a story comes from its seed and from what you write.',
   },
 
+  variant: {
+    button: '✏️ Edit the prompt and draw a variant',
+    title: '✏️ Your own prompt for the picture',
+    note: max => `Open the prompt under the picture, copy it, edit it and send it in one message, up to ${max} characters. It is the whole prompt, style included: nothing will be added or taken out. It is drawn exactly like the original picture — the same settings and the same random noise — so only the prompt differs. The variant arrives as a picture of its own under the same scene.`,
+    leave: '↩️ Do not draw',
+    drawing: '🎨 Drawing a variant…',
+    failed: 'The variant did not work out. Try again a little later.',
+  },
+
   pictureStyle: {
     title: '🎨 Picture style',
     current: name => `Now: ${name}`,
@@ -519,6 +528,13 @@ export const en: Messages = {
     sampleBusy: 'The scene is still being written. Ask for a sample once it arrives.',
     sampleNoScene: 'A sample is drawn from your last scene. Start a story, and after its first scene you can ask for one.',
     sampleInFlight: 'Already drawing a sample. You can ask for the next one once it arrives.',
+    promptNeedsText: 'Send the prompt as text, in one message. To leave without a change, tap “↩️” or send /cancel.',
+    promptTooLong: 'Too long: a prompt has to fit in 4000 characters. Shorten it and send it again.',
+    variantOff: 'Pictures for your scenes are not switched on, so a variant cannot be drawn.',
+    variantGone: 'A variant of this picture can no longer be drawn: its scene was deleted, or the picture is more than two days old.',
+    variantChanged: 'The picture graph or model has changed since, so this picture cannot be drawn with the same settings again. It will not be drawn with others: that would no longer compare prompts.',
+    variantBusy: 'The scene is still being written. Ask for a variant once it arrives.',
+    variantInFlight: 'Already drawing a variant. You can ask for the next one once it arrives.',
   },
 
   labels: {
