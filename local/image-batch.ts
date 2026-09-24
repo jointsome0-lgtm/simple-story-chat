@@ -58,8 +58,9 @@ export type Picture = Cell & {
 };
 // A cell that did not become a picture. The whole cell is on the row, so a later run that draws it can take its
 // failure off again; `httpStatus` is the server's own answer, the one thing that tells a refused graph from a
-// tunnel that went down (local/model-error.ts whitelists it). `oom` says the card ran out of video memory.
-export type Failure = Cell & { code: string; httpStatus?: number; oom?: boolean };
+// tunnel that went down (local/model-error.ts whitelists it). `oom` says the card ran out of video memory, and
+// `references` how many portraits the cell was to be drawn with: a failed frame of four is a peak nobody measured.
+export type Failure = Cell & { code: string; httpStatus?: number; oom?: boolean; references?: number };
 export type BatchIndex = {
   startedAt: string; completedAt?: string; comfy: { steps: number; sampler: string; scheduler: string; cfg: number; width: number; height: number };
   // The graph this run posted, by name and by its own hash. One run has one workflow, so the Qwen comparison is a
@@ -365,10 +366,11 @@ const mergeVram = (into: Vram[], seen: Vram[]) => {
   }
 };
 
-// The memory a job was seen with: the video memory above, how many samples it rests on, and the RAM in use.
+// The memory a job was seen with: the video memory above, how many samples taken while it ran it rests on (the one
+// after the picture adds to the maxima and not to this count), and the RAM in use.
 type Memory = { vram: Vram[]; samples: number; ramMiB?: { min: number; max: number } };
-const mergeStats = (into: Memory, seen: Stats) => {
-  if (seen.vram.length) into.samples++;
+const mergeStats = (into: Memory, seen: Stats, during: boolean) => {
+  if (seen.vram.length && during) into.samples++;
   mergeVram(into.vram, seen.vram);
   if (seen.ramMiB !== undefined) {
     into.ramMiB = { min: Math.min(into.ramMiB?.min ?? seen.ramMiB, seen.ramMiB), max: Math.max(into.ramMiB?.max ?? 0, seen.ramMiB) };
@@ -636,10 +638,10 @@ async function drawWatched(comfy: Comfy, graph: Graph, watch: Watch, options: Dr
   // Video memory is sampled without waiting for the answer, and one request at a time: a card that stops answering
   // would otherwise gather another hanging request every few polls.
   let sampling = false;
-  const sampleVram = () => {
+  const sampleVram = (during = true) => {
     if (sampling) return;
     sampling = true;
-    leave(readStats(comfy).then(seen => mergeStats(memory, seen)).finally(() => { sampling = false; }));
+    leave(readStats(comfy).then(seen => mergeStats(memory, seen, during)).finally(() => { sampling = false; }));
   };
   // The delete of the job's record: sent once, whichever way this ends, and never waited for (`settled`).
   let forgotten = false;
@@ -692,7 +694,7 @@ async function drawWatched(comfy: Comfy, graph: Graph, watch: Watch, options: Dr
     const viewMs = Math.round(performance.now() - viewStarted);
     // The record goes first, on the connection `/view` has just left open, and the last sample after it.
     forget();
-    sampleVram();
+    sampleVram(false);
     // `memory` fills in like `vram` did, the last sample after the picture; `timing` is the socket's account of the job.
     return { bytes: stripPngMetadata(bytes), totalMs: Math.round(performance.now() - started), viewMs, vram: memory.vram, memory,
       timing: watch.timing(promptId, graph) };
@@ -883,6 +885,9 @@ export async function draw(options: DrawOptions): Promise<BatchIndex> {
   if (changed) throw new Error(`${indexPath} was drawn under another ${changed}; one run directory holds one set of pins`);
   index.workflow = workflow;
   if (Object.keys(pins).length) index.pins = { ...index.pins, ...pins };
+  // What ended the last run says nothing about this one, which may draw every cell that is left.
+  delete index.stopped;
+  delete index.error;
   const save = () => writeFileSync(indexPath, JSON.stringify(index, null, 2));
   const deadline = performance.now() + options.minutes * 60000;
 
@@ -906,11 +911,11 @@ export async function draw(options: DrawOptions): Promise<BatchIndex> {
     if (arms && index.failures.some(failure => isCell(failure, cell) && !stopsTheRun(failure.code))) continue;
     if (performance.now() > deadline) { index.stopped = 'budget'; log({ event: 'budget_spent', drawn: index.pictures.length }); break; }
     const one = cases.find(entry => entry.id === cell.caseId)!;
+    // One upload per portrait, not per cell: the same face comes back in every frame of its story, and the card
+    // is billed by the minute. A cell whose people have no portraits is drawn without any, from the prompt alone,
+    // and so is every cell of arm A. An upload's seconds belong to the frame that needed the portrait first.
+    const sent = references && cell.arm !== 'A' ? bindingPlan(one, references) : [];
     try {
-      // One upload per portrait, not per cell: the same face comes back in every frame of its story, and the card
-      // is billed by the minute. A cell whose people have no portraits is drawn without any, from the prompt alone,
-      // and so is every cell of arm A. An upload's seconds belong to the frame that needed the portrait first.
-      const sent = references && cell.arm !== 'A' ? bindingPlan(one, references) : [];
       let bound: string[] | undefined;
       let uploadMs = 0;
       if (references) {
@@ -960,7 +965,8 @@ export async function draw(options: DrawOptions): Promise<BatchIndex> {
       const { httpStatus } = safeErrorDetails(error);
       const oom = (error as { oom?: unknown }).oom === true;
       index.failures = index.failures.filter(failure => !isCell(failure, cell));
-      index.failures.push({ ...cell, code, ...(httpStatus === undefined ? {} : { httpStatus }), ...(oom ? { oom } : {}) });
+      index.failures.push({ ...cell, code, ...(httpStatus === undefined ? {} : { httpStatus }), ...(oom ? { oom } : {}),
+        ...(references ? { references: sent.length } : {}) });
       save();
       log({ event: 'picture_failed', caseId: cell.caseId, role: cell.role, arm: cell.arm, code, httpStatus, oom });
       // The graph or the server, not this picture: every cell after it fails the same way, and the rental pays for
