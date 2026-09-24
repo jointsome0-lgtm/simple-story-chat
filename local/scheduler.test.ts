@@ -135,13 +135,17 @@ test("a probe's call holds its lease from the moment the queue takes it until it
   calls.at(-1)!.finish(); await person;
   await assert.rejects(scheduler.background.generate('slow'), { code: 'background_timeout' });
   assert.deepEqual(leases, [1, 1, 1, 1, 1, 1]);
-  // Stopped once probes may not run, refused once they may not wait, and refused before the queue takes it.
+  // Stopped once probes may not run, refused once they may not wait, and refused before the queue takes it. The queue
+  // is empty before anything is awaited, so one that kept a probe fails here instead of hanging the test.
   const stopped = scheduler.background.generate('stopped');
   const refused = scheduler.background.generate('refused');
   allowed = false; canWait = false; scheduler.tick();
+  assert.equal(scheduler.snapshot().backgroundQueued, 0);
   await assert.rejects(stopped, { code: 'background_unavailable' });
   await assert.rejects(refused, { code: 'background_unavailable' });
-  await assert.rejects(scheduler.background.generate('not taken'), { code: 'background_unavailable' });
+  const notTaken = assert.rejects(scheduler.background.generate('not taken'), { code: 'background_unavailable' });
+  assert.equal(scheduler.snapshot().backgroundQueued, 0);
+  await notTaken;
   assert.deepEqual(leases, [1, 1, 1, 1, 1, 1, 1, 1]);
   allowed = true; canWait = true;
   // A full queue takes no fifth waiting call; the shutdown ends the running call and the waiting ones.

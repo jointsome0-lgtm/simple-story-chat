@@ -165,7 +165,7 @@ An unfinished stream, a tool call and a mismatch of counters do not become a fin
 
 The bot has one computation queue in `local/scheduler.ts`. User requests are served in order. A background probe starts a computation after 60 seconds without user requests. A new user request cancels the background computation; the probe repeats only its own unfinished step. User answers are not repeated automatically.
 
-One background call is limited to 90 seconds. It runs only when the GPU is ready and there are no user jobs. It keeps the GPU up from the moment the queue takes it until it ends, so the auto-pause never comes while an eval sends its calls one after another; between two calls only the idle interval keeps the GPU up. The background work never starts a rental and yields to a pause: while the GPU is pausing or paused, the queue stops the running call, refuses the waiting ones and takes no new ones. The pause and the unavailability are checked every second. The model has one slot, so the background work can evict the story cache and increase the time to the first text of the next user answer. A turn, a person's or an agent's, keeps the model slot from the start of its first call until it ends, so no other turn or probe runs between its compaction steps and its scene and evicts its cache (the compaction and the scene share only a common prefix, so the scene still has its own prefill). A started turn is never cut off by a person. Agent turns ([agent interface](agent-interface.md#model-access)) have their own queue: they wait for the same quiet window and have no 90-second limit. Once started, an agent turn runs to its end, so the GPU does real work while people read; a person who writes meanwhile waits for it, up to a couple of minutes (the tester agreed to this for the sake of GPU use). Only a compaction prepared ahead for one person yields to anyone else's call. A started agent turn keeps the GPU up from its first call to its end, the gaps between its calls included: a pause waits for it, and the auto-pause counts from its end. A person waiting for the model sees how many requests are ahead: before a scene in the disappearing draft the scene then streams into, and in the compaction status. Only the count is shown, never whose requests they are; when the model starts reading the scene request, the draft says so until the text arrives.
+One background call is limited to 90 seconds. It runs only when the GPU is ready and there are no user jobs. It keeps the GPU up from the moment the queue takes it until it ends, so the auto-pause never comes while a probe sends its calls one after another; between two calls only the idle interval keeps the GPU up. The background work never starts a rental and yields to a pause: while the GPU is pausing or paused, the queue stops the running call, refuses the waiting ones and takes no new ones. The pause and the unavailability are checked every second. The model has one slot, so the background work can evict the story cache and increase the time to the first text of the next user answer. A turn, a person's or an agent's, keeps the model slot from the start of its first call until it ends, so no other turn or probe runs between its compaction steps and its scene and evicts its cache (the compaction and the scene share only a common prefix, so the scene still has its own prefill). A started turn is never cut off by a person. Agent turns ([agent interface](agent-interface.md#model-access)) have their own queue: they wait for the same quiet window and have no 90-second limit. Once started, an agent turn runs to its end, so the GPU does real work while people read; a person who writes meanwhile waits for it, up to a couple of minutes (the tester agreed to this for the sake of GPU use). Only a compaction prepared ahead for one person yields to anyone else's call. A started agent turn keeps the GPU up from its first call to its end, the gaps between its calls included: a pause waits for it, and the auto-pause counts from its end. A person waiting for the model sees how many requests are ahead: before a scene in the disappearing draft the scene then streams into, and in the compaction status. Only the count is shown, never whose requests they are; when the model starts reading the scene request, the draft says so until the text arrives.
 
 ### Slot pool (off by default)
 
@@ -566,14 +566,19 @@ compaction and during the generation that follows it.
 
 `SIMPLE_CHAT_GPU_IDLE_MINUTES=15` sets an auto-pause 15 minutes after the last
 work for the model ends. A reader's scene or compaction and an agent's turn count
-from their start to their end, the gaps between their requests included; an eval or
-a probe counts request by request, each from the moment the bot's queue takes it.
-The timer does not run while any of this work lasts and starts again when the last
-of it ends, so our own work keeps the card up for as long as it goes on: only the
-rental's own guard (see [Renting](#renting)) stops the card under it. A pause from
-Telegram waits for the readers' jobs and for an agent's turn, but stops an eval's
-request within a second. The check runs every 10 seconds. Viewing the menu and the
-status does not reset the timer. An ordinary message does not start a stopped rental.
+from their start to their end, the gaps between their requests included; a probe
+through the bot's queue (`npm run memory:probe` without `--direct`) counts request
+by request, each from the moment the bot's queue takes it. The timer does not run
+while any of this work lasts and starts again when the last of it ends, so this work
+keeps the card up for as long as it goes on: only the rental's own guard (see
+[Renting](#renting)) deletes the instance under it. `npm run eval` and the probes
+with `--direct` call the model server directly: the bot does not see them (see
+[model-providers.md](model-providers.md#evaluating-changes-npm-run-eval)), and its
+auto-pause can stop the card under them, so run them while the bot is stopped or
+within the idle interval. A pause from Telegram waits for the readers' jobs and for
+an agent's turn, but stops a probe's request within a second. The check runs every
+10 seconds. Viewing the menu and the status does not reset the timer. An ordinary
+message does not start a stopped rental.
 After an explicit start the bot waits until the GPU, SSH and the model are available. A free card
 after a pause is not guaranteed: Vast may wait until it is released.
 

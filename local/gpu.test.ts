@@ -458,11 +458,15 @@ test("the owner's pause during an eval completes once the queue stops the runnin
   f.gpu.pause();
   await f.gpu.tick();
   assert.deepEqual([f.gpu.snapshot().status, f.writes], ['draining', []]);
-  // The queue's next tick: probes may no longer run, nor wait.
+  // The queue's next tick: probes may no longer run, nor wait. The queue is empty before anything is awaited, so a
+  // queue that kept a probe fails here instead of hanging the test.
   q.scheduler.tick();
+  assert.equal(q.scheduler.snapshot().backgroundQueued, 0);
   await stopped; await refused;
   // The eval asks again at once, and is refused before its call waits: it keeps nothing up.
-  await assert.rejects(q.scheduler.background.generate('eval 3'), { code: 'background_unavailable' });
+  const again = assert.rejects(q.scheduler.background.generate('eval 3'), { code: 'background_unavailable' });
+  assert.equal(q.scheduler.snapshot().backgroundQueued, 0);
+  await again;
   await f.gpu.tick();
   assert.deepEqual([f.gpu.snapshot().status, f.writes], ['stopping', ['stopped']]);
   f.setRemote({ actual: 'exited', intended: 'stopped' }); await f.gpu.tick();
@@ -487,7 +491,9 @@ test('a model server whose checks fail does not hang a pause during an eval', as
   // The owner pauses: the pause waits for the waiting call, the queue refuses it, and the pause needs no check.
   f.gpu.pause(); await f.gpu.tick();
   assert.equal(f.gpu.snapshot().status, 'draining');
-  q.scheduler.tick(); await refused; await f.gpu.tick();
+  q.scheduler.tick();
+  assert.equal(q.scheduler.snapshot().backgroundQueued, 0);
+  await refused; await f.gpu.tick();
   assert.deepEqual([f.gpu.snapshot().status, f.writes], ['stopping', ['stopped']]);
 });
 

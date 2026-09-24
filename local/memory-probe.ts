@@ -113,9 +113,11 @@ const provider = { async generate(request: ModelRequest) {
   }
   for (let attempt = 0; !direct && attempt < 20; attempt++) {
     deadline.throwIfAborted();
-    // Background work is served only with GPU control, so the status includes its snapshot.
+    // Background work is served only with GPU control, so the status includes its snapshot. A card that is pausing
+    // takes no probe, and its queue refuses one at once (local/gpu.ts), so the run ends here instead of spending its
+    // retries in a moment. Any other retry waits in the bot's queue.
     const state = await client.check({ signal: deadline }) as { gpu: { status: string } };
-    if (state.gpu.status === 'paused') throw Object.assign(new Error(), { code: 'gpu_paused' });
+    if (member(['draining', 'stopping', 'paused'], state.gpu.status)) throw Object.assign(new Error(), { code: 'gpu_paused' });
     try { return await client.generate(request, { signal: deadline }); }
     catch (error) {
       const failure = error as Failure;
@@ -123,7 +125,6 @@ const provider = { async generate(request: ModelRequest) {
       current!.preemptions++;
       save();
       progress({ event: 'yielded', code: failure.code });
-      // The scheduler enforces its quiet period. No immediate GPU retry here.
     }
   }
   throw Object.assign(new Error(), { code: 'retry_limit' });
