@@ -13,7 +13,7 @@ import { render, scenePrefix, sceneKeyboard } from './ui.ts';
 import { commandSets } from './text.ts';
 import { createSeedFileReader } from './seed-file.ts';
 import { createVast } from './vast.ts';
-import { createGpu } from './gpu.ts';
+import { createGpu, queueOptions } from './gpu.ts';
 import type { GpuController } from './gpu.ts';
 import { createGpuConnection } from './gpu-connection.ts';
 import { createScheduler } from './scheduler.ts';
@@ -54,26 +54,12 @@ try {
       scheduler?.forget();
     }); }, 10000);
   } else await rawProvider.check?.();
-  const pool = config.slots > 1;
   scheduler = createScheduler(rawProvider, { log,
     slots: config.slots, poolTokens: config.poolTokens, sharedCache: config.sharedCache,
     outputTokens: request => request.maxOutputTokens,
-    backgroundAllowed: () => {
-      const state = gpu?.snapshot();
-      // Without an idle deadline (null) background work is not allowed.
-      return state?.status === 'ready' && state.activeJobs === 0 && (state.idleRemainingSeconds ?? 0) > 100;
-    },
-    // An agent turn holds the GPU through the idle countdown, so it starts only if it can end before it, and never extends it.
-    // In a pool it also starts beside people's jobs, which keep the GPU up anyway.
-    agentCanStart: () => {
-      const state = gpu?.snapshot();
-      return state?.status === 'ready' && (pool && state.activeJobs > 0
-        || state.activeJobs === 0 && (state.idleRemainingSeconds ?? 0) > config.timeoutMs / 1000 + 100);
-    },
-    // Without GPU control there is no socket and no agent work here. A started agent turn holds the GPU, which then
-    // drains instead of pausing under it; a stopped or failing GPU stops the turn.
-    agentCanRun: () => ['ready', 'draining'].includes(gpu?.snapshot().status ?? ''),
-    holdAgentTurn: () => gpu ? gpu.hold() : () => {},
+    // Without GPU control there is no socket, and no agent or probe work here.
+    ...gpu ? queueOptions(gpu, { pool: config.slots > 1 })
+      : { backgroundAllowed: () => false, agentCanStart: () => false, agentCanRun: () => false },
   });
   const provider = scheduler.foreground;
   const api = createApi(config.token);

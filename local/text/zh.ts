@@ -195,7 +195,7 @@ export const zh: Messages = {
   gpu: {
     title: '🖥 GPU（机器人的所有用户共用）',
     ready: n => `🟢 运行中。当前模型任务：${jobs(n)}。`,
-    autoPause: minutes => `自动暂停：连续 ${minutes} 分钟没有模型任务后触发，从最近一次场景或压缩结束时算起。浏览菜单不会重置计时。`,
+    autoPause: minutes => `自动暂停：连续 ${minutes} 分钟没有模型任务后触发，从最近一个任务结束时算起。浏览菜单不会重置计时。`,
     untilPause: minutes => `距自动暂停 ≈${minutes} 分钟。`,
     untilPauseSoon: '距自动暂停不到 1 分钟。',
     draining: n => `⏳ 正在暂停：等待所有模型任务结束（当前：${jobs(n)}）。`,

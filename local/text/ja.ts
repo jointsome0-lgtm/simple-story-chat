@@ -194,7 +194,7 @@ export const ja: Messages = {
   gpu: {
     title: '🖥 GPU（ボットの全ユーザーで共有）',
     ready: n => `🟢 稼働中です。実行中のジョブ：${jobs(n)}。`,
-    autoPause: minutes => `ジョブのない状態が${minutes}分続くと、自動で一時停止します。最後のシーンまたは圧縮が終わった時点から数えます。メニューを見ても、このカウントはリセットされません。`,
+    autoPause: minutes => `ジョブのない状態が${minutes}分続くと、自動で一時停止します。最後のジョブが終わった時点から数えます。メニューを見ても、このカウントはリセットされません。`,
     untilPause: minutes => `自動一時停止まで約${minutes}分です。`,
     untilPauseSoon: '自動一時停止まで1分未満です。',
     draining: n => `⏳ 一時停止の準備中です。すべてのジョブが終わるのを待っています（現在：${jobs(n)}）。`,

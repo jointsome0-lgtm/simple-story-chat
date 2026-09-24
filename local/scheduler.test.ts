@@ -3,7 +3,7 @@ import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import type { SchedulerOptions } from './scheduler.ts';
 import { createScheduler } from './scheduler.ts';
-import { createGpu } from './gpu.ts';
+import { ModelError } from './model-error.ts';
 import type { Controls } from './model.ts';
 const turn = () => new Promise(resolve => setImmediate(resolve));
 function fixture(t: TestContext, options: SchedulerOptions = {}) {
@@ -95,24 +95,67 @@ test('background timeout frees the slot and shutdown cancels both active and que
   await f.scheduler.close(); await Promise.all(rejected);
   assert.deepEqual(f.calls.map(c => c.name), ['bounded', 'first']);
 });
-test('real GPU idle countdown expires even while background work is running', async t => {
-  let time = 0;
-  const stops: string[] = [];
-  const gpu = createGpu({ now: () => time, idleMinutes: 15,
-    api: { read: async () => ({ actual: 'running', intended: 'running' }), setState: async state => { stops.push(state); } },
-    connection: { ensure: async () => {}, close() {} }, check: async () => {} });
-  await gpu.tick();
-  const f = fixture(t, { now: () => time, backgroundAllowed: () => {
-    const state = gpu.snapshot();
-    return state.status === 'ready' && state.activeJobs === 0 && (state.idleRemainingSeconds ?? 0) > 100;
-  } });
-  const low = f.scheduler.background.generate('experiment');
-  const rejected = assert.rejects(low, { code: 'background_unavailable' });
-  time = 801000; f.scheduler.tick(); await rejected;
-  assert.equal(gpu.snapshot().activeJobs, 0);
-  assert.equal(gpu.snapshot().idleRemainingSeconds, 99);
-  time = 900000; await gpu.tick();
-  assert.deepEqual(stops, ['stopped']);
+// The lease keeps the GPU up for the call (gpu.ts `keepAwake`), so it must end exactly once, on every way a call ends.
+test("a probe's call holds its lease from the moment the queue takes it until it settles, whichever way it ends", async t => {
+  // How often each lease was released, in the order the calls were taken.
+  const leases: number[] = [];
+  let allowed = true, canWait = true;
+  const calls: { name: string; finish: () => void; fail: () => void }[] = [];
+  const provider = { generate: (request: string, { signal }: { signal: AbortSignal }) => new Promise<string>((resolve, reject) => {
+    calls.push({ name: request, finish: () => resolve(request), fail: () => reject(new ModelError('provider_failed')) });
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+  }) };
+  const options = { quietMs: 0, pollMs: 100000, backgroundTimeoutMs: 20,
+    backgroundAllowed: () => allowed, backgroundCanWait: () => canWait,
+    holdBackgroundCall: () => {
+      const lease = leases.length;
+      leases.push(0);
+      return () => { leases[lease]++; };
+    } };
+  const scheduler = createScheduler(provider, options);
+  t.after(() => scheduler.close());
+  const done = scheduler.background.generate('done');
+  assert.deepEqual(leases, [0]);
+  calls[0].finish(); await done;
+  const failed = scheduler.background.generate('failed');
+  calls[1].fail(); await assert.rejects(failed, { code: 'provider_failed' });
+  assert.deepEqual(leases, [1, 1]);
+  // Cancelled while it runs, and while it waits: a waiting call holds its lease already.
+  const running = new AbortController(), waiting = new AbortController();
+  const first = scheduler.background.generate('running', { signal: running.signal });
+  const second = scheduler.background.generate('waiting', { signal: waiting.signal });
+  assert.deepEqual(leases, [1, 1, 0, 0]);
+  waiting.abort(); await assert.rejects(second, { code: 'cancelled' });
+  running.abort(); await assert.rejects(first, { code: 'cancelled' });
+  assert.deepEqual(leases, [1, 1, 1, 1]);
+  // Preempted by a person, whose calls take no lease.
+  const probe = scheduler.background.generate('preempted');
+  const person = scheduler.foreground.generate('person');
+  await assert.rejects(probe, { code: 'background_preempted' }); await turn();
+  calls.at(-1)!.finish(); await person;
+  await assert.rejects(scheduler.background.generate('slow'), { code: 'background_timeout' });
+  assert.deepEqual(leases, [1, 1, 1, 1, 1, 1]);
+  // Stopped once probes may not run, refused once they may not wait, and refused before the queue takes it.
+  const stopped = scheduler.background.generate('stopped');
+  const refused = scheduler.background.generate('refused');
+  allowed = false; canWait = false; scheduler.tick();
+  await assert.rejects(stopped, { code: 'background_unavailable' });
+  await assert.rejects(refused, { code: 'background_unavailable' });
+  await assert.rejects(scheduler.background.generate('not taken'), { code: 'background_unavailable' });
+  assert.deepEqual(leases, [1, 1, 1, 1, 1, 1, 1, 1]);
+  allowed = true; canWait = true;
+  // A full queue takes no fifth waiting call; the shutdown ends the running call and the waiting ones.
+  const last = ['last', 'waiting 1', 'waiting 2', 'waiting 3', 'waiting 4'].map(name => scheduler.background.generate(name));
+  await assert.rejects(scheduler.background.generate('full'), { code: 'queue_full' });
+  await scheduler.close();
+  for (const call of last) await assert.rejects(call, { code: 'cancelled' });
+  await assert.rejects(scheduler.background.generate('closed'), { code: 'cancelled' });
+  // In a shared pool a call waits for its size first, and a count that fails ends it.
+  const pool = createScheduler({ ...provider, countInput: async () => { throw new ModelError('provider_failed'); } },
+    { ...options, slots: 2, poolTokens: 100000, sharedCache: true, outputTokens: () => 100 });
+  t.after(() => pool.close());
+  await assert.rejects(pool.background.generate('uncounted'), { code: 'provider_failed' });
+  assert.deepEqual(leases, Array(14).fill(1));
 });
 
 test('a provider without a check gets none from the scheduler', async t => {
@@ -191,7 +234,7 @@ test('an agent call preempts a probe, starts only when allowed and stops only wh
   await preempted; await turn();
   assert.deepEqual(f.calls.map(c => c.name), ['probe']);
   start = true; f.scheduler.tick(); assert.equal(f.calls[1].name, 'agent turn');
-  // The start rule turning false (the idle countdown running down) does not stop a running call; a pause does.
+  // The start rule turning false (a person's job beginning) does not stop a running call; a pause does.
   start = false; f.scheduler.tick(); assert.equal(f.calls[1].signal.aborted, false);
   const stopped = assert.rejects(agent, { code: 'background_unavailable' });
   run = false; f.scheduler.tick(); await stopped;

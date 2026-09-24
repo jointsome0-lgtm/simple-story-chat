@@ -1,7 +1,10 @@
 import test from 'node:test';
+import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import type { GpuApi } from './gpu.ts';
-import { createGpu } from './gpu.ts';
+import { createGpu, queueOptions } from './gpu.ts';
+import type { SchedulerOptions } from './scheduler.ts';
+import { createScheduler } from './scheduler.ts';
 import { createVast } from './vast.ts';
 import { gpuConfig } from './config.ts';
 import { ModelError } from './model-error.ts';
@@ -17,7 +20,7 @@ function fixture() {
     async read() { if (failRead) throw new ModelError(typeof failRead === 'string' ? failRead : 'gpu_api_failed'); return { ...remote }; },
     async setState(state) { writes.push(state); remote.intended = state; },
   }, connection, now: () => time, check: async () => { if (healthy !== true) throw new ModelError(typeof healthy === 'string' ? healthy : 'model_unavailable'); } });
-  return { gpu, writes, advance: (ms: number) => { time += ms; },
+  return { gpu, writes, now: () => time, advance: (ms: number) => { time += ms; },
     setRemote: (value: typeof remote) => { remote = value; }, fail: (value: boolean | string) => { failRead = value; },
     health: (value: boolean | string) => { healthy = value; } };
 }
@@ -43,17 +46,53 @@ test('idle stop waits 15 minutes after the last job; status reads never extend i
   assert.equal(f.gpu.snapshot().status, 'paused');
 });
 
-test('an agent turn holds the GPU past the idle deadline without resetting the countdown', async () => {
-  const f = fixture(); await f.gpu.tick();
+test('other work keeps the card up while it lasts, and the end of the last work starts the idle interval', async () => {
+  const f = fixture();
+  // Work held when the bot starts: the first tick starts no idle interval.
+  const early = f.gpu.keepAwake();
+  await f.gpu.tick();
+  assert.deepEqual([f.gpu.snapshot().status, f.gpu.snapshot().idleRemainingSeconds], ['ready', null]);
+  f.advance(60 * 60000); await f.gpu.tick();
+  assert.deepEqual(f.writes, []);
+  // Nor does the end of a reader's job while other work lasts.
   f.gpu.acquire()();
-  f.advance(14 * 60000);
-  const release = f.gpu.hold();
-  // The countdown goes on while the agent turn holds the GPU.
-  assert.equal(f.gpu.snapshot().idleRemainingSeconds, 60);
-  f.advance(60000); await f.gpu.tick();
-  assert.deepEqual([f.gpu.snapshot().status, f.writes], ['draining', []]);
-  release(); await f.gpu.tick();
+  assert.equal(f.gpu.snapshot().idleRemainingSeconds, null);
+  early();
+  assert.equal(f.gpu.snapshot().idleRemainingSeconds, 15 * 60);
+  // A release works once: called again, it does not end the work that came after it.
+  const next = f.gpu.keepAwake();
+  early();
+  assert.equal(f.gpu.snapshot().idleRemainingSeconds, null);
+  next();
+  f.advance(15 * 60000 - 1); await f.gpu.tick();
+  assert.deepEqual(f.writes, []);
+  f.advance(1); await f.gpu.tick();
   assert.deepEqual(f.writes, ['stopped']);
+});
+
+test('other work neither wakes a paused card nor takes back a pause, which waits for it', async () => {
+  const f = fixture(); await f.gpu.tick();
+  const work = f.gpu.keepAwake();
+  f.gpu.pause();
+  assert.equal(f.gpu.snapshot().status, 'draining');
+  // Work that begins while the pause waits leaves the pause in place, and the pause waits for it too.
+  const more = f.gpu.keepAwake();
+  await f.gpu.tick();
+  assert.deepEqual([f.gpu.snapshot().status, f.gpu.snapshot().canPause, f.writes], ['draining', false, []]);
+  assert.throws(() => f.gpu.acquire(), { code: 'gpu_not_ready' });
+  work(); await f.gpu.tick();
+  assert.deepEqual(f.writes, []);
+  more(); await f.gpu.tick();
+  assert.deepEqual(f.writes, ['stopped']);
+  f.setRemote({ actual: 'exited', intended: 'stopped' }); await f.gpu.tick();
+  assert.equal(f.gpu.snapshot().status, 'paused');
+  // Work taken on a paused card does not start it: only the owner does.
+  const late = f.gpu.keepAwake();
+  await f.gpu.tick(); await f.gpu.tick();
+  assert.deepEqual([f.gpu.snapshot().status, f.writes], ['paused', ['stopped']]);
+  late();
+  f.gpu.resume(); await f.gpu.tick();
+  assert.deepEqual(f.writes, ['stopped', 'running']);
 });
 
 test('manual pause drains all users and refuses new jobs without interrupting existing work', async () => {
@@ -333,4 +372,142 @@ test('an intention to stop that never took effect is not a restart', async () =>
   state = { actual: 'running', intended: 'running' };
   const back = await gpu.tick();
   assert.deepEqual([back.status, back.starts, writes], ['ready', 1, 0]);
+});
+
+// The bot's model queue on this card, with the options local/main.ts gives it. A call runs until the test finishes it
+// or the queue stops it.
+function queue(t: TestContext, f: ReturnType<typeof fixture>, options: SchedulerOptions = {}) {
+  const calls: { name: string; finish: () => void }[] = [];
+  const scheduler = createScheduler({ generate: (request: string, { signal }: { signal: AbortSignal }) => new Promise<string>((resolve, reject) => {
+    calls.push({ name: request, finish: () => resolve(request) });
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+  }) }, { ...queueOptions(f.gpu, { pool: false }), now: f.now, quietMs: 0, pollMs: 100000, ...options });
+  t.after(() => scheduler.close());
+  return { scheduler, calls };
+}
+
+test('a long eval keeps the card up: calls back to back for longer than the idle interval never drain or pause it', async t => {
+  const f = fixture(); await f.gpu.tick();
+  const q = queue(t, f);
+  for (let call = 0; call < 30; call++) {
+    const result = q.scheduler.background.generate(`eval ${call}`);
+    assert.equal(q.calls.length, call + 1);
+    // A minute of generation, with the bot's ticks meanwhile.
+    f.advance(60000); await f.gpu.tick(); q.scheduler.tick();
+    assert.deepEqual([f.gpu.snapshot().status, f.gpu.snapshot().idleRemainingSeconds], ['ready', null]);
+    q.calls[call].finish(); assert.equal(await result, `eval ${call}`);
+    // The eval sends its next request a moment later; in between only the idle interval keeps the card up.
+    f.advance(50); await f.gpu.tick();
+  }
+  assert.deepEqual([f.gpu.snapshot().status, f.gpu.snapshot().idleRemainingSeconds, f.writes], ['ready', 15 * 60, []]);
+  f.advance(15 * 60000); await f.gpu.tick();
+  assert.deepEqual(f.writes, ['stopped']);
+});
+
+test('a reader who comes during an eval is served at once, and the card stays ready', async t => {
+  const f = fixture(); await f.gpu.tick();
+  const q = queue(t, f, { quietMs: 60000 });
+  f.advance(60000);
+  const probe = q.scheduler.background.generate('eval');
+  const preempted = assert.rejects(probe, { code: 'background_preempted' });
+  f.advance(10 * 60000); await f.gpu.tick();
+  // A scene as bot.ts runs it: the reader's job first, then its call, which stops the probe.
+  const job = f.gpu.acquire();
+  const scene = q.scheduler.foreground.generate('scene');
+  await preempted; await turn();
+  assert.deepEqual(q.calls.map(call => call.name), ['eval', 'scene']);
+  // The eval asks again at once. Its call waits for the reader and the quiet window after them, and keeps the card
+  // up meanwhile.
+  const again = q.scheduler.background.generate('eval again');
+  f.advance(30000); await f.gpu.tick(); q.scheduler.tick();
+  assert.deepEqual([f.gpu.snapshot().status, f.gpu.snapshot().activeJobs, q.calls.length], ['ready', 1, 2]);
+  q.calls[1].finish(); assert.equal(await scene, 'scene'); job();
+  assert.equal(f.gpu.snapshot().idleRemainingSeconds, null);
+  f.advance(60000); await f.gpu.tick(); q.scheduler.tick();
+  assert.equal(q.calls[2].name, 'eval again');
+  q.calls[2].finish(); await again;
+  assert.deepEqual([f.gpu.snapshot().status, f.gpu.snapshot().idleRemainingSeconds, f.writes], ['ready', 15 * 60, []]);
+});
+
+test('cancelling the last waiting probe starts the idle interval', async t => {
+  const f = fixture(); await f.gpu.tick();
+  const q = queue(t, f, { quietMs: 60000 });
+  // A reader's scene has just ended; the eval's call waits for the quiet window.
+  const job = f.gpu.acquire();
+  const scene = q.scheduler.foreground.generate('scene');
+  q.calls[0].finish(); await scene;
+  const cancel = new AbortController();
+  const probe = q.scheduler.background.generate('eval', { signal: cancel.signal });
+  job();
+  f.advance(30000); await f.gpu.tick(); q.scheduler.tick();
+  assert.deepEqual([q.calls.length, f.gpu.snapshot().idleRemainingSeconds], [1, null]);
+  const cancelled = assert.rejects(probe, { code: 'cancelled' });
+  cancel.abort(); await cancelled;
+  assert.equal(f.gpu.snapshot().idleRemainingSeconds, 15 * 60);
+  f.advance(15 * 60000); await f.gpu.tick();
+  assert.deepEqual([q.calls.length, f.writes], [1, ['stopped']]);
+});
+
+test("the owner's pause during an eval completes once the queue stops the running call and refuses the waiting ones", async t => {
+  const f = fixture(); await f.gpu.tick();
+  const q = queue(t, f);
+  const running = q.scheduler.background.generate('eval 1');
+  const waiting = q.scheduler.background.generate('eval 2');
+  const stopped = assert.rejects(running, { code: 'background_unavailable' });
+  const refused = assert.rejects(waiting, { code: 'background_unavailable' });
+  f.gpu.pause();
+  await f.gpu.tick();
+  assert.deepEqual([f.gpu.snapshot().status, f.writes], ['draining', []]);
+  // The queue's next tick: probes may no longer run, nor wait.
+  q.scheduler.tick();
+  await stopped; await refused;
+  // The eval asks again at once, and is refused before its call waits: it keeps nothing up.
+  await assert.rejects(q.scheduler.background.generate('eval 3'), { code: 'background_unavailable' });
+  await f.gpu.tick();
+  assert.deepEqual([f.gpu.snapshot().status, f.writes], ['stopping', ['stopped']]);
+  f.setRemote({ actual: 'exited', intended: 'stopped' }); await f.gpu.tick();
+  assert.equal(f.gpu.snapshot().status, 'paused');
+  assert.deepEqual(q.calls.map(call => call.name), ['eval 1']);
+});
+
+test('a model server whose checks fail does not hang a pause during an eval', async t => {
+  const f = fixture(); await f.gpu.tick();
+  const q = queue(t, f);
+  const first = q.scheduler.background.generate('eval 1');
+  const stopped = assert.rejects(first, { code: 'background_unavailable' });
+  // The server stops answering its checks. Past the readiness grace the card is in error, and the probe stops.
+  f.health('timeout'); f.advance(31000); await f.gpu.tick();
+  assert.equal(f.gpu.snapshot().status, 'error');
+  q.scheduler.tick(); await stopped;
+  // The eval asks again; its call waits for the card to be ready.
+  const second = q.scheduler.background.generate('eval 2');
+  const refused = assert.rejects(second, { code: 'background_unavailable' });
+  f.advance(60000); await f.gpu.tick(); q.scheduler.tick();
+  assert.deepEqual([f.gpu.snapshot().status, q.calls.length, f.writes], ['error', 1, []]);
+  // The owner pauses: the pause waits for the waiting call, the queue refuses it, and the pause needs no check.
+  f.gpu.pause(); await f.gpu.tick();
+  assert.equal(f.gpu.snapshot().status, 'draining');
+  q.scheduler.tick(); await refused; await f.gpu.tick();
+  assert.deepEqual([f.gpu.snapshot().status, f.writes], ['stopping', ['stopped']]);
+});
+
+test("an agent's turn keeps the card up through the gaps between its calls, and its end starts the idle interval", async t => {
+  const f = fixture(); await f.gpu.tick();
+  const q = queue(t, f);
+  // The card has been idle for 14 minutes when the turn begins: it no longer needs the time to end before the pause.
+  f.advance(14 * 60000); await f.gpu.tick();
+  const agent = q.scheduler.agent.openTurn();
+  for (let call = 0; call < 5; call++) {
+    const result = agent.generate(`agent ${call}`);
+    assert.equal(q.calls.length, call + 1);
+    f.advance(3 * 60000); await f.gpu.tick(); q.scheduler.tick();
+    q.calls[call].finish(); await result;
+    // The agent reads the answer and writes its next call.
+    f.advance(50000); await f.gpu.tick(); q.scheduler.tick();
+    assert.deepEqual([f.gpu.snapshot().status, f.gpu.snapshot().idleRemainingSeconds, f.writes], ['ready', null, []]);
+  }
+  agent.end();
+  assert.equal(f.gpu.snapshot().idleRemainingSeconds, 15 * 60);
+  f.advance(15 * 60000); await f.gpu.tick();
+  assert.deepEqual(f.writes, ['stopped']);
 });

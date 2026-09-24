@@ -37,9 +37,8 @@ When the bot runs with GPU control it serves its model queue on `<bot database>.
 If that socket answers, agent turns go through it in their own queue (`local/scheduler.ts`), between people and
 disposable probes:
 
-- people in Telegram go first: an agent call starts only after the bot has been quiet for a minute, the GPU is ready
-  and the auto-pause is further away than the model's timeout plus 100 seconds. Until then it waits in the queue; the
-  agent's `wait` keeps answering `running`;
+- people in Telegram go first: an agent call starts only after the bot has been quiet for a minute and the GPU is
+  ready. Until then it waits in the queue; the agent's `wait` keeps answering `running`;
 - once started, a turn keeps the model to its end, so the GPU does real work while people read: nobody runs between its
   compaction steps and its scene, so a started step is never cut off and another turn's prompt never evicts its cache.
   (The compaction and the scene have different system prompts, so llama.cpp reuses only their common prefix; the turn
@@ -49,10 +48,10 @@ disposable probes:
   call stops and a later call under its id is refused. An agent call has no time limit of its own, only the model's
   timeout;
 - an agent call stops a running probe;
-- a stopped or paused GPU gives `failed` / `gpu_not_ready` at once and is never woken for an agent. A started turn holds
-  the GPU: an idle or manual pause waits for it (the bot shows the GPU draining), but agent work does not reset the
-  idle countdown, so the rental runs at most one turn longer. If the GPU stops or fails anyway, the turn ends
-  `preempted` (`background_unavailable`). It is never rerun silently; ask again with a new `requestId`.
+- a stopped or paused GPU gives `failed` / `gpu_not_ready` at once and is never woken for an agent. A started turn keeps
+  the GPU up from its first call to its end, the gaps between its calls included: the auto-pause counts from the
+  turn's end, and a manual pause waits for it (the bot shows the GPU draining). If the GPU stops or fails anyway, the
+  turn ends `preempted` (`background_unavailable`). It is never rerun silently; ask again with a new `requestId`.
 
 The queue checks that it serves the configured model, so start the agent with the bot's model configuration
 (`npm run agent:gpu`, `npm run mcp:gpu`). Without the socket the agent calls the configured provider directly. The

@@ -204,7 +204,7 @@ export const ko: Messages = {
   gpu: {
     title: '🖥 GPU — 모든 봇 사용자 공용',
     ready: n => `🟢 실행 중. 현재 모델 작업: ${jobs(n)}.`,
-    autoPause: minutes => `모델 작업 없이 ${minutes}분이 지나면 자동으로 일시정지돼요. 마지막 장면이나 압축이 끝난 때부터 세고, 메뉴를 둘러봐도 이 시간은 초기화되지 않아요.`,
+    autoPause: minutes => `모델 작업 없이 ${minutes}분이 지나면 자동으로 일시정지돼요. 마지막 작업이 끝난 때부터 세고, 메뉴를 둘러봐도 이 시간은 초기화되지 않아요.`,
     untilPause: minutes => `자동 일시정지까지 ≈${minutes}분.`,
     untilPauseSoon: '자동 일시정지까지 1분 미만.',
     draining: n => `⏳ 일시정지 준비 중: 모델 작업이 모두 끝나기를 기다려요(현재 작업: ${jobs(n)}).`,

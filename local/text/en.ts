@@ -185,7 +185,7 @@ export const en: Messages = {
   gpu: {
     title: '🖥 GPU, shared by everyone who uses the bot',
     ready: n => `🟢 Running. Model jobs right now: ${jobs(n)}.`,
-    autoPause: minutes => `It pauses by itself after ${minutes} min without model jobs, counted from the end of the last scene or compaction. Browsing the menu does not reset the timer.`,
+    autoPause: minutes => `It pauses by itself after ${minutes} min without model jobs, counted from the end of the last one. Browsing the menu does not reset the timer.`,
     untilPause: minutes => `Auto-pause in ≈${minutes} min.`,
     untilPauseSoon: 'Auto-pause in less than a minute.',
     draining: n => `⏳ Pausing: waiting for every model job to finish (now: ${jobs(n)}).`,

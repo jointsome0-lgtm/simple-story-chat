@@ -1,5 +1,6 @@
 import type { Log } from './model-error.ts';
 import { ModelError, errorCode, member } from './model-error.ts';
+import type { SchedulerOptions } from './scheduler.ts';
 import type { RemoteState } from './vast.ts';
 
 export type GpuApi = { read(): Promise<RemoteState>; setState(state: 'running' | 'stopped'): Promise<unknown> };
@@ -32,9 +33,10 @@ export function createGpu({ api, connection, check, idleMinutes = 15, now = Date
   const idleMs = idleMinutes * 60000;
   let status: GpuStatus = 'unknown';
   let activeJobs = 0;
-  // Agent turns that have started (local/scheduler.ts). They keep the instance from pausing until they end, but unlike
-  // a user's job they do not stop or reset the idle countdown.
-  let holds = 0;
+  // The rest of the work that keeps the instance up while it lasts (`keepAwake`): an agent's turn from its first call
+  // to its end, a probe's call from the moment the queue takes it until it settles (local/scheduler.ts).
+  let awake = 0;
+  // The start of the idle interval: null while any work lasts and while the instance is paused.
   let idleSince: number | null = null;
   let intent: Intent = 'none';
   let pending: Promise<GpuSnapshot> | undefined;
@@ -45,8 +47,8 @@ export function createGpu({ api, connection, check, idleMinutes = 15, now = Date
   // pause() and resume() may change the intent while reconcile awaits. It is read through a call, which TypeScript
   // does not narrow, so a check made before an await is not assumed to still hold after it.
   const wants = (value: Intent) => intent === value;
-  const busy = () => activeJobs + holds > 0;
-  const idleExpired = () => !activeJobs && idleSince !== null && now() - idleSince >= idleMs;
+  const busy = () => activeJobs + awake > 0;
+  const idleExpired = () => !busy() && idleSince !== null && now() - idleSince >= idleMs;
   const stopped = (remote: RemoteState) => member(['stopped', 'exited'], remote.actual) && remote.intended === 'stopped';
   const currentStatus = () => status === 'ready' && checkDegraded && now() - lastReadyAt >= readyGraceMs ? 'error' : status;
   // The instance was down (or not yet known) since the last time a tick saw it ready.
@@ -64,7 +66,7 @@ export function createGpu({ api, connection, check, idleMinutes = 15, now = Date
   }
   const snapshot = (): GpuSnapshot => ({ status: currentStatus(), starts, activeJobs, idleMinutes,
     checkDegraded: checkDegraded && currentStatus() === 'ready',
-    idleRemainingSeconds: idleSince === null || activeJobs ? null : Math.max(0, Math.ceil((idleSince + idleMs - now()) / 1000)),
+    idleRemainingSeconds: idleSince === null || busy() ? null : Math.max(0, Math.ceil((idleSince + idleMs - now()) / 1000)),
     canStart: !closed && status === 'paused' && now() < resumeUntil,
     canPause: !closed && !wants('pause') && status !== 'paused',
   });
@@ -77,7 +79,8 @@ export function createGpu({ api, connection, check, idleMinutes = 15, now = Date
     try {
       const remote = await api.read();
       if (closed) return snapshot();
-      if (idleSince === null && !stopped(remote)) idleSince = now();
+      // An instance found up with nothing to do (at startup, or started outside the bot) idles from now on.
+      if (idleSince === null && !busy() && !stopped(remote)) idleSince = now();
       if (idleExpired()) intent = 'pause';
       if (wants('pause')) {
         lastReadyAt = -Infinity;
@@ -127,30 +130,33 @@ export function createGpu({ api, connection, check, idleMinutes = 15, now = Date
     }
     return snapshot();
   }
+  // The end of one piece of work, once however often it is called. The last one to end starts the idle interval, and
+  // a pause that waited for it goes on at once.
+  function ending(end: () => void) {
+    let ended = false;
+    return () => {
+      if (ended) return;
+      ended = true;
+      end();
+      if (busy()) return;
+      idleSince = now();
+      if (wants('pause')) void controller.tick();
+    };
+  }
   const controller = {
     snapshot, assertReady,
     acquire() {
       assertReady();
       activeJobs++;
       idleSince = null;
-      let released = false;
-      return () => {
-        if (released) return;
-        released = true;
-        activeJobs--;
-        if (!activeJobs) { idleSince = now(); if (!busy() && wants('pause')) void controller.tick(); }
-      };
+      return ending(() => { activeJobs--; });
     },
-    // Keeps a started agent turn from being cut off by a pause; the idle countdown goes on.
-    hold() {
-      holds++;
-      let released = false;
-      return () => {
-        if (released) return;
-        released = true;
-        holds--;
-        if (!busy() && wants('pause')) void controller.tick();
-      };
+    // Work that is not a reader's job keeps the instance up as one does, and a pause waits for it too. It may begin on
+    // an instance that is not ready: it neither wakes a paused one nor takes back a pause.
+    keepAwake() {
+      awake++;
+      idleSince = null;
+      return ending(() => { awake--; });
     },
     pause() {
       lastReadyAt = -Infinity; checkDegraded = false;
@@ -162,7 +168,7 @@ export function createGpu({ api, connection, check, idleMinutes = 15, now = Date
       if (!snapshot().canStart) throw new ModelError('gpu_not_ready');
       intent = 'start'; status = 'starting';
       lastReadyAt = -Infinity; checkDegraded = false;
-      idleSince = now(); lastWrite = -Infinity;
+      idleSince = busy() ? null : now(); lastWrite = -Infinity;
     },
     tick(): Promise<GpuSnapshot> {
       if (closed) return Promise.resolve(snapshot());
@@ -182,3 +188,22 @@ export function createGpu({ api, connection, check, idleMinutes = 15, now = Date
   };
   return controller;
 }
+
+// How the bot's model queue (local/scheduler.ts) runs on this instance. People come first: probes run only on a ready
+// instance while no reader's job runs, and agents start there too, beside people's jobs only in a pool. A started
+// agent turn runs on while a pause waits for it. Agent turns and probes' calls keep the instance up while they last;
+// while it pauses the queue takes no probe, so that no waiting probe holds the pause back.
+export const queueOptions = (gpu: GpuController, { pool }: { pool: boolean }) => ({
+  backgroundAllowed: () => {
+    const state = gpu.snapshot();
+    return state.status === 'ready' && state.activeJobs === 0;
+  },
+  backgroundCanWait: () => !member(['draining', 'stopping', 'paused'], gpu.snapshot().status),
+  agentCanStart: () => {
+    const state = gpu.snapshot();
+    return state.status === 'ready' && (pool || state.activeJobs === 0);
+  },
+  agentCanRun: () => member(['ready', 'draining'], gpu.snapshot().status),
+  holdAgentTurn: () => gpu.keepAwake(),
+  holdBackgroundCall: () => gpu.keepAwake(),
+}) satisfies SchedulerOptions;

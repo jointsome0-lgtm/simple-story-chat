@@ -15,8 +15,13 @@ type Turn = { priority: Priority; ended: AbortCode | null; idleSince: number; ho
 export type SchedulerOptions<Request = unknown> = {
   // Agent work starts under `agentCanStart` and is stopped only when `agentCanRun` turns false (the GPU is paused).
   backgroundAllowed?: () => boolean; agentCanStart?: () => boolean; agentCanRun?: () => boolean;
-  // Called when an agent turn takes a slot; the returned function when the turn lets it go (gpu.ts `hold`).
+  // Whether a probe may wait for `backgroundAllowed`. While it may not (the GPU is pausing), the queue refuses the
+  // probes that wait and takes no new ones.
+  backgroundCanWait?: () => boolean;
+  // Called when an agent turn takes a slot; the returned function when the turn lets it go (gpu.ts `keepAwake`).
   holdAgentTurn?: () => () => void;
+  // Called when the queue takes a probe's call; the returned function once, when the call settles, however it ends.
+  holdBackgroundCall?: () => () => void;
   // A turn that holds a slot without calling the model this long is taken as lost: an emergency, never a normal end.
   turnIdleMs?: number;
   quietMs?: number; backgroundTimeoutMs?: number; now?: () => number; pollMs?: number; log?: Log;
@@ -64,7 +69,8 @@ export function createScheduler<Request, Result>(provider: {
   countInput?(request: Request, controls: Controls & Slot): Promise<number>;
   check?: Provider['check'];
 }, { backgroundAllowed = () => true, agentCanStart = backgroundAllowed, agentCanRun = () => true,
-  holdAgentTurn = () => () => {}, turnIdleMs = 60000, quietMs = 60000,
+  backgroundCanWait = () => true, holdAgentTurn = () => () => {}, holdBackgroundCall = () => () => {},
+  turnIdleMs = 60000, quietMs = 60000,
   backgroundTimeoutMs = 90000, now = Date.now, pollMs = 1000, log = () => {},
   slots = 1, poolTokens = 0, sharedCache = true, outputTokens = () => 0 }: SchedulerOptions<Request> = {}) {
   const pool = slots > 1;
@@ -173,9 +179,17 @@ export function createScheduler<Request, Result>(provider: {
       try { controls.onStart?.(); } catch {}
       return provider.countInput!(request, { ...controls, signal: controls.signal ?? new AbortController().signal, ...whose(priority, turn) });
     }
+    if (priority === 'background' && !backgroundCanWait()) return Promise.reject(fail('background_unavailable'));
     return new Promise((resolve, reject) => {
-      const item: Item<Request> = { priority, method, request, controls, resolve, reject,
-        turn,
+      // A probe's call keeps the GPU up from here until it settles, whichever way it ends.
+      let release = priority === 'background' ? holdBackgroundCall() : null;
+      const settled = () => {
+        const held = release;
+        release = null;
+        held?.();
+      };
+      const item: Item<Request> = { priority, method, request, controls, turn,
+        resolve: value => { resolve(value); settled(); }, reject: reason => { reject(reason); settled(); },
         signal: controls.signal, controller: new AbortController(),
         cancel: () => {
           if (running().includes(item)) item.controller.abort(fail('cancelled'));
@@ -388,6 +402,8 @@ export function createScheduler<Request, Result>(provider: {
   }
   function tick() {
     if (!backgroundAllowed()) stop('background', 'background_unavailable');
+    // The GPU is pausing: the probes waiting for it would hold the pause back, which waits for them.
+    if (!backgroundCanWait()) for (const item of [...background]) rejectQueued(item, fail('background_unavailable'));
     if (!agentCanRun()) {
       // The GPU is pausing: running and waiting agent calls end, rather than wait for a GPU that will not come back.
       stop('agent', 'background_unavailable');
