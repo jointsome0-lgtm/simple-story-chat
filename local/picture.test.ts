@@ -76,15 +76,15 @@ function fakeComfy(options: { jobMs?: number; failing?: boolean } = {}) {
       }
       if (request.method === 'POST' && url.pathname === '/interrupt') {
         seen.interrupts++;
-        // ComfyUI draws one job at a time and interrupts that one; an interrupted prompt lands in the history too,
-        // so that the delete below has a record to remove.
+        // ComfyUI draws one job at a time and interrupts that one, and only while it is the job the interrupt names;
+        // an interrupted prompt lands in the history too, so that the delete below has a record to remove.
+        const named = (await body().catch(() => ({})) as { prompt_id?: unknown }).prompt_id;
         const running = [...finishAt.keys()][0];
-        if (running !== undefined) { finishAt.delete(running); done.add(running); }
+        if (running !== undefined && (named === undefined || named === running)) { finishAt.delete(running); done.add(running); }
         return json({});
       }
       if (request.method === 'POST' && url.pathname === '/queue') { seen.queueDeletes++; return json({}); }
-      // The card draws one job and queues the rest, and says which is which: only the one being drawn may be
-      // interrupted, because the interrupt has no id (local/image-batch.ts `stopJob`).
+      // The card draws one job and queues the rest, and says which is which (local/image-batch.ts `stopJob`).
       if (url.pathname === '/queue') {
         const waiting = [...finishAt.keys()];
         return json({ queue_running: waiting.slice(0, 1).map(id => [0, id]), queue_pending: waiting.slice(1).map((id, at) => [at + 1, id]) });
