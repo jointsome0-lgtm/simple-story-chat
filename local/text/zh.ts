@@ -488,6 +488,8 @@ export const zh: Messages = {
     gpuPaused: 'GPU 已进入暂停。打开 /model 启动它，然后重新发送你的行动。',
     drawing: '🎨 正在绘制插图…',
     pictureFailed: '插图没有画成。场景已保存。',
+    promptSummary: (chars, tokens, style) =>
+      `🖼 提示词：${tokens === null ? '' : `${grouped(tokens)} 个 token${style === null ? '' : `，其中风格 ${grouped(style)} 个`} · `}${grouped(chars)} 个字符`,
     sampleFailed: '示例没有画成。请稍后再试。',
   },
 

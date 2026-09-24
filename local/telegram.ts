@@ -106,6 +106,13 @@ export function createChat(api: TelegramApi, chatId: number | string) {
       // Bot API results are not validated; the id is read as returned.
       return (sent as { message_id?: number } | undefined)?.message_id;
     },
+    // A rich message hung under another one: the folded prompt under a picture (local/picture.ts `foldedPrompt`).
+    // Resolves to its own message id, by which a deletion of its scene takes it out of the chat as well.
+    async note(markdown: string, replyTo?: number) {
+      const sent = await api('sendRichMessage', { chat_id: chatId, rich_message: { markdown },
+        ...(replyTo ? { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } } : {}) });
+      return (sent as { message_id?: number } | undefined)?.message_id;
+    },
     async final(text: string, replyMarkup?: InlineKeyboard) {
       return api('sendRichMessage', { chat_id: chatId, rich_message: { markdown: text },
         ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });

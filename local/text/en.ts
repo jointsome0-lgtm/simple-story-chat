@@ -478,6 +478,8 @@ export const en: Messages = {
     gpuPaused: 'The GPU has gone on pause. Open /model and start it, then send your action again.',
     drawing: '🎨 Drawing the illustration…',
     pictureFailed: 'The illustration did not work out. The scene is saved.',
+    promptSummary: (chars, tokens, style) =>
+      `🖼 Prompt: ${tokens === null ? '' : `${count(tokens, 'token', 'tokens', grouped(tokens))}${style === null ? '' : `, ${grouped(style)} of them the style`} · `}${count(chars, 'character', 'characters', grouped(chars))}`,
     sampleFailed: 'The sample did not work out. Try again a little later.',
   },
 

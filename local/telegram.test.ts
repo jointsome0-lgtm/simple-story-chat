@@ -74,6 +74,11 @@ test('a picture is sent as a photo under the message it belongs to, and the line
   // A scene whose own message is not known still gets its picture, just not as a reply to it.
   await one.photo(bytes, undefined);
   assert.deepEqual(calls[2]!.payload, { chat_id: 7, photo: bytes });
+  // The prompt under the photo is a rich message replying to it, and its id comes back the same way.
+  assert.equal(await one.note('<details><summary>S</summary>\n\nP\n\n</details>', 3), 4);
+  assert.deepEqual(calls[3], { method: 'sendRichMessage', payload: { chat_id: 7,
+    rich_message: { markdown: '<details><summary>S</summary>\n\nP\n\n</details>' },
+    reply_parameters: { message_id: 3, allow_sending_without_reply: true } } });
 });
 
 test('messages go a hundred to a call, one by one when a call fails, and no further past a failure of the chat itself', async () => {

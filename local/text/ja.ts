@@ -487,6 +487,8 @@ export const ja: Messages = {
     gpuPaused: 'GPUが一時停止しました。/model を開いて起動してから、行動をもう一度送ってください。',
     drawing: '🎨 挿絵を描いています…',
     pictureFailed: '挿絵は描けませんでした。シーンは保存されています。',
+    promptSummary: (chars, tokens, style) =>
+      `🖼 プロンプト：${tokens === null ? '' : `${grouped(tokens)} トークン${style === null ? '' : `（うちスタイル ${grouped(style)}）`} · `}${grouped(chars)} 文字`,
     sampleFailed: 'サンプルは描けませんでした。少し時間をおいてもう一度お試しください。',
   },
 

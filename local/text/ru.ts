@@ -581,6 +581,11 @@ export const ru = {
     // Стоит под сценой, пока рисуется картинка, и исчезает вместе с ней.
     drawing: '🎨 Рисую иллюстрацию…',
     pictureFailed: 'Иллюстрация не получилась. Сцена сохранена.',
+    // The one line of the folded block under every picture that holds the prompt it was drawn from (local/picture.ts).
+    // Raw counts: `chars` of the prompt; `tokens` as the picture model's text encoder reads it and `style` of them the
+    // style line, both null when the bot has no tokenizer for that model.
+    promptSummary: (chars: number, tokens: number | null, style: number | null) =>
+      `🖼 Промпт: ${tokens === null ? '' : `${grouped(tokens, ' ')} ${form(tokens, 'токен', 'токена', 'токенов')}${style === null ? '' : `, из них стиль ${grouped(style, ' ')}`} · `}${grouped(chars, ' ')} ${form(chars, 'знак', 'знака', 'знаков')}`,
     // A sample of a style (local/picture.ts `sample`) that did not come out; the reader asked for it and waits.
     sampleFailed: 'Не получилось нарисовать пример. Попробуй ещё раз чуть позже.',
   },

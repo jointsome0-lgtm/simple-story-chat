@@ -23,7 +23,7 @@ import { createLlama } from './llama.ts';
 import type { ErrorDetails } from './model-error.ts';
 import { safeErrorDetails } from './model-error.ts';
 import type { GenerateControls, GenerationResult, ModelRequest, Provider } from './model.ts';
-import { clothesOf, createIllustrator, wornAt } from './picture.ts';
+import { clothesOf, createIllustrator, foldedPrompt, wornAt } from './picture.ts';
 import { PRESETS } from './picture-style.ts';
 import { Store } from './store.ts';
 import type { TelegramPayload } from './telegram.ts';
@@ -168,8 +168,11 @@ type Options = {
   holdPhotos?: number;
   // A workflow pinned on a card the way the ones in gpu/ are: it ends in SaveImage.
   saveImage?: boolean;
-  // A model that refuses the sheet with this code, and a Telegram that will not delete a message.
-  sheetError?: string; refuseDelete?: boolean;
+  // A model that refuses the sheet with this code, and a Telegram that will not delete a message or send the prompt
+  // under a photo.
+  sheetError?: string; refuseDelete?: boolean; refuseNote?: boolean;
+  // The picture model's tokenizer, as the note under a photo counts with it.
+  promptTokens?: (prompt: string) => number;
   // What the model says the scene cost. Above `compactAtTokens` the bot prepares the next compaction while the
   // reader reads; the numbers are the model's own and say nothing about the size of these synthetic scenes.
   usage?: { inputTokens: number; outputTokens: number };
@@ -203,9 +206,10 @@ function fixture(t: TestContext, options: Options = {}) {
     }
     sent.push({ method, payload });
     const id = sent.length;
+    if (isNote({ method, payload }) && options.refuseNote) throw Object.assign(new Error('can\'t parse the rich message'), { code: 400 });
     // A scene that is still being delivered: the story is already committed and its job lock clear, so the reader
     // can answer here, which is the moment the bot has to get right.
-    if (method === 'sendRichMessage' && heldFinals++ < (options.holdFinal ?? 0)) await new Promise<void>(go => holding.push(go));
+    if (method === 'sendRichMessage' && !isNote({ method, payload }) && heldFinals++ < (options.holdFinal ?? 0)) await new Promise<void>(go => holding.push(go));
     if (method === 'sendPhoto' && heldPhotos++ < (options.holdPhotos ?? 0)) await new Promise<void>(go => holding.push(go));
     return { message_id: id };
   };
@@ -245,7 +249,8 @@ function fixture(t: TestContext, options: Options = {}) {
   // illustrator again over the same store and Telegram, and so forgets whatever they kept in memory.
   const boot = () => {
     const illustrator = images && createIllustrator(images, { store, provider, pollMs: 2, now: () => Date.now() + (options.offsetMs ?? 0),
-      model: { model: options.llama?.illustratorModel ?? 'test-model', provider: 'claude-code', contextTokens: 65536 } });
+      model: { model: options.llama?.illustratorModel ?? 'test-model', provider: 'claude-code', contextTokens: 65536 },
+      promptTokens: options.promptTokens });
     const bot = createBot({ store, api, provider, illustrator, allowedUsers: new Set(['1', '2']), maxOutputTokens: 4096,
       render, scenePrefix, sceneKeyboard, model: 'test-model', ownerId: '1',
       compactAtTokens: options.compactAtTokens, keepScenes: options.keepScenes,
@@ -284,6 +289,10 @@ const statuses = (sent: Sent[]) => sent.filter(one => one.method === 'sendMessag
 const told = (sent: Sent[], text: string) => sent.some(one => one.payload.text === text);
 const seedIn = (graph: Graph) => (Object.values(graph).find(node => node.class_type === 'KSampler')!.inputs as { seed: number }).seed;
 const photos = (sent: Sent[]) => sent.filter(one => one.method === 'sendPhoto');
+// The prompt folded under a photo is a rich message like a scene, and the only one that opens with a fold.
+const isNote = (one: Sent) => one.method === 'sendRichMessage' && !!one.payload.rich_message?.markdown.startsWith('<details>');
+const notes = (sent: Sent[]) => sent.filter(isNote);
+const idOf = (sent: Sent[], one: Sent) => sent.indexOf(one) + 1;
 
 test('without the picture configuration a scene is written, sent and not described', async t => {
   const f = fixture(t);
@@ -426,6 +435,89 @@ test('a sample of a style is the last scene drawn once more: its frame and seed,
   assert.deepEqual(photos(f.sent)[2].payload.reply_markup?.inline_keyboard.flat().map(button => button.callback_data), ['view:style']);
   assert.equal(f.rows.filter(one => one.event === 'picture_sample').at(-1)!.pictureStyle, 'custom');
   assert.doesNotMatch(JSON.stringify(f.rows), /Charcoal|Уголь/);
+});
+
+// The prompt under a photo, for the reader to read, copy and tune a style line against (docs/telegram-ui.md).
+test('the prompt of every photo is folded under it, with its size in characters and in the picture model\'s tokens', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  // A tokenizer of whole words, so that what the note says can be counted by hand.
+  const words = (text: string) => text.split(/\s+/).filter(Boolean).length;
+  const f = fixture(t, { comfy: root, style: STYLE_LINE, promptTokens: words });
+  await f.start();
+  await f.bot.idle();
+  await f.bot.handle(f.click('style-sample:film'));
+  await f.bot.idle();
+
+  // One note under each photo, the scene's own and the sample's: the very prompt the card drew, in a fenced block
+  // inside a fold, whose one line gives the prompt's tokens, the style line's share of them, and its characters.
+  const [own, sample] = comfy.submitted.map(promptOf);
+  assert.equal(notes(f.sent).length, 2);
+  for (const [at, prompt, line] of [[0, own, STYLE_LINE], [1, sample, PRESETS.film]] as const) {
+    const note = notes(f.sent)[at];
+    const photo = photos(f.sent)[at];
+    assert.equal(note.payload.reply_parameters?.message_id, idOf(f.sent, photo), 'the note hangs under its own photo');
+    assert.ok(idOf(f.sent, note) > idOf(f.sent, photo), 'and follows it');
+    const summary = note.payload.rich_message.markdown.match(/^<details><summary>(.*)<\/summary>/)![1];
+    assert.equal(note.payload.rich_message.markdown, foldedPrompt(summary, prompt));
+    assert.match(summary, /^🖼 Промпт: \d+ токен\S*, из них стиль \d+ · [\d ]+ знак\S*$/u);
+    assert.deepEqual(summary.match(/\d[\d ]*/g)!.map(number => Number(number.replace(/ /g, ''))),
+      [words(prompt), words(line), [...prompt].length]);
+  }
+  // The status line is the only message the picture takes out of the chat.
+  assert.deepEqual(f.deleted.length, 2);
+
+  // The rows carry the same three counts, and not a word of the prompt.
+  const row = f.rows.find(one => one.event === 'picture')!;
+  assert.deepEqual([row.outcome, row.promptCharacters, row.pictureTokens, row.styleTokens], ['ready', [...own].length, words(own), words(STYLE_LINE)]);
+  const sampled = f.rows.find(one => one.event === 'picture_sample')!;
+  assert.deepEqual([sampled.promptCharacters, sampled.pictureTokens, sampled.styleTokens], [[...sample].length, words(sample), words(PRESETS.film)]);
+  assert.ok(!f.rows.some(one => one.event === 'picture_prompt_unsent'));
+  assert.doesNotMatch(JSON.stringify(f.rows), /hair|door|Synthetic test style/);
+});
+
+test('without the picture model\'s tokenizer, or with one that fails, the note gives characters alone, and a note Telegram refuses costs only the note', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root, style: STYLE_LINE });
+  await f.start();
+  await f.bot.idle();
+  const prompt = promptOf(comfy.submitted[0]);
+  const markdown = notes(f.sent)[0].payload.rich_message.markdown;
+  assert.ok(markdown.startsWith(`<details><summary>🖼 Промпт: ${String([...prompt].length).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')} знак`));
+  const row = f.rows.find(one => one.event === 'picture')!;
+  assert.equal(row.promptCharacters, [...prompt].length);
+  assert.ok(!('pictureTokens' in row) && !('styleTokens' in row));
+
+  // A tokenizer that throws is the same as none.
+  const broken = fixture(t, { comfy: root, style: STYLE_LINE, promptTokens: () => { throw new Error('vocabulary'); } });
+  await broken.start();
+  await broken.bot.idle();
+  const kept = broken.rows.find(one => one.event === 'picture')!;
+  assert.deepEqual([kept.outcome, kept.promptCharacters, 'pictureTokens' in kept], ['ready', [...prompt].length, false]);
+  assert.match(notes(broken.sent)[0].payload.rich_message.markdown, /^<details><summary>🖼 Промпт: [\d ]+ знак/u);
+
+  const g = fixture(t, { comfy: root, style: STYLE_LINE, refuseNote: true });
+  await g.start();
+  await g.bot.idle();
+  assert.equal(photos(g.sent).length, 1, 'the photo is there');
+  assert.equal(notes(g.sent).length, 1, 'its note was tried once');
+  assert.deepEqual(g.store.read('1').sentPictures!.map(picture => picture.messageId), [idOf(g.sent, photos(g.sent)[0])]);
+  assert.deepEqual(g.rows.filter(one => one.event === 'picture_prompt_unsent').map(one => one.code), [400]);
+  assert.equal(g.rows.find(one => one.event === 'picture')!.outcome, 'ready');
+  assert.ok(!g.sent.some(one => one.method === 'editMessageText'), 'and the reader is told nothing about it');
+});
+
+test('a folded prompt cannot be closed or unfenced by what the prompt says', () => {
+  assert.equal(foldedPrompt('S', 'A quiet harbour. Painterly.'), '<details><summary>S</summary>\n\n```\nA quiet harbour. Painterly.\n```\n\n</details>');
+  const odd = 'A sign reads ```` and </details> <summary>x</summary>. Done.';
+  const folded = foldedPrompt('S', odd);
+  assert.ok(folded.startsWith('<details><summary>S</summary>\n\n`````\n'), 'the fence is longer than any run of backticks in it');
+  assert.ok(folded.endsWith('\n`````\n\n</details>'));
+  assert.equal(folded.match(/<\/details/g)!.length, 1, 'and only the fold itself closes');
+  assert.ok(folded.includes('<​/details> <summary>x</summary>'));
 });
 
 test('a sample after a restart describes the scene again, and one that fails says so once', async t => {
@@ -774,7 +866,7 @@ async function deleteTheSeed(f: ReturnType<typeof fixture>) {
   await f.bot.handle(f.click(`remove-seed:${seedId}`));
 }
 
-test('every photo is recorded as it is sent, and deleting the seed takes them all out of the chat', async t => {
+test('every photo and the prompt under it are recorded as they are sent, and deleting the seed takes them all out of the chat', async t => {
   const comfy = fakeComfy();
   const root = await comfy.listen();
   t.after(() => comfy.server.close());
@@ -788,9 +880,10 @@ test('every photo is recorded as it is sent, and deleting the seed takes them al
   const state = f.store.read('1');
   const { storyId, branchId } = state.active!;
   const nodeId = state.stories[storyId].branches[branchId].head!;
-  // The scene's own picture, one sample and all six styles, each recorded by its message beside its scene.
-  const ids = photos(f.sent).map(photo => f.sent.indexOf(photo) + 1);
-  assert.equal(ids.length, 8);
+  // The scene's own picture, one sample and all six styles, each with its prompt under it, and each recorded by its
+  // message beside its scene.
+  const ids = [...photos(f.sent), ...notes(f.sent)].map(one => idOf(f.sent, one)).sort((one, other) => one - other);
+  assert.equal(ids.length, 16);
   assert.deepEqual(state.sentPictures!.map(({ at, ...picture }) => picture), ids.map(messageId => ({ storyId, nodeId, messageId })));
   assert.ok(state.sentPictures!.every(picture => Number.isSafeInteger(picture.at) && Math.abs(Date.now() - picture.at) < 60_000));
 
@@ -799,7 +892,7 @@ test('every photo is recorded as it is sent, and deleting the seed takes them al
   assert.deepEqual(f.sent.filter(one => one.method === 'deleteMessages').map(one => one.payload.message_ids), [ids]);
   assert.deepEqual(f.store.read('1').sentPictures, []);
   assert.deepEqual(f.rows.filter(one => one.event === 'pictures_removed'),
-    [{ event: 'pictures_removed', picturesRemoved: 8, picturesNotRemoved: 0, actor: 'owner' }]);
+    [{ event: 'pictures_removed', picturesRemoved: 16, picturesNotRemoved: 0, actor: 'owner' }]);
 });
 
 test('a picture whose scene is deleted while it is drawn is not sent, and one already on its way is taken back', async t => {
@@ -845,13 +938,13 @@ test('a sample whose scene is deleted ends with the style on the card, silently,
   await until(() => comfy.submitted.length === 1, 'the scene\'s own picture to reach the card');
   comfy.finish();
   await f.bot.idle();
-  const own = f.sent.indexOf(photos(f.sent)[0]) + 1;
+  const own = [idOf(f.sent, photos(f.sent)[0]), idOf(f.sent, notes(f.sent)[0])];
   await f.bot.handle(f.click('style-samples'));
   await until(() => comfy.submitted.length === 2, 'the first style to reach the card');
   await deleteTheSeed(f);
   comfy.finish();
   await f.bot.idle();
-  assert.deepEqual(f.sent.filter(one => one.method === 'deleteMessages').map(one => one.payload.message_ids), [[own]]);
+  assert.deepEqual(f.sent.filter(one => one.method === 'deleteMessages').map(one => one.payload.message_ids), [own]);
   assert.equal(photos(f.sent).length, 1, 'the style the card finished is not sent');
   assert.equal(comfy.submitted.length, 2, 'and no style after it is drawn');
   const status = f.sent.find(one => one.method === 'sendMessage' && /во всех стилях/.test(one.payload.text ?? ''))!;

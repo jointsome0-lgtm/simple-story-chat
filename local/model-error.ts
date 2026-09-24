@@ -56,6 +56,9 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   // The clothes of a frame (local/picture.ts): how many people of the sheet it shows in other clothes than the
   // picture before it in that line of the story, which is how a change of clothes in the story is seen to arrive.
   'clothesChanged',
+  // The prompt a picture was drawn from, as the note under it gives its size (local/picture.ts `promptSize`): its
+  // characters, its tokens as the picture model's text encoder reads them, and how many of those the style line is.
+  'promptCharacters', 'pictureTokens', 'styleTokens',
   // A sample of styles (local/picture.ts `sample`): how many styles one press of the reader asked for, one on a
   // style's own card and every style of the picker for "all styles".
   'stylesAsked',

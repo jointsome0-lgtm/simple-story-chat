@@ -11,7 +11,8 @@
 //   - the picture is drawn on a SECOND card, reached through an ssh tunnel on loopback (local/image-batch.ts).
 //     The language model's card is 22-25 GB full; the image model needs its own, and `SIMPLE_CHAT_IMAGE_URL` is
 //     checked against the model's own server in local/config.ts.
-// Nothing here is stored or logged but counts: not the description, not the prompt, not the bytes. The picture is
+// Nothing here is stored or logged but counts: not the description, not the prompt, not the bytes. The prompt goes
+// to the reader alone, folded under the photo it was drawn from (`foldedPrompt`), as their own. The picture is
 // stripped of its PNG text chunks by `drawOne` before it is sent, because ComfyUI writes the whole prompt into
 // them, and the card keeps no copy of it for long either: the job record is cleared, and a saving node in the
 // workflow is loaded as a preview one (`previewOnly`), whose file is in RAM and is deleted by gpu/image-sweeper.py
@@ -24,7 +25,7 @@
 //
 // A picture goes with its scene. Every photo is recorded in the reader's library as it is sent, and deleting the
 // scene with its seed or branch deletes the photo from the chat (local/bot.ts); a picture whose scene is deleted
-// while it is being made is not sent at all (`sendPhoto`).
+// while it is being made is not sent at all (`sendKept`). The folded prompt under the photo goes with it the same way.
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { recordPicture } from '../lib/library.ts';
@@ -82,7 +83,7 @@ const GAVE_WAY = ['background_preempted', 'background_unavailable', 'background_
 
 // The scene of a picture is no longer in its reader's library: they deleted it, with its seed or its branch. That
 // ends the picture the way their next message does, without a word; the row keeps this code, so that the two can
-// still be told apart. `details` are the counts of a photo that had to be taken back (`sendPhoto`).
+// still be told apart. `details` are the counts of a message that had to be taken back (`sendKept`).
 const sceneGone = (details?: object) => Object.assign(new Error('scene_gone'), { code: 'scene_gone', ...details });
 
 // The sheet of a story as one frame at `nodeId` starts from: each person in the clothes of the nearest picture above
@@ -116,6 +117,15 @@ export function clothesOf(description: Description, worn: Character[]): { clothe
   return { clothes, changed };
 }
 
+// The prompt of a picture as a rich message folded to one line, `summary`, which the reader opens to read or copy it
+// (docs/telegram-ui.md). The prompt stands in a fenced block, so that nothing in it is read as Markdown: the fence is
+// longer than any run of backticks in the prompt, and a `</details` in it, which a description may hold like any
+// other text, is broken by a zero-width space, so that it cannot close the fold early.
+export function foldedPrompt(summary: string, prompt: string): string {
+  const fence = '`'.repeat(Math.max(3, ...[...prompt.matchAll(/`+/g)].map(run => run[0].length + 1)));
+  return `<details><summary>${summary}</summary>\n\n${fence}\n${prompt.replace(/<\/details/gi, '<\u200b/details')}\n${fence}\n\n</details>`;
+}
+
 // One seed per story, from the story's id. Free sampling redraws the world from nothing in every scene; a seed that
 // stays put holds a place steadier between visits, and costs nothing (the plan, "What survives without reference
 // images"). Which seed it is is never logged: it says nothing a count can say.
@@ -130,6 +140,9 @@ export function createIllustrator(config: ImageConfig, deps: {
   // fake ComfyUI in milliseconds. `drawOne` waits for ComfyUI's websocket to say the job is over and polls the job's
   // record beside it; a fake without the socket is answered by the polls alone.
   now?: () => number; pollMs?: number;
+  // The tokens of a prompt as the picture model's text encoder reads it, for the note under each photo and its log
+  // row (`promptSize`). Without it the note gives the prompt's characters alone.
+  promptTokens?: (prompt: string) => number;
 }) {
   const { store, provider, now = Date.now, pollMs } = deps;
   // The graph is read once, here, so that a workflow that is not a ComfyUI API export fails when the bot starts
@@ -239,6 +252,22 @@ export function createIllustrator(config: ImageConfig, deps: {
     return { description, sheet, clothesChanged: worn.changed };
   }
 
+  // The size of a prompt that ends with the style `line`: its characters, and, with a tokenizer, its tokens and how
+  // many of them the line adds to the description before it. The tokens of the line alone would miss the one where
+  // the description's last word meets it. It is counted once the photo is in the chat, so a tokenizer that fails
+  // costs the counts alone and never the picture.
+  const promptSize = (prompt: string, line: string) => {
+    const promptCharacters = [...prompt].length;
+    try {
+      if (deps.promptTokens) {
+        const pictureTokens = deps.promptTokens(prompt);
+        const described = deps.promptTokens(prompt.slice(0, prompt.length - line.length).trimEnd());
+        return { promptCharacters, pictureTokens, styleTokens: Math.max(0, pictureTokens - described) };
+      }
+    } catch { /* the characters alone */ }
+    return { promptCharacters };
+  };
+
   // One frame on the picture card in one style line, with the story's seed: a sample of a style and the scene's own
   // picture differ in their last sentence alone.
   async function drawFrame(storyId: string, frame: { description: Description; sheet: Character[] }, line: string, signal: AbortSignal) {
@@ -261,26 +290,40 @@ export function createIllustrator(config: ImageConfig, deps: {
     };
   }
 
-  // A photo goes out only while its scene is in the reader's library, and is recorded there the moment it is sent,
-  // so that deleting the scene deletes the photo too (local/bot.ts). A deletion that lands while the photo is on its
-  // way finds no record of it yet; the record then finds no scene, and the photo is taken back at once. The two
-  // writes of the library cannot interleave, so one of them always sees the other.
-  async function sendPhoto(request: { userId: string; chat: Chat; storyId: string; nodeId: string }, bytes: Uint8Array,
-    replyTo?: number, caption?: Screen) {
+  // A message of a picture — the photo, and the prompt folded under it — goes out only while its scene is in the
+  // reader's library, and is recorded there the moment it is sent, so that deleting the scene deletes it too
+  // (local/bot.ts). A deletion that lands while it is on its way finds no record of it yet; the record then finds no
+  // scene, and the message is taken back at once. The two writes of the library cannot interleave, so one of them
+  // always sees the other. Resolves to the id of the message.
+  async function sendKept(request: { userId: string; chat: Chat; storyId: string; nodeId: string },
+    send: () => Promise<number | undefined>) {
     const { userId, chat, storyId, nodeId } = request;
     if (!store.read(userId).stories[storyId]?.nodes[nodeId]) throw sceneGone();
-    const messageId = await chat.photo(bytes, replyTo, caption);
-    // A photo whose id did not come back can be neither recorded nor taken back.
-    if (messageId === undefined) return;
+    const messageId = await send();
+    // A message whose id did not come back can be neither recorded nor taken back.
+    if (messageId === undefined) return undefined;
     const kept = store.mutate(userId, state => {
       if (!state.stories[storyId]?.nodes[nodeId]) return false;
       recordPicture(state, { storyId, nodeId, messageId, at: now() });
       return true;
     });
-    if (kept) return;
+    if (kept) return messageId;
     let removed = 0;
     try { await chat.remove(messageId); removed = 1; } catch { /* counted in the row */ }
     throw sceneGone({ picturesRemoved: removed, picturesNotRemoved: 1 - removed });
+  }
+
+  // The prompt of a photo, folded under it. The photo is what the reader waited for: a note that does not go out
+  // costs them the note alone and is told by a row of its own, unless its scene is gone, which ends the picture.
+  async function sendPrompt(request: { userId: string; chat: Chat; storyId: string; nodeId: string; log: Log },
+    photo: number | undefined, prompt: string, size: { promptCharacters: number; pictureTokens?: number; styleTokens?: number }) {
+    const t = texts(store.read(request.userId).language);
+    const summary = t.notices.promptSummary(size.promptCharacters, size.pictureTokens ?? null, size.styleTokens ?? null);
+    try { await sendKept(request, () => request.chat.note(foldedPrompt(summary, prompt), photo)); }
+    catch (error) {
+      if (errorCode(error) === 'scene_gone') throw error;
+      request.log('picture_prompt_unsent', errorCode(error));
+    }
   }
 
   // One picture, from the status line to the photo. `described` is called the moment the language model is out
@@ -318,16 +361,20 @@ export function createIllustrator(config: ImageConfig, deps: {
       // written, or the bot's own. The names of the sheet select appearance lines and are cut out of every field.
       const reader = store.read(userId);
       pictureStyle = styleChoice(reader, standard);
-      const { assembled, drawn } = await drawFrame(storyId, frame, styleLine(reader, standard), signal);
+      const line = styleLine(reader, standard);
+      const { assembled, drawn } = await drawFrame(storyId, frame, line, signal);
       if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
-      // The photo hangs under the scene it belongs to, and the status line goes only once the photo is there.
+      // The photo hangs under the scene it belongs to, and the status line goes only once the photo is there; the
+      // prompt follows it, folded.
       const photoStarted = now();
-      await sendPhoto(request, drawn.bytes, request.sceneMessageId);
+      const photo = await sendKept(request, () => chat.photo(drawn.bytes, request.sceneMessageId));
       const photoMs = Math.max(0, now() - photoStarted);
       await clear();
+      const size = promptSize(assembled.prompt, line);
+      await sendPrompt(request, photo, assembled.prompt, size);
       log('picture', undefined, { outcome: 'ready', describeMs, imageMs: drawn.totalMs, imageSteps: steps, photoMs,
         photoBytes: drawn.bytes.length, namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook,
-        clothesChanged: frame.clothesChanged, pictureStyle, ...elapsed() });
+        clothesChanged: frame.clothesChanged, pictureStyle, ...size, ...elapsed() });
     } catch (error) {
       const code = errorCode(error);
       const cancelled = signal.aborted || code === 'cancelled' || code === 'scene_gone';
@@ -399,9 +446,11 @@ export function createIllustrator(config: ImageConfig, deps: {
           if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
           const { assembled, drawn } = await drawFrame(storyId, frame, style.line, signal);
           if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
-          await sendPhoto(request, drawn.bytes, undefined, style.caption);
+          const photo = await sendKept(request, () => chat.photo(drawn.bytes, undefined, style.caption));
+          const size = promptSize(assembled.prompt, style.line);
+          await sendPrompt(request, photo, assembled.prompt, size);
           log('picture_sample', undefined, { outcome: 'ready', frameReused, describeMs, imageMs: drawn.totalMs, imageSteps: steps,
-            namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook, pictureStyle, stylesAsked });
+            namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook, pictureStyle, stylesAsked, ...size });
           // The styles after the first are drawn from the frame already in hand.
           frameReused = true;
           describeMs = 0;

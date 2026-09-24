@@ -541,7 +541,7 @@ only itself, and any other failure — the network, the rate limit, a chat close
 reader is told nothing, and the removal runs beside the next updates, so the deletion screen neither waits for it nor
 changes. A deleted branch takes only the pictures of the scenes that no other branch has.
 
-A picture must not arrive after its scene is gone. `sendPhoto` in `local/picture.ts` looks at the library just
+A picture must not arrive after its scene is gone. `sendKept` in `local/picture.ts` looks at the library just
 before sending, and records the photo in a write that looks for the scene once more; a deletion that landed while
 the photo was on its way is found there, and the photo is deleted at once. Either way the picture ends as cancelled,
 without a word, and its row keeps the code `scene_gone`. Before this, a scene deleted while its frame was being
@@ -574,3 +574,18 @@ every `picture` row counts in `clothesChanged` the people of the sheet dressed o
 Nothing of the clothes is logged. How well the model notices a change of clothes that happened several scenes back,
 or one that the memory of a compacted story no longer mentions, is not measured yet; the carried line is there so
 that such a change is lost only once and not undone later.
+
+## The prompt under the picture (2026-09-24)
+
+The tester asked to see the prompt of each picture and how long it is, to tune a style line against it. Every photo,
+the scene's own and every sample, now gets a reply right after it: a rich message folded to one line that gives the
+prompt's size, which opens to the prompt in a code block (`foldedPrompt`, docs/telegram-ui.md). The prompt goes to
+the reader of the story it was drawn from and to nobody else; the logs still carry counts alone. The note is sent
+through `sendKept` like the photo, so a deletion of the scene takes it out of the chat with the photo. A note that
+Telegram refuses costs the note alone and leaves a `picture_prompt_unsent` row with Telegram's code.
+
+The size is the prompt's characters and, when the bot is given the picture model's tokenizer (`promptTokens` in the
+illustrator's deps), its tokens as the text encoder reads them, with the style line's share: the count of the whole
+prompt less the count of the description before the line, so that the token where the two meet is the line's. The
+`picture` and `picture_sample` rows carry the same numbers as `promptCharacters`, `pictureTokens` and `styleTokens`.
+Until the tokenizer is wired in, the note and the rows give characters alone.
