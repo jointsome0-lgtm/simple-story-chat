@@ -47,7 +47,8 @@ type Work = ReturnType<typeof workOf>;
 // The bot's code for each of the gateway's (contract section 9). A refused key, class or scope is a configuration
 // the owner must fix; a full queue is a wait; a service that is starting, stopping or has lost its engine is not
 // serving. The gateway counts the context itself, so its `context_limit` compacts as llama-server's recount did. Any
-// other code, and a body without one, is a request the bot built wrong or a gateway it does not understand.
+// other code, and a body without one, is a request the bot built wrong, a gateway it does not understand or, with
+// `internal_error`, a failure in the gateway itself.
 const CODES: { readonly [code: string]: string } = { unauthorized: 'unauthorized', class_not_allowed: 'unauthorized',
   scope_not_allowed: 'unauthorized', forbidden: 'unauthorized', context_limit: 'context_limit', queue_full: 'rate_limited',
   starting: 'model_unavailable', draining: 'model_unavailable', drained: 'model_unavailable',

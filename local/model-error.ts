@@ -30,11 +30,11 @@ const PICTURE_STYLES = ['standard', 'semi', 'novel', 'film', 'graphic', 'waterco
 // means the run's output cap was hit, which the CLI reports as an error rather than a truncation.
 export const STOP_REASONS = ['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'refusal', 'other'] as const;
 // The code a simple-serving gateway refused a request with (its contract, section 9; local/serving.ts), beside the
-// bot's own code it maps to: `class_not_allowed` and `queue_full` tell whoever reads the log more than `unauthorized`
-// and `rate_limited` do. A code the contract does not list is `other`.
+// bot's own code it maps to: `class_not_allowed`, `queue_full` and `internal_error` tell whoever reads the log more
+// than `unauthorized`, `rate_limited` and `provider_failed` do. A code the contract does not list is `other`.
 const SERVING_CODES = ['invalid_request', 'unsupported_field', 'limit_exceeded', 'context_limit', 'unauthorized',
   'class_not_allowed', 'scope_not_allowed', 'forbidden', 'not_found', 'stale_boot', 'stale_generation', 'body_too_large',
-  'queue_full', 'starting', 'draining', 'drained', 'engine_unavailable', 'timeout'] as const;
+  'queue_full', 'internal_error', 'starting', 'draining', 'drained', 'engine_unavailable', 'timeout'] as const;
 // Sizes, counts and durations. Each is kept only as a non-negative safe integer, so none can carry text.
 const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'repairSceneCount', 'requestBytes',
   'inputBytesBefore', 'inputBytesAfter', 'outputCharacters', 'inputTokens', 'outputTokens', 'elapsedMs',

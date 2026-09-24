@@ -43,7 +43,7 @@ test('a gateway request logs its measurements as counts and its refusal as a cod
   assert.deepEqual(safeErrorDetails({ waitMs: 3, servingWaitMs: 0, servingFirstTokenMs: 410, servingTotalMs: 5200 }),
     { waitMs: 3, servingWaitMs: 0, servingFirstTokenMs: 410, servingTotalMs: 5200 });
   assert.deepEqual(safeErrorDetails({ servingWaitMs: -1, servingFirstTokenMs: 1.5, servingTotalMs: '5200' }), {});
-  for (const servingCode of ['class_not_allowed', 'queue_full', 'drained', 'engine_unavailable']) {
+  for (const servingCode of ['class_not_allowed', 'queue_full', 'internal_error', 'drained', 'engine_unavailable']) {
     assert.equal(safeErrorDetails({ servingCode }).servingCode, servingCode);
   }
   assert.deepEqual(safeErrorDetails({ servingCode: 'PRIVATE_TEXT', httpStatus: 400 }), { servingCode: 'other', httpStatus: 400 });

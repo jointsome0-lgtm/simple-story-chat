@@ -289,7 +289,7 @@ test('a stream that fails what the adapter checks never becomes an answer', asyn
 
 test('an error event ends a started stream with the gateway\'s code, and the text before it is not an answer', async () => {
   for (const [servingCode, code] of [['engine_unavailable', 'model_unavailable'], ['draining', 'model_unavailable'],
-    ['timeout', 'timeout'], ['PRIVATE_CODE', 'provider_failed']] as const) {
+    ['timeout', 'timeout'], ['internal_error', 'provider_failed'], ['PRIVATE_CODE', 'provider_failed']] as const) {
     const parts: string[] = [];
     const f = fixture(() => stream([chunk({ content: 'Начало ' }), chunk({}, 'stop'), { error: { code: servingCode } }], { done: false }));
     await assert.rejects(f.provider.generate(request(), { onText: async value => parts.push(value) }), (error: ModelError) => {
@@ -326,9 +326,9 @@ test('refusals map by their code, keep the status, phase and code, and never car
     [400, 'limit_exceeded', 'provider_failed'], [400, 'context_limit', 'context_limit'], [401, 'unauthorized', 'unauthorized'],
     [403, 'class_not_allowed', 'unauthorized'], [403, 'scope_not_allowed', 'unauthorized'], [403, 'forbidden', 'unauthorized'],
     [404, 'not_found', 'unsupported_server'], [409, 'stale_boot', 'provider_failed'], [409, 'stale_generation', 'provider_failed'],
-    [413, 'body_too_large', 'provider_failed'], [429, 'queue_full', 'rate_limited'], [503, 'starting', 'model_unavailable'],
-    [503, 'draining', 'model_unavailable'], [503, 'drained', 'model_unavailable'], [503, 'engine_unavailable', 'model_unavailable'],
-    [504, 'timeout', 'timeout']] as const;
+    [413, 'body_too_large', 'provider_failed'], [429, 'queue_full', 'rate_limited'], [500, 'internal_error', 'provider_failed'],
+    [503, 'starting', 'model_unavailable'], [503, 'draining', 'model_unavailable'], [503, 'drained', 'model_unavailable'],
+    [503, 'engine_unavailable', 'model_unavailable'], [504, 'timeout', 'timeout']] as const;
   for (const [status, servingCode, code] of table) {
     assert.equal(codeFor(servingCode), code);
     const f = fixture(() => json({ error: { code: servingCode, message: 'PRIVATE_RAW_ERROR' } }, status));
