@@ -27,6 +27,7 @@ import type { GenerationResult, Provider } from './model.ts';
 import { STYLE } from './illustrate.ts';
 import { OWN_STYLE_CHARS, OWN_STYLES_MAX, choiceOf, lineOf, ownStyle, ownStyleInput, ownStyles, pickerKeys, styleKey, styleName } from './picture-style.ts';
 import type { Store } from './store.ts';
+import { fileErrorCode } from './store.ts';
 import type { GpuInfo, ModelInfo, RenderDetails } from './ui.ts';
 import { isRegistered, langFromTelegram, texts } from './text.ts';
 import type { Messages } from './text.ts';
@@ -590,7 +591,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       if (!plan) return;
       if (plan.portraitKept) illustrator?.portraitKept(userId, plan.portraitKept);
       if (plan.sweep) {
-        try { store.sweepPortraits(userId); } catch (error) { log('portraits_unswept', errorCode(error)); }
+        try { store.sweepPortraits(userId); } catch (error) { log('portraits_unswept', fileErrorCode(error)); }
       }
       if (plan.gpuAction) {
         if (!gpu) await safeSend(chat, { text: texts(store.read(userId).language).notices.gpuNotConfigured }, log);

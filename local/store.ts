@@ -4,6 +4,7 @@ import { mkdirSync, chmodSync, readdirSync, rmSync, writeFileSync } from 'node:f
 import { dirname, join } from 'node:path';
 import type { Library } from '../lib/library.ts';
 import { emptyLibrary } from '../lib/library.ts';
+import type { Log } from './model-error.ts';
 
 type AccessRequest = { userId: string; at: number };
 
@@ -68,14 +69,14 @@ export class Store {
     const next = [...pending.filter(item => item.userId !== userId), { userId, at: Date.now() }].slice(-100);
     this.db.prepare("INSERT INTO metadata VALUES ('access_requests', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(next));
   }
-  recover() {
+  recover(log?: Log) {
     // No model or Telegram write is retried automatically after process death.
     for (const { user_id } of this.db.prepare('SELECT user_id FROM libraries').all()) {
       this.mutate(user_id as string, state => {
         if (state.job) { state.job = null; state.interrupted = true; }
       });
       // A portrait file that cannot go now goes with a later sweep; it never keeps the bot from starting.
-      try { this.sweepPortraits(user_id as string); } catch {}
+      try { this.sweepPortraits(user_id as string); } catch (error) { log?.('portraits_unswept', fileErrorCode(error)); }
     }
   }
   // The portraits a reader kept (local/picture.ts) are PNG files beside the database, never in it: one directory for
@@ -103,11 +104,20 @@ export class Store {
     if (this.path === ':memory:') return 0;
     const directory = this.portraits(userId);
     let files: string[];
-    try { files = readdirSync(directory); } catch { return 0; }
+    // No directory yet is no portrait yet. A directory that cannot be read is another matter, for the caller to tell.
+    try { files = readdirSync(directory); }
+    catch (error) { if ((error as { code?: unknown }).code === 'ENOENT') return 0; throw error; }
     const kept = new Set(Object.values(this.read(userId).stories).flatMap(story => (story.sheet ?? []).map(one => one?.portrait?.file)));
     const lost = files.filter(file => !kept.has(file));
     for (const file of lost) rmSync(join(directory, file), { force: true });
     return lost.length;
   }
   close() { this.db.close(); }
+}
+
+// A file system failure as a log row may carry it: its errno in lower case (`enotdir`), since local/main.ts keeps
+// only such words, and never its message, which names the path.
+export function fileErrorCode(error: unknown) {
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' && /^E[A-Z_]{1,38}$/.test(code) ? code.toLowerCase() : 'file_failed';
 }

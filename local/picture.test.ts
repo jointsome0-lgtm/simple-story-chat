@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { crc32, deflateSync } from 'node:zlib';
@@ -1211,6 +1211,27 @@ test('a portrait file goes with its write rolled back, and one whose write never
   assert.equal(memory.sweepPortraits('1'), 0);
   assert.throws(() => memory.writePortrait('1', bytes), /database file/);
   memory.close();
+});
+
+// A reader's directory that cannot be read is not taken for one that is not there: the sweep fails, and the start and
+// the bot tell the log so by the code alone, never by the message, which names the path. A deletion stands regardless.
+test('a portraits directory that cannot be read is logged by its code, and a missing one means no portraits', async t => {
+  const f = fixture(t);
+  await f.start();
+  assert.equal(f.store.sweepPortraits('1'), 0);
+  // A file where the reader's directory should be: reading it fails otherwise than for a directory that is not there.
+  const directory = f.store.portraits('1');
+  mkdirSync(dirname(directory), { recursive: true });
+  writeFileSync(directory, '');
+  assert.throws(() => f.store.sweepPortraits('1'), { code: 'ENOTDIR' });
+  const rows: Row[] = [];
+  f.store.recover((event, code, details) => { rows.push({ event, ...(code === undefined ? {} : { code }), ...safeErrorDetails(details) }); });
+  assert.deepEqual(rows, [{ event: 'portraits_unswept', code: 'enotdir' }]);
+  await deleteTheSeed(f);
+  assert.deepEqual(f.store.read('1').seeds, {});
+  assert.deepEqual(f.rows.filter(one => one.event === 'portraits_unswept').map(({ event, code, actor }) => ({ event, code, actor })),
+    [{ event: 'portraits_unswept', code: 'enotdir', actor: 'owner' }]);
+  assert.ok(!JSON.stringify([rows, f.rows]).includes(f.directory), 'no path in the log');
 });
 
 // A kept portrait shows a reader's character, so it is story data wherever the database is put: `*.db` or `*.sqlite*`

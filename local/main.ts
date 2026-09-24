@@ -68,7 +68,7 @@ try {
   const webhook = await api('getWebhookInfo') as { url?: string };
   if (webhook.url) throw new Error('webhook_configured');
   store = new Store(config.dbPath);
-  store.recover();
+  store.recover(log);
   if (gpu) background = await serveBackground({ socketPath: config.dbPath + '.model.sock', scheduler,
     status: () => ({ model: config.model, contextTokens: config.contextTokens, gpu: gpu!.snapshot() }) });
   // Pictures under the scenes, if this computer has a second card tunnelled for them (docs/illustrations-plan.md).
