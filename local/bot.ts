@@ -20,7 +20,7 @@ import type { CompactionStatus } from './compact-view.ts';
 import type { GpuController } from './gpu.ts';
 import type { Illustrator, PictureRequest, SampleRequest } from './picture.ts';
 import type { Log } from './model-error.ts';
-import { errorCode, member, safeErrorDetails } from './model-error.ts';
+import { errorCode, member, safeErrorDetails, unavailable } from './model-error.ts';
 import type { GenerationResult, Provider } from './model.ts';
 import { STYLE } from './illustrate.ts';
 import { OWN_STYLE_CHARS, OWN_STYLES_MAX, choiceOf, lineOf, ownStyle, ownStyleInput, ownStyles, pickerKeys, styleKey, styleName } from './picture-style.ts';
@@ -381,6 +381,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       const text = failure.code === 'nothing_to_compact' ? t.notices.nothingToCompactYet(keepScenes)
         : failure.code === 'context_limit' ? t.notices.contextLimit
         : failure.code === 'invalid_memory' || failure.code === 'memory_not_smaller' ? t.notices.compactionUnverified(retry)
+        : unavailable(failure) ? t.notices.modelUnavailable
         : t.notices.failed(retry);
       await safeSend(chat, { text, reply_markup: sceneKeyboard(snapshot) }, log);
     };

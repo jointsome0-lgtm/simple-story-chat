@@ -577,6 +577,8 @@ export const ru = {
     compactionUnverified: (command: string) => `Сжатие не удалось проверить. Исходные сцены и готовые чекпоинты сохранены. Повторить: ${command}.`,
     failed: (command: string) => `Не получилось завершить операцию. Готовые сцены и чекпоинты сохранены. Повторить: ${command}.`,
     gpuNotConfigured: 'Управление арендой GPU пока не настроено. /model покажет текущую модель.',
+    // A model service that is starting, asleep or out of reach. The bot cannot tell which, so it names none.
+    modelUnavailable: 'Сервис модели сейчас недоступен. Продолжить историю можно, когда он снова заработает.',
     gpuPaused: 'GPU перешла на паузу. Открой /model и запусти её; затем отправь действие снова.',
     // Стоит под сценой, пока рисуется картинка, и исчезает вместе с ней.
     drawing: '🎨 Рисую иллюстрацию…',

@@ -914,6 +914,34 @@ test('the model screen does not call a provider verified when it has no check', 
   assert.match(server.sent.at(-1)!.payload.text, /Последняя успешная проверка/);
 });
 
+test('while the model service is down the reader is told so, the story stays, and it goes on once the service is back', async t => {
+  let service: 'refused' | 'starting' | 'up' = 'refused';
+  const f = fixture(t, { providerName: 'simple-serving', generate: async (_request, controls) => {
+    // A closed tunnel, then a service that is still starting: the bot cannot tell a sleeping card from either.
+    if (service === 'refused') throw new ModelError('provider_failed', { phase: 'generate', transportCode: 'ECONNREFUSED' });
+    if (service === 'starting') throw new ModelError('model_unavailable', { phase: 'generate', httpStatus: 503, servingCode: 'starting' });
+    await controls.onText('2026-08-02 20:00\n\n');
+    return { text: '2026-08-02 20:00\n\nСинтетическая сцена.', finishReason: 'stop' };
+  } });
+  const notices = () => f.sent.filter(item => item.method === 'sendMessage').map(item => item.payload.text);
+  const scenes = () => {
+    const state = f.store.read(1);
+    const story = Object.values(state.stories)[0];
+    return history(story, story.branches[state.active!.branchId].head).length;
+  };
+  await f.start();
+  const before = scenes();
+  assert.equal(notices().at(-1), texts('ru').notices.modelUnavailable);
+  service = 'starting';
+  await f.bot.handle(f.message('/continue'));
+  await f.bot.idle();
+  assert.deepEqual([notices().at(-1), scenes()], [texts('ru').notices.modelUnavailable, before]);
+  service = 'up';
+  await f.bot.handle(f.message('/continue'));
+  await f.bot.idle();
+  assert.equal(scenes(), before + 1);
+});
+
 // The fixture's updates come from a Russian Telegram app; these come from an app in the given language.
 function speaking<T extends Update>(update: T, languageCode: string | undefined): T {
   const from = update.message?.from ?? update.callback_query?.from;
