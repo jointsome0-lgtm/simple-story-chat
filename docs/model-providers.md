@@ -112,7 +112,7 @@ Differences from llama.cpp:
 
 GPU control comes later. With `SIMPLE_CHAT_VAST_INSTANCE_ID` set, the bot refuses to start with this provider: the card may stop only after the gateway has drained its requests (contract section 8), and the bot cannot drain it yet. Until then the gateway's card is started and stopped by hand. Without GPU control the bot serves no model socket, so the agent interface calls the gateway directly. Eval (`--model gpu:<label>`) and the probes with `--direct` call it directly in any case. All these calls are `internal`, and the bot does not see them.
 
-The shared cases are pinned in `local/serving-contract/`: an exact copy of `contract/cases-v1.json` and `pin.json` with its commit and SHA-256. To update them, copy the file again from a commit of simple-serving, change the pin in the same commit, and correct the step counts in `local/serving-contract.test.ts` if they changed. The copy is never edited by hand.
+The shared cases are pinned in `local/serving-contract/`: an exact copy of `contract/cases-v1.json` and `pin.json` with its commit and SHA-256. `local/serving-contract.test.ts` plays each public step's answer from a fake gateway, and each stream also with its text cut into single characters, joined, and sent a byte at a time: the contract promises no split. To update the cases, copy the file again from a commit of simple-serving, change the pin in the same commit, and correct the counts at the end of the test if they changed. The copy is never edited by hand.
 
 ## Codex CLI: `codex-cli`
 

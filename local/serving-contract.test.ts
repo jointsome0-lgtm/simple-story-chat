@@ -137,7 +137,46 @@ function fill(value: unknown): unknown {
 const READY = { contract: '1', boot_id: 'synthetic-boot', status: 'ready', model: alias, context_tokens: cases.service.context_tokens, drain_generation: 0 };
 const MODELS = { object: 'list', data: [{ id: alias, object: 'model', max_model_len: cases.service.context_tokens }] };
 
-type Running = { step: Step; call: Call; controls: Controls; body: Json | null; seen: string[]; problems: string[];
+// The contract promises a client no split of the text (contract/README.md there, "response"): the bot must make the
+// same of a stream however its text is cut into chunks and however its bytes arrive. So each streamed step runs as the
+// case cuts it, with every piece of text cut into single characters, with neighbouring text joined, and a byte at a time.
+type Split = 'case' | 'characters' | 'joined' | 'bytes';
+const SPLITS: readonly Split[] = ['case', 'characters', 'joined', 'bytes'];
+// The one choice of a chunk, with its delta.
+const choiceOf = (chunk: Json | undefined) => chunk && Array.isArray(chunk.choices) && chunk.choices.length === 1
+  && isObject(chunk.choices[0]) && isObject(chunk.choices[0].delta) ? chunk.choices[0] as Json & { delta: Json } : undefined;
+function resplit(chunks: Json[], split: Split): Json[] {
+  if (split === 'characters') return chunks.flatMap(chunk => {
+    const choice = choiceOf(chunk);
+    const field = choice && ['content', 'reasoning_content'].find(name => typeof choice.delta[name] === 'string');
+    if (!choice || !field || Object.keys(choice.delta).some(name => name !== field && name !== 'role')) return [chunk];
+    const { [field]: text, ...rest } = choice.delta;
+    const { finish_reason: finish, ...open } = choice;
+    const pieces = [...text as string];
+    if (pieces.length < 2) return [chunk];
+    // A role goes with the first piece, a finish with the last.
+    return pieces.map((piece, index) => ({ ...chunk, choices: [{ ...open, delta: { ...index ? {} : rest, [field]: piece },
+      ...index === pieces.length - 1 && finish != null ? { finish_reason: finish } : {} }] }));
+  });
+  if (split !== 'joined') return chunks;
+  // Plain text, or none, joins the plain text before it, unless that has finished; a finish comes along.
+  const plain = (delta: Json) => Object.keys(delta).every(name => name === 'content' && typeof delta.content === 'string');
+  const joined: Json[] = [];
+  for (const chunk of chunks) {
+    const last = joined.at(-1);
+    const [into, from] = [choiceOf(last), choiceOf(chunk)];
+    if (!last || !into || !from || into.finish_reason != null || !plain(into.delta) || !plain(from.delta)) {
+      joined.push(chunk);
+      continue;
+    }
+    const content = `${into.delta.content ?? ''}${from.delta.content ?? ''}`;
+    joined[joined.length - 1] = { ...last, choices: [{ ...into, delta: content ? { content } : {},
+      ...from.finish_reason != null ? { finish_reason: from.finish_reason } : {} }] };
+  }
+  return joined;
+}
+
+type Running = { step: Step; call: Call; controls: Controls; body: Json | null; split: Split; seen: string[]; problems: string[];
   // Within a case: the scope the bot sent for each reader of the case.
   scopes: Map<string, string> };
 
@@ -181,14 +220,21 @@ function send(outgoing: ServerResponse, status: number, value: unknown) {
   outgoing.end(JSON.stringify(value));
 }
 // The step's response as the gateway sends it: an error body, a JSON body, or a stream whose every chunk names the
-// model, ending in `[DONE]` or in the error event.
-function respond(outgoing: ServerResponse, { status, error, json, chunks = [], done, error_event: errorEvent }: Step['response']) {
+// model, ending in `[DONE]` or in the error event, its text cut as `split` says.
+async function respond(outgoing: ServerResponse, { status, error, json, chunks = [], done, error_event: errorEvent }: Step['response'], split: Split) {
   if (error !== undefined) return send(outgoing, status, { error: { code: error } });
   if (json !== undefined) return send(outgoing, status, fill(json));
   outgoing.writeHead(status, { 'Content-Type': 'text/event-stream' });
-  for (const chunk of chunks) outgoing.write(`data: ${JSON.stringify({ id: 'synthetic', object: 'chat.completion.chunk', created: 0, model: alias, ...fill(chunk) as Json })}\n\n`);
-  if (done) outgoing.write('data: [DONE]\n\n');
-  else if (errorEvent !== undefined) outgoing.write(`data: ${JSON.stringify({ error: { code: errorEvent } })}\n\n`);
+  const events = resplit(chunks.map(chunk => fill(chunk) as Json), split)
+    .map(chunk => `data: ${JSON.stringify({ id: 'synthetic', object: 'chat.completion.chunk', created: 0, model: alias, ...chunk })}\n\n`);
+  if (done) events.push('data: [DONE]\n\n');
+  else if (errorEvent !== undefined) events.push(`data: ${JSON.stringify({ error: { code: errorEvent } })}\n\n`);
+  const bytes = Buffer.from(events.join(''));
+  if (split !== 'bytes') return outgoing.end(bytes);
+  for (let at = 0; at < bytes.length; at++) {
+    outgoing.write(bytes.subarray(at, at + 1));
+    await new Promise(resolve => setImmediate(resolve));
+  }
   outgoing.end();
 }
 
@@ -201,7 +247,7 @@ test('every public step of the pinned cases gives the bot the result the case ex
       const route = `${incoming.method} ${incoming.url}`;
       running!.seen.push(route);
       running!.problems.push(...problemsOf(running!, incoming, Buffer.concat(parts)));
-      if (route === ownRoute(running!.call, running!.step.request)) respond(outgoing, running!.step.response);
+      if (route === ownRoute(running!.call, running!.step.request)) void respond(outgoing, running!.step.response, running!.split);
       else if (route === 'GET /v1/state') send(outgoing, 200, READY);
       else if (route === 'GET /v1/models') send(outgoing, 200, MODELS);
       else { running!.problems.push(`a call of ${route}`); send(outgoing, 500, {}); }
@@ -212,7 +258,7 @@ test('every public step of the pinned cases gives the bot the result the case ex
   const provider = createServing({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, model: alias,
     contextTokens: cases.service.context_tokens, apiKey: KEY, timeoutMs: 10000 });
 
-  const counted = { run: 0, gateway: 0, control: 0 };
+  const counted = { run: 0, gateway: 0, control: 0, resplit: 0 };
   for (const { name, steps } of cases.cases) {
     const scopes = new Map<string, string>();
     for (const [index, step] of steps.entries()) {
@@ -229,44 +275,51 @@ test('every public step of the pinned cases gives the bot the result the case ex
         'context_tokens', 'status', 'error'].includes(key)), [], label);
       const call = callOf(step.request);
       const { request, body } = requestOf(step.request);
-      running = { step, call, controls: controlsOf(step.request.headers), body, seen: [], problems: [], scopes };
-      let value: unknown;
-      let failure: ModelError | undefined;
-      try {
-        value = call === 'generate' ? await provider.generate(request, running.controls)
-          : call === 'count' ? await provider.countInput(request, running.controls) : await provider.check();
-      } catch (error) { failure = error as ModelError; }
+      const controls = controlsOf(step.request.headers);
+      const run = async (split: Split): Promise<{ value?: unknown; failure?: ModelError }> => {
+        running = { step, call, controls, body, split, seen: [], problems: [], scopes };
+        try {
+          return { value: call === 'generate' ? await provider.generate(request, controls)
+            : call === 'count' ? await provider.countInput(request, controls) : await provider.check() };
+        } catch (error) { return { failure: error as ModelError }; }
+      };
+      for (const split of call === 'generate' && step.response.chunks ? SPLITS : ['case'] as const) {
+        const where = split === 'case' ? label : `${label}, split ${split}`;
+        const { value, failure } = await run(split);
+        if (split !== 'case') counted.resplit++;
+        assert.deepEqual(running!.problems, [], where);
+        assert.deepEqual(running!.seen, call === 'generate' ? ['POST /v1/chat/completions'] : call === 'count' ? ['POST /v1/chat/completions/input_tokens']
+          : ownRoute(call, step.request) === 'GET /v1/models' || result.error === undefined ? ['GET /v1/state', 'GET /v1/models'] : ['GET /v1/state'], where);
+        if (result.error !== undefined) {
+          assert.ok(failure, `${where}: no failure`);
+          assert.ok(Object.hasOwn(BOT_CODES, result.error), where);
+          assert.equal(failure.code, BOT_CODES[result.error], where);
+          // The gateway's own code goes to the log beside the bot's; the status tells a refusal from an error event.
+          assert.equal(failure.servingCode, result.error, where);
+          assert.equal(failure.httpStatus, step.response.status, where);
+          continue;
+        }
+        assert.equal(failure, undefined, `${where}: ${failure?.code}`);
+        if (result.text !== undefined) {
+          const { text, finishReason, usage, timings } = value as GenerationResult;
+          assert.equal(text, result.text, where);
+          assert.equal(finishReason, result.finish_reason, where);
+          assert.deepEqual([usage?.inputTokens, usage?.outputTokens, usage?.cachedInputTokens],
+            [result.usage!.input, result.usage!.output, result.usage!.cached], where);
+          // The bot keeps no reasoning, only how long it was.
+          assert.equal(usage?.reasoningCharacters, (result.reasoning ?? '').length, where);
+          assert.deepEqual(timings, { servingWaitMs: MEASURED.wait_ms, servingFirstTokenMs: MEASURED.first_token_ms,
+            servingTotalMs: MEASURED.total_ms, ...(result.usage!.cached === null ? {} : { cacheTokens: result.usage!.cached }) }, where);
+        }
+        if (result.input_tokens !== undefined) assert.equal(value, result.input_tokens, where);
+        if (result.model !== undefined) assert.deepEqual(value, { model: result.model, contextTokens: result.context_tokens }, where);
+        // The check passes only on a service that is ready.
+        if (result.status !== undefined) assert.equal(result.status, 'ready', where);
+      }
       counted.run++;
-      assert.deepEqual(running.problems, [], label);
-      assert.deepEqual(running.seen, call === 'generate' ? ['POST /v1/chat/completions'] : call === 'count' ? ['POST /v1/chat/completions/input_tokens']
-        : ownRoute(call, step.request) === 'GET /v1/models' || result.error === undefined ? ['GET /v1/state', 'GET /v1/models'] : ['GET /v1/state'], label);
-      if (result.error !== undefined) {
-        assert.ok(failure, `${label}: no failure`);
-        assert.ok(Object.hasOwn(BOT_CODES, result.error), label);
-        assert.equal(failure.code, BOT_CODES[result.error], label);
-        // The gateway's own code goes to the log beside the bot's; the status tells a refusal from an error event.
-        assert.equal(failure.servingCode, result.error, label);
-        assert.equal(failure.httpStatus, step.response.status, label);
-        continue;
-      }
-      assert.equal(failure, undefined, `${label}: ${failure?.code}`);
-      if (result.text !== undefined) {
-        const { text, finishReason, usage, timings } = value as GenerationResult;
-        assert.equal(text, result.text, label);
-        assert.equal(finishReason, result.finish_reason, label);
-        assert.deepEqual([usage?.inputTokens, usage?.outputTokens, usage?.cachedInputTokens],
-          [result.usage!.input, result.usage!.output, result.usage!.cached], label);
-        // The bot keeps no reasoning, only how long it was.
-        assert.equal(usage?.reasoningCharacters, (result.reasoning ?? '').length, label);
-        assert.deepEqual(timings, { servingWaitMs: MEASURED.wait_ms, servingFirstTokenMs: MEASURED.first_token_ms,
-          servingTotalMs: MEASURED.total_ms, ...(result.usage!.cached === null ? {} : { cacheTokens: result.usage!.cached }) }, label);
-      }
-      if (result.input_tokens !== undefined) assert.equal(value, result.input_tokens, label);
-      if (result.model !== undefined) assert.deepEqual(value, { model: result.model, contextTokens: result.context_tokens }, label);
-      // The check passes only on a service that is ready.
-      if (result.status !== undefined) assert.equal(result.status, 'ready', label);
     }
   }
-  // A client counts the steps it skips, so that none is skipped by accident. A new copy of the cases changes these.
-  assert.deepEqual(counted, { run: 56, gateway: 4, control: 14 });
+  // A client counts the steps it skips, so that none is skipped by accident; beside them, the streams it read cut
+  // otherwise. A new copy of the cases changes these.
+  assert.deepEqual(counted, { run: 56, gateway: 4, control: 14, resplit: 57 });
 });
