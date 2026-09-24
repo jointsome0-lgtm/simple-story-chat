@@ -629,9 +629,10 @@ export function createIllustrator(config: ImageConfig, deps: {
     },
 
     // Keeps the portrait a reader was shown under `candidateId`, inside the library write that `state` belongs to: the
-    // file is written first and the sheet refers to it once that write commits; the caller sweeps the file it replaced
-    // afterwards (local/store.ts). Only the very portrait that button came with is kept, only while it is held, and only
-    // while its person still has the look it shows. Returns where that person is on the sheet, or null for a stale button.
+    // file is written first and the sheet refers to it once that write commits; a rollback deletes the file, and the
+    // caller sweeps the one it replaced afterwards (local/store.ts). Only the very portrait that button came with is
+    // kept, only while it is held, and only while its person still has the look it shows. Returns where that person is
+    // on the sheet, or null for a stale button. The portrait stays held until `portraitKept`.
     keepPortrait(userId: string, candidateId: string, state: Library) {
       const held = candidates.get(userId);
       if (!held || held.id !== candidateId || now() - held.at > PORTRAIT_HELD_MS) return null;
@@ -640,8 +641,11 @@ export function createIllustrator(config: ImageConfig, deps: {
       if (index < 0 || sheet[index].look !== held.look) return null;
       sheet[index].portrait = { file: store.writePortrait(userId, held.bytes), seed: held.seed, look: held.look, clothes: PORTRAIT_CLOTHES,
         style: PORTRAIT_STYLE, graph: graphHash, checkpoint: config.checkpoint, at: now() };
-      letGo(userId);
       return { storyId: held.storyId, index };
     },
+
+    // Lets a kept portrait go, once the write that refers to its file is committed (local/bot.ts). One whose write was
+    // rolled back is still held, so the same button keeps it again.
+    portraitKept(userId: string, candidateId: string) { letGo(userId, candidateId); },
   };
 }

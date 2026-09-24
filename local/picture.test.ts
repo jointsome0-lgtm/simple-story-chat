@@ -1146,9 +1146,41 @@ test('a portrait replaced or kept leaves no picture of it in memory', async t =>
   for (const one of kept) assert.equal(await held(one.picture), false, 'a kept portrait is let go');
 });
 
-// The sidecar of the library: a portrait's file is written before the write that refers to it, so a write rolled back,
-// or one a stopped process never made, leaves a file nobody refers to. The next sweep takes it, and so does the next start.
-test('a portrait file whose library write is rolled back, or never came, is swept', t => {
+// Keeping writes the file and then the write that refers to it. When that write is rolled back, here by a trigger
+// that refuses it the way a full disk would, the file goes with it and the portrait stays held for the same button.
+test('a portrait whose keep is rolled back leaves no file behind and is kept by the same button again', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root });
+  await f.start();
+  await f.bot.idle();
+  const storyId = f.store.read('1').active!.storyId;
+  await f.bot.handle(f.click(`portrait:${elin(storyId)}`));
+  await f.bot.idle();
+  const keep = photos(f.sent).at(-1)!.payload.reply_markup!.inline_keyboard[0][1].callback_data;
+  f.store.db.exec(`CREATE TEMP TRIGGER refuse_portrait BEFORE UPDATE ON libraries WHEN instr(NEW.payload, '"portrait":') > 0
+    BEGIN SELECT RAISE(ABORT, 'synthetic refusal'); END`);
+  await assert.rejects(f.bot.handle(f.click(keep)), /synthetic refusal/);
+  const directory = f.store.portraits('1');
+  assert.deepEqual(readdirSync(directory), [], 'the file of the write rolled back went with it');
+  assert.equal(f.store.read('1').stories[storyId].sheet![0].portrait, undefined);
+
+  f.store.db.exec('DROP TRIGGER refuse_portrait');
+  await f.bot.handle(f.click(keep));
+  assert.equal(f.sent.at(-1)!.payload.text, '✅ Портрет сохранён: Элин. В картинки к сценам он пока не попадает.');
+  const portrait = f.store.read('1').stories[storyId].sheet![0].portrait!;
+  assert.equal(portrait.seed, seedIn(comfy.submitted.at(-1)!));
+  assert.deepEqual(readdirSync(directory), [portrait.file]);
+  // Once that write is committed, the button has nothing left to keep.
+  await f.bot.handle(f.click(keep));
+  assert.equal(f.sent.at(-1)!.payload.text, 'Этот портрет уже не сохранить: он устарел или внешность с тех пор изменилась. Нарисуй новый.');
+});
+
+// The sidecar of the library: a portrait's file is written before the write that refers to it. A write rolled back
+// deletes the file it wrote, and one a stopped process never made leaves a file nobody refers to: the next sweep takes
+// it, and so does the next start.
+test('a portrait file goes with its write rolled back, and one whose write never came is swept', t => {
   const directory = mkdtempSync(join(tmpdir(), 'simple-chat-portraits-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const path = join(directory, 'story.sqlite');
@@ -1156,7 +1188,8 @@ test('a portrait file whose library write is rolled back, or never came, is swep
   const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
   assert.throws(() => store.mutate('1', () => { store.writePortrait('1', bytes); throw new Error('synthetic'); }), /synthetic/);
   const mine = store.portraits('1');
-  assert.equal(readdirSync(mine).length, 1, 'the file outlives the rollback');
+  assert.deepEqual(readdirSync(mine), [], 'the rollback took its file');
+  store.writePortrait('1', bytes);
   assert.equal(store.sweepPortraits('1'), 1);
   assert.deepEqual(readdirSync(mine), []);
 

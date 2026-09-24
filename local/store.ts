@@ -11,6 +11,8 @@ type AccessRequest = { userId: string; at: number };
 export class Store {
   declare db: DatabaseSync;
   declare path: string;
+  // The portrait files written inside the write under way (`writePortrait`), which a rollback takes with it.
+  declare writing: string[] | undefined;
 
   // A read-only store serves a process that only looks while another one writes: it creates nothing and takes no lock.
   constructor(path: string, { readOnly = false }: { readOnly?: boolean } = {}) {
@@ -39,6 +41,7 @@ export class Store {
   }
   mutate<T>(userId: string | number, fn: (state: Library) => T): T {
     this.db.exec('BEGIN IMMEDIATE');
+    const written: string[] = this.writing = [];
     try {
       const state = this.read(userId);
       const result = fn(state);
@@ -46,7 +49,12 @@ export class Store {
         .run(String(userId), JSON.stringify(state));
       this.db.exec('COMMIT');
       return result;
-    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    } catch (error) {
+      try { this.db.exec('ROLLBACK'); }
+      // A file that cannot go now goes with the next sweep, and never hides why the write failed.
+      finally { for (const file of written) try { rmSync(file, { force: true }); } catch {} }
+      throw error;
+    } finally { this.writing = undefined; }
   }
   offset(value?: number) {
     if (value !== undefined) this.db.prepare("INSERT INTO metadata VALUES ('offset', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(value));
@@ -80,12 +88,14 @@ export class Store {
     const key = this.db.prepare("SELECT value FROM metadata WHERE key='portrait_key'").get()!.value as string;
     return join(`${this.path}.portraits`, createHmac('sha256', key).update(userId).digest('hex').slice(0, 32));
   }
-  // Writes one portrait of `userId`'s and returns the name the library is to refer to it by.
+  // Writes one portrait of `userId`'s and returns the name the library is to refer to it by. Inside a write, a rollback
+  // of that write deletes the file again (`mutate`).
   writePortrait(userId: string, bytes: Uint8Array): string {
     const directory = this.portraits(userId);
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     const file = `${randomBytes(16).toString('hex')}.png`;
     writeFileSync(join(directory, file), bytes, { mode: 0o600, flag: 'wx' });
+    this.writing?.push(join(directory, file));
     return file;
   }
   // Called once a write that may have let a portrait go is committed, never inside one. Returns how many files went.

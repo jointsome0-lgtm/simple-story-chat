@@ -67,6 +67,8 @@ type Plan = {
   // The write may have let go of a kept portrait — a deletion, or a portrait kept in its place — whose file goes once
   // it is committed (local/store.ts `sweepPortraits`).
   sweep?: boolean;
+  // The id of a portrait this write keeps, let go from memory once the write is committed and not before.
+  portraitKept?: string;
 };
 // One reader's turn, for as long as it can still be cancelled. What it leaves behind — a picture being stopped on
 // the other card — outlives the entry and is awaited through `inFlight` instead.
@@ -295,7 +297,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       if (!pictureInfo.pictures || !illustrator) throw refuse(t, 'portraitOff');
       const kept = illustrator.keepPortrait(String(update.callback_query?.from?.id), action.slice(14), state);
       if (!kept) throw refuse(t, 'portraitStale');
-      return { screen: render(state, `portrait-kept:${kept.storyId}:${kept.index}`), sweep: true };
+      return { screen: render(state, `portrait-kept:${kept.storyId}:${kept.index}`), sweep: true, portraitKept: action.slice(14) };
     }
     // While a look is being written, text is the look: one line, whatever the lines it was sent in. The person is
     // looked for again by name, since the story may be gone or its sheet written anew in the meantime.
@@ -586,6 +588,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         }
       });
       if (!plan) return;
+      if (plan.portraitKept) illustrator?.portraitKept(userId, plan.portraitKept);
       if (plan.sweep) {
         try { store.sweepPortraits(userId); } catch (error) { log('portraits_unswept', errorCode(error)); }
       }
