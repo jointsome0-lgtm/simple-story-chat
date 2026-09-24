@@ -380,15 +380,17 @@ export function createAgentApi({ store, provider, config, userId = 'agent', wait
 export type AgentApi = ReturnType<typeof createAgentApi>;
 
 // The model: the bot's queue when the bot serves one (a GPU run), so its humans keep priority; otherwise the provider
-// the bot would use, directly. The model configuration comes from loadAgentConfig, which keeps the hosted consent gate.
+// the bot would use, directly. simple-serving is always called directly: its gateway admits people, agents and probes
+// itself (its contract, section 2). A direct call says it is an agent's. The model configuration comes from
+// loadAgentConfig, which keeps the hosted consent gate.
 // The route is chosen at the first model call of a turn and kept to its end; the next turn checks the queue again, so a
 // long-lived MCP server started before the bot goes through its queue once the bot serves one.
 export async function agentProvider(config: AgentConfig): Promise<{ provider: Provider; queue: boolean }> {
   let direct: Provider | undefined;
   const directModel = () => direct ??= createModel(config);
-  // The bot's queue, if its socket answers now.
+  // The bot's queue, if its socket answers now. A socket that answers beside simple-serving is another bot's, never its.
   async function queue() {
-    if (!existsSync(config.modelSocket) || !lstatSync(config.modelSocket).isSocket()) return null;
+    if (config.provider === 'simple-serving' || !existsSync(config.modelSocket) || !lstatSync(config.modelSocket).isSocket()) return null;
     // The time covers waiting behind people and the quiet window, then the call itself under the model's timeout.
     const client = createBackgroundClient({ socketPath: config.modelSocket, model: config.model, work: 'agent', timeoutMs: config.timeoutMs + 600_000 });
     const live = await client.status().then(() => true, (error: unknown) => errorCode(error) !== 'background_unavailable');
@@ -411,7 +413,7 @@ export async function agentProvider(config: AgentConfig): Promise<{ provider: Pr
   const calls = (turn?: Turn): Provider => ({
     async generate(request, controls = {}) {
       const client = await route(turn);
-      if (!client) return directModel().generate(request, controls);
+      if (!client) return directModel().generate(request, { ...controls, priority: 'agent' });
       // Agent work never wakes a stopped GPU and must not wait in the queue for one. A turn that holds the slot keeps
       // the GPU through a pause, which the bot then reports as draining.
       const state = await client.check(controls) as { gpu?: { status?: unknown } };
@@ -421,7 +423,7 @@ export async function agentProvider(config: AgentConfig): Promise<{ provider: Pr
     // The queue does not count input; the estimate the request already carries stands in for it.
     async countInput(request, controls) {
       const model = (await route(turn)) ? null : directModel();
-      return model?.countInput ? model.countInput(request, controls) : request.estimatedInputTokens ?? requestBudget(request, config.contextTokens).inputTokens;
+      return model?.countInput ? model.countInput(request, { ...controls, priority: 'agent' }) : request.estimatedInputTokens ?? requestBudget(request, config.contextTokens).inputTokens;
     },
   });
   const provider: Provider = { ...calls(),

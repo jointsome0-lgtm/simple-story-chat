@@ -20,7 +20,7 @@ import { createScheduler } from './scheduler.ts';
 import type { Scheduler } from './scheduler.ts';
 import { serveBackground } from './background.ts';
 import type { Log } from './model-error.ts';
-import { safeErrorDetails } from './model-error.ts';
+import { safeErrorDetails, unavailable } from './model-error.ts';
 
 // Thrown values are not checked: startup and polling failures are Error objects,
 // and Telegram, model and GPU errors add a code (Telegram errors also a retry delay).
@@ -53,7 +53,12 @@ try {
       starts = state.starts;
       scheduler?.forget();
     }); }, 10000);
-  } else await rawProvider.check?.();
+  } else await rawProvider.check?.().catch((error: unknown) => {
+    // simple-serving puts its card to sleep on its own. A service that is only out of reach now lets the bot start, and
+    // its first model call checks it again (local/serving.ts); a wrong key, model, context or contract stops the start.
+    if (config.provider !== 'simple-serving' || !unavailable(error)) throw error;
+    log('model_check_deferred', (error as Failure).code, error);
+  });
   scheduler = createScheduler(rawProvider, { log,
     slots: config.slots, poolTokens: config.poolTokens, sharedCache: config.sharedCache,
     outputTokens: request => request.maxOutputTokens,
