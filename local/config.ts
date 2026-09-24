@@ -116,7 +116,7 @@ export function loadModelConfig(directory = process.cwd(), inherited: Env = proc
 
 export function gpuConfig(env: Env, provider: string): GpuConfig | undefined {
   if (!env.SIMPLE_CHAT_VAST_INSTANCE_ID?.trim()) return undefined;
-  if (provider === 'simple-serving') throw new Error('simple-serving runs its own card, not the bot: unset SIMPLE_CHAT_VAST_INSTANCE_ID and SIMPLE_CHAT_VAST_API_KEY');
+  if (provider === 'simple-serving') throw new Error('simple-serving runs its own card, not the bot: unset SIMPLE_CHAT_VAST_INSTANCE_ID');
   const instanceId = env.SIMPLE_CHAT_VAST_INSTANCE_ID.trim();
   const apiKey = env.SIMPLE_CHAT_VAST_API_KEY?.trim();
   const sshHost = env.SIMPLE_CHAT_GPU_SSH_HOST || 'simple-chat-vast';
