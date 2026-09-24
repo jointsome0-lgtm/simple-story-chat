@@ -46,6 +46,18 @@ test('one portrait per person, numbered rather than named, with the appearance t
   assert.equal(portraitCases([]).length, 0);
 });
 
+// The owner wants the build to come from the portrait, so the portrait must show it: the whole figure, in clothes
+// that do not hide it, and no expression that could argue with a look line that says grim.
+test('a portrait is the whole figure in plain close-fitting clothes, and asks for no expression', () => {
+  const [bran] = portraitCases([{ ...cases[0]!, sheet: [{ name: 'Бран', look: 'A middle-aged man of huge heavy build, grim menacing bearing',
+    outfit: 'wearing a long fur-lined robe' }] }]);
+  assert.ok(bran!.prompt.includes('A middle-aged man of huge heavy build, grim menacing bearing, wearing a plain close-fitting'));
+  assert.ok(bran!.prompt.includes('head to feet'));
+  // The sheet's robe is what the man wears in the story; in the portrait it would hide what the portrait is for.
+  assert.ok(!bran!.prompt.includes('robe'));
+  assert.ok(!/expression|calm|smil/i.test(bran!.prompt));
+});
+
 const picture = (caseId: string, file: string): Picture => ({ caseId, checkpoint: 'q.safetensors', role: 'primary',
   seed: 7, steps: 25, sampler: 'euler', scheduler: 'simple', width: 1280, height: 720, totalMs: 1, viewMs: 1,
   vram: [], bytes: 10, sha256: 'aa', file });

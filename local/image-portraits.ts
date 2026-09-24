@@ -15,17 +15,23 @@ import type { Description } from './illustrate.ts';
 import type { Case } from './illustrate-probe.ts';
 import type { BatchIndex, References } from './image-batch.ts';
 
-// A reference portrait is a body and a face with nothing happening: the frame run asks the model to keep this
-// person, not to repeat this moment. The fields are the ones every frame uses, so the style string and the name
-// stripping are the frames' own; only `look` differs, and that comes from the sheet through `assemblePrompt`.
+// A reference portrait carries the whole person, the figure as well as the face, so that a frame need not describe
+// the build every time: the owner's example is a man whose big muscles and barbarian menace should come from the
+// picture (2026-09-24). So it is the whole figure, head to feet, in plain close-fitting clothes that show the build
+// rather than a robe or a coat that would hide it, in a neutral standing pose, with nothing happening: the frame run
+// asks the model to keep this person, not to repeat this moment. No expression is asked for either — a face told to
+// be calm contradicts a look line that says grim, and a permanent bearing is the look's to carry. The fields are the
+// ones every frame uses, so the style string and the name stripping are the frames' own; `look` comes from the sheet
+// through `assemblePrompt`, and these clothes stand where a frame would put the sheet's outfit.
+export const PORTRAIT_CLOTHES = 'wearing a plain close-fitting charcoal T-shirt with short sleeves, plain close-fitting charcoal trousers and plain dark shoes';
 export function portraitDescription(name: string): Description {
   return {
-    shot: 'Full-length character reference, the whole body in frame, seen from the front',
-    setting: 'A plain even grey backdrop, no scenery',
+    shot: 'Full-length character reference, the whole figure from head to feet in frame, seen from the front',
+    setting: 'A plain even light grey backdrop, no scenery',
     moment: 'One person stands still to be looked at',
     objects: '', props: '', light: 'Even soft frontal light, no strong shadows',
-    people: [{ who: name, look: '', state: '',
-      action: 'stands upright facing the viewer, arms relaxed at the sides, calm neutral expression' }],
+    people: [{ who: name, look: '', clothes: PORTRAIT_CLOTHES, state: '',
+      action: 'stands upright facing the viewer, feet slightly apart, arms relaxed at the sides' }],
   };
 }
 
