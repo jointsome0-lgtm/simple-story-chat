@@ -267,6 +267,10 @@ export function createIllustrator(config: ImageConfig, deps: {
   const graphId = createHash('sha256').update(JSON.stringify(graph)).digest('hex').slice(0, 16);
   const recipeOf = (storyId: string): PictureRecipe => ({ seed: seedOf(storyId), graph: graphId, checkpoint: config.checkpoint,
     width: size.width, height: size.height, steps, cfg, sampler, scheduler });
+  // A portrait stands, so it is drawn on the graph's canvas turned upright: the smaller side across and the larger one
+  // down, 720x1280 for a graph of 1280x720. A whole figure in the scenes' landscape frame would get a third of the
+  // pixels. Nothing else of the graph changes.
+  const upright = { width: Math.min(size.width, size.height), height: Math.max(size.width, size.height) };
 
   // The scene's own request, once more: the same system prompt and the same history up to this scene, so that a
   // server with a prefix cache pays for the appended instruction alone (the plan's "What the second call costs").
@@ -310,7 +314,7 @@ export function createIllustrator(config: ImageConfig, deps: {
   // only, one per reader, until the next one, the keep, a delivery that failed, or PORTRAIT_HELD_MS. That one timer
   // is cleared with it, and knows the reader and the id alone, so that the map is the only holder of the picture: a
   // timer that held it would keep every picture replaced or kept alive for the whole half hour.
-  type Candidate = { id: string; storyId: string; name: string; look: string; seed: number; bytes: Uint8Array; at: number };
+  type Candidate = { id: string; storyId: string; name: string; look: string; recipe: PictureRecipe; bytes: Uint8Array; at: number };
   const candidates = new Map<string, Candidate & { timer: ReturnType<typeof setTimeout> }>();
   function letGo(userId: string, id?: string) {
     const held = candidates.get(userId);
@@ -687,13 +691,13 @@ export function createIllustrator(config: ImageConfig, deps: {
       try {
         const look = lookNow();
         if (look === undefined) throw sceneGone();
-        const seed = randomInt(2 ** 32);
-        const drawn = await draw({ ...recipeOf(storyId), seed }, portraitPrompt(name, look).prompt, signal);
+        const recipe = { ...recipeOf(storyId), ...upright, seed: randomInt(2 ** 32) };
+        const drawn = await draw(recipe, portraitPrompt(name, look).prompt, signal);
         if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
         if (lookNow() !== look) throw sceneGone();
         // Held before it is sent, so that its button finds it however soon it is pressed, and let go if it never
         // arrives. The one shown before goes either way: its button keeps nothing once a newer one is shown.
-        if (drawn.bytes.length <= PORTRAIT_BYTES) hold(userId, { id: request.candidate, storyId, name, look, seed, bytes: drawn.bytes, at: now() });
+        if (drawn.bytes.length <= PORTRAIT_BYTES) hold(userId, { id: request.candidate, storyId, name, look, recipe, bytes: drawn.bytes, at: now() });
         else letGo(userId);
         const photoStarted = now();
         try { await sendKept({ userId, chat, storyId }, () => chat.photo(drawn.bytes, undefined, request.caption)); }
@@ -705,8 +709,8 @@ export function createIllustrator(config: ImageConfig, deps: {
         await clear();
         // A photo handed to Telegram is delivered: a stop that lands while it is on its way does not take it back, and
         // it stays there to keep. The row then says both, that it is ready and that it was stopped.
-        log('picture_portrait', undefined, { outcome: 'ready', cancelled: signal.aborted, imageMs: drawn.totalMs, imageSteps: steps,
-          photoMs, photoBytes: drawn.bytes.length });
+        log('picture_portrait', undefined, { outcome: 'ready', cancelled: signal.aborted, imageMs: drawn.totalMs,
+          imageSteps: recipe.steps, photoMs, photoBytes: drawn.bytes.length });
       } catch (error) {
         const code = errorCode(error);
         const cancelled = signal.aborted || code === 'cancelled' || code === 'scene_gone';
@@ -728,8 +732,8 @@ export function createIllustrator(config: ImageConfig, deps: {
       const sheet = state.stories[held.storyId]?.sheet ?? [];
       const index = sheet.findIndex(one => one.name === held.name);
       if (index < 0 || sheet[index].look !== held.look) return null;
-      sheet[index].portrait = { file: store.writePortrait(userId, held.bytes), seed: held.seed, look: held.look, clothes: PORTRAIT_CLOTHES,
-        style: PORTRAIT_STYLE, graph: graphId, checkpoint: config.checkpoint, at: now() };
+      sheet[index].portrait = { file: store.writePortrait(userId, held.bytes), ...held.recipe, look: held.look,
+        clothes: PORTRAIT_CLOTHES, style: PORTRAIT_STYLE, at: now() };
       return { storyId: held.storyId, index };
     },
 

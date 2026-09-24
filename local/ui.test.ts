@@ -280,7 +280,7 @@ test('characters: beside each story when pictures are drawn, a list, a card with
   }
   // A kept portrait is named on the card, and one drawn from an earlier look says so, with or without pictures.
   const kept = { file: '0123456789abcdef0123456789abcdef.png', seed: 7, look, clothes: 'plain', style: 'neutral', graph: '0123456789abcdef',
-    checkpoint: 'synthetic.safetensors', at: 1 };
+    checkpoint: 'synthetic.safetensors', width: 720, height: 1280, steps: 8, cfg: 1, sampler: 'euler', scheduler: 'simple', at: 1 };
   state.stories.h2.sheet[0].portrait = kept;
   assert.match(render(state, `character:${mira}`, on).text, /\n\n🖼 Портрет сохранён: лицо и фигура по этой внешности\.$/);
   state.stories.h2.sheet[0].portrait = { ...kept, look: 'An earlier look.' };

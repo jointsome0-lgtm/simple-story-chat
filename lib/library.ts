@@ -33,11 +33,9 @@ export type Branch = { id: string; name: string; head: string | null; memory: st
 export type Checkpoint = { id: string; branchId: string; label: string; kind: string; head: string | null; memory: string | null };
 // A portrait of one person of a sheet that the reader kept to pick a reference by (local/picture.ts): the name of its
 // file among the reader's portraits beside the database (local/store.ts), never the picture itself, and how it was
-// drawn — the seed, the look it shows, which an edited look no longer matches, the clothes and the style line, and the
-// graph by its hash with its checkpoint. Frames never use it.
-export type KeptPortrait = {
-  file: string; seed: number; look: string; clothes: string; style: string; graph: string; checkpoint: string; at: number;
-};
+// drawn — its recipe, on a canvas of its own, the look it shows, which an edited look no longer matches, and the
+// clothes and the style line of its prompt. Frames never use it.
+export type KeptPortrait = PictureRecipe & { file: string; look: string; clothes: string; style: string; at: number };
 export type Story = {
   id: string; seedId: string; title: string; branches: Record<string, Branch>; checkpoints: Record<string, Checkpoint>;
   nodes: Record<string, SceneNode>; memories: Record<string, MemoryVersion>;

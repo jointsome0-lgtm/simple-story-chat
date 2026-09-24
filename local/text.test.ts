@@ -78,7 +78,7 @@ function drawn(lang: Lang | undefined): Library {
 function portraits(lang: Lang | undefined): Library {
   const state = drawn(lang);
   const kept = { file: '0123456789abcdef0123456789abcdef.png', seed: 7, clothes: 'plain', style: 'neutral', graph: '0123456789abcdef',
-    checkpoint: 'synthetic.safetensors', at: 1 };
+    checkpoint: 'synthetic.safetensors', width: 720, height: 1280, steps: 8, cfg: 1, sampler: 'euler', scheduler: 'simple', at: 1 };
   state.stories.h2.sheet = [{ ...SHEET[0], portrait: { ...kept, look: SHEET[0].look } }, { ...SHEET[1], portrait: { ...kept, look: 'Earlier.' } }, SHEET[2]];
   return state;
 }
