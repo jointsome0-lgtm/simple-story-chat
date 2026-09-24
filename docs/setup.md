@@ -19,7 +19,7 @@ After the rename to `simple-story-chat`, the `SIMPLE_CHAT_*` variables, the data
 | `TELEGRAM_BOT_TOKEN` | The secret token of the ordinary bot |
 | `SIMPLE_CHAT_ALLOWED_USER_IDS` | Numeric IDs separated by commas, no public access |
 | `SIMPLE_CHAT_OWNER_ID` | The ID of the owner, who allowed their own messages to be read for debugging; it is not a permission to read other users. It must be on the access list. The bot uses it to mark log rows as `actor: owner`; the other rows get `other` |
-| `SIMPLE_CHAT_DB_PATH` | `data/simple-chat.sqlite` by default; you can choose a local path on the computer or on a server |
+| `SIMPLE_CHAT_DB_PATH` | `data/simple-chat.sqlite` by default; you can choose a local path on the computer or on a server. The portraits readers keep lie beside it in `<path>.portraits/`, and only the database says whose each one is: a backup takes both, copied while the bot is stopped, so that no portrait is kept or swept in between |
 | `SIMPLE_CHAT_PROVIDER` | `claude-code`, `llama-cpp`, `simple-serving`, `codex-cli` or `openai-compatible`. `simple-serving` is our own gateway on a rented card ([details](model-providers.md#simple-serving-our-gateway)). The last two send the story to a third-party service, and without the consent below they are suitable only for probes ([details](model-providers.md)) |
 | `SIMPLE_CHAT_ALLOW_HOSTED` | Exactly `stories-leave-this-computer`, so that the bot starts with `codex-cli` or `openai-compatible`. Only for your own stories; any other value does not count as consent |
 | `SIMPLE_CHAT_MODEL` | `claude-haiku-4-5-20251001` by default; required for `codex-cli`, `openai-compatible` and `simple-serving` |
