@@ -286,13 +286,14 @@ test('every public step of the pinned cases gives the bot the result the case ex
         } catch (error) { return { failure: error as ModelError }; }
       };
       // A person's call always names its reader (local/serving.ts `workOf`), so a reader step without a reader scope is
-      // a call the bot does not make: it refuses it before anything is sent. The step's answer then goes to the call of
-      // a reader the bot does name, as every answer goes to the bot's nearest call.
+      // a call the bot does not make: it fails on its own, and no request reaches the gateway, whatever the step's
+      // answer would have been.
       if (call !== 'check' && controls.priority === 'foreground' && controls.holder === undefined) {
         const { failure } = await run('case');
         assert.deepEqual([failure?.code, failure?.servingCode, running!.seen, running!.problems], ['unnamed_reader', undefined, [], []], label);
-        controls.holder = 'stand-in';
+        counted.run++;
         counted.unnamed++;
+        continue;
       }
       for (const split of call === 'generate' && step.response.chunks ? SPLITS : ['case'] as const) {
         const where = split === 'case' ? label : `${label}, split ${split}`;
@@ -330,7 +331,7 @@ test('every public step of the pinned cases gives the bot the result the case ex
       counted.run++;
     }
   }
-  // A client counts the steps it skips, so that none is skipped by accident; beside them, the reader steps the bot
-  // refuses to send and the streams it read cut otherwise. A new copy of the cases changes these.
+  // A client counts the steps it skips, so that none is skipped by accident; beside them, the reader steps that fail
+  // in the bot before any request and the streams it read cut otherwise. A new copy of the cases changes these.
   assert.deepEqual(counted, { run: 56, gateway: 4, control: 14, unnamed: 3, resplit: 57 });
 });
