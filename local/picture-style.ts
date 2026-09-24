@@ -32,12 +32,11 @@ export const PRESET_KEYS = Object.keys(PRESETS) as Preset[];
 export const OWN_STYLE_CHARS = 400;
 export const OWN_NAME_CHARS = 40;
 export const OWN_STYLES_MAX = 10;
-// The one thing the bot adds to a reader's own line: whatever look a reader writes, the people of the picture stay
-// adults. Nothing of the presets' other rules is added: natural proportions and no lettering fought a line that
-// wanted a look of its own, and the owner took them off on 2026-09-24, so the rest of the prompt's end is the
-// reader's line as written. The sentence is added only when the line does not say it already.
-export const OWN_STYLE_TAIL = 'All people are adults.';
-const TAIL_PARTS = OWN_STYLE_TAIL.split(/(?<=\.) /);
+// A reader's own line ends the prompt as written, with nothing of the bot's after it: it is what the tester sets a
+// style and runs tests with. The bot's tail took a sentence of meaning into every such picture — natural proportions
+// and no lettering until the owner took them off on 2026-09-24, and that all people are adults until later that
+// night. The age of the people is now in their own description, where it is the same in every style of a scene
+// (local/illustrate.ts, `SHEET` and the frame's `look`).
 // The id of an own style, as `id(state, 'y')` makes it (lib/library.ts).
 export const OWN_STYLE_ID = /^y\d+$/;
 
@@ -94,15 +93,13 @@ function flat(text: string): string {
 
 // The whole line a key stands for, as it ends a prompt, or null for a key this library has no style under.
 // `standard` is the bot's own line. A reader's own line is cut to the limit it was accepted under — a longer one
-// came from somewhere other than the bot — and followed by OWN_STYLE_TAIL when it does not say it already.
+// came from somewhere other than the bot.
 export function lineOf(state: Partial<Library>, key: string, standard: string): string | null {
   if (key === 'standard') return standard;
   if (Object.hasOwn(PRESETS, key)) return PRESETS[key as Preset];
   const own = ownStyle(state, key);
   if (!own) return null;
-  const line = [...flat(own.line)].slice(0, OWN_STYLE_CHARS).join('').trim();
-  const missing = TAIL_PARTS.filter(part => !line.includes(part));
-  return missing.length ? `${/[.!?]$/.test(line) ? line : line + '.'} ${missing.join(' ')}` : line;
+  return [...flat(own.line)].slice(0, OWN_STYLE_CHARS).join('').trim();
 }
 
 // The last sentence of this reader's next prompt.
@@ -111,18 +108,12 @@ export function styleLine(state: Partial<Library>, standard: string): string {
 }
 
 // What a reader sent as a style. With two lines or more the first is its name and the rest is the line; with one,
-// there is no name and the caller makes one (`styleName`). The sentences the bot adds itself are taken off the end,
-// so that the whole prompt copied from a card fits the limit again: `lineOf` puts them back. Null when no line is
-// left.
+// there is no name and the caller makes one (`styleName`). Null when no line is left.
 export function ownStyleInput(text: string): { name: string | null; line: string } | null {
   const lines = text.split(/\r\n|[\n\r\u0085\u2028\u2029]/u).map(flat).filter(Boolean);
   if (!lines.length) return null;
   const [name, rest] = lines.length === 1 ? [null, lines] : [lines[0], lines.slice(1)];
-  let line = rest.join(' ');
-  for (let cut = true; cut;) {
-    cut = false;
-    for (const part of TAIL_PARTS) if (line.endsWith(part)) { line = line.slice(0, -part.length).trim(); cut = true; }
-  }
+  const line = rest.join(' ');
   return line ? { name, line } : null;
 }
 

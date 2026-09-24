@@ -218,7 +218,7 @@ function styleCard(state: State, key: string, details: RenderDetails) {
   if (full === null || (key === 'standard' && presetOf(standard))) return styleScreen(state, details);
   const own = ownStyle(state, key);
   const chosen = styleKey(state, standard) === key;
-  const result = payload([styleLabel(t, state, key), chosen ? s.chosen : null, '', s.prompt, full, own ? '' : null, own ? s.tailNote : null,
+  const result = payload([styleLabel(t, state, key), chosen ? s.chosen : null, '', s.prompt, full,
     details.pictures ? null : '', details.pictures ? null : s.off], [
     chosen ? null : [btn(s.choose, `style:${key}`)],
     details.pictures ? [btn(s.sample, `style-sample:${key}`)] : null,

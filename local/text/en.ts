@@ -123,7 +123,6 @@ export const en: Messages = {
     add: '➕ New style',
     chosen: '✅ Your pictures are drawn in this style.',
     prompt: 'The style’s prompt (tap to copy):',
-    tailNote: 'The bot adds the last sentence itself when your text does not have it: people in the pictures are always adults. Everything else is drawn from your text as written.',
     choose: '✅ Draw in this style',
     sample: '🖼 Sample on the last scene',
     sampleAll: '🖼 All styles on the last scene',

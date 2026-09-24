@@ -495,10 +495,14 @@ last sentence of the prompt, never seen by the describing model. `local/picture-
 - `novel`, the `STYLE` the six steps were measured with;
 - `film`, `graphic` and `watercolor`.
 
-The same file keeps the rules for a reader's own line: 400 characters under a name of 40, at most 10 in a library,
-and followed by `OWN_STYLE_TAIL`, that all people are adults, unless it says so itself. Until 2026-09-24 the tail also
-asked for natural proportions and no lettering; the owner took those off, because they fought a line that wanted a
-look of its own. Every own
+The same file keeps the rules for a reader's own line: 400 characters under a name of 40, at most 10 in a library.
+The line ends the prompt as written. Until 2026-09-24 the bot followed it with a tail of its own: natural proportions
+and no lettering, which the owner took off because they fought a line that wanted a look of its own, and then that
+all people are adults. That sentence went too, the same night: the tester sets styles and tests them by this line,
+and a sentence of the bot's after it changed every picture it was compared on. The age of the people moved into
+their description, where it belongs: the sheet's `look` and a stranger's `look` in the frame give it as young adult,
+middle-aged or elderly (local/illustrate.ts). That part of the prompt is the same in every style of a scene, so it
+does not stand between two styles being compared. Every own
 style is logged as `custom`, never by its words or its id. A sample reuses the frame of the scene's own picture from
 memory, so it costs the picture card alone, and draws it with the story's seed: two samples of one scene differ in
 the style sentence only. The row is `picture_sample`, with `frameReused` beside the fields of `picture`.

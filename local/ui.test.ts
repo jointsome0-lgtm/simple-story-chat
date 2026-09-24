@@ -136,14 +136,14 @@ test('picture styles: a picker of cards, the prompt of each to copy, a library o
   assert.deepEqual(callbacks(off), ['style:film', 'view:style']);
   assert.match(off.text, /пока не включены/);
 
-  // A style of the reader's own: its line, then the sentence the bot adds, and the ways to change or delete it.
+  // A style of the reader's own: its line as written, and the ways to change or delete it.
   state.pictureStyles = { y7: { id: 'y7', name: 'Масло при свечах', line: 'Oil painting, warm candlelight' } };
   state.pictureStyle = 'y7';
   const own = render(state, 'style:y7', semi);
   checkPayload(own, 'style:y7');
-  assert.equal(preText(own), 'Oil painting, warm candlelight. All people are adults.');
+  assert.equal(preText(own), 'Oil painting, warm candlelight');
   assert.match(own.text, /^✍️ Масло при свечах\n✅/);
-  assert.match(own.text, /Последнюю фразу бот добавляет сам/);
+  assert.doesNotMatch(own.text, /adults|взросл/);
   assert.deepEqual(callbacks(own), ['style-sample:y7', 'style-edit:y7', 'view:delete-style:y7', 'view:style']);
   assert.deepEqual(callbacks(render(state, 'style', semi)).slice(-4), ['view:style:y7', 'style-new', 'style-samples', 'view:home']);
   assert.match(render(state, 'style', semi).text, /Сейчас: ✍️ Масло при свечах/);

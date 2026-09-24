@@ -162,11 +162,9 @@ export const ru = {
     // `name` is the name the reader gave a style of their own, already shortened.
     own: (name: string) => `✍️ ${name}`,
     add: '➕ Новый стиль',
-    // A style's card. The prompt under `prompt` stays in English, as the picture model reads it; `tailNote` is shown
-    // under the reader's own styles, whose last sentence is OWN_STYLE_TAIL in local/picture-style.ts.
+    // A style's card. The prompt under `prompt` stays in English, as the picture model reads it.
     chosen: '✅ Картинки рисуются в этом стиле.',
     prompt: 'Промпт стиля (нажми, чтобы скопировать):',
-    tailNote: 'Последнюю фразу бот добавляет сам, если её нет в твоём тексте: люди на картинках всегда взрослые. Остальное рисуется по твоему тексту как есть.',
     choose: '✅ Рисовать в этом стиле',
     sample: '🖼 Пример на последней сцене',
     sampleAll: '🖼 Все стили на последней сцене',
