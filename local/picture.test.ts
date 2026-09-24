@@ -126,7 +126,7 @@ const FRAME = {
 const STYLE_LINE = 'Synthetic test style line, one sentence and no more.';
 const seedText = 'Маяк\n2026-08-02 20:00\nСмотритель встречает лодку. Кодовая фраза: СЕВЕР.';
 type Row = { event: string; code?: string | number } & ErrorDetails;
-type Payload = { chat_id: number; message_id: number; message_ids?: number[]; text: string; rich_message: { markdown: string }; photo: Uint8Array;
+type Payload = { chat_id: number; message_id: number; message_ids?: number[]; text: string; rich_message: { markdown?: string; html?: string }; photo: Uint8Array;
   reply_parameters?: { message_id: number }; caption?: string; reply_markup?: { inline_keyboard: { text: string; callback_data: string }[][] } };
 type Sent = { method: string; payload: Payload };
 // Which of the three calls a request is: a scene streams and has no schema, the other two are told apart by the
@@ -289,8 +289,9 @@ const statuses = (sent: Sent[]) => sent.filter(one => one.method === 'sendMessag
 const told = (sent: Sent[], text: string) => sent.some(one => one.payload.text === text);
 const seedIn = (graph: Graph) => (Object.values(graph).find(node => node.class_type === 'KSampler')!.inputs as { seed: number }).seed;
 const photos = (sent: Sent[]) => sent.filter(one => one.method === 'sendPhoto');
-// The prompt folded under a photo is a rich message like a scene, and the only one that opens with a fold.
-const isNote = (one: Sent) => one.method === 'sendRichMessage' && !!one.payload.rich_message?.markdown.startsWith('<details>');
+// The prompt folded under a photo is a rich message like a scene, and the only one written in HTML.
+const isNote = (one: Sent) => one.method === 'sendRichMessage' && typeof one.payload.rich_message?.html === 'string';
+const htmlOf = (one: Sent) => one.payload.rich_message.html!;
 const notes = (sent: Sent[]) => sent.filter(isNote);
 const idOf = (sent: Sent[], one: Sent) => sent.indexOf(one) + 1;
 
@@ -459,8 +460,8 @@ test('the prompt of every photo is folded under it, with its size in characters 
     const photo = photos(f.sent)[at];
     assert.equal(note.payload.reply_parameters?.message_id, idOf(f.sent, photo), 'the note hangs under its own photo');
     assert.ok(idOf(f.sent, note) > idOf(f.sent, photo), 'and follows it');
-    const summary = note.payload.rich_message.markdown.match(/^<details><summary>(.*)<\/summary>/)![1];
-    assert.equal(note.payload.rich_message.markdown, foldedPrompt(summary, prompt));
+    const summary = htmlOf(note).match(/^<details><summary>(.*)<\/summary>/)![1];
+    assert.equal(htmlOf(note), foldedPrompt(summary, prompt));
     assert.match(summary, /^🖼 Промпт: \d+ токен\S*, из них стиль \d+ · [\d ]+ знак\S*$/u);
     assert.deepEqual(summary.match(/\d[\d ]*/g)!.map(number => Number(number.replace(/ /g, ''))),
       [words(prompt), words(line), [...prompt].length]);
@@ -485,8 +486,8 @@ test('without the picture model\'s tokenizer, or with one that fails, the note g
   await f.start();
   await f.bot.idle();
   const prompt = promptOf(comfy.submitted[0]);
-  const markdown = notes(f.sent)[0].payload.rich_message.markdown;
-  assert.ok(markdown.startsWith(`<details><summary>🖼 Промпт: ${String([...prompt].length).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')} знак`));
+  const html = htmlOf(notes(f.sent)[0]);
+  assert.ok(html.startsWith(`<details><summary>🖼 Промпт: ${String([...prompt].length).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')} знак`));
   const row = f.rows.find(one => one.event === 'picture')!;
   assert.equal(row.promptCharacters, [...prompt].length);
   assert.ok(!('pictureTokens' in row) && !('styleTokens' in row));
@@ -497,7 +498,7 @@ test('without the picture model\'s tokenizer, or with one that fails, the note g
   await broken.bot.idle();
   const kept = broken.rows.find(one => one.event === 'picture')!;
   assert.deepEqual([kept.outcome, kept.promptCharacters, 'pictureTokens' in kept], ['ready', [...prompt].length, false]);
-  assert.match(notes(broken.sent)[0].payload.rich_message.markdown, /^<details><summary>🖼 Промпт: [\d ]+ знак/u);
+  assert.match(htmlOf(notes(broken.sent)[0]), /^<details><summary>🖼 Промпт: [\d ]+ знак/u);
 
   const g = fixture(t, { comfy: root, style: STYLE_LINE, refuseNote: true });
   await g.start();
@@ -510,14 +511,11 @@ test('without the picture model\'s tokenizer, or with one that fails, the note g
   assert.ok(!g.sent.some(one => one.method === 'editMessageText'), 'and the reader is told nothing about it');
 });
 
-test('a folded prompt cannot be closed or unfenced by what the prompt says', () => {
-  assert.equal(foldedPrompt('S', 'A quiet harbour. Painterly.'), '<details><summary>S</summary>\n\n```\nA quiet harbour. Painterly.\n```\n\n</details>');
-  const odd = 'A sign reads ```` and </details> <summary>x</summary>. Done.';
-  const folded = foldedPrompt('S', odd);
-  assert.ok(folded.startsWith('<details><summary>S</summary>\n\n`````\n'), 'the fence is longer than any run of backticks in it');
-  assert.ok(folded.endsWith('\n`````\n\n</details>'));
-  assert.equal(folded.match(/<\/details/g)!.length, 1, 'and only the fold itself closes');
-  assert.ok(folded.includes('<​/details> <summary>x</summary>'));
+test('a folded prompt is plain text a phone wraps, and nothing in it is read as a tag', () => {
+  assert.equal(foldedPrompt('S', 'A quiet harbour. Painterly.'), '<details><summary>S</summary>A quiet harbour. Painterly.</details>');
+  const folded = foldedPrompt('S & T', 'A sign reads </details> <summary>x</summary> & ```code```. Done.');
+  assert.equal(folded, '<details><summary>S &amp; T</summary>A sign reads &lt;/details&gt; &lt;summary&gt;x&lt;/summary&gt; &amp; ```code```. Done.</details>');
+  assert.equal(folded.match(/<\/details>/g)!.length, 1, 'only the fold itself closes');
 });
 
 test('a sample after a restart describes the scene again, and one that fails says so once', async t => {

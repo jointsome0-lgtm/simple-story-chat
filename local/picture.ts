@@ -118,12 +118,12 @@ export function clothesOf(description: Description, worn: Character[]): { clothe
 }
 
 // The prompt of a picture as a rich message folded to one line, `summary`, which the reader opens to read or copy it
-// (docs/telegram-ui.md). The prompt stands in a fenced block, so that nothing in it is read as Markdown: the fence is
-// longer than any run of backticks in the prompt, and a `</details` in it, which a description may hold like any
-// other text, is broken by a zero-width space, so that it cannot close the fold early.
+// (docs/telegram-ui.md). It is Telegram's rich HTML with the prompt as plain text, which wraps to the width of a
+// phone: a code block does not, and the first one sent this way was read by scrolling sideways. Escaping the three
+// characters HTML gives a meaning to keeps anything a description holds from being read as a tag.
 export function foldedPrompt(summary: string, prompt: string): string {
-  const fence = '`'.repeat(Math.max(3, ...[...prompt.matchAll(/`+/g)].map(run => run[0].length + 1)));
-  return `<details><summary>${summary}</summary>\n\n${fence}\n${prompt.replace(/<\/details/gi, '<\u200b/details')}\n${fence}\n\n</details>`;
+  const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return `<details><summary>${escape(summary)}</summary>${escape(prompt)}</details>`;
 }
 
 // One seed per story, from the story's id. Free sampling redraws the world from nothing in every scene; a seed that

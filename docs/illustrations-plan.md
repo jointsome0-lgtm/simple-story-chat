@@ -583,7 +583,7 @@ that such a change is lost only once and not undone later.
 
 The tester asked to see the prompt of each picture and how long it is, to tune a style line against it. Every photo,
 the scene's own and every sample, now gets a reply right after it: a rich message folded to one line that gives the
-prompt's size, which opens to the prompt in a code block (`foldedPrompt`, docs/telegram-ui.md). The prompt goes to
+prompt's size, which opens to the prompt as plain text that wraps on a phone (`foldedPrompt`, docs/telegram-ui.md). The prompt goes to
 the reader of the story it was drawn from and to nobody else; the logs still carry counts alone. The note is sent
 through `sendKept` like the photo, so a deletion of the scene takes it out of the chat with the photo. A note that
 Telegram refuses costs the note alone and leaves a `picture_prompt_unsent` row with Telegram's code.
