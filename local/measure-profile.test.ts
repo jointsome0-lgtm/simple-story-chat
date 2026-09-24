@@ -249,8 +249,16 @@ test('ensure-server.sh starts no server while a measurement marker is valid, and
   const ensure = () => spawnSync('bash', [resolve('gpu/ensure-server.sh')], { encoding: 'utf8', timeout: 30000,
     env: { PATH: machine.path, SIMPLE_CHAT_GPU_DIR: machine.directory } });
   const startedServer = async () => {
-    for (let tries = 0; tries < 200 && !existsSync(machine.cmdline); tries++) await delay(20);
+    const until = Date.now() + 20000;
+    while (!existsSync(machine.cmdline) && Date.now() < until) await delay(20);
     return existsSync(machine.cmdline);
+  };
+  // The fake server exits once it has written its command line, but its supervisor holds server.lock a moment longer,
+  // and a reconnect in that moment rightly starts nothing (`flock -n`: one server per machine). Under load that moment
+  // failed this test, so a reconnect that must start a server first waits for the previous one to let go.
+  const released = async () => {
+    const lock = join(machine.directory, 'server.lock'), until = Date.now() + 20000;
+    while (spawnSync('flock', ['-n', lock, 'true']).status !== 0 && Date.now() < until) await delay(20);
   };
   const now = () => Math.floor(Date.now() / 1000);
 
@@ -265,6 +273,7 @@ test('ensure-server.sh starts no server while a measurement marker is valid, and
   for (const stale of [`pool-3\nuntil=${now() - 1}\n`, 'pool-3\n']) {
     rmSync(machine.cmdline, { force: true });
     writeFileSync(marker, stale);
+    await released();
     const reconnect = ensure();
     assert.equal(reconnect.status, 0);
     assert.match(reconnect.stdout, /expired measurement marker/);
@@ -273,6 +282,7 @@ test('ensure-server.sh starts no server while a measurement marker is valid, and
   }
 
   rmSync(machine.cmdline, { force: true });
+  await released();
   assert.equal(ensure().status, 0);
   assert.ok(await startedServer(), 'without the marker a reconnect must start the default server');
 });
