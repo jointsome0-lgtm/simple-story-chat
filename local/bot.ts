@@ -154,11 +154,13 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       };
       // Only the listed commands: ordinary text may start with an Object.prototype name such as `constructor`.
       action = command !== undefined && Object.hasOwn(commands, command) ? commands[command] : undefined;
-      if (!action && text?.startsWith('/') && state.ui?.input !== 'seed') return { screen: { text: t.notices.unknownCommand } };
     }
-    // Writing a picture style, or the prompt of a variant, ends with any button or command, so that no later message
-    // is kept as one by surprise (/last or /model would otherwise leave the next move to be taken for one).
-    if (action && (state.ui?.input === 'style' || state.ui?.input === 'prompt')) state.ui = null;
+    const unknownCommand = !action && !fileInput && !!text?.startsWith('/');
+    // Writing a picture style, or the prompt of a variant, ends with any button or command, one the bot does not know
+    // too, so that no later message is kept as one by surprise (/last or /model would otherwise leave the next move to
+    // be taken for one).
+    if ((action || unknownCommand) && (state.ui?.input === 'style' || state.ui?.input === 'prompt')) state.ui = null;
+    if (unknownCommand && state.ui?.input !== 'seed') return { screen: { text: t.notices.unknownCommand } };
     if (action === 'cancel') {
       const hadJob = !!state.job;
       state.job = null;

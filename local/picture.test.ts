@@ -1170,6 +1170,30 @@ test('a variant is refused for a scene that is not the reader\'s own or has no p
   assert.ok(!f.rows.some(one => one.event === 'picture_variant'));
 });
 
+test('a command the bot does not know ends the wait for a style or for a prompt, and the next text is a move again', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root });
+  await f.start();
+  await f.bot.idle();
+  const edit = editOf(notes(f.sent)[0]);
+  const [, storyId] = edit.split(':');
+  const scenes = () => Object.keys(f.store.read('1').stories[storyId].nodes).length;
+  for (const wait of ['style-new', edit]) {
+    await f.bot.handle(f.click(wait));
+    await f.bot.handle(f.message('/charcoal'));
+    assert.equal(f.sent.at(-1)!.payload.text, texts('ru').notices.unknownCommand, wait);
+    assert.equal(f.store.read('1').ui, null, wait);
+    const before = scenes();
+    await f.bot.handle(f.message('Осмотреться'));
+    await f.bot.idle();
+    assert.equal(scenes(), before + 1, wait);
+  }
+  assert.deepEqual(Object.keys(f.store.read('1').pictureStyles ?? {}), [], 'no style was kept');
+  assert.ok(!f.rows.some(one => one.event === 'picture_variant'), 'no variant was drawn');
+});
+
 test('a variant stops at the reader\'s next move, is not sent once its scene is deleted, and a failure is told once', async t => {
   const card: { jobMs: number; failing?: boolean } = { jobMs: 60000 };
   const comfy = fakeComfy(card);
