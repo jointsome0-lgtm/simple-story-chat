@@ -374,55 +374,191 @@ record another. So the graph keeps an `EmptyLatentImage` and pins it to the numb
 template's relationship, written out. The two sizes differ, so a Krea frame and an identity frame are not the same
 canvas; the blind page compares Krea against the text-to-image graph, which is.
 
-**The identity runbook, two steps.** The portraits are drawn on the card first, by the same text-to-image graph, so
-that the references are the model's own faces and not photographs of anybody:
+**The identity runbook, 2026-09-25.** One fixed synthetic set,
+[examples/identity-set.ts](../examples/identity-set.ts), written before any card is rented: one story, a sheet of six
+people and eight frames, each frame drawn from two seeds in three arms, 48 pictures on one canvas.
+
+- **A**: the frame's text alone, looks included, as the bot draws a frame today;
+- **B**: the same text, and the portraits of the people the frame binds;
+- **C**: the same portraits, and the whole look of each bound person, build included, replaced by "the person from
+  image N". Clothes, state and action stay, and no arm's text holds a name.
+
+B against A says whether a portrait helps at all; C against B, whether the look can go once the portrait is there.
+**C is the owner's question.** The reference is meant to carry the whole figure, so that a frame need not say every
+time that a man is huge and grim as a barbarian: does the build come from the portrait alone? No frame of the set
+says who is big or small outside the looks, so in C nothing else can carry it.
+
+What the eight frames cover, each on purpose:
+
+- a very muscular, heavy man and a slight, thin woman, and a very tall man beside a very short one. Both pairs appear
+  together in one frame and again in swapped order;
+- two women who look alike on purpose, together and swapped;
+- one, two and four portraits in a frame;
+- a ferryman nobody drew a portrait of, standing between the two women, where the binding stops;
+- three frames that change clothes, and a new pose and place in every frame.
+
+The second seed is an independent repeat, never a second chance. A cell that failed, an OOM above all, stays failed:
+drawing it again until it comes out would be choosing the picture.
 
 ```sh
-npm run image:portraits -- prompts --prompts illustrations/prompts --out illustrations/portrait-prompts
-npm run image:batch -- draw --prompts illustrations/portrait-prompts --out illustrations/portraits \
-  --checkpoints qwen_image_2.1_int8_convrot.safetensors --workflow gpu/image-workflow-qwen.json
-npm run image:portraits -- references --run illustrations/portraits --out illustrations/references.json
-npm run image:batch -- draw --out illustrations/qwen-identity \
-  --checkpoints qwen_image_2.1_int8_convrot.safetensors --workflow gpu/image-workflow-qwen-edit.json \
-  --references illustrations/references.json
-npm run image:batch -- bundles --out illustrations/qwen-identity
+npm run image:identity -- dry-run        # before renting: all of it against a fake ComfyUI, with made-up answers
+npm run image:identity -- set            # writes illustrations/identity/set
+npm run image:portraits -- prompts --prompts illustrations/identity/set --out illustrations/identity/portrait-prompts
+npm run image:batch -- draw --prompts illustrations/identity/portrait-prompts --out illustrations/identity/portraits \
+  --checkpoints qwen_image_2.1_int8_convrot.safetensors --workflow gpu/image-workflow-qwen.json --minutes 10
+npm run image:portraits -- references --run illustrations/identity/portraits \
+  --out illustrations/identity/references.json
+npm run image:identity -- draw --smoke --minutes 10
+npm run image:identity -- report --portraits illustrations/identity/portraits
+npm run image:identity -- draw --minutes <what is left of the hour>
+npm run image:identity -- report --portraits illustrations/identity/portraits
+npm run image:identity -- bundles        # no card needed from here on
+npm run image:identity -- report --portraits illustrations/identity/portraits   # once answers/ holds every bundle
 ```
 
-`--workflow` is read on this computer, not on the card. For Krea that file has to come off the box, because the
-bootstrap renders it with whichever source installed the encoder; the Qwen graphs have one source and one set of
-names, so the repository's copy and the box's are the same file and `gpu/…` is the honest path.
+By default `draw`, `bundles` and `report` work on `illustrations/identity/run`, and `draw` reads
+`illustrations/identity/set` and `illustrations/identity/references.json` and draws with
+[image-workflow-qwen-edit.json](../gpu/image-workflow-qwen-edit.json); `--out`, `--prompts`, `--references` and
+`--workflow` change them. `--workflow` is read on this computer, not on the card. For Krea that file has to come off
+the box, because the bootstrap renders it with whichever source installed the encoder; the Qwen graphs have one
+source and one set of names, so the repository's copy and the box's are the same file and `gpu/…` is the honest
+path.
 
-One portrait per person per story, from that story's character sheet line and nothing else. The frame run binds only
-the people who are in that frame: a face reaches the card once, under the hash of its own bytes, and the sheet name
-picks the file and goes no further — the rule that no name reaches the image model is unchanged. Portraits pass
-through `stripPngMetadata` on the way up like every picture here passes through it on the way down.
+**The portraits carry the figure.** They are drawn on the card first, by the text-to-image graph, so that the
+references are the model's own people and not photographs of anybody. Each portrait is:
 
-**Slot N is person N of the prompt.** Nothing else says whose face is whose: the encoder's tokenizer writes its own
-`<image1> <image2> …` block in front of a prompt that never mentions the references, and the prompt names people in
-the order of `description.people`, which is the order the slots are filled in. So the binding stops at the first
-person of a frame who has no portrait — somebody off the sheet, a stranger of one scene, a sheet person the portrait
-run drew nothing for — rather than skipping them and moving every later face up a slot, which would put a portrait
-against another person's clause and let question 5 read it as one person kept. The people after that stop are drawn
-from their appearance line alone, which is what the whole Krea lane does, and `references` in the index counts what
-was actually bound.
+- one per person, from that person's sheet line and nothing else;
+- the whole figure from head to feet, seen from the front, before a plain grey backdrop;
+- in a neutral standing pose;
+- in plain close-fitting charcoal clothes that show the build, rather than a robe or a coat that would hide it.
 
-Judge it by its own bundle, not by the blind page: `image:blind` keeps one picture per checkpoint per scene, so the
-Qwen frames with references and the Qwen frames without would collapse into one. `npm run image:batch -- bundles`
-over each run asks question 5 — "where several pictures share a person with the same appearance line, is he
-recognised as the same person" — which is exactly the difference being measured. Krea against Qwen is the blind
-page's job, and for that the two run directories go in together: `image:blind -- build --run a,b --out <directory>`.
+No expression is asked for. A face told to be calm argues with a look line that says grim, and a permanent bearing
+is the look's to carry. No frame dresses anybody as the portraits are dressed, so in B and C every appearance also
+asks whether the clothes came from the text or from the portrait. A face reaches the card once, under the hash of its
+own bytes. The sheet name picks the file and goes no further: the rule that no name reaches the image model is
+unchanged. Portraits pass through `stripPngMetadata` on the way up, as every picture here passes through it on the
+way down.
 
-**Timebox: one hour of the session, and it ends on the clock rather than on a result.** Twelve minutes of it are
-the download, which happens beside the other lane's. If the frames are not drawn and bundled within the hour, the
-run stops where it is — the run directory resumes, and what was drawn is still comparable, because a cell is
-recorded with the settings it was drawn at.
+**One binding plan, and slot N is person N of the prompt.** Nothing else says whose face is whose. The encoder's
+tokenizer writes its own `<image1> <image2> …` block in front of the prompt. The prompt names people in the order of
+`description.people`, and the slots are filled in that order. One plan, `bindingPlan` in
+[image-batch.ts](../local/image-batch.ts), says both which portraits a frame sends and whose look arm C drops, so the
+two cannot disagree.
 
-**Not verified without a card**, in the order it would bite: that the int8 transformer and the int8 encoder load
-through `UNETLoader` with `weight_dtype: default` and `CLIPLoader` with `type: qwen_image` (read from the pinned
-source, never run); how long one 25-step 1280x720 picture takes, which decides whether the comparison fits the
-hour at all; whether four reference latents of 1280x704 each plus the encoder plus the transformer stay inside
-32 GB, and whether `QwenImage21Cache` has to be moved off `auto` if they do not; and whether a reference kept at
-its own size helps identity at this frame or whether the references want to be smaller than the picture.
+The plan stops at the first person of a frame who has no portrait, rather than skipping them. That person may be
+somebody off the sheet, a stranger of one scene, or a sheet person the portrait run drew nothing for. Skipping them
+would move every later face up a slot and put a portrait against another person's clause. The people after the stop
+keep their look in every arm, and `references` in the index counts what was actually bound. C's "image N" is the
+slot's number. The swapped frames test whether the model follows that number rather than the order alone.
+
+**One canvas.** All three arms are drawn at 1280x704, the size the portraits reach the encoder at (above). Arm A runs
+the edit graph with every reference slot taken out: the text-to-image graph's own encode node, given no picture, on
+the same canvas. So one run directory holds one graph and one canvas.
+
+The tool refuses portraits of two sizes, a `--size` other than theirs, and a resume under another canvas, other arms
+or other pins. A run is pinned to:
+
+- the files of the manifest;
+- the graph's cache device and resize;
+- the set, the portraits and the seeds;
+- what the server says of itself: ComfyUI, PyTorch and the card.
+
+Smaller portraits are no cheaper way to draw the same frame. Under `resolution: 0` a portrait 640 wide sets a canvas
+640 wide, and a smaller picture is not a faster reference. Smaller portraits and a waist-up crop are each a short
+run of their own after this one, with their own arm A. They are never a full factorial of sizes, crops and costumes.
+
+**What each frame records:**
+
+- the reference sizes after the resize, the number of portraits bound, the arm and the seed;
+- the time from submit to file, with the upload apart from it, and the encode and sampling phases the websocket
+  reports;
+- whether the job loaded its models (`cold`), and whether it was its arm's first;
+- the video memory sampled while the job ran, counting torch's reserved pool as occupied;
+- the system RAM;
+- the partial loads ComfyUI's own log reports. The cache node on `auto` moves what does not fit into RAM rather than
+  failing, so a run without an OOM may still have spilled.
+
+The portrait run, and each arm's first frame, are shown apart from the warm frames. The prompt is counted in text
+tokens as the encoder reads it, or in characters when `tokenizers/` is missing. C's shorter text is fewer words for
+the encoder to read, and no promise of less compute: a reference adds a vision pass and a longer sequence.
+
+**Judging.** `bundles` writes one bundle per arm and seed under `review/`. A transition compares two frames of one
+arm, and a session shown the arms side by side would judge the arms. Bundles and pictures are named by hashes, and
+the key stays in `keys/`. Every frame is shown with `frame_text`, the text with all its looks, whichever arm drew it,
+because arm C's own text would name the arm.
+
+The bundle's `checks.json` is the sheet the gates are counted from:
+
+- **transition**: each sheet person in each pair of frames that follow each other, with `face` and `figure` apart. A
+  face kept on a body that lost its build is `figure: no`;
+- **picture**: each picture's `action`. Where two people of the sheet share the picture, also `apart` (nobody has
+  another's face or figure) and `swap` (nobody took both another's look and clothes);
+- **clothes**: each appearance's `clothes`;
+- **style**: one answer for the bundle.
+
+Question 5 of TASK.md asks about the style and the people apart, and about the face and the figure apart. Each bundle
+goes to a reading session of its own. The session's report ends with its answers as one JSON block, which is saved
+as `answers/bundle-N.json` in the run directory for `report` to count. Bundles are built once, because the answers are
+read against them.
+
+`image:blind` now deals the arms as contenders of their own. It leaves out any question whose pictures were drawn on
+two canvases, and counts them. The identity run is judged by its own bundles all the same.
+
+**The gates, fixed before the paid run.** These are Astra's engineering gates of 2026-09-24, as `report` counts them.
+They are thresholds for the next decision, not a statistical proof: a small experiment is a basis for the next step,
+not a promise of universal identity. Each gate is counted for B and for C against A, over all the arm's bundles. A
+`no` and an `unsure` both count against the picture. An arm with an item unanswered is unscored, never passed.
+
+1. **Recognition.** At least 20 transitions; the set gives 13 per seed, 26 per arm. The face is kept (`face`) in at
+   least 90% of them, and the figure (`figure`) in at least 90%. No picture mixes two people up (`apart`).
+2. **Against A.** The share of transitions that keep both face and figure is at least 15 points above A's. If A is
+   at 90% or above, B cannot pass. C passes then only if all three hold: it is at most 5 points below A, its median
+   prompt is shorter than A's, and it has no more action errors than A.
+3. **Clothes.** The frame's clothes are right in at least 90% of the appearances of sheet people. No picture has a
+   swap, and there are no more action errors than in A. The story's own changes of clothes, in frames 1, 4 and 6,
+   are shown apart and not gated alone: there are eight such appearances per arm, and one miss in eight is already
+   under 90%.
+4. **Time.** The frames counted are those drawn warm in both the arm and A: the same frame and seed, and neither
+   cold nor its arm's first. Over them, the arm's median time is at most 1.5× A's, and its slowest at most 2× A's
+   slowest. The portraits and the first frames are shown, not counted here.
+5. **Memory.** No OOM. Every frame of four references is drawn, sampled while it ran, and leaves at least 2 GiB of
+   the card free at its peak. A frame of four that failed or was never sampled fails the gate. RAM and partial loads
+   are shown, not gated: what they cost is time, and gate 4 counts time.
+
+An arm passes with all five. A run that did not draw every cell is **incomplete**, whatever its gates say. That
+covers a run cut short by the hour and one stopped by an error.
+
+**Timebox: one hour of the session, and it ends on the clock rather than on a result.** The card is rented only with
+the owner's explicit consent and under [the owner's rules](gpu.md#while-the-cards-are-paid-for). The hour runs in
+this order:
+
+1. **The download**: twelve minutes, beside the other lane's.
+2. **The portraits.**
+3. **The smoke**: the frame with one portrait, then the frame with four, at the first seed, in all three arms.
+4. **The main set**: `--minutes` is what is left of the hour, and not more.
+
+If the smoke fails on memory or on geometry, the measurement ends there and the card is let go. The tool refuses the
+main set in that directory until the smoke has passed. A fix, such as the cache node off `auto` or smaller
+portraits, is another run with its own pins.
+
+A run the hour cuts short is recorded as incomplete, and the rental is not extended to finish it. The directory
+resumes on a later rental only under the same pins, the card's included. The bundles, the reading and the report need
+no card.
+
+**Not verified without a card**, in the order it would bite:
+
+- that the int8 transformer and the int8 encoder load through `UNETLoader` with `weight_dtype: default` and
+  `CLIPLoader` with `type: qwen_image` (read from the pinned source, never run);
+- how long one 25-step frame takes, which decides whether 48 frames fit the hour at all;
+- whether four references of 1280x704, plus the encoder, plus the transformer stay inside 32 GB, and how much the
+  cache node on `auto` spills to RAM;
+- whether a frame of A on the edit graph costs what the text-to-image graph's frame costs;
+- whether the websocket messages, `/system_stats` and the log ring are what [fake-comfy.ts](../local/fake-comfy.ts)
+  modelled from the pinned source.
+
+Memory is polled every half second, so the sampler's true peak can fall between two samples. Counting the reserved
+pool as occupied narrows that gap and does not close it. The fake's numbers are made up and say nothing about the
+card.
 
 ## Two constraints that do not bend
 
