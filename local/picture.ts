@@ -268,8 +268,8 @@ export function createIllustrator(config: ImageConfig, deps: {
   const recipeOf = (storyId: string): PictureRecipe => ({ seed: seedOf(storyId), graph: graphId, checkpoint: config.checkpoint,
     width: size.width, height: size.height, steps, cfg, sampler, scheduler });
   // A portrait stands, so it is drawn on the graph's canvas turned upright: the smaller side across and the larger one
-  // down, 720x1280 for a graph of 1280x720. A whole figure in the scenes' landscape frame would get a third of the
-  // pixels. Nothing else of the graph changes.
+  // down, 720x1280 for a graph of 1280x720, which leaves more of the frame to a figure standing full length. Nothing
+  // else of the graph changes.
   const upright = { width: Math.min(size.width, size.height), height: Math.max(size.width, size.height) };
 
   // The scene's own request, once more: the same system prompt and the same history up to this scene, so that a
