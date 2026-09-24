@@ -5,7 +5,7 @@ import { contextStats } from './context.ts';
 import { renderCompaction } from './compact-view.ts';
 import type { CompactionStatus } from './compact-view.ts';
 import type { GpuStatus } from './gpu.ts';
-import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX } from './picture-style.ts';
+import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX, PROMPT_CHARS } from './picture-style.ts';
 import type { Screen } from './telegram.ts';
 import { LANGS, LANGUAGE_BUTTON, REGISTERED, commandSets, isRegistered, langFromTelegram, shownLang, texts } from './text.ts';
 import type { Lang } from './text.ts';
@@ -80,6 +80,7 @@ function screens(lang: Lang | undefined): [string, Screen][] {
     ['new style', { ...library(lang), ui: { input: 'style' } }],
     ['style edit', { ...library(lang), pictureStyles: { y20: OWN }, ui: { input: 'style', styleId: 'y20' } }],
     ['style edit of a deleted style', { ...library(lang), ui: { input: 'style', styleId: 'y404' } }],
+    ['prompt input', { ...library(lang), ui: { input: 'prompt', storyId: 'h2', nodeId: 'n6' } }],
   ];
   for (const [name, state] of states) {
     const details = (route: string): RenderDetails => {
@@ -93,7 +94,7 @@ function screens(lang: Lang | undefined): [string, Screen][] {
     // Crawl what the buttons reach, and add the routes no button leads to in this state.
     const queue = ['home', 'new-seed', 'model', 'language', 'nonsense', 'seed:s404', 'story:h404', 'tree:h404', 'log:h2:b404:0', 'branch:h2:b404',
       'checkpoints:h2:b404:0', 'checkpoint:h2:c404', 'context:h2:c404', 'delete-seed:s404', 'delete-branch:h2:b404', 'delete-seed:s12', 'delete-branch:h2:b8',
-      'style-input', 'style:y404', 'delete-style:y404', 'delete-style:y20', 'sample:film', 'sample:standard', 'sample:y20'];
+      'style-input', 'style:y404', 'delete-style:y404', 'delete-style:y20', 'sample:film', 'sample:standard', 'sample:y20', 'prompt-input'];
     const seen = new Set<string>();
     while (queue.length) {
       const route = queue.shift()!;
@@ -229,7 +230,7 @@ test('command lists: English by default, then one per registered language, GPU c
   for (const set of commandSets(false, true)) assert.ok(set.commands.some(item => item.command === 'style'), String(set.language_code));
 });
 
-test('the style texts name the limits the code keeps', () => {
+test('the style and prompt texts name the limits the code keeps', () => {
   for (const lang of REGISTERED) {
     const t = texts(lang);
     assert.match(t.errors.styleTooLong, new RegExp(`\\b${OWN_STYLE_CHARS}\\b`), lang);
@@ -237,6 +238,8 @@ test('the style texts name the limits the code keeps', () => {
     const note = t.pictureStyle.inputNote(OWN_STYLE_CHARS, OWN_NAME_CHARS);
     assert.ok(note.includes(String(OWN_STYLE_CHARS)) && note.includes(String(OWN_NAME_CHARS)), lang);
     assert.ok(t.pictureStyle.editNote(OWN_STYLE_CHARS).includes(String(OWN_STYLE_CHARS)), lang);
+    assert.match(t.errors.promptTooLong, new RegExp(`\\b${PROMPT_CHARS}\\b`), lang);
+    assert.ok(t.variant.note(PROMPT_CHARS).includes(String(PROMPT_CHARS)), lang);
     // The example is a style as a reader would send it: a name, then the line in English.
     const [name, line, ...rest] = t.pictureStyle.exampleText.split('\n');
     assert.ok(name && [...name].length <= OWN_NAME_CHARS && line && [...line].length <= OWN_STYLE_CHARS && !rest.length, lang);
