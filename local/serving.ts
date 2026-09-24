@@ -168,9 +168,11 @@ export function createServing(config: ServingConfig, { fetch: fetcher = globalTh
     return { ...value, counted: true };
   }
 
-  // After a failed check, the next call checks the service before it runs. The bot starts while the service is down
-  // (local/main.ts), and a wrong model, context or contract must not meet a story once it is back.
-  let unchecked = false;
+  // No text goes to a service that has not passed a check: until one has, and again after one fails or is cancelled,
+  // a count or a generation checks the service before it runs. The agent interface and the probes call it without the
+  // check the bot makes at its start (local/main.ts), and the bot starts while the service is down: either way, a
+  // wrong contract, model or context must meet no story.
+  let unchecked = true;
   const provider = {
     countInput(request: ModelRequest, { signal, priority, holder }: Controls = {}) {
       return operation(signal, 'count_input', async current => {

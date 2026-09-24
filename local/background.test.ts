@@ -183,6 +183,9 @@ test('a socket client cannot pass for a reader: its calls reach the gateway as i
   const heard: string[] = [];
   const gateway = createServing({ baseUrl: 'http://127.0.0.1:8080', model: 'synthetic-model', contextTokens: 65536, apiKey: 'synthetic-key' },
     { fetch: async (url, init) => {
+      // A ready service, for the check the adapter makes before its first call.
+      if (url.endsWith('/v1/state')) return Response.json({ contract: '2', status: 'ready', model: 'synthetic-model', context_tokens: 65536 });
+      if (url.endsWith('/v1/models')) return Response.json({ data: [{ id: 'synthetic-model', max_model_len: 65536 }] });
       const headers = new Headers(init.headers);
       heard.push(`${new URL(url).pathname} ${headers.get('x-simple-serving-class')} ${headers.get('x-simple-serving-scope')}`);
       if (url.endsWith('/input_tokens')) return Response.json({ input_tokens: 10 });

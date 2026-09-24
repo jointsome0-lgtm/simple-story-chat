@@ -13,6 +13,8 @@ type Sent = { path: string; method: string; headers: Headers; body: { [field: st
 type Respond = (path: string, sent: Sent) => Response;
 
 const config = { baseUrl: 'http://127.0.0.1:8080', model: 'test-model', contextTokens: 65536, apiKey: 'synthetic-key', temperature: 0.8 };
+const state = { contract: '2', boot_id: 'synthetic-boot', status: 'ready', model: 'test-model', context_tokens: 65536, drain_generation: 0 };
+const models = { object: 'list', data: [{ id: 'other-model', object: 'model', max_model_len: 65536 }, { id: 'test-model', object: 'model', max_model_len: 65536 }] };
 const request = (): ModelRequest => ({ system: 'Синтетические правила.', messages: [
   { role: 'user', content: 'Синтетический сид.' }, { role: 'user', content: 'Память.' },
   { role: 'assistant', content: '2026-08-02 20:00\n\nСцена.' }, { role: 'user', content: 'Дальше.' },
@@ -36,7 +38,15 @@ function stream(items: (object | string)[], { split = false, done = true } = {})
   } }), { headers: { 'Content-Type': 'text/event-stream' } });
 }
 const answer = (text = 'Готово.') => stream([chunk({ role: 'assistant' }), chunk({ content: text }), chunk({}, 'stop'), closing()]);
-function fixture(respond: Respond = () => answer(), options: Partial<typeof config> & { timeoutMs?: number } = {}) {
+type Fetch = (url: string, init: RequestInit) => Promise<Response>;
+// An adapter checks the service before its first count or generation. A test of something else puts this ready
+// service in front of its fetch, and does not see the check.
+const ready = (fetch: Fetch): Fetch => async (url, init) => {
+  const path = new URL(url).pathname;
+  return path === '/v1/state' ? json(state) : path === '/v1/models' ? json(models) : fetch(url, init);
+};
+// `seeCheck`: the test's `respond` answers the check, and the check is among the calls.
+function fixture(respond: Respond = () => answer(), { seeCheck = false, ...options }: Partial<typeof config> & { timeoutMs?: number; seeCheck?: boolean } = {}) {
   const calls: Sent[] = [];
   const fetch = async (url: string, init: RequestInit) => {
     // The provider sends JSON text.
@@ -46,7 +56,7 @@ function fixture(respond: Respond = () => answer(), options: Partial<typeof conf
     if (sent.path.endsWith('/input_tokens')) return json({ input_tokens: 120 });
     return respond(sent.path, sent);
   };
-  return { calls, provider: createServing({ ...config, ...options }, { fetch }) };
+  return { calls, provider: createServing({ ...config, ...options }, { fetch: seeCheck ? fetch : ready(fetch) }) };
 }
 const whose = (sent: Sent) => [sent.headers.get('x-simple-serving-class'), sent.headers.get('x-simple-serving-scope')];
 
@@ -69,13 +79,11 @@ test('count and generation send one body of the contract\'s fields, with neighbo
     assert.equal(call.options.redirect, 'error');
   }
   // The configured temperature, and the default without one.
-  const g = fixture(undefined, { temperature: 1.1 });
-  await g.provider.generate(trusted());
-  assert.equal(g.calls[0].body!.temperature, 1.1);
-  const { temperature: _, ...unset } = config;
-  let body: Sent['body'] = null;
-  await createServing(unset, { fetch: async (_url, init) => { body = JSON.parse(init.body as string); return answer(); } }).generate(trusted());
-  assert.equal(body!.temperature, 0.8);
+  for (const [temperature, sent] of [[1.1, 1.1], [undefined, 0.8]]) {
+    const g = fixture(undefined, { temperature });
+    await g.provider.generate(trusted());
+    assert.equal(g.calls[0].body!.temperature, sent);
+  }
 });
 
 test('a structured request asks for its schema as json_schema, and memory samples cold', async () => {
@@ -95,8 +103,7 @@ test('a structured request asks for its schema as json_schema, and memory sample
 });
 
 test('every call says whose it is: a reader with a scope of their own, the agent, or internal work', async () => {
-  const f = fixture(path => path === '/v1/state' ? json({ contract: '2', status: 'ready', model: 'test-model', context_tokens: 65536 })
-    : path === '/v1/models' ? json({ data: [{ id: 'test-model', max_model_len: 65536 }] }) : answer());
+  const f = fixture();
   await f.provider.generate(trusted(), { priority: 'foreground', holder: 'synthetic-reader' });
   await f.provider.countInput(request(), { priority: 'foreground', holder: 'synthetic-reader' });
   await f.provider.generate(trusted(), { priority: 'agent', holder: 'synthetic-reader' });
@@ -108,14 +115,6 @@ test('every call says whose it is: a reader with a scope of their own, the agent
   const reader = readerScope('synthetic-reader');
   assert.deepEqual(f.calls.map(whose), [['reader', reader], ['reader', reader], ['agent', 'agent'], ['internal', 'internal'],
     ['internal', 'internal'], ['internal', 'internal']]);
-  // A check reads the service and names no class: only the key goes with it.
-  await f.provider.check({ priority: 'foreground', holder: 'synthetic-reader' });
-  for (const call of f.calls.slice(-2)) {
-    assert.equal(call.method, 'GET');
-    assert.equal(call.body, null);
-    assert.equal(call.headers.get('authorization'), 'Bearer synthetic-key');
-    assert.deepEqual([...call.headers.keys()], ['authorization']);
-  }
   assert.deepEqual(workOf(), { class: 'internal', scope: 'internal' });
 });
 
@@ -136,13 +135,13 @@ test('a reader\'s scope is stable in the process, differs between readers and ne
 test('a person\'s call that names no reader is refused before anything is sent', async t => {
   for (const holder of [undefined, '']) {
     assert.throws(() => workOf({ priority: 'foreground', holder }), { code: 'unnamed_reader' });
-    const f = fixture();
+    const f = fixture(undefined, { seeCheck: true });
     await assert.rejects(f.provider.generate(trusted(), { priority: 'foreground', holder }), { code: 'unnamed_reader', phase: 'generate' });
     await assert.rejects(f.provider.countInput(request(), { priority: 'foreground', holder }), { code: 'unnamed_reader', phase: 'count_input' });
     assert.deepEqual(f.calls, []);
   }
   // Through the scheduler: a person's call outside a turn, or in a turn that names nobody.
-  const f = fixture();
+  const f = fixture(undefined, { seeCheck: true });
   const scheduler = createScheduler(f.provider, { quietMs: 0, pollMs: 100000 });
   t.after(() => scheduler.close());
   await assert.rejects(scheduler.foreground.generate(trusted()), { code: 'unnamed_reader' });
@@ -341,13 +340,13 @@ test('refusals map by their code, keep the status, phase and code, and never car
     assert.equal(f.calls.length, 1);
   }
   // The count is refused the same way, in its own phase.
-  const counting = createServing(config, { fetch: async () => refusal(429, 'queue_full') });
+  const counting = createServing(config, { fetch: ready(async () => refusal(429, 'queue_full')) });
   await assert.rejects(counting.countInput(request()), { code: 'rate_limited', phase: 'count_input', httpStatus: 429, servingCode: 'queue_full' });
   // A code the contract does not list, a body that is not the contract's, and one too large to be an error body.
   for (const [body, servingCode] of [[JSON.stringify({ error: { code: 'PRIVATE_CODE' } }), 'other'], ['PRIVATE_RAW_ERROR', undefined],
     [JSON.stringify({ error: 'PRIVATE_CODE' }), undefined], ['', undefined],
     [JSON.stringify({ padding: 'x'.repeat(5000), error: { code: 'queue_full' } }), undefined]] as const) {
-    const provider = createServing(config, { fetch: async () => new Response(body, { status: 500 }) });
+    const provider = createServing(config, { fetch: ready(async () => new Response(body, { status: 500 })) });
     await assert.rejects(provider.generate(trusted()), (error: ModelError) => {
       assert.deepEqual({ ...error }, { code: 'provider_failed', httpStatus: 500, phase: 'generate', ...(servingCode ? { servingCode } : {}) });
       assert.doesNotMatch(JSON.stringify(error), /PRIVATE/);
@@ -392,18 +391,23 @@ test('a trusted estimate goes without a count, and the usage chunk decides; a co
   assert.equal(early.calls.length, 0);
   // A count that is not one.
   for (const value of [{ input_tokens: 0 }, { input_tokens: 'PRIVATE' }, null, [120]]) {
-    const provider = createServing(config, { fetch: async () => json(value) });
+    const provider = createServing(config, { fetch: ready(async () => json(value)) });
     await assert.rejects(provider.countInput(request()), { code: 'usage_unavailable' });
   }
 });
 
 test('the check reads the state, then the model and its context, and the two must agree', async () => {
-  const state = { contract: '2', boot_id: 'synthetic-boot', status: 'ready', model: 'test-model', context_tokens: 65536, drain_generation: 0 };
-  const models = { object: 'list', data: [{ id: 'other-model', object: 'model', max_model_len: 65536 }, { id: 'test-model', object: 'model', max_model_len: 65536 }] };
-  const checked = (stateAnswer: unknown, modelsAnswer: unknown) => fixture(path => path === '/v1/state' ? json(stateAnswer) : json(modelsAnswer));
+  const checked = (stateAnswer: unknown, modelsAnswer: unknown) =>
+    fixture(path => path === '/v1/state' ? json(stateAnswer) : json(modelsAnswer), { seeCheck: true });
   const f = checked(state, models);
-  assert.deepEqual(await f.provider.check(), { model: 'test-model', contextTokens: 65536 });
+  assert.deepEqual(await f.provider.check({ priority: 'foreground', holder: 'synthetic-reader' }), { model: 'test-model', contextTokens: 65536 });
   assert.deepEqual(f.calls.map(call => `${call.method} ${call.path}`), ['GET /v1/state', 'GET /v1/models']);
+  // A check names no class, whoever asks for it: only the key goes with it.
+  for (const call of f.calls) {
+    assert.equal(call.body, null);
+    assert.equal(call.headers.get('authorization'), 'Bearer synthetic-key');
+    assert.deepEqual([...call.headers.keys()], ['authorization']);
+  }
   // Each answer, and how many routes the check read: a service that is not ready, not of this contract or not serving
   // this model is not asked for its models.
   const cases: [unknown, unknown, string, number][] = [
@@ -424,26 +428,25 @@ test('the check reads the state, then the model and its context, and the two mus
     await assert.rejects(g.provider.check(), { code, phase: 'health' });
     assert.equal(g.calls.length, routes, JSON.stringify([stateAnswer, modelsAnswer]));
   }
-  await assert.rejects(fixture(() => refusal(401, 'unauthorized')).provider.check(),
+  await assert.rejects(fixture(() => refusal(401, 'unauthorized'), { seeCheck: true }).provider.check(),
     { code: 'unauthorized', phase: 'health', httpStatus: 401, servingCode: 'unauthorized' });
-  await assert.rejects(fixture(() => new Response('PRIVATE_RAW_TEXT')).provider.check(), { code: 'invalid_response' });
+  await assert.rejects(fixture(() => new Response('PRIVATE_RAW_TEXT'), { seeCheck: true }).provider.check(), { code: 'invalid_response' });
 });
 
 test('the bot starts while the service is down, and its first call checks the service before it goes on', async () => {
-  const state = { contract: '2', boot_id: 'synthetic-boot', status: 'ready', model: 'test-model', context_tokens: 65536, drain_generation: 0 };
   // At the start (local/main.ts), a service out of reach or not ready lets the bot start; any other answer stops it.
   const refused = Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
   const atStart = [[() => { throw refused; }, true], [() => refusal(503, 'starting'), true], [() => refusal(401, 'unauthorized'), false],
     [() => refusal(500, 'internal_error'), false], [() => json({ ...state, contract: '0' }), false],
     [() => json({ ...state, model: 'other-model' }), false]] as const;
-  for (const [respond, starts] of atStart) assert.equal(unavailable(await fixture(respond).provider.check().catch(error => error)), starts);
+  for (const [respond, starts] of atStart) assert.equal(unavailable(await fixture(respond, { seeCheck: true }).provider.check().catch(error => error)), starts);
   // Down, then back with another model, then back as configured.
   let serving: 'down' | 'other' | 'up' = 'down';
   const f = fixture(path => {
     if (serving === 'down') throw refused;
     const model = serving === 'up' ? 'test-model' : 'other-model';
     return path === '/v1/state' ? json({ ...state, model }) : path === '/v1/models' ? json({ data: [{ id: model, max_model_len: 65536 }] }) : answer();
-  });
+  }, { seeCheck: true });
   await assert.rejects(f.provider.check(), { code: 'provider_failed', transportCode: 'ECONNREFUSED' });
   // A person's call that names no reader is still refused before anything is sent, the check included.
   await assert.rejects(f.provider.generate(trusted(), { priority: 'foreground' }), { code: 'unnamed_reader' });
@@ -459,19 +462,32 @@ test('the bot starts while the service is down, and its first call checks the se
     ['GET /v1/state', 'GET /v1/models', 'POST /v1/chat/completions', 'POST /v1/chat/completions']);
 });
 
-test('cancellation and timeout close the in-flight request', async () => {
+test('cancellation and timeout close the in-flight request, and a check cancelled on the way is made again', async () => {
   const waitForAbort = async (_: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
     init.signal!.addEventListener('abort', () => reject(init.signal!.reason), { once: true });
   });
-  const controller = new AbortController();
-  const provider = createServing(config, { fetch: waitForAbort });
-  const pending = provider.generate(request(), { signal: controller.signal });
-  controller.abort();
-  await assert.rejects(pending, { code: 'cancelled' });
+  // A ready service, except that the call is cancelled while its request on one path is in flight.
+  const sent: string[] = [];
+  let [holds, controller] = ['', new AbortController()];
+  const pass = ready(async () => answer());
+  const provider = createServing(config, { fetch: async (url, init) => {
+    const path = new URL(url).pathname;
+    sent.push(path);
+    if (path !== holds) return pass(url, init);
+    const held = waitForAbort(url, init);
+    controller.abort();
+    return held;
+  } });
+  // Cancelled in its check, a call sends no text; the next one checks again, and is cancelled in its stream.
+  for (const path of ['/v1/state', '/v1/chat/completions']) {
+    [holds, controller] = [path, new AbortController()];
+    await assert.rejects(provider.generate(trusted(), { signal: controller.signal }), { code: 'cancelled' });
+  }
+  assert.deepEqual(sent, ['/v1/state', '/v1/state', '/v1/models', '/v1/chat/completions']);
   const timer = setTimeout(() => {}, 1000); // AbortSignal.timeout does not keep Node alive.
   try {
-    await assert.rejects(createServing({ ...config, timeoutMs: 10 }, { fetch: waitForAbort }).generate(trusted()), { code: 'timeout', phase: 'generate' });
-    await assert.rejects(provider.check({ signal: AbortSignal.timeout(10) }), { code: 'timeout', phase: 'health' });
+    await assert.rejects(createServing({ ...config, timeoutMs: 100 }, { fetch: ready(waitForAbort) }).generate(trusted()), { code: 'timeout', phase: 'generate' });
+    await assert.rejects(createServing(config, { fetch: waitForAbort }).check({ signal: AbortSignal.timeout(10) }), { code: 'timeout', phase: 'health' });
   }
   finally { clearTimeout(timer); }
 });

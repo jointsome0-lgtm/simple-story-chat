@@ -188,7 +188,8 @@ function problemsOf({ call, controls, body: expected, scopes }: Running, incomin
   if (header('authorization') !== `Bearer ${KEY}`) found.push('the key');
   const extra = Object.keys(incoming.headers).filter(name => name.startsWith('x-') && !name.startsWith('x-simple-serving-'));
   if (extra.length) found.push(`headers ${extra.join(', ')}`);
-  if (call === 'check') {
+  // A GET is a check: the step's own, or the one the adapter makes before its first count or generation.
+  if (call === 'check' || incoming.method === 'GET') {
     if (incoming.method !== 'GET' || sent.length || header('x-simple-serving-class') || header('x-simple-serving-scope')) found.push('a check that is not a plain GET');
     return found;
   }
@@ -257,7 +258,7 @@ test('every public step of the pinned cases gives the bot the result the case ex
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => { server.close(); server.closeAllConnections(); });
-  // A new adapter for every exchange: one that has seen a failed check checks the service again before its next call.
+  // A new adapter for every exchange, so that each starts alike: its count or generation comes after its first check.
   const serving = () => createServing({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, model: alias,
     contextTokens: cases.service.context_tokens, apiKey: KEY, timeoutMs: 10000 });
 
@@ -302,8 +303,9 @@ test('every public step of the pinned cases gives the bot the result the case ex
         const { value, failure } = await run(split);
         if (split !== 'case') counted.resplit++;
         assert.deepEqual(running!.problems, [], where);
-        assert.deepEqual(running!.seen, call === 'generate' ? ['POST /v1/chat/completions'] : call === 'count' ? ['POST /v1/chat/completions/input_tokens']
-          : ownRoute(call, step.request) === 'GET /v1/models' || result.error === undefined ? ['GET /v1/state', 'GET /v1/models'] : ['GET /v1/state'], where);
+        const check = ['GET /v1/state', 'GET /v1/models'];
+        assert.deepEqual(running!.seen, call !== 'check' ? [...check, ownRoute(call, step.request)]
+          : ownRoute(call, step.request) === 'GET /v1/models' || result.error === undefined ? check : ['GET /v1/state'], where);
         if (result.error !== undefined) {
           assert.ok(failure, `${where}: no failure`);
           assert.ok(Object.hasOwn(BOT_CODES, result.error), where);
