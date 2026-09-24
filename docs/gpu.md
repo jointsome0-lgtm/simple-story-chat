@@ -40,6 +40,14 @@ Machines in mainland China are not asked for and are dropped from the answer (`d
 
 Offers are sorted by `hour * 2.5 + download`, the cost of the session the instance is billed for, with the measured host first. Offers with fewer than two direct ports are dropped and the count of them is reported: an offer with no ports can only be reached through Vast's proxy. That rule has never yet excluded anything — every 5090 within this price has had ports — so treat it as a guard, not as an explanation of any failure.
 
+### While the cards are paid for
+
+Two cards cost about $1.2 an hour, and Vast bills every minute whether they draw or wait. On the night of 2026-09-23 they waited for long stretches. The agent changed code one change after another, each with tests, a commit and a bot restart, and the cards had nothing to do. An experiment proposed around 23:30 UTC got its script at 01:15 UTC and drew 4 of its 12 pictures before the account's credit ran out. The owner's rules since 2026-09-24:
+
+1. Rent when the work for the cards is ready. Write and dry-run every experiment script before the rental. A dry run needs no card. It assembles the prompts and counts their tokens.
+2. Keep the cards busy while they run. Code, tests and commits that the cards do not need go to a subagent in its own worktree, so the agent feeding the cards never stops to do them.
+3. Watch the idle time. When the cards have stood idle for more than 10 minutes and no work for them is ready, tell the owner and offer to delete them.
+
 ## Preparing the server
 
 After you create the instance, take the address, the SSH port and the user from Vast. Add a local entry to `~/.ssh/config`; the values below are a sample:

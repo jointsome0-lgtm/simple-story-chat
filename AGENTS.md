@@ -21,6 +21,8 @@ Whoever runs the bot brings the model; adapters behind one interface are describ
 [docs/model-providers.md](docs/model-providers.md).
 
 - `npm start` runs the bot from `.env`; `npm run start:gpu` swaps in the model connection from `.env.gpu`.
+- Rented cards bill every minute, working or idle. Before renting, read the owner's rules in
+  [docs/gpu.md](docs/gpu.md#while-the-cards-are-paid-for).
 - `npm test` needs no `npm install`, network, Telegram or model. `npm run check` (after `npm install`) type-checks
   `local/`, verifies the generated `lib/library.js` and the syntax of the cloud files.
 - `local/*.ts` import each other with explicit `.ts` specifiers and use erasable syntax only. More in
