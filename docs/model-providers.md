@@ -87,7 +87,7 @@ Technical sources: [Claude Code streaming output](https://code.claude.com/docs/e
 
 ## simple-serving: our gateway
 
-`local/serving.ts` calls [simple-serving](https://github.com/jointsome0-lgtm/simple-serving), our own gateway in front of vLLM on a rented card. Its API is fixed by its contract v2 (`docs/contract-v2.md` there). The adapter was added on 24 September 2026 and is tested against the contract's shared cases. It has not met a live gateway yet.
+`local/serving.ts` calls [simple-serving](https://github.com/jointsome0-lgtm/simple-serving), our own gateway in front of vLLM on a rented card. Its API is fixed by its contract v2 (`docs/contract-v2.md` there). The adapter was added on 24 September 2026 and is tested against the contract's shared cases and against the real gateway in front of its fake engine. It has not met one in front of vLLM yet.
 
 To point the bot at a gateway, set in `.env`:
 
@@ -113,6 +113,8 @@ Differences from llama.cpp:
 simple-serving runs its own card: the bot never starts or stops it, and refuses to start with this provider while `SIMPLE_CHAT_VAST_INSTANCE_ID` is set. The owner unsets it by hand; `SIMPLE_CHAT_VAST_API_KEY` stays, as `npm run gpu:rent` rents the picture card with it. A reader whose turn finds the service unavailable is told so, without a guess at why or for how long, and `/gpu_start` and `/gpu_pause` say that the model service is started separately. The agent interface calls the gateway directly, as `agent`, even when a model socket answers: that socket would be another bot's. Eval (`--model gpu:<label>`) and the probes with `--direct` call it directly too, as `internal`. The bot sees none of these calls.
 
 The shared cases are pinned in `local/serving-contract/`: an exact copy of `contract/cases-v2.json` and `pin.json` with its commit and SHA-256. `local/serving-contract.test.ts` plays each public step's answer from a fake gateway, and each stream also with its text cut into single characters, joined, and sent a byte at a time: the contract promises no split. To update the cases, copy the file again from a commit of simple-serving, change the pin in the same commit, and correct the counts at the end of the test if they changed. The copy is never edited by hand.
+
+`npm run test:serving` runs the adapter against the real gateway, which simple-serving's dev launcher starts on loopback in front of its fake engine, with the service block of the pinned cases. It checks the state and the contract, a count, a stream with its usage, a refusal, a cancelled stream, and the class and scope the gateway logs for each call, and prints the commits of both checkouts. It needs `SIMPLE_SERVING_CHECKOUT`, a git checkout of simple-serving, and `SIMPLE_SERVING_PYTHON`, the python of an environment with its dependencies (`uv sync` there). Without them it fails rather than pass. It is not part of `npm test`.
 
 ## Codex CLI: `codex-cli`
 
