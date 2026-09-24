@@ -492,26 +492,23 @@ test('the edit graph holds as many faces as a character sheet has people, so one
   assert.deepEqual(referenceSlots(filled).map(slot => filled[slot.loader].inputs.image), faces);
   assert.throws(() => applyToWorkflow(edit, { ...values, references: [...faces, 'g.png'] }),
     { code: 'workflow_too_few_reference_slots' });
-});
-
-// The pinned node's own arithmetic (comfy_extras/nodes_qwen.py:99-168), rounding halves as Python does. The edit
-// graph encodes a reference at its own size, so a 1280x720 portrait sets a 1280x704 canvas, which is the edit graph's.
-test('a reference reaches the encoder at the size the pinned node computes, in multiples of 32', () => {
-  assert.deepEqual(referenceGeometry(1280, 720, 0), [1280, 704]);
-  assert.deepEqual(referenceGeometry(640, 360, 0), [640, 352]);
+  // The canvas is the graph's own latent, never the one the encode node makes of the first reference: a frame drawn
+  // with upright portraits is still 1280x704.
+  const upright = applyToWorkflow(edit, { ...values, references: faces.slice(0, 4) });
+  assert.deepEqual(latentSizeOf(upright), { width: 1280, height: 704 });
+  assert.deepEqual(Object.values(upright).find(node => node.class_type === 'KSampler')!.inputs.latent_image, ['6', 0]);
+  assert.equal(upright['6'].class_type, 'EmptyLatentImage');
+  // A reference reaches the encoder at the size the pinned node computes (comfy_extras/nodes_qwen.py:99-168), in
+  // multiples of 32 and rounding halves as Python does: a 720x1280 portrait at 704x1280.
+  assert.deepEqual(referenceGeometry(720, 1280, 0), [704, 1280]);
   assert.deepEqual(referenceGeometry(1280, 720, 1024), [1376, 768]);
   assert.deepEqual(referenceGeometry(2, 2, 0), [32, 32]);
-  const graph = (file: string): Graph => JSON.parse(readFileSync(resolve(file), 'utf8'));
-  assert.equal(encoderResolution(graph('gpu/image-workflow-qwen-edit.json')), 0);
-  assert.deepEqual(latentSizeOf(graph('gpu/image-workflow-qwen-edit.json')), { width: 1280, height: 704 });
+  assert.equal(encoderResolution(edit), 0);
   // The text-to-image graph takes no reference, so it has no size to hand one at.
-  assert.equal(encoderResolution(graph('gpu/image-workflow-qwen.json')), undefined);
+  assert.equal(encoderResolution(JSON.parse(readFileSync(resolve('gpu/image-workflow-qwen.json'), 'utf8'))), undefined);
   assert.deepEqual(pngSize(pngWithMetadata('{}')), { width: 2, height: 2 });
-});
-
-// The time from one node's start to the next one's is the first node's, and the last runs until the job is over.
-test('a job\'s time is split by the kind of node it was spent in', () => {
-  const edit: Graph = JSON.parse(readFileSync(resolve('gpu/image-workflow-qwen-edit.json'), 'utf8'));
+  // A job's time by the kind of node it was spent in: from one node's start to the next one's is the first node's,
+  // and the last runs until the job is over.
   const ran = [{ node: '11', at: 0 }, { node: '1', at: 100 }, { node: '5', at: 1100 }, { node: '4', at: 1600 },
     { node: '7', at: 1610 }, { node: '8', at: 9610 }, { node: '9', at: 9900 }];
   assert.deepEqual(phasesOf(edit, ran, 10000), { loadMs: 1100, encodeMs: 500, otherMs: 110, sampleMs: 8000, decodeMs: 290 });
@@ -664,19 +661,19 @@ function acceptSocket(request: IncomingMessage, socket: Duplex) {
 // ComfyUI with its websocket, as the picture card runs it: a job's messages go to the socket of the client id it was
 // submitted with, in the order execution.py and main.py send them — `execution_start`, `executed` with the node's
 // output, `execution_success` (or `execution_error`, or `execution_interrupted`), then the record is written, then
-// `executing` with no node. `socket` is what the socket does: 'open' hears the whole job, which waits for it as it
-// would behind a socket quicker than the submit; 'late' opened after the job began and missed its start; 'silent' is
-// accepted and never spoken to; 'closing' hears the start and is hung up on; 'refused' is answered 404. `quietEnd`
-// leaves out the last message, and `statsMs` and `deleteMs` hold /system_stats and the delete back that long. Every
-// /history request that is not one `drawOne` may make, a read or a delete of one job by its id, is kept in `bare`.
-function pushingComfy(options: { socket?: 'open' | 'late' | 'silent' | 'closing' | 'refused';
+// `executing` with no node. `socket` is what the socket does: 'open' hears whatever is sent once it is open; 'late'
+// opened after the job began and missed its start; 'silent' is accepted and never spoken to; 'closing' hears the
+// start and is hung up on; 'refused' is answered 404. `openMs` holds the handshake back that long, and a job submitted
+// meanwhile is told nothing of its start, as by the real server. `quietEnd` leaves out the last message, and `statsMs`
+// and `deleteMs` hold /system_stats and the delete back that long. Every /history request that is not one `drawOne`
+// may make, a read or a delete of one job by its id, is kept in `bare`.
+function pushingComfy(options: { socket?: 'open' | 'late' | 'silent' | 'closing' | 'refused'; openMs?: number;
   outcome?: 'success' | 'error' | 'interrupted'; quietEnd?: boolean; jobMs?: number; statsMs?: number; deleteMs?: number } = {}) {
   const mode = options.socket ?? 'open';
   const records = new Map<string, object>();
   const files = new Set<string>();
   const clientOf = new Map<string, string>();
   const speakers = new Map<string, ReturnType<typeof acceptSocket>>();
-  const waiting = new Map<string, () => void>();
   const upgraded = new Set<Duplex>();
   const seen = { posted: [] as string[], connected: [] as string[], reads: [] as string[], cleared: [] as string[],
     bare: [] as string[], said: [] as { type: string; at: number }[], interrupts: 0 };
@@ -723,8 +720,7 @@ function pushingComfy(options: { socket?: 'open' | 'late' | 'silent' | 'closing'
         const id = `p${++count}`;
         seen.posted.push(clientId);
         clientOf.set(id, clientId);
-        if (mode === 'open' && !speakers.has(clientId)) waiting.set(clientId, () => begin(id));
-        else begin(id);
+        begin(id);
         return json({ prompt_id: id, number: count });
       }
       if (url.pathname === '/system_stats') {
@@ -764,16 +760,17 @@ function pushingComfy(options: { socket?: 'open' | 'late' | 'silent' | 'closing'
   if (mode !== 'refused') server.on('upgrade', (request: IncomingMessage, socket: Duplex) => {
     upgraded.add(socket);
     socket.on('close', () => upgraded.delete(socket));
-    const speaker = acceptSocket(request, socket);
-    const clientId = new URL(request.url!, 'http://127.0.0.1').searchParams.get('clientId') ?? '';
-    seen.connected.push(clientId);
-    if (mode === 'silent') return;
-    // The greeting ComfyUI sends every socket first (server.py:287); it names no job.
-    speaker.send({ type: 'status', data: { status: { exec_info: { queue_remaining: running ? 1 : 0 } }, sid: clientId } });
-    speakers.set(clientId, speaker);
-    socket.on('close', () => { if (speakers.get(clientId) === speaker) speakers.delete(clientId); });
-    waiting.get(clientId)?.();
-    waiting.delete(clientId);
+    setTimeout(() => {
+      if (socket.destroyed) return;
+      const speaker = acceptSocket(request, socket);
+      const clientId = new URL(request.url!, 'http://127.0.0.1').searchParams.get('clientId') ?? '';
+      seen.connected.push(clientId);
+      if (mode === 'silent') return;
+      // The greeting ComfyUI sends every socket first (server.py:287); it names no job.
+      speaker.send({ type: 'status', data: { status: { exec_info: { queue_remaining: running ? 1 : 0 } }, sid: clientId } });
+      speakers.set(clientId, speaker);
+      socket.on('close', () => { if (speakers.get(clientId) === speaker) speakers.delete(clientId); });
+    }, options.openMs ?? 0);
   });
   const over = () => seen.said.find(one => one.type === 'over');
   return { seen, over,
@@ -801,6 +798,14 @@ test('the socket\'s word that a job is over ends the wait at once, and a socket 
   await settled();
   assert.deepEqual(comfy.seen.cleared, ['p1']);
   assert.deepEqual(comfy.seen.bare, []);
+  // A socket that opens late, as one through a tunnel may: the submit waits for it, so the job is still heard from
+  // its start, and the picture knows where its time went and whether its loaders ran.
+  const slow = pushingComfy({ jobMs: 50, openMs: 300 });
+  const slowUrl = await slow.listen();
+  t.after(slow.close);
+  const heard = await drawOne({ baseUrl: slowUrl, timeoutMs: 5000 }, defaultWorkflow(), { pollMs: 10000, waitMs: 20000 });
+  assert.equal(heard.timing?.loaderCacheMiss, true);
+  assert.deepEqual(slow.seen.reads, ['p1']);
 });
 
 test('a socket that opened after the job began is not taken at its word for the outputs: the record is read', async t => {
@@ -836,6 +841,12 @@ test('a socket that is refused, says nothing or hangs up leaves the picture to t
     assert.deepEqual(comfy.seen.cleared, ['p1'], socket);
     assert.deepEqual(comfy.seen.bare, [], socket);
   }
+  // A run that measures the card (`requireSocket`) fails the cell instead, before anything reaches the card.
+  const refused = pushingComfy({ socket: 'refused' });
+  const url = await refused.listen();
+  t.after(refused.close);
+  await assert.rejects(drawOne({ baseUrl: url, timeoutMs: 5000 }, defaultWorkflow(), { requireSocket: true }), { code: 'comfy_socket_unavailable' });
+  assert.deepEqual(refused.seen.posted, []);
 });
 
 test('a slow /system_stats holds up nothing, and its answer joins the video memory when it lands', async t => {
