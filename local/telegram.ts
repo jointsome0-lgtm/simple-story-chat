@@ -108,9 +108,10 @@ export function createChat(api: TelegramApi, chatId: number | string) {
     },
     // A rich message in HTML hung under another one: the folded prompt under a picture (local/picture.ts
     // `foldedPrompt`). Resolves to its own message id, by which a deletion of its scene takes it out of the chat too.
-    async note(html: string, replyTo?: number) {
+    async note(html: string, replyTo?: number, replyMarkup?: InlineKeyboard) {
       const sent = await api('sendRichMessage', { chat_id: chatId, rich_message: { html },
-        ...(replyTo ? { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } } : {}) });
+        ...(replyTo ? { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } } : {}),
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
       return (sent as { message_id?: number } | undefined)?.message_id;
     },
     async final(text: string, replyMarkup?: InlineKeyboard) {
