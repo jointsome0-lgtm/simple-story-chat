@@ -257,7 +257,8 @@ test('every public step of the pinned cases gives the bot the result the case ex
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => { server.close(); server.closeAllConnections(); });
-  const provider = createServing({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, model: alias,
+  // A new adapter for every exchange: one that has seen a failed check checks the service again before its next call.
+  const serving = () => createServing({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, model: alias,
     contextTokens: cases.service.context_tokens, apiKey: KEY, timeoutMs: 10000 });
 
   const counted = { run: 0, gateway: 0, control: 0, unnamed: 0, resplit: 0 };
@@ -280,6 +281,7 @@ test('every public step of the pinned cases gives the bot the result the case ex
       const controls = controlsOf(step.request.headers);
       const run = async (split: Split): Promise<{ value?: unknown; failure?: ModelError }> => {
         running = { step, call, controls, body, split, seen: [], problems: [], scopes };
+        const provider = serving();
         try {
           return { value: call === 'generate' ? await provider.generate(request, controls)
             : call === 'count' ? await provider.countInput(request, controls) : await provider.check() };

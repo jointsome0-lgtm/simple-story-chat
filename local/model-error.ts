@@ -171,3 +171,10 @@ export const reasonCode = (error: unknown): Reason => {
 export function errorCode(error: unknown): string | number | undefined {
   return (error as { code?: string | number }).code;
 }
+
+// A model that is not there now, rather than one that answered wrongly: a service that is starting, draining or asleep
+// (`model_unavailable`), or one out of reach, such as behind a closed tunnel (a transport failure).
+export function unavailable(error: unknown) {
+  const { code, transportCode } = (error ?? {}) as { code?: unknown; transportCode?: unknown };
+  return code === 'model_unavailable' || (code === 'provider_failed' && transportCode !== undefined);
+}

@@ -6,7 +6,7 @@ import { gpuConfig, loadAgentConfig, loadConfig, loadModelConfig } from './confi
 import { createModel } from './model.ts';
 import { createScheduler } from './scheduler.ts';
 import type { ModelError } from './model-error.ts';
-import { safeErrorDetails } from './model-error.ts';
+import { safeErrorDetails, unavailable } from './model-error.ts';
 import type { ModelRequest } from './model.ts';
 
 type Sent = { path: string; method: string; headers: Headers; body: { [field: string]: unknown } | null; options: RequestInit };
@@ -427,6 +427,36 @@ test('the check reads the state, then the model and its context, and the two mus
   await assert.rejects(fixture(() => refusal(401, 'unauthorized')).provider.check(),
     { code: 'unauthorized', phase: 'health', httpStatus: 401, servingCode: 'unauthorized' });
   await assert.rejects(fixture(() => new Response('PRIVATE_RAW_TEXT')).provider.check(), { code: 'invalid_response' });
+});
+
+test('the bot starts while the service is down, and its first call checks the service before it goes on', async () => {
+  const state = { contract: '1', boot_id: 'synthetic-boot', status: 'ready', model: 'test-model', context_tokens: 65536, drain_generation: 0 };
+  // At the start (local/main.ts), a service out of reach or not ready lets the bot start; any other answer stops it.
+  const refused = Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
+  const atStart = [[() => { throw refused; }, true], [() => refusal(503, 'starting'), true], [() => refusal(401, 'unauthorized'), false],
+    [() => refusal(500, 'internal_error'), false], [() => json({ ...state, contract: '0' }), false],
+    [() => json({ ...state, model: 'other-model' }), false]] as const;
+  for (const [respond, starts] of atStart) assert.equal(unavailable(await fixture(respond).provider.check().catch(error => error)), starts);
+  // Down, then back with another model, then back as configured.
+  let serving: 'down' | 'other' | 'up' = 'down';
+  const f = fixture(path => {
+    if (serving === 'down') throw refused;
+    const model = serving === 'up' ? 'test-model' : 'other-model';
+    return path === '/v1/state' ? json({ ...state, model }) : path === '/v1/models' ? json({ data: [{ id: model, max_model_len: 65536 }] }) : answer();
+  });
+  await assert.rejects(f.provider.check(), { code: 'provider_failed', transportCode: 'ECONNREFUSED' });
+  // A person's call that names no reader is still refused before anything is sent, the check included.
+  await assert.rejects(f.provider.generate(trusted(), { priority: 'foreground' }), { code: 'unnamed_reader' });
+  assert.equal(f.calls.length, 1);
+  await assert.rejects(f.provider.generate(trusted()), { code: 'provider_failed', transportCode: 'ECONNREFUSED' });
+  serving = 'other';
+  await assert.rejects(f.provider.countInput(request()), { code: 'unexpected_model' });
+  serving = 'up';
+  f.calls.length = 0;
+  assert.equal((await f.provider.generate(trusted())).text, 'Готово.');
+  assert.equal((await f.provider.generate(trusted())).text, 'Готово.');
+  assert.deepEqual(f.calls.map(call => `${call.method} ${call.path}`),
+    ['GET /v1/state', 'GET /v1/models', 'POST /v1/chat/completions', 'POST /v1/chat/completions']);
 });
 
 test('cancellation and timeout close the in-flight request', async () => {

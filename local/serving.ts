@@ -168,14 +168,22 @@ export function createServing(config: ServingConfig, { fetch: fetcher = globalTh
     return { ...value, counted: true };
   }
 
-  return {
+  // After a failed check, the next call checks the service before it runs. The bot starts while the service is down
+  // (local/main.ts), and a wrong model, context or contract must not meet a story once it is back.
+  let unchecked = false;
+  const provider = {
     countInput(request: ModelRequest, { signal, priority, holder }: Controls = {}) {
-      return operation(signal, 'count_input', async current => (await prepare(request, workOf({ priority, holder }), current)).inputTokens);
+      return operation(signal, 'count_input', async current => {
+        const work = workOf({ priority, holder });
+        if (unchecked) await provider.check({ signal: current });
+        return (await prepare(request, work, current)).inputTokens;
+      });
     },
     // The state first: another contract version may answer the models route differently, and a service that is not
     // ready answers no inference route at all.
     check({ signal }: Controls = {}) {
       return operation(signal, 'health', async current => {
+        unchecked = true;
         const state = await json('/v1/state', null, current);
         if (!isObject(state) || state.contract !== '1') throw new ModelError('unsupported_server');
         if (state.status !== 'ready') throw new ModelError('model_unavailable');
@@ -189,6 +197,7 @@ export function createServing(config: ServingConfig, { fetch: fetcher = globalTh
         const contextTokens = count(listed.max_model_len);
         if (contextTokens === null || count(state.context_tokens) !== contextTokens) throw new ModelError('unsupported_server');
         if (contextTokens < config.contextTokens) throw new ModelError('context_limit');
+        unchecked = false;
         return { model: config.model, contextTokens };
       });
     },
@@ -196,6 +205,7 @@ export function createServing(config: ServingConfig, { fetch: fetcher = globalTh
     generate(request: ModelRequest, { onText = async () => {}, signal, inputLimitTokens, priority, holder }: GenerateControls = {}) {
       return operation(signal, 'generate', async (current): Promise<GenerationResult> => {
         const work = workOf({ priority, holder });
+        if (unchecked) await provider.check({ signal: current });
         const { body, inputTokens: preparedTokens, counted } = await prepare(request, work, current, true);
         prepared.delete(request);
         const limit = Math.min(config.contextTokens - request.maxOutputTokens, inputLimitTokens ?? Infinity);
@@ -267,4 +277,5 @@ export function createServing(config: ServingConfig, { fetch: fetcher = globalTh
       });
     },
   };
+  return provider;
 }
