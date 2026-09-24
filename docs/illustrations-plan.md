@@ -586,7 +586,10 @@ the scene's own and every sample, now gets a reply right after it: a rich messag
 prompt's size, which opens to the prompt as plain text that wraps on a phone (`foldedPrompt`, docs/telegram-ui.md). The prompt goes to
 the reader of the story it was drawn from and to nobody else; the logs still carry counts alone. The note is sent
 through `sendKept` like the photo, so a deletion of the scene takes it out of the chat with the photo. A note that
-Telegram refuses costs the note alone and leaves a `picture_prompt_unsent` row with Telegram's code.
+Telegram refuses costs the note alone and leaves a `picture_prompt_unsent` row with Telegram's code. A photo already
+handed to Telegram when the reader's next move or `/cancel` stops its picture goes out with its note all the same
+(decided 2026-09-25): it is in the chat either way, and of no use there without the prompt it was drawn from. Nothing
+of that picture follows the note, and its row is `ready` with `cancelled: true`.
 
 The size is the prompt's characters and, when the bot is given the picture model's tokenizer (`promptTokens` in the
 illustrator's deps), its tokens as the text encoder reads them, with the style line's share: the count of the whole

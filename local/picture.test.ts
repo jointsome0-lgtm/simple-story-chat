@@ -1276,6 +1276,36 @@ test('a variant stops at the reader\'s next move, is not sent once its scene is 
   assert.deepEqual(g.rows.filter(one => one.event === 'picture_variant').map(row => [row.outcome, row.edited]), [['failed', true]]);
 });
 
+test('a photo already on its way when its picture is stopped goes out with its note, and nothing of the picture follows', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root, holdPhotos: 3 });
+  // The stop is /cancel, whose menu is out before the photo lands: all that is sent after it is the picture's.
+  const stopOnItsWay = async (count: number) => {
+    await until(() => photos(f.sent).length === count, 'the photo to be on its way');
+    await f.bot.handle(f.message('/cancel'));
+    const stopped = f.sent.length;
+    f.release();
+    await f.bot.idle();
+    const after = f.sent.slice(stopped).filter(one => one.method !== 'deleteMessage');
+    assert.equal(after.length, 1);
+    assert.ok(isNote(after[0]));
+    assert.equal(after[0].payload.reply_parameters?.message_id, idOf(f.sent, photos(f.sent)[count - 1]));
+    return after[0];
+  };
+  // The scene's own picture, a variant of it, and a sample.
+  await f.start();
+  const note = await stopOnItsWay(1);
+  await f.bot.handle(f.click(editOf(note)));
+  await f.bot.handle(f.message('A synthetic prompt.'));
+  await stopOnItsWay(2);
+  await f.bot.handle(f.click('style-sample:film'));
+  await stopOnItsWay(3);
+  assert.deepEqual(f.rows.filter(one => /^picture(_variant|_sample)?$/.test(one.event)).map(row => [row.event, row.outcome, row.cancelled]),
+    [['picture', 'ready', true], ['picture_variant', 'ready', true], ['picture_sample', 'ready', true]]);
+});
+
 test('a variant is drawn by the recipe its picture was drawn with, and refused once the graph or the checkpoint changed', async t => {
   const comfy = fakeComfy();
   const root = await comfy.listen();

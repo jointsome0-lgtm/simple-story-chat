@@ -22,6 +22,9 @@
 // A picture in flight is stopped by the reader's next message and by `/cancel`. It is not offered as a button of
 // its own: by the time it is being drawn the job lock is clear, so the bot shows no cancel control, and moving
 // around the menus does not stop it either — it ends with the next scene the reader asks for, or with the photo.
+// A photo already handed to Telegram when the stop comes goes out with its note all the same: it is in the chat
+// either way, and is of no use there without the prompt it was drawn from. Nothing of the picture follows the note,
+// and its row is `ready` with `cancelled: true`.
 //
 // A picture goes with its scene. Every photo is recorded in the reader's library as it is sent, and deleting the
 // scene with its seed or branch deletes the photo from the chat (local/bot.ts); a picture whose scene is deleted
@@ -405,16 +408,16 @@ export function createIllustrator(config: ImageConfig, deps: {
       const { assembled, recipe, drawn } = await drawFrame(storyId, frame, line, signal);
       if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
       // The photo hangs under the scene it belongs to, and the status line goes only once the photo is there; the
-      // prompt follows it, folded.
+      // prompt follows it, folded, even if the picture was stopped while the photo was on its way.
       const photoStarted = now();
       const photo = await sendKept(request, () => chat.photo(drawn.bytes, request.sceneMessageId), recipe);
       const photoMs = Math.max(0, now() - photoStarted);
       await clear();
       const size = promptSize(assembled.prompt, line);
       await sendPrompt(request, photo, assembled.prompt, size, true);
-      log('picture', undefined, { outcome: 'ready', describeMs, imageMs: drawn.totalMs, imageSteps: steps, photoMs,
-        photoBytes: drawn.bytes.length, namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook,
-        clothesChanged: frame.clothesChanged, pictureStyle, ...size, ...elapsed() });
+      log('picture', undefined, { outcome: 'ready', cancelled: signal.aborted, describeMs, imageMs: drawn.totalMs,
+        imageSteps: steps, photoMs, photoBytes: drawn.bytes.length, namesStripped: assembled.namesStripped,
+        withoutLook: assembled.withoutLook, clothesChanged: frame.clothesChanged, pictureStyle, ...size, ...elapsed() });
     } catch (error) {
       const code = errorCode(error);
       const cancelled = signal.aborted || code === 'cancelled' || code === 'scene_gone';
@@ -501,8 +504,9 @@ export function createIllustrator(config: ImageConfig, deps: {
           const photo = await sendKept(request, () => chat.photo(drawn.bytes, undefined, style.caption));
           const size = promptSize(assembled.prompt, style.line);
           await sendPrompt(request, photo, assembled.prompt, size);
-          log('picture_sample', undefined, { outcome: 'ready', frameReused, describeMs, imageMs: drawn.totalMs, imageSteps: steps,
-            namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook, pictureStyle, stylesAsked, ...size });
+          log('picture_sample', undefined, { outcome: 'ready', cancelled: signal.aborted, frameReused, describeMs,
+            imageMs: drawn.totalMs, imageSteps: steps, namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook,
+            pictureStyle, stylesAsked, ...size });
           // The styles after the first are drawn from the frame already in hand.
           frameReused = true;
           describeMs = 0;
@@ -527,7 +531,8 @@ export function createIllustrator(config: ImageConfig, deps: {
     // It goes under the same scene as a photo of its own, with its prompt folded under it and the same button, and
     // leaves the chat with the scene like the first. The language model has no part in it, so its card is neither held
     // nor woken, and the story, its sheet, the clothes and the frame kept for a sample stay as they were. The reader's
-    // next move in the story stops it (local/bot.ts); a failure is told once and never tried again.
+    // next move in the story stops it (local/bot.ts), all but a photo already on its way, which goes out with its note
+    // as any photo does; a failure is told once and never tried again.
     async variant(request: VariantRequest): Promise<void> {
       const { userId, chat, storyId, nodeId, prompt, signal, log } = request;
       if (signal.aborted) return;
@@ -552,8 +557,8 @@ export function createIllustrator(config: ImageConfig, deps: {
         await clear();
         const size = promptSize(prompt);
         await sendPrompt(scene, photo, prompt, size, true);
-        log('picture_variant', undefined, { outcome: 'ready', edited: true, imageMs: drawn.totalMs, imageSteps: recipe.steps, photoMs,
-          photoBytes: drawn.bytes.length, ...size });
+        log('picture_variant', undefined, { outcome: 'ready', cancelled: signal.aborted, edited: true, imageMs: drawn.totalMs,
+          imageSteps: recipe.steps, photoMs, photoBytes: drawn.bytes.length, ...size });
       } catch (error) {
         const code = errorCode(error);
         const cancelled = signal.aborted || code === 'cancelled' || code === 'scene_gone';
