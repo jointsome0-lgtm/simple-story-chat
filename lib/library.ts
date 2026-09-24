@@ -35,7 +35,8 @@ export type Story = {
   // the story's own history and kept beside its memory (docs/illustrations-plan.md, step 3), and the clothes they
   // wore when it was written. A sheet without `outfit` is older and had clothes in `look`; the next picture writes it
   // again. Only the local bot writes it, and only when pictures are switched on; a story without pictures never has it.
-  sheet?: { name: string; look: string; outfit?: string }[];
+  // `edited` marks a look the reader wrote themselves, which that rewrite keeps.
+  sheet?: { name: string; look: string; outfit?: string; edited?: boolean }[];
 };
 export type Job = {
   id: string; storyId: string; branchId: string; head: string | null; memory: string | null; input: string; started: number;
@@ -48,6 +49,9 @@ export type DeleteConfirmation = { confirm: string; input?: undefined };
 // A reader writing a picture style of their own (local/picture-style.ts): their next text message is the style, not a
 // move. With `styleId` it is a new version of that style; without it, a new style.
 export type StyleInput = { input: 'style'; styleId?: string; confirm?: undefined };
+// A reader writing the look of one person of a story's sheet (local/ui.ts, the characters' card): their next text
+// message is the look. The person is the one they opened, by story and name, never whatever is active by then.
+export type LookInput = { input: 'look'; storyId: string; name: string; confirm?: undefined };
 // One of the reader's own picture styles: the name on its button and the line that ends the prompt.
 export type OwnStyle = { id: string; name: string; line: string };
 // A picture the local bot sent into its reader's chat (local/picture.ts): the scene it shows, the message it is, and
@@ -57,7 +61,7 @@ export type SentPicture = { storyId: string; nodeId: string; messageId: number; 
 export type Language = 'ru' | 'en' | 'zh' | 'ko' | 'ja';
 export type Library = {
   version: 1; seq: number; seeds: Record<string, Seed>; stories: Record<string, Story>;
-  active: { storyId: string; branchId: string } | null; job: Job | null; ui: SeedDraft | DeleteConfirmation | StyleInput | null; seen: number[];
+  active: { storyId: string; branchId: string } | null; job: Job | null; ui: SeedDraft | DeleteConfirmation | StyleInput | LookInput | null; seen: number[];
   interrupted?: boolean; language?: Language;
   // The look of this reader's pictures: a preset's key or the id of one of their own styles, and those styles. Only
   // the local bot reads them (local/picture-style.ts), and only for a reader it draws for; without a choice the bot's

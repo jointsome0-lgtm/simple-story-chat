@@ -15,6 +15,8 @@ import type { Messages } from './ru.ts';
 const grouped = (n: number) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 const lastScenes = (n: number | null) => (n === null ? '直近のシーン' : `直近の${n}シーン`);
 const jobs = (n: number | null) => (n === null ? '不明' : String(n));
+const textSize = (label: string, tokens: number | null, chars: number) =>
+  `${label}：${tokens === null ? 'トークン数は不明' : `${grouped(tokens)} トークン`} · ${grouped(chars)} 文字`;
 
 export const ja: Messages = {
   format: {
@@ -61,6 +63,7 @@ export const ja: Messages = {
     next: '次へ ➡️',
     keep: '↩️ 削除しない',
     pictureStyle: '🎨 挿絵のスタイル',
+    characters: '👤 登場人物',
   },
 
   common: {
@@ -155,6 +158,29 @@ export const ja: Messages = {
     drawingSample: '🎨 サンプルを描いています…',
     // `count` is how many styles are drawn, one picture each.
     drawingAll: (count: number) => `🎨 最新のシーンを全${count}スタイルで描いています。画像は1枚ずつ届きます。物語で次の行動をすると描画は止まります。`,
+  },
+
+  characters: {
+    title: story => `👤 登場人物：${story}`,
+    note: 'この物語の挿絵は登場人物をこう描きます。人物をタップすると、説明の全文を見たり、外見を編集したりできます。',
+    none: '登場人物は、物語の最初の挿絵のあとに表示されます。',
+    toStory: '📖 物語へ',
+    cardTitle: (person, story) => `👤 ${person} · ${story}`,
+    look: '外見（タップでコピー）：',
+    lookSize: (tokens, chars) => textSize('外見のテキスト', tokens, chars),
+    clothesOfBranch: branch => `ルート${branch}の最新の挿絵での服装：`,
+    clothesAtStart: 'この物語の挿絵が始まったときの服装：',
+    clothesSize: (tokens, chars) => textSize('服装のテキスト', tokens, chars),
+    noClothes: '服装はまだ記録されていません。',
+    clothesNote: '服装はここでは編集しません。服装は物語の中で変わり、挿絵はシーンから服装を取ります。',
+    sizeNote: '数値はテキストごとに別々に数えたものです。プロンプトの大きさではありません。挿絵を描くときにテキストは短くされ、ほかのテキストとつなげられます。正確な大きさは各挿絵の下にあります。',
+    scope: '外見の変更は、この物語のすべてのルートでこれから描く挿絵に適用されます。物語の本文、記憶、描き終えた挿絵は変わりません。いま描いている挿絵は、前の外見で描かれることがあります。',
+    edit: '✏️ 外見を編集',
+    back: '↩️ 登場人物一覧へ',
+    editTitle: (person, story) => `✏️ 外見：${person} · ${story}`,
+    editNote: max => `新しい外見を1通のメッセージで、${max}文字まで送ってください。顔、髪、体つき、身長、特徴など。服装と名前は書かないでください。服装は物語が変え、名前はそのままです。挿絵のモデルは英語を最もよく理解します。`,
+    nowText: '現在：',
+    backToCard: '↩️ 人物に戻る',
   },
 
   model: {
@@ -528,6 +554,9 @@ export const ja: Messages = {
     sampleBusy: 'シーンはまだ執筆中です。届いてからサンプルを頼んでください。',
     sampleNoScene: 'サンプルは最新のシーンをもとに描きます。物語を始めると、最初のシーンのあとから頼めます。',
     sampleInFlight: 'サンプルを描いているところです。届いたら次のサンプルを頼めます。',
+    lookNeedsText: '外見はテキストで、1通のメッセージで送ってください。変更せずに戻るには「↩️」を押すか、/cancel を送ってください。',
+    lookTooLong: '長すぎます。外見は400文字以内にしてください。短くしてもう一度送ってください。',
+    lookGone: 'この登場人物はもう物語にいないため、外見は保存されていません。/menu を開いてください。',
   },
 
   labels: {

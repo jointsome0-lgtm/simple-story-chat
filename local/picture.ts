@@ -120,6 +120,24 @@ export function clothesOf(description: Description, worn: Character[]): { clothe
   return { clothes, changed };
 }
 
+// The longest look a reader may write for a person of a sheet (local/bot.ts), in characters: the sheet's own are 15-25
+// words, and the room left is the reader's, as for a style of their own.
+export const LOOK_CHARS = 400;
+
+// A sheet written again in place of an older one (`describeFrame`) keeps what the reader made of it: a look they wrote
+// themselves, under the same name or on its own if the new sheet lost the name.
+type SheetEntry = NonNullable<Story['sheet']>[number];
+export function rewrittenSheet(before: SheetEntry[], written: Character[]): SheetEntry[] {
+  const key = (name: string) => name.trim().toLowerCase();
+  const old = new Map(before.map(one => [key(one.name), one]));
+  const kept = written.map(one => {
+    const mine = old.get(key(one.name));
+    return { ...one, ...mine?.edited ? { look: mine.look, edited: true } : {} };
+  });
+  const names = new Set(written.map(one => key(one.name)));
+  return [...kept, ...before.filter(one => one.edited && !names.has(key(one.name))).map(one => ({ ...one, outfit: one.outfit ?? '' }))];
+}
+
 // The prompt of a picture as a rich message folded to one line, `summary`, which the reader opens to read or copy it
 // (docs/telegram-ui.md). It is Telegram's rich HTML with the prompt as plain text, which wraps to the width of a
 // phone: a code block does not, and the first one sent this way was read by scrolling sideways. Escaping the three
@@ -143,6 +161,13 @@ export function encoderTokens(qwen: QwenTokenizer, graph: Graph): ((prompt: stri
   return encoder ? prompt => qwenPromptTokens(qwen, prompt, encoder, { images }).conditioning : undefined;
 }
 
+// How many tokens one text is on its own, as the same encoder tokenizes it: a field of a sheet on the characters' card
+// (local/ui.ts), which is part of a prompt and not one, so that no template is counted with it.
+export function textTokens(qwen: QwenTokenizer, graph: Graph): ((text: string) => number) | undefined {
+  const encoder = textEncoderOf(graph);
+  return encoder ? text => qwenPromptTokens(qwen, text, encoder).prompt : undefined;
+}
+
 export function createIllustrator(config: ImageConfig, deps: {
   store: Store; provider: Provider;
   // The story model as the bot names it in each scene's request stamp, and its context. Without it every description
@@ -156,6 +181,8 @@ export function createIllustrator(config: ImageConfig, deps: {
   // note under each photo and its log row (`promptSize`). Asked once, at startup; without an answer the note gives
   // the prompt's characters alone.
   promptTokens?: (graph: Graph) => ((prompt: string) => number) | undefined;
+  // The same for one field of a sheet on its own (`textTokens`), for the characters' card.
+  textTokens?: (graph: Graph) => ((text: string) => number) | undefined;
 }) {
   const { store, provider, now = Date.now, pollMs } = deps;
   // The graph is read once, here, so that a workflow that is not a ComfyUI API export fails when the bot starts
@@ -174,6 +201,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       { code: 'workflow_unreadable' });
   }
   const promptTokens = deps.promptTokens?.(graph);
+  const fieldTokens = deps.textTokens?.(graph);
   const latent = latentSizeOf(graph);
   if (!latent) throw new Error('SIMPLE_CHAT_IMAGE_WORKFLOW needs a sampler whose latent_image comes from a node with a width and a height');
   const size = latent;
@@ -249,7 +277,7 @@ export function createIllustrator(config: ImageConfig, deps: {
         const written = sheetOf((await askJson(model, trusted(model, sheetRequest(context), anchor), { signal })).value);
         store.mutate(userId, saved => {
           const one = saved.stories[storyId];
-          if (one && (!one.sheet || sheetWithoutOutfits(one.sheet))) one.sheet = written;
+          if (one && (!one.sheet || sheetWithoutOutfits(one.sheet))) one.sheet = rewrittenSheet(one.sheet ?? [], written);
         });
         log('picture_sheet_written', undefined, { sheetCharacters: written.length, sheetRewritten: older });
       }
@@ -434,9 +462,13 @@ export function createIllustrator(config: ImageConfig, deps: {
       if (signal.aborted || !styles.length) return;
       const t = texts(store.read(userId).language);
       const clear = await statusLine(chat, request.status, log);
-      // A frame is reused only for the very scene it was described from, and only while that scene still exists.
+      // A frame is reused only for the very scene it was described from, only while that scene still exists, and only
+      // while its people have the looks it was described with: a look the reader edited since is described anew, and
+      // so is one edited while that frame was still being described.
       const kept = frames.get(userId);
-      let frameReused = kept?.storyId === storyId && kept.nodeId === nodeId && !!store.read(userId).stories[storyId]?.nodes[nodeId];
+      const story = store.read(userId).stories[storyId];
+      let frameReused = kept?.storyId === storyId && kept.nodeId === nodeId && !!story?.nodes[nodeId]
+        && kept.sheet.every(one => story.sheet?.find(other => other.name === one.name)?.look === one.look);
       const stylesAsked = styles.length;
       let describeMs = 0;
       let pictureStyle = styles[0].pictureStyle;
@@ -480,6 +512,12 @@ export function createIllustrator(config: ImageConfig, deps: {
       }
       // As under a scene: over once the delete of its job's record has arrived too.
       await settled();
+    },
+
+    // The tokens of one field of a sheet as the picture model's text encoder takes that text alone, or null without a
+    // tokenizer for it (the characters' card, local/ui.ts).
+    textTokens(text: string): number | null {
+      try { return fieldTokens ? fieldTokens(text) : null; } catch { return null; }
     },
   };
 }

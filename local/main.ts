@@ -7,7 +7,7 @@ import type { GenerationResult, ModelRequest } from './model.ts';
 import { createBot } from './bot.ts';
 import type { Update } from './bot.ts';
 import { fileURLToPath } from 'node:url';
-import { createIllustrator, encoderTokens } from './picture.ts';
+import { createIllustrator, encoderTokens, textTokens } from './picture.ts';
 import { loadTokenizers } from './tokenizer.ts';
 import { render, scenePrefix, sceneKeyboard } from './ui.ts';
 import { commandSets } from './text.ts';
@@ -76,15 +76,17 @@ try {
   // not under the first reader who gets a scene.
   // The note under each picture counts the prompt in the picture model's tokens when `npm run tokenizers` has written
   // the vocabulary (docs/tokenizers.md). A missing or broken file costs the count alone: the note gives characters.
+  // The characters' card counts each field of a sheet the same way, on its own.
   const tokenizers = loadTokenizers(fileURLToPath(new URL('../tokenizers', import.meta.url)));
-  const promptTokens = (graph: Parameters<typeof encoderTokens>[1]) => {
+  const counter = (count: typeof encoderTokens) => (graph: Parameters<typeof encoderTokens>[1]) => {
     try {
       const qwen = tokenizers.qwen();
-      return qwen && encoderTokens(qwen, graph);
+      return qwen && count(qwen, graph);
     } catch (error) { log('tokenizer_unreadable', undefined, error); return undefined; }
   };
-  const illustrator = config.images ? createIllustrator(config.images,
-    { store, provider, model: { model: config.model, provider: config.provider, contextTokens: config.contextTokens }, promptTokens }) : undefined;
+  const illustrator = config.images ? createIllustrator(config.images, { store, provider,
+    model: { model: config.model, provider: config.provider, contextTokens: config.contextTokens },
+    promptTokens: counter(encoderTokens), textTokens: counter(textTokens) }) : undefined;
   if (config.images) log('pictures_configured');
   bot = createBot({ store, api, provider, gpu, illustrator, providerName: config.provider, readSeedFile: createSeedFileReader(config.token, api), render, scenePrefix, sceneKeyboard,
     allowedUsers: config.allowedUsers, ownerId: config.ownerId, maxOutputTokens: config.maxOutputTokens,

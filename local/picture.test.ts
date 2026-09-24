@@ -24,7 +24,7 @@ import type { ErrorDetails } from './model-error.ts';
 import { safeErrorDetails } from './model-error.ts';
 import type { GenerateControls, GenerationResult, ModelRequest, Provider } from './model.ts';
 import { createServing, readerScope } from './serving.ts';
-import { clothesOf, createIllustrator, encoderTokens, foldedPrompt, wornAt } from './picture.ts';
+import { clothesOf, createIllustrator, encoderTokens, foldedPrompt, rewrittenSheet, textTokens, wornAt } from './picture.ts';
 import { PRESETS } from './picture-style.ts';
 import { Store } from './store.ts';
 import type { TelegramPayload } from './telegram.ts';
@@ -196,8 +196,9 @@ type Options = {
   // A model that refuses the sheet with this code, and a Telegram that will not delete a message or send the prompt
   // under a photo.
   sheetError?: string; refuseDelete?: boolean; refuseNote?: boolean;
-  // The picture model's tokenizer, as the note under a photo counts with it.
+  // The picture model's tokenizer, as the note under a photo counts with it, and as the characters' card counts one text.
   promptTokens?: (prompt: string) => number;
+  textTokens?: (text: string) => number;
   // What the model says the scene cost. Above `compactAtTokens` the bot prepares the next compaction while the
   // reader reads; the numbers are the model's own and say nothing about the size of these synthetic scenes.
   usage?: { inputTokens: number; outputTokens: number };
@@ -280,7 +281,7 @@ function fixture(t: TestContext, options: Options = {}) {
   const boot = () => {
     const illustrator = images && createIllustrator(images, { store, provider, pollMs: 2, now: () => Date.now() + (options.offsetMs ?? 0),
       model: { model: options.llama?.illustratorModel ?? 'test-model', provider: 'claude-code', contextTokens: 65536 },
-      promptTokens: () => options.promptTokens });
+      promptTokens: () => options.promptTokens, textTokens: () => options.textTokens });
     const bot = createBot({ store, api, provider, illustrator, allowedUsers: new Set(['1', '2']), maxOutputTokens: 4096,
       render, scenePrefix, sceneKeyboard, model: 'test-model', ownerId: '1',
       compactAtTokens: options.compactAtTokens, keepScenes: options.keepScenes,
@@ -480,6 +481,11 @@ test('the tokens under a picture are what the pinned graph\'s encoder conditions
   assert.equal(counter('gpu/image-workflow.json')(prompt), own + 5);
   assert.equal(counter('gpu/image-workflow-qwen-edit.json')(prompt), own + 8 + 6 * 6);
   assert.equal(encoderTokens(qwen, defaultWorkflow()), undefined);
+  // A text of a characters' card is counted alone: no template and no picture, whatever the graph.
+  for (const file of ['gpu/image-workflow-qwen.json', 'gpu/image-workflow.json', 'gpu/image-workflow-qwen-edit.json']) {
+    assert.equal(textTokens(qwen, JSON.parse(readFileSync(resolve(file), 'utf8')))!(prompt), own, file);
+  }
+  assert.equal(textTokens(qwen, defaultWorkflow()), undefined);
 });
 
 // The prompt under a photo, for the reader to read, copy and tune a style line against (docs/telegram-ui.md).
@@ -797,6 +803,60 @@ test('a sheet from before clothes left it is written again once', async t => {
   const state = f.store.read('1');
   assert.deepEqual(state.stories[state.active!.storyId].sheet, [{ ...SHEET.characters[0] }]);
   assert.equal(photos(f.sent).length, 3);
+});
+
+// A look the reader wrote is theirs: that rewrite keeps it under its name, and keeps the person even when the new sheet
+// does not name them. Only what the reader did not write is taken from the new sheet.
+test('the rewrite of an old sheet keeps the looks the reader wrote', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root });
+  await f.start();
+  await f.bot.idle();
+  f.store.mutate('1', state => {
+    state.stories[state.active!.storyId].sheet = [{ name: 'Элин', look: 'A tall woman with a long braid', edited: true },
+      { name: 'Тарек', look: 'A young man with curly hair', edited: true }, { name: 'Ора', look: 'An old woman in a grey coat' }];
+  });
+  await f.bot.handle(f.message('Осмотреться'));
+  await f.bot.idle();
+  const state = f.store.read('1');
+  assert.deepEqual(state.stories[state.active!.storyId].sheet, [{ ...SHEET.characters[0], look: 'A tall woman with a long braid', edited: true },
+    { name: 'Тарек', look: 'A young man with curly hair', outfit: '', edited: true }]);
+  assert.match(promptOf(comfy.submitted[1]), /A tall woman with a long braid, wearing a grey wool coat/);
+  assert.deepEqual(rewrittenSheet([{ name: ' элин ', look: 'Mine', edited: true }], SHEET.characters),
+    [{ ...SHEET.characters[0], look: 'Mine', edited: true }], 'a name is matched as a reader would, apart from spaces and case');
+});
+
+// The frame kept for samples was described with the looks of that moment; one the reader edited since, or while it was
+// being described, is described again, and the sample draws the look as it is now.
+test('a sample after a look is edited describes the scene again, and the card counts each text with the picture model\'s tokenizer', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const words = (text: string) => text.split(' ').length;
+  const f = fixture(t, { comfy: root, textTokens: words });
+  await f.start();
+  await f.bot.idle();
+  const storyId = f.store.read('1').active!.storyId;
+  await f.bot.handle(f.click(`view:character:${storyId}:0`));
+  assert.match(f.sent.at(-1)!.payload.text, /\nТекст внешности: 8 токенов · 59 знаков\n/);
+  assert.match(f.sent.at(-1)!.payload.text, /\nТекст одежды: 5 токенов · 24 знака\n/);
+  await f.bot.handle(f.click(`look-edit:${storyId}:0`));
+  await f.bot.handle(f.message('A tall woman with a long braid'));
+  assert.equal(comfy.submitted.length, 1, 'an edit draws nothing');
+  await f.bot.handle(f.click('style-sample:film'));
+  await f.bot.idle();
+  assert.deepEqual(f.requests.map(kindOf), ['scene', 'sheet', 'frame', 'frame']);
+  assert.match(promptOf(comfy.submitted[1]), /A tall woman with a long braid, wearing a grey wool coat/);
+  assert.doesNotMatch(promptOf(comfy.submitted[1]), /ash-grey/);
+  assert.equal(f.rows.find(one => one.event === 'picture_sample')!.frameReused, false);
+  // The frame described now has the look as it is, and serves the next sample.
+  await f.bot.handle(f.click('style-sample:graphic'));
+  await f.bot.idle();
+  assert.equal(f.rows.filter(one => one.event === 'picture_sample').at(-1)!.frameReused, true);
+  assert.equal(f.requests.length, 4);
+  assert.doesNotMatch(JSON.stringify(f.rows), /braid/);
 });
 
 test('clothes are carried down one line of the story and never into another', () => {

@@ -8,7 +8,7 @@ import { render, renderContext, scenePrefix, sceneKeyboard } from './ui.ts';
 import { PRESETS } from './picture-style.ts';
 import { texts } from './text.ts';
 
-const ACTION = /^(view:.+|new-seed|save-seed:[^:]+|start:[^:]+|use:[^:]+:[^:]+|fork:[^:]+:[^:]+|remove-seed:[^:]+|remove-branch:[^:]+:[^:]+|continue|cancel|last|compact|gpu:start|gpu:pause|lang:[a-z]{2}|style:[a-z0-9]+|style-new|style-edit:y\d+|remove-style:y\d+|style-sample:[a-z0-9]+|style-samples)$/;
+const ACTION = /^(view:.+|new-seed|save-seed:[^:]+|start:[^:]+|use:[^:]+:[^:]+|fork:[^:]+:[^:]+|remove-seed:[^:]+|remove-branch:[^:]+:[^:]+|continue|cancel|last|compact|gpu:start|gpu:pause|lang:[a-z]{2}|style:[a-z0-9]+|style-new|style-edit:y\d+|remove-style:y\d+|style-sample:[a-z0-9]+|style-samples|look-edit:[^:]+:\d+)$/;
 
 function node(id: string, parent: string | null, time: string, body: string, input = 'Ввод'): SceneNode {
   return { id, parent, input, text: `${time}\n\n${body}`, time, truncated: false, delivery: 'sent' };
@@ -181,6 +181,82 @@ test('picture styles: a picker of cards, the prompt of each to copy, a library o
   state.pictureStyle = 'y1';
   assert.deepEqual(callbacks(render(state, 'style', semi)), [...presets.map(key => `view:style:${key}`), 'style-new', 'style-samples', 'view:home']);
   assert.deepEqual(callbacks(render(state, 'style:x2', semi)), callbacks(render(state, 'style', semi)));
+});
+
+test('characters: beside each story when pictures are drawn, a list, a card with each text counted alone, and a look to write', () => {
+  const state = fixture();
+  const on = { pictures: true, standardStyle: PRESETS.semi };
+  // The way in: beside the story on its seed's and its own screen, and beside the style for the story being played.
+  for (const route of ['home', 'seed:s1', 'story:h2']) {
+    assert.ok(callbacks(render(state, route, on)).includes('view:characters:h2'), route);
+    assert.ok(!callbacks(render(state, route)).includes('view:characters:h2'), route);
+  }
+  assert.deepEqual(render(state, 'home', on).reply_markup!.inline_keyboard.at(-1)!.map(button => button.callback_data),
+    ['view:language', 'view:style', 'view:characters:h2']);
+  // Without a sheet the list says when the people come, and opening it writes nothing.
+  const none = render(state, 'characters:h2', on);
+  checkPayload(none, 'characters:h2');
+  assert.match(none.text, /^👤 Персонажи: «Маяк» · история 1\n\nПерсонажи появятся в истории после первой иллюстрации\.$/);
+  assert.deepEqual(callbacks(none), ['view:story:h2', 'view:home']);
+  assert.equal(state.stories.h2.sheet, undefined);
+  state.seeds.s12 = { id: 's12', title: 'Пусто', startTime: '2026-08-02 20:00', text: 'Ничего.' };
+  assert.match(render(state, 'seed:s12', on).text, /Персонажи появятся в истории после первой иллюстрации/);
+  assert.doesNotMatch(render(state, 'seed:s12').text, /Персонажи/);
+
+  const look = 'Tall, short grey hair, a scar on the left cheek.';
+  state.stories.h2.sheet = [
+    { name: 'Мира', look, outfit: 'a dark wool coat' },
+    { name: 'Олег', look: 'A broad-shouldered man with a shaved head.', outfit: 'a fisherman sweater' },
+  ];
+  // The first scene of the branch being played dressed Мира otherwise than the sheet did.
+  state.stories.h2.nodes.n5.clothes = { Мира: 'a yellow raincoat' };
+  const list = render(state, 'characters:h2', on);
+  checkPayload(list, 'characters:h2 with a sheet');
+  assert.match(list.text, /\n1\. Мира — Tall, short grey hair, a scar on the left cheek\.\n2\. Олег — A broad-shouldered/);
+  assert.deepEqual(callbacks(list), ['view:character:h2:0', 'view:character:h2:1', 'view:story:h2', 'view:home']);
+
+  // The card: the whole look and clothes, each in its own block to copy, each counted on its own and never summed.
+  const words = (text: string) => text.split(' ').length;
+  const card = render(state, 'character:h2:0', { ...on, textTokens: words });
+  checkPayload(card, 'character:h2:0');
+  assert.match(card.text, /^👤 Мира · «Маяк» · история 1\n/);
+  assert.match(card.text, /\nТекст внешности: 10 токенов · 48 знаков\n/);
+  assert.match(card.text, /\nОдежда на последней картинке ветки «Начало»:\na yellow raincoat\nТекст одежды: 3 токена · 17 знаков\n/);
+  assert.doesNotMatch(card.text, /13 токенов|dark wool coat/);
+  assert.match(card.text, /не размер промпта/);
+  assert.match(card.text, /на следующие картинки всех веток этой истории/);
+  assert.deepEqual(card.entities!.map(entity => card.text.slice(entity.offset, entity.offset + entity.length)), [look, 'a yellow raincoat']);
+  assert.deepEqual(callbacks(card), ['look-edit:h2:0', 'view:characters:h2']);
+  // Without a counter, or with one that fails, the tokens are unknown and the characters stay.
+  for (const details of [on, { ...on, textTokens: () => { throw new Error('vocabulary'); } }, { ...on, textTokens: () => null }]) {
+    assert.match(render(state, 'character:h2:0', details).text, /\nТекст внешности: токены неизвестны · 48 знаков\n/);
+  }
+  // Someone the scenes did not dress yet wears the sheet's clothes, and so does everybody in a story not being played.
+  assert.match(render(state, 'character:h2:1', on).text, /\nОдежда, с которой начались картинки этой истории:\na fisherman sweater\n/);
+  state.active = null;
+  assert.match(render(state, 'character:h2:0', on).text, /\nОдежда, с которой начались картинки этой истории:\na dark wool coat\n/);
+  state.active = { storyId: 'h2', branchId: 'b3' };
+  // A sheet from before clothes left it has none to show.
+  state.stories.h2.sheet[1] = { name: 'Олег', look: 'A broad-shouldered man with a shaved head.' };
+  assert.match(render(state, 'character:h2:1', on).text, /\nОдежда пока не записана\.\n/);
+  // A person who is not on the sheet is the list; a story that is gone is stale.
+  assert.deepEqual(callbacks(render(state, 'character:h2:7', on)), callbacks(list));
+  assert.deepEqual(callbacks(render(state, 'character:h2:x', on)), callbacks(list));
+  checkPayload(render(state, 'character:h99:0', on), 'character:h99:0');
+  assert.ok(callbacks(render(state, 'characters:h99', on)).includes('view:home'));
+
+  // Writing a look: only while the bot waits for one, with the look as it is to copy and the limit named.
+  assert.deepEqual(callbacks(render(state, 'look-input', on)), callbacks(render(state, 'home', on)));
+  state.ui = { input: 'look', storyId: 'h2', name: 'Мира' };
+  const input = render(state, 'look-input', on);
+  checkPayload(input, 'look-input');
+  assert.match(input.text, /^✏️ Внешность: Мира · «Маяк» · история 1\n\n.*до 400 знаков/);
+  assert.equal(preText(input), look);
+  assert.deepEqual(callbacks(input), ['view:character:h2:0']);
+  state.ui = { input: 'look', storyId: 'h2', name: 'Нет такой' };
+  assert.deepEqual(callbacks(render(state, 'look-input', on)), callbacks(render(state, 'home', on)));
+  state.ui = null;
+  crawl(state, on);
 });
 
 test('empty library guides to seed creation', () => {

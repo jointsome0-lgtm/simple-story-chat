@@ -6,6 +6,8 @@ const count = (n: number, one: string, many: string, shown = String(n)) => `${sh
 const grouped = (n: number) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 const lastScenes = (n: number | null) => (n === null ? 'the latest scenes' : `the latest ${count(n, 'scene', 'scenes')}`);
 const jobs = (n: number | null) => (n === null ? 'unknown' : String(n));
+const textSize = (label: string, tokens: number | null, chars: number) =>
+  `${label}: ${tokens === null ? 'tokens unknown' : count(tokens, 'token', 'tokens', grouped(tokens))} · ${count(chars, 'character', 'characters', grouped(chars))}`;
 
 export const en: Messages = {
   format: {
@@ -52,6 +54,7 @@ export const en: Messages = {
     next: 'Next ➡️',
     keep: '↩️ Keep it',
     pictureStyle: '🎨 Picture style',
+    characters: '👤 Characters',
   },
 
   common: {
@@ -146,6 +149,29 @@ export const en: Messages = {
     drawingSample: '🎨 Drawing a sample…',
     // `count` is how many styles are drawn, one picture each.
     drawingAll: (count: number) => `🎨 Drawing the last scene in all ${count} styles. The pictures arrive one by one; your next move in the story stops the drawing.`,
+  },
+
+  characters: {
+    title: story => `👤 Characters: ${story}`,
+    note: 'This is how the pictures of this story draw them. Tap a character to see the whole description or edit the look.',
+    none: 'Characters appear in a story after its first illustration.',
+    toStory: '📖 To the story',
+    cardTitle: (person, story) => `👤 ${person} · ${story}`,
+    look: 'Look (tap to copy):',
+    lookSize: (tokens, chars) => textSize('Look text', tokens, chars),
+    clothesOfBranch: branch => `Clothes in the latest picture of the branch ${branch}:`,
+    clothesAtStart: 'Clothes the pictures of this story started with:',
+    clothesSize: (tokens, chars) => textSize('Clothes text', tokens, chars),
+    noClothes: 'No clothes are recorded yet.',
+    clothesNote: 'Clothes are not edited here: the story itself changes them, and the pictures take them from the scenes.',
+    sizeNote: 'The numbers are for each text on its own. They are not the size of a prompt: in a picture the texts are shortened and joined with others. The exact size is under each picture.',
+    scope: 'A change to the look applies to the next pictures of every branch of this story. The story text, its memory and the pictures already drawn stay as they are, and a picture being drawn right now may still come out the old way.',
+    edit: '✏️ Edit the look',
+    back: '↩️ Back to characters',
+    editTitle: (person, story) => `✏️ Look: ${person} · ${story}`,
+    editNote: max => `Send the new look in one message, up to ${max} characters: face, hair, build, height, marks. Leave out the clothes and the name: the story changes the clothes, and the name stays. The picture model understands English best.`,
+    nowText: 'Now:',
+    backToCard: '↩️ Back to the character',
   },
 
   model: {
@@ -519,6 +545,9 @@ export const en: Messages = {
     sampleBusy: 'The scene is still being written. Ask for a sample once it arrives.',
     sampleNoScene: 'A sample is drawn from your last scene. Start a story, and after its first scene you can ask for one.',
     sampleInFlight: 'Already drawing a sample. You can ask for the next one once it arrives.',
+    lookNeedsText: 'Send the look as text, in one message. To leave without a change, tap “↩️” or send /cancel.',
+    lookTooLong: 'Too long: a look has to fit in 400 characters. Shorten it and send it again.',
+    lookGone: 'That character is no longer in the story, so the look was not saved. Open /menu.',
   },
 
   labels: {

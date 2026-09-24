@@ -19,6 +19,7 @@ import { renderCompaction } from './compact-view.ts';
 import type { CompactionStatus } from './compact-view.ts';
 import type { GpuController } from './gpu.ts';
 import type { Illustrator, PictureRequest, SampleRequest } from './picture.ts';
+import { LOOK_CHARS } from './picture.ts';
 import type { Log } from './model-error.ts';
 import { errorCode, member, safeErrorDetails } from './model-error.ts';
 import type { GenerationResult, Provider } from './model.ts';
@@ -145,9 +146,9 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       action = command !== undefined && Object.hasOwn(commands, command) ? commands[command] : undefined;
       if (!action && text?.startsWith('/') && state.ui?.input !== 'seed') return { screen: { text: t.notices.unknownCommand } };
     }
-    // Writing a picture style ends with any button or command, so that no later message is kept as a style by
+    // Writing a picture style or a look ends with any button or command, so that no later message is kept as one by
     // surprise (/last or /model would otherwise leave the next move to be taken for one).
-    if (action && state.ui?.input === 'style') state.ui = null;
+    if (action && (state.ui?.input === 'style' || state.ui?.input === 'look')) state.ui = null;
     if (action === 'cancel') {
       const hadJob = !!state.job;
       state.job = null;
@@ -266,6 +267,29 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       if (!editing) state.pictureStyle = styleId;
       state.ui = null;
       return { screen: render(state, `style:${styleId}`, pictureInfo) };
+    }
+    // The people of a story's sheet (local/ui.ts, the characters' screens), by the story and their place on it. A look
+    // is written the way a style is.
+    if (action?.startsWith('look-edit:')) {
+      const [, storyId, index] = action.split(':');
+      const person = ID.story.test(storyId) && /^\d+$/.test(index) ? state.stories[storyId]?.sheet?.[Number(index)] : undefined;
+      if (!person) throw refuse(t, 'staleButton');
+      state.ui = { input: 'look', storyId, name: person.name };
+      return { screen: render(state, 'look-input', pictureInfo) };
+    }
+    // While a look is being written, text is the look: one line, whatever the lines it was sent in. The person is
+    // looked for again by name, since the story may be gone or its sheet written anew in the meantime.
+    if (state.ui?.input === 'look' && !action) {
+      const look = (text ?? '').replace(/\s+/g, ' ').trim();
+      if (!look) throw refuse(t, 'lookNeedsText');
+      if ([...look].length > LOOK_CHARS) throw refuse(t, 'lookTooLong');
+      const { storyId, name } = state.ui;
+      state.ui = null;
+      const sheet = state.stories[storyId]?.sheet ?? [];
+      const index = sheet.findIndex(one => one.name === name);
+      if (index < 0) throw refuse(t, 'lookGone');
+      sheet[index] = { ...sheet[index], look, edited: true };
+      return { screen: render(state, `character:${storyId}:${index}`, pictureInfo) };
     }
     if (action === 'last') return { savedText: last(state) };
     if (action === 'new-seed') {
@@ -533,7 +557,8 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         // already exists keeps what it has; without a stored language it stays Russian (text.ts).
         if (state.language === undefined && !state.seen.length && !state.seq) setLanguage(state, langFromTelegram(from?.language_code));
         state.seen = [...state.seen.slice(-511), update.update_id];
-        const pictureInfo = { pictures: illustrator?.enabledFor(userId) ?? false, standardStyle: illustrator?.standardStyle };
+        const pictureInfo = { pictures: illustrator?.enabledFor(userId) ?? false, standardStyle: illustrator?.standardStyle,
+          textTokens: illustrator?.textTokens };
         try { return prepare(state, update, fileInput, pictureInfo); }
         catch (error) {
           if (error instanceof UserError) return { screen: { text: errorText(texts(state.language), error) } };

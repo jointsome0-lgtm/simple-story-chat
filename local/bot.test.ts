@@ -1122,3 +1122,68 @@ test('a reader keeps a library of picture styles: writes one, finds it chosen, e
   assert.equal(shown(), texts('ru').errors.sampleOff);
   assert.equal(drawn.length, 2);
 });
+
+test('a reader writes the look of one person of a story: that person only, found again on save, and any button leaves', async t => {
+  const f = fixture(t, { illustrator: sketchbook([]) });
+  await f.start();
+  const calls = f.requests.length;
+  const shown = () => f.sent.at(-1)!.payload.text;
+  const state = () => f.store.read('1');
+  const storyId = state().active!.storyId;
+  const mira = { name: 'Мира', look: 'A tall woman with short grey hair.', outfit: 'a dark wool coat' };
+  f.store.mutate('1', library => { library.stories[storyId].sheet = [mira,
+    { name: 'Олег', look: 'A broad-shouldered man with a shaved head.', outfit: 'a fisherman sweater' }]; });
+
+  // The next message after the edit button is the look, on one line, and never a move in the story.
+  await f.bot.handle(f.click(`view:character:${storyId}:1`));
+  assert.match(shown(), /^👤 Олег · «Маяк» · история 1\n/);
+  await f.bot.handle(f.click(`look-edit:${storyId}:1`));
+  assert.deepEqual(state().ui, { input: 'look', storyId, name: 'Олег' });
+  assert.match(shown(), /до 400 знаков/);
+  await f.bot.handle(f.message('A broad-shouldered man\nwith a shaved head  and a broken nose.'));
+  assert.deepEqual(state().stories[storyId].sheet, [mira, { name: 'Олег', look: 'A broad-shouldered man with a shaved head and a broken nose.',
+    outfit: 'a fisherman sweater', edited: true }]);
+  assert.equal(state().ui, null);
+  assert.match(shown(), /^👤 Олег · «Маяк» · история 1\n/);
+  assert.equal(f.requests.length, calls, 'no scene was asked for');
+
+  // What does not fit is refused and the bot keeps waiting; any button or command leaves without a change.
+  await f.bot.handle(f.click(`look-edit:${storyId}:0`));
+  await f.bot.handle(f.message('y'.repeat(401)));
+  assert.equal(shown(), texts('ru').errors.lookTooLong);
+  await f.bot.handle(f.message(' \n '));
+  assert.equal(shown(), texts('ru').errors.lookNeedsText);
+  await f.bot.handle(f.message(undefined));
+  assert.equal(shown(), texts('ru').errors.lookNeedsText);
+  assert.deepEqual(state().ui, { input: 'look', storyId, name: 'Мира' });
+  await f.bot.handle(f.click('view:home'));
+  assert.equal(state().ui, null);
+  await f.bot.handle(f.click(`look-edit:${storyId}:0`));
+  await f.bot.handle(f.message('/last'));
+  assert.equal(state().ui, null);
+  assert.deepEqual(state().stories[storyId].sheet![0], mira);
+  // A look at the limit is kept whole.
+  await f.bot.handle(f.click(`look-edit:${storyId}:0`));
+  await f.bot.handle(f.message(`${'x'.repeat(399)}.`));
+  assert.equal(state().stories[storyId].sheet![0].look, `${'x'.repeat(399)}.`);
+
+  // The input keeps its person: once the sheet is written anew without them, the look has nowhere to go.
+  await f.bot.handle(f.click(`look-edit:${storyId}:0`));
+  f.store.mutate('1', library => { library.stories[storyId].sheet = [{ name: 'Олег', look: 'Another man.', outfit: '' }]; });
+  await f.bot.handle(f.message('A tall woman with a braid.'));
+  assert.equal(shown(), texts('ru').errors.lookGone);
+  assert.equal(state().ui, null);
+  assert.deepEqual(state().stories[storyId].sheet, [{ name: 'Олег', look: 'Another man.', outfit: '' }]);
+  assert.equal(f.requests.length, calls);
+
+  // A button for nobody on the sheet is stale, and so is one of another reader, whose library has no such person.
+  for (const data of [`look-edit:${storyId}:5`, `look-edit:${storyId}:x`, 'look-edit:h404:0', 'look-edit:__proto__:0']) {
+    await f.bot.handle(f.click(data));
+    assert.equal(shown(), texts('ru').errors.staleButton, data);
+  }
+  await f.start(2);
+  await f.bot.handle(f.click(`look-edit:${storyId}:0`, 2));
+  assert.equal(shown(), texts('ru').errors.staleButton);
+  assert.equal(f.store.read('2').ui, null);
+  assert.equal(state().stories[storyId].sheet![0].look, 'Another man.');
+});
