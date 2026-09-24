@@ -30,6 +30,7 @@
     "image:batch": "node local/image-batch.ts",
     "image:portraits": "node local/image-portraits.ts",
     "image:blind": "node local/blind-review.ts",
+    "image:identity": "node local/image-identity.ts",
     "agent": "node local/agent-cli.ts",
     "agent:gpu": "node --env-file=.env.gpu local/agent-cli.ts",
     "mcp": "node local/mcp.ts",
