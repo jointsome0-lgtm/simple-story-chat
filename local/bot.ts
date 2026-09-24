@@ -141,6 +141,9 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     if (fileInput?.error) throw fileInput.error;
     if (fileInput && (state.ui?.input !== 'seed' || state.ui.draftId !== fileInput.draftId)) throw refuse(t, 'draftChanged');
     const text = fileInput ? fileInput.text : messageText(update.message);
+    // Writing a picture style or a look ends with any button or command, an unknown command included, so that no later
+    // message is kept as one by surprise (/last, /model or /typo would otherwise leave the next move to be taken for one).
+    if ((action || text?.startsWith('/')) && (state.ui?.input === 'style' || state.ui?.input === 'look')) state.ui = null;
     if (!action && !fileInput) {
       const command = text?.split(/[\s@]/)[0];
       const current = state.active;
@@ -155,9 +158,6 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       action = command !== undefined && Object.hasOwn(commands, command) ? commands[command] : undefined;
       if (!action && text?.startsWith('/') && state.ui?.input !== 'seed') return { screen: { text: t.notices.unknownCommand } };
     }
-    // Writing a picture style or a look ends with any button or command, so that no later message is kept as one by
-    // surprise (/last or /model would otherwise leave the next move to be taken for one).
-    if (action && (state.ui?.input === 'style' || state.ui?.input === 'look')) state.ui = null;
     if (action === 'cancel') {
       const hadJob = !!state.job;
       state.job = null;

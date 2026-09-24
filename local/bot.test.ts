@@ -1201,3 +1201,36 @@ test('a reader writes the look of one person of a story: that person only, found
   assert.equal(f.store.read('2').ui, null);
   assert.equal(state().stories[storyId].sheet![0].look, 'Another man.');
 });
+
+// Writing a style or a look ends with any command, one the bot does not know included: otherwise the next message,
+// meant as a move in the story, would be taken for a style or a look.
+async function unknownCommandEnds(t: TestContext, begin: (f: ReturnType<typeof fixture>, storyId: string) => Promise<void>, text: string) {
+  const f = fixture(t, { illustrator: sketchbook([]) });
+  await f.start();
+  await f.bot.idle();
+  const storyId = f.store.read('1').active!.storyId;
+  await begin(f, storyId);
+  assert.notEqual(f.store.read('1').ui, null);
+  await f.bot.handle(f.message('/typo'));
+  assert.equal(f.sent.at(-1)!.payload.text, texts('ru').notices.unknownCommand);
+  assert.equal(f.store.read('1').ui, null);
+  await f.bot.handle(f.message(text));
+  await f.bot.idle();
+  const { active, stories } = f.store.read('1');
+  assert.equal(stories[storyId].nodes[stories[storyId].branches[active!.branchId].head!].input, text, 'the message was a move');
+  return f.store.read('1');
+}
+
+test('an unknown command ends the writing of a style, and the next message is a move in the story', async t => {
+  const state = await unknownCommandEnds(t, f => f.bot.handle(f.click('style-new')), 'Watercolor with soft washes');
+  assert.deepEqual(state.pictureStyles ?? {}, {});
+});
+
+test('an unknown command ends the writing of a look, and the next message is a move in the story', async t => {
+  const mira = { name: 'Мира', look: 'A tall woman with short grey hair.', outfit: '' };
+  const state = await unknownCommandEnds(t, async (f, storyId) => {
+    f.store.mutate('1', library => { library.stories[storyId].sheet = [mira]; });
+    await f.bot.handle(f.click(`look-edit:${storyId}:0:${personTag('Мира')}`));
+  }, 'A tall woman with a braid.');
+  assert.deepEqual(state.stories[state.active!.storyId].sheet, [mira]);
+});
