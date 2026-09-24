@@ -4,7 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 
 export type Env = NodeJS.Dict<string>;
 export type ModelConfig = {
-  provider: 'claude-code' | 'codex-cli' | 'llama-cpp' | 'openai-compatible'; model: string; baseUrl: string | undefined; apiKey: string; temperature: number;
+  provider: 'claude-code' | 'codex-cli' | 'llama-cpp' | 'openai-compatible' | 'simple-serving'; model: string; baseUrl: string | undefined; apiKey: string; temperature: number;
   memoryMode: 'plain' | 'sgr'; repairCoverage: boolean; timeoutMs: number; contextTokens: number; maxOutputTokens: number;
   compactAtTokens: number; keepScenes: number;
   // llama.cpp: the server's slots, whether they share one KV cache (`--kv-unified`) and how many cells that is.
@@ -36,7 +36,7 @@ function environment(directory: string, inherited: Env): Env {
 export function modelBaseUrl(value: string | undefined): string {
   let url;
   // URL converts its argument to a string, so a missing value fails here too.
-  try { url = new URL(String(value)); } catch { throw new Error('Set SIMPLE_CHAT_BASE_URL to the llama.cpp server root'); }
+  try { url = new URL(String(value)); } catch { throw new Error('Set SIMPLE_CHAT_BASE_URL to the model server root'); }
   const loopback = ['127.0.0.1', '[::1]', 'localhost'].includes(url.hostname);
   if (url.username || url.password || url.search || url.hash || url.pathname !== '/'
       || (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback))) {
@@ -62,17 +62,23 @@ function modelConfig(env: Env): ModelConfig {
     return value;
   };
   const provider = env.SIMPLE_CHAT_PROVIDER || 'claude-code';
-  if (provider !== 'claude-code' && provider !== 'codex-cli' && provider !== 'llama-cpp' && provider !== 'openai-compatible') throw new Error('Unsupported SIMPLE_CHAT_PROVIDER');
-  const baseUrl = provider === 'llama-cpp' ? modelBaseUrl(env.SIMPLE_CHAT_BASE_URL)
+  if (provider !== 'claude-code' && provider !== 'codex-cli' && provider !== 'llama-cpp' && provider !== 'openai-compatible'
+      && provider !== 'simple-serving') throw new Error('Unsupported SIMPLE_CHAT_PROVIDER');
+  // simple-serving is our gateway on the card (local/serving.ts): its root, like llama-server's, is HTTPS or loopback.
+  const baseUrl = provider === 'llama-cpp' || provider === 'simple-serving' ? modelBaseUrl(env.SIMPLE_CHAT_BASE_URL)
     : provider === 'openai-compatible' ? apiBaseUrl(env.SIMPLE_CHAT_BASE_URL) : undefined;
   const apiKey = env.SIMPLE_CHAT_API_KEY?.trim() || '';
   if (/[\r\n]/.test(apiKey)) throw new Error('Invalid SIMPLE_CHAT_API_KEY');
+  // The gateway asks every request for its key, over the tunnel too.
+  if (provider === 'simple-serving' && !apiKey) throw new Error('Set SIMPLE_CHAT_API_KEY to the gateway key');
   if (baseUrl?.startsWith('https:') && !apiKey) throw new Error('Set SIMPLE_CHAT_API_KEY for a remote HTTPS server');
   const temperature = Number(env.SIMPLE_CHAT_TEMPERATURE || '0.8');
   if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) throw new Error('Invalid SIMPLE_CHAT_TEMPERATURE');
   if (provider === 'openai-compatible' && !env.SIMPLE_CHAT_MODEL) throw new Error('Set SIMPLE_CHAT_MODEL for the hosted API');
   // Which models a Codex account may use depends on its plan, so there is no safe default.
   if (provider === 'codex-cli' && !env.SIMPLE_CHAT_MODEL) throw new Error('Set SIMPLE_CHAT_MODEL for the Codex CLI');
+  // The gateway serves one model under the name its operator gave it and refuses any other.
+  if (provider === 'simple-serving' && !env.SIMPLE_CHAT_MODEL) throw new Error('Set SIMPLE_CHAT_MODEL to the model name the gateway serves');
   const model = env.SIMPLE_CHAT_MODEL || (provider === 'llama-cpp' ? 'gemma-4-31b-heretic-q6k' : 'claude-haiku-4-5-20251001');
   if (!/^[A-Za-z0-9][A-Za-z0-9_./:-]{0,199}$/.test(model)) throw new Error('Invalid SIMPLE_CHAT_MODEL');
   const contextTokens = integer('SIMPLE_CHAT_CONTEXT_TOKENS', 65536, 8192, 65536);
@@ -85,7 +91,8 @@ function modelConfig(env: Env): ModelConfig {
   if (maxInput < 2048) throw new Error('Output reserve leaves too little input context');
   // A pool (scheduler.ts) needs a server started with the same slots (gpu/serve.sh). By default each slot holds its own
   // request of `contextTokens` and nothing is divided. `SIMPLE_CHAT_GPU_KV_UNIFIED=true` is llama.cpp's `--kv-unified`:
-  // the slots then share `SIMPLE_CHAT_POOL_TOKENS` cells and the scheduler admits calls by size.
+  // the slots then share `SIMPLE_CHAT_POOL_TOKENS` cells and the scheduler admits calls by size. A simple-serving
+  // gateway has no slots to place a call in, so over it, as over every other provider, the scheduler runs one lane.
   const slots = provider === 'llama-cpp' ? integer('SIMPLE_CHAT_GPU_SLOTS', 1, 1, 8) : 1;
   const unified = env.SIMPLE_CHAT_GPU_KV_UNIFIED || 'false';
   if (!['true', 'false'].includes(unified)) throw new Error('Invalid SIMPLE_CHAT_GPU_KV_UNIFIED');
@@ -109,6 +116,9 @@ export function loadModelConfig(directory = process.cwd(), inherited: Env = proc
 
 export function gpuConfig(env: Env, provider: string): GpuConfig | undefined {
   if (!env.SIMPLE_CHAT_VAST_INSTANCE_ID?.trim()) return undefined;
+  // A gateway's card may stop only after the gateway has drained its requests (simple-serving's contract, section 8),
+  // which the bot does not do yet. Until then that card is started and stopped by hand.
+  if (provider === 'simple-serving') throw new Error('GPU control does not work with simple-serving yet: unset SIMPLE_CHAT_VAST_INSTANCE_ID and run the card by hand');
   const instanceId = env.SIMPLE_CHAT_VAST_INSTANCE_ID.trim();
   const apiKey = env.SIMPLE_CHAT_VAST_API_KEY?.trim();
   const sshHost = env.SIMPLE_CHAT_GPU_SSH_HOST || 'simple-chat-vast';

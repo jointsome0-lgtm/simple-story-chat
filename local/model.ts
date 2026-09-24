@@ -3,6 +3,7 @@ import type { ModelConfig } from './config.ts';
 import { createClaude } from './claude.ts';
 import { createCodex } from './codex.ts';
 import { createLlama, createOpenAI } from './llama.ts';
+import { createServing } from './serving.ts';
 import { createBudget, channelFor, capsFor } from './budget.ts';
 import { resolve } from 'node:path';
 
@@ -57,6 +58,7 @@ export function createModel(config: ModelConfig & { dbPath: string }): Provider 
   if (config.provider === 'claude-code') return createClaude(config);
   if (config.provider === 'codex-cli') return createCodex(config);
   if (config.provider === 'llama-cpp') return createLlama(config, { slots: config.slots });
+  if (config.provider === 'simple-serving') return createServing(config);
   if (config.provider === 'openai-compatible') {
     const channel = channelFor(config.baseUrl!, config.model);
     return createOpenAI(config, { budget: createBudget(BUDGET_PATH, channel, capsFor(channel, config.budget)) });

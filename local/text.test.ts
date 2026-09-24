@@ -59,7 +59,7 @@ function library(lang: Lang | undefined): Library {
 
 const job = (kind?: 'compact') => ({ id: 'j20', storyId: 'h2', branchId: 'b3', head: 'n6', memory: null, input: 'x', started: 0, ...(kind ? { kind } : {}) }) satisfies Job;
 const GPU_STATUSES: (GpuStatus | undefined)[] = ['ready', 'draining', 'stopping', 'paused', 'starting', 'error', undefined];
-const PROVIDERS = ['claude-code', 'llama-cpp', 'codex-cli', 'openai-compatible'];
+const PROVIDERS = ['claude-code', 'llama-cpp', 'codex-cli', 'openai-compatible', 'simple-serving'];
 const MODEL_STATUSES = ['ready', 'unavailable', 'configured', 'other'];
 
 // One of the reader's own picture styles, in the same script as the rest of the library.

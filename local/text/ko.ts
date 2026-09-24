@@ -173,6 +173,7 @@ export const ko: Messages = {
     providers: {
       'claude-code': { short: 'Claude Code', full: 'Claude 구독으로 쓰는 Claude Code(자체 GPU 서버 아님)' },
       'llama-cpp': { short: '자체 서버', full: '자체 모델 서버(llama.cpp)' },
+      'simple-serving': { short: '자체 서버', full: '자체 모델 서버(vLLM)' },
       'codex-cli': { short: 'Codex', full: 'ChatGPT 구독으로 쓰는 Codex CLI(자체 GPU 서버 아님)' },
       'openai-compatible': { short: '호스팅 API', full: 'OpenAI 형식의 호스팅 API(자체 GPU 서버 아님)' },
     },
@@ -181,6 +182,7 @@ export const ko: Messages = {
     notes: {
       'claude-code': '모델은 우리가 임대한 GPU가 아니라 Claude 구독으로 실행돼요.',
       'llama-cpp': '자체 모델 서버예요. 서버 확인은 그래픽카드, GPU 메모리, 속도, 글의 품질을 측정하지 않아요.',
+      'simple-serving': '자체 모델 서버예요. 서버 확인은 그래픽카드, GPU 메모리, 속도, 글의 품질을 측정하지 않아요.',
       'codex-cli': '모델은 우리가 임대한 GPU가 아니라 ChatGPT 구독으로 실행돼요. 이야기 텍스트는 외부 서비스로 전송돼요.',
       'openai-compatible': '모델은 우리가 임대한 GPU가 아니라 외부 제공자 쪽에서 실행돼요. 이야기 텍스트는 외부 서비스로 전송돼요.',
     },

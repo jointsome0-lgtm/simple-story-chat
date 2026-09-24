@@ -154,6 +154,7 @@ export const en: Messages = {
     providers: {
       'claude-code': { short: 'Claude Code', full: 'Claude Code on a Claude subscription (not our GPU server)' },
       'llama-cpp': { short: 'our server', full: 'our model server (llama.cpp)' },
+      'simple-serving': { short: 'our server', full: 'our model server (vLLM)' },
       'codex-cli': { short: 'Codex', full: 'Codex CLI on a ChatGPT subscription (not our GPU server)' },
       'openai-compatible': { short: 'hosted API', full: 'a hosted OpenAI-style API (not our GPU server)' },
     },
@@ -162,6 +163,7 @@ export const en: Messages = {
     notes: {
       'claude-code': 'The model runs on a Claude subscription, not on our rented GPU.',
       'llama-cpp': 'This is our own model server. Its check does not measure the graphics card, GPU memory, speed or writing quality.',
+      'simple-serving': 'This is our own model server. Its check does not measure the graphics card, GPU memory, speed or writing quality.',
       'codex-cli': 'The model runs on a ChatGPT subscription, not on our rented GPU. Story text is sent to a third-party service.',
       'openai-compatible': 'The model runs at a third-party provider, not on our rented GPU. Story text is sent to a third-party service.',
     },

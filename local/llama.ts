@@ -34,7 +34,8 @@ type Choice = { index?: unknown; delta?: unknown; finish_reason?: unknown };
 
 const count = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
 const isObject = (value: unknown): value is { readonly [field: string]: unknown } => !!value && typeof value === 'object';
-const MAX_BODY = 2_000_000;
+// A response body's limit, here and in local/serving.ts.
+export const MAX_BODY = 2_000_000;
 // OpenAI's current models reject `max_tokens` and a non-default temperature; OpenRouter lists `max_tokens`.
 const OPENAI_HOST = 'api.openai.com';
 // OpenAI's strict mode rejects string length limits; memory.ts checks the lengths of the parsed reply itself.
@@ -44,7 +45,7 @@ function withoutLengths(schema: unknown): unknown {
   return Object.fromEntries(Object.entries(schema).filter(([key]) => key !== 'minLength' && key !== 'maxLength')
     .map(([key, value]) => [key, withoutLengths(value)]));
 }
-function messagesFor(request: ModelRequest) {
+export function messagesFor(request: ModelRequest) {
   const messages: { role: string; content: string }[] = [];
   for (const message of [{ role: 'system', content: request.system }, ...request.messages]) {
     const previous = messages.at(-1);
@@ -55,7 +56,7 @@ function messagesFor(request: ModelRequest) {
 }
 
 // Decode complete SSE events, including UTF-8 characters split across chunks.
-async function* events(body: Response['body']) {
+export async function* events(body: Response['body']) {
   if (!body) throw new ModelError('invalid_stream');
   const decoder = new TextDecoder('utf-8', { fatal: true });
   let buffer = '';

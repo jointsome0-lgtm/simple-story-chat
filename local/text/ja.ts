@@ -163,6 +163,7 @@ export const ja: Messages = {
     providers: {
       'claude-code': { short: 'Claude Code', full: 'Claudeのサブスクリプションで動くClaude Code（自前のGPUサーバーではありません）' },
       'llama-cpp': { short: '自前サーバー', full: '自前のモデルサーバー（llama.cpp）' },
+      'simple-serving': { short: '自前サーバー', full: '自前のモデルサーバー（vLLM）' },
       'codex-cli': { short: 'Codex', full: 'ChatGPTのサブスクリプションで動くCodex CLI（自前のGPUサーバーではありません）' },
       'openai-compatible': { short: '外部API', full: 'OpenAI互換の外部API（自前のGPUサーバーではありません）' },
     },
@@ -171,6 +172,7 @@ export const ja: Messages = {
     notes: {
       'claude-code': 'モデルはClaudeのサブスクリプションで動いています。こちらで借りているGPUは使いません。',
       'llama-cpp': 'これは自前のモデルサーバーです。チェックでは、グラフィックカード、GPUメモリ、速度、文章の質は測りません。',
+      'simple-serving': 'これは自前のモデルサーバーです。チェックでは、グラフィックカード、GPUメモリ、速度、文章の質は測りません。',
       'codex-cli': 'モデルはChatGPTのサブスクリプションで動いています。こちらで借りているGPUは使いません。物語のテキストは外部サービスに送信されます。',
       'openai-compatible': 'モデルは外部プロバイダーで動いています。こちらで借りているGPUは使いません。物語のテキストは外部サービスに送信されます。',
     },

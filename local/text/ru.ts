@@ -201,6 +201,7 @@ export const ru = {
     providers: {
       'claude-code': { short: 'Claude Code', full: 'Claude Code по подписке Claude (не наш GPU-сервер)' },
       'llama-cpp': { short: 'наш сервер', full: 'наш сервер модели (llama.cpp)' },
+      'simple-serving': { short: 'наш сервер', full: 'наш сервер модели (vLLM)' },
       'codex-cli': { short: 'Codex', full: 'Codex CLI по подписке ChatGPT (не наш GPU-сервер)' },
       'openai-compatible': { short: 'размещённый API', full: 'размещённый API в формате OpenAI (не наш GPU-сервер)' },
     },
@@ -210,6 +211,7 @@ export const ru = {
     notes: {
       'claude-code': 'Модель работает по подписке Claude, а не на нашем арендованном GPU.',
       'llama-cpp': 'Это наш сервер модели. Его проверка не измеряет видеокарту, память GPU, скорость и качество текста.',
+      'simple-serving': 'Это наш сервер модели. Его проверка не измеряет видеокарту, память GPU, скорость и качество текста.',
       'codex-cli': 'Модель работает по подписке ChatGPT, а не на нашем арендованном GPU. Текст истории уходит стороннему сервису.',
       'openai-compatible': 'Модель работает у стороннего провайдера, а не на нашем арендованном GPU. Текст истории уходит стороннему сервису.',
     },

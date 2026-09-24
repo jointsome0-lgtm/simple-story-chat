@@ -164,6 +164,7 @@ export const zh: Messages = {
     providers: {
       'claude-code': { short: 'Claude Code', full: 'Claude Code，使用 Claude 订阅（不是我们的 GPU 服务器）' },
       'llama-cpp': { short: '我们的服务器', full: '我们的模型服务器（llama.cpp）' },
+      'simple-serving': { short: '我们的服务器', full: '我们的模型服务器（vLLM）' },
       'codex-cli': { short: 'Codex', full: 'Codex CLI，使用 ChatGPT 订阅（不是我们的 GPU 服务器）' },
       'openai-compatible': { short: '托管 API', full: 'OpenAI 格式的托管 API（不是我们的 GPU 服务器）' },
     },
@@ -172,6 +173,7 @@ export const zh: Messages = {
     notes: {
       'claude-code': '模型通过 Claude 订阅运行，不在我们租用的 GPU 上。',
       'llama-cpp': '这是我们自己的模型服务器。对它的检查不会测量显卡、GPU 显存、速度和文本质量。',
+      'simple-serving': '这是我们自己的模型服务器。对它的检查不会测量显卡、GPU 显存、速度和文本质量。',
       'codex-cli': '模型通过 ChatGPT 订阅运行，不在我们租用的 GPU 上。故事文本会发送给第三方服务。',
       'openai-compatible': '模型在第三方提供方那里运行，不在我们租用的 GPU 上。故事文本会发送给第三方服务。',
     },
