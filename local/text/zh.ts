@@ -16,6 +16,8 @@ const grouped = (n: number) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d
 const sceneCount = (n: number) => `${n} 个场景`;
 const lastScenes = (n: number | null) => (n === null ? '最近的场景' : `最近 ${sceneCount(n)}`);
 const jobs = (n: number | null) => (n === null ? '未知' : String(n));
+const textSize = (label: string, tokens: number | null, chars: number) =>
+  `${label}：${tokens === null ? 'token 数未知' : `${grouped(tokens)} 个 token`} · ${grouped(chars)} 个字符`;
 
 export const zh: Messages = {
   format: {
@@ -62,6 +64,7 @@ export const zh: Messages = {
     next: '下一页 ➡️',
     keep: '↩️ 不删除',
     pictureStyle: '🎨 插图风格',
+    characters: '👤 人物',
   },
 
   common: {
@@ -116,6 +119,15 @@ export const zh: Messages = {
     note: '只会改变菜单和机器人消息的语言。故事的语言由种子和你发的消息决定。',
   },
 
+  variant: {
+    button: '✏️ 修改提示词并画一个变体',
+    title: '✏️ 你自己的插图提示词',
+    note: max => `从插图下方的备注里复制提示词，修改后用一条消息发来，最多 ${max} 个字符。这是包括风格在内的完整提示词，我不会添加或删除任何内容。我会用与原图相同的设置和相同的初始噪声来画，所以只有提示词不同。变体会作为一张单独的插图出现在同一个场景下。`,
+    leave: '↩️ 不画了',
+    drawing: '🎨 正在绘制变体…',
+    failed: '变体没有画成。请稍后再试。',
+  },
+
   pictureStyle: {
     title: '🎨 插图风格',
     current: name => `当前：${name}`,
@@ -156,6 +168,39 @@ export const zh: Messages = {
     drawingSample: '🎨 正在绘制示例…',
     // `count` is how many styles are drawn, one picture each.
     drawingAll: (count: number) => `🎨 正在用最近一幕绘制全部 ${count} 种风格。图片会逐张发来；在故事里继续行动会停止绘制。`,
+  },
+
+  characters: {
+    title: story => `👤 人物：${story}`,
+    note: '这个故事的插图就是这样画他们的。点一个人物，可以查看完整描述、修改外貌或者画一张肖像。',
+    none: '人物会在故事的第一张插图之后出现。',
+    toStory: '📖 返回故事',
+    cardTitle: (person, story) => `👤 ${person} · ${story}`,
+    look: '外貌（点击即可复制）：',
+    lookSize: (tokens, chars) => textSize('外貌文字', tokens, chars),
+    clothesOfBranch: branch => `分支${branch}最新一张插图里的服装：`,
+    clothesAtStart: '这个故事的插图开始时的服装：',
+    clothesSize: (tokens, chars) => textSize('服装文字', tokens, chars),
+    noClothes: '还没有记录服装。',
+    clothesNote: '服装不在这里修改：它由故事本身改变，插图从场景中取用。',
+    sizeNote: '每个数字只算它那一段文字。提示词里还包括场景描述和风格；准确的大小写在插图下面。',
+    scope: '修改外貌会作用于这个故事所有分支之后的插图。故事文字、记忆和已经画好的插图都不会改变；正在绘制的那张可能仍按旧外貌画出。',
+    portraitNone: '🖼 还没有肖像。肖像会按这个外貌画出面部和全身身材，方便挑选参考图。',
+    portraitKept: '🖼 肖像已保存：按这个外貌画的面部和身材。',
+    portraitStale: '🖼 保存的肖像是按之前的外貌画的。新画一张，就能看到按现在外貌画的面部和身材。',
+    edit: '✏️ 修改外貌',
+    portrait: '🖼 肖像',
+    back: '↩️ 返回人物列表',
+    editTitle: (person, story) => `✏️ 外貌：${person} · ${story}`,
+    editNote: max => `用一条消息发来新的外貌，最多 ${max} 个字符：脸、头发、体形、身高、特征。不用写服装和名字：服装由故事改变，名字保持不变。插图模型最擅长理解英文。`,
+    nowText: '当前：',
+    backToCard: '↩️ 返回该人物',
+    caption: person => `🖼 肖像：${person}。面部和全身身材，穿着简单的中性服装。`,
+    again: '🔄 再画一张',
+    keep: '✅ 保留这张',
+    kept: person => `✅ 肖像已保存：${person}。场景插图暂时还不会用到它。`,
+    drawing: '🎨 正在绘制肖像…',
+    portraitFailed: '肖像没有画成。请稍后再试。',
   },
 
   model: {
@@ -486,6 +531,8 @@ export const zh: Messages = {
     compactionUnverified: command => `无法验证压缩结果。原始场景和已完成的存档点都已保存。重试：${command}。`,
     failed: command => `操作未能完成。已完成的场景和存档点都已保存。重试：${command}。`,
     gpuNotConfigured: '还没有配置 GPU 租用的控制。用 /model 查看当前模型。',
+    modelServiceSeparate: '模型服务是单独启动的，不在这个聊天里启动。用 /model 查看当前模型。',
+    modelUnavailable: '模型服务现在不可用。等它恢复工作后，就可以继续故事。',
     gpuPaused: 'GPU 已进入暂停。打开 /model 启动它，然后重新发送你的行动。',
     drawing: '🎨 正在绘制插图…',
     pictureFailed: '插图没有画成。场景已保存。',
@@ -529,6 +576,19 @@ export const zh: Messages = {
     sampleBusy: '场景还在写。等它发来后再请求示例。',
     sampleNoScene: '示例按你最近的一幕来画。先开始一个故事，第一幕出来后就可以请求示例。',
     sampleInFlight: '正在绘制示例。等它发来后可以再请求下一张。',
+    promptNeedsText: '请用一条文本消息发来提示词。不做修改离开：点“↩️”或发送 /cancel。',
+    promptTooLong: '太长了：提示词不能超过 4000 个字符。请缩短后再发一次。',
+    variantOff: '你的场景还没有开启插图，所以无法绘制变体。',
+    variantGone: '这张插图已经无法再画变体：它的场景已被删除。',
+    variantChanged: '此后插图模型或其设置已经改变，用原来的已无法重现这张插图。我不会用新的来画，否则不同的就不只是提示词了。',
+    variantBusy: '场景还在写。等它发来后再请求变体。',
+    variantInFlight: '正在绘制变体。等它发来后可以再请求下一张。',
+    lookNeedsText: '请用一条文本消息发来外貌。不做修改离开：点“↩️”或发送 /cancel。',
+    lookTooLong: '太长了：外貌不能超过 400 个字符。请缩短后再发一次。',
+    lookGone: '这个人物已经不在故事里了，外貌没有保存。打开 /menu 看看。',
+    portraitOff: '你的场景还没有开启插图，所以无法绘制肖像。',
+    portraitStale: '这张肖像已经无法保存：它已过期，或者外貌之后改过了。请重新画一张。',
+    portraitInFlight: '正在绘制你请求的图片。等它发来后再请求肖像。',
   },
 
   labels: {

@@ -19,7 +19,7 @@ After the rename to `simple-story-chat`, the `SIMPLE_CHAT_*` variables, the data
 | `TELEGRAM_BOT_TOKEN` | The secret token of the ordinary bot |
 | `SIMPLE_CHAT_ALLOWED_USER_IDS` | Numeric IDs separated by commas, no public access |
 | `SIMPLE_CHAT_OWNER_ID` | The ID of the owner, who allowed their own messages to be read for debugging; it is not a permission to read other users. It must be on the access list. The bot uses it to mark log rows as `actor: owner`; the other rows get `other` |
-| `SIMPLE_CHAT_DB_PATH` | `data/simple-chat.sqlite` by default; you can choose a local path on the computer or on a server |
+| `SIMPLE_CHAT_DB_PATH` | `data/simple-chat.sqlite` by default; you can choose a local path on the computer or on a server. The portraits readers keep lie beside it in `<path>.portraits/`, and only the database says whose each one is: a backup takes both, copied while the bot is stopped, so that no portrait is kept or swept in between |
 | `SIMPLE_CHAT_PROVIDER` | `claude-code`, `llama-cpp`, `simple-serving`, `codex-cli` or `openai-compatible`. `simple-serving` is our own gateway on a rented card ([details](model-providers.md#simple-serving-our-gateway)). The last two send the story to a third-party service, and without the consent below they are suitable only for probes ([details](model-providers.md)) |
 | `SIMPLE_CHAT_ALLOW_HOSTED` | Exactly `stories-leave-this-computer`, so that the bot starts with `codex-cli` or `openai-compatible`. Only for your own stories; any other value does not count as consent |
 | `SIMPLE_CHAT_MODEL` | `claude-haiku-4-5-20251001` by default; required for `codex-cli`, `openai-compatible` and `simple-serving` |
@@ -32,7 +32,7 @@ After the rename to `simple-story-chat`, the `SIMPLE_CHAT_*` variables, the data
 | `SIMPLE_CHAT_TEMPERATURE` | The temperature of the fiction reply of llama.cpp and simple-serving, 0.8 by default |
 | `SIMPLE_CHAT_MEMORY_MODE` | `plain` (the default) or the experimental `sgr` |
 | `SIMPLE_CHAT_BUDGET_REQUESTS`, `SIMPLE_CHAT_BUDGET_TOKENS` | Daily limits for `openai-compatible`; without them the values of the channel from the [table](model-providers.md#daily-limits-of-hosted-apis) apply |
-| `SIMPLE_CHAT_VAST_INSTANCE_ID`, `SIMPLE_CHAT_VAST_API_KEY` | Optional: the Vast.ai instance that the bot starts and stops by itself ([instructions](gpu.md)). Only with `llama-cpp` for now |
+| `SIMPLE_CHAT_VAST_INSTANCE_ID`, `SIMPLE_CHAT_VAST_API_KEY` | Optional: the Vast.ai instance that the bot starts and stops by itself ([instructions](gpu.md)). Only with `llama-cpp`: `simple-serving` runs its own card |
 | `SIMPLE_CHAT_IMAGE_URL` | Optional: a picture under each scene ([plan](illustrations-plan.md)). Without this variable the feature is off — no second model call, no status line, no picture. It is the loopback end of the ssh tunnel to the card that draws, such as `http://127.0.0.1:8188` (`bash gpu/tunnel.sh --pictures`), never a published address and never the language model's own server: one card cannot hold both models |
 | `SIMPLE_CHAT_IMAGE_WORKFLOW` | The ComfyUI graph to draw with, exported in API format (Workflow > Export (API)), such as `gpu/image-workflow-qwen.json`; a relative path is read beside `.env`. The bot loads a saving node as a preview one, so the card keeps no copy of the picture. Required when the URL is set, and checked at startup |
 | `SIMPLE_CHAT_IMAGE_CHECKPOINT` | The name of the checkpoint file on the picture card, as its `checkpoints` folder writes it. Required when the URL is set |
@@ -54,7 +54,7 @@ tmux new -s simple-story-chat-bot 'npm start'
 
 If the session already exists, attach to it; do not start a second instance. `flock` also prevents two processes from working with one database at the same time. To stop: Ctrl+C in the bot session. An unfinished reply is not repeated automatically; the scenes that are already saved remain.
 
-At startup the bot checks that no webhook is set. If a webhook is configured, the bot stops; it does not change somebody else's configuration automatically. Do not use the cloud handler and local polling at the same time. The `tgcloud` commands belong to a separate cloud draft that is not launched yet; you do not need to read or edit `.tgcloud/` by hand.
+At startup the bot checks that no webhook is set. If a webhook is configured, the bot stops; it does not change somebody else's configuration automatically.
 
 ## First run
 

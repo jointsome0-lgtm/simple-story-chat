@@ -7,7 +7,7 @@ import type { GenerationResult, ModelRequest } from './model.ts';
 import { createBot } from './bot.ts';
 import type { Update } from './bot.ts';
 import { fileURLToPath } from 'node:url';
-import { createIllustrator, encoderTokens } from './picture.ts';
+import { createIllustrator, encoderTokens, textTokens } from './picture.ts';
 import { loadTokenizers } from './tokenizer.ts';
 import { render, scenePrefix, sceneKeyboard } from './ui.ts';
 import { commandSets } from './text.ts';
@@ -20,7 +20,7 @@ import { createScheduler } from './scheduler.ts';
 import type { Scheduler } from './scheduler.ts';
 import { serveBackground } from './background.ts';
 import type { Log } from './model-error.ts';
-import { safeErrorDetails } from './model-error.ts';
+import { safeErrorDetails, unavailable } from './model-error.ts';
 
 // Thrown values are not checked: startup and polling failures are Error objects,
 // and Telegram, model and GPU errors add a code (Telegram errors also a retry delay).
@@ -53,7 +53,12 @@ try {
       starts = state.starts;
       scheduler?.forget();
     }); }, 10000);
-  } else await rawProvider.check?.();
+  } else await rawProvider.check?.().catch((error: unknown) => {
+    // simple-serving puts its card to sleep on its own. A service that is only out of reach now lets the bot start, and
+    // its first model call checks it again (local/serving.ts); a wrong key, model, context or contract stops the start.
+    if (config.provider !== 'simple-serving' || !unavailable(error)) throw error;
+    log('model_check_deferred', (error as Failure).code, error);
+  });
   scheduler = createScheduler(rawProvider, { log,
     slots: config.slots, poolTokens: config.poolTokens, sharedCache: config.sharedCache,
     outputTokens: request => request.maxOutputTokens,
@@ -68,7 +73,7 @@ try {
   const webhook = await api('getWebhookInfo') as { url?: string };
   if (webhook.url) throw new Error('webhook_configured');
   store = new Store(config.dbPath);
-  store.recover();
+  store.recover(log);
   if (gpu) background = await serveBackground({ socketPath: config.dbPath + '.model.sock', scheduler,
     status: () => ({ model: config.model, contextTokens: config.contextTokens, gpu: gpu!.snapshot() }) });
   // Pictures under the scenes, if this computer has a second card tunnelled for them (docs/illustrations-plan.md).
@@ -76,15 +81,17 @@ try {
   // not under the first reader who gets a scene.
   // The note under each picture counts the prompt in the picture model's tokens when `npm run tokenizers` has written
   // the vocabulary (docs/tokenizers.md). A missing or broken file costs the count alone: the note gives characters.
+  // The characters' card counts each field of a sheet the same way, on its own.
   const tokenizers = loadTokenizers(fileURLToPath(new URL('../tokenizers', import.meta.url)));
-  const promptTokens = (graph: Parameters<typeof encoderTokens>[1]) => {
+  const counter = (count: typeof encoderTokens) => (graph: Parameters<typeof encoderTokens>[1]) => {
     try {
       const qwen = tokenizers.qwen();
-      return qwen && encoderTokens(qwen, graph);
+      return qwen && count(qwen, graph);
     } catch (error) { log('tokenizer_unreadable', undefined, error); return undefined; }
   };
-  const illustrator = config.images ? createIllustrator(config.images,
-    { store, provider, model: { model: config.model, provider: config.provider, contextTokens: config.contextTokens }, promptTokens }) : undefined;
+  const illustrator = config.images ? createIllustrator(config.images, { store, provider,
+    model: { model: config.model, provider: config.provider, contextTokens: config.contextTokens },
+    promptTokens: counter(encoderTokens), textTokens: counter(textTokens) }) : undefined;
   if (config.images) log('pictures_configured');
   bot = createBot({ store, api, provider, gpu, illustrator, providerName: config.provider, readSeedFile: createSeedFileReader(config.token, api), render, scenePrefix, sceneKeyboard,
     allowedUsers: config.allowedUsers, ownerId: config.ownerId, maxOutputTokens: config.maxOutputTokens,

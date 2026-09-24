@@ -6,6 +6,8 @@ const count = (n: number, one: string, many: string, shown = String(n)) => `${sh
 const grouped = (n: number) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 const lastScenes = (n: number | null) => (n === null ? 'the latest scenes' : `the latest ${count(n, 'scene', 'scenes')}`);
 const jobs = (n: number | null) => (n === null ? 'unknown' : String(n));
+const textSize = (label: string, tokens: number | null, chars: number) =>
+  `${label}: ${tokens === null ? 'tokens unknown' : count(tokens, 'token', 'tokens', grouped(tokens))} · ${count(chars, 'character', 'characters', grouped(chars))}`;
 
 export const en: Messages = {
   format: {
@@ -52,6 +54,7 @@ export const en: Messages = {
     next: 'Next ➡️',
     keep: '↩️ Keep it',
     pictureStyle: '🎨 Picture style',
+    characters: '👤 Characters',
   },
 
   common: {
@@ -106,6 +109,15 @@ export const en: Messages = {
     note: 'This changes only the menus and messages of the bot. The language of a story comes from its seed and from what you write.',
   },
 
+  variant: {
+    button: '✏️ Edit the prompt and draw a variant',
+    title: '✏️ Your own prompt for the picture',
+    note: max => `Copy the prompt from the note under the picture, edit it and send it in one message, up to ${max} characters. This is the whole prompt, style included; I will add nothing and take nothing out. I will draw it with the same settings and the same initial noise as the original picture, so only the prompt will differ. The variant will arrive as a separate picture under the same scene.`,
+    leave: '↩️ Do not draw',
+    drawing: '🎨 Drawing a variant…',
+    failed: 'The variant did not work out. Try again a little later.',
+  },
+
   pictureStyle: {
     title: '🎨 Picture style',
     current: name => `Now: ${name}`,
@@ -146,6 +158,39 @@ export const en: Messages = {
     drawingSample: '🎨 Drawing a sample…',
     // `count` is how many styles are drawn, one picture each.
     drawingAll: (count: number) => `🎨 Drawing the last scene in all ${count} styles. The pictures arrive one by one; your next move in the story stops the drawing.`,
+  },
+
+  characters: {
+    title: story => `👤 Characters: ${story}`,
+    note: 'This is how the pictures of this story draw them. Tap a character to see the whole description, edit the look or draw a portrait.',
+    none: 'Characters appear in a story after its first illustration.',
+    toStory: '📖 To the story',
+    cardTitle: (person, story) => `👤 ${person} · ${story}`,
+    look: 'Look (tap to copy):',
+    lookSize: (tokens, chars) => textSize('Look text', tokens, chars),
+    clothesOfBranch: branch => `Clothes in the latest picture of the branch ${branch}:`,
+    clothesAtStart: 'Clothes the pictures of this story started with:',
+    clothesSize: (tokens, chars) => textSize('Clothes text', tokens, chars),
+    noClothes: 'No clothes are recorded yet.',
+    clothesNote: 'Clothes are not edited here: the story itself changes them, and the pictures take them from the scenes.',
+    sizeNote: 'Each number is for its text alone. The prompt also holds the description of the scene and the style; its exact size is under the picture.',
+    scope: 'A change to the look applies to the next pictures of every branch of this story. The story text, its memory and the pictures already drawn stay as they are, and a picture being drawn right now may still come out the old way.',
+    portraitNone: '🖼 No portrait yet. A portrait draws the face and the whole figure, full length, from this look, which makes a reference easier to pick.',
+    portraitKept: '🖼 Portrait kept: the face and figure from this look.',
+    portraitStale: '🖼 The kept portrait was drawn from an earlier look. A new one shows the face and figure from this one.',
+    edit: '✏️ Edit the look',
+    portrait: '🖼 Portrait',
+    back: '↩️ Back to characters',
+    editTitle: (person, story) => `✏️ Look: ${person} · ${story}`,
+    editNote: max => `Send the new look in one message, up to ${max} characters: face, hair, build, height, marks. Leave out the clothes and the name: the story changes the clothes, and the name stays. The picture model understands English best.`,
+    nowText: 'Now:',
+    backToCard: '↩️ Back to the character',
+    caption: person => `🖼 Portrait: ${person}. Face and figure, full length, in plain neutral clothes.`,
+    again: '🔄 Another version',
+    keep: '✅ Keep this one',
+    kept: person => `✅ Portrait kept: ${person}. The pictures of the scenes do not use it yet.`,
+    drawing: '🎨 Drawing a portrait…',
+    portraitFailed: 'The portrait did not work out. Try again a little later.',
   },
 
   model: {
@@ -476,6 +521,8 @@ export const en: Messages = {
     compactionUnverified: command => `The compaction could not be verified. The original scenes and finished checkpoints are saved. Try again: ${command}.`,
     failed: command => `Could not finish the operation. Finished scenes and checkpoints are saved. Try again: ${command}.`,
     gpuNotConfigured: 'GPU rental control is not set up yet. /model shows the current model.',
+    modelServiceSeparate: 'The model service is started separately, not from this chat. /model shows the current model.',
+    modelUnavailable: 'The model service is unavailable right now. You can continue the story once it works again.',
     gpuPaused: 'The GPU has gone on pause. Open /model and start it, then send your action again.',
     drawing: '🎨 Drawing the illustration…',
     pictureFailed: 'The illustration did not work out. The scene is saved.',
@@ -519,6 +566,19 @@ export const en: Messages = {
     sampleBusy: 'The scene is still being written. Ask for a sample once it arrives.',
     sampleNoScene: 'A sample is drawn from your last scene. Start a story, and after its first scene you can ask for one.',
     sampleInFlight: 'Already drawing a sample. You can ask for the next one once it arrives.',
+    promptNeedsText: 'Send the prompt as text, in one message. To leave without a change, tap “↩️” or send /cancel.',
+    promptTooLong: 'Too long: a prompt has to fit in 4000 characters. Shorten it and send it again.',
+    variantOff: 'Pictures for your scenes are not switched on, so a variant cannot be drawn.',
+    variantGone: 'A variant of this picture can no longer be drawn: its scene was deleted.',
+    variantChanged: 'The picture model or its settings have changed since, and this picture can no longer be repeated with the old ones. I will not draw it with the new ones, or more than the prompt would differ.',
+    variantBusy: 'The scene is still being written. Ask for a variant once it arrives.',
+    variantInFlight: 'Already drawing a variant. You can ask for the next one once it arrives.',
+    lookNeedsText: 'Send the look as text, in one message. To leave without a change, tap “↩️” or send /cancel.',
+    lookTooLong: 'Too long: a look has to fit in 400 characters. Shorten it and send it again.',
+    lookGone: 'That character is no longer in the story, so the look was not saved. Open /menu.',
+    portraitOff: 'Pictures for your scenes are not switched on, so a portrait cannot be drawn.',
+    portraitStale: 'This portrait can no longer be kept: it is too old, or the look has changed since. Draw a new one.',
+    portraitInFlight: 'Already drawing a picture you asked for. You can ask for a portrait once it arrives.',
   },
 
   labels: {

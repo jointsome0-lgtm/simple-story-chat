@@ -6,7 +6,6 @@
 !.env.gpu.example
 !.env.eval.example
 config.local.json
-handlers/_configure.js
 
 # Private stories, exports, backups and diagnostic output
 data/
@@ -22,6 +21,8 @@ logs/
 *.sqlite*
 *.db
 *.db-*
+# The portraits a reader kept lie beside the database, whatever it is called (local/store.ts `portraits`).
+*.portraits/
 
 # Dependencies and generated reports
 __pycache__/

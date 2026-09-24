@@ -25,6 +25,8 @@ const josa = (text: string, closed: string, open: string) => {
 // With the topic particle, which differs between the two forms.
 const lastScenes = (n: number | null) => (n === null ? '최근 장면은' : `최근 장면 ${n}개는`);
 const jobs = (n: number | null) => (n === null ? '알 수 없음' : `${n}개`);
+const textSize = (label: string, tokens: number | null, chars: number) =>
+  `${label}: ${tokens === null ? '토큰 수 알 수 없음' : `${grouped(tokens)}토큰`} · ${grouped(chars)}자`;
 
 export const ko: Messages = {
   format: {
@@ -71,6 +73,7 @@ export const ko: Messages = {
     next: '다음 ➡️',
     keep: '↩️ 삭제 안 함',
     pictureStyle: '🎨 삽화 스타일',
+    characters: '👤 인물',
   },
 
   common: {
@@ -125,6 +128,15 @@ export const ko: Messages = {
     note: '봇의 메뉴와 메시지 언어만 바뀌어요. 이야기의 언어는 시드와 내가 보내는 메시지가 정해요.',
   },
 
+  variant: {
+    button: '✏️ 프롬프트를 고쳐 변형 그리기',
+    title: '✏️ 삽화에 쓸 내 프롬프트',
+    note: max => `삽화 아래 메모에서 프롬프트를 복사해 고친 뒤 메시지 하나로 보내 주세요. 최대 ${max}자예요. 스타일까지 포함한 프롬프트 전체라서 아무것도 더하거나 빼지 않아요. 원래 삽화와 같은 설정, 같은 초기 노이즈로 그려서 프롬프트만 달라져요. 변형은 같은 장면 아래에 별도의 삽화로 도착해요.`,
+    leave: '↩️ 그리지 않기',
+    drawing: '🎨 변형을 그리는 중…',
+    failed: '변형을 그리지 못했어요. 조금 뒤에 다시 시도해 주세요.',
+  },
+
   pictureStyle: {
     title: '🎨 삽화 스타일',
     current: name => `지금: ${name}`,
@@ -165,6 +177,39 @@ export const ko: Messages = {
     drawingSample: '🎨 예시를 그리는 중…',
     // `count` is how many styles are drawn, one picture each.
     drawingAll: (count: number) => `🎨 마지막 장면을 모든 스타일(${count}개)로 그리는 중이에요. 그림은 한 장씩 도착하고, 이야기에서 다음 행동을 하면 그리기가 멈춰요.`,
+  },
+
+  characters: {
+    title: story => `👤 인물: ${story}`,
+    note: '이 이야기의 삽화는 인물을 이렇게 그려요. 인물을 누르면 전체 설명을 보고, 외모를 고치거나 초상화를 그릴 수 있어요.',
+    none: '인물은 이야기의 첫 삽화가 나온 뒤에 생겨요.',
+    toStory: '📖 이야기로',
+    cardTitle: (person, story) => `👤 ${person} · ${story}`,
+    look: '외모(누르면 복사돼요):',
+    lookSize: (tokens, chars) => textSize('외모 텍스트', tokens, chars),
+    clothesOfBranch: branch => `분기 ${branch}의 마지막 삽화 속 옷:`,
+    clothesAtStart: '이 이야기의 삽화가 시작될 때의 옷:',
+    clothesSize: (tokens, chars) => textSize('옷 텍스트', tokens, chars),
+    noClothes: '아직 기록된 옷이 없어요.',
+    clothesNote: '옷은 여기서 고치지 않아요. 옷은 이야기 속에서 바뀌고, 삽화는 장면에서 옷을 가져와요.',
+    sizeNote: '숫자는 텍스트마다 따로 센 거예요. 프롬프트에는 장면 묘사와 스타일도 들어가요. 정확한 크기는 삽화 아래에 있어요.',
+    scope: '외모를 고치면 이 이야기의 모든 분기에서 앞으로 그릴 삽화에 적용돼요. 이야기 본문, 기억, 이미 그린 삽화는 바뀌지 않아요. 지금 그리고 있는 삽화는 예전 외모로 나올 수 있어요.',
+    portraitNone: '🖼 아직 초상화가 없어요. 초상화는 이 외모대로 얼굴과 전신 체형을 그려서 참고 이미지를 고르기 쉽게 해 줘요.',
+    portraitKept: '🖼 초상화를 저장했어요. 이 외모대로 그린 얼굴과 체형이에요.',
+    portraitStale: '🖼 저장한 초상화는 이전 외모로 그린 거예요. 새로 그리면 지금 외모대로 얼굴과 체형을 볼 수 있어요.',
+    edit: '✏️ 외모 수정',
+    portrait: '🖼 초상화',
+    back: '↩️ 인물 목록으로',
+    editTitle: (person, story) => `✏️ 외모: ${person} · ${story}`,
+    editNote: max => `새 외모를 메시지 하나로 보내 주세요: 얼굴, 머리, 체형, 키, 특징. 최대 ${max}자예요. 옷과 이름은 쓰지 마세요. 옷은 이야기가 바꾸고, 이름은 그대로 남아요. 삽화 모델은 영어를 가장 잘 이해해요.`,
+    nowText: '지금:',
+    backToCard: '↩️ 인물로 돌아가기',
+    caption: person => `🖼 초상화: ${person}. 얼굴과 전신 체형을 단순하고 중립적인 옷차림으로 그렸어요.`,
+    again: '🔄 다시 그리기',
+    keep: '✅ 이걸로 저장',
+    kept: person => `✅ 초상화를 저장했어요: ${person}. 장면 삽화에는 아직 쓰이지 않아요.`,
+    drawing: '🎨 초상화를 그리는 중…',
+    portraitFailed: '초상화를 그리지 못했어요. 조금 뒤에 다시 시도해 주세요.',
   },
 
   model: {
@@ -495,6 +540,8 @@ export const ko: Messages = {
     compactionUnverified: command => `압축을 검증하지 못했어요. 원본 장면과 완성된 체크포인트는 저장되어 있어요. 다시 시도: ${command}.`,
     failed: command => `작업을 끝내지 못했어요. 완성된 장면과 체크포인트는 저장되어 있어요. 다시 시도: ${command}.`,
     gpuNotConfigured: 'GPU 임대 제어가 아직 설정되지 않았어요. 현재 모델 보기: /model',
+    modelServiceSeparate: '모델 서비스는 이 채팅이 아니라 따로 시작돼요. 현재 모델 보기: /model',
+    modelUnavailable: '모델 서비스를 지금 사용할 수 없어요. 서비스가 다시 작동하면 이야기를 이어갈 수 있어요.',
     gpuPaused: 'GPU가 일시정지됐어요. /model 명령으로 GPU를 시작한 뒤 행동을 다시 보내 주세요.',
     drawing: '🎨 삽화를 그리는 중…',
     pictureFailed: '삽화를 그리지 못했어요. 장면은 저장되어 있어요.',
@@ -538,6 +585,19 @@ export const ko: Messages = {
     sampleBusy: '장면을 아직 쓰고 있어요. 장면이 도착하면 예시를 요청해 주세요.',
     sampleNoScene: '예시는 마지막 장면으로 그려요. 이야기를 시작하면 첫 장면 뒤부터 예시를 요청할 수 있어요.',
     sampleInFlight: '이미 예시를 그리고 있어요. 도착하면 다음 예시를 요청할 수 있어요.',
+    promptNeedsText: '프롬프트를 텍스트 메시지 하나로 보내 주세요. 바꾸지 않고 나가려면 ‘↩️’를 누르거나 /cancel을 보내 주세요.',
+    promptTooLong: '너무 길어요. 프롬프트는 4000자 안에 들어가야 해요. 줄여서 다시 보내 주세요.',
+    variantOff: '아직 내 장면에는 삽화가 켜져 있지 않아서 변형을 그릴 수 없어요.',
+    variantGone: '이 삽화의 변형은 더 이상 그릴 수 없어요. 장면이 삭제되었어요.',
+    variantChanged: '그 뒤로 삽화 모델이나 그 설정이 바뀌어서 예전 것으로는 이 삽화를 더 이상 다시 그릴 수 없어요. 새것으로 그리면 프롬프트 말고도 달라지는 게 생기니 그리지 않아요.',
+    variantBusy: '장면을 아직 쓰고 있어요. 장면이 도착하면 변형을 요청해 주세요.',
+    variantInFlight: '이미 변형을 그리고 있어요. 도착하면 다음 변형을 요청할 수 있어요.',
+    lookNeedsText: '외모를 텍스트 메시지 하나로 보내 주세요. 바꾸지 않고 나가려면 ‘↩️’를 누르거나 /cancel 명령을 보내 주세요.',
+    lookTooLong: '너무 길어요. 외모는 400자 안에 들어가야 해요. 줄여서 다시 보내 주세요.',
+    lookGone: '이 인물은 이제 이야기에 없어서 외모를 저장하지 못했어요. 메뉴 열기: /menu',
+    portraitOff: '아직 내 장면에는 삽화가 켜져 있지 않아서 초상화를 그릴 수 없어요.',
+    portraitStale: '이 초상화는 이제 저장할 수 없어요. 너무 오래됐거나 그 뒤로 외모가 바뀌었어요. 새로 그려 주세요.',
+    portraitInFlight: '요청한 그림을 이미 그리고 있어요. 그림이 도착하면 초상화를 요청할 수 있어요.',
   },
 
   labels: {

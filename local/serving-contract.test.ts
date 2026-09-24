@@ -10,7 +10,7 @@ import { createServing } from './serving.ts';
 import type { ModelError } from './model-error.ts';
 import type { ChatMessage, Controls, GenerationResult, ModelRequest } from './model.ts';
 
-// The shared cases of simple-serving's contract v1, pinned in local/serving-contract/ (pin.json says from where). The
+// The shared cases of simple-serving's contract v2, pinned in local/serving-contract/ (pin.json says from where). The
 // gateway's tests play each step's engine and check the gateway's response; these play that response from a fake
 // gateway over HTTP and check what the bot makes of it (contract/README.md there, "Who runs what").
 type Json = { readonly [field: string]: unknown };
@@ -26,7 +26,7 @@ type Cases = { contract: string; service: { alias: string; context_tokens: numbe
   cases: { name: string; steps: Step[] }[] };
 
 const directory = new URL('./serving-contract/', import.meta.url);
-const raw = readFileSync(new URL('cases-v1.json', directory));
+const raw = readFileSync(new URL('cases-v2.json', directory));
 const pin = JSON.parse(readFileSync(new URL('pin.json', directory), 'utf8')) as { [field: string]: unknown };
 const cases = JSON.parse(raw.toString('utf8')) as Cases;
 const alias = cases.service.alias;
@@ -36,15 +36,15 @@ const isObject = (value: unknown): value is Json => !!value && typeof value === 
 
 test('the pinned cases are the file the pin names, byte for byte', () => {
   assert.equal(createHash('sha256').update(raw).digest('hex'), pin.sha256);
-  assert.equal(pin.contract, '1');
+  assert.equal(pin.contract, '2');
   assert.equal(cases.contract, pin.contract);
   assert.equal(pin.repository, 'jointsome0-lgtm/simple-serving');
-  assert.equal(pin.path, 'contract/cases-v1.json');
+  assert.equal(pin.path, 'contract/cases-v2.json');
   assert.match(String(pin.commit), /^[0-9a-f]{40}$/);
 });
 
 // The bot's code for each of the contract's, written out here apart from the adapter's own table (local/serving.ts),
-// so that a change to either shows. The control codes come only from routes the bot does not call yet.
+// so that a change to either shows. The control codes come only from routes the bot does not call.
 const BOT_CODES: { readonly [code: string]: string } = {
   unauthorized: 'unauthorized', class_not_allowed: 'unauthorized', scope_not_allowed: 'unauthorized', forbidden: 'unauthorized',
   context_limit: 'context_limit', queue_full: 'rate_limited', timeout: 'timeout', not_found: 'unsupported_server',
@@ -134,7 +134,7 @@ function fill(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(fill);
   return isObject(value) ? Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, fill(inner)])) : value;
 }
-const READY = { contract: '1', boot_id: 'synthetic-boot', status: 'ready', model: alias, context_tokens: cases.service.context_tokens, drain_generation: 0 };
+const READY = { contract: '2', boot_id: 'synthetic-boot', status: 'ready', model: alias, context_tokens: cases.service.context_tokens, drain_generation: 0 };
 const MODELS = { object: 'list', data: [{ id: alias, object: 'model', max_model_len: cases.service.context_tokens }] };
 
 // The contract promises a client no split of the text (contract/README.md there, "response"): the bot must make the
@@ -188,7 +188,8 @@ function problemsOf({ call, controls, body: expected, scopes }: Running, incomin
   if (header('authorization') !== `Bearer ${KEY}`) found.push('the key');
   const extra = Object.keys(incoming.headers).filter(name => name.startsWith('x-') && !name.startsWith('x-simple-serving-'));
   if (extra.length) found.push(`headers ${extra.join(', ')}`);
-  if (call === 'check') {
+  // A GET is a check: the step's own, or the one the adapter makes before its first count or generation.
+  if (call === 'check' || incoming.method === 'GET') {
     if (incoming.method !== 'GET' || sent.length || header('x-simple-serving-class') || header('x-simple-serving-scope')) found.push('a check that is not a plain GET');
     return found;
   }
@@ -257,7 +258,8 @@ test('every public step of the pinned cases gives the bot the result the case ex
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => { server.close(); server.closeAllConnections(); });
-  const provider = createServing({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, model: alias,
+  // A new adapter for every exchange, so that each starts alike: its count or generation comes after its first check.
+  const serving = () => createServing({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, model: alias,
     contextTokens: cases.service.context_tokens, apiKey: KEY, timeoutMs: 10000 });
 
   const counted = { run: 0, gateway: 0, control: 0, unnamed: 0, resplit: 0 };
@@ -266,7 +268,7 @@ test('every public step of the pinned cases gives the bot the result the case ex
     for (const [index, step] of steps.entries()) {
       const label = `${name} #${index + 1}${step.name ? ` (${step.name})` : ''}`;
       // The two kinds of steps a client skips (contract/README.md there): the gateway's own, and those on the control
-      // listener, which the bot does not call yet.
+      // listener, which the bot does not call.
       if (step.only === 'gateway') { counted.gateway++; continue; }
       if (step.request.base === 'control') { counted.control++; continue; }
       assert.equal(step.request.base, 'public', label);
@@ -280,6 +282,7 @@ test('every public step of the pinned cases gives the bot the result the case ex
       const controls = controlsOf(step.request.headers);
       const run = async (split: Split): Promise<{ value?: unknown; failure?: ModelError }> => {
         running = { step, call, controls, body, split, seen: [], problems: [], scopes };
+        const provider = serving();
         try {
           return { value: call === 'generate' ? await provider.generate(request, controls)
             : call === 'count' ? await provider.countInput(request, controls) : await provider.check() };
@@ -300,8 +303,9 @@ test('every public step of the pinned cases gives the bot the result the case ex
         const { value, failure } = await run(split);
         if (split !== 'case') counted.resplit++;
         assert.deepEqual(running!.problems, [], where);
-        assert.deepEqual(running!.seen, call === 'generate' ? ['POST /v1/chat/completions'] : call === 'count' ? ['POST /v1/chat/completions/input_tokens']
-          : ownRoute(call, step.request) === 'GET /v1/models' || result.error === undefined ? ['GET /v1/state', 'GET /v1/models'] : ['GET /v1/state'], where);
+        const check = ['GET /v1/state', 'GET /v1/models'];
+        assert.deepEqual(running!.seen, call !== 'check' ? [...check, ownRoute(call, step.request)]
+          : ownRoute(call, step.request) === 'GET /v1/models' || result.error === undefined ? check : ['GET /v1/state'], where);
         if (result.error !== undefined) {
           assert.ok(failure, `${where}: no failure`);
           assert.ok(Object.hasOwn(BOT_CODES, result.error), where);
@@ -333,5 +337,5 @@ test('every public step of the pinned cases gives the bot the result the case ex
   }
   // A client counts the steps it skips, so that none is skipped by accident; beside them, the reader steps that fail
   // in the bot before any request and the streams it read cut otherwise. A new copy of the cases changes these.
-  assert.deepEqual(counted, { run: 56, gateway: 4, control: 14, unnamed: 3, resplit: 57 });
+  assert.deepEqual(counted, { run: 58, gateway: 4, control: 27, unnamed: 3, resplit: 57 });
 });

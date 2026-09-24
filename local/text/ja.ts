@@ -15,6 +15,8 @@ import type { Messages } from './ru.ts';
 const grouped = (n: number) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 const lastScenes = (n: number | null) => (n === null ? '直近のシーン' : `直近の${n}シーン`);
 const jobs = (n: number | null) => (n === null ? '不明' : String(n));
+const textSize = (label: string, tokens: number | null, chars: number) =>
+  `${label}：${tokens === null ? 'トークン数は不明' : `${grouped(tokens)} トークン`} · ${grouped(chars)} 文字`;
 
 export const ja: Messages = {
   format: {
@@ -61,6 +63,7 @@ export const ja: Messages = {
     next: '次へ ➡️',
     keep: '↩️ 削除しない',
     pictureStyle: '🎨 挿絵のスタイル',
+    characters: '👤 登場人物',
   },
 
   common: {
@@ -115,6 +118,15 @@ export const ja: Messages = {
     note: '変わるのは、メニューとボットのメッセージの言語だけです。物語の言語は、シードと送るメッセージで決まります。',
   },
 
+  variant: {
+    button: '✏️ プロンプトを直してバリエーションを描く',
+    title: '✏️ 挿絵の自分のプロンプト',
+    note: max => `挿絵の下のメモからプロンプトをコピーし、直して1通のメッセージで送ってください。${max}文字までです。これはスタイルも含めたプロンプト全体で、何も足したり削ったりしません。元の挿絵と同じ設定、同じ初期ノイズで描くので、違うのはプロンプトだけです。バリエーションは同じシーンの下に別の挿絵として届きます。`,
+    leave: '↩️ 描かない',
+    drawing: '🎨 バリエーションを描いています…',
+    failed: 'バリエーションは描けませんでした。少し時間をおいてもう一度お試しください。',
+  },
+
   pictureStyle: {
     title: '🎨 挿絵のスタイル',
     current: name => `現在：${name}`,
@@ -155,6 +167,39 @@ export const ja: Messages = {
     drawingSample: '🎨 サンプルを描いています…',
     // `count` is how many styles are drawn, one picture each.
     drawingAll: (count: number) => `🎨 最新のシーンを全${count}スタイルで描いています。画像は1枚ずつ届きます。物語で次の行動をすると描画は止まります。`,
+  },
+
+  characters: {
+    title: story => `👤 登場人物：${story}`,
+    note: 'この物語の挿絵は登場人物をこう描きます。人物をタップすると、説明の全文を見たり、外見を編集したり、肖像を描いたりできます。',
+    none: '登場人物は、物語の最初の挿絵のあとに表示されます。',
+    toStory: '📖 物語へ',
+    cardTitle: (person, story) => `👤 ${person} · ${story}`,
+    look: '外見（タップでコピー）：',
+    lookSize: (tokens, chars) => textSize('外見のテキスト', tokens, chars),
+    clothesOfBranch: branch => `ルート${branch}の最新の挿絵での服装：`,
+    clothesAtStart: 'この物語の挿絵が始まったときの服装：',
+    clothesSize: (tokens, chars) => textSize('服装のテキスト', tokens, chars),
+    noClothes: '服装はまだ記録されていません。',
+    clothesNote: '服装はここでは編集しません。服装は物語の中で変わり、挿絵はシーンから服装を取ります。',
+    sizeNote: '数値はテキストごとに別々に数えたものです。プロンプトには場面の描写とスタイルも入ります。正確な大きさは挿絵の下にあります。',
+    scope: '外見の変更は、この物語のすべてのルートでこれから描く挿絵に適用されます。物語の本文、記憶、描き終えた挿絵は変わりません。いま描いている挿絵は、前の外見で描かれることがあります。',
+    portraitNone: '🖼 肖像はまだありません。肖像はこの外見から顔と全身の体つきを描くので、参考画像を選びやすくなります。',
+    portraitKept: '🖼 肖像を保存しました。この外見で描いた顔と体つきです。',
+    portraitStale: '🖼 保存した肖像は前の外見で描かれています。新しく描くと、今の外見での顔と体つきが見られます。',
+    edit: '✏️ 外見を編集',
+    portrait: '🖼 肖像',
+    back: '↩️ 登場人物一覧へ',
+    editTitle: (person, story) => `✏️ 外見：${person} · ${story}`,
+    editNote: max => `新しい外見を1通のメッセージで、${max}文字まで送ってください。顔、髪、体つき、身長、特徴など。服装と名前は書かないでください。服装は物語が変え、名前はそのままです。挿絵のモデルは英語を最もよく理解します。`,
+    nowText: '現在：',
+    backToCard: '↩️ 人物に戻る',
+    caption: person => `🖼 肖像：${person}。顔と全身の体つきを、飾り気のない中立的な服装で描いています。`,
+    again: '🔄 別の案',
+    keep: '✅ これを残す',
+    kept: person => `✅ 肖像を保存しました：${person}。シーンの挿絵にはまだ使われません。`,
+    drawing: '🎨 肖像を描いています…',
+    portraitFailed: '肖像は描けませんでした。少し時間をおいてもう一度お試しください。',
   },
 
   model: {
@@ -485,6 +530,8 @@ export const ja: Messages = {
     compactionUnverified: command => `圧縮を検証できませんでした。元のシーンと完成したチェックポイントは保存されています。再試行：${command}。`,
     failed: command => `操作を完了できませんでした。完成したシーンとチェックポイントは保存されています。再試行：${command}。`,
     gpuNotConfigured: 'GPUレンタルの制御は、まだ設定されていません。/model で現在のモデルを確認できます。',
+    modelServiceSeparate: 'モデルのサービスは、このチャットからではなく別に起動されます。/model で現在のモデルを確認できます。',
+    modelUnavailable: 'モデルのサービスは今、利用できません。再び動くようになったら、物語を続けられます。',
     gpuPaused: 'GPUが一時停止しました。/model を開いて起動してから、行動をもう一度送ってください。',
     drawing: '🎨 挿絵を描いています…',
     pictureFailed: '挿絵は描けませんでした。シーンは保存されています。',
@@ -528,6 +575,19 @@ export const ja: Messages = {
     sampleBusy: 'シーンはまだ執筆中です。届いてからサンプルを頼んでください。',
     sampleNoScene: 'サンプルは最新のシーンをもとに描きます。物語を始めると、最初のシーンのあとから頼めます。',
     sampleInFlight: 'サンプルを描いているところです。届いたら次のサンプルを頼めます。',
+    promptNeedsText: 'プロンプトはテキストで、1通のメッセージで送ってください。変更せずに戻るには「↩️」を押すか、/cancel を送ってください。',
+    promptTooLong: '長すぎます。プロンプトは4000文字以内にしてください。短くしてもう一度送ってください。',
+    variantOff: 'あなたのシーンにはまだ挿絵が有効になっていないため、バリエーションは描けません。',
+    variantGone: 'この挿絵のバリエーションはもう描けません。シーンが削除されました。',
+    variantChanged: 'その後、挿絵のモデルかその設定が変わったため、以前のものではこの挿絵をもう再現できません。新しいもので描くとプロンプト以外も変わってしまうので、描きません。',
+    variantBusy: 'シーンはまだ執筆中です。届いてからバリエーションを頼んでください。',
+    variantInFlight: 'バリエーションを描いているところです。届いたら次のバリエーションを頼めます。',
+    lookNeedsText: '外見はテキストで、1通のメッセージで送ってください。変更せずに戻るには「↩️」を押すか、/cancel を送ってください。',
+    lookTooLong: '長すぎます。外見は400文字以内にしてください。短くしてもう一度送ってください。',
+    lookGone: 'この登場人物はもう物語にいないため、外見は保存されていません。/menu を開いてください。',
+    portraitOff: 'あなたのシーンにはまだ挿絵が有効になっていないため、肖像は描けません。',
+    portraitStale: 'この肖像はもう保存できません。古くなったか、そのあと外見が変わりました。新しく描いてください。',
+    portraitInFlight: '頼まれた絵を描いているところです。届いたら肖像を頼めます。',
   },
 
   labels: {

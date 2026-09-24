@@ -4,7 +4,6 @@
   "description": "Telegram bot for branching interactive stories: bring your own model (Claude Code, llama.cpp, Codex CLI or an OpenAI-compatible API); seeds, story tree, checkpoints, memory compaction and a world-consistency eval.",
   "license": "MIT",
   "devDependencies": {
-    "@tgcloud/cli": "0.1.2",
     "@types/node": "24.9.2",
     "tiktoken": "^1.0.22",
     "typescript": "7.0.2"
@@ -16,8 +15,8 @@
   },
   "scripts": {
     "test": "node --test local/*.test.ts",
-    "check": "tsc -p tsconfig.json && node local/cloud-lib.ts --check && node local/check.ts",
-    "cloud:lib": "node local/cloud-lib.ts",
+    "test:serving": "node --test local/integration/serving.test.ts",
+    "check": "tsc -p tsconfig.json",
     "start": "node local/start.ts",
     "start:gpu": "node --env-file=.env.gpu local/start.ts",
     "model:probe": "node --env-file=.env.gpu local/model-probe.ts",
@@ -39,10 +38,7 @@
     "gpu:measure": "node --env-file-if-exists=.env.gpu local/gpu-measure.ts",
     "gpu:fake": "node local/fake-llama.ts",
     "gpu:rent": "node --env-file-if-exists=.env.gpu gpu/rent.mjs",
-    "tokenizers": "node local/tokenizer-extract.ts",
-    "deploy": "tgcloud push",
-    "status": "tgcloud status",
-    "run:cloud": "tgcloud run"
+    "tokenizers": "node local/tokenizer-extract.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0"

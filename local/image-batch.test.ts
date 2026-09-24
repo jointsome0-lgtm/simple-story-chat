@@ -117,14 +117,17 @@ function fakeComfy(options: { failCase?: string; refuse?: number; refuseUpload?:
 
 // The same server with the queue ComfyUI really has: one job at a time, in submit order, and a history entry — the
 // whole graph in it — only once a job is over, so a delete sent while the card is still drawing removes nothing.
-// `/interrupt` stops the job the card is working through and records it, as ComfyUI records an interrupted prompt.
+// `/interrupt` stops the job the card is working through, and one given a `prompt_id` only while that is the job it
+// names (server.py:1163-1191); the interrupted job is recorded as failed, as ComfyUI records an interrupted prompt.
+// `afterQueueRead` runs once, the moment the next read of the queue has been answered.
 function serialComfy(jobMs: number) {
   const prompts = new Map<string, string>();
   const finishAt = new Map<string, number>();
   const history = new Map<string, string>();
   const polls = new Map<string, number>();
-  const seen = { submitted: 0, interrupts: 0, queueDeletes: 0 };
+  const seen = { submitted: 0, interrupts: 0, queueDeletes: 0, interrupted: [] as string[] };
   let busyUntil = 0;
+  let afterQueueRead: (() => void) | undefined;
   const settle = () => { for (const [id, at] of [...finishAt]) if (Date.now() >= at) { finishAt.delete(id); history.set(id, prompts.get(id)!); } };
   const running = () => [...finishAt.entries()].sort((a, b) => a[1] - b[1])[0]?.[0];
   const server = createServer((request, response) => {
@@ -143,9 +146,15 @@ function serialComfy(jobMs: number) {
       }
       if (request.method === 'POST' && url.pathname === '/interrupt') {
         seen.interrupts++;
+        const named = (await body().catch(() => ({})) as { prompt_id?: unknown }).prompt_id;
         const id = running();
         // An interrupted prompt lands in the history too, with the whole graph in it.
-        if (id) { finishAt.delete(id); history.set(id, prompts.get(id)!); busyUntil = Date.now(); }
+        if (id && (named === undefined || named === id)) {
+          finishAt.delete(id);
+          history.set(id, prompts.get(id)!);
+          seen.interrupted.push(id);
+          busyUntil = Date.now();
+        }
         return json({});
       }
       if (request.method === 'POST' && url.pathname === '/queue') {
@@ -157,7 +166,10 @@ function serialComfy(jobMs: number) {
       // whose second element is the prompt id.
       if (url.pathname === '/queue') {
         const waiting = [...finishAt.keys()].filter(id => id !== running());
-        return json({ queue_running: running() ? [[0, running()]] : [], queue_pending: waiting.map((id, at) => [at + 1, id]) });
+        json({ queue_running: running() ? [[0, running()]] : [], queue_pending: waiting.map((id, at) => [at + 1, id]) });
+        const then = afterQueueRead;
+        afterQueueRead = undefined;
+        return then?.();
       }
       if (request.method === 'POST' && url.pathname === '/history') {
         for (const id of ((await body()).delete as string[]) ?? []) history.delete(id);
@@ -168,6 +180,7 @@ function serialComfy(jobMs: number) {
         const id = url.pathname.slice('/history/'.length);
         polls.set(id, (polls.get(id) ?? 0) + 1);
         if (!history.has(id)) return json({});
+        if (seen.interrupted.includes(id)) return json({ [id]: { status: { completed: false, status_str: 'error' }, outputs: {} } });
         return json({ [id]: { status: { completed: true, status_str: 'success' }, outputs: { 7: { images: [{ filename: `${id}.png`, subfolder: '', type: 'temp' }] } } } });
       }
       if (url.pathname === '/view') { response.setHeader('content-type', 'image/png'); return response.end(pngWithMetadata('{}')); }
@@ -177,7 +190,10 @@ function serialComfy(jobMs: number) {
   });
   // What the card is still working through, whether or not the harness is waiting for it.
   const onTheCard = () => finishAt.size;
-  return { server, history, polls, seen, settle, onTheCard, listen: () => new Promise<string>(done => server.listen(0, '127.0.0.1', () => done(`http://127.0.0.1:${(server.address() as AddressInfo).port}`))) };
+  // The job `id` is done now, as one that was nearly done would be, and the next one takes the card.
+  const end = (id: string) => { finishAt.set(id, Date.now()); settle(); };
+  return { server, history, polls, seen, settle, onTheCard, end, set afterQueueRead(then: () => void) { afterQueueRead = then; },
+    listen: () => new Promise<string>(done => server.listen(0, '127.0.0.1', () => done(`http://127.0.0.1:${(server.address() as AddressInfo).port}`))) };
 }
 
 const cases: Case[] = [
@@ -535,9 +551,8 @@ test('a picture that outlives the wait is stopped on the card and leaves no reco
   assert.deepEqual([...comfy.history.keys()], [], 'the record of an abandoned job holds the whole prompt');
 });
 
-// Two readers share one card (local/picture.ts), and `/interrupt` carries no prompt id: it stops whatever is being
-// drawn. A reader who gives up while their own picture is still waiting in the queue must therefore not interrupt
-// anything — the job on the card belongs to somebody who is still waiting for it.
+// Two readers share one card (local/picture.ts). A reader who gives up while their own picture is still waiting in
+// the queue must not interrupt anything: the job on the card belongs to somebody who is still waiting for it.
 test('a picture given up while it waits in the queue leaves the one being drawn alone', async t => {
   const comfy = serialComfy(400);
   const url = await comfy.listen();
@@ -552,12 +567,37 @@ test('a picture given up while it waits in the queue leaves the one being drawn 
   await assert.rejects(drawOne({ baseUrl: url, timeoutMs: 5000, signal: stop.signal }, defaultWorkflow(), { pollMs: 5, waitMs: 5000 }),
     (error: { code?: string }) => error.code === 'cancelled');
   assert.equal(comfy.seen.submitted, 2);
-  assert.equal(comfy.seen.interrupts, 0, 'the card was drawing another reader\'s picture');
+  assert.deepEqual(comfy.seen.interrupted, [], 'the card was drawing another reader\'s picture');
   assert.equal(comfy.seen.queueDeletes, 1, 'and the abandoned one was taken out of the queue');
   // A job that never ran writes no record, so nothing is waited for: the ten polls used to run out under every
   // cancelled picture, and `idle()` waited them out.
   assert.equal(comfy.polls.get('p2') ?? 0, 0);
   assert.ok((await busy).bytes.length > 0, 'the picture on the card was drawn and delivered');
+});
+
+// The job being stopped may end, and another reader's take the card, between the read of the queue and the
+// interrupt. An interrupt without an id stopped theirs then, and they got the failure line under a scene they never
+// touched; it names its job now, and the card lets the other one be.
+test('a stop never interrupts the job that took the card after the queue was read', async t => {
+  const comfy = serialComfy(300);
+  const url = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const stop = new AbortController();
+  const mine = drawOne({ baseUrl: url, timeoutMs: 5000, signal: stop.signal }, defaultWorkflow(), { pollMs: 5, waitMs: 5000 });
+  for (let attempt = 0; attempt < 500 && comfy.seen.submitted < 1; attempt++) await new Promise(next => setTimeout(next, 2));
+  const theirs = drawOne({ baseUrl: url, timeoutMs: 5000 }, defaultWorkflow(), { pollMs: 5, waitMs: 5000 });
+  for (let attempt = 0; attempt < 500 && comfy.seen.submitted < 2; attempt++) await new Promise(next => setTimeout(next, 2));
+
+  comfy.afterQueueRead = () => comfy.end('p1');
+  stop.abort();
+  await assert.rejects(mine, (error: { code?: string }) => error.code === 'cancelled');
+  assert.equal(comfy.seen.interrupts, 1);
+  assert.deepEqual(comfy.seen.interrupted, [], 'the interrupt stopped another reader\'s picture');
+  assert.ok((await theirs).bytes.length > 0, 'the other reader\'s picture was drawn and delivered');
+  // The stopped job's record, which holds the whole prompt, was waited for and deleted.
+  await settled();
+  comfy.settle();
+  assert.deepEqual([...comfy.history.keys()], []);
 });
 
 // ComfyUI as the picture card runs it: a graph identical to the one it ran last is answered from the cache, whose output
@@ -745,7 +785,8 @@ function pushingComfy(options: { socket?: 'open' | 'late' | 'silent' | 'closing'
       if (url.pathname === '/queue') { await body(); return json({}); }
       if (url.pathname === '/interrupt') {
         seen.interrupts++;
-        if (running) finish(running, 'interrupted');
+        const named = (await body().catch(() => ({})) as { prompt_id?: unknown }).prompt_id;
+        if (running && (named === undefined || named === running)) finish(running, 'interrupted');
         return json({});
       }
       if (url.pathname === '/view' && files.has(String(url.searchParams.get('filename')))) {

@@ -17,6 +17,8 @@ const count = (n: number, one: string, few: string, many: string) => `${n} ${for
 const grouped = (n: number, separator: string) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, separator);
 const lastScenes = (n: number | null) => (n === null ? 'последние сцены' : `последние ${count(n, 'сцена', 'сцены', 'сцен')}`);
 const jobs = (n: number | null) => (n === null ? 'неизвестно' : String(n));
+const textSize = (label: string, tokens: number | null, chars: number) =>
+  `${label}: ${tokens === null ? 'токены неизвестны' : `${grouped(tokens, ' ')} ${form(tokens, 'токен', 'токена', 'токенов')}`} · ${grouped(chars, ' ')} ${form(chars, 'знак', 'знака', 'знаков')}`;
 
 export const ru = {
   format: {
@@ -77,6 +79,8 @@ export const ru = {
     keep: '↩️ Не удалять',
     // In the menu of a reader whose scenes are illustrated.
     pictureStyle: '🎨 Стиль картинок',
+    // Beside a story, for a reader whose scenes are illustrated.
+    characters: '👤 Персонажи',
   },
 
   // Marks and notes shared by several screens.
@@ -143,6 +147,18 @@ export const ru = {
     note: 'Меняется только язык меню и сообщений бота. Язык историй задают сид и твои сообщения.',
   },
 
+  // A variant of a scene's picture from a prompt the reader writes whole (local/picture.ts `variant`): the button under
+  // the picture's folded prompt, the screen while the reader writes, and the status line while it is drawn.
+  variant: {
+    button: '✏️ Изменить промпт и нарисовать вариант',
+    title: '✏️ Свой промпт для картинки',
+    // `max` is PROMPT_CHARS in local/picture-style.ts.
+    note: (max: number) => `Скопируй промпт из заметки под картинкой, поправь и пришли одним сообщением, до ${max} знаков. Это весь промпт вместе со стилем, я ничего не добавлю и не уберу. Нарисую с теми же настройками и тем же начальным шумом, что и исходную картинку, так что отличаться будет только промпт. Вариант придёт отдельной картинкой под той же сценой.`,
+    leave: '↩️ Не рисовать',
+    drawing: '🎨 Рисую вариант…',
+    failed: 'Не получилось нарисовать вариант. Попробуй ещё раз чуть позже.',
+  },
+
   // The look of the pictures under the scenes (local/picture-style.ts): the picker, a card for every style with its
   // prompt, and the reader's own styles. Style names are buttons: keep them short.
   pictureStyle: {
@@ -192,6 +208,48 @@ export const ru = {
     drawingSample: '🎨 Рисую пример…',
     // `count` is how many styles are drawn, one picture each.
     drawingAll: (count: number) => `🎨 Рисую последнюю сцену во всех стилях (${count}). Картинки придут по одной; следующий ход в истории остановит рисование.`,
+  },
+
+  // The people the pictures of a story draw (local/picture.ts): the list the story's first picture writes, a card for
+  // each person, the look the reader writes for them, and a portrait drawn from it on request, to pick a reference by.
+  // Looks and clothes stay in English, as the picture model reads them. `person` is a name as the story gives it, not
+  // quoted; `story` is common.storyName.
+  characters: {
+    title: (story: string) => `👤 Персонажи: ${story}`,
+    note: 'Такими их рисуют картинки этой истории. Нажми на персонажа, чтобы увидеть описание целиком, поправить внешность или нарисовать портрет.',
+    none: 'Персонажи появятся в истории после первой иллюстрации.',
+    toStory: '📖 К истории',
+    cardTitle: (person: string, story: string) => `👤 ${person} · ${story}`,
+    look: 'Внешность (нажми, чтобы скопировать):',
+    // The size of the text above, alone: `tokens` as the picture model reads it, null when the bot has no tokenizer.
+    lookSize: (tokens: number | null, chars: number) => textSize('Текст внешности', tokens, chars),
+    // `branch` is the quoted name of the branch being played.
+    clothesOfBranch: (branch: string) => `Одежда на последней картинке ветки ${branch}:`,
+    clothesAtStart: 'Одежда, с которой начались картинки этой истории:',
+    clothesSize: (tokens: number | null, chars: number) => textSize('Текст одежды', tokens, chars),
+    noClothes: 'Одежда пока не записана.',
+    clothesNote: 'Одежду здесь не правят: её меняет сама история, и картинки берут её из сцен.',
+    sizeNote: 'Числа относятся к каждому тексту отдельно. В промпт также входят описание сцены и стиль; точный размер указан под картинкой.',
+    scope: 'Правка внешности действует на следующие картинки всех веток этой истории. Текст истории, память и уже нарисованные картинки не меняются, а картинка, которая рисуется сейчас, может выйти по-старому.',
+    portraitNone: '🖼 Портрета пока нет. Портрет рисует лицо и фигуру в полный рост по этой внешности — так проще подобрать референс.',
+    portraitKept: '🖼 Портрет сохранён: лицо и фигура по этой внешности.',
+    portraitStale: '🖼 Сохранённый портрет нарисован по прежней внешности. Новый покажет лицо и фигуру по этой.',
+    edit: '✏️ Изменить внешность',
+    portrait: '🖼 Портрет',
+    back: '↩️ К персонажам',
+    // While the reader writes a look. `max` is a limit in characters.
+    editTitle: (person: string, story: string) => `✏️ Внешность: ${person} · ${story}`,
+    editNote: (max: number) => `Пришли новую внешность одним сообщением, до ${max} знаков: лицо, волосы, телосложение, рост, приметы. Одежду и имя не пиши: одежду меняет история, а имя остаётся прежним. Модель картинок лучше всего понимает английский.`,
+    nowText: 'Сейчас:',
+    backToCard: '↩️ К персонажу',
+    // Under a portrait, which is drawn in plain neutral clothes whatever the story's.
+    caption: (person: string) => `🖼 Портрет: ${person}. Лицо и фигура в полный рост, в простой нейтральной одежде.`,
+    again: '🔄 Ещё вариант',
+    keep: '✅ Оставить',
+    // Once the reader kept a portrait. The scenes' pictures do not use it yet.
+    kept: (person: string) => `✅ Портрет сохранён: ${person}. В картинки к сценам он пока не попадает.`,
+    drawing: '🎨 Рисую портрет…',
+    portraitFailed: 'Не получилось нарисовать портрет. Попробуй ещё раз чуть позже.',
   },
 
   model: {
@@ -577,6 +635,10 @@ export const ru = {
     compactionUnverified: (command: string) => `Сжатие не удалось проверить. Исходные сцены и готовые чекпоинты сохранены. Повторить: ${command}.`,
     failed: (command: string) => `Не получилось завершить операцию. Готовые сцены и чекпоинты сохранены. Повторить: ${command}.`,
     gpuNotConfigured: 'Управление арендой GPU пока не настроено. /model покажет текущую модель.',
+    // /gpu_start and /gpu_pause when simple-serving runs the card: the bot neither starts nor pauses it.
+    modelServiceSeparate: 'Сервис модели запускается отдельно, не из этого чата. /model покажет текущую модель.',
+    // A model service that is starting, asleep or out of reach. The bot cannot tell which, so it names none.
+    modelUnavailable: 'Сервис модели сейчас недоступен. Продолжить историю можно, когда он снова заработает.',
     gpuPaused: 'GPU перешла на паузу. Открой /model и запусти её; затем отправь действие снова.',
     // Стоит под сценой, пока рисуется картинка, и исчезает вместе с ней.
     drawing: '🎨 Рисую иллюстрацию…',
@@ -629,6 +691,21 @@ export const ru = {
     sampleBusy: 'Сцена ещё пишется. Попроси пример, когда она придёт.',
     sampleNoScene: 'Пример рисуется по последней сцене. Начни историю, и после первой сцены его можно будет попросить.',
     sampleInFlight: 'Уже рисую пример. Следующий можно попросить, когда он придёт.',
+    // A variant of a picture (local/picture.ts `variant`). The number is PROMPT_CHARS in local/picture-style.ts.
+    promptNeedsText: 'Пришли промпт текстом, одним сообщением. Выйти без изменений можно кнопкой «↩️» или командой /cancel.',
+    promptTooLong: 'Слишком длинно: промпт должен уложиться в 4000 знаков. Сократи и пришли снова.',
+    variantOff: 'Картинки к твоим сценам пока не включены, поэтому вариант нарисовать нельзя.',
+    variantGone: 'Вариант этой картинки уже не нарисовать: её сцена удалена.',
+    variantChanged: 'С тех пор поменялась модель картинок или её настройки, и с прежними эту картинку уже не повторить. С новыми рисовать не буду, иначе отличался бы не только промпт.',
+    variantBusy: 'Сцена ещё пишется. Попроси вариант, когда она придёт.',
+    variantInFlight: 'Уже рисую вариант. Следующий можно попросить, когда он придёт.',
+    // While the reader writes a look, and under a portrait. The number is LOOK_CHARS in local/picture.ts.
+    lookNeedsText: 'Пришли внешность текстом, одним сообщением. Выйти без изменений можно кнопкой «↩️» или командой /cancel.',
+    lookTooLong: 'Слишком длинно: внешность должна уложиться в 400 знаков. Сократи и пришли снова.',
+    lookGone: 'Этого персонажа уже нет в истории, внешность не сохранена. Открой /menu.',
+    portraitOff: 'Картинки к твоим сценам пока не включены, поэтому портрет нарисовать нельзя.',
+    portraitStale: 'Этот портрет уже не сохранить: он устарел или внешность с тех пор изменилась. Нарисуй новый.',
+    portraitInFlight: 'Уже рисую картинку по твоей просьбе. Портрет можно попросить, когда она придёт.',
   },
 
   // Names the bot gives to branches and checkpoints it creates. They are stored with the story and keep the language

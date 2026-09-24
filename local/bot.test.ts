@@ -14,6 +14,7 @@ import type { ErrorDetails } from './model-error.ts';
 import { ModelError, safeErrorDetails } from './model-error.ts';
 import type { Controls, GenerateControls, GenerationResult, ModelRequest, Provider } from './model.ts';
 import type { Illustrator, SampleRequest } from './picture.ts';
+import { personTag } from './picture.ts';
 import { PRESETS } from './picture-style.ts';
 import type { TelegramPayload } from './telegram.ts';
 import { render, scenePrefix, sceneKeyboard } from './ui.ts';
@@ -914,6 +915,46 @@ test('the model screen does not call a provider verified when it has no check', 
   assert.match(server.sent.at(-1)!.payload.text, /Последняя успешная проверка/);
 });
 
+test('while the model service is down the reader is told so, the story stays, and it goes on once the service is back', async t => {
+  let service: 'refused' | 'starting' | 'up' = 'refused';
+  const f = fixture(t, { providerName: 'simple-serving', generate: async (_request, controls) => {
+    // A closed tunnel, then a service that is still starting: the bot cannot tell a sleeping card from either.
+    if (service === 'refused') throw new ModelError('provider_failed', { phase: 'generate', transportCode: 'ECONNREFUSED' });
+    if (service === 'starting') throw new ModelError('model_unavailable', { phase: 'generate', httpStatus: 503, servingCode: 'starting' });
+    await controls.onText('2026-08-02 20:00\n\n');
+    return { text: '2026-08-02 20:00\n\nСинтетическая сцена.', finishReason: 'stop' };
+  } });
+  const notices = () => f.sent.filter(item => item.method === 'sendMessage').map(item => item.payload.text);
+  const scenes = () => {
+    const state = f.store.read(1);
+    const story = Object.values(state.stories)[0];
+    return history(story, story.branches[state.active!.branchId].head).length;
+  };
+  await f.start();
+  const before = scenes();
+  assert.equal(notices().at(-1), texts('ru').notices.modelUnavailable);
+  service = 'starting';
+  await f.bot.handle(f.message('/continue'));
+  await f.bot.idle();
+  assert.deepEqual([notices().at(-1), scenes()], [texts('ru').notices.modelUnavailable, before]);
+  service = 'up';
+  await f.bot.handle(f.message('/continue'));
+  await f.bot.idle();
+  assert.equal(scenes(), before + 1);
+});
+
+test('on simple-serving /gpu_start and /gpu_pause say the model service is started apart from this chat', async t => {
+  const f = fixture(t, { providerName: 'simple-serving' });
+  for (const command of ['/gpu_start', '/gpu_pause']) {
+    await f.bot.handle(f.message(command));
+    assert.equal(f.sent.at(-1)!.payload.text, texts('ru').notices.modelServiceSeparate);
+  }
+  // A bot without GPU control on another provider says so as before.
+  const cli = fixture(t);
+  await cli.bot.handle(cli.message('/gpu_start'));
+  assert.equal(cli.sent.at(-1)!.payload.text, texts('ru').notices.gpuNotConfigured);
+});
+
 // The fixture's updates come from a Russian Telegram app; these come from an app in the given language.
 function speaking<T extends Update>(update: T, languageCode: string | undefined): T {
   const from = update.message?.from ?? update.callback_query?.from;
@@ -1121,4 +1162,82 @@ test('a reader keeps a library of picture styles: writes one, finds it chosen, e
   await f.bot.handle(f.click('style-samples', 2));
   assert.equal(shown(), texts('ru').errors.sampleOff);
   assert.equal(drawn.length, 2);
+});
+
+test('a reader writes the look of one person of a story: that person only, found again on save, and any button leaves', async t => {
+  const f = fixture(t, { illustrator: sketchbook([]) });
+  await f.start();
+  const calls = f.requests.length;
+  const shown = () => f.sent.at(-1)!.payload.text;
+  const state = () => f.store.read('1');
+  const storyId = state().active!.storyId;
+  const mira = { name: 'Мира', look: 'A tall woman with short grey hair.', outfit: 'a dark wool coat' };
+  f.store.mutate('1', library => { library.stories[storyId].sheet = [mira,
+    { name: 'Олег', look: 'A broad-shouldered man with a shaved head.', outfit: 'a fisherman sweater' }]; });
+  // A button names a person by their place on the sheet and the hash of their name (local/picture.ts `personTag`).
+  const at = (index: number, name: string) => `${storyId}:${index}:${personTag(name)}`;
+
+  // The next message after the edit button is the look, on one line, and never a move in the story.
+  await f.bot.handle(f.click(`view:character:${at(1, 'Олег')}`));
+  assert.match(shown(), /^👤 Олег · «Маяк» · история 1\n/);
+  await f.bot.handle(f.click(`look-edit:${at(1, 'Олег')}`));
+  assert.deepEqual(state().ui, { input: 'look', storyId, name: 'Олег' });
+  assert.match(shown(), /до 400 знаков/);
+  await f.bot.handle(f.message('A broad-shouldered man\nwith a shaved head  and a broken nose.'));
+  assert.deepEqual(state().stories[storyId].sheet, [mira, { name: 'Олег', look: 'A broad-shouldered man with a shaved head and a broken nose.',
+    outfit: 'a fisherman sweater', edited: true }]);
+  assert.equal(state().ui, null);
+  assert.match(shown(), /^👤 Олег · «Маяк» · история 1\n/);
+  assert.equal(f.requests.length, calls, 'no scene was asked for');
+
+  // What does not fit is refused and the bot keeps waiting; any button or command leaves without a change.
+  await f.bot.handle(f.click(`look-edit:${at(0, 'Мира')}`));
+  await f.bot.handle(f.message('y'.repeat(401)));
+  assert.equal(shown(), texts('ru').errors.lookTooLong);
+  await f.bot.handle(f.message(' \n '));
+  assert.equal(shown(), texts('ru').errors.lookNeedsText);
+  await f.bot.handle(f.message(undefined));
+  assert.equal(shown(), texts('ru').errors.lookNeedsText);
+  assert.deepEqual(state().ui, { input: 'look', storyId, name: 'Мира' });
+  await f.bot.handle(f.click('view:home'));
+  assert.equal(state().ui, null);
+  await f.bot.handle(f.click(`look-edit:${at(0, 'Мира')}`));
+  await f.bot.handle(f.message('/last'));
+  assert.equal(state().ui, null);
+  assert.deepEqual(state().stories[storyId].sheet![0], mira);
+  // A look at the limit is kept whole.
+  await f.bot.handle(f.click(`look-edit:${at(0, 'Мира')}`));
+  await f.bot.handle(f.message(`${'x'.repeat(399)}.`));
+  assert.equal(state().stories[storyId].sheet![0].look, `${'x'.repeat(399)}.`);
+
+  // A button keeps its person too: once a sheet written anew puts Олег where Мира stood, her old button is refused
+  // and waits for nobody's look, his included, while the button of her new place is hers.
+  f.store.mutate('1', library => { const sheet = library.stories[storyId].sheet!; library.stories[storyId].sheet = [sheet[1], sheet[0]]; });
+  await f.bot.handle(f.click(`look-edit:${at(0, 'Мира')}`));
+  assert.equal(shown(), texts('ru').errors.staleButton);
+  assert.equal(state().ui, null);
+  await f.bot.handle(f.click(`view:character:${at(0, 'Мира')}`));
+  assert.match(shown(), /^👤 Персонажи: /, 'her old card button opens the list, not his card');
+
+  // The input keeps its person: once the sheet is written anew without them, the look has nowhere to go.
+  await f.bot.handle(f.click(`look-edit:${at(1, 'Мира')}`));
+  assert.deepEqual(state().ui, { input: 'look', storyId, name: 'Мира' });
+  f.store.mutate('1', library => { library.stories[storyId].sheet = [{ name: 'Олег', look: 'Another man.', outfit: '' }]; });
+  await f.bot.handle(f.message('A tall woman with a braid.'));
+  assert.equal(shown(), texts('ru').errors.lookGone);
+  assert.equal(state().ui, null);
+  assert.deepEqual(state().stories[storyId].sheet, [{ name: 'Олег', look: 'Another man.', outfit: '' }]);
+  assert.equal(f.requests.length, calls);
+
+  // A button for nobody on the sheet is stale, and so is one of another reader, whose library has no such person.
+  for (const data of [`look-edit:${storyId}:5:${personTag('Олег')}`, `look-edit:${storyId}:x:${personTag('Олег')}`, `look-edit:${storyId}:0`,
+    `look-edit:${at(0, 'Мира')}`, `look-edit:h404:0:${personTag('Олег')}`, `look-edit:__proto__:0:${personTag('Олег')}`]) {
+    await f.bot.handle(f.click(data));
+    assert.equal(shown(), texts('ru').errors.staleButton, data);
+  }
+  await f.start(2);
+  await f.bot.handle(f.click(`look-edit:${at(0, 'Олег')}`, 2));
+  assert.equal(shown(), texts('ru').errors.staleButton);
+  assert.equal(f.store.read('2').ui, null);
+  assert.equal(state().stories[storyId].sheet![0].look, 'Another man.');
 });

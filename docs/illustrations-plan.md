@@ -824,10 +824,48 @@ the scene's own and every sample, now gets a reply right after it: a rich messag
 prompt's size, which opens to the prompt as plain text that wraps on a phone (`foldedPrompt`, docs/telegram-ui.md). The prompt goes to
 the reader of the story it was drawn from and to nobody else; the logs still carry counts alone. The note is sent
 through `sendKept` like the photo, so a deletion of the scene takes it out of the chat with the photo. A note that
-Telegram refuses costs the note alone and leaves a `picture_prompt_unsent` row with Telegram's code.
+Telegram refuses costs the note alone and leaves a `picture_prompt_unsent` row with Telegram's code. A photo already
+handed to Telegram when the reader's next move or `/cancel` stops its picture goes out with its note all the same
+(decided 2026-09-25): it is in the chat either way, and of no use there without the prompt it was drawn from. Nothing
+of that picture follows the note, and its row is `ready` with `cancelled: true`.
 
 The size is the prompt's characters and, when the bot is given the picture model's tokenizer (`promptTokens` in the
 illustrator's deps), its tokens as the text encoder reads them, with the style line's share: the count of the whole
 prompt less the count of the description before the line, so that the token where the two meet is the line's. The
 `picture` and `picture_sample` rows carry the same numbers as `promptCharacters`, `pictureTokens` and `styleTokens`.
 Until the tokenizer is wired in, the note and the rows give characters alone.
+
+## A variant from the reader's own prompt (2026-09-24)
+
+The owner asked for a way to edit the prompt of the picture after a scene, for tests. The note under a scene's own
+picture now has a button that asks for a whole prompt: the reader copies the prompt from the note, edits it and sends
+it, and the bot draws it as it came. Nothing is assembled, no name or age is cut out, no style line is added. The
+screens are in [telegram-ui.md](telegram-ui.md#picture-styles).
+
+Two prompts compared mean nothing if anything else differs, so a variant is drawn by the recipe of the picture it
+varies, never by the configuration of the day. The scene keeps, as `picture`, the seed of its own picture, a hash of
+the graph as the bot read it, the checkpoint's file name, and the size, steps, cfg, sampler and scheduler it was drawn
+with (`PictureRecipe` in `lib/library.ts`), written in the same write that records the photo (`sendKept` in
+`local/picture.ts`). It lives as long as the scene, not as long as the photo's `sentPictures` record, which goes after
+the 48 hours in which a bot may delete its message: a variant can be drawn under any scene's picture drawn since
+scenes keep it, while the graph and the checkpoint are the same. A picture drawn with a graph or a checkpoint the bot
+no longer has is refused with the reason, rather than drawn with another. There is no choice of seed: a new seed
+would mix what the words do with what the noise does. Samples get no button and no recipe, because this first
+version answers the request about the picture after a scene.
+
+The recipe pins the request and not the card: the graph with the file names in it, the checkpoint's name, the seed,
+the size and the sampler settings. The card's software, and weights replaced under the same file name, are not in it,
+and after a change to either the same recipe can draw a different picture.
+
+The variant goes under the same scene as a photo of its own. The note under it counts the tokens of that prompt and
+gives no style share, which nobody knows for a prompt written whole. It was drawn by the scene's recipe, so its note
+has the same button, and it leaves the chat with the scene. The reader's permission, the scene and its recipe are
+checked when the button is pressed, when the prompt arrives, before the drawing and before the photo goes out. A
+variant asks the language model nothing and holds none of its card, and it changes nothing of the story: not the
+sheet, the clothes or the frame kept for samples. The reader's next move stops it, and a failure is told once and
+never tried again. The row is `picture_variant`, with `edited: true` beside the counts `picture` has and no word of
+the prompt. The bot keeps the prompt in neither its library nor its technical logs, not even while it waits for it.
+Telegram keeps the reader's message and the note under the variant, and the card holds the job as long as it holds
+any picture's ([gpu.md](gpu.md#what-the-card-keeps-of-a-picture)). A prompt may have 4000 characters
+(`PROMPT_CHARS` in `local/picture-style.ts`): at five characters for every escaped `&`, the note still fits the 32768
+of a rich message.

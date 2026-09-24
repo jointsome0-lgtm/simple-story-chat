@@ -37,11 +37,11 @@ chmod 600 .env
 npm start
 ```
 
-`npm test` checks saving, branching, deletion, isolation of users, repeated events, stream failures, navigation, and that `lib/library.js` matches `lib/library.ts`. `npm run check` (after `npm install`) checks strict TypeScript types, that `lib/library.js` is up to date, and the syntax of the cloud JS. These commands do not call Telegram or a paid model. Test data is created in a temporary directory.
+`npm test` checks saving, branching, deletion, isolation of users, repeated events, stream failures and navigation. `npm run check` (after `npm install`) checks strict TypeScript types. These commands do not call Telegram or a paid model. Test data is created in a temporary directory.
 
 An AI agent can run and test stories without Telegram through the [agent interface](docs/agent-interface.md): `npm run --silent agent -- <call> --json '{...}'` for scripts, or `npm run --silent mcp` as an MCP server for Claude Code or Codex. It keeps its own library in `data/agents.sqlite` and never opens the bot's database.
 
-The working code is in `local/`: strict TypeScript that Node 24 runs without a build step. `schema.js`, `handlers/` and the other files in `lib/` belong to an earlier draft for Telegram Serverless; the local bot uses only the pure library logic from `lib/library.ts`. The draft needs `lib/library.js`, which is generated from `lib/library.ts` by `npm run cloud:lib`. The cloud draft is not deployed.
+The working code is in `local/`: strict TypeScript that Node 24 runs without a build step. The pure library logic is in `lib/library.ts`.
 
 ## Limitations
 

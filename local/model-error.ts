@@ -90,6 +90,8 @@ export type ErrorDetails = {
   // in which style, and for a sample of a style whether the scene's frame was still in memory.
   imageRole?: typeof IMAGE_ROLES[number]; outcome?: typeof OUTCOMES[number]; cancelled?: boolean;
   pictureStyle?: typeof PICTURE_STYLES[number]; frameReused?: boolean;
+  // A picture drawn from a prompt the reader wrote whole (local/picture.ts `variant`) rather than one the bot assembled.
+  edited?: boolean;
   // A sheet written in place of an older one that still had the clothes in its appearance lines.
   sheetRewritten?: boolean;
   // A failed Claude CLI run: how it ended and whether the CLI itself called the result an error.
@@ -127,6 +129,7 @@ export function safeErrorDetails(value: unknown = {}): ErrorDetails {
   if (typeof input?.cancelled === 'boolean') result.cancelled = input.cancelled;
   if (member(PICTURE_STYLES, input?.pictureStyle)) result.pictureStyle = input.pictureStyle;
   if (typeof input?.frameReused === 'boolean') result.frameReused = input.frameReused;
+  if (typeof input?.edited === 'boolean') result.edited = input.edited;
   if (typeof input?.sheetRewritten === 'boolean') result.sheetRewritten = input.sheetRewritten;
   if (member(CLI_RESULTS, input?.cliResult)) result.cliResult = input.cliResult;
   if (typeof input?.cliError === 'boolean') result.cliError = input.cliError;
@@ -170,4 +173,11 @@ export const reasonCode = (error: unknown): Reason => {
 // TelegramError carries an HTTP-like number or a string. Callers compare or sanitize the code.
 export function errorCode(error: unknown): string | number | undefined {
   return (error as { code?: string | number }).code;
+}
+
+// A model that is not there now, rather than one that answered wrongly: a service that is starting, draining or asleep
+// (`model_unavailable`), or one out of reach, such as behind a closed tunnel (a transport failure).
+export function unavailable(error: unknown) {
+  const { code, transportCode } = (error ?? {}) as { code?: unknown; transportCode?: unknown };
+  return code === 'model_unavailable' || (code === 'provider_failed' && transportCode !== undefined);
 }

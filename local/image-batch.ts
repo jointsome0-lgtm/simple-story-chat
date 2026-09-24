@@ -453,7 +453,7 @@ export function withoutLooks(one: Case, bound: string[]): string {
 
 // What the card is drawing now and what waits behind it. A queue entry is an array whose second element is the
 // prompt id; a server that answers with anything else, or does not answer at all, is read as an empty queue, and
-// then `stopJob` below does the one thing that is safe on an unknown card.
+// then `stopJob` below waits for no record.
 const promptIds = (list: unknown): string[] => (Array.isArray(list) ? list : [])
   .flatMap(one => (Array.isArray(one) && typeof one[1] === 'string' ? [one[1]] : []));
 async function readQueue(comfy: Comfy): Promise<{ running: string[]; pending: string[] }> {
@@ -469,17 +469,19 @@ async function readQueue(comfy: Comfy): Promise<{ running: string[]; pending: st
 // delete in `drawOne`'s `finally` has already run. So: out of the queue if it is still waiting, interrupted if it is
 // drawing, and then waited for, so that there is a record for the delete to remove.
 //
-// `/interrupt` carries no id: it stops whatever the card is drawing. With one card and two readers that is somebody
-// else's picture as often as ours, and they would get the failure line under a scene they never touched. So the
-// queue is read first and the interrupt is sent only while the card says this job is the one it is drawing. A job
-// that was still waiting is gone with the delete and will never write a record, so there is nothing to wait for
-// either; a card that did not answer the queue is left alone, because a wrong interrupt costs another reader their
-// picture and a missed one costs this reader's job a few more seconds of a card we are already paying for.
+// With one card and two readers, the job being drawn is somebody else's as often as ours, and an interrupt that
+// reached theirs would give them the failure line under a scene they never touched. So the interrupt names this
+// job: the pinned server stops a job named by `prompt_id` only while it is the one being drawn, and does nothing
+// otherwise (server.py:1163-1191), where an interrupt without an id stops whatever is drawn. The queue is read after
+// the delete, when the job can no longer go from waiting to being drawn: one that did so a moment earlier is being
+// drawn now, and is interrupted and waited for like any other. One that is not was taken out by the delete, or is
+// over and has its record, and there is nothing to wait for. The interrupt goes either way, since it can stop no
+// other job, and it is all that can stop this one on a card that did not answer the queue.
 async function stopJob(comfy: Comfy, promptId: string, pollMs: number) {
-  const queue = await readQueue(comfy);
   await post(comfy, '/queue', { delete: [promptId] }).catch(() => undefined);
+  const queue = await readQueue(comfy);
+  await post(comfy, '/interrupt', { prompt_id: promptId }).catch(() => undefined);
   if (!queue.running.includes(promptId)) return;
-  await call(comfy, '/interrupt', { method: 'POST' }).catch(() => undefined);
   let missing = 0;
   for (let poll = 0; poll < 10; poll++) {
     const seen: Record<string, HistoryEntry> = await call(comfy, `/history/${promptId}`)

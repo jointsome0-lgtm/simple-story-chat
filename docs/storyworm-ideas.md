@@ -125,7 +125,7 @@ Hypothesis: if the current value ("where the item is, what is with the body, wha
 Change:
 - `local/memory.ts` (`plain`): a fact with `kind=state` gets the fields `subject` (the name verbatim from the text) and `slot` from the enum `holder`, `condition`, `available_from`, `version`, `remaining`. `remaining` holds only a number named in the text. `counters` are removed, the rules paragraph about keys is shortened to one or two sentences, the length bounds are as in J.
 - `local/prompt.ts`: `stateText` groups the last values by `subject`. The code canonicalizes the name: case, ё/е, quotation marks, spaces. If two names differ by one word, both candidates are printed with dates, without a choice.
-- `lib/library.ts`: the `Fact` type, then `npm run cloud:lib`. The tests go in `local/memory.test.ts`.
+- `lib/library.ts`: the `Fact` type. The tests go in `local/memory.test.ts`.
 
 Keys:
 - Shift: `turn14_dagger_with_tarek`, `dagger_source`, `turn9_left_hand_spared`, `turn15_still_broken`, `healer_still_broken`, `wrist_limits`.

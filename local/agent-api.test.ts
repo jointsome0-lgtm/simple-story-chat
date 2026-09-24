@@ -406,3 +406,62 @@ test('cancelling a turn while its control request opens settles at once', async 
   await assert.rejects(pending, { code: 'cancelled' });
   turn.end();
 });
+
+test('simple-serving is called directly, as an agent, once it has passed a check, even while another bot\'s queue answers on the socket', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'simple-chat-agent-serving-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  // A synthetic gateway: the state each case sets, the models route with the same context, a count and a stream. It
+  // keeps every call, and whose each count or generation said it was.
+  let state: [number, { readonly [field: string]: unknown }] = [503, {}];
+  const seen: string[] = [];
+  const gateway = http.createServer((req, res) => {
+    seen.push([req.method, req.url, req.headers['x-simple-serving-class'], req.headers['x-simple-serving-scope']].filter(Boolean).join(' '));
+    req.resume();
+    const send = (status: number, value: object) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(value)); };
+    if (req.url === '/v1/state') return send(...state);
+    if (req.url === '/v1/models') return send(200, { object: 'list', data: [{ id: 'synthetic-alias', max_model_len: state[1].context_tokens }] });
+    if (req.url?.endsWith('/input_tokens')) return send(200, { input_tokens: 7 });
+    const event = (value: object) => `data: ${JSON.stringify({ model: 'synthetic-alias', ...value })}\n\n`;
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    res.end(event({ choices: [{ index: 0, delta: { content: 'direct scene' }, finish_reason: 'stop' }] })
+      + event({ choices: [], usage: { prompt_tokens: 7, completion_tokens: 2 } }) + 'data: [DONE]\n\n');
+  });
+  await new Promise<void>(resolve => gateway.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => gateway.close(resolve)));
+  const config = loadAgentConfig(directory, { SIMPLE_CHAT_PROVIDER: 'simple-serving', SIMPLE_CHAT_API_KEY: 'synthetic-key',
+    SIMPLE_CHAT_MODEL: 'synthetic-alias', SIMPLE_CHAT_BASE_URL: `http://127.0.0.1:${(gateway.address() as { port: number }).port}` });
+  mkdirSync(dirname(config.modelSocket), { recursive: true });
+  let asked = 0;
+  const socket = http.createServer((_req, res) => {
+    asked++;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ model: config.model, gpu: { status: 'ready' } }));
+  });
+  await new Promise<void>(resolve => socket.listen(config.modelSocket, resolve));
+  t.after(() => new Promise(resolve => socket.close(resolve)));
+  // A service of another contract, model or context gets no text, neither a count nor a generation.
+  const ready = { contract: '2', status: 'ready', model: 'synthetic-alias', context_tokens: config.contextTokens };
+  for (const [answer, code] of [[{ ...ready, contract: '1' }, 'unsupported_server'], [{ ...ready, contract: 2 }, 'unsupported_server'],
+    [{ ...ready, model: 'other-alias' }, 'unexpected_model'], [{ ...ready, context_tokens: config.contextTokens - 1 }, 'context_limit']] as const) {
+    state = [200, answer];
+    const { provider } = await agentProvider(config);
+    await assert.rejects(provider.countInput!(synthetic), { code });
+    await assert.rejects(provider.generate(synthetic), { code });
+  }
+  assert.deepEqual(seen.filter(call => !call.startsWith('GET ')), []);
+  // A check that fails stops its call, and the next call checks again. Once one has passed, the counts and the
+  // generations go on without another, and say they are the agent's.
+  const { provider, queue } = await agentProvider(config);
+  state = [503, { error: { code: 'starting' } }];
+  await assert.rejects(provider.generate(synthetic), { code: 'model_unavailable' });
+  state = [200, ready];
+  seen.length = 0;
+  const turn = provider.openTurn!();
+  assert.equal(await turn.countInput!(synthetic), 7);
+  assert.equal((await turn.generate(synthetic)).text, 'direct scene');
+  turn.end();
+  assert.equal((await provider.generate(synthetic)).text, 'direct scene');
+  assert.deepEqual([queue, asked], [false, 0]);
+  assert.deepEqual(seen, ['GET /v1/state', 'GET /v1/models', 'POST /v1/chat/completions/input_tokens agent agent',
+    'POST /v1/chat/completions agent agent', 'POST /v1/chat/completions/input_tokens agent agent', 'POST /v1/chat/completions agent agent']);
+});
