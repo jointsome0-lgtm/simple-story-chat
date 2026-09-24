@@ -32,10 +32,10 @@ export type Controls = {
 export type GenerateControls = Controls & {
   onText?: (delta: string) => unknown; inputLimitTokens?: number; onQueued?: () => void; slot?: number;
 };
-// Server-side counts and durations of one request, as llama-server reports them, and the pool slot it ran in. For logs
-// only; never stored.
+// Server-side counts and durations of one request, as llama-server reports them, and the pool slot it ran in; or as a
+// simple-serving gateway measures them (`serving…`, local/serving.ts). For logs only; never stored.
 export type Timings = Partial<Record<'cacheTokens' | 'promptTokens' | 'promptMs' | 'predictedTokens' | 'predictedMs'
-  | 'draftTokens' | 'draftAcceptedTokens' | 'slot', number>>;
+  | 'draftTokens' | 'draftAcceptedTokens' | 'slot' | 'servingWaitMs' | 'servingFirstTokenMs' | 'servingTotalMs', number>>;
 export type GenerationResult = {
   text: string; finishReason: 'stop' | 'length'; usage?: Usage | null; timings?: Timings; streamResultMismatch?: boolean;
 };

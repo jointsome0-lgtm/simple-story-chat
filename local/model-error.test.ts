@@ -37,6 +37,21 @@ test('a scene row carries the estimate it was sent on as a count, and nothing el
   for (const estimateTokens of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1, null]) assert.deepEqual(safeErrorDetails({ estimateTokens }), {});
 });
 
+// A request through a simple-serving gateway (local/serving.ts): its own three measurements beside the bot's queue,
+// and the gateway's code of a refusal as a word of the contract's list, never the body it came in.
+test('a gateway request logs its measurements as counts and its refusal as a code of a closed list', () => {
+  assert.deepEqual(safeErrorDetails({ waitMs: 3, servingWaitMs: 0, servingFirstTokenMs: 410, servingTotalMs: 5200 }),
+    { waitMs: 3, servingWaitMs: 0, servingFirstTokenMs: 410, servingTotalMs: 5200 });
+  assert.deepEqual(safeErrorDetails({ servingWaitMs: -1, servingFirstTokenMs: 1.5, servingTotalMs: '5200' }), {});
+  for (const servingCode of ['class_not_allowed', 'queue_full', 'drained', 'engine_unavailable']) {
+    assert.equal(safeErrorDetails({ servingCode }).servingCode, servingCode);
+  }
+  assert.deepEqual(safeErrorDetails({ servingCode: 'PRIVATE_TEXT', httpStatus: 400 }), { servingCode: 'other', httpStatus: 400 });
+  assert.deepEqual(safeErrorDetails({ servingCode: { code: 'queue_full' } }), {});
+  const error = new ModelError('rate_limited', { servingCode: 'queue_full', httpStatus: 429, phase: 'generate', body: 'PRIVATE_BODY' });
+  assert.deepEqual({ ...error }, { code: 'rate_limited', servingCode: 'queue_full', httpStatus: 429, phase: 'generate' });
+});
+
 test('an illustrated scene logs its durations and the checkpoint role, never the seed, the prompt or the file', () => {
   assert.deepEqual(safeErrorDetails({ imageRole: 'alternate', cancelled: true, describeMs: 6200, imageQueueMs: 40,
     imageMs: 9500, imageSteps: 8, pictureAfterSceneMs: 16000 }),

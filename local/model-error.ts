@@ -29,6 +29,12 @@ const PICTURE_STYLES = ['standard', 'semi', 'novel', 'film', 'graphic', 'waterco
 // Why the model's last message ended, as the API names it, for the row of a failed Claude CLI run: `max_tokens` there
 // means the run's output cap was hit, which the CLI reports as an error rather than a truncation.
 export const STOP_REASONS = ['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'refusal', 'other'] as const;
+// The code a simple-serving gateway refused a request with (its contract, section 9; local/serving.ts), beside the
+// bot's own code it maps to: `class_not_allowed` and `queue_full` tell whoever reads the log more than `unauthorized`
+// and `rate_limited` do. A code the contract does not list is `other`.
+const SERVING_CODES = ['invalid_request', 'unsupported_field', 'limit_exceeded', 'context_limit', 'unauthorized',
+  'class_not_allowed', 'scope_not_allowed', 'forbidden', 'not_found', 'stale_boot', 'stale_generation', 'body_too_large',
+  'queue_full', 'starting', 'draining', 'drained', 'engine_unavailable', 'timeout'] as const;
 // Sizes, counts and durations. Each is kept only as a non-negative safe integer, so none can carry text.
 const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'repairSceneCount', 'requestBytes',
   'inputBytesBefore', 'inputBytesAfter', 'outputCharacters', 'inputTokens', 'outputTokens', 'elapsedMs',
@@ -37,6 +43,10 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   // One model request: time in the queue and in token counting, then llama-server's own timings (local/model.ts Timings).
   'waitMs', 'countMs', 'cacheTokens', 'promptTokens', 'promptMs', 'predictedTokens', 'predictedMs', 'draftTokens',
   'draftAcceptedTokens', 'slot',
+  // A simple-serving gateway's own measurements of one request instead (local/serving.ts), each from the moment it
+  // accepted the request: until it handed the request to its engine, until the first token, until its last event.
+  // `waitMs` stays the bot's own queue.
+  'servingWaitMs', 'servingFirstTokenMs', 'servingTotalMs',
   // The scene request's size as the bot estimated it before any count (local/generation.ts): beside `inputTokens` it
   // shows how far the estimate that let a request skip the count was from the server's own.
   'estimateTokens',
@@ -72,6 +82,7 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
 export type ErrorDetails = {
   httpStatus?: number; phase?: typeof PHASES[number]; operation?: typeof OPERATIONS[number];
   memoryReason?: typeof MEMORY_REASONS[number]; transportCode?: typeof TRANSPORT_CODES[number] | 'other';
+  servingCode?: typeof SERVING_CODES[number] | 'other';
   exitCode?: number; signal?: typeof SIGNALS[number]; sshReason?: typeof SSH_REASONS[number];
   // Whose request a bot log row belongs to. Only the owner allowed reading the owner's own stories for debugging.
   actor?: typeof ACTORS[number]; automatic?: boolean; agentCall?: typeof AGENT_CALLS[number]; stage?: typeof STAGES[number];
@@ -102,6 +113,7 @@ export function safeErrorDetails(value: unknown = {}): ErrorDetails {
   if (member(OPERATIONS, input?.operation)) result.operation = input.operation;
   if (member(MEMORY_REASONS, input?.memoryReason)) result.memoryReason = input.memoryReason;
   if (typeof input?.transportCode === 'string' && input.transportCode) result.transportCode = member(TRANSPORT_CODES, input.transportCode) ? input.transportCode : 'other';
+  if (typeof input?.servingCode === 'string' && input.servingCode) result.servingCode = member(SERVING_CODES, input.servingCode) ? input.servingCode : 'other';
   const exitCode = input?.exitCode;
   if (typeof exitCode === 'number' && Number.isInteger(exitCode) && exitCode >= 0 && exitCode <= 255) result.exitCode = exitCode;
   if (member(SIGNALS, input?.signal)) result.signal = input.signal;
@@ -129,7 +141,7 @@ export class ModelError extends Error {
   declare code: string;
   declare httpStatus?: number; declare phase?: ErrorDetails['phase']; declare operation?: ErrorDetails['operation'];
   declare memoryReason?: ErrorDetails['memoryReason']; declare transportCode?: ErrorDetails['transportCode'];
-  declare exitCode?: number; declare signal?: ErrorDetails['signal']; declare sshReason?: ErrorDetails['sshReason'];
+  declare servingCode?: ErrorDetails['servingCode']; declare exitCode?: number; declare signal?: ErrorDetails['signal']; declare sshReason?: ErrorDetails['sshReason'];
   declare cliResult?: ErrorDetails['cliResult']; declare cliError?: boolean; declare stopReason?: ErrorDetails['stopReason'];
   declare sceneCount?: number; declare missingCount?: number; declare connectionAgeMs?: number;
   // A failed compaction carries its sizes and counts to the log row of the failure.
