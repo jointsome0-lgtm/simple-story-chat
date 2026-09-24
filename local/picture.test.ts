@@ -23,6 +23,7 @@ import { createLlama } from './llama.ts';
 import type { ErrorDetails } from './model-error.ts';
 import { safeErrorDetails } from './model-error.ts';
 import type { GenerateControls, GenerationResult, ModelRequest, Provider } from './model.ts';
+import { createServing, readerScope } from './serving.ts';
 import { clothesOf, createIllustrator, encoderTokens, foldedPrompt, wornAt } from './picture.ts';
 import { PRESETS } from './picture-style.ts';
 import { Store } from './store.ts';
@@ -157,6 +158,29 @@ function fakeLlama(scene: { inputTokens: number; outputTokens: number }, counted
   } });
 }
 
+// simple-serving as the bot's provider meets it (local/serving.ts): a gateway that notes whose each request is, its class
+// and cache scope, beside the kind of work it is. A count and its generation agree, as the contract has them.
+type Heard = { kind: string; class: string | null; scope: string | null };
+function fakeServing(scene: { inputTokens: number; outputTokens: number }, heard: Heard[]) {
+  return createServing({ baseUrl: 'http://127.0.0.1:8080', model: 'test-model', contextTokens: 65536, apiKey: 'synthetic-key' }, { fetch: async (url, init) => {
+    const body = JSON.parse(init.body as string) as { response_format?: { json_schema: { schema: { properties: Record<string, unknown> } } } };
+    const properties = body.response_format?.json_schema.schema.properties;
+    const kind = !properties ? 'scene' : 'facts' in properties ? 'compaction' : 'characters' in properties ? 'sheet' : 'frame';
+    const promptTokens = kind === 'scene' ? scene.inputTokens : kind === 'compaction' ? 5000
+      : scene.inputTokens + scene.outputTokens + (kind === 'sheet' ? 200 : 1200);
+    const headers = new Headers(init.headers);
+    const count = new URL(url).pathname.endsWith('/input_tokens');
+    heard.push({ kind: count ? `count ${kind}` : kind, class: headers.get('x-simple-serving-class'), scope: headers.get('x-simple-serving-scope') });
+    if (count) return new Response(JSON.stringify({ input_tokens: promptTokens }), { headers: { 'content-type': 'application/json' } });
+    // A compaction's answer is not a memory and is dropped by its check: all this needs from it is that it was asked.
+    const text = kind === 'scene' ? '2026-08-02 20:00\n\nСинтетическая сцена.' : JSON.stringify(kind === 'sheet' ? SHEET : kind === 'frame' ? FRAME : { facts: [] });
+    const events = [{ model: 'test-model', choices: [{ index: 0, delta: { content: text }, finish_reason: 'stop' }] },
+      { model: 'test-model', choices: [], usage: { prompt_tokens: promptTokens, completion_tokens: kind === 'scene' ? scene.outputTokens : 50 } }];
+    return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n',
+      { headers: { 'content-type': 'text/event-stream' } });
+  } });
+}
+
 type Options = {
   comfy?: string; users?: string[]; style?: string; offsetMs?: number; sheetReply?: object;
   // What the model describes each frame as, in turn; the last one answers every frame after it.
@@ -177,6 +201,8 @@ type Options = {
   // What the model says the scene cost. Above `compactAtTokens` the bot prepares the next compaction while the
   // reader reads; the numbers are the model's own and say nothing about the size of these synthetic scenes.
   usage?: { inputTokens: number; outputTokens: number };
+  // The real simple-serving provider in front of `fakeServing`, whose usage is `usage` as the fake model's is.
+  serving?: boolean;
   // The real llama.cpp provider in front of `fakeLlama`, with what the server counts for the scene; `illustratorModel`
   // names the story model to the illustrator otherwise than the scenes' stamps do.
   llama?: { inputTokens: number; outputTokens: number; illustratorModel?: string };
@@ -233,7 +259,10 @@ function fixture(t: TestContext, options: Options = {}) {
         totalTokens: (options.usage?.inputTokens ?? 100) + (options.usage?.outputTokens ?? 50) } };
   } };
   const llama = options.llama && fakeLlama(options.llama, counted);
-  const model: Provider = llama ? { ...llama, generate: (request, controls) => { requests.push(request); return llama.generate(request, controls); } } : fake;
+  const heard: Heard[] = [];
+  const serving = options.serving ? fakeServing(options.usage ?? { inputTokens: 100, outputTokens: 50 }, heard) : undefined;
+  const real = llama || serving;
+  const model: Provider = real ? { ...real, generate: (request, controls) => { requests.push(request); return real.generate(request, controls); } } : fake;
   // The queue the bot really runs on, when a test needs the slot itself: one slot, as one llama-server has.
   const scheduler = options.scheduler
     ? createScheduler(model as { generate: Provider['generate'] }, { pollMs: 2, quietMs: 0, log: (event, code, details) => rows.push({ event, ...(code === undefined ? {} : { code }), ...safeErrorDetails(details) }) })
@@ -275,7 +304,7 @@ function fixture(t: TestContext, options: Options = {}) {
   const release = () => { for (const go of holding.splice(0)) go(); };
   const restart = async () => { await running.bot.stop(); running = boot(); };
   return { get bot() { return running.bot; }, get illustrator() { return running.illustrator; }, restart,
-    store, sent, rows, requests, counted, deleted, provider, message, click, start, release, workflow, directory };
+    store, sent, rows, requests, counted, heard, deleted, provider, message, click, start, release, workflow, directory };
 }
 
 // Waits for something the fake server or the bot does on its own; the whole file runs in milliseconds.
@@ -989,6 +1018,33 @@ test('the description keeps the reader\'s own slot, and the compaction prepared 
   assert.equal(photos(f.sent).length, 2);
   assert.ok(f.rows.some(row => row.event === 'compaction_prepare_started'), 'the work ahead still runs');
   assert.ok(!f.rows.some(row => row.event === 'background_unavailable'), 'and it no longer takes the slot first');
+});
+
+// Everything the bot asks for a reader is that reader's work at the gateway: their scene, the compaction prepared while
+// they read and their picture's description, counts included, all go as class reader in the reader's own cache scope,
+// and another reader's in another (local/serving.ts, contract section 2).
+test('a reader\'s scene, the compaction prepared for them and their picture reach the gateway in that reader\'s scope', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root, users: ['1', '2'], serving: true, scheduler: true, keepScenes: 1, compactAtTokens: 30000,
+    usage: { inputTokens: 29000, outputTokens: 2000 } });
+  await f.start();
+  await f.bot.idle();
+  await f.bot.handle(f.message('Осмотреться'));
+  await f.bot.idle();
+  await f.bot.idle();
+  const first = f.heard.length;
+  await f.start(2);
+  await f.bot.idle();
+  await f.bot.idle();
+
+  assert.equal(photos(f.sent).length, 3);
+  const whose = (heard: Heard[]) => [...new Set(heard.map(one => `${one.class} ${one.scope}`))];
+  assert.deepEqual(whose(f.heard.slice(0, first)), [`reader ${readerScope('1')}`]);
+  assert.deepEqual(whose(f.heard.slice(first)), [`reader ${readerScope('2')}`]);
+  for (const kind of ['scene', 'compaction', 'sheet', 'frame']) assert.ok(f.heard.slice(0, first).some(one => one.kind === kind), kind);
+  assert.ok(f.heard.some(one => one.kind.startsWith('count ')), 'a count goes in the same scope as its generation');
 });
 
 // Pictures off, and the bot as it was: a reader who answers while the scene they asked for is still being

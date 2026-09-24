@@ -199,6 +199,8 @@ function problemsOf({ call, controls, body: expected, scopes }: Running, incomin
   if (kind !== 'reader' && scope !== kind) found.push('the scope');
   if (kind === 'reader') {
     const holder = controls.holder;
+    // The bot refuses such a call before it is sent.
+    if (holder === undefined) found.push('a reader\'s call that names nobody');
     if (!/^reader\.[A-Za-z0-9_-]{8,64}$/.test(scope) || (holder && scope.includes(holder))) found.push('the reader scope');
     // One reader keeps one scope; two readers never share one.
     const known = holder === undefined ? undefined : scopes.get(holder);
@@ -258,7 +260,7 @@ test('every public step of the pinned cases gives the bot the result the case ex
   const provider = createServing({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, model: alias,
     contextTokens: cases.service.context_tokens, apiKey: KEY, timeoutMs: 10000 });
 
-  const counted = { run: 0, gateway: 0, control: 0, resplit: 0 };
+  const counted = { run: 0, gateway: 0, control: 0, unnamed: 0, resplit: 0 };
   for (const { name, steps } of cases.cases) {
     const scopes = new Map<string, string>();
     for (const [index, step] of steps.entries()) {
@@ -283,6 +285,15 @@ test('every public step of the pinned cases gives the bot the result the case ex
             : call === 'count' ? await provider.countInput(request, controls) : await provider.check() };
         } catch (error) { return { failure: error as ModelError }; }
       };
+      // A person's call always names its reader (local/serving.ts `workOf`), so a reader step without a reader scope is
+      // a call the bot does not make: it refuses it before anything is sent. The step's answer then goes to the call of
+      // a reader the bot does name, as every answer goes to the bot's nearest call.
+      if (call !== 'check' && controls.priority === 'foreground' && controls.holder === undefined) {
+        const { failure } = await run('case');
+        assert.deepEqual([failure?.code, failure?.servingCode, running!.seen, running!.problems], ['unnamed_reader', undefined, [], []], label);
+        controls.holder = 'stand-in';
+        counted.unnamed++;
+      }
       for (const split of call === 'generate' && step.response.chunks ? SPLITS : ['case'] as const) {
         const where = split === 'case' ? label : `${label}, split ${split}`;
         const { value, failure } = await run(split);
@@ -319,7 +330,7 @@ test('every public step of the pinned cases gives the bot the result the case ex
       counted.run++;
     }
   }
-  // A client counts the steps it skips, so that none is skipped by accident; beside them, the streams it read cut
-  // otherwise. A new copy of the cases changes these.
-  assert.deepEqual(counted, { run: 56, gateway: 4, control: 14, resplit: 57 });
+  // A client counts the steps it skips, so that none is skipped by accident; beside them, the reader steps the bot
+  // refuses to send and the streams it read cut otherwise. A new copy of the cases changes these.
+  assert.deepEqual(counted, { run: 56, gateway: 4, control: 14, unnamed: 3, resplit: 57 });
 });

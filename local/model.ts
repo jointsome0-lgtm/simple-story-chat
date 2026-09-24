@@ -25,7 +25,8 @@ export type Priority = 'foreground' | 'agent' | 'background';
 // `onWait`: a shared model's queue reports how many calls are ahead of this one, each time the number changes.
 // `onStart`: the call has left a shared model's queue and runs.
 // `priority` and `holder`: whose call it is, as that queue passes them on (TurnOptions `holder`); a direct call has
-// neither. Only a provider that serves kinds of work apart reads them (local/serving.ts).
+// neither. The scheduler writes them over whatever its caller passed, so no caller names its own. Only a provider that
+// serves kinds of work apart reads them (local/serving.ts).
 export type Controls = {
   signal?: AbortSignal; onWait?: (ahead: number) => void; onStart?: () => void; priority?: Priority; holder?: string;
 };

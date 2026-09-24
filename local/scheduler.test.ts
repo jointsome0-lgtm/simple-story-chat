@@ -124,30 +124,43 @@ test('a provider without a check gets none from the scheduler', async t => {
   assert.deepEqual(await server.foreground.check!(), { model: 'test-model' });
 });
 // A provider that serves kinds of work apart (local/serving.ts) learns whose each call is, from the queue it came
-// through, in one slot as in a pool, where the scheduler counts tokens on its own.
+// through, on every way a call reaches it: through a slot, and in a pool also the count that runs beside the slots and
+// the count a shared cache sizes a call by before admitting it. Whatever a caller writes into its own controls.
 test('the provider hears the priority and holder of every call, and a caller cannot name its own', async t => {
-  for (const slots of [1, 2]) {
+  for (const { slots, sharedCache } of [{ slots: 1, sharedCache: true }, { slots: 2, sharedCache: true }, { slots: 2, sharedCache: false }]) {
     const seen: string[] = [];
     const heard = (request: string, { priority, holder }: Controls) => { seen.push(`${request} ${priority} ${holder}`); };
     const scheduler = createScheduler({
       generate: async (request: string, controls: Controls) => { heard(request, controls); return request; },
       countInput: async (request: string, controls: Controls) => { heard(`count ${request}`, controls); return 100; },
-    }, { quietMs: 0, pollMs: 100000, slots, poolTokens: 100000, sharedCache: true, outputTokens: () => 100 });
+    }, { quietMs: 0, pollMs: 100000, slots, poolTokens: 100000, sharedCache, outputTokens: () => 100 });
     t.after(() => scheduler.close());
+    const claims = { priority: 'foreground', holder: 'someone else' } as const;
     const reader = scheduler.foreground.openTurn({ holder: 'tester' });
-    await reader.countInput!('scene');
-    await reader.generate('scene', { priority: 'background', holder: 'someone else' });
+    await reader.countInput!('scene', { ...claims, priority: 'background' });
+    await reader.generate('scene', { ...claims, priority: 'background' });
     reader.end();
-    await scheduler.foreground.generate('unheld');
+    // The work the bot does ahead for a reader: a picture's description, then a compaction prepared while they read.
+    for (const options of [{ sharesPrefix: true }, { yields: true }]) {
+      const ahead = scheduler.foreground.openTurn({ holder: 'tester', ...options });
+      await ahead.countInput!('ahead', claims);
+      await ahead.generate('ahead', claims);
+      ahead.end();
+    }
+    await scheduler.foreground.countInput!('unheld', claims);
+    await scheduler.foreground.generate('unheld', claims);
     const agent = scheduler.agent.openTurn();
-    await agent.generate('agent');
+    await agent.countInput!('agent', claims);
+    await agent.generate('agent', claims);
     agent.end();
-    await scheduler.background.generate('probe');
-    // A shared cache sizes every call first, with the same word on whose it is.
-    const sized = (request: string, whose: string) => slots > 1 ? [`count ${request} ${whose}`] : [];
-    assert.deepEqual(seen, ['count scene foreground tester', ...sized('scene', 'foreground tester'), 'scene foreground tester',
-      ...sized('unheld', 'foreground undefined'), 'unheld foreground undefined', ...sized('agent', 'agent undefined'), 'agent agent undefined',
-      ...sized('probe', 'background undefined'), 'probe background undefined'], `${slots} slots`);
+    await scheduler.background.countInput!('probe', claims);
+    await scheduler.background.generate('probe', claims);
+    // A shared cache sizes every generation first, with the same word on whose it is; a count is never sized.
+    const call = (request: string, whose: string) =>
+      [`count ${request} ${whose}`, ...slots > 1 && sharedCache ? [`count ${request} ${whose}`] : [], `${request} ${whose}`];
+    assert.deepEqual(seen, [...call('scene', 'foreground tester'), ...call('ahead', 'foreground tester'), ...call('ahead', 'foreground tester'),
+      ...call('unheld', 'foreground undefined'), ...call('agent', 'agent undefined'), ...call('probe', 'background undefined')],
+    `${slots} slots, ${sharedCache ? 'shared' : 'isolated'}`);
   }
 });
 test('an agent call waits for people and the quiet window, then runs to its end while a person waits', async t => {

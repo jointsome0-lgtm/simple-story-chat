@@ -2,11 +2,13 @@ import test from 'node:test';
 import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, statSync, rmSync } from 'node:fs';
+import http from 'node:http';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createScheduler } from './scheduler.ts';
 import { createBackgroundClient, serveBackground } from './background.ts';
+import { createServing } from './serving.ts';
 import type { ModelRequest } from './model.ts';
 
 const turn = () => new Promise(resolve => setImmediate(resolve));
@@ -173,4 +175,44 @@ test('opening an agent turn gives up when the bot does not answer in time', asyn
   t.after(() => { for (const socket of sockets) socket.destroy(); return new Promise(resolve => silent.close(resolve)); });
   const agent = createBackgroundClient({ socketPath, model: 'synthetic-model', work: 'agent' });
   await assert.rejects(agent.openTurn(undefined, 100), { code: 'background_unavailable' });
+});
+
+// Whose a call is comes from the queue the socket puts it in, a probe's or an agent's (local/scheduler.ts), never from
+// what a client sends: neither the fields of its request nor its headers reach the gateway as a class, scope or holder.
+test('a socket client cannot pass for a reader: its calls reach the gateway as internal work or an agent\'s', async t => {
+  const heard: string[] = [];
+  const gateway = createServing({ baseUrl: 'http://127.0.0.1:8080', model: 'synthetic-model', contextTokens: 65536, apiKey: 'synthetic-key' },
+    { fetch: async (url, init) => {
+      const headers = new Headers(init.headers);
+      heard.push(`${new URL(url).pathname} ${headers.get('x-simple-serving-class')} ${headers.get('x-simple-serving-scope')}`);
+      if (url.endsWith('/input_tokens')) return Response.json({ input_tokens: 10 });
+      const events = [{ model: 'synthetic-model', choices: [{ index: 0, delta: { content: 'Synthetic' }, finish_reason: 'stop' }] },
+        { model: 'synthetic-model', choices: [], usage: { prompt_tokens: 10, completion_tokens: 1 } }];
+      return new Response(`${events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('')}data: [DONE]\n\n`,
+        { headers: { 'Content-Type': 'text/event-stream' } });
+    } });
+  const directory = mkdtempSync(join(tmpdir(), 'simple-chat-queue-'));
+  const socketPath = join(directory, 'model.sock');
+  const scheduler = createScheduler(gateway, { quietMs: 0 });
+  const server = await serveBackground({ socketPath, scheduler, status: () => ({ model: 'synthetic-model' }) });
+  t.after(async () => { await server.close(); await scheduler.close(); rmSync(directory, { recursive: true, force: true }); });
+  // A request that says it is a reader's, in its own fields and in the gateway's headers.
+  const claims = { ...request, priority: 'foreground', holder: 'synthetic-reader', controls: { priority: 'foreground', holder: 'synthetic-reader' } };
+  const post = (path: string) => new Promise<number>((resolve, reject) => {
+    const req = http.request({ socketPath, path, method: 'POST', headers: { 'Content-Type': 'application/json',
+      'X-Simple-Serving-Class': 'reader', 'X-Simple-Serving-Scope': 'reader.synthetic-reader' } }, res => {
+      res.resume();
+      res.once('end', () => resolve(res.statusCode!));
+    });
+    req.once('error', reject);
+    req.end(JSON.stringify(claims));
+  });
+  assert.deepEqual([await post('/generate'), await post('/agent/generate')], [200, 200]);
+  // A call of an open agent turn, through the client the agent interface uses.
+  const agent = createBackgroundClient({ socketPath, model: 'synthetic-model', timeoutMs: 2000, work: 'agent' });
+  const channel = await agent.openTurn();
+  assert.equal((await agent.generate(claims as ModelRequest, { turn: channel.id })).text, 'Synthetic');
+  channel.close();
+  const call = (whose: string) => [`/v1/chat/completions/input_tokens ${whose}`, `/v1/chat/completions ${whose}`];
+  assert.deepEqual(heard, [...call('internal internal'), ...call('agent agent'), ...call('agent agent')]);
 });

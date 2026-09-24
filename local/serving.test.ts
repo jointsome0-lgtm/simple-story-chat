@@ -6,6 +6,7 @@ import { gpuConfig, loadAgentConfig, loadConfig, loadModelConfig } from './confi
 import { createModel } from './model.ts';
 import { createScheduler } from './scheduler.ts';
 import type { ModelError } from './model-error.ts';
+import { safeErrorDetails } from './model-error.ts';
 import type { ModelRequest } from './model.ts';
 
 type Sent = { path: string; method: string; headers: Headers; body: { [field: string]: unknown } | null; options: RequestInit };
@@ -98,13 +99,15 @@ test('every call says whose it is: a reader with a scope of their own, the agent
     : path === '/v1/models' ? json({ data: [{ id: 'test-model', max_model_len: 65536 }] }) : answer());
   await f.provider.generate(trusted(), { priority: 'foreground', holder: 'synthetic-reader' });
   await f.provider.countInput(request(), { priority: 'foreground', holder: 'synthetic-reader' });
-  await f.provider.generate(trusted(), { priority: 'agent' });
+  await f.provider.generate(trusted(), { priority: 'agent', holder: 'synthetic-reader' });
   await f.provider.generate(trusted(), { priority: 'background' });
-  // A call that did not come through the scheduler is our own work.
-  await f.provider.generate(trusted());
+  // A call that did not come through the scheduler is our own work, whatever its request carries: whose a call is
+  // comes from the controls alone, never from a request, which a socket client writes (local/background.ts).
+  await f.provider.generate({ ...trusted(), priority: 'foreground', holder: 'synthetic-reader' } as ModelRequest);
+  await f.provider.countInput({ ...request(), priority: 'foreground', holder: 'synthetic-reader' } as ModelRequest);
   const reader = readerScope('synthetic-reader');
   assert.deepEqual(f.calls.map(whose), [['reader', reader], ['reader', reader], ['agent', 'agent'], ['internal', 'internal'],
-    ['internal', 'internal']]);
+    ['internal', 'internal'], ['internal', 'internal']]);
   // A check reads the service and names no class: only the key goes with it.
   await f.provider.check({ priority: 'foreground', holder: 'synthetic-reader' });
   for (const call of f.calls.slice(-2)) {
@@ -117,21 +120,37 @@ test('every call says whose it is: a reader with a scope of their own, the agent
 });
 
 test('a reader\'s scope is stable in the process, differs between readers and never shows the holder', () => {
-  const holders = ['123456789', '987654321', 'synthetic-reader', ''];
+  const holders = ['123456789', '987654321', 'synthetic-reader'];
   const scopes = holders.map(readerScope);
   for (const [index, scope] of scopes.entries()) {
     // The contract allows 8 to 64 characters of A-Z, a-z, 0-9, _ and - after `reader.`.
     assert.match(scope, /^reader\.[A-Za-z0-9_-]{22}$/);
     assert.equal(readerScope(holders[index]), scope);
-    if (holders[index]) assert.equal(scope.includes(holders[index]), false);
+    assert.equal(scope.includes(holders[index]), false);
   }
   assert.equal(new Set(scopes).size, holders.length);
-  // A person's call that names no holder shares nobody's cache, not even the next such call's.
-  const unheld = [readerScope(undefined), readerScope(undefined)];
-  for (const scope of unheld) assert.match(scope, /^reader\.[A-Za-z0-9_-]{22}$/);
-  assert.notEqual(unheld[0], unheld[1]);
-  assert.equal(scopes.includes(unheld[0]), false);
   assert.deepEqual(workOf({ priority: 'foreground', holder: '123456789' }), { class: 'reader', scope: scopes[0] });
+});
+
+// Whatever scope such a call were given, it would share another reader's cache or never meet its own.
+test('a person\'s call that names no reader is refused before anything is sent', async t => {
+  for (const holder of [undefined, '']) {
+    assert.throws(() => workOf({ priority: 'foreground', holder }), { code: 'unnamed_reader' });
+    const f = fixture();
+    await assert.rejects(f.provider.generate(trusted(), { priority: 'foreground', holder }), { code: 'unnamed_reader', phase: 'generate' });
+    await assert.rejects(f.provider.countInput(request(), { priority: 'foreground', holder }), { code: 'unnamed_reader', phase: 'count_input' });
+    assert.deepEqual(f.calls, []);
+  }
+  // Through the scheduler: a person's call outside a turn, or in a turn that names nobody.
+  const f = fixture();
+  const scheduler = createScheduler(f.provider, { quietMs: 0, pollMs: 100000 });
+  t.after(() => scheduler.close());
+  await assert.rejects(scheduler.foreground.generate(trusted()), { code: 'unnamed_reader' });
+  await assert.rejects(scheduler.foreground.countInput!(request()), { code: 'unnamed_reader' });
+  const nobody = scheduler.foreground.openTurn();
+  await assert.rejects(nobody.generate(trusted()), { code: 'unnamed_reader' });
+  nobody.end();
+  assert.deepEqual(f.calls, []);
 });
 
 test('a reader\'s scope comes from a secret of this process: another process gives the same holder another scope', () => {
@@ -143,6 +162,21 @@ test('a reader\'s scope comes from a secret of this process: another process giv
   assert.equal(scopes.includes(readerScope('synthetic-reader')), false);
 });
 
+// A log row is made from an error by safeErrorDetails, and the error is all that a failed call leaves behind. The
+// secret stays inside the module.
+test('a reader\'s failed call leaves neither the holder nor the scope in its error, and the secret is not exported', async () => {
+  const scope = readerScope('synthetic-reader');
+  for (const respond of [() => refusal(403, 'class_not_allowed'),
+    () => stream([chunk({ content: 'Текст.' }), { error: { code: 'engine_unavailable' } }], { done: false })]) {
+    const f = fixture(respond);
+    const error: ModelError = await f.provider.generate(trusted(), { priority: 'foreground', holder: 'synthetic-reader' })
+      .then(() => assert.fail('the call must fail'), (error: ModelError) => error);
+    const traces = [JSON.stringify(error), String(error), error.stack ?? '', JSON.stringify(safeErrorDetails(error))].join('\n');
+    for (const secret of ['synthetic-reader', scope.slice('reader.'.length)]) assert.equal(traces.includes(secret), false);
+  }
+  assert.deepEqual(Object.keys(await import('./serving.ts')), ['codeFor', 'createServing', 'readerScope', 'workOf']);
+});
+
 test('through the scheduler, a person\'s turn, an agent\'s turn and a probe reach the gateway as reader, agent and internal', async t => {
   const f = fixture();
   const scheduler = createScheduler(f.provider, { quietMs: 0, pollMs: 100000 });
@@ -152,12 +186,23 @@ test('through the scheduler, a person\'s turn, an agent\'s turn and a probe reac
   await reader.countInput!(scene);
   await reader.generate(scene);
   reader.end();
+  // The work done ahead for a reader is theirs too, in the order the bot runs it: their picture's description, which
+  // continues the scene in its slot (local/picture.ts), then the compaction prepared while they read (local/prepare.ts).
+  for (const options of [{ sharesPrefix: true }, { yields: true }]) {
+    const ahead = scheduler.foreground.openTurn({ holder: 'synthetic-reader', ...options });
+    await ahead.countInput!(request());
+    await ahead.generate(trusted());
+    ahead.end();
+  }
   const agent = scheduler.agent.openTurn();
+  await agent.countInput!(request());
   await agent.generate(trusted());
   agent.end();
+  await scheduler.background.countInput!(request());
   await scheduler.background.generate(trusted());
   const scope = readerScope('synthetic-reader');
-  assert.deepEqual(f.calls.map(whose), [['reader', scope], ['reader', scope], ['agent', 'agent'], ['internal', 'internal']]);
+  assert.deepEqual(f.calls.map(whose), [...Array(6).fill(['reader', scope]), ['agent', 'agent'], ['agent', 'agent'],
+    ['internal', 'internal'], ['internal', 'internal']]);
   // One lane: nothing slot-specific reaches the body.
   for (const call of f.calls) assert.equal('id_slot' in call.body!, false);
 });

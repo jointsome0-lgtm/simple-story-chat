@@ -24,17 +24,19 @@ const isObject = (value: unknown): value is { readonly [field: string]: unknown 
 // a secret this process makes once and never stores or logs, cut to 22 base64url characters (the contract allows 8 to
 // 64). One reader keeps one scope, and so one cached story, until the bot restarts.
 const SCOPE_SECRET = randomBytes(32);
-export function readerScope(holder: string | undefined) {
-  // A person's call that names no holder cannot be told from another's, so it gets a scope of its own that nothing
-  // else will ever share. The bot's own turns always name their reader (local/turn.ts, bot.ts, prepare.ts, picture.ts).
-  if (holder === undefined) return `reader.${randomBytes(16).toString('base64url')}`;
-  return `reader.${createHmac('sha256', SCOPE_SECRET).update(holder).digest('base64url').slice(0, 22)}`;
-}
-// The class and cache scope of a call (contract section 2), from the queue it came through (local/model.ts Controls).
-// A person's turns are a reader's, with a cache of their own; the agent interface's turns share one scope; probes,
-// eval and every call that did not come through the scheduler are internal.
+export const readerScope = (holder: string) =>
+  `reader.${createHmac('sha256', SCOPE_SECRET).update(holder).digest('base64url').slice(0, 22)}`;
+// The class and cache scope of a call (contract section 2), from the queue it came through (local/model.ts Controls),
+// which only the scheduler sets. A person's turns are a reader's, with a cache of their own; the agent interface's
+// turns share one scope; probes, eval and every call that did not come through the scheduler are internal.
 export function workOf({ priority, holder }: Pick<Controls, 'priority' | 'holder'> = {}) {
-  if (priority === 'foreground') return { class: 'reader', scope: readerScope(holder) };
+  // A person's call names its reader: the bot's own turns always do (local/turn.ts, bot.ts, prepare.ts, picture.ts).
+  // One that does not is a bug, refused before anything is sent: in any scope it could be given, it would either
+  // share another reader's cache or never meet its own.
+  if (priority === 'foreground') {
+    if (typeof holder !== 'string' || !holder) throw new ModelError('unnamed_reader');
+    return { class: 'reader', scope: readerScope(holder) };
+  }
   if (priority === 'agent') return { class: 'agent', scope: 'agent' };
   return { class: 'internal', scope: 'internal' };
 }
