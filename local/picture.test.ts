@@ -839,6 +839,19 @@ test('the rewrite of an old sheet keeps the looks the reader wrote and the portr
     [{ ...SHEET.characters[0], portrait }, { name: 'Ора', look: 'An old woman', outfit: '', portrait }], 'a kept portrait stays, and so does its person');
 });
 
+// A person is their name, apart from spaces and case, and nothing else: one the model renames is somebody new, and
+// what the reader made of the old name stays beside them, under it. Two people are never merged by a like name.
+test('a person the rewrite renames is somebody new, beside the one the reader made', () => {
+  const portrait = { file: `${'0'.repeat(32)}.png`, seed: 1, look: 'Mine', clothes: PORTRAIT_CLOTHES, style: PORTRAIT_STYLE,
+    graph: '0123456789abcdef', checkpoint: 'synthetic.safetensors', at: 1 };
+  const renamed = { name: 'Элин Вос', look: 'A lean woman, grey hair', outfit: 'wearing a grey wool coat' };
+  assert.deepEqual(rewrittenSheet([{ name: 'Элин', look: 'Mine', edited: true, portrait }], [renamed]),
+    [renamed, { name: 'Элин', look: 'Mine', outfit: '', edited: true, portrait }]);
+  // So are the buttons: they name her by the hash of the name she has.
+  assert.equal(personTag(' ЭЛИН '), personTag('Элин'));
+  assert.notEqual(personTag('Элин Вос'), personTag('Элин'));
+});
+
 // The frame kept for samples was described with the looks of that moment; one the reader edited since, or while it was
 // being described, is described again, and the sample draws the look as it is now.
 test('a sample after a look is edited describes the scene again, and the card counts each text with the picture model\'s tokenizer', async t => {
