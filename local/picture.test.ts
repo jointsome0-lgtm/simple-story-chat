@@ -1382,6 +1382,49 @@ test('a scene keeps its picture\'s recipe as long as the scene is kept, and its 
   assert.equal(photos(f.sent).length, 2);
 });
 
+test('a wait for a prompt outlives a restart, and the prompt that ends it is checked again before anything is drawn', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root });
+  await f.start();
+  await f.bot.idle();
+  const edit = editOf(notes(f.sent)[0]);
+  const [, storyId, nodeId] = edit.split(':');
+  const drawn = () => comfy.submitted.length;
+
+  // The wait is in the library, so the bot that starts again takes the next text for the prompt.
+  await f.bot.handle(f.click(edit));
+  await f.restart();
+  assert.deepEqual(f.store.read('1').ui, { input: 'prompt', storyId, nodeId });
+  await f.bot.handle(f.message('A synthetic prompt after a restart.'));
+  await f.bot.idle();
+  assert.equal(drawn(), 2);
+  assert.equal(promptOf(comfy.submitted[1]), 'A synthetic prompt after a restart.');
+
+  // A bot that starts again without pictures for this reader, or with another checkpoint, draws nothing for a wait
+  // left open before, says why, and closes it.
+  const refusals = [
+    [() => f.images!.users.delete('1'), () => f.images!.users.add('1'), 'Картинки к твоим сценам пока не включены, поэтому вариант нарисовать нельзя.'],
+    [() => { f.images!.checkpoint = 'another.safetensors'; }, () => { f.images!.checkpoint = 'synthetic.safetensors'; },
+      'С тех пор поменялась модель картинок или её настройки, и с прежними эту картинку уже не повторить. С новыми рисовать не буду, иначе отличался бы не только промпт.'],
+  ] as const;
+  for (const [change, undo, reason] of refusals) {
+    await f.bot.handle(f.click(edit));
+    change();
+    await f.restart();
+    const before = f.sent.length;
+    await f.bot.handle(f.message('A synthetic prompt for a bot that changed.'));
+    await f.bot.idle();
+    assert.ok(told(f.sent.slice(before), reason), reason);
+    assert.equal(f.store.read('1').ui, null);
+    assert.equal(drawn(), 2, 'nothing was drawn');
+    undo();
+    await f.restart();
+  }
+  assert.deepEqual(f.rows.filter(one => one.event === 'picture_variant').map(row => row.outcome), ['ready']);
+});
+
 // The bot prepares the next compaction while the reader reads (local/bot.ts `prepareNext`), on a turn of its own
 // that takes the reader's slot and leaves it marked for nobody (local/scheduler.ts `start`). The description
 // continues the scene cached in that slot and runs there or nowhere, so it has to go first.
