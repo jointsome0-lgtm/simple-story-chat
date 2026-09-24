@@ -27,8 +27,9 @@ export type SchedulerOptions<Request = unknown> = {
   holdBackgroundCall?: () => () => void;
   // A turn that holds a slot without calling the model this long is taken as lost: an emergency, never a normal end.
   turnIdleMs?: number;
-  // How long a probe's call may wait to start, from the moment the queue takes it; `backgroundTimeoutMs` bounds its run.
-  // Together they bound how long it keeps the GPU up, even a GPU that never becomes ready for it.
+  // A probe's call that has waited this long to start, counted from the moment the queue takes it, is refused at the
+  // next tick; one that has run `backgroundTimeoutMs` is stopped. Its hold on the GPU ends only once it has ended
+  // locally, so neither is a bound in seconds on how long it keeps the GPU up.
   backgroundWaitMs?: number;
   quietMs?: number; backgroundTimeoutMs?: number; now?: () => number; pollMs?: number; log?: Log;
   // A pool: the server's slot count and the output limit of a request, which a shared cache reserves in full. One slot
@@ -142,7 +143,8 @@ export function createScheduler<Request, Result>(provider: {
     turn.release = undefined;
     release?.();
   }
-  // Ends a turn: its waiting calls are refused, its running call is stopped, and its slot is free.
+  // Ends a turn: its waiting calls are refused, its call in the slot is stopped, and its slot is free. A count it runs
+  // beside the slots in a pool is not stopped here: its caller's signal stops it.
   function endTurn(turn: Turn, code: AbortCode) {
     if (turn.ended) return;
     turn.ended = code;
@@ -152,7 +154,7 @@ export function createScheduler<Request, Result>(provider: {
     if (lane?.active?.turn === turn && !lane.active.controller.signal.aborted) lane.active.controller.abort(fail(code));
     if (lane) {
       // The slot is the turn's no longer, but the GPU is let go only once its calls have settled: a call stopped here
-      // is still ending on the server.
+      // is still ending on the server, and a count beside the slots runs on until it ends or its caller stops it.
       if (turn.open) turn.release = lane.reserved!.release;
       else lane.reserved!.release();
       lane.reserved = null;
@@ -187,8 +189,9 @@ export function createScheduler<Request, Result>(provider: {
     if (closed || controls.signal?.aborted) return Promise.reject(fail('cancelled'));
     // A pool counts tokens beside the running calls: the count reads no cache and fills none, so it waits for no slot
     // and for no queue. It is a call of its turn all the same: a person's scene is counted before it is generated, and
-    // the picture in the slot that scene wants ends for the count, as it does with one slot. A probe's count waits for
-    // no slot either, but it keeps to the probes' queue and rules (step).
+    // the picture in the slot that scene wants ends for the count, as it does with one slot. The turn's end does not
+    // stop it, its caller's signal does, and an agent turn's hold on the GPU lasts until it has ended. A probe's count
+    // waits for no slot either, but it keeps to the probes' queue and rules (step).
     const counting = pool && method === 'countInput' && priority !== 'background';
     const queue = queues[priority];
     if (!counting && queue.length >= (priority === 'foreground' ? 32 : 4)) return Promise.reject(fail('queue_full'));
@@ -459,8 +462,8 @@ export function createScheduler<Request, Result>(provider: {
     if (!backgroundAllowed()) stop('background', 'background_unavailable');
     // The GPU is pausing: the probes waiting for it would hold the pause back, which waits for them.
     if (!backgroundCanWait()) for (const item of [...background]) rejectQueued(item, fail('background_unavailable'));
-    // A probe is refused once it has waited `backgroundWaitMs`, whatever it waits for: a GPU in error or one still
-    // starting is kept up for it no longer.
+    // A probe that has waited `backgroundWaitMs` is refused, whatever it waits for, so that a GPU in error or still
+    // starting is not kept up for it indefinitely.
     const expired = background.filter(item => now() - item.accepted >= backgroundWaitMs);
     for (const item of expired) rejectQueued(item, fail('background_timeout'));
     if (!agentCanRun()) {
@@ -481,7 +484,7 @@ export function createScheduler<Request, Result>(provider: {
   });
   const wrap = (priority: 'foreground' | 'agent') => ({ ...calls(priority, null),
     // The calls of one turn, until `end`. `end` after a normal finish frees the slot; after a lost owner it also stops
-    // the turn's running call.
+    // the turn's call in the slot, though not a count it runs beside the slots (endTurn).
     openTurn({ holder, yields = false, sharesPrefix = false }: TurnOptions = {}) {
       // A call that continues its holder's last request is prepared ahead of need too, so it yields like the rest.
       const turn: Turn = { priority, ended: null, idleSince: Infinity, holder, yields: yields || sharesPrefix, sharesPrefix, open: 0 };
@@ -497,7 +500,9 @@ export function createScheduler<Request, Result>(provider: {
     async close() {
       closed = true;
       clearInterval(timer);
-      // Each turn ends as it would on its own, and lets the GPU go once its calls have settled.
+      // Each turn ends as it would on its own, and lets the GPU go once its calls have settled. The shutdown waits for
+      // the calls it stops and for the counts that size queued calls. It neither stops nor waits for a count a turn runs
+      // beside the slots: that count's caller ends it, and an agent turn's hold lasts until then.
       for (const lane of lanes) if (lane.reserved) endTurn(lane.reserved.turn, 'cancelled');
       for (const item of [...foreground, ...agent, ...background]) rejectQueued(item, fail('cancelled'));
       const active = running();

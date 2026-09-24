@@ -525,8 +525,8 @@ test("the owner's pause stops the card only once a refused probe's count has end
 });
 
 // A card whose model server stopped answering is in error, and a probe waiting for it would keep it up for as long as
-// it waited. The queue refuses it after ten minutes, and the idle interval runs from there.
-test('a probe waiting on a card in error keeps it up ten minutes at most, and the idle interval runs from its refusal', async t => {
+// it waited. The queue refuses it at its first tick after ten minutes, and the idle interval runs from there.
+test('a probe waiting on a card in error is refused at the first tick after ten minutes, and the idle interval runs from then', async t => {
   const f = fixture(); await f.gpu.tick();
   const q = queue(t, f);
   f.health('timeout'); f.advance(31000); await f.gpu.tick();
