@@ -610,18 +610,20 @@ the graph as the bot read it, the checkpoint's file name, and the size, steps, c
 with (`PictureRecipe` in `lib/library.ts`), written in the same write that records the photo (`sendKept` in
 `local/picture.ts`). It lives as long as the scene, not as long as the photo's `sentPictures` record, which goes after
 the 48 hours in which a bot may delete its message: a variant can be drawn under any scene's picture drawn since
-scenes keep it, while the graph and the checkpoint are the same. The prompt is kept neither there nor while the reader
-writes it. A picture drawn with a graph or a checkpoint the bot no longer has is refused with the reason, rather than
-drawn with another.
-There is no choice of seed: a new seed would mix what the words do with what the noise does. Samples get no button
-and no recipe, because this first version answers the request about the picture after a scene.
+scenes keep it, while the graph and the checkpoint are the same. A picture drawn with a graph or a checkpoint the bot
+no longer has is refused with the reason, rather than drawn with another. There is no choice of seed: a new seed
+would mix what the words do with what the noise does. Samples get no button and no recipe, because this first
+version answers the request about the picture after a scene.
 
 The variant goes under the same scene as a photo of its own. The note under it counts the tokens of that prompt and
 gives no style share, which nobody knows for a prompt written whole. It was drawn by the scene's recipe, so its note
 has the same button, and it leaves the chat with the scene. The reader's permission, the scene and its recipe are
-checked when the button is pressed, when the prompt arrives, before the drawing and before the photo goes out. A variant asks
-the language model nothing and holds none of its card, and it changes nothing of the story: not the sheet, the
-clothes or the frame kept for samples. The reader's next move stops it, and a failure is told once and never tried
-again. The row is `picture_variant`, with `edited: true` beside the counts `picture` has and no word of the prompt.
-A prompt may have 4000 characters (`PROMPT_CHARS` in `local/picture-style.ts`): at five characters for every escaped
-`&`, the note still fits the 32768 of a rich message.
+checked when the button is pressed, when the prompt arrives, before the drawing and before the photo goes out. A
+variant asks the language model nothing and holds none of its card, and it changes nothing of the story: not the
+sheet, the clothes or the frame kept for samples. The reader's next move stops it, and a failure is told once and
+never tried again. The row is `picture_variant`, with `edited: true` beside the counts `picture` has and no word of
+the prompt. The bot keeps the prompt in neither its library nor its technical logs, not even while it waits for it.
+Telegram keeps the reader's message and the note under the variant, and the card holds the job as long as it holds
+any picture's ([gpu.md](gpu.md#what-the-card-keeps-of-a-picture)). A prompt may have 4000 characters
+(`PROMPT_CHARS` in `local/picture-style.ts`): at five characters for every escaped `&`, the note still fits the 32768
+of a rich message.
