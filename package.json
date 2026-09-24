@@ -38,6 +38,7 @@
     "gpu:measure": "node --env-file-if-exists=.env.gpu local/gpu-measure.ts",
     "gpu:fake": "node local/fake-llama.ts",
     "gpu:rent": "node --env-file-if-exists=.env.gpu gpu/rent.mjs",
+    "tokenizers": "node local/tokenizer-extract.ts",
     "deploy": "tgcloud push",
     "status": "tgcloud status",
     "run:cloud": "tgcloud run"

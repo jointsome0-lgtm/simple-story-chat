@@ -30,3 +30,5 @@ coverage/
 measurements/
 models/
 *.gguf
+# Vocabularies written by `npm run tokenizers` (docs/tokenizers.md)
+tokenizers/
