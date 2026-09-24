@@ -1211,3 +1211,31 @@ test("a probe's count in a pool keeps to the probes' rules beside the slots, and
   f.calls[2].finish('reader');
   assert.deepEqual(await Promise.all(people), ['owner', 'tester', 'reader']);
 });
+// A probe's wait to start is bounded from the moment the queue takes it, so that a GPU that never becomes ready for it
+// (in error, or starting) is kept up for it no longer than that wait and the probe's run (local/gpu.ts).
+test('a probe waits to start at most ten minutes from the moment the queue takes it, and is then refused', async t => {
+  let time = 0, allowed = false;
+  const f = unwindFixture(t, { sharedCache: false, now: () => time, backgroundAllowed: () => allowed });
+  const first = f.scheduler.background.generate('first');
+  time = 5 * 60000;
+  const second = f.scheduler.background.generate('second');
+  // A probe's count in a pool waits in the same queue, and as long.
+  const count = f.scheduler.background.countInput!('held count');
+  time = 10 * 60000 - 1; f.scheduler.tick();
+  assert.deepEqual([f.scheduler.snapshot().backgroundQueued, f.probes], [3, [0, 0, 0]]);
+  // Each is refused at its own deadline, and lets its lease go at once: nothing of it ran.
+  time = 10 * 60000; f.scheduler.tick();
+  assert.deepEqual([f.scheduler.snapshot().backgroundQueued, f.probes], [2, [1, 0, 0]]);
+  await assert.rejects(first, { code: 'background_timeout' });
+  time = 15 * 60000; f.scheduler.tick();
+  assert.deepEqual([f.scheduler.snapshot().backgroundQueued, f.probes], [0, [1, 1, 1]]);
+  await assert.rejects(second, { code: 'background_timeout' });
+  await assert.rejects(count, { code: 'background_timeout' });
+  // Only the wait is bounded: a probe that starts in time runs on under its own limit.
+  const third = f.scheduler.background.generate('third');
+  time = 25 * 60000 - 1; allowed = true; f.scheduler.tick();
+  time = 40 * 60000; f.scheduler.tick();
+  assert.deepEqual([f.calls.map(call => call.name), f.calls[0].signal.aborted], [['third'], false]);
+  f.calls[0].finish('third'); assert.equal(await third, 'third');
+  assert.deepEqual([f.probes, f.counts], [[1, 1, 1, 1], []]);
+});

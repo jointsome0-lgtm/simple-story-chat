@@ -27,6 +27,9 @@ export type SchedulerOptions<Request = unknown> = {
   holdBackgroundCall?: () => () => void;
   // A turn that holds a slot without calling the model this long is taken as lost: an emergency, never a normal end.
   turnIdleMs?: number;
+  // How long a probe's call may wait to start, from the moment the queue takes it; `backgroundTimeoutMs` bounds its run.
+  // Together they bound how long it keeps the GPU up, even a GPU that never becomes ready for it.
+  backgroundWaitMs?: number;
   quietMs?: number; backgroundTimeoutMs?: number; now?: () => number; pollMs?: number; log?: Log;
   // A pool: the server's slot count and the output limit of a request, which a shared cache reserves in full. One slot
   // (the default) is the plain queue. `sharedCache` is llama.cpp's `--kv-unified`: the slots share `poolTokens` cells
@@ -38,6 +41,8 @@ type Item<Request> = {
   priority: Priority; method: 'generate' | 'countInput'; request: Request; controls: GenerateControls; turn: Turn | null;
   resolve: (value: unknown) => void; reject: (reason: unknown) => void; signal: AbortSignal | undefined;
   controller: AbortController; cancel: () => void; done?: Promise<void>; ahead?: number;
+  // When the queue took it.
+  accepted: number;
   // In a pool: the input the server counted, and the cache cells the call may fill (input and the whole output limit).
   // `sizing` is that count while it runs: the call settles only after it, however the call ends.
   inputTokens?: number; claim?: number; sizing?: Promise<void>;
@@ -75,7 +80,7 @@ export function createScheduler<Request, Result>(provider: {
 }, { backgroundAllowed = () => true, agentCanStart = backgroundAllowed, agentCanRun = () => true,
   backgroundCanWait = () => true, holdAgentTurn = () => () => {}, holdBackgroundCall = () => () => {},
   turnIdleMs = 60000, quietMs = 60000,
-  backgroundTimeoutMs = 90000, now = Date.now, pollMs = 1000, log = () => {},
+  backgroundTimeoutMs = 90000, backgroundWaitMs = 600000, now = Date.now, pollMs = 1000, log = () => {},
   slots = 1, poolTokens = 0, sharedCache = true, outputTokens = () => 0 }: SchedulerOptions<Request> = {}) {
   const pool = slots > 1;
   // Only a shared cache has to be divided. With isolated slots a call that fits one request fits its own slot, so
@@ -218,7 +223,7 @@ export function createScheduler<Request, Result>(provider: {
         release?.();
         settledIn(turn);
       };
-      const item: Item<Request> = { priority, method, request, controls, turn,
+      const item: Item<Request> = { priority, method, request, controls, turn, accepted: now(),
         resolve: value => { resolve(value); settled(); }, reject: reason => { reject(reason); settled(); },
         signal: controls.signal, controller: new AbortController(),
         cancel: () => {
@@ -454,6 +459,10 @@ export function createScheduler<Request, Result>(provider: {
     if (!backgroundAllowed()) stop('background', 'background_unavailable');
     // The GPU is pausing: the probes waiting for it would hold the pause back, which waits for them.
     if (!backgroundCanWait()) for (const item of [...background]) rejectQueued(item, fail('background_unavailable'));
+    // A probe is refused once it has waited `backgroundWaitMs`, whatever it waits for: a GPU in error or one still
+    // starting is kept up for it no longer.
+    const expired = background.filter(item => now() - item.accepted >= backgroundWaitMs);
+    for (const item of expired) rejectQueued(item, fail('background_timeout'));
     if (!agentCanRun()) {
       // The GPU is pausing: running and waiting agent calls end, rather than wait for a GPU that will not come back.
       stop('agent', 'background_unavailable');

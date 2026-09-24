@@ -524,6 +524,25 @@ test("the owner's pause stops the card only once a refused probe's count has end
   assert.deepEqual([f.gpu.snapshot().status, f.writes], ['stopping', ['stopped']]);
 });
 
+// A card whose model server stopped answering is in error, and a probe waiting for it would keep it up for as long as
+// it waited. The queue refuses it after ten minutes, and the idle interval runs from there.
+test('a probe waiting on a card in error keeps it up ten minutes at most, and the idle interval runs from its refusal', async t => {
+  const f = fixture(); await f.gpu.tick();
+  const q = queue(t, f);
+  f.health('timeout'); f.advance(31000); await f.gpu.tick();
+  assert.equal(f.gpu.snapshot().status, 'error');
+  const refused = assert.rejects(q.scheduler.background.generate('eval'), { code: 'background_timeout' });
+  f.advance(10 * 60000 - 1); await f.gpu.tick(); q.scheduler.tick();
+  assert.deepEqual([q.scheduler.snapshot().backgroundQueued, f.gpu.snapshot().idleRemainingSeconds, f.writes], [1, null, []]);
+  // The queue is empty before anything is awaited, so a queue that kept the probe fails here instead of hanging.
+  f.advance(1); q.scheduler.tick();
+  assert.equal(q.scheduler.snapshot().backgroundQueued, 0);
+  await refused;
+  assert.equal(f.gpu.snapshot().idleRemainingSeconds, 15 * 60);
+  f.advance(15 * 60000); await f.gpu.tick();
+  assert.deepEqual([f.gpu.snapshot().status, f.writes, q.calls], ['stopping', ['stopped'], []]);
+});
+
 test("an agent's turn keeps the card up through the gaps between its calls, and its end starts the idle interval", async t => {
   const f = fixture(); await f.gpu.tick();
   const q = queue(t, f);
