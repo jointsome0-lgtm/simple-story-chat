@@ -79,6 +79,11 @@ test('a picture is sent as a photo under the message it belongs to, and the line
   assert.deepEqual(calls[3], { method: 'sendRichMessage', payload: { chat_id: 7,
     rich_message: { html: '<details><summary>S</summary>P</details>' },
     reply_parameters: { message_id: 3, allow_sending_without_reply: true } } });
+  // Under a scene's own picture the note carries the button that asks for a variant of it (local/picture.ts).
+  const keyboard = { inline_keyboard: [[{ text: 'E', callback_data: 'prompt-edit:3' }]] };
+  await one.note('<details><summary>S</summary>P</details>', 3, keyboard);
+  assert.deepEqual(calls[4]!.payload, { chat_id: 7, rich_message: { html: '<details><summary>S</summary>P</details>' },
+    reply_parameters: { message_id: 3, allow_sending_without_reply: true }, reply_markup: keyboard });
 });
 
 test('messages go a hundred to a call, one by one when a call fails, and no further past a failure of the chat itself', async () => {

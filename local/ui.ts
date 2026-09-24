@@ -7,7 +7,7 @@ import type { GpuStatus } from './gpu.ts';
 import type { InlineButton, InlineKeyboard, Screen } from './telegram.ts';
 import { STYLE } from './illustrate.ts';
 import { LOOK_CHARS, personAt, personTag, wornAt } from './picture.ts';
-import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX, PRESETS, lineOf, ownStyle, ownStyles, pickerKeys, presetOf, styleKey } from './picture-style.ts';
+import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX, PRESETS, PROMPT_CHARS, lineOf, ownStyle, ownStyles, pickerKeys, presetOf, styleKey } from './picture-style.ts';
 import { LANGS, LANGUAGE_BUTTON, REGISTERED, shownLang, texts } from './text.ts';
 import type { Messages } from './text.ts';
 
@@ -111,6 +111,8 @@ function screen(state: State, route: string, details: RenderDetails) {
     case 'style': return args.length ? styleCard(state, args[0], details) : styleScreen(state, details);
     // Only while the reader is writing a style: otherwise their next message would be taken as a move in the story.
     case 'style-input': return styleInputScreen(state, details);
+    // The same for the prompt of a variant of a picture.
+    case 'prompt-input': return promptInputScreen(state, details);
     case 'delete-style': return deleteStyleScreen(state, args[0], details);
     case 'sample': return sampleScreen(state, args[0], details);
     case 'characters': return charactersScreen(state, args[0]);
@@ -276,6 +278,14 @@ function styleInputScreen(state: State, details: RenderDetails) {
   const offset = result.text.indexOf(example);
   if (offset >= 0) result.entities = [{ type: 'pre', offset, length: example.length }];
   return result;
+}
+
+// Waiting for the whole prompt of a variant of a picture (local/picture.ts `variant`), which the reader copies from the
+// note under it. The next text message is taken as it, and any button leaves. Without the wait this is the menu.
+function promptInputScreen(state: State, details: RenderDetails) {
+  const v = texts(state.language).variant;
+  if (state.ui?.input !== 'prompt') return home(state, null, details.modelInfo, gpuFor(details), details.pictures === true);
+  return payload([v.title, '', v.note(PROMPT_CHARS)], [[btn(v.leave, 'view:home')]]);
 }
 
 // The caption and the buttons of a sample of a style (local/picture.ts `sample`), as they stand when it is asked for.

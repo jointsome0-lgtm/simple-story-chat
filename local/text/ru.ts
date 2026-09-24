@@ -147,6 +147,18 @@ export const ru = {
     note: 'Меняется только язык меню и сообщений бота. Язык историй задают сид и твои сообщения.',
   },
 
+  // A variant of a scene's picture from a prompt the reader writes whole (local/picture.ts `variant`): the button under
+  // the picture's folded prompt, the screen while the reader writes, and the status line while it is drawn.
+  variant: {
+    button: '✏️ Изменить промпт и нарисовать вариант',
+    title: '✏️ Свой промпт для картинки',
+    // `max` is PROMPT_CHARS in local/picture-style.ts.
+    note: (max: number) => `Скопируй промпт из заметки под картинкой, поправь и пришли одним сообщением, до ${max} знаков. Это весь промпт вместе со стилем, я ничего не добавлю и не уберу. Нарисую с теми же настройками и тем же начальным шумом, что и исходную картинку, так что отличаться будет только промпт. Вариант придёт отдельной картинкой под той же сценой.`,
+    leave: '↩️ Не рисовать',
+    drawing: '🎨 Рисую вариант…',
+    failed: 'Не получилось нарисовать вариант. Попробуй ещё раз чуть позже.',
+  },
+
   // The look of the pictures under the scenes (local/picture-style.ts): the picker, a card for every style with its
   // prompt, and the reader's own styles. Style names are buttons: keep them short.
   pictureStyle: {
@@ -675,6 +687,14 @@ export const ru = {
     sampleBusy: 'Сцена ещё пишется. Попроси пример, когда она придёт.',
     sampleNoScene: 'Пример рисуется по последней сцене. Начни историю, и после первой сцены его можно будет попросить.',
     sampleInFlight: 'Уже рисую пример. Следующий можно попросить, когда он придёт.',
+    // A variant of a picture (local/picture.ts `variant`). The number is PROMPT_CHARS in local/picture-style.ts.
+    promptNeedsText: 'Пришли промпт текстом, одним сообщением. Выйти без изменений можно кнопкой «↩️» или командой /cancel.',
+    promptTooLong: 'Слишком длинно: промпт должен уложиться в 4000 знаков. Сократи и пришли снова.',
+    variantOff: 'Картинки к твоим сценам пока не включены, поэтому вариант нарисовать нельзя.',
+    variantGone: 'Вариант этой картинки уже не нарисовать: её сцена удалена.',
+    variantChanged: 'С тех пор поменялась модель картинок или её настройки, и с прежними эту картинку уже не повторить. С новыми рисовать не буду, иначе отличался бы не только промпт.',
+    variantBusy: 'Сцена ещё пишется. Попроси вариант, когда она придёт.',
+    variantInFlight: 'Уже рисую вариант. Следующий можно попросить, когда он придёт.',
     // While the reader writes a look, and under a portrait. The number is LOOK_CHARS in local/picture.ts.
     lookNeedsText: 'Пришли внешность текстом, одним сообщением. Выйти без изменений можно кнопкой «↩️» или командой /cancel.',
     lookTooLong: 'Слишком длинно: внешность должна уложиться в 400 знаков. Сократи и пришли снова.',

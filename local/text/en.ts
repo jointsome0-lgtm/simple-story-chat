@@ -109,6 +109,15 @@ export const en: Messages = {
     note: 'This changes only the menus and messages of the bot. The language of a story comes from its seed and from what you write.',
   },
 
+  variant: {
+    button: '✏️ Edit the prompt and draw a variant',
+    title: '✏️ Your own prompt for the picture',
+    note: max => `Copy the prompt from the note under the picture, edit it and send it in one message, up to ${max} characters. This is the whole prompt, style included; I will add nothing and take nothing out. I will draw it with the same settings and the same initial noise as the original picture, so only the prompt will differ. The variant will arrive as a separate picture under the same scene.`,
+    leave: '↩️ Do not draw',
+    drawing: '🎨 Drawing a variant…',
+    failed: 'The variant did not work out. Try again a little later.',
+  },
+
   pictureStyle: {
     title: '🎨 Picture style',
     current: name => `Now: ${name}`,
@@ -555,6 +564,13 @@ export const en: Messages = {
     sampleBusy: 'The scene is still being written. Ask for a sample once it arrives.',
     sampleNoScene: 'A sample is drawn from your last scene. Start a story, and after its first scene you can ask for one.',
     sampleInFlight: 'Already drawing a sample. You can ask for the next one once it arrives.',
+    promptNeedsText: 'Send the prompt as text, in one message. To leave without a change, tap “↩️” or send /cancel.',
+    promptTooLong: 'Too long: a prompt has to fit in 4000 characters. Shorten it and send it again.',
+    variantOff: 'Pictures for your scenes are not switched on, so a variant cannot be drawn.',
+    variantGone: 'A variant of this picture can no longer be drawn: its scene was deleted.',
+    variantChanged: 'The picture model or its settings have changed since, and this picture can no longer be repeated with the old ones. I will not draw it with the new ones, or more than the prompt would differ.',
+    variantBusy: 'The scene is still being written. Ask for a variant once it arrives.',
+    variantInFlight: 'Already drawing a variant. You can ask for the next one once it arrives.',
     lookNeedsText: 'Send the look as text, in one message. To leave without a change, tap “↩️” or send /cancel.',
     lookTooLong: 'Too long: a look has to fit in 400 characters. Shorten it and send it again.',
     lookGone: 'That character is no longer in the story, so the look was not saved. Open /menu.',

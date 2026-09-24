@@ -32,6 +32,10 @@ export const PRESET_KEYS = Object.keys(PRESETS) as Preset[];
 export const OWN_STYLE_CHARS = 400;
 export const OWN_NAME_CHARS = 40;
 export const OWN_STYLES_MAX = 10;
+// A whole prompt a reader writes for a variant of a picture (local/picture.ts `variant`) is at most PROMPT_CHARS
+// characters: short enough that its note, every character escaped to the five of `&amp;` and its summary line added,
+// stays inside the 32768 characters of a rich message (docs/setup.md).
+export const PROMPT_CHARS = 4000;
 // A reader's own line ends the prompt as written, with nothing of the bot's after it: it is what the tester sets a
 // style and runs tests with. The bot's tail took a sentence of meaning into every such picture — natural proportions
 // and no lettering until the owner took them off on 2026-09-24, and that all people are adults until later that
