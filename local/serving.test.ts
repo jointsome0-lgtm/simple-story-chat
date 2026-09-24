@@ -95,7 +95,7 @@ test('a structured request asks for its schema as json_schema, and memory sample
 });
 
 test('every call says whose it is: a reader with a scope of their own, the agent, or internal work', async () => {
-  const f = fixture(path => path === '/v1/state' ? json({ contract: '1', status: 'ready', model: 'test-model', context_tokens: 65536 })
+  const f = fixture(path => path === '/v1/state' ? json({ contract: '2', status: 'ready', model: 'test-model', context_tokens: 65536 })
     : path === '/v1/models' ? json({ data: [{ id: 'test-model', max_model_len: 65536 }] }) : answer());
   await f.provider.generate(trusted(), { priority: 'foreground', holder: 'synthetic-reader' });
   await f.provider.countInput(request(), { priority: 'foreground', holder: 'synthetic-reader' });
@@ -398,7 +398,7 @@ test('a trusted estimate goes without a count, and the usage chunk decides; a co
 });
 
 test('the check reads the state, then the model and its context, and the two must agree', async () => {
-  const state = { contract: '1', boot_id: 'synthetic-boot', status: 'ready', model: 'test-model', context_tokens: 65536, drain_generation: 0 };
+  const state = { contract: '2', boot_id: 'synthetic-boot', status: 'ready', model: 'test-model', context_tokens: 65536, drain_generation: 0 };
   const models = { object: 'list', data: [{ id: 'other-model', object: 'model', max_model_len: 65536 }, { id: 'test-model', object: 'model', max_model_len: 65536 }] };
   const checked = (stateAnswer: unknown, modelsAnswer: unknown) => fixture(path => path === '/v1/state' ? json(stateAnswer) : json(modelsAnswer));
   const f = checked(state, models);
@@ -407,7 +407,7 @@ test('the check reads the state, then the model and its context, and the two mus
   // Each answer, and how many routes the check read: a service that is not ready, not of this contract or not serving
   // this model is not asked for its models.
   const cases: [unknown, unknown, string, number][] = [
-    [{ ...state, contract: '2' }, models, 'unsupported_server', 1], [{ ...state, contract: 1 }, models, 'unsupported_server', 1],
+    [{ ...state, contract: '1' }, models, 'unsupported_server', 1], [{ ...state, contract: 2 }, models, 'unsupported_server', 1],
     [[state], models, 'unsupported_server', 1],
     [{ ...state, status: 'starting' }, models, 'model_unavailable', 1], [{ ...state, status: 'draining' }, models, 'model_unavailable', 1],
     [{ ...state, status: 'drained' }, models, 'model_unavailable', 1], [{ ...state, status: 'failed' }, models, 'model_unavailable', 1],
@@ -430,7 +430,7 @@ test('the check reads the state, then the model and its context, and the two mus
 });
 
 test('the bot starts while the service is down, and its first call checks the service before it goes on', async () => {
-  const state = { contract: '1', boot_id: 'synthetic-boot', status: 'ready', model: 'test-model', context_tokens: 65536, drain_generation: 0 };
+  const state = { contract: '2', boot_id: 'synthetic-boot', status: 'ready', model: 'test-model', context_tokens: 65536, drain_generation: 0 };
   // At the start (local/main.ts), a service out of reach or not ready lets the bot start; any other answer stops it.
   const refused = Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
   const atStart = [[() => { throw refused; }, true], [() => refusal(503, 'starting'), true], [() => refusal(401, 'unauthorized'), false],

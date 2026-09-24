@@ -6,7 +6,7 @@ import { modelBaseUrl } from './config.ts';
 import type { Controls, GenerateControls, GenerationResult, ModelRequest, Timings } from './model.ts';
 import { MAX_BODY, events, messagesFor } from './llama.ts';
 
-// simple-serving: our own gateway in front of vLLM on a rented card, built to contract v1 (docs/contract-v1.md in
+// simple-serving: our own gateway in front of vLLM on a rented card, built to contract v2 (docs/contract-v2.md in
 // jointsome0-lgtm/simple-serving; the cases both sides test are pinned in local/serving-contract/). Unlike llama-server
 // it serves readers, agents, our own probes and outside keys at once, so every request says whose it is, and every
 // refusal comes with a code of the contract rather than a bare status.
@@ -185,7 +185,7 @@ export function createServing(config: ServingConfig, { fetch: fetcher = globalTh
       return operation(signal, 'health', async current => {
         unchecked = true;
         const state = await json('/v1/state', null, current);
-        if (!isObject(state) || state.contract !== '1') throw new ModelError('unsupported_server');
+        if (!isObject(state) || state.contract !== '2') throw new ModelError('unsupported_server');
         if (state.status !== 'ready') throw new ModelError('model_unavailable');
         if (state.model !== config.model) throw new ModelError('unexpected_model');
         const models = await json('/v1/models', null, current);

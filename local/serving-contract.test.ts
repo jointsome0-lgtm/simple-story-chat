@@ -10,7 +10,7 @@ import { createServing } from './serving.ts';
 import type { ModelError } from './model-error.ts';
 import type { ChatMessage, Controls, GenerationResult, ModelRequest } from './model.ts';
 
-// The shared cases of simple-serving's contract v1, pinned in local/serving-contract/ (pin.json says from where). The
+// The shared cases of simple-serving's contract v2, pinned in local/serving-contract/ (pin.json says from where). The
 // gateway's tests play each step's engine and check the gateway's response; these play that response from a fake
 // gateway over HTTP and check what the bot makes of it (contract/README.md there, "Who runs what").
 type Json = { readonly [field: string]: unknown };
@@ -26,7 +26,7 @@ type Cases = { contract: string; service: { alias: string; context_tokens: numbe
   cases: { name: string; steps: Step[] }[] };
 
 const directory = new URL('./serving-contract/', import.meta.url);
-const raw = readFileSync(new URL('cases-v1.json', directory));
+const raw = readFileSync(new URL('cases-v2.json', directory));
 const pin = JSON.parse(readFileSync(new URL('pin.json', directory), 'utf8')) as { [field: string]: unknown };
 const cases = JSON.parse(raw.toString('utf8')) as Cases;
 const alias = cases.service.alias;
@@ -36,10 +36,10 @@ const isObject = (value: unknown): value is Json => !!value && typeof value === 
 
 test('the pinned cases are the file the pin names, byte for byte', () => {
   assert.equal(createHash('sha256').update(raw).digest('hex'), pin.sha256);
-  assert.equal(pin.contract, '1');
+  assert.equal(pin.contract, '2');
   assert.equal(cases.contract, pin.contract);
   assert.equal(pin.repository, 'jointsome0-lgtm/simple-serving');
-  assert.equal(pin.path, 'contract/cases-v1.json');
+  assert.equal(pin.path, 'contract/cases-v2.json');
   assert.match(String(pin.commit), /^[0-9a-f]{40}$/);
 });
 
@@ -134,7 +134,7 @@ function fill(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(fill);
   return isObject(value) ? Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, fill(inner)])) : value;
 }
-const READY = { contract: '1', boot_id: 'synthetic-boot', status: 'ready', model: alias, context_tokens: cases.service.context_tokens, drain_generation: 0 };
+const READY = { contract: '2', boot_id: 'synthetic-boot', status: 'ready', model: alias, context_tokens: cases.service.context_tokens, drain_generation: 0 };
 const MODELS = { object: 'list', data: [{ id: alias, object: 'model', max_model_len: cases.service.context_tokens }] };
 
 // The contract promises a client no split of the text (contract/README.md there, "response"): the bot must make the
@@ -335,5 +335,5 @@ test('every public step of the pinned cases gives the bot the result the case ex
   }
   // A client counts the steps it skips, so that none is skipped by accident; beside them, the reader steps that fail
   // in the bot before any request and the streams it read cut otherwise. A new copy of the cases changes these.
-  assert.deepEqual(counted, { run: 56, gateway: 4, control: 14, unnamed: 3, resplit: 57 });
+  assert.deepEqual(counted, { run: 58, gateway: 4, control: 27, unnamed: 3, resplit: 57 });
 });
