@@ -109,7 +109,7 @@ export const en: Messages = {
   variant: {
     button: '✏️ Edit the prompt and draw a variant',
     title: '✏️ Your own prompt for the picture',
-    note: max => `Open the prompt under the picture, copy it, edit it and send it in one message, up to ${max} characters. It is the whole prompt, style included: nothing will be added or taken out. It is drawn exactly like the original picture — the same settings and the same random noise — so only the prompt differs. The variant arrives as a picture of its own under the same scene.`,
+    note: max => `Copy the prompt from the note under the picture, edit it and send it in one message, up to ${max} characters. This is the whole prompt, style included; I will add nothing and take nothing out. I will draw it with the same settings and the same initial noise as the original picture, so only the prompt will differ. The variant will arrive as a separate picture under the same scene.`,
     leave: '↩️ Do not draw',
     drawing: '🎨 Drawing a variant…',
     failed: 'The variant did not work out. Try again a little later.',
@@ -532,7 +532,7 @@ export const en: Messages = {
     promptTooLong: 'Too long: a prompt has to fit in 4000 characters. Shorten it and send it again.',
     variantOff: 'Pictures for your scenes are not switched on, so a variant cannot be drawn.',
     variantGone: 'A variant of this picture can no longer be drawn: its scene was deleted.',
-    variantChanged: 'The picture graph or model has changed since, so this picture cannot be drawn with the same settings again. It will not be drawn with others: that would no longer compare prompts.',
+    variantChanged: 'The picture model or its settings have changed since, and this picture can no longer be repeated with the old ones. I will not draw it with the new ones, or more than the prompt would differ.',
     variantBusy: 'The scene is still being written. Ask for a variant once it arrives.',
     variantInFlight: 'Already drawing a variant. You can ask for the next one once it arrives.',
   },

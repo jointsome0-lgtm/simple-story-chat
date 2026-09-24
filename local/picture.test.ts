@@ -1055,7 +1055,7 @@ test('a variant is the reader\'s whole prompt drawn as it came, by the picture\'
 
   // It asks for the whole prompt, style and all, and the reader's next message is that prompt.
   await f.bot.handle(f.click(editOf(ownNote)));
-  assert.match(f.sent.at(-1)!.payload.text, /Это весь промпт целиком, вместе со стилем/);
+  assert.match(f.sent.at(-1)!.payload.text, /Это весь промпт вместе со стилем/);
   assert.deepEqual(f.store.read('1').ui, { input: 'prompt', storyId, nodeId });
   const prompt = 'Элин, 48 years old, waits at the lighthouse door at dawn. <b>Charcoal</b> & ink, no colour.';
   await f.bot.handle(f.message(prompt));
@@ -1329,7 +1329,7 @@ test('a variant is drawn by the recipe its picture was drawn with, and refused o
 
   // Another checkpoint or another graph would make another picture: the reader is told so, and nothing is drawn,
   // whether the change is there when the button is pressed or comes while the prompt is written.
-  const changed = 'С тех пор сменились граф или модель картинок, и эту картинку уже не повторить с теми же настройками. С другими рисовать не буду: это было бы уже не сравнение промптов.';
+  const changed = 'С тех пор поменялась модель картинок или её настройки, и с прежними эту картинку уже не повторить. С новыми рисовать не буду, иначе отличался бы не только промпт.';
   f.images!.checkpoint = 'another.safetensors';
   await f.restart();
   await f.bot.handle(f.click(own));
