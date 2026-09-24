@@ -258,7 +258,7 @@ test('command lists: English by default, then one per registered language, GPU c
   for (const set of commandSets(false, true)) assert.ok(set.commands.some(item => item.command === 'style'), String(set.language_code));
 });
 
-test('the style and prompt texts name the limits the code keeps', () => {
+test('the style, prompt and look texts name the limits the code keeps', () => {
   for (const lang of REGISTERED) {
     const t = texts(lang);
     assert.match(t.errors.styleTooLong, new RegExp(`\\b${OWN_STYLE_CHARS}\\b`), lang);
@@ -268,6 +268,13 @@ test('the style and prompt texts name the limits the code keeps', () => {
     assert.ok(t.pictureStyle.editNote(OWN_STYLE_CHARS).includes(String(OWN_STYLE_CHARS)), lang);
     assert.match(t.errors.promptTooLong, new RegExp(`\\b${PROMPT_CHARS}\\b`), lang);
     assert.ok(t.variant.note(PROMPT_CHARS).includes(String(PROMPT_CHARS)), lang);
+    assert.match(t.errors.lookTooLong, new RegExp(`\\b${LOOK_CHARS}\\b`), lang);
+    assert.ok(t.characters.editNote(LOOK_CHARS).includes(String(LOOK_CHARS)), lang);
+    // Each size on a character's card says which text it counts; a count the bot does not know is said in words, and
+    // the characters stay.
+    assert.notEqual(t.characters.lookSize(3, 20), t.characters.clothesSize(3, 20), lang);
+    const unknown = t.characters.lookSize(null, 20);
+    assert.ok(unknown.includes('20') && unknown !== t.characters.lookSize(3, 20) && !/null|NaN/.test(unknown), lang);
     // The example is a style as a reader would send it: a name, then the line in English.
     const [name, line, ...rest] = t.pictureStyle.exampleText.split('\n');
     assert.ok(name && [...name].length <= OWN_NAME_CHARS && line && [...line].length <= OWN_STYLE_CHARS && !rest.length, lang);
@@ -276,18 +283,6 @@ test('the style and prompt texts name the limits the code keeps', () => {
 });
 
 // tsc already rejects a catalog with other keys; this also holds a catalog to the same kind of value and arity.
-test('the look texts name the limit the code keeps', () => {
-  for (const lang of REGISTERED) {
-    const t = texts(lang);
-    assert.match(t.errors.lookTooLong, new RegExp(`\\b${LOOK_CHARS}\\b`), lang);
-    assert.ok(t.characters.editNote(LOOK_CHARS).includes(String(LOOK_CHARS)), lang);
-    // Each size says which text it counts; a count the bot does not know is said in words, and the characters stay.
-    assert.notEqual(t.characters.lookSize(3, 20), t.characters.clothesSize(3, 20), lang);
-    const unknown = t.characters.lookSize(null, 20);
-    assert.ok(unknown.includes('20') && unknown !== t.characters.lookSize(3, 20) && !/null|NaN/.test(unknown), lang);
-  }
-});
-
 test('every catalog has the keys of the Russian one, with strings for strings and functions of the same arity', () => {
   const shape = (value: unknown, path: string, out: Map<string, string>) => {
     if (typeof value === 'string') { assert.ok(value.length > 0, `${path} is empty`); out.set(path, 'string'); }

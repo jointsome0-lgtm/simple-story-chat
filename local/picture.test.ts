@@ -66,7 +66,8 @@ const promptOf = (graph: Graph) => (Object.values(graph)
 function fakeComfy(options: { jobMs?: number; failing?: boolean } = {}) {
   const submitted: Graph[] = [];
   const done = new Set<string>();
-  const seen = { interrupts: 0, queueDeletes: 0, cleared: [] as string[] };
+  // `interrupted`: the job each interrupt named.
+  const seen = { interrupted: [] as unknown[], queueDeletes: 0, cleared: [] as string[] };
   const finishAt = new Map<string, number>();
   const server = createServer((request, response) => {
     const url = new URL(request.url!, 'http://127.0.0.1');
@@ -80,10 +81,10 @@ function fakeComfy(options: { jobMs?: number; failing?: boolean } = {}) {
         return json({ prompt_id: id });
       }
       if (request.method === 'POST' && url.pathname === '/interrupt') {
-        seen.interrupts++;
         // ComfyUI draws one job at a time and interrupts that one, and only while it is the job the interrupt names;
         // an interrupted prompt lands in the history too, so that the delete below has a record to remove.
         const named = (await body().catch(() => ({})) as { prompt_id?: unknown }).prompt_id;
+        seen.interrupted.push(named);
         const running = [...finishAt.keys()][0];
         if (running !== undefined && (named === undefined || named === running)) { finishAt.delete(running); done.add(running); }
         return json({});
@@ -832,8 +833,10 @@ test('a sheet from before clothes left it is written again once', async t => {
 });
 
 // A look the reader wrote is theirs: that rewrite keeps it under its name, and keeps the person even when the new sheet
-// does not name them. Only what the reader did not write is taken from the new sheet.
-test('the rewrite of an old sheet keeps the looks the reader wrote and the portraits they kept', async t => {
+// does not name them. Only what the reader did not write is taken from the new sheet. A person is their name, apart
+// from spaces and case, and nothing else: one the model renames is somebody new, and what the reader made of the old
+// name stays beside them, under it. Two people are never merged by a like name.
+test('the rewrite of an old sheet keeps the looks the reader wrote and the portraits they kept, under the names they had', async t => {
   const comfy = fakeComfy();
   const root = await comfy.listen();
   t.after(() => comfy.server.close());
@@ -855,15 +858,9 @@ test('the rewrite of an old sheet keeps the looks the reader wrote and the portr
   const portrait = keptOf('An old look');
   assert.deepEqual(rewrittenSheet([{ name: 'Элин', look: 'An old look', portrait }, { name: 'Ора', look: 'An old woman', portrait }], SHEET.characters),
     [{ ...SHEET.characters[0], portrait }, { name: 'Ора', look: 'An old woman', outfit: '', portrait }], 'a kept portrait stays, and so does its person');
-});
-
-// A person is their name, apart from spaces and case, and nothing else: one the model renames is somebody new, and
-// what the reader made of the old name stays beside them, under it. Two people are never merged by a like name.
-test('a person the rewrite renames is somebody new, beside the one the reader made', () => {
-  const portrait = keptOf('Mine');
   const renamed = { name: 'Элин Вос', look: 'A lean woman, grey hair', outfit: 'wearing a grey wool coat' };
   assert.deepEqual(rewrittenSheet([{ name: 'Элин', look: 'Mine', edited: true, portrait }], [renamed]),
-    [renamed, { name: 'Элин', look: 'Mine', outfit: '', edited: true, portrait }]);
+    [renamed, { name: 'Элин', look: 'Mine', outfit: '', edited: true, portrait }], 'a person renamed is somebody new');
   // So are the buttons: they name her by the hash of the name she has.
   assert.equal(personTag(' ЭЛИН '), personTag('Элин'));
   assert.notEqual(personTag('Элин Вос'), personTag('Элин'));
@@ -1071,7 +1068,7 @@ test('a portrait whose story is deleted while it is drawn is not sent, and a del
   assert.deepEqual(g.store.read('1').sentPictures, []);
 });
 
-test('a portrait is drawn on request only, one at a time with the samples, and a move in the story stops it', async t => {
+test('a portrait is drawn on request only, in one slot with the samples and beside a variant, and a move in the story stops both', async t => {
   const comfy = fakeComfy({ jobMs: 60000 });
   const root = await comfy.listen();
   t.after(() => comfy.server.close());
@@ -1087,17 +1084,25 @@ test('a portrait is drawn on request only, one at a time with the samples, and a
   assert.equal(comfy.submitted.length, 1);
   await f.bot.handle(f.click(`portrait:${elin(storyId)}`));
   await until(() => comfy.submitted.length === 2, 'the portrait to reach the card');
+  // Another portrait, or a sample, waits for this one; a variant of the scene's picture has a slot of its own.
   await f.bot.handle(f.click(`portrait:${elin(storyId)}`));
   assert.ok(told(f.sent, 'Уже рисую картинку по твоей просьбе. Портрет можно попросить, когда она придёт.'));
+  await f.bot.handle(f.click('style-sample:film'));
+  assert.ok(told(f.sent, texts('ru').errors.sampleInFlight));
   assert.equal(comfy.submitted.length, 2);
+  await f.bot.handle(f.click(editOf(notes(f.sent)[0])));
+  await f.bot.handle(f.message('A synthetic prompt.'));
+  await until(() => comfy.submitted.length === 3, 'the variant to reach the card beside it');
 
+  // The move stops both, and the card is told to stop each by the job it is.
   await f.bot.handle(f.message('Осмотреться'));
-  await until(() => f.rows.some(one => one.event === 'picture_portrait'), 'the portrait to stop');
-  const row = f.rows.find(one => one.event === 'picture_portrait')!;
-  assert.deepEqual([row.outcome, row.code], ['cancelled', 'cancelled']);
+  const stopped = () => f.rows.filter(one => one.event === 'picture_portrait' || one.event === 'picture_variant');
+  await until(() => stopped().length === 2, 'both to stop');
+  assert.deepEqual(stopped().map(row => [row.event, row.outcome, row.code]).sort(),
+    [['picture_portrait', 'cancelled', 'cancelled'], ['picture_variant', 'cancelled', 'cancelled']]);
   await f.bot.stop();
-  assert.ok(!photos(f.sent).some(one => one.payload.caption?.startsWith('🖼 Портрет')), 'no portrait after the reader moved on');
-  assert.ok(comfy.seen.cleared.includes('p2'));
+  assert.equal(photos(f.sent).length, 1, 'no portrait or variant after the reader moved on');
+  assert.ok(['p2', 'p3'].every(id => comfy.seen.interrupted.includes(id) && comfy.seen.cleared.includes(id)));
 });
 
 // A portrait's caption is written when it is asked for, and the drawing takes a while: a sheet written anew meanwhile
@@ -1210,44 +1215,16 @@ test('a portrait whose keep is rolled back leaves no file behind and is kept by 
   assert.equal(f.sent.at(-1)!.payload.text, 'Этот портрет уже не сохранить: он устарел или внешность с тех пор изменилась. Нарисуй новый.');
 });
 
-// A stop that lands while the photo is on its way to Telegram does not take it back: the portrait arrives, stays to
-// be kept, and its row says both that it is ready and that it was stopped.
-test('a portrait stopped while its photo is delivered arrives, can be kept, and is logged as ready and stopped', async t => {
-  const comfy = fakeComfy();
-  const root = await comfy.listen();
-  t.after(() => comfy.server.close());
-  const f = fixture(t, { comfy: root, holdPhotos: 2 });
-  await f.start();
-  await until(() => photos(f.sent).length === 1, 'the scene\'s photo to be on its way');
-  f.release();
-  await f.bot.idle();
-  const storyId = f.store.read('1').active!.storyId;
-  await f.bot.handle(f.click(`portrait:${elin(storyId)}`));
-  await until(() => photos(f.sent).length === 2, 'the portrait to be on its way');
-  await f.bot.handle(f.message('/cancel'));
-  f.release();
-  await f.bot.idle();
-  const row = f.rows.find(one => one.event === 'picture_portrait')!;
-  assert.deepEqual([row.outcome, row.cancelled, row.code], ['ready', true, undefined]);
-  const photo = photos(f.sent)[1];
-  assert.equal(f.store.read('1').sentPictures!.at(-1)!.messageId, idOf(f.sent, photo));
-  assert.ok(!f.deleted.includes(idOf(f.sent, photo)), 'the photo is not taken back');
-  await f.bot.handle(f.click(photo.payload.reply_markup!.inline_keyboard[0][1].callback_data));
-  assert.equal(f.sent.at(-1)!.payload.text, '✅ Портрет сохранён: Элин. В картинки к сценам он пока не попадает.');
-});
-
 // The sidecar of the library: a portrait's file is written before the write that refers to it. A write rolled back
-// deletes the file it wrote, and one a stopped process never made leaves a file nobody refers to: the next sweep takes
-// it, and so does the next start.
-test('a portrait file goes with its write rolled back, and one whose write never came is swept', t => {
+// takes the file with it (above); one a stopped process never made leaves a file nobody refers to, and the next sweep
+// takes it, and so does the next start.
+test('a portrait file whose write never came is swept, after a write and at start', t => {
   const directory = mkdtempSync(join(tmpdir(), 'simple-chat-portraits-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const path = join(directory, 'story.sqlite');
   let store = new Store(path);
   const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
-  assert.throws(() => store.mutate('1', () => { store.writePortrait('1', bytes); throw new Error('synthetic'); }), /synthetic/);
   const mine = store.portraits('1');
-  assert.deepEqual(readdirSync(mine), [], 'the rollback took its file');
   store.writePortrait('1', bytes);
   assert.equal(store.sweepPortraits('1'), 1);
   assert.deepEqual(readdirSync(mine), []);
@@ -1393,7 +1370,7 @@ test('the reader\'s next message ends the picture of the scene they have read pa
 
   assert.equal(photos(f.sent).length, 0, 'no picture of a scene the reader has read past');
   assert.ok(f.deleted.includes(status), 'the status line under the first scene goes without a word');
-  assert.ok(comfy.seen.interrupts >= 1 && comfy.seen.queueDeletes >= 1, 'the card is told to stop drawing it');
+  assert.ok(comfy.seen.interrupted.includes('p1') && comfy.seen.queueDeletes >= 1, 'the card is told to stop drawing it');
   assert.ok(comfy.seen.cleared.includes('p1'), 'and the job it was drawing is off its history');
   const rows = f.rows.filter(one => one.event === 'picture');
   assert.equal(rows.length, 2);
@@ -1621,7 +1598,8 @@ test('a variant is refused for a scene that is not the reader\'s own or has no p
   const gone = 'Вариант этой картинки уже не нарисовать: её сцена удалена.';
 
   // A button names a scene in the library of the reader who presses it: another reader's library has no such scene,
-  // a scene without a picture has nothing to vary, and a button nobody made names nothing.
+  // a scene without a picture has nothing to vary, a story alone, all a portrait's photo is recorded with, is no scene,
+  // and a button nobody made names nothing.
   for (const [data, user] of [[edit, 2], [`prompt-edit:${storyId}:${bare}`, 1], ['prompt-edit:constructor:__proto__', 1],
     [`prompt-edit:${storyId}`, 1], ['prompt-edit:7', 1]] as const) {
     const before = f.sent.length;
@@ -1675,7 +1653,7 @@ test('a variant is refused for a scene that is not the reader\'s own or has no p
   assert.ok(!f.rows.some(one => one.event === 'picture_variant'));
 });
 
-test('a command the bot does not know ends the wait for a style or for a prompt, and the next text is a move again', async t => {
+test('a command the bot does not know ends the wait for a style, a prompt or a look, and so does another wait', async t => {
   const comfy = fakeComfy();
   const root = await comfy.listen();
   t.after(() => comfy.server.close());
@@ -1683,9 +1661,9 @@ test('a command the bot does not know ends the wait for a style or for a prompt,
   await f.start();
   await f.bot.idle();
   const edit = editOf(notes(f.sent)[0]);
-  const [, storyId] = edit.split(':');
+  const [, storyId, nodeId] = edit.split(':');
   const scenes = () => Object.keys(f.store.read('1').stories[storyId].nodes).length;
-  for (const wait of ['style-new', edit]) {
+  for (const wait of ['style-new', edit, `look-edit:${elin(storyId)}`]) {
     await f.bot.handle(f.click(wait));
     await f.bot.handle(f.message('/charcoal'));
     assert.equal(f.sent.at(-1)!.payload.text, texts('ru').notices.unknownCommand, wait);
@@ -1696,6 +1674,14 @@ test('a command the bot does not know ends the wait for a style or for a prompt,
     assert.equal(scenes(), before + 1, wait);
   }
   assert.deepEqual(Object.keys(f.store.read('1').pictureStyles ?? {}), [], 'no style was kept');
+  assert.ok(!f.store.read('1').stories[storyId].sheet!.some(one => one.edited), 'no look was kept');
+  // One wait ends where another begins: a look, then a prompt, then the look again, which the text is.
+  await f.bot.handle(f.click(`look-edit:${elin(storyId)}`));
+  await f.bot.handle(f.click(edit));
+  assert.deepEqual(f.store.read('1').ui, { input: 'prompt', storyId, nodeId });
+  await f.bot.handle(f.click(`look-edit:${elin(storyId)}`));
+  await f.bot.handle(f.message('A tall woman with a long braid'));
+  assert.equal(f.store.read('1').stories[storyId].sheet![0].look, 'A tall woman with a long braid');
   assert.ok(!f.rows.some(one => one.event === 'picture_variant'), 'no variant was drawn');
 });
 
@@ -1772,21 +1758,26 @@ test('a photo already on its way when its picture is stopped goes out with its n
   const comfy = fakeComfy();
   const root = await comfy.listen();
   t.after(() => comfy.server.close());
-  const f = fixture(t, { comfy: root, holdPhotos: 3 });
-  // The stop is /cancel, whose menu is out before the photo lands: all that is sent after it is the picture's.
-  const stopOnItsWay = async (count: number) => {
+  const f = fixture(t, { comfy: root, holdPhotos: 4 });
+  // The stop is /cancel, whose menu is out before the photo lands: all that is sent after it is the picture's, its note
+  // or, for a portrait, which has none, nothing. The photo is not taken back.
+  const stopOnItsWay = async (count: number, noted = true) => {
     await until(() => photos(f.sent).length === count, 'the photo to be on its way');
     await f.bot.handle(f.message('/cancel'));
     const stopped = f.sent.length;
     f.release();
     await f.bot.idle();
+    const photo = photos(f.sent)[count - 1];
+    assert.ok(!f.deleted.includes(idOf(f.sent, photo)));
     const after = f.sent.slice(stopped).filter(one => one.method !== 'deleteMessage');
-    assert.equal(after.length, 1);
-    assert.ok(isNote(after[0]));
-    assert.equal(after[0].payload.reply_parameters?.message_id, idOf(f.sent, photos(f.sent)[count - 1]));
-    return after[0];
+    assert.equal(after.length, noted ? 1 : 0);
+    if (noted) {
+      assert.ok(isNote(after[0]));
+      assert.equal(after[0].payload.reply_parameters?.message_id, idOf(f.sent, photo));
+    }
+    return noted ? after[0] : photo;
   };
-  // The scene's own picture, a variant of it, and a sample.
+  // The scene's own picture, a variant of it, a sample, and a portrait, which stays there to keep.
   await f.start();
   const note = await stopOnItsWay(1);
   await f.bot.handle(f.click(editOf(note)));
@@ -1794,8 +1785,12 @@ test('a photo already on its way when its picture is stopped goes out with its n
   await stopOnItsWay(2);
   await f.bot.handle(f.click('style-sample:film'));
   await stopOnItsWay(3);
-  assert.deepEqual(f.rows.filter(one => /^picture(_variant|_sample)?$/.test(one.event)).map(row => [row.event, row.outcome, row.cancelled]),
-    [['picture', 'ready', true], ['picture_variant', 'ready', true], ['picture_sample', 'ready', true]]);
+  await f.bot.handle(f.click(`portrait:${elin(f.store.read('1').active!.storyId)}`));
+  const portrait = await stopOnItsWay(4, false);
+  await f.bot.handle(f.click(portrait.payload.reply_markup!.inline_keyboard[0][1].callback_data));
+  assert.equal(f.sent.at(-1)!.payload.text, '✅ Портрет сохранён: Элин. В картинки к сценам он пока не попадает.');
+  assert.deepEqual(f.rows.filter(one => /^picture(_variant|_sample|_portrait)?$/.test(one.event)).map(row => [row.event, row.outcome, row.cancelled]),
+    [['picture', 'ready', true], ['picture_variant', 'ready', true], ['picture_sample', 'ready', true], ['picture_portrait', 'ready', true]]);
 });
 
 test('a variant is drawn by the recipe its picture was drawn with, and refused once the graph or the checkpoint changed', async t => {
