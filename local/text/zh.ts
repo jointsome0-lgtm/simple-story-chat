@@ -486,6 +486,7 @@ export const zh: Messages = {
     compactionUnverified: command => `无法验证压缩结果。原始场景和已完成的存档点都已保存。重试：${command}。`,
     failed: command => `操作未能完成。已完成的场景和存档点都已保存。重试：${command}。`,
     gpuNotConfigured: '还没有配置 GPU 租用的控制。用 /model 查看当前模型。',
+    modelServiceSeparate: '模型服务是单独启动的，不在这个聊天里启动。用 /model 查看当前模型。',
     modelUnavailable: '模型服务现在不可用。等它恢复工作后，就可以继续故事。',
     gpuPaused: 'GPU 已进入暂停。打开 /model 启动它，然后重新发送你的行动。',
     drawing: '🎨 正在绘制插图…',

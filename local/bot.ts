@@ -543,7 +543,9 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       });
       if (!plan) return;
       if (plan.gpuAction) {
-        if (!gpu) await safeSend(chat, { text: texts(store.read(userId).language).notices.gpuNotConfigured }, log);
+        // simple-serving starts and sleeps its own card, so there is nothing here to start (docs/model-providers.md).
+        const notices = texts(store.read(userId).language).notices;
+        if (!gpu) await safeSend(chat, { text: providerName === 'simple-serving' ? notices.modelServiceSeparate : notices.gpuNotConfigured }, log);
         else {
           try {
             if (plan.gpuAction === 'pause') gpu.pause(); else gpu.resume();

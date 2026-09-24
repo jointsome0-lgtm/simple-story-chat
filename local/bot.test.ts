@@ -942,6 +942,18 @@ test('while the model service is down the reader is told so, the story stays, an
   assert.equal(scenes(), before + 1);
 });
 
+test('on simple-serving /gpu_start and /gpu_pause say the model service is started apart from this chat', async t => {
+  const f = fixture(t, { providerName: 'simple-serving' });
+  for (const command of ['/gpu_start', '/gpu_pause']) {
+    await f.bot.handle(f.message(command));
+    assert.equal(f.sent.at(-1)!.payload.text, texts('ru').notices.modelServiceSeparate);
+  }
+  // A bot without GPU control on another provider says so as before.
+  const cli = fixture(t);
+  await cli.bot.handle(cli.message('/gpu_start'));
+  assert.equal(cli.sent.at(-1)!.payload.text, texts('ru').notices.gpuNotConfigured);
+});
+
 // The fixture's updates come from a Russian Telegram app; these come from an app in the given language.
 function speaking<T extends Update>(update: T, languageCode: string | undefined): T {
   const from = update.message?.from ?? update.callback_query?.from;
