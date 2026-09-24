@@ -10,7 +10,7 @@ import { deflateSync, inflateSync, crc32 } from 'node:zlib';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { draw, buildBundles, bundlesOf, applyToWorkflow, defaultWorkflow, drawOne, latentSizeOf, parseSeeds, portraitsFor, referenceSlots, samplerSettingsOf, settled, stripPngMetadata, taskMarkdown, textEncoderOf, REVIEW } from './image-batch.ts';
+import { draw, buildBundles, bundlesOf, applyToWorkflow, defaultWorkflow, drawOne, encoderResolution, latentSizeOf, parseSeeds, phasesOf, pngSize, portraitsFor, referenceGeometry, referenceSlots, samplerSettingsOf, settled, stripPngMetadata, taskMarkdown, textEncoderOf, REVIEW } from './image-batch.ts';
 import type { Graph, Picture, References } from './image-batch.ts';
 import type { Case } from './illustrate-probe.ts';
 
@@ -492,6 +492,30 @@ test('the edit graph holds as many faces as a character sheet has people, so one
   assert.deepEqual(referenceSlots(filled).map(slot => filled[slot.loader].inputs.image), faces);
   assert.throws(() => applyToWorkflow(edit, { ...values, references: [...faces, 'g.png'] }),
     { code: 'workflow_too_few_reference_slots' });
+});
+
+// The pinned node's own arithmetic (comfy_extras/nodes_qwen.py:99-168), rounding halves as Python does. The edit
+// graph encodes a reference at its own size, so a 1280x720 portrait sets a 1280x704 canvas, which is the edit graph's.
+test('a reference reaches the encoder at the size the pinned node computes, in multiples of 32', () => {
+  assert.deepEqual(referenceGeometry(1280, 720, 0), [1280, 704]);
+  assert.deepEqual(referenceGeometry(640, 360, 0), [640, 352]);
+  assert.deepEqual(referenceGeometry(1280, 720, 1024), [1376, 768]);
+  assert.deepEqual(referenceGeometry(2, 2, 0), [32, 32]);
+  const graph = (file: string): Graph => JSON.parse(readFileSync(resolve(file), 'utf8'));
+  assert.equal(encoderResolution(graph('gpu/image-workflow-qwen-edit.json')), 0);
+  assert.deepEqual(latentSizeOf(graph('gpu/image-workflow-qwen-edit.json')), { width: 1280, height: 704 });
+  // The text-to-image graph takes no reference, so it has no size to hand one at.
+  assert.equal(encoderResolution(graph('gpu/image-workflow-qwen.json')), undefined);
+  assert.deepEqual(pngSize(pngWithMetadata('{}')), { width: 2, height: 2 });
+});
+
+// The time from one node's start to the next one's is the first node's, and the last runs until the job is over.
+test('a job\'s time is split by the kind of node it was spent in', () => {
+  const edit: Graph = JSON.parse(readFileSync(resolve('gpu/image-workflow-qwen-edit.json'), 'utf8'));
+  const ran = [{ node: '11', at: 0 }, { node: '1', at: 100 }, { node: '5', at: 1100 }, { node: '4', at: 1600 },
+    { node: '7', at: 1610 }, { node: '8', at: 9610 }, { node: '9', at: 9900 }];
+  assert.deepEqual(phasesOf(edit, ran, 10000), { loadMs: 1100, encodeMs: 500, otherMs: 110, sampleMs: 8000, decodeMs: 290 });
+  assert.deepEqual(phasesOf(edit, [], 10), {});
 });
 
 // ComfyUI draws one job at a time. A picture abandoned when the wait runs out keeps the card: the next cell queues
@@ -1043,6 +1067,12 @@ test('a review bundle names no checkpoint, and the key that does stays outside i
     const task = readFileSync(join(folder, 'TASK.md'), 'utf8');
     assert.ok(!task.includes('Имена до модели картинок не доходят'));
     assert.match(task, /Если в `prompt_sent` осталось имя/);
+    // Question 5 asks about the style and the people apart, and about a face and a figure apart: an even style
+    // hides changing faces, and a face on a body that lost its build is no person kept.
+    assert.match(task, /а\) Стиль: держится ли один стиль/);
+    assert.match(task, /б\) Люди: .*отдельно по лицу и отдельно по фигуре/);
+    assert.match(task, /Лицо на месте, а телосложение потеряно — это провал фигуры/);
+    assert.ok(!task.includes('checks.json'), 'the sheet of checks belongs to an identity bundle');
     // Each session sees both checkpoints, so no bundle is about one of them.
     const key = JSON.parse(readFileSync(join(root, 'run', 'keys', `${bundle.name}.json`), 'utf8')) as { checkpoint: string }[];
     assert.equal(new Set(key.map(one => one.checkpoint)).size, 2);
