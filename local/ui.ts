@@ -6,7 +6,7 @@ import type { ContextStats } from './context.ts';
 import type { GpuStatus } from './gpu.ts';
 import type { InlineButton, InlineKeyboard, Screen } from './telegram.ts';
 import { STYLE } from './illustrate.ts';
-import { LOOK_CHARS, wornAt } from './picture.ts';
+import { LOOK_CHARS, personAt, personTag, wornAt } from './picture.ts';
 import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX, PRESETS, lineOf, ownStyle, ownStyles, pickerKeys, presetOf, styleKey } from './picture-style.ts';
 import { LANGS, LANGUAGE_BUTTON, REGISTERED, shownLang, texts } from './text.ts';
 import type { Messages } from './text.ts';
@@ -114,10 +114,10 @@ function screen(state: State, route: string, details: RenderDetails) {
     case 'delete-style': return deleteStyleScreen(state, args[0], details);
     case 'sample': return sampleScreen(state, args[0], details);
     case 'characters': return charactersScreen(state, args[0]);
-    case 'character': return characterScreen(state, args[0], args[1], details);
+    case 'character': return characterScreen(state, args[0], args[1], args[2], details);
     // Only while the reader is writing a look, as for a style.
     case 'look-input': return lookInputScreen(state, details);
-    case 'portrait': return portraitCaption(state, args[0], args[1], args[2]);
+    case 'portrait': return portraitCaption(state, args[0], args[1], args[2], args[3]);
     case 'portrait-kept': return portraitKept(state, args[0], args[1]);
     case 'seeds': return seedList(state, args[0]);
     case 'seed': return seedScreen(state, args[0], args[1], details.pictures === true);
@@ -456,7 +456,7 @@ function charactersScreen(state: State, storyId: string | undefined) {
   const sheet = people(story);
   return payload([c.title(storyName(state, story)), '', sheet.length ? c.note : c.none, sheet.length ? '' : null,
     ...sheet.map((one, n) => `${n + 1}. ${line(one.name, 40)} — ${line(one.look, 90)}`)], [
-    ...sheet.map(one => [btn(`👤 ${line(one.name, 30) || t.format.untitledButton}`, `view:character:${story.id}:${one.index}`)]),
+    ...sheet.map(one => [btn(`👤 ${line(one.name, 30) || t.format.untitledButton}`, `view:character:${personRef(story, one)}`)]),
     [btn(c.toStory, `view:story:${story.id}`), btn(t.buttons.menu, 'view:home')],
   ]);
 }
@@ -465,12 +465,14 @@ function charactersScreen(state: State, storyId: string | undefined) {
 // (never their sum: the prompt they go into is cut and joined otherwise), where an edited look reaches, and the
 // portrait kept to pick a reference by. The clothes are the story's to change, so they are only shown: those of the
 // active branch's latest picture for the active story (local/picture.ts `wornAt`), the sheet's own otherwise.
-function characterScreen(state: State, storyId: string | undefined, rawIndex: string | undefined, details: RenderDetails) {
+function characterScreen(state: State, storyId: string | undefined, rawIndex: string | undefined, tag: string | undefined,
+  details: RenderDetails) {
   const t = texts(state.language);
   const c = t.characters;
   const story = own(state.stories, storyId);
   if (!story) return stale(t, t.story.notFound);
-  const person = people(story).find(one => String(one.index) === rawIndex);
+  // A button of somebody whose place on the sheet another person took since opens the list, not that other person.
+  const person = personAt(story, rawIndex, tag);
   if (!person) return charactersScreen(state, story.id);
   const ref = activeRef(state);
   const branch = ref?.story === story && ref.branch.head ? ref.branch : null;
@@ -487,8 +489,8 @@ function characterScreen(state: State, storyId: string | undefined, rawIndex: st
     c.look, person.look, c.lookSize(...size(person.look)), '',
     ...clothes ? [clothesTitle, clothes, c.clothesSize(...size(clothes))] : [c.noClothes], c.clothesNote, '',
     c.sizeNote, '', c.scope, portrait === null ? null : '', portrait], [
-    [btn(c.edit, `look-edit:${story.id}:${person.index}`)],
-    details.pictures ? [btn(c.portrait, `portrait:${story.id}:${person.index}`)] : null,
+    [btn(c.edit, `look-edit:${personRef(story, person)}`)],
+    details.pictures ? [btn(c.portrait, `portrait:${personRef(story, person)}`)] : null,
     [btn(c.back, `view:characters:${story.id}`)],
   ]);
   const pre = (text: string, after: string) => {
@@ -509,7 +511,7 @@ function lookInputScreen(state: State, details: RenderDetails) {
   const person = story && people(story).find(one => one.name === ui?.name);
   if (!story || !person) return home(state, null, details.modelInfo, gpuFor(details), details.pictures === true);
   const result = payload([c.editTitle(line(person.name, 60), storyName(state, story)), '', c.editNote(LOOK_CHARS), '', c.nowText, person.look],
-    [[btn(c.backToCard, `view:character:${story.id}:${person.index}`)]]);
+    [[btn(c.backToCard, `view:character:${personRef(story, person)}`)]]);
   const offset = result.text.lastIndexOf(person.look);
   if (offset >= 0) result.entities = [{ type: 'pre', offset, length: person.look.length }];
   return result;
@@ -517,15 +519,16 @@ function lookInputScreen(state: State, details: RenderDetails) {
 
 // The caption and the buttons of a portrait (local/picture.ts `portrait`): another one, keeping this one by the id it
 // was drawn under, and the way back to its person.
-function portraitCaption(state: State, storyId: string | undefined, rawIndex: string | undefined, candidate: string | undefined) {
+function portraitCaption(state: State, storyId: string | undefined, rawIndex: string | undefined, tag: string | undefined,
+  candidate: string | undefined) {
   const t = texts(state.language);
   const c = t.characters;
   const story = own(state.stories, storyId);
-  const person = story && people(story).find(one => String(one.index) === rawIndex);
+  const person = story && personAt(story, rawIndex, tag);
   if (!story || !person) return stale(t, t.story.notFound);
   return payload([c.caption(line(person.name, 60))], [
-    [btn(c.again, `portrait:${story.id}:${person.index}`), candidate ? btn(c.keep, `portrait-keep:${candidate}`) : null],
-    [btn(c.backToCard, `view:character:${story.id}:${person.index}`)],
+    [btn(c.again, `portrait:${personRef(story, person)}`), candidate ? btn(c.keep, `portrait-keep:${candidate}`) : null],
+    [btn(c.backToCard, `view:character:${personRef(story, person)}`)],
   ]);
 }
 
@@ -535,7 +538,7 @@ function portraitKept(state: State, storyId: string | undefined, rawIndex: strin
   const story = own(state.stories, storyId);
   const person = story && people(story).find(one => String(one.index) === rawIndex);
   if (!story || !person) return stale(t, t.story.notFound);
-  return payload([c.kept(line(person.name, 60))], [[btn(c.backToCard, `view:character:${story.id}:${person.index}`)]]);
+  return payload([c.kept(line(person.name, 60))], [[btn(c.backToCard, `view:character:${personRef(story, person)}`)]]);
 }
 
 // The story as a tree: scenes point at their parents, a branch or a checkpoint marks a scene. A straight run of scenes
@@ -974,6 +977,10 @@ function storiesOf(state: State, seedId: string) {
 function people(story: Story) {
   return (Array.isArray(story.sheet) ? story.sheet : []).flatMap((one, index) =>
     typeof one?.name === 'string' && typeof one.look === 'string' ? [{ ...one, index }] : []);
+}
+// A person as the buttons name them (local/picture.ts `personTag`).
+function personRef(story: Story, person: { name: string; index: number }) {
+  return `${story.id}:${person.index}:${personTag(person.name)}`;
 }
 
 function storyName(state: State, story: Story) {

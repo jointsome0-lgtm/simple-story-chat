@@ -135,19 +135,32 @@ export function clothesOf(description: Description, worn: Character[]): { clothe
 // words, and the room left is the reader's, as for a style of their own.
 export const LOOK_CHARS = 400;
 
+// A person of a sheet is their name, apart from spaces and case. One the model renames is somebody new, and what the
+// reader made of the old name stays with it: merging two people by a like name would be worse than keeping both.
+type SheetEntry = NonNullable<Story['sheet']>[number];
+const personKey = (name: string) => name.trim().toLowerCase();
+
+// A button names a person by their place on the sheet and a short hash of their name, never the name itself, within
+// Telegram's 64 bytes. A sheet written anew may put somebody else in that place, and the button is then refused
+// rather than acting on them: `personAt` finds the person only while the two still agree.
+export const personTag = (name: string) => createHash('sha256').update(personKey(name)).digest('hex').slice(0, 8);
+export function personAt(story: Story | undefined, index: string | undefined, tag: string | undefined) {
+  const person = story && /^\d+$/.test(index ?? '') ? story.sheet?.[Number(index)] : undefined;
+  return person && typeof person.name === 'string' && typeof person.look === 'string' && personTag(person.name) === tag
+    ? { ...person, index: Number(index) } : undefined;
+}
+
 // A sheet written again in place of an older one (`describeFrame`) keeps what the reader made of it: a look they wrote
 // themselves and a portrait they kept, under the same name, or with the person on their own if the new sheet lost the
 // name. The card shows a portrait as drawn from another look if the new one differs (local/ui.ts).
-type SheetEntry = NonNullable<Story['sheet']>[number];
 export function rewrittenSheet(before: SheetEntry[], written: Character[]): SheetEntry[] {
-  const key = (name: string) => name.trim().toLowerCase();
-  const old = new Map(before.map(one => [key(one.name), one]));
+  const old = new Map(before.map(one => [personKey(one.name), one]));
   const kept = written.map(one => {
-    const mine = old.get(key(one.name));
+    const mine = old.get(personKey(one.name));
     return { ...one, ...mine?.edited ? { look: mine.look, edited: true } : {}, ...mine?.portrait ? { portrait: mine.portrait } : {} };
   });
-  const names = new Set(written.map(one => key(one.name)));
-  return [...kept, ...before.filter(one => (one.edited || one.portrait) && !names.has(key(one.name))).map(one => ({ ...one, outfit: one.outfit ?? '' }))];
+  const names = new Set(written.map(one => personKey(one.name)));
+  return [...kept, ...before.filter(one => (one.edited || one.portrait) && !names.has(personKey(one.name))).map(one => ({ ...one, outfit: one.outfit ?? '' }))];
 }
 
 // A portrait to pick a reference by (`portrait`): the whole figure from the front, so that the build, the height, the

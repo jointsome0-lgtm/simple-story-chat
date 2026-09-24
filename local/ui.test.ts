@@ -5,10 +5,11 @@ import type { ContextStats } from './context.ts';
 import type { Screen } from './telegram.ts';
 import type { GpuInfo, ModelInfo, RenderDetails } from './ui.ts';
 import { render, renderContext, scenePrefix, sceneKeyboard } from './ui.ts';
+import { personTag } from './picture.ts';
 import { PRESETS } from './picture-style.ts';
 import { texts } from './text.ts';
 
-const ACTION = /^(view:.+|new-seed|save-seed:[^:]+|start:[^:]+|use:[^:]+:[^:]+|fork:[^:]+:[^:]+|remove-seed:[^:]+|remove-branch:[^:]+:[^:]+|continue|cancel|last|compact|gpu:start|gpu:pause|lang:[a-z]{2}|style:[a-z0-9]+|style-new|style-edit:y\d+|remove-style:y\d+|style-sample:[a-z0-9]+|style-samples|look-edit:[^:]+:\d+|portrait:[^:]+:\d+|portrait-keep:[0-9a-f]+)$/;
+const ACTION = /^(view:.+|new-seed|save-seed:[^:]+|start:[^:]+|use:[^:]+:[^:]+|fork:[^:]+:[^:]+|remove-seed:[^:]+|remove-branch:[^:]+:[^:]+|continue|cancel|last|compact|gpu:start|gpu:pause|lang:[a-z]{2}|style:[a-z0-9]+|style-new|style-edit:y\d+|remove-style:y\d+|style-sample:[a-z0-9]+|style-samples|look-edit:[^:]+:\d+:[0-9a-f]{8}|portrait:[^:]+:\d+:[0-9a-f]{8}|portrait-keep:[0-9a-f]+)$/;
 
 function node(id: string, parent: string | null, time: string, body: string, input = 'Ввод'): SceneNode {
   return { id, parent, input, text: `${time}\n\n${body}`, time, truncated: false, delivery: 'sent' };
@@ -210,14 +211,16 @@ test('characters: beside each story when pictures are drawn, a list, a card with
   ];
   // The first scene of the branch being played dressed Мира otherwise than the sheet did.
   state.stories.h2.nodes.n5.clothes = { Мира: 'a yellow raincoat' };
+  // A button names a person by their place and the hash of their name (local/picture.ts `personTag`).
+  const mira = `h2:0:${personTag('Мира')}`, oleg = `h2:1:${personTag('Олег')}`;
   const list = render(state, 'characters:h2', on);
   checkPayload(list, 'characters:h2 with a sheet');
   assert.match(list.text, /\n1\. Мира — Tall, short grey hair, a scar on the left cheek\.\n2\. Олег — A broad-shouldered/);
-  assert.deepEqual(callbacks(list), ['view:character:h2:0', 'view:character:h2:1', 'view:story:h2', 'view:home']);
+  assert.deepEqual(callbacks(list), [`view:character:${mira}`, `view:character:${oleg}`, 'view:story:h2', 'view:home']);
 
   // The card: the whole look and clothes, each in its own block to copy, each counted on its own and never summed.
   const words = (text: string) => text.split(' ').length;
-  const card = render(state, 'character:h2:0', { ...on, textTokens: words });
+  const card = render(state, `character:${mira}`, { ...on, textTokens: words });
   checkPayload(card, 'character:h2:0');
   assert.match(card.text, /^👤 Мира · «Маяк» · история 1\n/);
   assert.match(card.text, /\nТекст внешности: 10 токенов · 48 знаков\n/);
@@ -226,26 +229,28 @@ test('characters: beside each story when pictures are drawn, a list, a card with
   assert.match(card.text, /не размер промпта/);
   assert.match(card.text, /на следующие картинки всех веток этой истории/);
   assert.deepEqual(card.entities!.map(entity => card.text.slice(entity.offset, entity.offset + entity.length)), [look, 'a yellow raincoat']);
-  assert.deepEqual(callbacks(card), ['look-edit:h2:0', 'portrait:h2:0', 'view:characters:h2']);
+  assert.deepEqual(callbacks(card), [`look-edit:${mira}`, `portrait:${mira}`, 'view:characters:h2']);
   // A portrait is offered to a reader whose scenes are drawn, and says what it is for: the face and the figure.
   assert.match(card.text, /\n\n🖼 Портрета пока нет\. Портрет рисует лицо и фигуру в полный рост/);
-  assert.deepEqual(callbacks(render(state, 'character:h2:0')), ['look-edit:h2:0', 'view:characters:h2']);
-  assert.doesNotMatch(render(state, 'character:h2:0').text, /Портрет/);
+  assert.deepEqual(callbacks(render(state, `character:${mira}`)), [`look-edit:${mira}`, 'view:characters:h2']);
+  assert.doesNotMatch(render(state, `character:${mira}`).text, /Портрет/);
   // Without a counter, or with one that fails, the tokens are unknown and the characters stay.
   for (const details of [on, { ...on, textTokens: () => { throw new Error('vocabulary'); } }, { ...on, textTokens: () => null }]) {
-    assert.match(render(state, 'character:h2:0', details).text, /\nТекст внешности: токены неизвестны · 48 знаков\n/);
+    assert.match(render(state, `character:${mira}`, details).text, /\nТекст внешности: токены неизвестны · 48 знаков\n/);
   }
   // Someone the scenes did not dress yet wears the sheet's clothes, and so does everybody in a story not being played.
-  assert.match(render(state, 'character:h2:1', on).text, /\nОдежда, с которой начались картинки этой истории:\na fisherman sweater\n/);
+  assert.match(render(state, `character:${oleg}`, on).text, /\nОдежда, с которой начались картинки этой истории:\na fisherman sweater\n/);
   state.active = null;
-  assert.match(render(state, 'character:h2:0', on).text, /\nОдежда, с которой начались картинки этой истории:\na dark wool coat\n/);
+  assert.match(render(state, `character:${mira}`, on).text, /\nОдежда, с которой начались картинки этой истории:\na dark wool coat\n/);
   state.active = { storyId: 'h2', branchId: 'b3' };
   // A sheet from before clothes left it has none to show.
   state.stories.h2.sheet[1] = { name: 'Олег', look: 'A broad-shouldered man with a shaved head.' };
-  assert.match(render(state, 'character:h2:1', on).text, /\nОдежда пока не записана\.\n/);
-  // A person who is not on the sheet is the list; a story that is gone is stale.
-  assert.deepEqual(callbacks(render(state, 'character:h2:7', on)), callbacks(list));
-  assert.deepEqual(callbacks(render(state, 'character:h2:x', on)), callbacks(list));
+  assert.match(render(state, `character:${oleg}`, on).text, /\nОдежда пока не записана\.\n/);
+  // A person who is not on the sheet is the list, and so is a button of one whose place somebody else took since;
+  // a story that is gone is stale.
+  for (const route of ['character:h2:7', 'character:h2:x', 'character:h2:0', 'character:h2:0:00000000', `character:h2:1:${personTag('Мира')}`]) {
+    assert.deepEqual(callbacks(render(state, route, on)), callbacks(list), route);
+  }
   checkPayload(render(state, 'character:h99:0', on), 'character:h99:0');
   assert.ok(callbacks(render(state, 'characters:h99', on)).includes('view:home'));
 
@@ -256,26 +261,30 @@ test('characters: beside each story when pictures are drawn, a list, a card with
   checkPayload(input, 'look-input');
   assert.match(input.text, /^✏️ Внешность: Мира · «Маяк» · история 1\n\n.*до 400 знаков/);
   assert.equal(preText(input), look);
-  assert.deepEqual(callbacks(input), ['view:character:h2:0']);
+  assert.deepEqual(callbacks(input), [`view:character:${mira}`]);
   state.ui = { input: 'look', storyId: 'h2', name: 'Нет такой' };
   assert.deepEqual(callbacks(render(state, 'look-input', on)), callbacks(render(state, 'home', on)));
   state.ui = null;
 
   // A portrait's caption keeps its candidate on the keep button; another version asks for a new one.
-  const caption = render(state, 'portrait:h2:0:0a1b2c3d', on);
+  const caption = render(state, `portrait:${mira}:0a1b2c3d`, on);
   assert.equal(caption.text, '🖼 Портрет: Мира. Лицо и фигура в полный рост, в простой нейтральной одежде.');
   assert.deepEqual(caption.reply_markup!.inline_keyboard.map(row => row.map(button => button.callback_data)),
-    [['portrait:h2:0', 'portrait-keep:0a1b2c3d'], ['view:character:h2:0']]);
-  assert.deepEqual(callbacks(render(state, 'portrait-kept:h2:0', on)), ['view:character:h2:0']);
+    [[`portrait:${mira}`, 'portrait-keep:0a1b2c3d'], [`view:character:${mira}`]]);
+  assert.deepEqual(callbacks(render(state, 'portrait-kept:h2:0', on)), [`view:character:${mira}`]);
   assert.match(render(state, 'portrait-kept:h2:0', on).text, /^✅ Портрет сохранён: Мира\. В картинки к сценам он пока не попадает\.$/);
-  for (const route of ['portrait:h99:0:0a1b2c3d', 'portrait:h2:7:0a1b2c3d', 'portrait-kept:h2:7']) checkPayload(render(state, route, on), route);
+  for (const route of [`portrait:h99:0:${personTag('Мира')}:0a1b2c3d`, `portrait:h2:7:${personTag('Мира')}:0a1b2c3d`,
+    `portrait:h2:1:${personTag('Мира')}:0a1b2c3d`, 'portrait-kept:h2:7']) {
+    checkPayload(render(state, route, on), route);
+    assert.ok(!callbacks(render(state, route, on)).some(data => data.startsWith('portrait')), route);
+  }
   // A kept portrait is named on the card, and one drawn from an earlier look says so, with or without pictures.
   const kept = { file: '0123456789abcdef0123456789abcdef.png', seed: 7, look, clothes: 'plain', style: 'neutral', graph: '0123456789abcdef',
     checkpoint: 'synthetic.safetensors', at: 1 };
   state.stories.h2.sheet[0].portrait = kept;
-  assert.match(render(state, 'character:h2:0', on).text, /\n\n🖼 Портрет сохранён: лицо и фигура по этой внешности\.$/);
+  assert.match(render(state, `character:${mira}`, on).text, /\n\n🖼 Портрет сохранён: лицо и фигура по этой внешности\.$/);
   state.stories.h2.sheet[0].portrait = { ...kept, look: 'An earlier look.' };
-  assert.match(render(state, 'character:h2:0').text, /\n\n🖼 Сохранённый портрет нарисован по прежней внешности\./);
+  assert.match(render(state, `character:${mira}`).text, /\n\n🖼 Сохранённый портрет нарисован по прежней внешности\./);
   crawl(state, on);
 });
 

@@ -20,7 +20,7 @@ import { renderCompaction } from './compact-view.ts';
 import type { CompactionStatus } from './compact-view.ts';
 import type { GpuController } from './gpu.ts';
 import type { Illustrator, PictureRequest, PortraitRequest, SampleRequest } from './picture.ts';
-import { LOOK_CHARS } from './picture.ts';
+import { LOOK_CHARS, personAt, personTag } from './picture.ts';
 import type { Log } from './model-error.ts';
 import { errorCode, member, safeErrorDetails } from './model-error.ts';
 import type { GenerationResult, Provider } from './model.ts';
@@ -274,11 +274,12 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       state.ui = null;
       return { screen: render(state, `style:${styleId}`, pictureInfo) };
     }
-    // The people of a story's sheet (local/ui.ts, the characters' screens), by the story and their place on it. A look
-    // is written the way a style is, and a portrait is drawn on request only, for a reader who is drawn for.
+    // The people of a story's sheet (local/ui.ts, the characters' screens), by the story, their place on it and the
+    // hash of their name: a button of somebody whose place another person took since is refused (`personAt`). A look is
+    // written the way a style is, and a portrait is drawn on request only, for a reader who is drawn for.
     if (action?.startsWith('look-edit:') || action?.startsWith('portrait:')) {
-      const [verb, storyId, index] = action.split(':');
-      const person = ID.story.test(storyId) && /^\d+$/.test(index) ? state.stories[storyId]?.sheet?.[Number(index)] : undefined;
+      const [verb, storyId, index, tag] = action.split(':');
+      const person = ID.story.test(storyId) ? personAt(state.stories[storyId], index, tag) : undefined;
       if (!person) throw refuse(t, 'staleButton');
       if (verb === 'look-edit') {
         state.ui = { input: 'look', storyId, name: person.name };
@@ -288,7 +289,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       // Names the portrait for its keep button, so that a button of an earlier one never keeps this one.
       const candidate = randomBytes(4).toString('hex');
       return { portrait: { storyId, name: person.name, candidate, status: t.characters.drawing,
-        caption: render(state, `portrait:${storyId}:${index}:${candidate}`, pictureInfo) } };
+        caption: render(state, `portrait:${storyId}:${index}:${tag}:${candidate}`, pictureInfo) } };
     }
     if (action?.startsWith('portrait-keep:')) {
       if (!pictureInfo.pictures || !illustrator) throw refuse(t, 'portraitOff');
@@ -308,7 +309,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       const index = sheet.findIndex(one => one.name === name);
       if (index < 0) throw refuse(t, 'lookGone');
       sheet[index] = { ...sheet[index], look, edited: true };
-      return { screen: render(state, `character:${storyId}:${index}`, pictureInfo) };
+      return { screen: render(state, `character:${storyId}:${index}:${personTag(name)}`, pictureInfo) };
     }
     if (action === 'last') return { savedText: last(state) };
     if (action === 'new-seed') {

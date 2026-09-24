@@ -5,7 +5,7 @@ import { contextStats } from './context.ts';
 import { renderCompaction } from './compact-view.ts';
 import type { CompactionStatus } from './compact-view.ts';
 import type { GpuStatus } from './gpu.ts';
-import { LOOK_CHARS } from './picture.ts';
+import { LOOK_CHARS, personTag } from './picture.ts';
 import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX } from './picture-style.ts';
 import type { Screen } from './telegram.ts';
 import { LANGS, LANGUAGE_BUTTON, REGISTERED, commandSets, isRegistered, langFromTelegram, shownLang, texts } from './text.ts';
@@ -120,7 +120,8 @@ function screens(lang: Lang | undefined): [string, Screen][] {
       'checkpoints:h2:b404:0', 'checkpoint:h2:c404', 'context:h2:c404', 'delete-seed:s404', 'delete-branch:h2:b404', 'delete-seed:s12', 'delete-branch:h2:b8',
       'style-input', 'style:y404', 'delete-style:y404', 'delete-style:y20', 'sample:film', 'sample:standard', 'sample:y20',
       'characters:h404', 'character:h404:0', 'character:h2:9', 'look-input',
-      'portrait:h2:0:0a1b2c3d', 'portrait:h2:1:', 'portrait:h404:0:0a1b2c3d', 'portrait-kept:h2:1', 'portrait-kept:h2:9'];
+      `portrait:h2:0:${personTag('Mira')}:0a1b2c3d`, `portrait:h2:1:${personTag('Oleg')}:`, `portrait:h2:1:${personTag('Mira')}:0a1b2c3d`,
+      `portrait:h404:0:${personTag('Mira')}:0a1b2c3d`, 'portrait-kept:h2:1', 'portrait-kept:h2:9'];
     const seen = new Set<string>();
     while (queue.length) {
       const route = queue.shift()!;

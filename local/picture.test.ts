@@ -26,7 +26,7 @@ import type { ErrorDetails } from './model-error.ts';
 import { safeErrorDetails } from './model-error.ts';
 import type { GenerateControls, GenerationResult, ModelRequest, Provider } from './model.ts';
 import { createServing, readerScope } from './serving.ts';
-import { PORTRAIT_CLOTHES, PORTRAIT_STYLE, clothesOf, createIllustrator, encoderTokens, foldedPrompt, rewrittenSheet, textTokens, wornAt } from './picture.ts';
+import { PORTRAIT_CLOTHES, PORTRAIT_STYLE, clothesOf, createIllustrator, encoderTokens, foldedPrompt, personTag, rewrittenSheet, textTokens, wornAt } from './picture.ts';
 import { PRESETS } from './picture-style.ts';
 import { Store } from './store.ts';
 import type { TelegramPayload } from './telegram.ts';
@@ -121,6 +121,8 @@ function fakeComfy(options: { jobMs?: number; failing?: boolean } = {}) {
 // What the describing model answers. The sheet writes an age as a number and the frame carries a name in two
 // fields the instruction forbids them in: both are what the assembly has to take out (local/illustrate.ts).
 const SHEET = { characters: [{ name: 'Элин', look: 'A middle-aged woman, 48-year-old, lean, short ash-grey hair', outfit: 'wearing a grey wool coat' }] };
+// Элин as the characters' buttons name her: her story, her place on the sheet and the hash of her name.
+const elin = (storyId: string) => `${storyId}:0:${personTag('Элин')}`;
 const FRAME = {
   moment: 'Элин stands with her back against the closed door', shot: 'Medium wide three-quarter shot',
   setting: 'A narrow stone passage, the door closed', objects: 'A splint of two boards beside Элина сумка',
@@ -846,10 +848,10 @@ test('a sample after a look is edited describes the scene again, and the card co
   await f.start();
   await f.bot.idle();
   const storyId = f.store.read('1').active!.storyId;
-  await f.bot.handle(f.click(`view:character:${storyId}:0`));
+  await f.bot.handle(f.click(`view:character:${elin(storyId)}`));
   assert.match(f.sent.at(-1)!.payload.text, /\nТекст внешности: 8 токенов · 59 знаков\n/);
   assert.match(f.sent.at(-1)!.payload.text, /\nТекст одежды: 5 токенов · 24 знака\n/);
-  await f.bot.handle(f.click(`look-edit:${storyId}:0`));
+  await f.bot.handle(f.click(`look-edit:${elin(storyId)}`));
   await f.bot.handle(f.message('A tall woman with a long braid'));
   assert.equal(comfy.submitted.length, 1, 'an edit draws nothing');
   await f.bot.handle(f.click('style-sample:film'));
@@ -877,7 +879,7 @@ test('a portrait is the look alone, full length in neutral clothes and style, a 
   await f.bot.idle();
   const calls = f.requests.length;
   const storyId = f.store.read('1').active!.storyId;
-  await f.bot.handle(f.click(`portrait:${storyId}:0`));
+  await f.bot.handle(f.click(`portrait:${elin(storyId)}`));
   await f.bot.idle();
   assert.equal(f.requests.length, calls, 'the language model is not asked');
   const prompt = promptOf(comfy.submitted[1]);
@@ -890,9 +892,9 @@ test('a portrait is the look alone, full length in neutral clothes and style, a 
   const photo = photos(f.sent)[1];
   assert.equal(photo.payload.caption, '🖼 Портрет: Элин. Лицо и фигура в полный рост, в простой нейтральной одежде.');
   const [[again, keep], [back]] = photo.payload.reply_markup!.inline_keyboard.map(row => row.map(button => button.callback_data));
-  assert.equal(again, `portrait:${storyId}:0`);
+  assert.equal(again, `portrait:${elin(storyId)}`);
   assert.match(keep, /^portrait-keep:[0-9a-f]{8}$/);
-  assert.equal(back, `view:character:${storyId}:0`);
+  assert.equal(back, `view:character:${elin(storyId)}`);
   const status = f.sent.find(one => one.method === 'sendMessage' && one.payload.text === '🎨 Рисую портрет…')!;
   assert.ok(f.deleted.includes(idOf(f.sent, status)), 'its status line goes');
   // It is recorded with its story and no scene, and has no prompt under it.
@@ -917,7 +919,7 @@ test('a portrait is the look alone, full length in neutral clothes and style, a 
   await f.bot.idle();
   const theirs = f.store.read('2').active!.storyId;
   f.store.mutate('2', state => { state.stories[theirs].sheet = [{ name: 'Мира', look: 'A tall woman.', outfit: '' }]; });
-  await f.bot.handle(f.click(`portrait:${theirs}:0`, 2));
+  await f.bot.handle(f.click(`portrait:${theirs}:0:${personTag('Мира')}`, 2));
   assert.ok(told(f.sent, 'Картинки к твоим сценам пока не включены, поэтому портрет нарисовать нельзя.'));
   await f.bot.handle(f.click(keep, 2));
   assert.equal(f.sent.at(-1)!.payload.text, 'Картинки к твоим сценам пока не включены, поэтому портрет нарисовать нельзя.');
@@ -934,7 +936,7 @@ test('keeping a portrait writes the very one shown into a private file beside th
   const storyId = f.store.read('1').active!.storyId;
   const shown = () => f.sent.at(-1)!.payload.text;
   const draw = async () => {
-    await f.bot.handle(f.click(`portrait:${storyId}:0`));
+    await f.bot.handle(f.click(`portrait:${elin(storyId)}`));
     await f.bot.idle();
     const photo = photos(f.sent).at(-1)!;
     return { photo, keep: photo.payload.reply_markup!.inline_keyboard[0][1].callback_data, seed: seedIn(comfy.submitted.at(-1)!) };
@@ -986,7 +988,7 @@ test('keeping a portrait writes the very one shown into a private file beside th
   // Once the look changes, a portrait shown before it cannot be kept, and the kept one is marked as of the earlier look.
   const fourth = await draw();
   const drawings = comfy.submitted.length;
-  await f.bot.handle(f.click(`look-edit:${storyId}:0`));
+  await f.bot.handle(f.click(`look-edit:${elin(storyId)}`));
   await f.bot.handle(f.message('A tall woman with a long braid'));
   assert.match(shown(), /\n\n🖼 Сохранённый портрет нарисован по прежней внешности\./);
   await f.bot.handle(f.click(fourth.keep));
@@ -1005,7 +1007,7 @@ test('a portrait whose story is deleted while it is drawn is not sent, and a del
   await until(() => slow.submitted.length === 1, 'the scene\'s picture to reach the card');
   slow.finish();
   await f.bot.idle();
-  await f.bot.handle(f.click(`portrait:${f.store.read('1').active!.storyId}:0`));
+  await f.bot.handle(f.click(`portrait:${elin(f.store.read('1').active!.storyId)}`));
   await until(() => slow.submitted.length === 2, 'the portrait to reach the card');
   await deleteTheSeed(f);
   slow.finish();
@@ -1021,7 +1023,7 @@ test('a portrait whose story is deleted while it is drawn is not sent, and a del
   const g = fixture(t, { comfy: root });
   await g.start();
   await g.bot.idle();
-  await g.bot.handle(g.click(`portrait:${g.store.read('1').active!.storyId}:0`));
+  await g.bot.handle(g.click(`portrait:${elin(g.store.read('1').active!.storyId)}`));
   await g.bot.idle();
   const photo = photos(g.sent).at(-1)!;
   await g.bot.handle(g.click(photo.payload.reply_markup!.inline_keyboard[0][1].callback_data));
@@ -1046,11 +1048,11 @@ test('a portrait is drawn on request only, one at a time with the samples, and a
   const storyId = f.store.read('1').active!.storyId;
   // Opening the list and the card draws nothing.
   await f.bot.handle(f.click(`view:characters:${storyId}`));
-  await f.bot.handle(f.click(`view:character:${storyId}:0`));
+  await f.bot.handle(f.click(`view:character:${elin(storyId)}`));
   assert.equal(comfy.submitted.length, 1);
-  await f.bot.handle(f.click(`portrait:${storyId}:0`));
+  await f.bot.handle(f.click(`portrait:${elin(storyId)}`));
   await until(() => comfy.submitted.length === 2, 'the portrait to reach the card');
-  await f.bot.handle(f.click(`portrait:${storyId}:0`));
+  await f.bot.handle(f.click(`portrait:${elin(storyId)}`));
   assert.ok(told(f.sent, 'Уже рисую картинку по твоей просьбе. Портрет можно попросить, когда она придёт.'));
   assert.equal(comfy.submitted.length, 2);
 
@@ -1061,6 +1063,41 @@ test('a portrait is drawn on request only, one at a time with the samples, and a
   await f.bot.stop();
   assert.ok(!photos(f.sent).some(one => one.payload.caption?.startsWith('🖼 Портрет')), 'no portrait after the reader moved on');
   assert.ok(comfy.seen.cleared.includes('p2'));
+});
+
+// A portrait's caption is written when it is asked for, and the drawing takes a while: a sheet written anew meanwhile
+// may put somebody else where its buttons name the person. Those buttons are then refused and neither draw nor open
+// that other person, while its keep button still keeps the portrait for the person it shows.
+test('a portrait whose sheet changes order while it is drawn keeps to its person', async t => {
+  const comfy = fakeComfy({ jobMs: 60000 });
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root });
+  await f.start();
+  await until(() => comfy.submitted.length === 1, 'the scene\'s picture to reach the card');
+  comfy.finish();
+  await f.bot.idle();
+  const storyId = f.store.read('1').active!.storyId;
+  f.store.mutate('1', state => { state.stories[storyId].sheet!.push({ name: 'Тарек', look: 'A young wiry man, curly black hair', outfit: '' }); });
+  await f.bot.handle(f.click(`portrait:${elin(storyId)}`));
+  await until(() => comfy.submitted.length === 2, 'the portrait to reach the card');
+  // Тарек now stands where Элин stood, her look as it was.
+  f.store.mutate('1', state => { const sheet = state.stories[storyId].sheet!; state.stories[storyId].sheet = [sheet[1], sheet[0]]; });
+  comfy.finish();
+  await f.bot.idle();
+  const photo = photos(f.sent).at(-1)!;
+  assert.equal(photo.payload.caption, '🖼 Портрет: Элин. Лицо и фигура в полный рост, в простой нейтральной одежде.');
+  const [[again, keep], [back]] = photo.payload.reply_markup!.inline_keyboard.map(row => row.map(button => button.callback_data));
+  await f.bot.handle(f.click(again));
+  assert.equal(f.sent.at(-1)!.payload.text, 'Кнопка устарела. Открой /menu.');
+  await f.bot.handle(f.click(back));
+  assert.match(f.sent.at(-1)!.payload.text!, /^👤 Персонажи: /, 'the list, not the card of Тарек');
+  assert.equal(comfy.submitted.length, 2, 'nobody was drawn for the old place');
+  await f.bot.handle(f.click(keep));
+  assert.equal(f.sent.at(-1)!.payload.text, '✅ Портрет сохранён: Элин. В картинки к сценам он пока не попадает.');
+  const [first, second] = f.store.read('1').stories[storyId].sheet!;
+  assert.deepEqual([first.name, first.portrait, second.name], ['Тарек', undefined, 'Элин']);
+  assert.equal(second.portrait!.look, second.look);
 });
 
 // The sidecar of the library: a portrait's file is written before the write that refers to it, so a write rolled back,
