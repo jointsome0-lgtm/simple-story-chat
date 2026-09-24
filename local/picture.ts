@@ -296,8 +296,24 @@ export function createIllustrator(config: ImageConfig, deps: {
   // style is drawn from it without asking the language model again. Never stored and never logged.
   const frames = new Map<string, { storyId: string; nodeId: string; description: Description; sheet: Character[] }>();
   // The portrait each reader was shown last, for its keep button (`keepPortrait`), with the look it shows: in memory
-  // only, one per reader, until the next one, the keep, or PORTRAIT_HELD_MS.
-  const candidates = new Map<string, { id: string; storyId: string; name: string; look: string; seed: number; bytes: Uint8Array; at: number }>();
+  // only, one per reader, until the next one, the keep, a delivery that failed, or PORTRAIT_HELD_MS. That one timer
+  // is cleared with it, and knows the reader and the id alone, so that the map is the only holder of the picture: a
+  // timer that held it would keep every picture replaced or kept alive for the whole half hour.
+  type Candidate = { id: string; storyId: string; name: string; look: string; seed: number; bytes: Uint8Array; at: number };
+  const candidates = new Map<string, Candidate & { timer: ReturnType<typeof setTimeout> }>();
+  function letGo(userId: string, id?: string) {
+    const held = candidates.get(userId);
+    if (!held || (id !== undefined && held.id !== id)) return;
+    clearTimeout(held.timer);
+    candidates.delete(userId);
+  }
+  function hold(userId: string, candidate: Candidate) {
+    letGo(userId);
+    const { id } = candidate;
+    const timer = setTimeout(() => letGo(userId, id), PORTRAIT_HELD_MS);
+    timer.unref();
+    candidates.set(userId, { ...candidate, timer });
+  }
 
   // The description of one scene: the story's sheet first if it has none yet, then the frame, both on the language
   // model's card. `sharesPrefix` holds it to the slot where the scene's own request is cached, which is where the
@@ -589,16 +605,14 @@ export function createIllustrator(config: ImageConfig, deps: {
           negative: '', seed, steps, sampler, scheduler, cfg, width: size.width, height: size.height }), { waitMs: config.waitMs, pollMs });
         if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
         if (lookNow() !== look) throw sceneGone();
-        // Held before it is sent, so that its button finds it however soon it is pressed, and let go if it never arrives.
-        const held = { id: request.candidate, storyId, name, look, seed, bytes: drawn.bytes, at: now() };
-        if (drawn.bytes.length <= PORTRAIT_BYTES) {
-          candidates.set(userId, held);
-          setTimeout(() => { if (candidates.get(userId) === held) candidates.delete(userId); }, PORTRAIT_HELD_MS).unref();
-        }
+        // Held before it is sent, so that its button finds it however soon it is pressed, and let go if it never
+        // arrives. The one shown before goes either way: its button keeps nothing once a newer one is shown.
+        if (drawn.bytes.length <= PORTRAIT_BYTES) hold(userId, { id: request.candidate, storyId, name, look, seed, bytes: drawn.bytes, at: now() });
+        else letGo(userId);
         const photoStarted = now();
         try { await sendKept({ userId, chat, storyId }, () => chat.photo(drawn.bytes, undefined, request.caption)); }
         catch (error) {
-          if (candidates.get(userId) === held) candidates.delete(userId);
+          letGo(userId, request.candidate);
           throw error;
         }
         const photoMs = Math.max(0, now() - photoStarted);
@@ -626,7 +640,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       if (index < 0 || sheet[index].look !== held.look) return null;
       sheet[index].portrait = { file: store.writePortrait(userId, held.bytes), seed: held.seed, look: held.look, clothes: PORTRAIT_CLOTHES,
         style: PORTRAIT_STYLE, graph: graphHash, checkpoint: config.checkpoint, at: now() };
-      candidates.delete(userId);
+      letGo(userId);
       return { storyId: held.storyId, index };
     },
   };

@@ -11,6 +11,8 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { crc32, deflateSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
+import { setFlagsFromString } from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createBot } from './bot.ts';
 import type { Update } from './bot.ts';
@@ -1098,6 +1100,50 @@ test('a portrait whose sheet changes order while it is drawn keeps to its person
   const [first, second] = f.store.read('1').stories[storyId].sheet!;
   assert.deepEqual([first.name, first.portrait, second.name], ['Тарек', undefined, 'Элин']);
   assert.equal(second.portrait!.look, second.look);
+});
+
+// The picture of a portrait is held for its keep button and for nothing else: one replaced by a newer portrait, and one
+// kept, are let go at once rather than when half an hour is up, which three portraits kept in a row once kept alive.
+// Asked of the collector itself, since the size of the map says nothing of a timer that still holds a picture.
+test('a portrait replaced or kept leaves no picture of it in memory', async t => {
+  setFlagsFromString('--expose-gc');
+  const gc = runInNewContext('gc') as () => void;
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root });
+  await f.start();
+  await f.bot.idle();
+  const storyId = f.store.read('1').active!.storyId;
+  // The picture of the photo just sent, which the test itself lets go of: past this, only the bot can hold it.
+  const draw = async () => {
+    await f.bot.handle(f.click(`portrait:${elin(storyId)}`));
+    await f.bot.idle();
+    const photo = photos(f.sent).at(-1)!;
+    const picture = new WeakRef(photo.payload.photo);
+    photo.payload.photo = new Uint8Array(0);
+    return { picture, keep: photo.payload.reply_markup!.inline_keyboard[0][1].callback_data };
+  };
+  // A WeakRef keeps what it points at to the end of the job that made or read it, so each look is a job of its own.
+  const held = async (picture: WeakRef<Uint8Array>) => {
+    for (let round = 0; round < 3; round++) {
+      await delay(0);
+      gc();
+      if (picture.deref() === undefined) return false;
+    }
+    return true;
+  };
+  const replaced = await draw();
+  const kept = [await draw()];
+  assert.equal(await held(replaced.picture), false, 'the portrait shown before is let go');
+  assert.equal(await held(kept[0].picture), true, 'the one shown last is held for its button');
+  await f.bot.handle(f.click(kept[0].keep));
+  for (let n = 0; n < 2; n++) {
+    kept.push(await draw());
+    await f.bot.handle(f.click(kept.at(-1)!.keep));
+  }
+  assert.equal(f.store.read('1').stories[storyId].sheet![0].portrait!.seed, seedIn(comfy.submitted.at(-1)!));
+  for (const one of kept) assert.equal(await held(one.picture), false, 'a kept portrait is let go');
 });
 
 // The sidecar of the library: a portrait's file is written before the write that refers to it, so a write rolled back,
