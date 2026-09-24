@@ -84,6 +84,8 @@ function exercise(domain: typeof source) {
   // Pictures in the chat: of a scene both branches share, and of the scene just written on one of them.
   domain.recordPicture(state, { storyId: story.id, nodeId: 'n6', messageId: 501, at: 1000 });
   domain.recordPicture(state, { storyId: story.id, nodeId: turn.nodeId, messageId: 502, at: 2000 });
+  // A portrait of one of the story's people shows no scene.
+  domain.recordPicture(state, { storyId: story.id, messageId: 503, at: 2500 });
   keep(state.sentPictures);
   keep(domain.saveCheckpoint(state, story, branch, 'Сцена 4', 'scene'));
   const job = domain.beginJob(state, 'Продолжай.', 7000);
@@ -128,14 +130,17 @@ test('pictures are recorded as sent, and a deletion forgets those of its lost sc
   // Every record drops what Telegram would no longer delete by then.
   source.recordPicture(state, sent(3, 'n6', now - hour));
   source.recordPicture(state, sent(4, nodeId, now - hour / 2));
-  assert.deepEqual(ids(), [2, 3, 4]);
+  // A portrait of one of the story's people shows no scene, and goes with the story alone.
+  const portrait = { storyId: 'h2', messageId: 5, at: now - hour / 4 };
+  source.recordPicture(state, portrait);
+  assert.deepEqual(ids(), [2, 3, 4, 5]);
   // The branch takes scene 4 with it: its picture of half an hour ago is returned for the chat, the one from 48 hours
-  // ago is only forgotten, and the picture of the shared scene stays.
+  // ago is only forgotten, and the picture of the shared scene stays, as does the portrait of the story that stays.
   source.deleteBranch(state, 'h2', 'b18');
   assert.deepEqual(source.forgetLostPictures(state, now + hour), [4]);
-  assert.deepEqual(pictures(), [sent(3, 'n6', now - hour)]);
+  assert.deepEqual(pictures(), [sent(3, 'n6', now - hour), portrait]);
   source.deleteSeed(state, 's1');
-  assert.deepEqual(source.forgetLostPictures(state, now + hour), [3]);
+  assert.deepEqual(source.forgetLostPictures(state, now + hour), [3, 5]);
   assert.deepEqual(pictures(), []);
   // However many are sent within the 48 hours, the library keeps the newest thousand.
   for (let n = 0; n < source.SENT_PICTURES_MAX + 5; n++) source.recordPicture(state, sent(100 + n, 'n6', now + n));

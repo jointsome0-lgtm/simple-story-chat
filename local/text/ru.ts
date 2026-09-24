@@ -17,6 +17,8 @@ const count = (n: number, one: string, few: string, many: string) => `${n} ${for
 const grouped = (n: number, separator: string) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, separator);
 const lastScenes = (n: number | null) => (n === null ? 'последние сцены' : `последние ${count(n, 'сцена', 'сцены', 'сцен')}`);
 const jobs = (n: number | null) => (n === null ? 'неизвестно' : String(n));
+const textSize = (label: string, tokens: number | null, chars: number) =>
+  `${label}: ${tokens === null ? 'токены неизвестны' : `${grouped(tokens, ' ')} ${form(tokens, 'токен', 'токена', 'токенов')}`} · ${grouped(chars, ' ')} ${form(chars, 'знак', 'знака', 'знаков')}`;
 
 export const ru = {
   format: {
@@ -77,6 +79,8 @@ export const ru = {
     keep: '↩️ Не удалять',
     // In the menu of a reader whose scenes are illustrated.
     pictureStyle: '🎨 Стиль картинок',
+    // Beside a story, for a reader whose scenes are illustrated.
+    characters: '👤 Персонажи',
   },
 
   // Marks and notes shared by several screens.
@@ -204,6 +208,48 @@ export const ru = {
     drawingSample: '🎨 Рисую пример…',
     // `count` is how many styles are drawn, one picture each.
     drawingAll: (count: number) => `🎨 Рисую последнюю сцену во всех стилях (${count}). Картинки придут по одной; следующий ход в истории остановит рисование.`,
+  },
+
+  // The people the pictures of a story draw (local/picture.ts): the list the story's first picture writes, a card for
+  // each person, the look the reader writes for them, and a portrait drawn from it on request, to pick a reference by.
+  // Looks and clothes stay in English, as the picture model reads them. `person` is a name as the story gives it, not
+  // quoted; `story` is common.storyName.
+  characters: {
+    title: (story: string) => `👤 Персонажи: ${story}`,
+    note: 'Такими их рисуют картинки этой истории. Нажми на персонажа, чтобы увидеть описание целиком, поправить внешность или нарисовать портрет.',
+    none: 'Персонажи появятся в истории после первой иллюстрации.',
+    toStory: '📖 К истории',
+    cardTitle: (person: string, story: string) => `👤 ${person} · ${story}`,
+    look: 'Внешность (нажми, чтобы скопировать):',
+    // The size of the text above, alone: `tokens` as the picture model reads it, null when the bot has no tokenizer.
+    lookSize: (tokens: number | null, chars: number) => textSize('Текст внешности', tokens, chars),
+    // `branch` is the quoted name of the branch being played.
+    clothesOfBranch: (branch: string) => `Одежда на последней картинке ветки ${branch}:`,
+    clothesAtStart: 'Одежда, с которой начались картинки этой истории:',
+    clothesSize: (tokens: number | null, chars: number) => textSize('Текст одежды', tokens, chars),
+    noClothes: 'Одежда пока не записана.',
+    clothesNote: 'Одежду здесь не правят: её меняет сама история, и картинки берут её из сцен.',
+    sizeNote: 'Числа относятся к каждому тексту отдельно. В промпт также входят описание сцены и стиль; точный размер указан под картинкой.',
+    scope: 'Правка внешности действует на следующие картинки всех веток этой истории. Текст истории, память и уже нарисованные картинки не меняются, а картинка, которая рисуется сейчас, может выйти по-старому.',
+    portraitNone: '🖼 Портрета пока нет. Портрет рисует лицо и фигуру в полный рост по этой внешности — так проще подобрать референс.',
+    portraitKept: '🖼 Портрет сохранён: лицо и фигура по этой внешности.',
+    portraitStale: '🖼 Сохранённый портрет нарисован по прежней внешности. Новый покажет лицо и фигуру по этой.',
+    edit: '✏️ Изменить внешность',
+    portrait: '🖼 Портрет',
+    back: '↩️ К персонажам',
+    // While the reader writes a look. `max` is a limit in characters.
+    editTitle: (person: string, story: string) => `✏️ Внешность: ${person} · ${story}`,
+    editNote: (max: number) => `Пришли новую внешность одним сообщением, до ${max} знаков: лицо, волосы, телосложение, рост, приметы. Одежду и имя не пиши: одежду меняет история, а имя остаётся прежним. Модель картинок лучше всего понимает английский.`,
+    nowText: 'Сейчас:',
+    backToCard: '↩️ К персонажу',
+    // Under a portrait, which is drawn in plain neutral clothes whatever the story's.
+    caption: (person: string) => `🖼 Портрет: ${person}. Лицо и фигура в полный рост, в простой нейтральной одежде.`,
+    again: '🔄 Ещё вариант',
+    keep: '✅ Оставить',
+    // Once the reader kept a portrait. The scenes' pictures do not use it yet.
+    kept: (person: string) => `✅ Портрет сохранён: ${person}. В картинки к сценам он пока не попадает.`,
+    drawing: '🎨 Рисую портрет…',
+    portraitFailed: 'Не получилось нарисовать портрет. Попробуй ещё раз чуть позже.',
   },
 
   model: {
@@ -653,6 +699,13 @@ export const ru = {
     variantChanged: 'С тех пор поменялась модель картинок или её настройки, и с прежними эту картинку уже не повторить. С новыми рисовать не буду, иначе отличался бы не только промпт.',
     variantBusy: 'Сцена ещё пишется. Попроси вариант, когда она придёт.',
     variantInFlight: 'Уже рисую вариант. Следующий можно попросить, когда он придёт.',
+    // While the reader writes a look, and under a portrait. The number is LOOK_CHARS in local/picture.ts.
+    lookNeedsText: 'Пришли внешность текстом, одним сообщением. Выйти без изменений можно кнопкой «↩️» или командой /cancel.',
+    lookTooLong: 'Слишком длинно: внешность должна уложиться в 400 знаков. Сократи и пришли снова.',
+    lookGone: 'Этого персонажа уже нет в истории, внешность не сохранена. Открой /menu.',
+    portraitOff: 'Картинки к твоим сценам пока не включены, поэтому портрет нарисовать нельзя.',
+    portraitStale: 'Этот портрет уже не сохранить: он устарел или внешность с тех пор изменилась. Нарисуй новый.',
+    portraitInFlight: 'Уже рисую картинку по твоей просьбе. Портрет можно попросить, когда она придёт.',
   },
 
   // Names the bot gives to branches and checkpoints it creates. They are stored with the story and keep the language

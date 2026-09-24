@@ -5,6 +5,7 @@ import { contextStats } from './context.ts';
 import { renderCompaction } from './compact-view.ts';
 import type { CompactionStatus } from './compact-view.ts';
 import type { GpuStatus } from './gpu.ts';
+import { LOOK_CHARS, personTag } from './picture.ts';
 import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX, PROMPT_CHARS } from './picture-style.ts';
 import type { Screen } from './telegram.ts';
 import { LANGS, LANGUAGE_BUTTON, REGISTERED, commandSets, isRegistered, langFromTelegram, shownLang, texts } from './text.ts';
@@ -64,6 +65,23 @@ const MODEL_STATUSES = ['ready', 'unavailable', 'configured', 'other'];
 
 // One of the reader's own picture styles, in the same script as the rest of the library.
 const OWN = { id: 'y20', name: 'Candle oil', line: 'Oil painting with visible impasto brushstrokes, warm candlelight and deep shadows.' };
+// A story's people as its first picture writes them, and a library whose first scene dressed one of them otherwise.
+const SHEET = [{ name: 'Mira', look: 'A tall woman in her forties, short grey hair, a scar on the left cheek.', outfit: 'wearing a dark wool coat' },
+  { name: 'Oleg', look: 'A broad-shouldered man with a shaved head.', outfit: 'wearing a fisherman sweater' }, { name: 'Ora', look: 'An old woman.' }];
+function drawn(lang: Lang | undefined): Library {
+  const state = library(lang);
+  state.stories.h2.sheet = SHEET;
+  state.stories.h2.nodes.n5.clothes = { Mira: 'wearing a yellow raincoat' };
+  return state;
+}
+// The same, with a portrait kept of the look as it is and one of an earlier look.
+function portraits(lang: Lang | undefined): Library {
+  const state = drawn(lang);
+  const kept = { file: '0123456789abcdef0123456789abcdef.png', seed: 7, clothes: 'plain', style: 'neutral', graph: '0123456789abcdef',
+    checkpoint: 'synthetic.safetensors', width: 720, height: 1280, steps: 8, cfg: 1, sampler: 'euler', scheduler: 'simple', at: 1 };
+  state.stories.h2.sheet = [{ ...SHEET[0], portrait: { ...kept, look: SHEET[0].look } }, { ...SHEET[1], portrait: { ...kept, look: 'Earlier.' } }, SHEET[2]];
+  return state;
+}
 
 // Every screen the interface can produce for one language: [what it is, the screen].
 function screens(lang: Lang | undefined): [string, Screen][] {
@@ -81,6 +99,11 @@ function screens(lang: Lang | undefined): [string, Screen][] {
     ['style edit', { ...library(lang), pictureStyles: { y20: OWN }, ui: { input: 'style', styleId: 'y20' } }],
     ['style edit of a deleted style', { ...library(lang), ui: { input: 'style', styleId: 'y404' } }],
     ['prompt input', { ...library(lang), ui: { input: 'prompt', storyId: 'h2', nodeId: 'n6' } }],
+    ['sheet', drawn(lang)],
+    ['sheet of a story not played', { ...drawn(lang), active: null }],
+    ['look edit', { ...drawn(lang), ui: { input: 'look', storyId: 'h2', name: 'Mira' } }],
+    ['look edit of a lost person', { ...drawn(lang), ui: { input: 'look', storyId: 'h2', name: 'Nobody' } }],
+    ['portraits', portraits(lang)],
   ];
   for (const [name, state] of states) {
     const details = (route: string): RenderDetails => {
@@ -89,12 +112,17 @@ function screens(lang: Lang | undefined): [string, Screen][] {
       try { if (kind === 'context') stats = contextStats(state, config, checkpointId ? { storyId, checkpointId } : undefined); } catch {}
       return { contextStats: stats, modelInfo: { provider: 'llama-cpp', model: 'synthetic-model', status: 'ready', checkedAt: '2026-09-16T10:05:00Z' },
         gpuInfo: { status: 'ready', activeJobs: 0, idleMinutes: 15, idleRemainingSeconds: 400, canStart: false, canPause: true },
-        pictures: true, standardStyle: 'A synthetic standard line of an owner.' };
+        pictures: true, standardStyle: 'A synthetic standard line of an owner.',
+        // The card counts each text in whole words for one library, and knows no count for the others.
+        ...name === 'sheet' ? { textTokens: (text: string) => text.split(' ').length } : {} };
     };
     // Crawl what the buttons reach, and add the routes no button leads to in this state.
     const queue = ['home', 'new-seed', 'model', 'language', 'nonsense', 'seed:s404', 'story:h404', 'tree:h404', 'log:h2:b404:0', 'branch:h2:b404',
       'checkpoints:h2:b404:0', 'checkpoint:h2:c404', 'context:h2:c404', 'delete-seed:s404', 'delete-branch:h2:b404', 'delete-seed:s12', 'delete-branch:h2:b8',
-      'style-input', 'style:y404', 'delete-style:y404', 'delete-style:y20', 'sample:film', 'sample:standard', 'sample:y20', 'prompt-input'];
+      'style-input', 'style:y404', 'delete-style:y404', 'delete-style:y20', 'sample:film', 'sample:standard', 'sample:y20', 'prompt-input',
+      'characters:h404', 'character:h404:0', 'character:h2:9', 'look-input',
+      `portrait:h2:0:${personTag('Mira')}:0a1b2c3d`, `portrait:h2:1:${personTag('Oleg')}:`, `portrait:h2:1:${personTag('Mira')}:0a1b2c3d`,
+      `portrait:h404:0:${personTag('Mira')}:0a1b2c3d`, 'portrait-kept:h2:1', 'portrait-kept:h2:9'];
     const seen = new Set<string>();
     while (queue.length) {
       const route = queue.shift()!;
@@ -230,7 +258,7 @@ test('command lists: English by default, then one per registered language, GPU c
   for (const set of commandSets(false, true)) assert.ok(set.commands.some(item => item.command === 'style'), String(set.language_code));
 });
 
-test('the style and prompt texts name the limits the code keeps', () => {
+test('the style, prompt and look texts name the limits the code keeps', () => {
   for (const lang of REGISTERED) {
     const t = texts(lang);
     assert.match(t.errors.styleTooLong, new RegExp(`\\b${OWN_STYLE_CHARS}\\b`), lang);
@@ -240,6 +268,13 @@ test('the style and prompt texts name the limits the code keeps', () => {
     assert.ok(t.pictureStyle.editNote(OWN_STYLE_CHARS).includes(String(OWN_STYLE_CHARS)), lang);
     assert.match(t.errors.promptTooLong, new RegExp(`\\b${PROMPT_CHARS}\\b`), lang);
     assert.ok(t.variant.note(PROMPT_CHARS).includes(String(PROMPT_CHARS)), lang);
+    assert.match(t.errors.lookTooLong, new RegExp(`\\b${LOOK_CHARS}\\b`), lang);
+    assert.ok(t.characters.editNote(LOOK_CHARS).includes(String(LOOK_CHARS)), lang);
+    // Each size on a character's card says which text it counts; a count the bot does not know is said in words, and
+    // the characters stay.
+    assert.notEqual(t.characters.lookSize(3, 20), t.characters.clothesSize(3, 20), lang);
+    const unknown = t.characters.lookSize(null, 20);
+    assert.ok(unknown.includes('20') && unknown !== t.characters.lookSize(3, 20) && !/null|NaN/.test(unknown), lang);
     // The example is a style as a reader would send it: a name, then the line in English.
     const [name, line, ...rest] = t.pictureStyle.exampleText.split('\n');
     assert.ok(name && [...name].length <= OWN_NAME_CHARS && line && [...line].length <= OWN_STYLE_CHARS && !rest.length, lang);

@@ -30,7 +30,11 @@
 // scene with its seed or branch deletes the photo from the chat (local/bot.ts); a picture whose scene is deleted
 // while it is being made is not sent at all (`sendKept`). The folded prompt under the photo goes with it the same way,
 // and so does a variant of the photo drawn from a prompt the reader wrote (`variant`).
-import { createHash } from 'node:crypto';
+//
+// A portrait of one person of a story's sheet (`portrait`) is drawn on request from their card in the characters'
+// screens (local/ui.ts), from their look alone, and goes with its story the same way. The one a reader keeps is a
+// file beside the database (local/store.ts), to pick a reference by later; no frame uses it.
+import { createHash, randomInt } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { recordPicture } from '../lib/library.ts';
 import type { Library, PictureRecipe, SceneNode, Story } from '../lib/library.ts';
@@ -41,6 +45,7 @@ import { SAMPLER_DEFAULTS, apiGraph, applyToWorkflow, drawOne, latentSizeOf, pre
 import type { Comfy, Graph } from './image-batch.ts';
 import { STYLE, askJson, assemblePrompt, frameRequest, matchSheet, sheetOf, sheetRequest, sheetWithoutOutfits } from './illustrate.ts';
 import type { Character, Description, Excerpt } from './illustrate.ts';
+import { portraitDescription } from './image-portraits.ts';
 import type { Log } from './model-error.ts';
 import { errorCode, safeErrorDetails } from './model-error.ts';
 import type { ModelRequest, Provider } from './model.ts';
@@ -80,6 +85,12 @@ export type SampleRequest = {
 // A variant of the picture of one of the reader's scenes (`variant`): the scene, and the whole prompt the reader wrote
 // for it, which the bot keeps in neither its library nor its logs.
 export type VariantRequest = { userId: string; chat: Chat; storyId: string; nodeId: string; prompt: string; signal: AbortSignal; log: Log };
+// A portrait of one person of a story's sheet (`portrait`), by story and name as their card showed them: the id its
+// keep button carries (`keepPortrait`), the caption with that button, and what stands in the chat while it is drawn.
+export type PortraitRequest = {
+  userId: string; chat: Chat; storyId: string; name: string; candidate: string; caption: Screen; status: string;
+  signal: AbortSignal; log: Log;
+};
 export type Illustrator = ReturnType<typeof createIllustrator>;
 
 // By the time a code reaches a log row it is a word from a closed set (local/main.ts drops anything else), so a
@@ -127,6 +138,55 @@ export function clothesOf(description: Description, worn: Character[]): { clothe
   return { clothes, changed };
 }
 
+// The longest look a reader may write for a person of a sheet (local/bot.ts), in characters: the sheet's own are 15-25
+// words, and the room left is the reader's, as for a style of their own.
+export const LOOK_CHARS = 400;
+
+// A person of a sheet is their name, apart from spaces and case. One the model renames is somebody new, and what the
+// reader made of the old name stays with it: merging two people by a like name would be worse than keeping both.
+type SheetEntry = NonNullable<Story['sheet']>[number];
+const personKey = (name: string) => name.trim().toLowerCase();
+
+// A button names a person by their place on the sheet and a short hash of their name, never the name itself, within
+// Telegram's 64 bytes. A sheet written anew may put somebody else in that place, and the button is then refused
+// rather than acting on them: `personAt` finds the person only while the two still agree.
+export const personTag = (name: string) => createHash('sha256').update(personKey(name)).digest('hex').slice(0, 8);
+export function personAt(story: Story | undefined, index: string | undefined, tag: string | undefined) {
+  const person = story && /^\d+$/.test(index ?? '') ? story.sheet?.[Number(index)] : undefined;
+  return person && typeof person.name === 'string' && typeof person.look === 'string' && personTag(person.name) === tag
+    ? { ...person, index: Number(index) } : undefined;
+}
+
+// A sheet written again in place of an older one (`describeFrame`) keeps what the reader made of it: a look they wrote
+// themselves and a portrait they kept, under the same name, or with the person on their own if the new sheet lost the
+// name. The card shows a portrait as drawn from another look if the new one differs (local/ui.ts).
+export function rewrittenSheet(before: SheetEntry[], written: Character[]): SheetEntry[] {
+  const old = new Map(before.map(one => [personKey(one.name), one]));
+  const kept = written.map(one => {
+    const mine = old.get(personKey(one.name));
+    return { ...one, ...mine?.edited ? { look: mine.look, edited: true } : {}, ...mine?.portrait ? { portrait: mine.portrait } : {} };
+  });
+  const names = new Set(written.map(one => personKey(one.name)));
+  return [...kept, ...before.filter(one => (one.edited || one.portrait) && !names.has(personKey(one.name))).map(one => ({ ...one, outfit: one.outfit ?? '' }))];
+}
+
+// A portrait to pick a reference by (`portrait`): the whole figure from the front, so that the build, the height, the
+// silhouette and every permanent mark show, in plain close-fitting clothes of the bot's own that hide none of it and
+// follow the person into no scene, standing without an expression put on them — a heavy brow or a hard stare is the
+// look's to say — and in a plain style of its own, never the reader's. Two portraits of one look differ by the seed.
+export const PORTRAIT_CLOTHES = 'wearing a plain close-fitting white tank top, close-fitting dark grey trousers and plain dark shoes';
+export const PORTRAIT_STYLE = 'Neutral character reference illustration with natural colors, realistic proportions and clean even rendering, the build, silhouette and permanent marks clearly readable.';
+export function portraitPrompt(name: string, look: string) {
+  const description = portraitDescription(name);
+  description.people = description.people.map(person => ({ ...person, clothes: PORTRAIT_CLOTHES,
+    action: 'stands upright facing the viewer, arms relaxed at the sides' }));
+  return assemblePrompt(description, [{ name, look, outfit: '' }], PORTRAIT_STYLE);
+}
+// The portrait a reader was shown last is held for its keep button this long, and only if Telegram would take it as
+// a photo at all.
+const PORTRAIT_HELD_MS = 30 * 60 * 1000;
+const PORTRAIT_BYTES = 10 * 1024 * 1024;
+
 // The prompt of a picture as a rich message folded to one line, `summary`, which the reader opens to read or copy it
 // (docs/telegram-ui.md). It is Telegram's rich HTML with the prompt as plain text, which wraps to the width of a
 // phone: a code block does not, and the first one sent this way was read by scrolling sideways. Escaping the three
@@ -150,6 +210,13 @@ export function encoderTokens(qwen: QwenTokenizer, graph: Graph): ((prompt: stri
   return encoder ? prompt => qwenPromptTokens(qwen, prompt, encoder, { images }).conditioning : undefined;
 }
 
+// How many tokens one text is on its own, as the same encoder tokenizes it: a field of a sheet on the characters' card
+// (local/ui.ts), which is part of a prompt and not one, so that no template is counted with it.
+export function textTokens(qwen: QwenTokenizer, graph: Graph): ((text: string) => number) | undefined {
+  const encoder = textEncoderOf(graph);
+  return encoder ? text => qwenPromptTokens(qwen, text, encoder).prompt : undefined;
+}
+
 export function createIllustrator(config: ImageConfig, deps: {
   store: Store; provider: Provider;
   // The story model as the bot names it in each scene's request stamp, and its context. Without it every description
@@ -163,6 +230,8 @@ export function createIllustrator(config: ImageConfig, deps: {
   // note under each photo and its log row (`promptSize`). Asked once, at startup; without an answer the note gives
   // the prompt's characters alone.
   promptTokens?: (graph: Graph) => ((prompt: string) => number) | undefined;
+  // The same for one field of a sheet on its own (`textTokens`), for the characters' card.
+  textTokens?: (graph: Graph) => ((text: string) => number) | undefined;
 }) {
   const { store, provider, now = Date.now, pollMs } = deps;
   // The graph is read once, here, so that a workflow that is not a ComfyUI API export fails when the bot starts
@@ -181,6 +250,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       { code: 'workflow_unreadable' });
   }
   const promptTokens = deps.promptTokens?.(graph);
+  const fieldTokens = deps.textTokens?.(graph);
   const latent = latentSizeOf(graph);
   if (!latent) throw new Error('SIMPLE_CHAT_IMAGE_WORKFLOW needs a sampler whose latent_image comes from a node with a width and a height');
   const size = latent;
@@ -197,6 +267,10 @@ export function createIllustrator(config: ImageConfig, deps: {
   const graphId = createHash('sha256').update(JSON.stringify(graph)).digest('hex').slice(0, 16);
   const recipeOf = (storyId: string): PictureRecipe => ({ seed: seedOf(storyId), graph: graphId, checkpoint: config.checkpoint,
     width: size.width, height: size.height, steps, cfg, sampler, scheduler });
+  // A portrait stands, so it is drawn on the graph's canvas turned upright: the smaller side across and the larger one
+  // down, 720x1280 for a graph of 1280x720. A whole figure in the scenes' landscape frame would get a third of the
+  // pixels. Nothing else of the graph changes.
+  const upright = { width: Math.min(size.width, size.height), height: Math.max(size.width, size.height) };
 
   // The scene's own request, once more: the same system prompt and the same history up to this scene, so that a
   // server with a prefix cache pays for the appended instruction alone (the plan's "What the second call costs").
@@ -236,6 +310,25 @@ export function createIllustrator(config: ImageConfig, deps: {
   // The frame of each reader's latest described scene, in memory only and only until the next one: a sample of a
   // style is drawn from it without asking the language model again. Never stored and never logged.
   const frames = new Map<string, { storyId: string; nodeId: string; description: Description; sheet: Character[] }>();
+  // The portrait each reader was shown last, for its keep button (`keepPortrait`), with the look it shows: in memory
+  // only, one per reader, until the next one, the keep, a delivery that failed, or PORTRAIT_HELD_MS. That one timer
+  // is cleared with it, and knows the reader and the id alone, so that the map is the only holder of the picture: a
+  // timer that held it would keep every picture replaced or kept alive for the whole half hour.
+  type Candidate = { id: string; storyId: string; name: string; look: string; recipe: PictureRecipe; bytes: Uint8Array; at: number };
+  const candidates = new Map<string, Candidate & { timer: ReturnType<typeof setTimeout> }>();
+  function letGo(userId: string, id?: string) {
+    const held = candidates.get(userId);
+    if (!held || (id !== undefined && held.id !== id)) return;
+    clearTimeout(held.timer);
+    candidates.delete(userId);
+  }
+  function hold(userId: string, candidate: Candidate) {
+    letGo(userId);
+    const { id } = candidate;
+    const timer = setTimeout(() => letGo(userId, id), PORTRAIT_HELD_MS);
+    timer.unref();
+    candidates.set(userId, { ...candidate, timer });
+  }
 
   // The description of one scene: the story's sheet first if it has none yet, then the frame, both on the language
   // model's card. `sharesPrefix` holds it to the slot where the scene's own request is cached, which is where the
@@ -262,7 +355,7 @@ export function createIllustrator(config: ImageConfig, deps: {
         const written = sheetOf((await askJson(model, trusted(model, sheetRequest(context), anchor), { signal })).value);
         store.mutate(userId, saved => {
           const one = saved.stories[storyId];
-          if (one && (!one.sheet || sheetWithoutOutfits(one.sheet))) one.sheet = written;
+          if (one && (!one.sheet || sheetWithoutOutfits(one.sheet))) one.sheet = rewrittenSheet(one.sheet ?? [], written);
         });
         log('picture_sheet_written', undefined, { sheetCharacters: written.length, sheetRewritten: older });
       }
@@ -328,20 +421,21 @@ export function createIllustrator(config: ImageConfig, deps: {
   // reader's library, and is recorded there the moment it is sent, so that deleting the scene deletes it too
   // (local/bot.ts). A deletion that lands while it is on its way finds no record of it yet; the record then finds no
   // scene, and the message is taken back at once. The two writes of the library cannot interleave, so one of them
-  // always sees the other. Resolves to the id of the message. The scene's own photo leaves the `recipe` it was drawn
-  // with on its scene in the same write, for a variant of it; its prompt is never written.
-  async function sendKept(request: { userId: string; chat: Chat; storyId: string; nodeId: string },
+  // always sees the other. A portrait has no scene and goes with its story alone. Resolves to the id of the message.
+  // The scene's own photo leaves the `recipe` it was drawn with on its scene in the same write, for a variant of it;
+  // its prompt is never written.
+  async function sendKept(request: { userId: string; chat: Chat; storyId: string; nodeId?: string },
     send: () => Promise<number | undefined>, recipe?: PictureRecipe) {
     const { userId, chat, storyId, nodeId } = request;
-    if (!store.read(userId).stories[storyId]?.nodes[nodeId]) throw sceneGone();
+    const there = (state: Library) => !!state.stories[storyId] && (nodeId === undefined || !!state.stories[storyId].nodes[nodeId]);
+    if (!there(store.read(userId))) throw sceneGone();
     const messageId = await send();
     // A message whose id did not come back can be neither recorded nor taken back.
     if (messageId === undefined) return undefined;
     const kept = store.mutate(userId, state => {
-      const node = state.stories[storyId]?.nodes[nodeId];
-      if (!node) return false;
+      if (!there(state)) return false;
       recordPicture(state, { storyId, nodeId, messageId, at: now() });
-      if (recipe) node.picture = recipe;
+      if (recipe && nodeId !== undefined) state.stories[storyId].nodes[nodeId].picture = recipe;
       return true;
     });
     if (kept) return messageId;
@@ -475,9 +569,13 @@ export function createIllustrator(config: ImageConfig, deps: {
       if (signal.aborted || !styles.length) return;
       const t = texts(store.read(userId).language);
       const clear = await statusLine(chat, request.status, log);
-      // A frame is reused only for the very scene it was described from, and only while that scene still exists.
+      // A frame is reused only for the very scene it was described from, only while that scene still exists, and only
+      // while its people have the looks it was described with: a look the reader edited since is described anew, and
+      // so is one edited while that frame was still being described.
       const kept = frames.get(userId);
-      let frameReused = kept?.storyId === storyId && kept.nodeId === nodeId && !!store.read(userId).stories[storyId]?.nodes[nodeId];
+      const story = store.read(userId).stories[storyId];
+      let frameReused = kept?.storyId === storyId && kept.nodeId === nodeId && !!story?.nodes[nodeId]
+        && kept.sheet.every(one => story.sheet?.find(other => other.name === one.name)?.look === one.look);
       const stylesAsked = styles.length;
       let describeMs = 0;
       let pictureStyle = styles[0].pictureStyle;
@@ -570,5 +668,77 @@ export function createIllustrator(config: ImageConfig, deps: {
       }
       await settled();
     },
+
+    // The tokens of one field of a sheet as the picture model's text encoder takes that text alone, or null without a
+    // tokenizer for it (the characters' card, local/ui.ts).
+    textTokens(text: string): number | null {
+      try { return fieldTokens ? fieldTokens(text) : null; } catch { return null; }
+    },
+
+    // A portrait of one person of a story's sheet (`PortraitRequest`), drawn again with a new seed each time the reader
+    // asks, from their look alone (`portraitPrompt`). It needs no description, so it neither wakes nor holds the
+    // language model's card: it waits for the picture card alone. The one sent last is held for its keep button; one
+    // whose person, story or look is gone by the time it is drawn is not sent. The reader's next move in the story
+    // stops it, as it stops a sample (local/bot.ts), until its photo is on its way; a failure is told, since they wait
+    // for it.
+    async portrait(request: PortraitRequest): Promise<void> {
+      const { userId, chat, storyId, name, signal, log } = request;
+      // The button is offered only to a reader who is drawn for, and that is asked again where the work starts.
+      if (signal.aborted || !config.users.has(userId)) return;
+      const t = texts(store.read(userId).language);
+      const clear = await statusLine(chat, request.status, log);
+      const lookNow = () => store.read(userId).stories[storyId]?.sheet?.find(one => one.name === name)?.look;
+      try {
+        const look = lookNow();
+        if (look === undefined) throw sceneGone();
+        const recipe = { ...recipeOf(storyId), ...upright, seed: randomInt(2 ** 32) };
+        const drawn = await draw(recipe, portraitPrompt(name, look).prompt, signal);
+        if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
+        if (lookNow() !== look) throw sceneGone();
+        // Held before it is sent, so that its button finds it however soon it is pressed, and let go if it never
+        // arrives. The one shown before goes either way: its button keeps nothing once a newer one is shown.
+        if (drawn.bytes.length <= PORTRAIT_BYTES) hold(userId, { id: request.candidate, storyId, name, look, recipe, bytes: drawn.bytes, at: now() });
+        else letGo(userId);
+        const photoStarted = now();
+        try { await sendKept({ userId, chat, storyId }, () => chat.photo(drawn.bytes, undefined, request.caption)); }
+        catch (error) {
+          letGo(userId, request.candidate);
+          throw error;
+        }
+        const photoMs = Math.max(0, now() - photoStarted);
+        await clear();
+        // A photo handed to Telegram is delivered: a stop that lands while it is on its way does not take it back, and
+        // it stays there to keep. The row then says both, that it is ready and that it was stopped.
+        log('picture_portrait', undefined, { outcome: 'ready', cancelled: signal.aborted, imageMs: drawn.totalMs,
+          imageSteps: recipe.steps, photoMs, photoBytes: drawn.bytes.length });
+      } catch (error) {
+        const code = errorCode(error);
+        const cancelled = signal.aborted || code === 'cancelled' || code === 'scene_gone';
+        await clear(cancelled ? undefined : t.characters.portraitFailed);
+        log('picture_portrait', signal.aborted ? 'cancelled' : safeCode(code),
+          { ...safeErrorDetails(error), outcome: cancelled ? 'cancelled' : 'failed', cancelled });
+      }
+      await settled();
+    },
+
+    // Keeps the portrait a reader was shown under `candidateId`, inside the library write that `state` belongs to: the
+    // file is written first and the sheet refers to it once that write commits; a rollback deletes the file, and the
+    // caller sweeps the one it replaced afterwards (local/store.ts). Only the very portrait that button came with is
+    // kept, only while it is held, and only while its person still has the look it shows. Returns where that person is
+    // on the sheet, or null for a stale button. The portrait stays held until `portraitKept`.
+    keepPortrait(userId: string, candidateId: string, state: Library) {
+      const held = candidates.get(userId);
+      if (!held || held.id !== candidateId || now() - held.at > PORTRAIT_HELD_MS) return null;
+      const sheet = state.stories[held.storyId]?.sheet ?? [];
+      const index = sheet.findIndex(one => one.name === held.name);
+      if (index < 0 || sheet[index].look !== held.look) return null;
+      sheet[index].portrait = { file: store.writePortrait(userId, held.bytes), ...held.recipe, look: held.look,
+        clothes: PORTRAIT_CLOTHES, style: PORTRAIT_STYLE, at: now() };
+      return { storyId: held.storyId, index };
+    },
+
+    // Lets a kept portrait go, once the write that refers to its file is committed (local/bot.ts). One whose write was
+    // rolled back is still held, so the same button keeps it again.
+    portraitKept(userId: string, candidateId: string) { letGo(userId, candidateId); },
   };
 }
