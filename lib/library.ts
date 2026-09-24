@@ -57,7 +57,9 @@ export type PromptInput = { input: 'prompt'; storyId: string; nodeId: string; co
 // One of the reader's own picture styles: the name on its button and the line that ends the prompt.
 export type OwnStyle = { id: string; name: string; line: string };
 // How a picture was drawn, all but its prompt (local/picture.ts): its seed, a hash of the graph, the checkpoint's file
-// name, and the size and sampler settings the graph was filled with. A variant of it is drawn with the same.
+// name, and the size and sampler settings the graph was filled with. A variant of it is drawn with the same. It pins
+// the request and not the card: after a change to the card's software, or to weights under the same file name, the
+// same recipe can draw another picture (docs/illustrations-plan.md).
 export type PictureRecipe = { seed: number; graph: string; checkpoint: string; width: number; height: number;
   steps: number; cfg: number; sampler: string; scheduler: string };
 // A picture the local bot sent into its reader's chat (local/picture.ts): the scene it shows, the message it is, and

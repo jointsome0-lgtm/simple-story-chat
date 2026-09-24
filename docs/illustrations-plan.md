@@ -615,6 +615,10 @@ no longer has is refused with the reason, rather than drawn with another. There 
 would mix what the words do with what the noise does. Samples get no button and no recipe, because this first
 version answers the request about the picture after a scene.
 
+The recipe pins the request and not the card: the graph with the file names in it, the checkpoint's name, the seed,
+the size and the sampler settings. The card's software, and weights replaced under the same file name, are not in it,
+and after a change to either the same recipe can draw a different picture.
+
 The variant goes under the same scene as a photo of its own. The note under it counts the tokens of that prompt and
 gives no style share, which nobody knows for a prompt written whole. It was drawn by the scene's recipe, so its note
 has the same button, and it leaves the chat with the scene. The reader's permission, the scene and its recipe are
