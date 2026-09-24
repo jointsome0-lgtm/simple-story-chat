@@ -363,25 +363,34 @@ the templates' 25 steps, cfg 1, euler and simple; the upstream card's 40 steps a
 text-to-image frame is 1280x720 like Krea's, because a blind bundle holding one square picture and one wide one has
 already told the rater which model drew which.
 
-**The identity frames are 1280x704, sixteen rows shorter, and that is the reference's size rather than a choice.**
-The encode node of the edit graph is at the template's `resolution: 0`, which keeps each reference at its own size
-rounded to a multiple of 32; a 1280x720 portrait out of the text-to-image graph becomes 1280x704 there (Python's
-`round(720 / 32)` is 22, not 23). The node hands out an empty latent of exactly that size, with the warning that
-sampling has to match it because "any other size shifts the edit", and the template samples from it through a
-switch whose other branch is a free-size canvas. We cannot wire that output: `applyToWorkflow` needs the sampler's
-latent to come from a node that has a width and a height, or it refuses the graph rather than draw one size and
-record another. So the graph keeps an `EmptyLatentImage` and pins it to the number the node computes — the
-template's relationship, written out. The two sizes differ, so a Krea frame and an identity frame are not the same
-canvas; the blind page compares Krea against the text-to-image graph, which is.
+**The identity frames are 1280x704, and the portraits are upright.** The encode node of the edit graph is at the
+template's `resolution: 0`, which keeps each reference at its own size rounded to a multiple of 32 (Python's
+`round(720 / 32)` is 22, not 23). A portrait is drawn on the text-to-image graph's latent turned upright, 720x1280,
+because a standing figure in a wide frame gets a third of the pixels, and it reaches the encoder at 704x1280. The node
+also hands out an empty latent of the first reference's size, with the warning that sampling has to match it because
+"any other size shifts the edit", and the template samples from it through a switch whose other branch is a free-size
+canvas. That output stays unwired here. The sampler starts from the graph's own `EmptyLatentImage`, so every frame is
+1280x704 whatever its references are, and the run pins `canvas` 1280x704 beside `referenceSize` 704x1280.
+`applyToWorkflow` would refuse a sampler latent without a width and a height anyway, rather than draw one size and
+record another. The pinned model gives each reference a place of its own in the sequence and centres its grid on the
+target (`build_sequence` in `comfy/ldm/qwen_image21/model.py`), so a reference of another shape than the canvas is a
+case it is built for. Whether an upright portrait keeps a person as well as a wide one would is not verified. The
+node's warning reads as one about an edit shifting against its first picture, and a frame keeps nothing of a portrait
+in place, but that is a reading of the source, not a measurement. Neither size is Krea's 1280x720, so a Krea frame
+and an identity frame are not the same canvas; the blind page compares Krea against the text-to-image graph, which is.
 
 **The identity runbook, 2026-09-25.** One fixed synthetic set,
 [examples/identity-set.ts](../examples/identity-set.ts), written before any card is rented: one story, a sheet of six
-people and eight frames, each frame drawn from two seeds in three arms, 48 pictures on one canvas.
+people and eight frames, each frame drawn from two seeds in three arms, 48 pictures on one canvas. Each arm goes by
+what it is, here, in the report and in the bundle keys (`armIs`):
 
-- **A**: the frame's text alone, looks included, as the bot draws a frame today;
-- **B**: the same text, and the portraits of the people the frame binds;
-- **C**: the same portraits, and the whole look of each bound person, build included, replaced by "the person from
-  image N". Clothes, state and action stay, and no arm's text holds a name.
+- **A, text only on the edit graph, 1280x704**: the frame's text, looks included, with every reference slot of the
+  edit graph taken out. A matched text-only baseline for B and C, and not the bot, which draws a frame on the
+  text-to-image graph; the control below prices that graph;
+- **B, the same text and the bound portraits**;
+- **C, the bound portraits, their looks replaced by the number of their picture**: the whole look of each bound
+  person, build included, becomes "the person from image N". Clothes, state and action stay, and no arm's text holds
+  a name.
 
 B against A says whether a portrait helps at all; C against B, whether the look can go once the portrait is there.
 **C is the owner's question.** The reference is meant to carry the whole figure, so that a frame need not say every
@@ -400,44 +409,32 @@ What the eight frames cover, each on purpose:
 The second seed is an independent repeat, never a second chance. A cell that failed, an OOM above all, stays failed:
 drawing it again until it comes out would be choosing the picture.
 
-```sh
-npm run image:identity -- dry-run        # before renting: all of it against a fake ComfyUI, with made-up answers
-npm run image:identity -- set            # writes illustrations/identity/set
-npm run image:portraits -- prompts --prompts illustrations/identity/set --out illustrations/identity/portrait-prompts
-npm run image:batch -- draw --prompts illustrations/identity/portrait-prompts --out illustrations/identity/portraits \
-  --checkpoints qwen_image_2.1_int8_convrot.safetensors --workflow gpu/image-workflow-qwen.json --minutes 10
-npm run image:portraits -- references --run illustrations/identity/portraits \
-  --out illustrations/identity/references.json
-npm run image:identity -- draw --smoke --minutes 10
-npm run image:identity -- report --portraits illustrations/identity/portraits
-npm run image:identity -- draw --minutes <what is left of the hour>
-npm run image:identity -- report --portraits illustrations/identity/portraits
-npm run image:identity -- bundles        # no card needed from here on
-npm run image:identity -- report --portraits illustrations/identity/portraits   # once answers/ holds every bundle
-```
-
-By default `draw`, `bundles` and `report` work on `illustrations/identity/run`, and `draw` reads
-`illustrations/identity/set` and `illustrations/identity/references.json` and draws with
-[image-workflow-qwen-edit.json](../gpu/image-workflow-qwen-edit.json); `--out`, `--prompts`, `--references` and
-`--workflow` change them. `--workflow` is read on this computer, not on the card. For Krea that file has to come off
-the box, because the bootstrap renders it with whichever source installed the encoder; the Qwen graphs have one
-source and one set of names, so the repository's copy and the box's are the same file and `gpu/…` is the honest
-path.
-
-**The portraits carry the figure.** They are drawn on the card first, by the text-to-image graph, so that the
-references are the model's own people and not photographs of anybody. Each portrait is:
+**The portraits carry the figure, by the bot's own recipe.** They are drawn on the card first, by the text-to-image
+graph, so that the references are the model's own people and not photographs of anybody. The recipe is the one the
+bot will draw its portraits with: `PORTRAIT_CLOTHES`, `PORTRAIT_STYLE`, `PORTRAIT_ACTION` and `portraitPrompt` in
+[image-portraits.ts](../local/image-portraits.ts) give the text the characters branch's `local/picture.ts` writes, and
+the bot takes them from there at the merge. Each portrait is:
 
 - one per person, from that person's sheet line and nothing else;
-- the whole figure from head to feet, seen from the front, before a plain grey backdrop;
-- in a neutral standing pose;
-- in plain close-fitting charcoal clothes that show the build, rather than a robe or a coat that would hide it.
+- the whole body in frame, seen from the front, before a plain grey backdrop;
+- standing upright facing the viewer, arms relaxed at the sides;
+- in a plain close-fitting white tank top, close-fitting dark grey trousers and plain dark shoes, which show the build
+  where a robe or a coat would hide it;
+- in a neutral reference style of its own, never a story's, on the upright canvas above.
 
-No expression is asked for. A face told to be calm argues with a look line that says grim, and a permanent bearing
-is the look's to carry. No frame dresses anybody as the portraits are dressed, so in B and C every appearance also
-asks whether the clothes came from the text or from the portrait. A face reaches the card once, under the hash of its
-own bytes. The sheet name picks the file and goes no further: the rule that no name reaches the image model is
-unchanged. Portraits pass through `stripPngMetadata` on the way up, as every picture here passes through it on the
-way down.
+The run pins the recipe, that is the clothes, the style, the action, the canvas and the text-to-image graph's hash,
+so a resume under another one is refused. No expression is asked for. A face told to be calm argues with a look line
+that says grim, and a permanent bearing is the look's to carry. No frame dresses anybody as the portraits are
+dressed, so in B and C every appearance also asks whether the clothes came from the text or from the portrait. A face
+reaches the card once, under the hash of its own bytes. The sheet name picks the file and goes no further: the rule
+that no name reaches the image model is unchanged. Portraits pass through `stripPngMetadata` on the way up, as every
+picture here passes through it on the way down.
+
+**All six portraits, or no smoke.** Before the smoke the tool checks that all six people have a portrait on the
+portrait canvas, that none failed, and that every frame binds exactly the people `IDENTITY_BINDING` in the set names,
+in that order, which fixes each frame's number of references. A portrait missing or failed ends the measurement
+there, incomplete: no portrait is drawn again, retried or chosen among. Without that check the binding below would
+quietly give the two look-alikes no face and much of C its look back.
 
 **One binding plan, and slot N is person N of the prompt.** Nothing else says whose face is whose. The encoder's
 tokenizer writes its own `<image1> <image2> …` block in front of the prompt. The prompt names people in the order of
@@ -451,41 +448,57 @@ would move every later face up a slot and put a portrait against another person'
 keep their look in every arm, and `references` in the index counts what was actually bound. C's "image N" is the
 slot's number. The swapped frames test whether the model follows that number rather than the order alone.
 
-**One canvas.** All three arms are drawn at 1280x704, the size the portraits reach the encoder at (above). Arm A runs
-the edit graph with every reference slot taken out: the text-to-image graph's own encode node, given no picture, on
-the same canvas. So one run directory holds one graph and one canvas.
+**One canvas, one set of pins.** All three arms, and the control, are drawn at 1280x704, and one run directory holds
+one graph and one canvas. The tool refuses portraits of two sizes and a resume under another canvas, other arms,
+another prompts file or other pins. It checks all of that before it writes anything, so a refused resume leaves the
+run directory byte for byte as it was. A run is pinned to:
 
-The tool refuses portraits of two sizes, a `--size` other than theirs, and a resume under another canvas, other arms
-or other pins. A run is pinned to:
-
-- the files of the manifest;
-- the graph's cache device and resize;
+- what the card was verified to run: the ComfyUI revision and the SHA256 of each Qwen file, from the bootstrap's own
+  record (the runbook below). A `--checkpoint` that record does not list is pinned as `unverified <name>`, never
+  under the standard transformer's hash;
+- the portraits' recipe;
+- the graph's cache device and resize, the canvas, and the size a portrait reaches the encoder at;
 - the set, the portraits and the seeds;
-- what the server says of itself: ComfyUI, PyTorch and the card.
+- what the server says of itself: ComfyUI, PyTorch and the card. A server that does not say all three on
+  `/system_stats` is refused, never read as saying nothing.
 
-Smaller portraits are no cheaper way to draw the same frame. Under `resolution: 0` a portrait 640 wide sets a canvas
-640 wide, and a smaller picture is not a faster reference. Smaller portraits and a waist-up crop are each a short
-run of their own after this one, with their own arm A. They are never a full factorial of sizes, crops and costumes.
+Smaller portraits and a waist-up crop are each a short run of their own after this one, with their own arm A. They
+are never a full factorial of sizes, crops and costumes.
 
 **What each frame records:**
 
 - the reference sizes after the resize, the number of portraits bound, the arm and the seed;
 - the time from submit to file, with the upload apart from it, and the encode and sampling phases the websocket
-  reports;
-- whether the job loaded its models (`cold`), and whether it was its arm's first;
-- the video memory sampled while the job ran, counting torch's reserved pool as occupied;
-- the system RAM;
-- the partial loads ComfyUI's own log reports. The cache node on `auto` moves what does not fit into RAM rather than
-  failing, so a run without an OOM may still have spilled.
+  reports. The server tells a job's start only to a socket that is connected when it starts, so the job is sent once
+  the socket is open, two seconds at most. Here a socket that does not open stops the run before the job is sent, as
+  a server that refuses a job does, and a resume starts from that cell; the bot's own pictures fall back to the polls
+  as before;
+- `loaderCacheMiss`: whether any loader node of the job ran rather than being answered from ComfyUI's node cache
+  (`execution_cached`). It proves nothing about weights moving to the card, and a model the server offloads and
+  brings back inside a job stays inside that job's time;
+- `first`: whether the frame is its arm's first. A **warm** frame has no loader cache miss and is not its arm's first;
+- the video memory sampled every half second while the job ran, counting torch's reserved pool as occupied: a
+  sampled high-water mark, which the true peak can exceed between two samples. Counting the pool narrows that gap
+  and does not close it;
+- the system RAM, which counts every process on the machine and not ComfyUI alone;
+- `partialModelLoadEvents`: the partial loads ComfyUI's own log reports during the job. The cache node on `auto`
+  moves what does not fit into RAM rather than failing, so a run without an OOM may still have spilled; a count of 0
+  does not prove the models stayed on the card.
 
 The portrait run, and each arm's first frame, are shown apart from the warm frames. The prompt is counted in text
 tokens as the encoder reads it, or in characters when `tokenizers/` is missing. C's shorter text is fewer words for
 the encoder to read, and no promise of less compute: a reference adds a vision pass and a longer sequence.
 
-**Judging.** `bundles` writes one bundle per arm and seed under `review/`. A transition compares two frames of one
-arm, and a session shown the arms side by side would judge the arms. Bundles and pictures are named by hashes, and
-the key stays in `keys/`. Every frame is shown with `frame_text`, the text with all its looks, whichever arm drew it,
-because arm C's own text would name the arm.
+**The text-to-image control.** Arm A is not the bot, so the graph the bot draws with is drawn too, on the same
+1280x704 canvas: frames 1, 2 and 3 at the first seed, picked before the run by the rule the arms follow, so one first
+frame and two after it. It is drawn once, after the main set, with nothing chosen among. The report gives it as cost
+only, outside every gate: its first frame, and its warm median against A's warm frames of the same scenes. The bot's
+own 1280x720 is skipped: one more canvas for one more number.
+
+**Judging.** `bundles` writes one bundle per arm and seed under `review/`, and only for a run that has a verdict
+(below). A transition compares two frames of one arm, and a session shown the arms side by side would judge the arms.
+Bundles and pictures are named by hashes, and the key stays in `keys/`. Every frame is shown with `frame_text`, the
+text with all its looks, whichever arm drew it, because arm C's own text would name the arm.
 
 The bundle's `checks.json` is the sheet the gates are counted from:
 
@@ -504,61 +517,150 @@ read against them.
 `image:blind` now deals the arms as contenders of their own. It leaves out any question whose pictures were drawn on
 two canvases, and counts them. The identity run is judged by its own bundles all the same.
 
-**The gates, fixed before the paid run.** These are Astra's engineering gates of 2026-09-24, as `report` counts them.
-They are thresholds for the next decision, not a statistical proof: a small experiment is a basis for the next step,
-not a promise of universal identity. Each gate is counted for B and for C against A, over all the arm's bundles. A
-`no` and an `unsure` both count against the picture. An arm with an item unanswered is unscored, never passed.
+**The gates, fixed before the paid run.** These are Astra's engineering gates of 2026-09-24, as `report` counts them;
+their numbers are one table, `CRITERIA` in [image-identity.ts](../local/image-identity.ts). They are thresholds for
+the next decision, not a statistical proof. The 26 transitions of an arm are repeated observations of six people, not
+26 independent characters. A transition checks that two frames of one arm agree, and the figure against the look; it
+does not compare a face with its portrait. So a pass proves no exact transfer of a face from reference to scene, and
+a small experiment promises no identity beyond its own set. Each gate is counted for B and for C against A, over all
+the arm's bundles. A `no` and an `unsure` both count against the picture. An arm with an item unanswered is
+unscored, never passed.
 
 1. **Recognition.** At least 20 transitions; the set gives 13 per seed, 26 per arm. The face is kept (`face`) in at
    least 90% of them, and the figure (`figure`) in at least 90%. No picture mixes two people up (`apart`).
 2. **Against A.** The share of transitions that keep both face and figure is at least 15 points above A's. If A is
    at 90% or above, B cannot pass. C passes then only if all three hold: it is at most 5 points below A, its median
    prompt is shorter than A's, and it has no more action errors than A.
-3. **Clothes.** The frame's clothes are right in at least 90% of the appearances of sheet people. No picture has a
-   swap, and there are no more action errors than in A. The story's own changes of clothes, in frames 1, 4 and 6,
-   are shown apart and not gated alone: there are eight such appearances per arm, and one miss in eight is already
-   under 90%.
-4. **Time.** The frames counted are those drawn warm in both the arm and A: the same frame and seed, and neither
-   cold nor its arm's first. Over them, the arm's median time is at most 1.5× A's, and its slowest at most 2× A's
-   slowest. The portraits and the first frames are shown, not counted here.
+3. **Clothes.** The frames' own changes of clothes are Бран's in frame 1, Ива's in frame 4, and Лада's and Вера's in
+   frame 6: eight appearances per arm over the two seeds. At least 90% of them show the clothes the frame gives,
+   which on this set means all eight, so 7 of 8 fails. No case where a person's identity and clothes carried over to
+   another person (`swap`), and no more action errors than A. Every appearance that differs from the neutral
+   portrait, changed by the story or not, is shown beside the gate as a number of its own. It gates nothing and does
+   not dilute the explicit changes.
+4. **Time.** The frames counted are the arm's warm frames, each matched with A's warm frame of the same scene and
+   seed. Over them, the arm's median time is at most 1.5× A's, and its slowest at most 2× A's slowest. The portraits,
+   the first frames and the control are shown, not counted here; with no matched frame the gate is unmeasured.
 5. **Memory.** No OOM. Every frame of four references is drawn, sampled while it ran, and leaves at least 2 GiB of
-   the card free at its peak. A frame of four that failed or was never sampled fails the gate. RAM and partial loads
-   are shown, not gated: what they cost is time, and gate 4 counts time.
+   the card free at its sampled peak. A frame of four that failed or was never sampled fails the gate. RAM and partial
+   loads are shown, not gated: what they cost is time, and gate 4 counts time.
 
-An arm passes with all five. A run that did not draw every cell is **incomplete**, whatever its gates say. That
-covers a run cut short by the hour and one stopped by an error.
+**Complete, or no verdict.** An arm passes with all five, and only in a complete run. Complete means all 48 cells
+drawn on the right geometry, with no failure, no stop and no error. The right geometry is the file at 1280x704, as
+many references as the set binds for its frame (none in A), and each of them at 704x1280. A failed cell stays in the
+record as the cell's result, and the set it belongs to is **incomplete**: no gates, no verdict and no bundles,
+whatever the surviving cells would say. A run whose smoke or geometry failed gets no verdict either, and neither does
+one the end of the rental cut short.
 
-**Timebox: one hour of the session, and it ends on the clock rather than on a result.** The card is rented only with
-the owner's explicit consent and under [the owner's rules](gpu.md#while-the-cards-are-paid-for). The hour runs in
-this order:
+**The smoke** is the frame with one portrait and the frame with four, at the first seed, in all three arms. It passes
+only if all of these hold:
 
-1. **The download**: twelve minutes, beside the other lane's.
-2. **The portraits.**
-3. **The smoke**: the frame with one portrait, then the frame with four, at the first seed, in all three arms.
-4. **The main set**: `--minutes` is what is left of the hour, and not more.
+- all six cells are drawn and none failed;
+- they are on the right geometry;
+- they are within the card's memory, by gate 5's rule on its two frames of four;
+- they give what gate 4 needs: every picture's phases and loader answer heard on the socket, and a warm frame of B
+  and of C matched in A.
 
-If the smoke fails on memory or on geometry, the measurement ends there and the card is let go. The tool refuses the
-main set in that directory until the smoke has passed. A fix, such as the cache node off `auto` or smaller
-portraits, is another run with its own pins.
+Anything less, and the tool refuses the main set in that directory: the measurement ends there and the card is let
+go. A fix, such as the cache node off `auto` or smaller portraits, is another run with its own pins.
 
-A run the hour cuts short is recorded as incomplete, and the rental is not extended to finish it. The directory
-resumes on a later rental only under the same pins, the card's included. The bundles, the reading and the report need
-no card.
+**One hour, ended on the wall clock.** The card is rented only with the owner's explicit consent and under
+[the owner's rules](gpu.md#while-the-cards-are-paid-for), for one hour. `gpu/rent.mjs --hours 1` sets the guard of
+[trial-onstart.sh](../gpu/trial-onstart.sh), which deletes the machine then, whatever is running, and which nothing
+extends. The harness takes an absolute end, `--until`, set five minutes before the guard's deadline as read off the
+card. No stage waits for a job past it. A job the end cuts is nobody's failure: its cell stays undrawn, and the run
+stops, incomplete. Once the smoke has timed its frames, no cell is submitted that cannot end by `--until`. A cell's
+time is taken from the smoke's slowest frames of one and of four portraits, on a straight line between them, plus a
+quarter and three seconds. The main set, and then the control, is priced whole that way before it begins. One that
+cannot end by `--until` is not begun, and the run ends incomplete rather than half-drawn. The rental is never
+extended.
+
+What the hour holds, counted from the guard's start, at the floor the rent filter asks of an offer
+(`inet_down` ≥ 300 Mbit/s, [rent-plan.ts](../local/rent-plan.ts)) and at the bootstrap's own floor of 200:
+
+| | minutes at 300 Mbit/s | at 200 Mbit/s | |
+|---|---|---|---|
+| ssh in, the scripts copied | 2 | 2 | not measured |
+| Qwen's three files, 17.28 GB, with `SIMPLE_CHAT_IMAGE_QWEN=only` | 7.7 | 11.5 | |
+| torch and its wheels, about 5 GB, on the same link | 2.2 | 3.3 | rent-plan.ts's figure |
+| the install: the ComfyUI checkout, pip | - | - | while the files download; any time beyond them is not measured |
+| the verification, the server, the tunnel and the card's record | 2 | 2 | not measured |
+| 57 cells: 6 portraits, the smoke's 6, the main set's 42, the control's 3 | 41 | 36 | what is left |
+| the margin before the guard: the last report, "we're done" | 5 | 5 | `--until` |
+
+That is about 43 seconds a cell at 300 Mbit/s and 38 at 200, with the first loads of the models inside it. Whether a
+25-step frame of four portraits fits that is the first thing the smoke answers. If it does not, the main set is
+refused on the smoke's own numbers. The hour has then bought the smoke's times, which say what a longer rental would
+need, and that rental is the owner's decision, never an extension.
+
+The runbook, in its order:
+
+```sh
+npm run image:identity -- dry-run    # before renting: all of it against a fake ComfyUI, with made-up answers
+npm run image:identity -- set        # the set and the portraits' prompts, in illustrations/identity
+SIMPLE_CHAT_RENT_DRY_RUN=1 node --env-file-if-exists=.env.gpu gpu/rent.mjs --lane pictures --hours 1
+node --env-file-if-exists=.env.gpu gpu/rent.mjs --lane pictures --hours 1    # with the owner's consent
+ssh simple-chat-vast 'mkdir -p /workspace/simple-chat/gpu'
+tar -cf - -C gpu . | ssh simple-chat-vast 'tar -xf - -C /workspace/simple-chat/gpu'
+ssh simple-chat-vast 'SIMPLE_CHAT_IMAGE_QWEN=only bash /workspace/simple-chat/gpu/image-bootstrap.sh'
+# The server on the machine's one card, and the tunnel to it, each in a terminal of its own:
+ssh -t simple-chat-vast \
+  'SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 bash /workspace/simple-chat/gpu/image-serve.sh'
+bash gpu/tunnel.sh --pictures-only simple-chat-vast
+ssh simple-chat-vast cat /workspace/simple-chat-gpu/image-verified.txt > illustrations/identity/card.txt
+end=$(( $(ssh simple-chat-vast cat /root/.simple-chat-trial-deadline) - 300 ))
+npm run image:identity -- portraits --until "$end"
+npm run image:identity -- draw --smoke --until "$end"
+npm run image:identity -- report
+npm run image:identity -- draw --until "$end"    # the main set, then the control
+npm run image:identity -- report
+ssh simple-chat-vast 'date +%s > /root/.simple-chat-trial-deadline'    # we're done: the guard deletes the machine
+npm run image:identity -- bundles    # no card needed from here on
+npm run image:identity -- report     # once answers/ holds every bundle
+```
+
+`image-verified.txt` is what the bootstrap wrote once every file was verified: the ComfyUI revision it checked out
+and each file's SHA256 as computed on the box. Every drawing stage refuses to start without it, or with a record that
+differs from the manifest, and pins the run to it. "We're done" writes the present time into the guard's deadline.
+The guard reads that file again every ten seconds and takes an earlier time, never a later one; check in Vast that
+the instance is gone. Everything lives in one directory, `illustrations/identity` unless `--dir` names another:
+
+- `set/` and `portrait-prompts/`, the prompts;
+- `card.txt`, the card's record;
+- `portraits/` and `references.json`;
+- `run/`, the arms, with `review/`, `keys/` and `answers/`;
+- `control/`.
+
+The graphs are the repository's `gpu/image-workflow-qwen.json` and `gpu/image-workflow-qwen-edit.json`. They have one
+source and one set of names, so the repository's copy and the box's are the same file.
+
+`dry-run` goes through all of it against [fake-comfy.ts](../local/fake-comfy.ts), with a socket that opens late on
+purpose and made-up answers. On the way it goes through every refusal the paid run relies on:
+
+- the main set before the smoke;
+- two lost portraits, and after them the smoke and a redraw refused;
+- a smoke that fails at one portrait;
+- a resume with another set, and the run byte for byte unchanged after it;
+- a main set that cannot end in time, and a job the end cuts;
+- bundles of a run with no verdict.
+
+Its made-up answers put C at 7 of 8 on gate 3 and B at 8 of 8, so its verdict is "B passes, C fails". The fake keeps
+the contract the harness talks to, with delays, failures and telemetry set by hand, and models no card.
 
 **Not verified without a card**, in the order it would bite:
 
 - that the int8 transformer and the int8 encoder load through `UNETLoader` with `weight_dtype: default` and
   `CLIPLoader` with `type: qwen_image` (read from the pinned source, never run);
-- how long one 25-step frame takes, which decides whether 48 frames fit the hour at all;
-- whether four references of 1280x704, plus the encoder, plus the transformer stay inside 32 GB, and how much the
+- that `SIMPLE_CHAT_IMAGE_QWEN=only` prepares and serves a box. It was checked dry: the bootstrap's `--dry-run`, its
+  verification step on a synthetic file, and image-serve.sh on a synthetic box;
+- how long one 25-step frame takes, which decides whether 57 cells fit the hour at all;
+- whether four references of 704x1280, plus the encoder, plus the transformer stay inside 32 GB, and how much the
   cache node on `auto` spills to RAM;
-- whether a frame of A on the edit graph costs what the text-to-image graph's frame costs;
+- whether an upright portrait on a wide canvas keeps a person as well as a wide portrait would;
+- what a frame of the text-to-image graph costs against A's, which the control prices;
 - whether the websocket messages, `/system_stats` and the log ring are what [fake-comfy.ts](../local/fake-comfy.ts)
-  modelled from the pinned source.
+  says they are, from the pinned source.
 
-Memory is polled every half second, so the sampler's true peak can fall between two samples. Counting the reserved
-pool as occupied narrows that gap and does not close it. The fake's numbers are made up and say nothing about the
-card.
+The fake's numbers are made up and say nothing about the card.
 
 ## Two constraints that do not bend
 
