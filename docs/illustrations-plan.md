@@ -593,3 +593,28 @@ illustrator's deps), its tokens as the text encoder reads them, with the style l
 prompt less the count of the description before the line, so that the token where the two meet is the line's. The
 `picture` and `picture_sample` rows carry the same numbers as `promptCharacters`, `pictureTokens` and `styleTokens`.
 Until the tokenizer is wired in, the note and the rows give characters alone.
+
+## A variant from the reader's own prompt (2026-09-24)
+
+The owner asked for a way to edit the prompt of the picture after a scene, for tests. The note under a scene's own
+picture now has a button that asks for a whole prompt: the reader copies the prompt from the note, edits it and sends
+it, and the bot draws it as it came. Nothing is assembled, no name or age is cut out, no style line is added. The
+screens are in [telegram-ui.md](telegram-ui.md#picture-styles).
+
+Two prompts compared mean nothing if anything else differs, so a variant is drawn by the recipe of the picture it
+varies, never by the configuration of the day. The photo's `sentPictures` record keeps the seed, a hash of the graph
+as the bot read it, the checkpoint's file name, and the size, steps, cfg, sampler and scheduler it was drawn with
+(`PictureRecipe` in `lib/library.ts`). The prompt is kept neither there nor while the reader writes it. A picture
+drawn with a graph or a checkpoint the bot no longer has is refused with the reason, rather than drawn with another.
+There is no choice of seed: a new seed would mix what the words do with what the noise does. Samples get no button
+and no recipe, because this first version answers the request about the picture after a scene.
+
+The variant goes under the same scene as a photo of its own. The note under it counts the tokens of that prompt and
+gives no style share, which nobody knows for a prompt written whole. It is recorded with the same recipe, so its own
+button varies it again, and it leaves the chat with the scene. The reader's permission and the picture are checked
+when the button is pressed, when the prompt arrives, before the drawing and before the photo goes out. A variant asks
+the language model nothing and holds none of its card, and it changes nothing of the story: not the sheet, the
+clothes or the frame kept for samples. The reader's next move stops it, and a failure is told once and never tried
+again. The row is `picture_variant`, with `edited: true` beside the counts `picture` has and no word of the prompt.
+A prompt may have 4000 characters (`PROMPT_CHARS` in `local/picture-style.ts`): at five characters for every escaped
+`&`, the note still fits the 32768 of a rich message.
