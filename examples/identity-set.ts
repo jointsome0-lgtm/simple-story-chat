@@ -12,7 +12,9 @@
 //     eyes, a mole and freckles), together in frame 3 and swapped in frame 6;
 //   - one, two and four portraits in a frame, and in frame 7 a ferryman nobody drew a portrait of, standing between
 //     the two women: the binding stops at him, so Лада after him keeps her look in every arm;
-//   - clothes the story changes (frames 1, 4 and 6), a new pose and a new place in every frame.
+//   - clothes the story changes (frames 1, 4 and 6), a new pose and a new place in every frame. No frame dresses anybody
+//     as the portraits are dressed (local/image-portraits.ts, a white tank top and dark grey trousers), so a change that
+//     shows is the text's and not the portrait's.
 // Everything is synthetic and safe to send to a hosted model; nothing here is adult.
 import type { Character, Description } from '../local/illustrate.ts';
 
@@ -22,6 +24,16 @@ export const IDENTITY_SEEDS = [7, 11];
 // The smoke the paid run starts with: the frame with one portrait and a frame with four, which is the most memory
 // the set asks of the card. A failure of memory or of geometry there stops the measurement before the main set.
 export const IDENTITY_SMOKE = ['troupe-1', 'troupe-2'];
+// The text-to-image control, drawn once after the main set at the first seed and counted as cost only: one first
+// frame and two after it, by the rule the arms follow, where an arm's first frame is its first cell.
+export const IDENTITY_CONTROL = ['troupe-1', 'troupe-2', 'troupe-3'];
+// Whose portrait each frame sends, in slot order, once all six are drawn: what local/image-batch.ts `bindingPlan` has
+// to find, checked before the smoke. Frame 7 binds Вера alone, because the ferryman stops the binding.
+export const IDENTITY_BINDING: Record<string, string[]> = {
+  'troupe-1': ['Бран'], 'troupe-2': ['Бран', 'Ива', 'Тимофей', 'Кузьма'], 'troupe-3': ['Вера', 'Лада'],
+  'troupe-4': ['Ива', 'Бран'], 'troupe-5': ['Кузьма', 'Тимофей'], 'troupe-6': ['Лада', 'Вера'], 'troupe-7': ['Вера'],
+  'troupe-8': ['Вера', 'Кузьма', 'Лада', 'Тимофей'],
+};
 
 // The sheet as local/illustrate.ts shapes one: the look is the body, the face and the permanent bearing, the outfit
 // what the person wears unless a frame says otherwise.
@@ -49,7 +61,7 @@ export const identityFrames: IdentityFrame[] = [
     description: { shot: 'Medium-wide shot at eye level, three-quarter view', setting: 'A snowy inn yard with a woodpile and a stone well, snow on the roofs',
       moment: 'The man is about to split a log on the chopping block',
       people: [cast('Бран', 'raises an axe above his head with both hands, a log standing on the chopping block in front of him',
-        'wearing a white linen shirt with rolled-up sleeves, dark wool trousers and heavy boots')],
+        'wearing a faded blue linen shirt with rolled-up sleeves, brown wool trousers and heavy boots')],
       objects: 'A pile of split logs beside the chopping block', props: 'The man holds the only axe with both hands.',
       light: 'Cold morning light after a snowstorm' } },
   { id: 'troupe-2', scene: 'На рассвете труппа грузит фургон. Бран поднимает сундук с костюмами, Ива сидит на козлах с вожжами, Тимофей подаёт ей свёрнутый задник, а Кузьма стоит рядом с ним и сверяет список.',
