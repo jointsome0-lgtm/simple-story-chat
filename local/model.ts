@@ -17,9 +17,17 @@ export type ModelRequest = {
   system: string; messages: ChatMessage[]; maxOutputTokens: number;
   purpose?: 'memory'; outputSchema?: object; estimatedInputTokens?: number; trustEstimate?: boolean;
 };
+// Whose call a shared model's queue (local/scheduler.ts) runs. `foreground`: a person in Telegram. `agent`: a turn of
+// the agent interface (local/agent-api.ts), real work that fills the GPU while people read and, once started, is not
+// cut off by them. `background`: disposable probes that yield to anyone.
+export type Priority = 'foreground' | 'agent' | 'background';
 // `onWait`: a shared model's queue reports how many calls are ahead of this one, each time the number changes.
 // `onStart`: the call has left a shared model's queue and runs.
-export type Controls = { signal?: AbortSignal; onWait?: (ahead: number) => void; onStart?: () => void };
+// `priority` and `holder`: whose call it is, as that queue passes them on (TurnOptions `holder`); a direct call has
+// neither. Only a provider that serves kinds of work apart reads them (local/serving.ts).
+export type Controls = {
+  signal?: AbortSignal; onWait?: (ahead: number) => void; onStart?: () => void; priority?: Priority; holder?: string;
+};
 // `slot`: the llama.cpp slot a pooled scheduler places the call in (`id_slot`), so its cache stays with its owner.
 export type GenerateControls = Controls & {
   onText?: (delta: string) => unknown; inputLimitTokens?: number; onQueued?: () => void; slot?: number;

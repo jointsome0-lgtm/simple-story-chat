@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import type { SchedulerOptions } from './scheduler.ts';
 import { createScheduler } from './scheduler.ts';
 import { createGpu } from './gpu.ts';
+import type { Controls } from './model.ts';
 const turn = () => new Promise(resolve => setImmediate(resolve));
 function fixture(t: TestContext, options: SchedulerOptions = {}) {
   const calls: { name: string; finish: () => void; signal: AbortSignal }[] = [];
@@ -121,6 +122,33 @@ test('a provider without a check gets none from the scheduler', async t => {
   const server = createScheduler({ generate: async () => 'done', check: async () => ({ model: 'test-model' }) });
   t.after(() => server.close());
   assert.deepEqual(await server.foreground.check!(), { model: 'test-model' });
+});
+// A provider that serves kinds of work apart (local/serving.ts) learns whose each call is, from the queue it came
+// through, in one slot as in a pool, where the scheduler counts tokens on its own.
+test('the provider hears the priority and holder of every call, and a caller cannot name its own', async t => {
+  for (const slots of [1, 2]) {
+    const seen: string[] = [];
+    const heard = (request: string, { priority, holder }: Controls) => { seen.push(`${request} ${priority} ${holder}`); };
+    const scheduler = createScheduler({
+      generate: async (request: string, controls: Controls) => { heard(request, controls); return request; },
+      countInput: async (request: string, controls: Controls) => { heard(`count ${request}`, controls); return 100; },
+    }, { quietMs: 0, pollMs: 100000, slots, poolTokens: 100000, sharedCache: true, outputTokens: () => 100 });
+    t.after(() => scheduler.close());
+    const reader = scheduler.foreground.openTurn({ holder: 'tester' });
+    await reader.countInput!('scene');
+    await reader.generate('scene', { priority: 'background', holder: 'someone else' });
+    reader.end();
+    await scheduler.foreground.generate('unheld');
+    const agent = scheduler.agent.openTurn();
+    await agent.generate('agent');
+    agent.end();
+    await scheduler.background.generate('probe');
+    // A shared cache sizes every call first, with the same word on whose it is.
+    const sized = (request: string, whose: string) => slots > 1 ? [`count ${request} ${whose}`] : [];
+    assert.deepEqual(seen, ['count scene foreground tester', ...sized('scene', 'foreground tester'), 'scene foreground tester',
+      ...sized('unheld', 'foreground undefined'), 'unheld foreground undefined', ...sized('agent', 'agent undefined'), 'agent agent undefined',
+      ...sized('probe', 'background undefined'), 'probe background undefined'], `${slots} slots`);
+  }
 });
 test('an agent call waits for people and the quiet window, then runs to its end while a person waits', async t => {
   let time = 0;

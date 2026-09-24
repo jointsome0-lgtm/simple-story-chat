@@ -1,10 +1,7 @@
 import type { Log } from './model-error.ts';
 import { ModelError } from './model-error.ts';
-import type { Controls, GenerateControls, Provider, TurnOptions } from './model.ts';
+import type { Controls, GenerateControls, Priority, Provider, TurnOptions } from './model.ts';
 
-// `foreground`: a person in Telegram. `agent`: a turn of the agent interface (local/agent-api.ts), real work that fills
-// the GPU while people read and, once started, is not cut off by them. `background`: disposable probes that yield to anyone.
-type Priority = 'foreground' | 'agent' | 'background';
 // Reasons the scheduler aborts a running call with. The call rejects with the reason, whatever the provider throws.
 type AbortCode = 'cancelled' | 'background_preempted' | 'background_timeout' | 'background_unavailable';
 // Methods run in a slot always receive its abort signal; a pool also names the slot.
@@ -86,6 +83,9 @@ export function createScheduler<Request, Result>(provider: {
   let closed = false;
   let lastForeground = now();
   const fail = (code: AbortCode | 'queue_full') => new ModelError(code);
+  // Whose call the provider runs (local/model.ts Controls). It goes after the caller's own controls, so a caller
+  // cannot name another priority or holder than the queue it called.
+  const whose = (priority: Priority, turn: Turn | null) => ({ priority, holder: turn?.holder });
   const laneOf = (turn: Turn | null) => turn ? lanes.find(lane => lane.reserved?.turn === turn) : undefined;
   const free = (lane: Lane<Request>) => !lane.active && !lane.reserved;
   // The one slot a prefix-sharing turn may use: the slot that holds its holder's own last request. Anywhere else it
@@ -171,7 +171,7 @@ export function createScheduler<Request, Result>(provider: {
     if (turn?.ended) return Promise.reject(fail(turn.ended));
     if (counting) {
       try { controls.onStart?.(); } catch {}
-      return provider.countInput!(request, { ...controls, signal: controls.signal ?? new AbortController().signal });
+      return provider.countInput!(request, { ...controls, signal: controls.signal ?? new AbortController().signal, ...whose(priority, turn) });
     }
     return new Promise((resolve, reject) => {
       const item: Item<Request> = { priority, method, request, controls, resolve, reject,
@@ -188,7 +188,7 @@ export function createScheduler<Request, Result>(provider: {
       // A shared cache admits a call by its size, which the server counts first.
       if (admits) {
         if (!provider.countInput) item.inputTokens = 0;
-        else provider.countInput(request, { signal: item.controller.signal }).then(tokens => {
+        else provider.countInput(request, { signal: item.controller.signal, ...whose(priority, turn) }).then(tokens => {
           item.inputTokens = tokens;
           pump();
         }, error => { if (queue.includes(item)) { rejectQueued(item, error); pump(); } });
@@ -370,7 +370,7 @@ export function createScheduler<Request, Result>(provider: {
         try { item.controls.onStart?.(); } catch {}
         // countInput is queued only when the provider has it.
         const result = await provider[item.method]!(item.request, { ...item.controls, signal: item.controller.signal,
-          ...(pool ? { slot: lane.id } : {}) });
+          ...whose(item.priority, item.turn), ...(pool ? { slot: lane.id } : {}) });
         item.controller.signal.throwIfAborted();
         item.resolve(result);
         if (item.priority !== 'foreground') log(`${item.priority}_completed`);
