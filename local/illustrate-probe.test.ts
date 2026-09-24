@@ -109,6 +109,22 @@ test('the sheet line is the only look of a person the sheet covers, and its age 
   assert.doesNotMatch(prompt, /\d/);
 });
 
+// Clothes change with the story, so they are the frame's: the sheet's outfit is only what a person of the sheet wears
+// when the frame gives them none. A full stop at the end of any part of a person would break the clause in two.
+test('a person wears the clothes of the frame, and the sheet\'s outfit only when the frame gives none', () => {
+  const dressed: Character[] = [{ name: 'Элин', look: 'A lean woman with short ash-grey hair.', outfit: 'wearing a grey wool coat.' }];
+  const person = { who: 'Элин', look: '', state: '', action: 'leans her back against the door' };
+  const changed = assemblePrompt(frame({ people: [{ ...person, clothes: 'wearing a red silk dress.' }] }), dressed).prompt;
+  assert.match(changed, /A lean woman with short ash-grey hair, wearing a red silk dress: leans her back against the door\. /);
+  assert.doesNotMatch(changed, /grey wool coat/);
+  const left = assemblePrompt(frame({ people: [{ ...person, clothes: ' ' }] }), dressed).prompt;
+  assert.match(left, /short ash-grey hair, wearing a grey wool coat: leans/);
+  // A sheet from before `outfit` gives nothing to fall back on, and a stranger's clothes stand after their own look.
+  assert.match(assemblePrompt(frame({ people: [person] }), [{ name: 'Элин', look: 'A lean woman' }]).prompt, /A lean woman: leans/);
+  const stranger = assemblePrompt(frame({ people: [{ who: 'salt worker', look: 'An old man.', clothes: 'wearing rags', state: 'soaked.', action: 'waits' }] }), dressed);
+  assert.match(stranger.prompt, /An old man, wearing rags, soaked: waits\. /);
+});
+
 test('the assembled prompt keeps the agreed order and ends with our one style sentence', () => {
   const { prompt } = assemblePrompt(frame(), sheet);
   const order = ['Medium wide three-quarter shot', 'A narrow stone passage', 'Two figures stand at a closed side door',

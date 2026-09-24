@@ -119,7 +119,7 @@ async function main(args: string[]) {
       for (const scene of todo) {
         const node = scenes[scene.index];
         if (!node) throw new Error(`No scene ${scene.index} in ${scenario}`);
-        const reply = await askJson(provider, frameRequest({ system, messages: messages(node.id) }, sheet.map(character => character.name)));
+        const reply = await askJson(provider, frameRequest({ system, messages: messages(node.id) }, sheet));
         const description = reply.value as unknown as Description;
         const { prompt, namesStripped, fromSheet, withoutLook } = assemblePrompt(description, sheet);
         cases.push({ id: scene.id, scenario, index: scene.index, scene: node.text, sheet, description, prompt, namesStripped, fromSheet, withoutLook });

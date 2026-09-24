@@ -28,12 +28,12 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { recordPicture } from '../lib/library.ts';
-import type { Library, SceneNode } from '../lib/library.ts';
+import type { Library, SceneNode, Story } from '../lib/library.ts';
 import type { ImageConfig } from './config.ts';
 import { estimateTokens, requestStamp, sameContext } from './context.ts';
 import { SAMPLER_DEFAULTS, apiGraph, applyToWorkflow, drawOne, latentSizeOf, previewOnly, samplerSettingsOf, settled } from './image-batch.ts';
 import type { Comfy, Graph } from './image-batch.ts';
-import { INSTRUCTION_TOKENS, STYLE, askJson, assemblePrompt, frameRequest, sheetOf, sheetRequest } from './illustrate.ts';
+import { STYLE, askJson, assemblePrompt, frameRequest, matchSheet, sheetOf, sheetRequest, sheetWithoutOutfits } from './illustrate.ts';
 import type { Character, Description, Excerpt } from './illustrate.ts';
 import type { Log } from './model-error.ts';
 import { errorCode, safeErrorDetails } from './model-error.ts';
@@ -84,6 +84,37 @@ const GAVE_WAY = ['background_preempted', 'background_unavailable', 'background_
 // ends the picture the way their next message does, without a word; the row keeps this code, so that the two can
 // still be told apart. `details` are the counts of a photo that had to be taken back (`sendPhoto`).
 const sceneGone = (details?: object) => Object.assign(new Error('scene_gone'), { code: 'scene_gone', ...details });
+
+// The sheet of a story as one frame at `nodeId` starts from: each person in the clothes of the nearest picture above
+// it in its own line of the story — the scene itself first, when it was described before — or, with no such
+// picture, in the sheet's own outfit. A branch walks its own parents, so a change of clothes in one line of the story
+// never reaches another.
+export function wornAt(story: Story, nodeId: string, sheet: Character[]): Character[] {
+  const worn = new Map<string, string>();
+  const seen = new Set<string>();
+  for (let id: string | null = nodeId; id && !seen.has(id) && worn.size < sheet.length; id = story.nodes[id]?.parent ?? null) {
+    seen.add(id);
+    for (const [name, clothes] of Object.entries(story.nodes[id]?.clothes ?? {}))
+      if (!worn.has(name) && typeof clothes === 'string' && clothes.trim()) worn.set(name, clothes);
+  }
+  return sheet.map(character => ({ ...character, outfit: worn.get(character.name) ?? character.outfit ?? '' }));
+}
+
+// What a frame says its people of the sheet wear, by sheet name, and how many of them it dresses otherwise than
+// they started. A person the frame left without clothes, or named twice, keeps what they had.
+export function clothesOf(description: Description, worn: Character[]): { clothes: Record<string, string>; changed: number } {
+  const names = worn.map(character => character.name);
+  const clothes: Record<string, string> = {};
+  let changed = 0;
+  for (const person of description.people ?? []) {
+    const name = matchSheet(person?.who ?? '', names);
+    const value = typeof person?.clothes === 'string' ? person.clothes.trim() : '';
+    if (name === null || !value || name in clothes) continue;
+    clothes[name] = value;
+    if (value !== (worn.find(character => character.name === name)?.outfit ?? '').trim()) changed++;
+  }
+  return { clothes, changed };
+}
 
 // One seed per story, from the story's id. Free sampling redraws the world from nothing in every scene; a seed that
 // stays put holds a place steadier between visits, and costs nothing (the plan, "What survives without reference
@@ -153,7 +184,8 @@ export function createIllustrator(config: ImageConfig, deps: {
   // about a second to the card each; the server's count while it answers still decides. Near the limit, or with no
   // anchor, the server counts first as before. The margin needs no allowance for dense scripts: the scene is counted
   // by the server, and the Russian instruction is counted a third or more over.
-  const trusted = (model: Provider, request: ModelRequest, anchor: number | null, instruction: number) => {
+  const trusted = (model: Provider, request: ModelRequest, anchor: number | null) => {
+    const instruction = estimateTokens(request.messages.at(-1)?.content ?? '');
     if (anchor !== null && deps.model && model.countInput && anchor + instruction < 0.9 * (deps.model.contextTokens - request.maxOutputTokens)) {
       request.estimatedInputTokens = anchor + instruction;
       request.trustEstimate = true;
@@ -183,19 +215,28 @@ export function createIllustrator(config: ImageConfig, deps: {
     const description = await inTurn(provider, async model => {
       // One sheet per story, written from the whole history the first time a scene of it is illustrated and
       // kept beside the story's memory afterwards: every later frame of this story repeats these lines
-      // verbatim, which is the only thing that made a character recognisable across pictures (step 6).
-      sheet = story.sheet ?? [];
-      if (!story.sheet) {
-        sheet = sheetOf((await askJson(model, trusted(model, sheetRequest(context), anchor, INSTRUCTION_TOKENS.sheet), { signal })).value);
-        store.mutate(userId, saved => { const one = saved.stories[storyId]; if (one && !one.sheet) one.sheet = sheet; });
-        log('picture_sheet_written', undefined, { sheetCharacters: sheet.length });
+      // verbatim, which is the only thing that made a character recognisable across pictures (step 6). A sheet
+      // from before clothes left it is written once more, from the history as it stands now.
+      const older = !!story.sheet && sheetWithoutOutfits(story.sheet);
+      if (!story.sheet || older) {
+        const written = sheetOf((await askJson(model, trusted(model, sheetRequest(context), anchor), { signal })).value);
+        store.mutate(userId, saved => {
+          const one = saved.stories[storyId];
+          if (one && (!one.sheet || sheetWithoutOutfits(one.sheet))) one.sheet = written;
+        });
+        log('picture_sheet_written', undefined, { sheetCharacters: written.length, sheetRewritten: older });
       }
-      const names = sheet.map(one => one.name);
-      const frame = trusted(model, frameRequest(context, names), anchor, INSTRUCTION_TOKENS.frame + estimateTokens(names.join(', ')));
-      return (await askJson(model, frame, { signal })).value as unknown as Description;
+      sheet = wornAt(story, nodeId, store.read(userId).stories[storyId]?.sheet ?? []);
+      return (await askJson(model, trusted(model, frameRequest(context, sheet), anchor), { signal })).value as unknown as Description;
     }, sharesPrefix ? { holder: userId, sharesPrefix } : { holder: userId });
+    // What the sheet's people wear in this frame is what the next picture below this scene starts from.
+    const worn = clothesOf(description, sheet);
+    if (Object.keys(worn.clothes).length) store.mutate(userId, saved => {
+      const node = saved.stories[storyId]?.nodes[nodeId];
+      if (node) node.clothes = { ...node.clothes, ...worn.clothes };
+    });
     frames.set(userId, { storyId, nodeId, description, sheet });
-    return { description, sheet };
+    return { description, sheet, clothesChanged: worn.changed };
   }
 
   // One frame on the picture card in one style line, with the story's seed: a sample of a style and the scene's own
@@ -266,7 +307,7 @@ export function createIllustrator(config: ImageConfig, deps: {
         await clear();
         return;
       }
-      let frame: { description: Description; sheet: Character[] };
+      let frame: { description: Description; sheet: Character[]; clothesChanged: number };
       try { frame = await describeFrame(userId, storyId, nodeId, branchId, signal, log, true); }
       finally { release?.(); described(); }
       describeMs = Math.max(0, now() - describeStarted);
@@ -286,7 +327,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       await clear();
       log('picture', undefined, { outcome: 'ready', describeMs, imageMs: drawn.totalMs, imageSteps: steps, photoMs,
         photoBytes: drawn.bytes.length, namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook,
-        pictureStyle, ...elapsed() });
+        clothesChanged: frame.clothesChanged, pictureStyle, ...elapsed() });
     } catch (error) {
       const code = errorCode(error);
       const cancelled = signal.aborted || code === 'cancelled' || code === 'scene_gone';

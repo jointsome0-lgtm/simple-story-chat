@@ -552,3 +552,25 @@ One `pictures_removed` row per deletion that took pictures carries `picturesRemo
 `actor`; a photo taken back on its way puts the same two counts into its own `picture` or `picture_sample` row. No
 message id, story id or text is logged. All of this has met the fake Bot API only: how a real chat answers a batch
 that holds a message just past its 48 hours is not measured, and the message-by-message fallback is there for it.
+
+## Clothes follow the story (2026-09-24)
+
+Step 3 already saw it: the sheet fixed clothes as constant, and clothes change with the story. On 2026-09-24 the
+tester's characters stayed in the clothes of the seed on every picture after the story had dressed them otherwise,
+because the sheet line replaced whatever the frame said about a person it covered.
+
+The sheet's `look` now holds only what stays: sex, age as a word, build, hair, face, marks. Its new `outfit` is what
+the person wore in the last scene of the history it was written from. Every frame writes `clothes` for each person,
+and the prompt puts them after the sheet's `look` (`assemblePrompt`); a person the frame left without clothes wears
+the sheet's line. A frame starts from what its people wore before: the instruction lists, for each person of the sheet,
+the clothes of the nearest picture above this scene in its own line of the story, or the sheet's `outfit` if there is
+none (`wornAt` in `local/picture.ts`). The model is told to repeat that line word for word unless the story changed
+it since. What the frame answers is kept on the scene as `clothes`, by sheet name, and is where the next picture below
+it starts. A branch walks only its own parents, so a change in one line of the story never dresses another.
+
+A sheet written before this has clothes inside `look` and no `outfit`. It is written once more at the next picture of
+that story, from the history as it stands. The `picture_sheet_written` row then carries `sheetRewritten: true`, and
+every `picture` row counts in `clothesChanged` the people of the sheet dressed otherwise than in the picture before.
+Nothing of the clothes is logged. How well the model notices a change of clothes that happened several scenes back,
+or one that the memory of a compacted story no longer mentions, is not measured yet; the carried line is there so
+that such a change is lost only once and not undone later.

@@ -22,6 +22,9 @@ export type SceneNode = {
   id: string; parent: string | null; input: string; text: string; time: string; truncated: boolean; delivery: 'pending' | 'sent';
   usage?: Usage | null; requestContext?: RequestStamp; streamResultMismatch?: boolean;
   modelInfo?: { provider: string; model: string }; messageId?: number;
+  // What each person of the story's sheet wore in this scene's picture, by their sheet name: the clothes the next
+  // picture of this line of the story starts from (local/picture.ts). Only the local bot writes it.
+  clothes?: Record<string, string>;
 };
 export type Branch = { id: string; name: string; head: string | null; memory: string | null };
 export type Checkpoint = { id: string; branchId: string; label: string; kind: string; head: string | null; memory: string | null };
@@ -29,9 +32,10 @@ export type Story = {
   id: string; seedId: string; title: string; branches: Record<string, Branch>; checkpoints: Record<string, Checkpoint>;
   nodes: Record<string, SceneNode>; memories: Record<string, MemoryVersion>;
   // The character sheet the illustrations use: one fixed appearance line per recurring person, written once from
-  // the story's own history and kept beside its memory (docs/illustrations-plan.md, step 3). Only the local bot
-  // writes it, and only when pictures are switched on; a story without pictures never has it.
-  sheet?: { name: string; look: string }[];
+  // the story's own history and kept beside its memory (docs/illustrations-plan.md, step 3), and the clothes they
+  // wore when it was written. A sheet without `outfit` is older and had clothes in `look`; the next picture writes it
+  // again. Only the local bot writes it, and only when pictures are switched on; a story without pictures never has it.
+  sheet?: { name: string; look: string; outfit?: string }[];
 };
 export type Job = {
   id: string; storyId: string; branchId: string; head: string | null; memory: string | null; input: string; started: number;

@@ -18,16 +18,17 @@ import type { ImageConfig } from './config.ts';
 import { defaultWorkflow } from './image-batch.ts';
 import type { Graph } from './image-batch.ts';
 import { STYLE } from './illustrate.ts';
+import type { Description } from './illustrate.ts';
 import { createLlama } from './llama.ts';
 import type { ErrorDetails } from './model-error.ts';
 import { safeErrorDetails } from './model-error.ts';
 import type { GenerateControls, GenerationResult, ModelRequest, Provider } from './model.ts';
-import { createIllustrator } from './picture.ts';
+import { clothesOf, createIllustrator, wornAt } from './picture.ts';
 import { PRESETS } from './picture-style.ts';
 import { Store } from './store.ts';
 import type { TelegramPayload } from './telegram.ts';
 import { render, scenePrefix, sceneKeyboard } from './ui.ts';
-import type { SeedDraft } from '../lib/library.ts';
+import type { SeedDraft, Story } from '../lib/library.ts';
 
 // A real PNG, written the way ComfyUI writes one: the whole prompt in a text chunk beside the pixels.
 const RAW = Buffer.from([0, 10, 20, 30, 40, 50, 60, 0, 70, 80, 90, 100, 110, 120]);
@@ -114,12 +115,12 @@ function fakeComfy(options: { jobMs?: number; failing?: boolean } = {}) {
 
 // What the describing model answers. The sheet writes an age as a number and the frame carries a name in two
 // fields the instruction forbids them in: both are what the assembly has to take out (local/illustrate.ts).
-const SHEET = { characters: [{ name: 'Элин', look: 'A middle-aged woman, 48-year-old, lean, short ash-grey hair, grey wool coat' }] };
+const SHEET = { characters: [{ name: 'Элин', look: 'A middle-aged woman, 48-year-old, lean, short ash-grey hair', outfit: 'wearing a grey wool coat' }] };
 const FRAME = {
   moment: 'Элин stands with her back against the closed door', shot: 'Medium wide three-quarter shot',
   setting: 'A narrow stone passage, the door closed', objects: 'A splint of two boards beside Элина сумка',
   props: 'The grey-clad woman holds the only dagger in her right hand', light: 'Overcast morning light',
-  people: [{ who: 'Элин', look: 'a 30 years old woman in red', state: 'her bandaged left forearm folded against her chest',
+  people: [{ who: 'Элин', look: 'a 30 years old woman in red', clothes: 'wearing a grey wool coat', state: 'her bandaged left forearm folded against her chest',
     action: 'leans her back against the door' }],
 };
 const STYLE_LINE = 'Synthetic test style line, one sentence and no more.';
@@ -157,6 +158,8 @@ function fakeLlama(scene: { inputTokens: number; outputTokens: number }, counted
 
 type Options = {
   comfy?: string; users?: string[]; style?: string; offsetMs?: number; sheetReply?: object;
+  // What the model describes each frame as, in turn; the last one answers every frame after it.
+  frameReplies?: object[];
   // How many scene deliveries to hold, so that a test can send the next message while one is still in flight;
   // `scheduler` puts the real queue between the bot and the model, which is where a picture takes its slot;
   // `compactAtTokens` and `keepScenes` are what makes the bot prepare the next compaction while the reader reads.
@@ -207,12 +210,16 @@ function fixture(t: TestContext, options: Options = {}) {
     return { message_id: id };
   };
   const counted: string[] = [];
+  let frames = 0;
   const fake: Provider = { async generate(request, controls?: GenerateControls) {
     requests.push(request);
     const kind = kindOf(request);
     if (kind === 'sheet' && options.sheetError) throw Object.assign(new Error(options.sheetError), { code: options.sheetError });
     if (kind === 'sheet') return { text: JSON.stringify(options.sheetReply ?? SHEET), finishReason: 'stop' };
-    if (kind === 'frame') return { text: JSON.stringify(FRAME), finishReason: 'stop' };
+    if (kind === 'frame') {
+      const replies = options.frameReplies ?? [FRAME];
+      return { text: JSON.stringify(replies[Math.min(frames++, replies.length - 1)]), finishReason: 'stop' };
+    }
     // A compaction prepared ahead asks with no stream and no schema; its answer is not a memory and is dropped by
     // the check, which is all this test needs from it — that it took the model's slot on the way.
     await controls?.onText?.('2026-08-02 20:00\n\n');
@@ -336,7 +343,7 @@ test('an illustrated scene: a status line, one description call, a prompt with o
   assert.ok(prompt.endsWith(STYLE_LINE), 'the style line is ours and stands last');
   assert.doesNotMatch(prompt, /Элин|Elin/);
   assert.doesNotMatch(prompt, /\d/, 'an age is a word, never a number');
-  assert.match(prompt, /short ash-grey hair/, 'the sheet line is the appearance of a person it covers');
+  assert.match(prompt, /short ash-grey hair, wearing a grey wool coat, her bandaged/, 'the sheet line is the appearance of a person it covers, the frame\'s clothes after it');
   assert.doesNotMatch(prompt, /woman in red/, 'and the model\'s own look for them is not sent beside it');
   assert.doesNotMatch(prompt, /Кодовая фраза|СЕВЕР|Синтетическая сцена/, 'the scene itself is not the prompt');
 
@@ -604,6 +611,78 @@ test('the sheet is written once per story and reused by the next scene', async t
   assert.deepEqual(f.requests.map(kindOf), ['scene', 'sheet', 'frame', 'scene', 'frame']);
   assert.equal(f.rows.filter(row => row.event === 'picture_sheet_written').length, 1);
   assert.equal(photos(f.sent).length, 2);
+});
+
+// The seed dressed a person once; the story changed their clothes later, and a sheet that kept clothes never let the
+// pictures follow (2026-09-24). Each frame now starts from what the picture before it showed and says what changed.
+test('a change of clothes reaches the next picture, and the picture after it starts from the new clothes', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const dress = { ...FRAME, people: [{ ...FRAME.people[0], clothes: 'wearing a red silk dress' }] };
+  const f = fixture(t, { comfy: root, frameReplies: [FRAME, dress] });
+  await f.start();
+  await f.bot.idle();
+  await f.bot.handle(f.message('Переодеться'));
+  await f.bot.idle();
+  await f.bot.handle(f.message('Выйти на улицу'));
+  await f.bot.idle();
+  const frames = f.requests.filter(request => kindOf(request) === 'frame').map(request => request.messages.at(-1)!.content);
+  assert.equal(frames.length, 3);
+  assert.match(frames[0], /- Элин: wearing a grey wool coat\n/, 'the first frame starts from the sheet');
+  assert.match(frames[1], /- Элин: wearing a grey wool coat\n/, 'the second from the first picture');
+  assert.match(frames[2], /- Элин: wearing a red silk dress\n/, 'the third from the second picture, where the story changed them');
+  const prompts = comfy.submitted.map(promptOf);
+  assert.match(prompts[1], /short ash-grey hair, wearing a red silk dress, her bandaged/);
+  assert.doesNotMatch(prompts[1], /grey wool coat/);
+  assert.deepEqual(f.rows.filter(row => row.event === 'picture').map(row => row.clothesChanged), [0, 1, 0]);
+  const state = f.store.read('1');
+  const story = state.stories[state.active!.storyId];
+  assert.deepEqual(Object.values(story.nodes).map(node => node.clothes?.['Элин']),
+    ['wearing a grey wool coat', 'wearing a red silk dress', 'wearing a red silk dress']);
+});
+
+// A sheet written before clothes left it has them in its appearance lines and no `outfit`: used as it is, it would
+// dress a person twice. It is written once more from the history as it stands, and then kept like any other.
+test('a sheet from before clothes left it is written again once', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root });
+  await f.start();
+  await f.bot.idle();
+  f.store.mutate('1', state => {
+    state.stories[state.active!.storyId].sheet = [{ name: 'Элин', look: 'A middle-aged woman, short ash-grey hair, grey wool coat' }];
+  });
+  await f.bot.handle(f.message('Осмотреться'));
+  await f.bot.idle();
+  await f.bot.handle(f.message('Подождать'));
+  await f.bot.idle();
+  assert.deepEqual(f.requests.map(kindOf), ['scene', 'sheet', 'frame', 'scene', 'sheet', 'frame', 'scene', 'frame']);
+  assert.deepEqual(f.rows.filter(row => row.event === 'picture_sheet_written').map(row => row.sheetRewritten), [false, true]);
+  const state = f.store.read('1');
+  assert.deepEqual(state.stories[state.active!.storyId].sheet, [{ ...SHEET.characters[0] }]);
+  assert.equal(photos(f.sent).length, 3);
+});
+
+test('clothes are carried down one line of the story and never into another', () => {
+  const node = (id: string, parent: string | null, clothes?: Record<string, string>) =>
+    ({ id, parent, input: '', text: '', time: '', truncated: false, delivery: 'sent', ...(clothes ? { clothes } : {}) });
+  // a → b → c is one line of the story, a → d another; the clothes of b belong to c and never to d.
+  const story = { nodes: { a: node('a', null, { Элин: 'wearing a grey wool coat' }), b: node('b', 'a', { Элин: 'wearing a red silk dress' }),
+    c: node('c', 'b'), d: node('d', 'a') } } as unknown as Story;
+  const sheet = [{ name: 'Элин', look: 'lean', outfit: 'wearing travel leathers' }, { name: 'Тарек', look: 'tall', outfit: 'wearing a blue tunic' }];
+  assert.deepEqual(wornAt(story, 'c', sheet).map(one => one.outfit), ['wearing a red silk dress', 'wearing a blue tunic']);
+  assert.deepEqual(wornAt(story, 'd', sheet).map(one => one.outfit), ['wearing a grey wool coat', 'wearing a blue tunic']);
+  assert.deepEqual(wornAt(story, 'b', sheet).map(one => one.outfit), ['wearing a red silk dress', 'wearing a blue tunic'],
+    'a scene described again starts from its own picture');
+  // The frame names people as it likes: inflected, transliterated, twice, or somebody the sheet does not know.
+  const people = [{ who: 'Элину', clothes: ' wearing a red silk dress ' }, { who: 'Tarek', clothes: 'wearing a blue tunic' },
+    { who: 'salt worker', clothes: 'wearing rags' }, { who: 'Элин', clothes: 'wearing armour' }, { who: 'Тарек', clothes: '' }]
+    .map(person => ({ look: '', state: '', action: '', ...person }));
+  const worn = clothesOf({ people } as unknown as Description, wornAt(story, 'd', sheet));
+  assert.deepEqual(worn.clothes, { Элин: 'wearing a red silk dress', Тарек: 'wearing a blue tunic' });
+  assert.equal(worn.changed, 1);
 });
 
 // A description repeats the scene's own request, so what the server counted for the scene and its answer, plus the

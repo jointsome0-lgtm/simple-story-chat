@@ -4,13 +4,15 @@
 // which illustrates a reader's scene in the bot, and local/illustrate-probe.ts, which describes the frozen synthetic
 // stories on a hosted model — so that what the six steps measured is what the bot sends. Nothing is drawn here.
 import type { ChatMessage, GenerateControls, ModelRequest, Provider } from './model.ts';
-import { estimateTokens } from './context.ts';
 
-// One recurring person of a story: the name as the story writes it, and the fixed appearance line the assembly puts
-// in wherever a described person is that name. The sheet is written once per story and reused for all its frames.
-export type Character = { name: string; look: string };
+// One recurring person of a story: the name as the story writes it, the fixed appearance line the assembly puts in
+// wherever a described person is that name, and the clothes they wear unless the frame says otherwise. The sheet is
+// written once per story and reused for all its frames. Clothes are not in `look`: a sheet that froze them kept a
+// reader's characters in the clothes of the seed after the story had changed them (2026-09-24), so each frame
+// writes what its people wear, starting from what they wore in the picture before it (local/picture.ts).
+export type Character = { name: string; look: string; outfit?: string };
 // `who` is the only field allowed to carry a name, and it never reaches the image model: it selects the sheet line.
-export type Person = { who: string; look: string; state: string; action: string };
+export type Person = { who: string; look: string; clothes?: string; state: string; action: string };
 export type Description = {
   moment: string; shot: string; setting: string; objects: string; props: string; light: string; people: Person[];
 };
@@ -112,6 +114,8 @@ const sentence = (text: string) => {
   const value = text.trim().replace(/\.$/, '');
   return value ? value + '. ' : '';
 };
+// A part of a clause: the parts of a person are joined with commas, so a full stop at the end of one is cut.
+const phrase = (text: string) => text.trim().replace(/\.$/, '').trim();
 
 // The sheet's appearance lines, by name in lower case. A line is the story's constant for that person, so an age
 // written as a number is taken out of it once, here.
@@ -119,9 +123,17 @@ export function sheetLooks(sheet: Character[]): Map<string, string> {
   return new Map(sheet.map(character => [character.name.trim().toLowerCase(), stripAges(character.look.trim().replace(/\.$/, ''))]));
 }
 
+// A sheet written before clothes left its appearance lines: every entry of a newer one carries `outfit`, even an
+// empty one. Such a sheet would dress its people twice, so it is written again rather than used.
+export function sheetWithoutOutfits(sheet: Character[]): boolean {
+  return sheet.some(character => typeof character.outfit !== 'string');
+}
+
 // The order is the one the third reader asked for: shot, setting, the shared action once, each person, objects,
 // props, light, style. A person the sheet covers takes their look from the sheet alone — the model's own `look` for
-// them contradicts it, and in step 6 the contradiction was visible in the picture. The style line is always the
+// them contradicts it, and in step 6 the contradiction was visible in the picture. Clothes are the frame's for
+// everybody; a person of the sheet whom the frame left without any wears the sheet's `outfit`, which the caller has
+// set to what they wore in the picture before. The style line is always the
 // last sentence and never comes from the describing model: the bot may carry its own in `SIMPLE_CHAT_IMAGE_STYLE`,
 // and a reader may pick a preset or write a line of their own (local/picture-style.ts). Those are the only parts of
 // this prompt a person writes.
@@ -146,16 +158,19 @@ export function assemblePrompt(description: Description, sheet: Character[], sty
     namesStripped += stripped.removed;
     return stripped.text;
   };
+  const outfits = new Map(sheet.map(character => [character.name.trim().toLowerCase(), character.outfit ?? '']));
   const people = (description.people ?? []).map(person => {
     const matched = matchSheet(person.who ?? '', sheetNames);
-    const known = matched === null ? undefined : looks.get(matched.trim().toLowerCase());
+    const key = matched === null ? undefined : matched.trim().toLowerCase();
+    const known = key === undefined ? undefined : looks.get(key);
     if (known) fromSheet++;
     // The sheet is model output too: a name in an appearance line would reach every frame of that story.
     const look = clean(known ?? person.look ?? '');
     // A person the sheet does not cover and whose `look` the model left empty anyway reaches the picture with no
-    // body, hair or clothes. Nothing can be done about it here, but it is counted rather than lost.
+    // body or hair. Nothing can be done about it here, but it is counted rather than lost.
     if (!look.trim()) withoutLook++;
-    const before = [look, clean(person.state)].map(part => part.trim()).filter(Boolean).join(', ');
+    const clothes = phrase(clean(person.clothes ?? '')) || (key === undefined ? '' : phrase(clean(outfits.get(key) ?? '')));
+    const before = [look, clothes, clean(person.state)].map(phrase).filter(Boolean).join(', ');
     const action = clean(person.action).trim();
     // No appearance and no state leaves nothing to put before the colon, and a prompt that opens a clause with one.
     return sentence(before ? `${before}: ${action}` : action);
@@ -170,12 +185,15 @@ export function assemblePrompt(description: Description, sheet: Character[], sty
 // carried names to the image model.
 const SHEET = `Не продолжай историю. Составь лист внешности для художника: по одной записи на КАЖДОГО человека, названного в истории по имени или по постоянной роли (командир, лекарь, судья) и появляющегося больше чем в одной сцене. Обычно их от трёх до шести; одна запись на целую историю — почти наверняка ошибка.
 - name: имя так, как оно пишется в истории.
-- look: по-английски, 15-25 слов, без имени: пол, возраст ТОЛЬКО словом (young, middle-aged, elderly) и никогда числом, даже если история называет годы, телосложение, волосы, лицо, постоянная одежда и её цвета. Всё, что история называет, бери из истории; чего она не называет — придумай один раз, правдоподобно для мира истории, и так, чтобы персонажи заметно отличались друг от друга силуэтом, волосами и цветом одежды.
-- Не включай травмы, повязки, оружие в руках и предметы, которые появляются или меняются по ходу истории: только постоянное.`;
+- look: по-английски, 15-25 слов, без имени и БЕЗ ОДЕЖДЫ: пол, возраст ТОЛЬКО словом (young, middle-aged, elderly) и никогда числом, даже если история называет годы, телосложение, волосы, лицо, постоянные приметы (шрам, татуировка, очки). Всё, что история называет, бери из истории; чего она не называет — придумай один раз, правдоподобно для мира истории, и так, чтобы персонажи заметно отличались друг от друга силуэтом и волосами.
+- outfit: по-английски, 8-20 слов, фразой, которая начинается с wearing: во что человек одет в ПОСЛЕДНЕЙ сцене, где история говорит о его одежде. Если по ходу истории он переоделся, это новая одежда, а не та, что в начале истории или в её описании. Если история об одежде молчит, придумай её правдоподобно для мира истории, и так, чтобы персонажи заметно отличались цветом одежды.
+- Не включай травмы, повязки, оружие в руках и предметы, которые появляются или меняются по ходу истории.`;
 const SHEET_SCHEMA = { type: 'object', additionalProperties: false, required: ['characters'], properties: { characters: { type: 'array', maxItems: 6,
-  items: { type: 'object', additionalProperties: false, required: ['name', 'look'], properties: { name: { type: 'string' }, look: { type: 'string' } } } } } };
+  items: { type: 'object', additionalProperties: false, required: ['name', 'look', 'outfit'],
+    properties: { name: { type: 'string' }, look: { type: 'string' }, outfit: { type: 'string' } } } } } };
 
-const instruction = (names: string[]) => `Не продолжай историю. Опиши ПОСЛЕДНЮЮ сцену для художника-иллюстратора: один неподвижный кадр, как в визуальной новелле. Пиши по-английски. Готовый запрос для модели картинок соберёт программа из твоих полей, поэтому всё существенное должно быть в полях; чего в них нет, того не будет на картинке.
+// `sheet` is the story's sheet with `outfit` set to what each of its people wore in the picture before this one.
+const instruction = (sheet: Character[]) => `Не продолжай историю. Опиши ПОСЛЕДНЮЮ сцену для художника-иллюстратора: один неподвижный кадр, как в визуальной новелле. Пиши по-английски. Готовый запрос для модели картинок соберёт программа из твоих полей, поэтому всё существенное должно быть в полях; чего в них нет, того не будет на картинке.
 Правила:
 - Имён не должно быть НИ В ОДНОМ поле, кроме who: ни в moment, ни в shot, ни в setting, ни в objects, ни в props, ни в light, ни в look, state и action. Программа всё равно вырежет их из запроса, и текст станет от этого хуже.
 - Модель картинок хорошо рисует, КТО в кадре, ГДЕ они, как стоят и что держат. Она НЕ умеет рисовать точные контакты (лезвие в щели, пальцы на кнопке, отмычку в скважине), читаемый текст и содержимое экранов. Скрывай такие детали ракурсом: экран повёрнут тыльной стороной к зрителю, кончик инструмента закрыт руками.
@@ -190,17 +208,28 @@ const instruction = (names: string[]) => `Не продолжай историю
 - Не передавай действие другому человеку: если в сцене запись отматывает председатель, то и в кадре это делает председатель; если в сцене никто ни на что не указывает, никто и не указывает. Не выдумывай подробностей позы, которых сцена не называет.
 - Сохраняй, где кто находится, если сцена это говорит: на пороге, внутри комнаты, в середине, справа от другого, спиной к двери.
 - Не добавляй свечение, магию, оружие, травмы и действия, которых нет в выбранном моменте. Наличие волшебного предмета не значит, что он светится.
-- people: каждый человек, который должен быть виден, отдельной записью, со своим действием. who — имя из списка [${names.join(', ')}], если это он; иначе короткая роль по-английски ("salt worker"). look: для людей из списка — ПУСТАЯ строка, их постоянную внешность подставит программа из листа внешности, и твой текст для них не будет использован; для остальных — пол, возраст словом, телосложение, волосы, одежда. state — то, что сейчас на нём или с ним и видно глазу: повязки, шины, что держит, что в ножнах; пустая строка, если нечего. action — что он делает в этом кадре и чего касается. Имён не должно быть НИ В ОДНОМ поле, кроме who: пиши he, she, the shield-bearer.
+- people: каждый человек, который должен быть виден, отдельной записью, со своим действием. who — имя из списка [${sheet.map(character => character.name).join(', ')}], если это он; иначе короткая роль по-английски ("salt worker"). look: для людей из списка — ПУСТАЯ строка, их постоянную внешность подставит программа из листа внешности, и твой текст для них не будет использован; для остальных — пол, возраст словом, телосложение, волосы, без одежды. clothes — во что он одет В ЭТОТ МОМЕНТ, по-английски, фразой, которая начинается с wearing. state — то, что сейчас с ним и видно глазу, кроме одежды: повязки, шины, что держит, что в ножнах; пустая строка, если нечего. action — что он делает в этом кадре и чего касается. Имён не должно быть НИ В ОДНОМ поле, кроме who: пиши he, she, the shield-bearer.${clothesRule(sheet)}
 - shot: план и ракурс, при котором видны ключевое действие и все перечисленные люди. В тесной сцене с несколькими людьми бери средне-общий план в три четверти, а не эффектный нижний ракурс.
 - setting: место, по-английски, без названий, которые ничего не говорят глазу. objects: важные предметы и их состояние; пустая строка, если нечего.
 - light: свет и время суток словами (morning, evening), без часов и минут. Не называй дверь, проём или арку источником света: закрытая дверь должна остаться закрытой. Если дверь или окно в сцене закрыты, так и напиши в setting.
 - Только то, что можно увидеть: без мыслей, реплик, предыстории. Без слов стиля, техники, качества (photorealistic, anime, 8k, cinematic). Возраст словами, не числом.`;
 
+// The clothes the people of the sheet start this frame in. Repeated word for word, they keep a person recognisable from
+// one picture to the next; a change the story made since is the one thing that should change them.
+function clothesRule(sheet: Character[]): string {
+  const worn = sheet.filter(character => character.outfit?.trim());
+  if (!worn.length) return '';
+  return `
+- Одежда людей из списка до этой сцены:
+${worn.map(character => `  - ${character.name}: ${character.outfit!.trim()}`).join('\n')}
+  Если история с тех пор переодела человека, раздела его, одела во что-то новое, испачкала или порвала одежду, в clothes опиши одежду такой, какая она сейчас. Если нет — повтори его строку отсюда слово в слово.`;
+}
+
 const str = { type: 'string' };
 const FRAME_SCHEMA = { type: 'object', additionalProperties: false, required: ['moment', 'shot', 'setting', 'objects', 'props', 'light', 'people'], properties: {
   props: str, moment: str, shot: str, setting: str, objects: str, light: str,
-  people: { type: 'array', maxItems: 4, items: { type: 'object', additionalProperties: false, required: ['who', 'look', 'state', 'action'],
-    properties: { who: str, look: str, state: str, action: str } } } } };
+  people: { type: 'array', maxItems: 4, items: { type: 'object', additionalProperties: false, required: ['who', 'look', 'clothes', 'state', 'action'],
+    properties: { who: str, look: str, clothes: str, state: str, action: str } } } } };
 
 // Both calls are shaped as a continuation of the scene's own request: the same system prompt and the same history,
 // with one instruction appended last, so a server with a prefix cache pays for the instruction alone (the plan's
@@ -209,9 +238,6 @@ export type Excerpt = { system: string; messages: ChatMessage[] };
 // The runaway of JSON mode is answered with a low limit and one retry, not with a longer wait: step 1 measured a
 // reply that filled 700 tokens with newlines, and the same scene parsed on the next attempt.
 export const DESCRIBE_TOKENS = 900;
-// What each instruction adds to the request it ends, by the estimate of local/context.ts, worked out once. The text is
-// Russian, which that estimate counts a third or more over; a frame's instruction adds the sheet's names on top.
-export const INSTRUCTION_TOKENS = { sheet: estimateTokens(SHEET), frame: estimateTokens(instruction([])) };
 
 // The sheet of a whole story, from its history up to the scene named in `context`.
 export function sheetRequest(context: Excerpt): ModelRequest {
@@ -219,11 +245,12 @@ export function sheetRequest(context: Excerpt): ModelRequest {
     messages: [...context.messages, { role: 'user', content: SHEET }] };
 }
 
-// One frame of the last scene of `context`. `names` are the sheet's, and they are in the instruction only so that
-// the model can say which described person is which sheet line; they never reach the image model.
-export function frameRequest(context: Excerpt, names: string[]): ModelRequest {
+// One frame of the last scene of `context`. The names of `sheet` are in the instruction only so that the model can
+// say which described person is which sheet line, and they never reach the image model; its outfits are the clothes
+// its people start this frame in.
+export function frameRequest(context: Excerpt, sheet: Character[]): ModelRequest {
   return { system: context.system, maxOutputTokens: DESCRIBE_TOKENS, outputSchema: FRAME_SCHEMA,
-    messages: [...context.messages, { role: 'user', content: instruction(names) }] };
+    messages: [...context.messages, { role: 'user', content: instruction(sheet) }] };
 }
 
 // One structured reply, parsed, with one retry. The raw text never leaves this function: it is the reader's scene in
@@ -241,11 +268,12 @@ Promise<{ value: Record<string, unknown>; retried: boolean }> {
 }
 
 // The sheet as the model answered it. `characters` is the schema's only field, and a reply that parsed as JSON
-// without it, or with a character that is not two strings, would otherwise reach the assembly as undefined.
+// without it, or with a character whose name or look is not a string, would otherwise reach the assembly as
+// undefined. `outfit` is always a string here, empty when missing, which is what marks a sheet as this kind.
 export function sheetOf(value: Record<string, unknown>): Character[] {
   const characters = Array.isArray(value.characters) ? value.characters : [];
   return characters.flatMap(one => {
-    const { name, look } = (one ?? {}) as { name?: unknown; look?: unknown };
-    return typeof name === 'string' && typeof look === 'string' ? [{ name, look }] : [];
+    const { name, look, outfit } = (one ?? {}) as { name?: unknown; look?: unknown; outfit?: unknown };
+    return typeof name === 'string' && typeof look === 'string' ? [{ name, look, outfit: typeof outfit === 'string' ? outfit : '' }] : [];
   });
 }

@@ -53,6 +53,9 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   // a field the instruction forbids them in, and how many people reached the prompt with no appearance at all.
   'describeMs', 'imageQueueMs', 'imageMs', 'imageSteps', 'pictureAfterSceneMs', 'pictureSeconds',
   'sheetCharacters', 'namesStripped', 'withoutLook',
+  // The clothes of a frame (local/picture.ts): how many people of the sheet it shows in other clothes than the
+  // picture before it in that line of the story, which is how a change of clothes in the story is seen to arrive.
+  'clothesChanged',
   // A sample of styles (local/picture.ts `sample`): how many styles one press of the reader asked for, one on a
   // style's own card and every style of the picker for "all styles".
   'stylesAsked',
@@ -73,6 +76,8 @@ export type ErrorDetails = {
   // in which style, and for a sample of a style whether the scene's frame was still in memory.
   imageRole?: typeof IMAGE_ROLES[number]; outcome?: typeof OUTCOMES[number]; cancelled?: boolean;
   pictureStyle?: typeof PICTURE_STYLES[number]; frameReused?: boolean;
+  // A sheet written in place of an older one that still had the clothes in its appearance lines.
+  sheetRewritten?: boolean;
   // A failed Claude CLI run: how it ended and whether the CLI itself called the result an error.
   cliResult?: typeof CLI_RESULTS[number]; cliError?: boolean; stopReason?: typeof STOP_REASONS[number];
 } & { [Key in typeof COUNTS[number]]?: number };
@@ -107,6 +112,7 @@ export function safeErrorDetails(value: unknown = {}): ErrorDetails {
   if (typeof input?.cancelled === 'boolean') result.cancelled = input.cancelled;
   if (member(PICTURE_STYLES, input?.pictureStyle)) result.pictureStyle = input.pictureStyle;
   if (typeof input?.frameReused === 'boolean') result.frameReused = input.frameReused;
+  if (typeof input?.sheetRewritten === 'boolean') result.sheetRewritten = input.sheetRewritten;
   if (member(CLI_RESULTS, input?.cliResult)) result.cliResult = input.cliResult;
   if (typeof input?.cliError === 'boolean') result.cliError = input.cliError;
   if (member(STOP_REASONS, input?.stopReason)) result.stopReason = input.stopReason;
