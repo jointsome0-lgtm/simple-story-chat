@@ -28,6 +28,13 @@ export type SceneNode = {
 };
 export type Branch = { id: string; name: string; head: string | null; memory: string | null };
 export type Checkpoint = { id: string; branchId: string; label: string; kind: string; head: string | null; memory: string | null };
+// A portrait of one person of a sheet that the reader kept to pick a reference by (local/picture.ts): the name of its
+// file among the reader's portraits beside the database (local/store.ts), never the picture itself, and how it was
+// drawn — the seed, the look it shows, which an edited look no longer matches, the clothes and the style line, and the
+// graph by its hash with its checkpoint. Frames never use it.
+export type KeptPortrait = {
+  file: string; seed: number; look: string; clothes: string; style: string; graph: string; checkpoint: string; at: number;
+};
 export type Story = {
   id: string; seedId: string; title: string; branches: Record<string, Branch>; checkpoints: Record<string, Checkpoint>;
   nodes: Record<string, SceneNode>; memories: Record<string, MemoryVersion>;
@@ -36,7 +43,7 @@ export type Story = {
   // wore when it was written. A sheet without `outfit` is older and had clothes in `look`; the next picture writes it
   // again. Only the local bot writes it, and only when pictures are switched on; a story without pictures never has it.
   // `edited` marks a look the reader wrote themselves, which that rewrite keeps.
-  sheet?: { name: string; look: string; outfit?: string; edited?: boolean }[];
+  sheet?: { name: string; look: string; outfit?: string; edited?: boolean; portrait?: KeptPortrait }[];
 };
 export type Job = {
   id: string; storyId: string; branchId: string; head: string | null; memory: string | null; input: string; started: number;
@@ -55,8 +62,8 @@ export type LookInput = { input: 'look'; storyId: string; name: string; confirm?
 // One of the reader's own picture styles: the name on its button and the line that ends the prompt.
 export type OwnStyle = { id: string; name: string; line: string };
 // A picture the local bot sent into its reader's chat (local/picture.ts): the scene it shows, the message it is, and
-// when it was sent, in milliseconds since the epoch.
-export type SentPicture = { storyId: string; nodeId: string; messageId: number; at: number };
+// when it was sent, in milliseconds since the epoch. A portrait of a person of the story's sheet shows no scene.
+export type SentPicture = { storyId: string; nodeId?: string; messageId: number; at: number };
 // Interface language of the bot, never of the stories. A library without it predates the choice and is shown in Russian.
 export type Language = 'ru' | 'en' | 'zh' | 'ko' | 'ja';
 export type Library = {
@@ -281,7 +288,8 @@ export function forgetLostPictures(state: Library, now: number): number[] {
   const lost: number[] = [];
   state.sentPictures = state.sentPictures.filter(picture => {
     if (now - picture.at >= MESSAGE_DELETABLE_MS) return false;
-    if (state.stories[picture.storyId]?.nodes[picture.nodeId]) return true;
+    const story = state.stories[picture.storyId];
+    if (story && (picture.nodeId === undefined || story.nodes[picture.nodeId])) return true;
     lost.push(picture.messageId);
     return false;
   });

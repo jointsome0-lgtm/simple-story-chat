@@ -117,6 +117,8 @@ function screen(state: State, route: string, details: RenderDetails) {
     case 'character': return characterScreen(state, args[0], args[1], details);
     // Only while the reader is writing a look, as for a style.
     case 'look-input': return lookInputScreen(state, details);
+    case 'portrait': return portraitCaption(state, args[0], args[1], args[2]);
+    case 'portrait-kept': return portraitKept(state, args[0], args[1]);
     case 'seeds': return seedList(state, args[0]);
     case 'seed': return seedScreen(state, args[0], args[1], details.pictures === true);
     case 'story': return storyScreen(state, args[0], args[1], details.pictures === true);
@@ -460,9 +462,9 @@ function charactersScreen(state: State, storyId: string | undefined) {
 }
 
 // One person: the whole look and clothes, tap-to-copy, each with its size as the picture model counts that text alone
-// (never their sum: the prompt they go into is cut and joined otherwise), and where an edited look reaches. The
-// clothes are the story's to change, so they are only shown: those of the active branch's latest picture for the
-// active story (local/picture.ts `wornAt`), the sheet's own otherwise.
+// (never their sum: the prompt they go into is cut and joined otherwise), where an edited look reaches, and the
+// portrait kept to pick a reference by. The clothes are the story's to change, so they are only shown: those of the
+// active branch's latest picture for the active story (local/picture.ts `wornAt`), the sheet's own otherwise.
 function characterScreen(state: State, storyId: string | undefined, rawIndex: string | undefined, details: RenderDetails) {
   const t = texts(state.language);
   const c = t.characters;
@@ -480,11 +482,13 @@ function characterScreen(state: State, storyId: string | undefined, rawIndex: st
     try { tokens = details.textTokens?.(text) ?? null; } catch { /* unknown, as without a tokenizer */ }
     return [tokens, [...text].length] as const;
   };
+  const portrait = person.portrait ? (person.portrait.look === person.look ? c.portraitKept : c.portraitStale) : details.pictures ? c.portraitNone : null;
   const result = payload([c.cardTitle(line(person.name, 60), storyName(state, story)), '',
     c.look, person.look, c.lookSize(...size(person.look)), '',
     ...clothes ? [clothesTitle, clothes, c.clothesSize(...size(clothes))] : [c.noClothes], c.clothesNote, '',
-    c.sizeNote, '', c.scope], [
+    c.sizeNote, '', c.scope, portrait === null ? null : '', portrait], [
     [btn(c.edit, `look-edit:${story.id}:${person.index}`)],
+    details.pictures ? [btn(c.portrait, `portrait:${story.id}:${person.index}`)] : null,
     [btn(c.back, `view:characters:${story.id}`)],
   ]);
   const pre = (text: string, after: string) => {
@@ -509,6 +513,29 @@ function lookInputScreen(state: State, details: RenderDetails) {
   const offset = result.text.lastIndexOf(person.look);
   if (offset >= 0) result.entities = [{ type: 'pre', offset, length: person.look.length }];
   return result;
+}
+
+// The caption and the buttons of a portrait (local/picture.ts `portrait`): another one, keeping this one by the id it
+// was drawn under, and the way back to its person.
+function portraitCaption(state: State, storyId: string | undefined, rawIndex: string | undefined, candidate: string | undefined) {
+  const t = texts(state.language);
+  const c = t.characters;
+  const story = own(state.stories, storyId);
+  const person = story && people(story).find(one => String(one.index) === rawIndex);
+  if (!story || !person) return stale(t, t.story.notFound);
+  return payload([c.caption(line(person.name, 60))], [
+    [btn(c.again, `portrait:${story.id}:${person.index}`), candidate ? btn(c.keep, `portrait-keep:${candidate}`) : null],
+    [btn(c.backToCard, `view:character:${story.id}:${person.index}`)],
+  ]);
+}
+
+function portraitKept(state: State, storyId: string | undefined, rawIndex: string | undefined) {
+  const t = texts(state.language);
+  const c = t.characters;
+  const story = own(state.stories, storyId);
+  const person = story && people(story).find(one => String(one.index) === rawIndex);
+  if (!story || !person) return stale(t, t.story.notFound);
+  return payload([c.kept(line(person.name, 60))], [[btn(c.backToCard, `view:character:${story.id}:${person.index}`)]]);
 }
 
 // The story as a tree: scenes point at their parents, a branch or a checkpoint marks a scene. A straight run of scenes

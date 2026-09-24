@@ -163,7 +163,7 @@ export const zh: Messages = {
 
   characters: {
     title: story => `👤 人物：${story}`,
-    note: '这个故事的插图就是这样画他们的。点一个人物，可以查看完整描述或者修改外貌。',
+    note: '这个故事的插图就是这样画他们的。点一个人物，可以查看完整描述、修改外貌或者画一张肖像。',
     none: '人物会在故事的第一张插图之后出现。',
     toStory: '📖 返回故事',
     cardTitle: (person, story) => `👤 ${person} · ${story}`,
@@ -176,12 +176,22 @@ export const zh: Messages = {
     clothesNote: '服装不在这里修改：它由故事本身改变，插图从场景中取用。',
     sizeNote: '这些数字是每段文字单独计算的，不是提示词的大小：画插图时，这些文字会被缩短并和其他文字拼在一起。准确的大小写在每张插图下面。',
     scope: '修改外貌会作用于这个故事所有分支之后的插图。故事文字、记忆和已经画好的插图都不会改变；正在绘制的那张可能仍按旧外貌画出。',
+    portraitNone: '🖼 还没有肖像。肖像会按这个外貌画出面部和全身身材，方便挑选参考图。',
+    portraitKept: '🖼 肖像已保存：按这个外貌画的面部和身材。',
+    portraitStale: '🖼 保存的肖像是按之前的外貌画的。新画一张，就能看到按现在外貌画的面部和身材。',
     edit: '✏️ 修改外貌',
+    portrait: '🖼 肖像',
     back: '↩️ 返回人物列表',
     editTitle: (person, story) => `✏️ 外貌：${person} · ${story}`,
     editNote: max => `用一条消息发来新的外貌，最多 ${max} 个字符：脸、头发、体形、身高、特征。不用写服装和名字：服装由故事改变，名字保持不变。插图模型最擅长理解英文。`,
     nowText: '当前：',
     backToCard: '↩️ 返回该人物',
+    caption: person => `🖼 肖像：${person}。面部和全身身材，穿着简单的中性服装。`,
+    again: '🔄 再画一张',
+    keep: '✅ 保留这张',
+    kept: person => `✅ 肖像已保存：${person}。场景插图暂时还不会用到它。`,
+    drawing: '🎨 正在绘制肖像…',
+    portraitFailed: '肖像没有画成。请稍后再试。',
   },
 
   model: {
@@ -558,6 +568,9 @@ export const zh: Messages = {
     lookNeedsText: '请用一条文本消息发来外貌。不做修改离开：点“↩️”或发送 /cancel。',
     lookTooLong: '太长了：外貌不能超过 400 个字符。请缩短后再发一次。',
     lookGone: '这个人物已经不在故事里了，外貌没有保存。打开 /menu 看看。',
+    portraitOff: '你的场景还没有开启插图，所以无法绘制肖像。',
+    portraitStale: '这张肖像已经无法保存：它已过期，或者外貌之后改过了。请重新画一张。',
+    portraitInFlight: '正在绘制你请求的图片。等它发来后再请求肖像。',
   },
 
   labels: {

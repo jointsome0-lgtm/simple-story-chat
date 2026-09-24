@@ -8,7 +8,7 @@ import { render, renderContext, scenePrefix, sceneKeyboard } from './ui.ts';
 import { PRESETS } from './picture-style.ts';
 import { texts } from './text.ts';
 
-const ACTION = /^(view:.+|new-seed|save-seed:[^:]+|start:[^:]+|use:[^:]+:[^:]+|fork:[^:]+:[^:]+|remove-seed:[^:]+|remove-branch:[^:]+:[^:]+|continue|cancel|last|compact|gpu:start|gpu:pause|lang:[a-z]{2}|style:[a-z0-9]+|style-new|style-edit:y\d+|remove-style:y\d+|style-sample:[a-z0-9]+|style-samples|look-edit:[^:]+:\d+)$/;
+const ACTION = /^(view:.+|new-seed|save-seed:[^:]+|start:[^:]+|use:[^:]+:[^:]+|fork:[^:]+:[^:]+|remove-seed:[^:]+|remove-branch:[^:]+:[^:]+|continue|cancel|last|compact|gpu:start|gpu:pause|lang:[a-z]{2}|style:[a-z0-9]+|style-new|style-edit:y\d+|remove-style:y\d+|style-sample:[a-z0-9]+|style-samples|look-edit:[^:]+:\d+|portrait:[^:]+:\d+|portrait-keep:[0-9a-f]+)$/;
 
 function node(id: string, parent: string | null, time: string, body: string, input = 'Ввод'): SceneNode {
   return { id, parent, input, text: `${time}\n\n${body}`, time, truncated: false, delivery: 'sent' };
@@ -226,7 +226,11 @@ test('characters: beside each story when pictures are drawn, a list, a card with
   assert.match(card.text, /не размер промпта/);
   assert.match(card.text, /на следующие картинки всех веток этой истории/);
   assert.deepEqual(card.entities!.map(entity => card.text.slice(entity.offset, entity.offset + entity.length)), [look, 'a yellow raincoat']);
-  assert.deepEqual(callbacks(card), ['look-edit:h2:0', 'view:characters:h2']);
+  assert.deepEqual(callbacks(card), ['look-edit:h2:0', 'portrait:h2:0', 'view:characters:h2']);
+  // A portrait is offered to a reader whose scenes are drawn, and says what it is for: the face and the figure.
+  assert.match(card.text, /\n\n🖼 Портрета пока нет\. Портрет рисует лицо и фигуру в полный рост/);
+  assert.deepEqual(callbacks(render(state, 'character:h2:0')), ['look-edit:h2:0', 'view:characters:h2']);
+  assert.doesNotMatch(render(state, 'character:h2:0').text, /Портрет/);
   // Without a counter, or with one that fails, the tokens are unknown and the characters stay.
   for (const details of [on, { ...on, textTokens: () => { throw new Error('vocabulary'); } }, { ...on, textTokens: () => null }]) {
     assert.match(render(state, 'character:h2:0', details).text, /\nТекст внешности: токены неизвестны · 48 знаков\n/);
@@ -256,6 +260,22 @@ test('characters: beside each story when pictures are drawn, a list, a card with
   state.ui = { input: 'look', storyId: 'h2', name: 'Нет такой' };
   assert.deepEqual(callbacks(render(state, 'look-input', on)), callbacks(render(state, 'home', on)));
   state.ui = null;
+
+  // A portrait's caption keeps its candidate on the keep button; another version asks for a new one.
+  const caption = render(state, 'portrait:h2:0:0a1b2c3d', on);
+  assert.equal(caption.text, '🖼 Портрет: Мира. Лицо и фигура в полный рост, в простой нейтральной одежде.');
+  assert.deepEqual(caption.reply_markup!.inline_keyboard.map(row => row.map(button => button.callback_data)),
+    [['portrait:h2:0', 'portrait-keep:0a1b2c3d'], ['view:character:h2:0']]);
+  assert.deepEqual(callbacks(render(state, 'portrait-kept:h2:0', on)), ['view:character:h2:0']);
+  assert.match(render(state, 'portrait-kept:h2:0', on).text, /^✅ Портрет сохранён: Мира\. В картинки к сценам он пока не попадает\.$/);
+  for (const route of ['portrait:h99:0:0a1b2c3d', 'portrait:h2:7:0a1b2c3d', 'portrait-kept:h2:7']) checkPayload(render(state, route, on), route);
+  // A kept portrait is named on the card, and one drawn from an earlier look says so, with or without pictures.
+  const kept = { file: '0123456789abcdef0123456789abcdef.png', seed: 7, look, clothes: 'plain', style: 'neutral', graph: '0123456789abcdef',
+    checkpoint: 'synthetic.safetensors', at: 1 };
+  state.stories.h2.sheet[0].portrait = kept;
+  assert.match(render(state, 'character:h2:0', on).text, /\n\n🖼 Портрет сохранён: лицо и фигура по этой внешности\.$/);
+  state.stories.h2.sheet[0].portrait = { ...kept, look: 'An earlier look.' };
+  assert.match(render(state, 'character:h2:0').text, /\n\n🖼 Сохранённый портрет нарисован по прежней внешности\./);
   crawl(state, on);
 });
 

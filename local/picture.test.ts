@@ -5,9 +5,9 @@ import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { crc32, deflateSync } from 'node:zlib';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createBot } from './bot.ts';
@@ -24,12 +24,13 @@ import type { ErrorDetails } from './model-error.ts';
 import { safeErrorDetails } from './model-error.ts';
 import type { GenerateControls, GenerationResult, ModelRequest, Provider } from './model.ts';
 import { createServing, readerScope } from './serving.ts';
-import { clothesOf, createIllustrator, encoderTokens, foldedPrompt, rewrittenSheet, textTokens, wornAt } from './picture.ts';
+import { PORTRAIT_CLOTHES, PORTRAIT_STYLE, clothesOf, createIllustrator, encoderTokens, foldedPrompt, rewrittenSheet, textTokens, wornAt } from './picture.ts';
 import { PRESETS } from './picture-style.ts';
 import { Store } from './store.ts';
 import type { TelegramPayload } from './telegram.ts';
 import { loadTokenizers, qwenPromptTokens } from './tokenizer.ts';
 import { render, scenePrefix, sceneKeyboard } from './ui.ts';
+import { addSeed, newStory } from '../lib/library.ts';
 import type { SeedDraft, Story } from '../lib/library.ts';
 
 // A real PNG, written the way ComfyUI writes one: the whole prompt in a text chunk beside the pixels.
@@ -807,7 +808,7 @@ test('a sheet from before clothes left it is written again once', async t => {
 
 // A look the reader wrote is theirs: that rewrite keeps it under its name, and keeps the person even when the new sheet
 // does not name them. Only what the reader did not write is taken from the new sheet.
-test('the rewrite of an old sheet keeps the looks the reader wrote', async t => {
+test('the rewrite of an old sheet keeps the looks the reader wrote and the portraits they kept', async t => {
   const comfy = fakeComfy();
   const root = await comfy.listen();
   t.after(() => comfy.server.close());
@@ -826,6 +827,10 @@ test('the rewrite of an old sheet keeps the looks the reader wrote', async t => 
   assert.match(promptOf(comfy.submitted[1]), /A tall woman with a long braid, wearing a grey wool coat/);
   assert.deepEqual(rewrittenSheet([{ name: ' элин ', look: 'Mine', edited: true }], SHEET.characters),
     [{ ...SHEET.characters[0], look: 'Mine', edited: true }], 'a name is matched as a reader would, apart from spaces and case');
+  const portrait = { file: `${'0'.repeat(32)}.png`, seed: 1, look: 'An old look', clothes: PORTRAIT_CLOTHES, style: PORTRAIT_STYLE,
+    graph: '0123456789abcdef', checkpoint: 'synthetic.safetensors', at: 1 };
+  assert.deepEqual(rewrittenSheet([{ name: 'Элин', look: 'An old look', portrait }, { name: 'Ора', look: 'An old woman', portrait }], SHEET.characters),
+    [{ ...SHEET.characters[0], portrait }, { name: 'Ора', look: 'An old woman', outfit: '', portrait }], 'a kept portrait stays, and so does its person');
 });
 
 // The frame kept for samples was described with the looks of that moment; one the reader edited since, or while it was
@@ -857,6 +862,237 @@ test('a sample after a look is edited describes the scene again, and the card co
   assert.equal(f.rows.filter(one => one.event === 'picture_sample').at(-1)!.frameReused, true);
   assert.equal(f.requests.length, 4);
   assert.doesNotMatch(JSON.stringify(f.rows), /braid/);
+});
+
+// A portrait to pick a reference by: one person from their look alone, the whole figure from the front, in clothes and
+// a style of the bot's own, with a new seed each time the reader asks. It needs no description, so no model is asked.
+test('a portrait is the look alone, full length in neutral clothes and style, a new seed each time, and no model call', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root, style: STYLE_LINE });
+  await f.start();
+  await f.bot.idle();
+  const calls = f.requests.length;
+  const storyId = f.store.read('1').active!.storyId;
+  await f.bot.handle(f.click(`portrait:${storyId}:0`));
+  await f.bot.idle();
+  assert.equal(f.requests.length, calls, 'the language model is not asked');
+  const prompt = promptOf(comfy.submitted[1]);
+  assert.ok(prompt.startsWith('Full-length character reference, the whole body in frame, seen from the front.'), prompt);
+  assert.ok(prompt.includes(`short ash-grey hair, ${PORTRAIT_CLOTHES}: stands upright facing the viewer, arms relaxed at the sides.`), prompt);
+  assert.ok(prompt.endsWith(PORTRAIT_STYLE), prompt);
+  assert.doesNotMatch(prompt, /Элин|grey wool coat|Synthetic test style|expression/);
+
+  // The photo comes with its caption, another version, the keep button with the id it was drawn under, and the way back.
+  const photo = photos(f.sent)[1];
+  assert.equal(photo.payload.caption, '🖼 Портрет: Элин. Лицо и фигура в полный рост, в простой нейтральной одежде.');
+  const [[again, keep], [back]] = photo.payload.reply_markup!.inline_keyboard.map(row => row.map(button => button.callback_data));
+  assert.equal(again, `portrait:${storyId}:0`);
+  assert.match(keep, /^portrait-keep:[0-9a-f]{8}$/);
+  assert.equal(back, `view:character:${storyId}:0`);
+  const status = f.sent.find(one => one.method === 'sendMessage' && one.payload.text === '🎨 Рисую портрет…')!;
+  assert.ok(f.deleted.includes(idOf(f.sent, status)), 'its status line goes');
+  // It is recorded with its story and no scene, and has no prompt under it.
+  const { at, ...recorded } = f.store.read('1').sentPictures!.at(-1)!;
+  assert.deepEqual(recorded, { storyId, messageId: idOf(f.sent, photo) });
+  assert.ok(Number.isSafeInteger(at));
+  assert.equal(notes(f.sent).length, 1);
+  const row = f.rows.find(one => one.event === 'picture_portrait')!;
+  assert.deepEqual([row.outcome, row.imageSteps, row.actor], ['ready', 8, 'owner']);
+  assert.ok(comfy.seen.cleared.includes('p2'));
+
+  // Another version is the same prompt with another seed.
+  await f.bot.handle(f.click(again));
+  await f.bot.idle();
+  assert.equal(promptOf(comfy.submitted[2]), prompt);
+  assert.notEqual(seedIn(comfy.submitted[2]), seedIn(comfy.submitted[1]));
+  assert.equal(f.requests.length, calls);
+  assert.doesNotMatch(JSON.stringify(f.rows), /Элин|hair|tank top|reference/);
+
+  // A reader who is not drawn for is refused, whatever button they have, and the card never hears of them.
+  await f.start(2);
+  await f.bot.idle();
+  const theirs = f.store.read('2').active!.storyId;
+  f.store.mutate('2', state => { state.stories[theirs].sheet = [{ name: 'Мира', look: 'A tall woman.', outfit: '' }]; });
+  await f.bot.handle(f.click(`portrait:${theirs}:0`, 2));
+  assert.ok(told(f.sent, 'Картинки к твоим сценам пока не включены, поэтому портрет нарисовать нельзя.'));
+  await f.bot.handle(f.click(keep, 2));
+  assert.equal(f.sent.at(-1)!.payload.text, 'Картинки к твоим сценам пока не включены, поэтому портрет нарисовать нельзя.');
+  assert.equal(comfy.submitted.length, 3);
+});
+
+test('keeping a portrait writes the very one shown into a private file beside the database, and a newer one replaces it', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root, users: ['1', '2'] });
+  await f.start();
+  await f.bot.idle();
+  const storyId = f.store.read('1').active!.storyId;
+  const shown = () => f.sent.at(-1)!.payload.text;
+  const draw = async () => {
+    await f.bot.handle(f.click(`portrait:${storyId}:0`));
+    await f.bot.idle();
+    const photo = photos(f.sent).at(-1)!;
+    return { photo, keep: photo.payload.reply_markup!.inline_keyboard[0][1].callback_data, seed: seedIn(comfy.submitted.at(-1)!) };
+  };
+  const first = await draw();
+  const second = await draw();
+  // The button of a portrait keeps nothing once another one has been shown, and another reader has none to keep.
+  await f.bot.handle(f.click(first.keep));
+  assert.equal(shown(), 'Этот портрет уже не сохранить: он устарел или внешность с тех пор изменилась. Нарисуй новый.');
+  await f.start(2);
+  await f.bot.idle();
+  await f.bot.handle(f.click(second.keep, 2));
+  assert.equal(shown(), 'Этот портрет уже не сохранить: он устарел или внешность с тех пор изменилась. Нарисуй новый.');
+  assert.equal(f.store.read('1').stories[storyId].sheet![0].portrait, undefined);
+  await f.bot.handle(f.click(second.keep));
+  assert.equal(shown(), '✅ Портрет сохранён: Элин. В картинки к сценам он пока не попадает.');
+  const person = f.store.read('1').stories[storyId].sheet![0];
+  const portrait = person.portrait!;
+  assert.match(portrait.file, /^[0-9a-f]{32}\.png$/);
+  assert.match(portrait.graph, /^[0-9a-f]{16}$/);
+  assert.deepEqual({ ...portrait, file: '', graph: '', at: 0 }, { file: '', graph: '', at: 0, seed: second.seed, look: person.look,
+    clothes: PORTRAIT_CLOTHES, style: PORTRAIT_STYLE, checkpoint: 'synthetic.safetensors' });
+
+  // The file is the photo that was shown, byte for byte, without the prompt the card wrote into it, in a directory of
+  // this reader's beside the database whose name says nothing of whose it is. Only this reader can read either.
+  const directory = f.store.portraits('1');
+  assert.equal(dirname(directory), `${f.store.path}.portraits`);
+  assert.match(basename(directory), /^[0-9a-f]{32}$/);
+  assert.notEqual(f.store.portraits('2'), directory);
+  assert.deepEqual(readdirSync(directory), [portrait.file]);
+  const bytes = readFileSync(join(directory, portrait.file));
+  assert.deepEqual(new Uint8Array(bytes), new Uint8Array(second.photo.payload.photo));
+  assert.doesNotMatch(bytes.toString('latin1'), /tank top|reference/);
+  assert.equal(statSync(dirname(directory)).mode & 0o777, 0o700);
+  assert.equal(statSync(directory).mode & 0o777, 0o700);
+  assert.equal(statSync(join(directory, portrait.file)).mode & 0o777, 0o600);
+  // The library refers to it; it never carries the picture.
+  assert.ok(JSON.stringify(f.store.read('1')).length < 10_000);
+
+  // A newer portrait kept in its place: its file is written first, and the old one goes once the library has moved on.
+  const third = await draw();
+  await f.bot.handle(f.click(third.keep));
+  const replaced = f.store.read('1').stories[storyId].sheet![0].portrait!;
+  assert.equal(replaced.seed, third.seed);
+  assert.deepEqual(readdirSync(directory), [replaced.file]);
+  await f.bot.handle(f.click(third.keep));
+  assert.equal(shown(), 'Этот портрет уже не сохранить: он устарел или внешность с тех пор изменилась. Нарисуй новый.');
+
+  // Once the look changes, a portrait shown before it cannot be kept, and the kept one is marked as of the earlier look.
+  const fourth = await draw();
+  const drawings = comfy.submitted.length;
+  await f.bot.handle(f.click(`look-edit:${storyId}:0`));
+  await f.bot.handle(f.message('A tall woman with a long braid'));
+  assert.match(shown(), /\n\n🖼 Сохранённый портрет нарисован по прежней внешности\./);
+  await f.bot.handle(f.click(fourth.keep));
+  assert.equal(shown(), 'Этот портрет уже не сохранить: он устарел или внешность с тех пор изменилась. Нарисуй новый.');
+  assert.equal(f.store.read('1').stories[storyId].sheet![0].portrait!.file, replaced.file);
+  assert.deepEqual(readdirSync(directory), [replaced.file]);
+  assert.equal(comfy.submitted.length, drawings, 'an edit draws nothing');
+});
+
+test('a portrait whose story is deleted while it is drawn is not sent, and a deleted seed takes kept ones out of the chat and off the disk', async t => {
+  const slow = fakeComfy({ jobMs: 60000 });
+  const slowRoot = await slow.listen();
+  t.after(() => slow.server.close());
+  const f = fixture(t, { comfy: slowRoot });
+  await f.start();
+  await until(() => slow.submitted.length === 1, 'the scene\'s picture to reach the card');
+  slow.finish();
+  await f.bot.idle();
+  await f.bot.handle(f.click(`portrait:${f.store.read('1').active!.storyId}:0`));
+  await until(() => slow.submitted.length === 2, 'the portrait to reach the card');
+  await deleteTheSeed(f);
+  slow.finish();
+  await f.bot.idle();
+  assert.equal(photos(f.sent).length, 1, 'the card finished it, and only the scene\'s own photo was ever sent');
+  const row = f.rows.find(one => one.event === 'picture_portrait')!;
+  assert.deepEqual([row.outcome, row.code, row.cancelled], ['cancelled', 'scene_gone', true]);
+  assert.ok(!f.sent.some(one => one.method === 'editMessageText'), 'and the reader is told nothing');
+
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const g = fixture(t, { comfy: root });
+  await g.start();
+  await g.bot.idle();
+  await g.bot.handle(g.click(`portrait:${g.store.read('1').active!.storyId}:0`));
+  await g.bot.idle();
+  const photo = photos(g.sent).at(-1)!;
+  await g.bot.handle(g.click(photo.payload.reply_markup!.inline_keyboard[0][1].callback_data));
+  const directory = g.store.portraits('1');
+  assert.equal(readdirSync(directory).length, 1);
+  await deleteTheSeed(g);
+  await g.bot.idle();
+  assert.ok(g.sent.filter(one => one.method === 'deleteMessages').flatMap(one => one.payload.message_ids!).includes(idOf(g.sent, photo)));
+  assert.deepEqual(readdirSync(directory), []);
+  assert.deepEqual(g.store.read('1').sentPictures, []);
+});
+
+test('a portrait is drawn on request only, one at a time with the samples, and a move in the story stops it', async t => {
+  const comfy = fakeComfy({ jobMs: 60000 });
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root });
+  await f.start();
+  await until(() => comfy.submitted.length === 1, 'the scene\'s picture to reach the card');
+  comfy.finish();
+  await f.bot.idle();
+  const storyId = f.store.read('1').active!.storyId;
+  // Opening the list and the card draws nothing.
+  await f.bot.handle(f.click(`view:characters:${storyId}`));
+  await f.bot.handle(f.click(`view:character:${storyId}:0`));
+  assert.equal(comfy.submitted.length, 1);
+  await f.bot.handle(f.click(`portrait:${storyId}:0`));
+  await until(() => comfy.submitted.length === 2, 'the portrait to reach the card');
+  await f.bot.handle(f.click(`portrait:${storyId}:0`));
+  assert.ok(told(f.sent, 'Уже рисую картинку по твоей просьбе. Портрет можно попросить, когда она придёт.'));
+  assert.equal(comfy.submitted.length, 2);
+
+  await f.bot.handle(f.message('Осмотреться'));
+  await until(() => f.rows.some(one => one.event === 'picture_portrait'), 'the portrait to stop');
+  const row = f.rows.find(one => one.event === 'picture_portrait')!;
+  assert.deepEqual([row.outcome, row.code], ['cancelled', 'cancelled']);
+  await f.bot.stop();
+  assert.ok(!photos(f.sent).some(one => one.payload.caption?.startsWith('🖼 Портрет')), 'no portrait after the reader moved on');
+  assert.ok(comfy.seen.cleared.includes('p2'));
+});
+
+// The sidecar of the library: a portrait's file is written before the write that refers to it, so a write rolled back,
+// or one a stopped process never made, leaves a file nobody refers to. The next sweep takes it, and so does the next start.
+test('a portrait file whose library write is rolled back, or never came, is swept', t => {
+  const directory = mkdtempSync(join(tmpdir(), 'simple-chat-portraits-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, 'story.sqlite');
+  let store = new Store(path);
+  const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+  assert.throws(() => store.mutate('1', () => { store.writePortrait('1', bytes); throw new Error('synthetic'); }), /synthetic/);
+  const mine = store.portraits('1');
+  assert.equal(readdirSync(mine).length, 1, 'the file outlives the rollback');
+  assert.equal(store.sweepPortraits('1'), 1);
+  assert.deepEqual(readdirSync(mine), []);
+
+  const file = store.writePortrait('1', bytes);
+  store.mutate('1', state => {
+    const { story } = newStory(state, addSeed(state, seedText).id);
+    story.sheet = [{ name: 'Элин', look: 'lean', outfit: '', portrait: { file, seed: 1, look: 'lean', clothes: PORTRAIT_CLOTHES,
+      style: PORTRAIT_STYLE, graph: '0123456789abcdef', checkpoint: 'synthetic.safetensors', at: 1 } }];
+  });
+  store.writePortrait('1', bytes);
+  store.close();
+  store = new Store(path);
+  t.after(() => store.close());
+  assert.equal(store.portraits('1'), mine, 'the key that names the directory is kept in the database');
+  store.recover();
+  assert.deepEqual(readdirSync(mine), [file]);
+  assert.equal(store.sweepPortraits('2'), 0, 'a reader with no portraits has no directory');
+  const memory = new Store(':memory:');
+  assert.equal(memory.sweepPortraits('1'), 0);
+  assert.throws(() => memory.writePortrait('1', bytes), /database file/);
+  memory.close();
 });
 
 test('clothes are carried down one line of the story and never into another', () => {

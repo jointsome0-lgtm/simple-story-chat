@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { UserError, id, active, addSeed, newStory, fork, beginJob,
   deleteSeed, deleteBranch, forgetLostPictures, context, jobTarget, setLanguage } from '../lib/library.ts';
 import type { Job, Library, SceneNode } from '../lib/library.ts';
@@ -18,7 +19,7 @@ import { createProgress } from './progress.ts';
 import { renderCompaction } from './compact-view.ts';
 import type { CompactionStatus } from './compact-view.ts';
 import type { GpuController } from './gpu.ts';
-import type { Illustrator, PictureRequest, SampleRequest } from './picture.ts';
+import type { Illustrator, PictureRequest, PortraitRequest, SampleRequest } from './picture.ts';
 import { LOOK_CHARS } from './picture.ts';
 import type { Log } from './model-error.ts';
 import { errorCode, member, safeErrorDetails } from './model-error.ts';
@@ -61,6 +62,11 @@ type Plan = {
   // The messages of the pictures whose scenes a deletion took with it (lib/library.ts `forgetLostPictures`), to be
   // deleted from the chat once the deletion screen is out.
   lostPictures?: number[];
+  // A portrait of a person of a story's sheet the reader asked for (local/picture.ts `portrait`).
+  portrait?: Pick<PortraitRequest, 'storyId' | 'name' | 'candidate' | 'caption' | 'status'>;
+  // The write may have let go of a kept portrait — a deletion, or a portrait kept in its place — whose file goes once
+  // it is committed (local/store.ts `sweepPortraits`).
+  sweep?: boolean;
 };
 // One reader's turn, for as long as it can still be cancelled. What it leaves behind — a picture being stopped on
 // the other card — outlives the entry and is awaited through `inFlight` instead.
@@ -269,13 +275,26 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       return { screen: render(state, `style:${styleId}`, pictureInfo) };
     }
     // The people of a story's sheet (local/ui.ts, the characters' screens), by the story and their place on it. A look
-    // is written the way a style is.
-    if (action?.startsWith('look-edit:')) {
-      const [, storyId, index] = action.split(':');
+    // is written the way a style is, and a portrait is drawn on request only, for a reader who is drawn for.
+    if (action?.startsWith('look-edit:') || action?.startsWith('portrait:')) {
+      const [verb, storyId, index] = action.split(':');
       const person = ID.story.test(storyId) && /^\d+$/.test(index) ? state.stories[storyId]?.sheet?.[Number(index)] : undefined;
       if (!person) throw refuse(t, 'staleButton');
-      state.ui = { input: 'look', storyId, name: person.name };
-      return { screen: render(state, 'look-input', pictureInfo) };
+      if (verb === 'look-edit') {
+        state.ui = { input: 'look', storyId, name: person.name };
+        return { screen: render(state, 'look-input', pictureInfo) };
+      }
+      if (!pictureInfo.pictures) throw refuse(t, 'portraitOff');
+      // Names the portrait for its keep button, so that a button of an earlier one never keeps this one.
+      const candidate = randomBytes(4).toString('hex');
+      return { portrait: { storyId, name: person.name, candidate, status: t.characters.drawing,
+        caption: render(state, `portrait:${storyId}:${index}:${candidate}`, pictureInfo) } };
+    }
+    if (action?.startsWith('portrait-keep:')) {
+      if (!pictureInfo.pictures || !illustrator) throw refuse(t, 'portraitOff');
+      const kept = illustrator.keepPortrait(String(update.callback_query?.from?.id), action.slice(14), state);
+      if (!kept) throw refuse(t, 'portraitStale');
+      return { screen: render(state, `portrait-kept:${kept.storyId}:${kept.index}`), sweep: true };
     }
     // While a look is being written, text is the look: one line, whatever the lines it was sent in. The person is
     // looked for again by name, since the story may be gone or its sheet written anew in the meantime.
@@ -322,7 +341,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       else deleteBranch(state, a, b);
       // The pictures of the scenes that went leave the chat too. A branch takes only the scenes that no other branch
       // or checkpoint reaches (`deleteBranch`), so the picture of a scene another branch still has stays with it.
-      return { screen: render(state, 'seeds:0'), lostPictures: forgetLostPictures(state, Date.now()) };
+      return { screen: render(state, 'seeds:0'), lostPictures: forgetLostPictures(state, Date.now()), sweep: true };
     }
     if (verb === 'use') {
       const story = state.stories[a];
@@ -566,6 +585,9 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         }
       });
       if (!plan) return;
+      if (plan.sweep) {
+        try { store.sweepPortraits(userId); } catch (error) { log('portraits_unswept', errorCode(error)); }
+      }
       if (plan.gpuAction) {
         if (!gpu) await safeSend(chat, { text: texts(store.read(userId).language).notices.gpuNotConfigured }, log);
         else {
@@ -616,6 +638,21 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
           sampling.set(userId, stop);
           const task: Promise<unknown> = illustrator.sample({ ...plan.sample, userId, chat, signal: stop.signal, log,
             hold: () => gpu?.acquire() })
+            .catch(error => log('turn_task_failed', errorCode(error)))
+            .finally(() => {
+              if (sampling.get(userId) === stop) sampling.delete(userId);
+              inFlight.delete(task);
+            });
+          inFlight.add(task);
+        }
+      }
+      // A portrait takes the place of a sample: one drawing on request at a time, stopped the same way.
+      if (plan.portrait && illustrator) {
+        if (sampling.has(userId)) await safeSend(chat, { text: texts(store.read(userId).language).errors.portraitInFlight }, log);
+        else {
+          const stop = new AbortController();
+          sampling.set(userId, stop);
+          const task: Promise<unknown> = illustrator.portrait({ ...plan.portrait, userId, chat, signal: stop.signal, log })
             .catch(error => log('turn_task_failed', errorCode(error)))
             .finally(() => {
               if (sampling.get(userId) === stop) sampling.delete(userId);

@@ -74,6 +74,14 @@ function drawn(lang: Lang | undefined): Library {
   state.stories.h2.nodes.n5.clothes = { Mira: 'wearing a yellow raincoat' };
   return state;
 }
+// The same, with a portrait kept of the look as it is and one of an earlier look.
+function portraits(lang: Lang | undefined): Library {
+  const state = drawn(lang);
+  const kept = { file: '0123456789abcdef0123456789abcdef.png', seed: 7, clothes: 'plain', style: 'neutral', graph: '0123456789abcdef',
+    checkpoint: 'synthetic.safetensors', at: 1 };
+  state.stories.h2.sheet = [{ ...SHEET[0], portrait: { ...kept, look: SHEET[0].look } }, { ...SHEET[1], portrait: { ...kept, look: 'Earlier.' } }, SHEET[2]];
+  return state;
+}
 
 // Every screen the interface can produce for one language: [what it is, the screen].
 function screens(lang: Lang | undefined): [string, Screen][] {
@@ -94,6 +102,7 @@ function screens(lang: Lang | undefined): [string, Screen][] {
     ['sheet of a story not played', { ...drawn(lang), active: null }],
     ['look edit', { ...drawn(lang), ui: { input: 'look', storyId: 'h2', name: 'Mira' } }],
     ['look edit of a lost person', { ...drawn(lang), ui: { input: 'look', storyId: 'h2', name: 'Nobody' } }],
+    ['portraits', portraits(lang)],
   ];
   for (const [name, state] of states) {
     const details = (route: string): RenderDetails => {
@@ -110,7 +119,8 @@ function screens(lang: Lang | undefined): [string, Screen][] {
     const queue = ['home', 'new-seed', 'model', 'language', 'nonsense', 'seed:s404', 'story:h404', 'tree:h404', 'log:h2:b404:0', 'branch:h2:b404',
       'checkpoints:h2:b404:0', 'checkpoint:h2:c404', 'context:h2:c404', 'delete-seed:s404', 'delete-branch:h2:b404', 'delete-seed:s12', 'delete-branch:h2:b8',
       'style-input', 'style:y404', 'delete-style:y404', 'delete-style:y20', 'sample:film', 'sample:standard', 'sample:y20',
-      'characters:h404', 'character:h404:0', 'character:h2:9', 'look-input'];
+      'characters:h404', 'character:h404:0', 'character:h2:9', 'look-input',
+      'portrait:h2:0:0a1b2c3d', 'portrait:h2:1:', 'portrait:h404:0:0a1b2c3d', 'portrait-kept:h2:1', 'portrait-kept:h2:9'];
     const seen = new Set<string>();
     while (queue.length) {
       const route = queue.shift()!;
