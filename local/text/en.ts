@@ -531,7 +531,7 @@ export const en: Messages = {
     promptNeedsText: 'Send the prompt as text, in one message. To leave without a change, tap “↩️” or send /cancel.',
     promptTooLong: 'Too long: a prompt has to fit in 4000 characters. Shorten it and send it again.',
     variantOff: 'Pictures for your scenes are not switched on, so a variant cannot be drawn.',
-    variantGone: 'A variant of this picture can no longer be drawn: its scene was deleted, or the picture is more than two days old.',
+    variantGone: 'A variant of this picture can no longer be drawn: its scene was deleted.',
     variantChanged: 'The picture graph or model has changed since, so this picture cannot be drawn with the same settings again. It will not be drawn with others: that would no longer compare prompts.',
     variantBusy: 'The scene is still being written. Ask for a variant once it arrives.',
     variantInFlight: 'Already drawing a variant. You can ask for the next one once it arrives.',

@@ -58,7 +58,7 @@ type Plan = {
   // (local/picture.ts `sample`).
   sample?: Pick<SampleRequest, 'storyId' | 'branchId' | 'nodeId' | 'styles' | 'status'>;
   // A variant of a picture from the prompt the reader wrote for it (local/picture.ts `variant`).
-  variant?: Pick<VariantRequest, 'messageId' | 'prompt'>;
+  variant?: Pick<VariantRequest, 'storyId' | 'nodeId' | 'prompt'>;
   // The messages of the pictures whose scenes a deletion took with it (lib/library.ts `forgetLostPictures`), to be
   // deleted from the chat once the deletion screen is out.
   lostPictures?: number[];
@@ -127,11 +127,11 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     const node = story.nodes[branch.head as string];
     return { text: node?.text ?? `${seed.startTime}\n\n${seed.text}`, modelInfo: node?.modelInfo };
   };
-  // The picture a variant is drawn from, when its button is pressed and when its prompt arrives: one drawn for this
-  // reader, still in their library and still drawable the way it was drawn (local/picture.ts `variantOf`). The
-  // picture lane asks again before it draws and before it sends.
-  const variantTarget = (state: Library, messageId: number, t: Messages, pictureInfo: RenderDetails) => {
-    const found = pictureInfo.pictures && illustrator ? illustrator.variantOf(state, messageId) : 'off';
+  // The scene whose picture a variant is drawn from, when its button is pressed and when its prompt arrives: one of
+  // this reader's scenes, still in their library, with a picture still drawable the way it was drawn
+  // (local/picture.ts `variantOf`). The picture lane asks again before it draws and before it sends.
+  const variantTarget = (state: Library, storyId: string, nodeId: string, t: Messages, pictureInfo: RenderDetails) => {
+    const found = pictureInfo.pictures && illustrator ? illustrator.variantOf(state, storyId, nodeId) : 'off';
     if (typeof found === 'string') throw refuse(t, found === 'off' ? 'variantOff' : found === 'gone' ? 'variantGone' : 'variantChanged');
   };
   // `pictureInfo`: whether this reader's scenes are illustrated, so that their menu offers the picture style, and the
@@ -278,25 +278,25 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       state.ui = null;
       return { screen: render(state, `style:${styleId}`, pictureInfo) };
     }
-    // A variant of a picture: the button under its prompt waits for a prompt, and the next text message is that prompt,
-    // drawn as it came. The wait keeps the picture alone, never the prompt.
+    // A variant of a scene's picture: the button under its prompt waits for a prompt, and the next text message is
+    // that prompt, drawn as it came. The wait keeps the scene alone, never the prompt.
     if (action?.startsWith('prompt-edit:')) {
-      const messageId = Number(action.slice(12));
-      variantTarget(state, messageId, t, pictureInfo);
-      state.ui = { input: 'prompt', messageId };
+      const [storyId = '', nodeId = ''] = action.slice(12).split(':');
+      variantTarget(state, storyId, nodeId, t, pictureInfo);
+      state.ui = { input: 'prompt', storyId, nodeId };
       return { screen: render(state, 'prompt-input', pictureInfo) };
     }
     if (state.ui?.input === 'prompt' && !action) {
-      const { messageId } = state.ui;
+      const { storyId, nodeId } = state.ui;
       state.ui = null;
-      variantTarget(state, messageId, t, pictureInfo);
+      variantTarget(state, storyId, nodeId, t, pictureInfo);
       // As with a sample, the picture of the scene being written goes first.
       if (state.job) throw refuse(t, 'variantBusy');
       // A prompt that cannot be drawn leaves the wait open for the next try.
-      const again = (key: 'promptNeedsText' | 'promptTooLong') => { state.ui = { input: 'prompt', messageId }; return refuse(t, key); };
+      const again = (key: 'promptNeedsText' | 'promptTooLong') => { state.ui = { input: 'prompt', storyId, nodeId }; return refuse(t, key); };
       if (!text?.trim()) throw again('promptNeedsText');
       if ([...text].length > PROMPT_CHARS) throw again('promptTooLong');
-      return { variant: { messageId, prompt: text } };
+      return { variant: { storyId, nodeId, prompt: text } };
     }
     if (action === 'last') return { savedText: last(state) };
     if (action === 'new-seed') {

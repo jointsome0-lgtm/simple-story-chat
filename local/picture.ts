@@ -11,13 +11,13 @@
 //   - the picture is drawn on a SECOND card, reached through an ssh tunnel on loopback (local/image-batch.ts).
 //     The language model's card is 22-25 GB full; the image model needs its own, and `SIMPLE_CHAT_IMAGE_URL` is
 //     checked against the model's own server in local/config.ts.
-// Nothing here is stored or logged but counts, and, beside a photo, the settings it was drawn with (`sendKept`): not
-// the description, not the prompt, not the bytes. The prompt goes to the reader alone, folded under the photo it was
-// drawn from (`foldedPrompt`), as their own. The picture is stripped of its PNG text chunks by `drawOne` before it is
-// sent, because ComfyUI writes the whole prompt into them, and the card keeps no copy of it for long either: the job
-// record is cleared, and a saving node in the workflow is loaded as a preview one (`previewOnly`), whose file is in
-// RAM and is deleted by gpu/image-sweeper.py seconds later. The server's node cache still holds the last job in
-// memory until the next one runs (docs/gpu.md, "What the card keeps of a picture").
+// Nothing here is stored or logged but counts, and, on its scene, the settings a scene's picture was drawn with
+// (`sendKept`): not the description, not the prompt, not the bytes. The prompt goes to the reader alone, folded under
+// the photo it was drawn from (`foldedPrompt`), as their own. The picture is stripped of its PNG text chunks by
+// `drawOne` before it is sent, because ComfyUI writes the whole prompt into them, and the card keeps no copy of it for
+// long either: the job record is cleared, and a saving node in the workflow is loaded as a preview one
+// (`previewOnly`), whose file is in RAM and is deleted by gpu/image-sweeper.py seconds later. The server's node cache
+// still holds the last job in memory until the next one runs (docs/gpu.md, "What the card keeps of a picture").
 //
 // A picture in flight is stopped by the reader's next message and by `/cancel`. It is not offered as a button of
 // its own: by the time it is being drawn the job lock is clear, so the bot shows no cancel control, and moving
@@ -30,7 +30,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { recordPicture } from '../lib/library.ts';
-import type { Library, PictureRecipe, SceneNode, SentPicture, Story } from '../lib/library.ts';
+import type { Library, PictureRecipe, SceneNode, Story } from '../lib/library.ts';
 import type { ImageConfig } from './config.ts';
 import { estimateTokens, requestStamp, sameContext } from './context.ts';
 import { SAMPLER_DEFAULTS, apiGraph, applyToWorkflow, drawOne, latentSizeOf, previewOnly, referenceSlots, samplerSettingsOf, settled,
@@ -74,9 +74,9 @@ export type SampleRequest = {
   status: string; signal: AbortSignal; log: Log;
   hold?: () => (() => void) | undefined;
 };
-// A variant of one of the reader's pictures (`variant`): the photo `messageId` it is drawn from, and the whole prompt
-// the reader wrote for it, which is never stored.
-export type VariantRequest = { userId: string; chat: Chat; messageId: number; prompt: string; signal: AbortSignal; log: Log };
+// A variant of the picture of one of the reader's scenes (`variant`): the scene, and the whole prompt the reader wrote
+// for it, which the bot keeps in neither its library nor its logs.
+export type VariantRequest = { userId: string; chat: Chat; storyId: string; nodeId: string; prompt: string; signal: AbortSignal; log: Log };
 export type Illustrator = ReturnType<typeof createIllustrator>;
 
 // By the time a code reaches a log row it is a word from a closed set (local/main.ts drops anything else), so a
@@ -325,8 +325,8 @@ export function createIllustrator(config: ImageConfig, deps: {
   // reader's library, and is recorded there the moment it is sent, so that deleting the scene deletes it too
   // (local/bot.ts). A deletion that lands while it is on its way finds no record of it yet; the record then finds no
   // scene, and the message is taken back at once. The two writes of the library cannot interleave, so one of them
-  // always sees the other. Resolves to the id of the message. A photo a variant may be drawn from keeps the `recipe`
-  // it was drawn with beside it, its prompt never.
+  // always sees the other. Resolves to the id of the message. The scene's own photo leaves the `recipe` it was drawn
+  // with on its scene in the same write, for a variant of it; its prompt is never written.
   async function sendKept(request: { userId: string; chat: Chat; storyId: string; nodeId: string },
     send: () => Promise<number | undefined>, recipe?: PictureRecipe) {
     const { userId, chat, storyId, nodeId } = request;
@@ -335,8 +335,10 @@ export function createIllustrator(config: ImageConfig, deps: {
     // A message whose id did not come back can be neither recorded nor taken back.
     if (messageId === undefined) return undefined;
     const kept = store.mutate(userId, state => {
-      if (!state.stories[storyId]?.nodes[nodeId]) return false;
-      recordPicture(state, { storyId, nodeId, messageId, at: now(), ...(recipe ? { recipe } : {}) });
+      const node = state.stories[storyId]?.nodes[nodeId];
+      if (!node) return false;
+      recordPicture(state, { storyId, nodeId, messageId, at: now() });
+      if (recipe) node.picture = recipe;
       return true;
     });
     if (kept) return messageId;
@@ -348,14 +350,15 @@ export function createIllustrator(config: ImageConfig, deps: {
   // The prompt of a photo, folded under it. The photo is what the reader waited for: a note that does not go out
   // costs them the note alone and is told by a row of its own, unless its scene is gone, which ends the picture.
   // Under a scene's own picture and under a variant of it, never under a sample, the note is `editable`: its button
-  // asks for a variant of the photo from a prompt the reader writes (`variant`, local/bot.ts).
+  // asks for a variant of the scene's picture from a prompt the reader writes (`variant`, local/bot.ts), and names the
+  // scene, whose ids keep it well inside the 64 bytes a button's data may have.
   async function sendPrompt(request: { userId: string; chat: Chat; storyId: string; nodeId: string; log: Log },
     photo: number | undefined, prompt: string, size: { promptCharacters: number; pictureTokens?: number; styleTokens?: number },
     editable = false) {
     const t = texts(store.read(request.userId).language);
     const summary = t.notices.promptSummary(size.promptCharacters, size.pictureTokens ?? null, size.styleTokens ?? null);
     const keyboard = editable && photo !== undefined
-      ? { inline_keyboard: [[{ text: t.variant.button, callback_data: `prompt-edit:${photo}` }]] } : undefined;
+      ? { inline_keyboard: [[{ text: t.variant.button, callback_data: `prompt-edit:${request.storyId}:${request.nodeId}` }]] } : undefined;
     try { await sendKept(request, () => request.chat.note(foldedPrompt(summary, prompt), photo, keyboard)); }
     catch (error) {
       if (errorCode(error) === 'scene_gone') throw error;
@@ -426,16 +429,16 @@ export function createIllustrator(config: ImageConfig, deps: {
     }
   }
 
-  // The photo `messageId` of a reader, as a variant is drawn from it: its record in their library, with the recipe it
-  // was drawn with, while its scene is there. 'gone' for a photo that is not — deleted with its scene, too old to be
-  // kept (lib/library.ts `recordPicture`), or no scene's own picture or variant — and 'changed' for one drawn with a
-  // graph or a checkpoint the bot no longer draws with: any other would make a different picture, not the same one
-  // with another prompt.
-  function variantOf(state: Library, messageId: number): (SentPicture & { recipe: PictureRecipe }) | 'gone' | 'changed' {
-    const picture = state.sentPictures?.find(one => one.messageId === messageId);
-    const recipe = picture?.recipe;
-    if (!picture || !recipe || !state.stories[picture.storyId]?.nodes[picture.nodeId]) return 'gone';
-    return recipe.graph === graphId && recipe.checkpoint === config.checkpoint ? { ...picture, recipe } : 'changed';
+  // A reader's scene as a variant of its picture is drawn from it: the scene, with the recipe its own picture was
+  // drawn with. 'gone' for a scene that is not in their library, deleted with its seed or branch, or has no such
+  // picture, and 'changed' for a picture drawn with a graph or a checkpoint the bot no longer draws with: any other
+  // would make a different picture, not the same one with another prompt.
+  function variantOf(state: Library, storyId: string, nodeId: string): { node: SceneNode; recipe: PictureRecipe } | 'gone' | 'changed' {
+    // The ids come from a button's data, which the reader's client sends: a name such as `constructor` finds nothing.
+    const node = state.stories[storyId]?.nodes?.[nodeId];
+    const recipe = node?.picture;
+    if (!node || !recipe) return 'gone';
+    return recipe.graph === graphId && recipe.checkpoint === config.checkpoint ? { node, recipe } : 'changed';
   }
 
   return {
@@ -526,26 +529,25 @@ export function createIllustrator(config: ImageConfig, deps: {
     // nor woken, and the story, its sheet, the clothes and the frame kept for a sample stay as they were. The reader's
     // next move in the story stops it (local/bot.ts); a failure is told once and never tried again.
     async variant(request: VariantRequest): Promise<void> {
-      const { userId, chat, messageId, prompt, signal, log } = request;
+      const { userId, chat, storyId, nodeId, prompt, signal, log } = request;
       if (signal.aborted) return;
       const t = texts(store.read(userId).language);
       const clear = await statusLine(chat, t.variant.drawing, log);
       // Asked again before the drawing and before the photo goes out: the scene may have been deleted meanwhile.
       const target = () => {
-        const found = config.users.has(userId) ? variantOf(store.read(userId), messageId) : 'off';
+        const found = config.users.has(userId) ? variantOf(store.read(userId), storyId, nodeId) : 'off';
         if (found === 'gone') throw sceneGone();
         if (typeof found === 'string') throw Object.assign(new Error(found), { code: found === 'off' ? 'pictures_off' : 'recipe_changed' });
         return found;
       };
       try {
-        const { storyId, nodeId, recipe } = target();
+        const { recipe } = target();
         const drawn = await draw(recipe, prompt, signal);
         if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
-        target();
+        const { node } = target();
         const scene = { userId, chat, storyId, nodeId, log };
-        const replyTo = store.read(userId).stories[storyId]?.nodes[nodeId]?.messageId;
         const photoStarted = now();
-        const photo = await sendKept(scene, () => chat.photo(drawn.bytes, replyTo), recipe);
+        const photo = await sendKept(scene, () => chat.photo(drawn.bytes, node.messageId));
         const photoMs = Math.max(0, now() - photoStarted);
         await clear();
         const size = promptSize(prompt);

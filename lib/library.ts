@@ -25,6 +25,9 @@ export type SceneNode = {
   // What each person of the story's sheet wore in this scene's picture, by their sheet name: the clothes the next
   // picture of this line of the story starts from (local/picture.ts). Only the local bot writes it.
   clothes?: Record<string, string>;
+  // How this scene's own picture was drawn, all but its prompt: a variant of it is drawn with the same, for as long
+  // as the scene is kept (local/picture.ts `variant`). Only the local bot writes it.
+  picture?: PictureRecipe;
 };
 export type Branch = { id: string; name: string; head: string | null; memory: string | null };
 export type Checkpoint = { id: string; branchId: string; label: string; kind: string; head: string | null; memory: string | null };
@@ -48,9 +51,9 @@ export type DeleteConfirmation = { confirm: string; input?: undefined };
 // A reader writing a picture style of their own (local/picture-style.ts): their next text message is the style, not a
 // move. With `styleId` it is a new version of that style; without it, a new style.
 export type StyleInput = { input: 'style'; styleId?: string; confirm?: undefined };
-// A reader writing the whole prompt of a variant of the photo `messageId` (local/picture.ts `variant`): their next
-// text message is that prompt, not a move. The prompt itself is not kept here.
-export type PromptInput = { input: 'prompt'; messageId: number; confirm?: undefined };
+// A reader writing the whole prompt of a variant of the picture of the scene `nodeId` (local/picture.ts `variant`):
+// their next text message is that prompt, not a move. The prompt itself is not kept here.
+export type PromptInput = { input: 'prompt'; storyId: string; nodeId: string; confirm?: undefined };
 // One of the reader's own picture styles: the name on its button and the line that ends the prompt.
 export type OwnStyle = { id: string; name: string; line: string };
 // How a picture was drawn, all but its prompt (local/picture.ts): its seed, a hash of the graph, the checkpoint's file
@@ -58,8 +61,8 @@ export type OwnStyle = { id: string; name: string; line: string };
 export type PictureRecipe = { seed: number; graph: string; checkpoint: string; width: number; height: number;
   steps: number; cfg: number; sampler: string; scheduler: string };
 // A picture the local bot sent into its reader's chat (local/picture.ts): the scene it shows, the message it is, and
-// when it was sent, in milliseconds since the epoch. A photo a variant may be drawn from keeps its recipe too.
-export type SentPicture = { storyId: string; nodeId: string; messageId: number; at: number; recipe?: PictureRecipe };
+// when it was sent, in milliseconds since the epoch.
+export type SentPicture = { storyId: string; nodeId: string; messageId: number; at: number };
 // Interface language of the bot, never of the stories. A library without it predates the choice and is shown in Russian.
 export type Language = 'ru' | 'en' | 'zh' | 'ko' | 'ja';
 export type Library = {

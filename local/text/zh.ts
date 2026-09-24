@@ -541,7 +541,7 @@ export const zh: Messages = {
     promptNeedsText: '请用一条文本消息发来提示词。不做修改离开：点“↩️”或发送 /cancel。',
     promptTooLong: '太长了：提示词不能超过 4000 个字符。请缩短后再发一次。',
     variantOff: '你的场景还没有开启插图，所以无法绘制变体。',
-    variantGone: '这张插图已经无法再画变体：它的场景已被删除，或者插图已超过两天。',
+    variantGone: '这张插图已经无法再画变体：它的场景已被删除。',
     variantChanged: '插图的流程图或模型此后已经更换，这张插图无法再用相同的设置绘制。换用其他设置就不再是提示词之间的比较，所以不会绘制。',
     variantBusy: '场景还在写。等它发来后再请求变体。',
     variantInFlight: '正在绘制变体。等它发来后可以再请求下一张。',

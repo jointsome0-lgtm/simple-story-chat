@@ -80,7 +80,7 @@ function screens(lang: Lang | undefined): [string, Screen][] {
     ['new style', { ...library(lang), ui: { input: 'style' } }],
     ['style edit', { ...library(lang), pictureStyles: { y20: OWN }, ui: { input: 'style', styleId: 'y20' } }],
     ['style edit of a deleted style', { ...library(lang), ui: { input: 'style', styleId: 'y404' } }],
-    ['prompt input', { ...library(lang), ui: { input: 'prompt', messageId: 501 } }],
+    ['prompt input', { ...library(lang), ui: { input: 'prompt', storyId: 'h2', nodeId: 'n6' } }],
   ];
   for (const [name, state] of states) {
     const details = (route: string): RenderDetails => {

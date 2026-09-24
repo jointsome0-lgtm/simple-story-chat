@@ -641,12 +641,11 @@ export const ru = {
     sampleBusy: 'Сцена ещё пишется. Попроси пример, когда она придёт.',
     sampleNoScene: 'Пример рисуется по последней сцене. Начни историю, и после первой сцены его можно будет попросить.',
     sampleInFlight: 'Уже рисую пример. Следующий можно попросить, когда он придёт.',
-    // A variant of a picture (local/picture.ts `variant`). The number is PROMPT_CHARS in local/picture-style.ts; two days
-    // is about how long a picture's record is kept (lib/library.ts MESSAGE_DELETABLE_MS).
+    // A variant of a picture (local/picture.ts `variant`). The number is PROMPT_CHARS in local/picture-style.ts.
     promptNeedsText: 'Пришли промпт текстом, одним сообщением. Выйти без изменений можно кнопкой «↩️» или командой /cancel.',
     promptTooLong: 'Слишком длинно: промпт должен уложиться в 4000 знаков. Сократи и пришли снова.',
     variantOff: 'Картинки к твоим сценам пока не включены, поэтому вариант нарисовать нельзя.',
-    variantGone: 'Вариант этой картинки уже не нарисовать: её сцена удалена или картинке больше двух суток.',
+    variantGone: 'Вариант этой картинки уже не нарисовать: её сцена удалена.',
     variantChanged: 'С тех пор сменились граф или модель картинок, и эту картинку уже не повторить с теми же настройками. С другими рисовать не буду: это было бы уже не сравнение промптов.',
     variantBusy: 'Сцена ещё пишется. Попроси вариант, когда она придёт.',
     variantInFlight: 'Уже рисую вариант. Следующий можно попросить, когда он придёт.',
