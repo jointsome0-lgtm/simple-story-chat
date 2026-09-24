@@ -36,6 +36,22 @@ test('a scene one checkpoint drew is left out, and a repeated picture is counted
   assert.equal(files.length, 12);
 });
 
+// The arms of an identity run share their checkpoint, and keyed by it alone two of every three were dropped as repeats.
+test('the arms of one checkpoint are contenders of their own, and pictures of two canvases make no question', () => {
+  const arms: Entry[] = ['A', 'B', 'C'].map(arm => ({ caseId: 'one', checkpoint: 'qwen', seed: 7, arm, width: 1280, height: 704,
+    file: `pictures/one-s7-${arm}.png`, run: '/run' }));
+  const dealt = deal(arms, scenes, 'owner', 1);
+  assert.equal(dealt.questions.length, 1);
+  assert.deepEqual(Object.values(dealt.key.questions[0].letters).sort(), ['qwen#A', 'qwen#B', 'qwen#C']);
+  assert.ok(!/qwen|#[ABC]/.test(JSON.stringify(dealt.questions) + dealt.files.map(file => file.name).join()));
+  // A frame of the text-to-image graph is 1280x720 and one drawn around a reference 1280x704: the size alone tells
+  // the rater which is which, and the two canvases are two experiments.
+  const wide: Entry = { caseId: 'one', checkpoint: 'krea', seed: 7, width: 1280, height: 720, file: 'pictures/one-s7.png', run: '/other' };
+  const mixed = deal([...arms, wide, ...entries], scenes, 'owner', 1);
+  assert.equal(mixed.mixed, 1);
+  assert.equal(mixed.questions.length, 5, 'the other scenes are dealt as before');
+});
+
 test('the page escapes scene text', () => {
   const { questions } = deal(entries, scenes, 'owner', 1);
   assert.ok(!page('owner', questions).includes('<script>"'));
