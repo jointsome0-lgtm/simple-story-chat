@@ -406,3 +406,41 @@ test('cancelling a turn while its control request opens settles at once', async 
   await assert.rejects(pending, { code: 'cancelled' });
   turn.end();
 });
+
+test('simple-serving is called directly, as an agent, even while another bot\'s queue answers on the socket', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'simple-chat-agent-serving-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  // A synthetic gateway that answers a count and a stream, and keeps whose each call said it was.
+  const whose: string[] = [];
+  const gateway = http.createServer((req, res) => {
+    whose.push(`${req.url} ${req.headers['x-simple-serving-class']} ${req.headers['x-simple-serving-scope']}`);
+    req.resume();
+    if (req.url?.endsWith('/input_tokens')) { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"input_tokens":7}'); return; }
+    const event = (value: object) => `data: ${JSON.stringify({ model: 'synthetic-alias', ...value })}\n\n`;
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    res.end(event({ choices: [{ index: 0, delta: { content: 'direct scene' }, finish_reason: 'stop' }] })
+      + event({ choices: [], usage: { prompt_tokens: 7, completion_tokens: 2 } }) + 'data: [DONE]\n\n');
+  });
+  await new Promise<void>(resolve => gateway.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => gateway.close(resolve)));
+  const config = loadAgentConfig(directory, { SIMPLE_CHAT_PROVIDER: 'simple-serving', SIMPLE_CHAT_API_KEY: 'synthetic-key',
+    SIMPLE_CHAT_MODEL: 'synthetic-alias', SIMPLE_CHAT_BASE_URL: `http://127.0.0.1:${(gateway.address() as { port: number }).port}` });
+  mkdirSync(dirname(config.modelSocket), { recursive: true });
+  let asked = 0;
+  const socket = http.createServer((_req, res) => {
+    asked++;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ model: config.model, gpu: { status: 'ready' } }));
+  });
+  await new Promise<void>(resolve => socket.listen(config.modelSocket, resolve));
+  t.after(() => new Promise(resolve => socket.close(resolve)));
+  const { provider, queue } = await agentProvider(config);
+  const turn = provider.openTurn!();
+  assert.equal(await turn.countInput!(synthetic), 7);
+  assert.equal((await turn.generate(synthetic)).text, 'direct scene');
+  turn.end();
+  assert.equal((await provider.generate(synthetic)).text, 'direct scene');
+  assert.deepEqual([queue, asked], [false, 0]);
+  assert.deepEqual(whose, ['/v1/chat/completions/input_tokens agent agent', '/v1/chat/completions agent agent',
+    '/v1/chat/completions/input_tokens agent agent', '/v1/chat/completions agent agent']);
+});

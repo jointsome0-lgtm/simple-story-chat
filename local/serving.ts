@@ -29,8 +29,8 @@ const SCOPE_SECRET = randomBytes(32);
 export const readerScope = (holder: string) =>
   `reader.${createHmac('sha256', SCOPE_SECRET).update(holder).digest('base64url').slice(0, 22)}`;
 // The class and cache scope of a call (contract section 2), from the queue it came through (local/model.ts Controls),
-// which only the scheduler sets. A person's turns are a reader's, with a cache of their own; the agent interface's
-// turns share one scope; probes, eval and every call that did not come through the scheduler are internal.
+// which the scheduler sets, or the agent interface for its direct calls. A person's turns are a reader's, with a cache
+// of their own; the agent interface's turns share one scope; probes, eval and every other call are internal.
 export function workOf({ priority, holder }: Pick<Controls, 'priority' | 'holder'> = {}) {
   // A person's call names its reader: the bot's own turns always do (local/turn.ts, bot.ts, prepare.ts, picture.ts).
   // One that does not is a bug, refused before anything is sent: in any scope it could be given, it would either

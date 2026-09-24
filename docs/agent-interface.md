@@ -55,7 +55,9 @@ disposable probes:
   silently; ask again with a new `requestId`.
 
 The queue checks that it serves the configured model, so start the agent with the bot's model configuration
-(`npm run agent:gpu`, `npm run mcp:gpu`). Without the socket the agent calls the configured provider directly. The
+(`npm run agent:gpu`, `npm run mcp:gpu`). Without the socket the agent calls the configured provider directly. With
+`simple-serving` it always does, whatever socket answers, and says each call is an agent's
+([model providers](model-providers.md#simple-serving-our-gateway)). The
 route is chosen at the first model call of a turn and kept to the turn's end; the next turn checks the queue again, so
 an MCP server started before the bot switches to its queue once the bot is up. A turn never changes route midway: if
 its queue goes away, it ends `preempted` (`background_unavailable`) rather than go on as a new direct request.
