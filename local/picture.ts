@@ -588,7 +588,8 @@ export function createIllustrator(config: ImageConfig, deps: {
     // asks, from their look alone (`portraitPrompt`). It needs no description, so it neither wakes nor holds the
     // language model's card: it waits for the picture card alone. The one sent last is held for its keep button; one
     // whose person, story or look is gone by the time it is drawn is not sent. The reader's next move in the story
-    // stops it, as it stops a sample (local/bot.ts), and a failure is told, since they wait for it.
+    // stops it, as it stops a sample (local/bot.ts), until its photo is on its way; a failure is told, since they wait
+    // for it.
     async portrait(request: PortraitRequest): Promise<void> {
       const { userId, chat, storyId, name, signal, log } = request;
       // The button is offered only to a reader who is drawn for, and that is asked again where the work starts.
@@ -617,7 +618,10 @@ export function createIllustrator(config: ImageConfig, deps: {
         }
         const photoMs = Math.max(0, now() - photoStarted);
         await clear();
-        log('picture_portrait', undefined, { outcome: 'ready', imageMs: drawn.totalMs, imageSteps: steps, photoMs, photoBytes: drawn.bytes.length });
+        // A photo handed to Telegram is delivered: a stop that lands while it is on its way does not take it back, and
+        // it stays there to keep. The row then says both, that it is ready and that it was stopped.
+        log('picture_portrait', undefined, { outcome: 'ready', cancelled: signal.aborted, imageMs: drawn.totalMs, imageSteps: steps,
+          photoMs, photoBytes: drawn.bytes.length });
       } catch (error) {
         const code = errorCode(error);
         const cancelled = signal.aborted || code === 'cancelled' || code === 'scene_gone';

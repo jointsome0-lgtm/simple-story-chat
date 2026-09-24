@@ -1190,6 +1190,32 @@ test('a portrait whose keep is rolled back leaves no file behind and is kept by 
   assert.equal(f.sent.at(-1)!.payload.text, 'Этот портрет уже не сохранить: он устарел или внешность с тех пор изменилась. Нарисуй новый.');
 });
 
+// A stop that lands while the photo is on its way to Telegram does not take it back: the portrait arrives, stays to
+// be kept, and its row says both that it is ready and that it was stopped.
+test('a portrait stopped while its photo is delivered arrives, can be kept, and is logged as ready and stopped', async t => {
+  const comfy = fakeComfy();
+  const root = await comfy.listen();
+  t.after(() => comfy.server.close());
+  const f = fixture(t, { comfy: root, holdPhotos: 2 });
+  await f.start();
+  await until(() => photos(f.sent).length === 1, 'the scene\'s photo to be on its way');
+  f.release();
+  await f.bot.idle();
+  const storyId = f.store.read('1').active!.storyId;
+  await f.bot.handle(f.click(`portrait:${elin(storyId)}`));
+  await until(() => photos(f.sent).length === 2, 'the portrait to be on its way');
+  await f.bot.handle(f.message('/cancel'));
+  f.release();
+  await f.bot.idle();
+  const row = f.rows.find(one => one.event === 'picture_portrait')!;
+  assert.deepEqual([row.outcome, row.cancelled, row.code], ['ready', true, undefined]);
+  const photo = photos(f.sent)[1];
+  assert.equal(f.store.read('1').sentPictures!.at(-1)!.messageId, idOf(f.sent, photo));
+  assert.ok(!f.deleted.includes(idOf(f.sent, photo)), 'the photo is not taken back');
+  await f.bot.handle(f.click(photo.payload.reply_markup!.inline_keyboard[0][1].callback_data));
+  assert.equal(f.sent.at(-1)!.payload.text, '✅ Портрет сохранён: Элин. В картинки к сценам он пока не попадает.');
+});
+
 // The sidecar of the library: a portrait's file is written before the write that refers to it. A write rolled back
 // deletes the file it wrote, and one a stopped process never made leaves a file nobody refers to: the next sweep takes
 // it, and so does the next start.
