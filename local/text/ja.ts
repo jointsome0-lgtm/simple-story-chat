@@ -494,6 +494,8 @@ export const ja: Messages = {
     compactionUnverified: command => `圧縮を検証できませんでした。元のシーンと完成したチェックポイントは保存されています。再試行：${command}。`,
     failed: command => `操作を完了できませんでした。完成したシーンとチェックポイントは保存されています。再試行：${command}。`,
     gpuNotConfigured: 'GPUレンタルの制御は、まだ設定されていません。/model で現在のモデルを確認できます。',
+    modelServiceSeparate: 'モデルのサービスは、このチャットからではなく別に起動されます。/model で現在のモデルを確認できます。',
+    modelUnavailable: 'モデルのサービスは今、利用できません。再び動くようになったら、物語を続けられます。',
     gpuPaused: 'GPUが一時停止しました。/model を開いて起動してから、行動をもう一度送ってください。',
     drawing: '🎨 挿絵を描いています…',
     pictureFailed: '挿絵は描けませんでした。シーンは保存されています。',

@@ -165,6 +165,9 @@ function fakeLlama(scene: { inputTokens: number; outputTokens: number }, counted
 type Heard = { kind: string; class: string | null; scope: string | null };
 function fakeServing(scene: { inputTokens: number; outputTokens: number }, heard: Heard[]) {
   return createServing({ baseUrl: 'http://127.0.0.1:8080', model: 'test-model', contextTokens: 65536, apiKey: 'synthetic-key' }, { fetch: async (url, init) => {
+    // A ready service, for the check the adapter makes before its first call.
+    if (url.endsWith('/v1/state')) return Response.json({ contract: '2', status: 'ready', model: 'test-model', context_tokens: 65536 });
+    if (url.endsWith('/v1/models')) return Response.json({ data: [{ id: 'test-model', max_model_len: 65536 }] });
     const body = JSON.parse(init.body as string) as { response_format?: { json_schema: { schema: { properties: Record<string, unknown> } } } };
     const properties = body.response_format?.json_schema.schema.properties;
     const kind = !properties ? 'scene' : 'facts' in properties ? 'compaction' : 'characters' in properties ? 'sheet' : 'frame';

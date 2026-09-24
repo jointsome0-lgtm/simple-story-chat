@@ -16,6 +16,7 @@
   },
   "scripts": {
     "test": "node --test local/*.test.ts",
+    "test:serving": "node --test local/integration/serving.test.ts",
     "check": "tsc -p tsconfig.json && node local/cloud-lib.ts --check && node local/check.ts",
     "cloud:lib": "node local/cloud-lib.ts",
     "start": "node local/start.ts",

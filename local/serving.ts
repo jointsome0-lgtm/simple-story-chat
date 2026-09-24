@@ -6,7 +6,7 @@ import { modelBaseUrl } from './config.ts';
 import type { Controls, GenerateControls, GenerationResult, ModelRequest, Timings } from './model.ts';
 import { MAX_BODY, events, messagesFor } from './llama.ts';
 
-// simple-serving: our own gateway in front of vLLM on a rented card, built to contract v1 (docs/contract-v1.md in
+// simple-serving: our own gateway in front of vLLM on a rented card, built to contract v2 (docs/contract-v2.md in
 // jointsome0-lgtm/simple-serving; the cases both sides test are pinned in local/serving-contract/). Unlike llama-server
 // it serves readers, agents, our own probes and outside keys at once, so every request says whose it is, and every
 // refusal comes with a code of the contract rather than a bare status.
@@ -29,8 +29,8 @@ const SCOPE_SECRET = randomBytes(32);
 export const readerScope = (holder: string) =>
   `reader.${createHmac('sha256', SCOPE_SECRET).update(holder).digest('base64url').slice(0, 22)}`;
 // The class and cache scope of a call (contract section 2), from the queue it came through (local/model.ts Controls),
-// which only the scheduler sets. A person's turns are a reader's, with a cache of their own; the agent interface's
-// turns share one scope; probes, eval and every call that did not come through the scheduler are internal.
+// which the scheduler sets, or the agent interface for its direct calls. A person's turns are a reader's, with a cache
+// of their own; the agent interface's turns share one scope; probes, eval and every other call are internal.
 export function workOf({ priority, holder }: Pick<Controls, 'priority' | 'holder'> = {}) {
   // A person's call names its reader: the bot's own turns always do (local/turn.ts, bot.ts, prepare.ts, picture.ts).
   // One that does not is a bug, refused before anything is sent: in any scope it could be given, it would either
@@ -168,16 +168,26 @@ export function createServing(config: ServingConfig, { fetch: fetcher = globalTh
     return { ...value, counted: true };
   }
 
-  return {
+  // No text goes to a service that has not passed a check: until one has, and again after one fails or is cancelled,
+  // a count or a generation checks the service before it runs. The agent interface and the probes call it without the
+  // check the bot makes at its start (local/main.ts), and the bot starts while the service is down: either way, a
+  // wrong contract, model or context must meet no story.
+  let unchecked = true;
+  const provider = {
     countInput(request: ModelRequest, { signal, priority, holder }: Controls = {}) {
-      return operation(signal, 'count_input', async current => (await prepare(request, workOf({ priority, holder }), current)).inputTokens);
+      return operation(signal, 'count_input', async current => {
+        const work = workOf({ priority, holder });
+        if (unchecked) await provider.check({ signal: current });
+        return (await prepare(request, work, current)).inputTokens;
+      });
     },
     // The state first: another contract version may answer the models route differently, and a service that is not
     // ready answers no inference route at all.
     check({ signal }: Controls = {}) {
       return operation(signal, 'health', async current => {
+        unchecked = true;
         const state = await json('/v1/state', null, current);
-        if (!isObject(state) || state.contract !== '1') throw new ModelError('unsupported_server');
+        if (!isObject(state) || state.contract !== '2') throw new ModelError('unsupported_server');
         if (state.status !== 'ready') throw new ModelError('model_unavailable');
         if (state.model !== config.model) throw new ModelError('unexpected_model');
         const models = await json('/v1/models', null, current);
@@ -189,6 +199,7 @@ export function createServing(config: ServingConfig, { fetch: fetcher = globalTh
         const contextTokens = count(listed.max_model_len);
         if (contextTokens === null || count(state.context_tokens) !== contextTokens) throw new ModelError('unsupported_server');
         if (contextTokens < config.contextTokens) throw new ModelError('context_limit');
+        unchecked = false;
         return { model: config.model, contextTokens };
       });
     },
@@ -196,6 +207,7 @@ export function createServing(config: ServingConfig, { fetch: fetcher = globalTh
     generate(request: ModelRequest, { onText = async () => {}, signal, inputLimitTokens, priority, holder }: GenerateControls = {}) {
       return operation(signal, 'generate', async (current): Promise<GenerationResult> => {
         const work = workOf({ priority, holder });
+        if (unchecked) await provider.check({ signal: current });
         const { body, inputTokens: preparedTokens, counted } = await prepare(request, work, current, true);
         prepared.delete(request);
         const limit = Math.min(config.contextTokens - request.maxOutputTokens, inputLimitTokens ?? Infinity);
@@ -267,4 +279,5 @@ export function createServing(config: ServingConfig, { fetch: fetcher = globalTh
       });
     },
   };
+  return provider;
 }

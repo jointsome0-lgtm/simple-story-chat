@@ -485,6 +485,8 @@ export const en: Messages = {
     compactionUnverified: command => `The compaction could not be verified. The original scenes and finished checkpoints are saved. Try again: ${command}.`,
     failed: command => `Could not finish the operation. Finished scenes and checkpoints are saved. Try again: ${command}.`,
     gpuNotConfigured: 'GPU rental control is not set up yet. /model shows the current model.',
+    modelServiceSeparate: 'The model service is started separately, not from this chat. /model shows the current model.',
+    modelUnavailable: 'The model service is unavailable right now. You can continue the story once it works again.',
     gpuPaused: 'The GPU has gone on pause. Open /model and start it, then send your action again.',
     drawing: '🎨 Drawing the illustration…',
     pictureFailed: 'The illustration did not work out. The scene is saved.',

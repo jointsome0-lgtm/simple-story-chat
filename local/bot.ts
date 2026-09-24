@@ -20,7 +20,7 @@ import type { CompactionStatus } from './compact-view.ts';
 import type { GpuController } from './gpu.ts';
 import type { Illustrator, PictureRequest, SampleRequest, VariantRequest } from './picture.ts';
 import type { Log } from './model-error.ts';
-import { errorCode, member, safeErrorDetails } from './model-error.ts';
+import { errorCode, member, safeErrorDetails, unavailable } from './model-error.ts';
 import type { GenerationResult, Provider } from './model.ts';
 import { STYLE } from './illustrate.ts';
 import { OWN_STYLE_CHARS, OWN_STYLES_MAX, PROMPT_CHARS, choiceOf, lineOf, ownStyle, ownStyleInput, ownStyles, pickerKeys, styleKey, styleName } from './picture-style.ts';
@@ -416,6 +416,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       const text = failure.code === 'nothing_to_compact' ? t.notices.nothingToCompactYet(keepScenes)
         : failure.code === 'context_limit' ? t.notices.contextLimit
         : failure.code === 'invalid_memory' || failure.code === 'memory_not_smaller' ? t.notices.compactionUnverified(retry)
+        : unavailable(failure) ? t.notices.modelUnavailable
         : t.notices.failed(retry);
       await safeSend(chat, { text, reply_markup: sceneKeyboard(snapshot) }, log);
     };
@@ -577,7 +578,9 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       });
       if (!plan) return;
       if (plan.gpuAction) {
-        if (!gpu) await safeSend(chat, { text: texts(store.read(userId).language).notices.gpuNotConfigured }, log);
+        // simple-serving starts and sleeps its own card, so there is nothing here to start (docs/model-providers.md).
+        const notices = texts(store.read(userId).language).notices;
+        if (!gpu) await safeSend(chat, { text: providerName === 'simple-serving' ? notices.modelServiceSeparate : notices.gpuNotConfigured }, log);
         else {
           try {
             if (plan.gpuAction === 'pause') gpu.pause(); else gpu.resume();
