@@ -6,7 +6,6 @@
 !.env.gpu.example
 !.env.eval.example
 config.local.json
-handlers/_configure.js
 
 # Private stories, exports, backups and diagnostic output
 data/

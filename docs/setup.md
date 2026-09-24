@@ -54,7 +54,7 @@ tmux new -s simple-story-chat-bot 'npm start'
 
 If the session already exists, attach to it; do not start a second instance. `flock` also prevents two processes from working with one database at the same time. To stop: Ctrl+C in the bot session. An unfinished reply is not repeated automatically; the scenes that are already saved remain.
 
-At startup the bot checks that no webhook is set. If a webhook is configured, the bot stops; it does not change somebody else's configuration automatically. Do not use the cloud handler and local polling at the same time. The `tgcloud` commands belong to a separate cloud draft that is not launched yet; you do not need to read or edit `.tgcloud/` by hand.
+At startup the bot checks that no webhook is set. If a webhook is configured, the bot stops; it does not change somebody else's configuration automatically.
 
 ## First run
 

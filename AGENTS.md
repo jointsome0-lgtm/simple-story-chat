@@ -24,7 +24,7 @@ Whoever runs the bot brings the model; adapters behind one interface are describ
 - Rented cards bill every minute, working or idle. Before renting, read the owner's rules in
   [docs/gpu.md](docs/gpu.md#while-the-cards-are-paid-for).
 - `npm test` needs no `npm install`, network, Telegram or model. `npm run check` (after `npm install`) type-checks
-  `local/`, verifies the generated `lib/library.js` and the syntax of the cloud files.
+  `local/` and `lib/`.
 - `local/*.ts` import each other with explicit `.ts` specifiers and use erasable syntax only. More in
   [local/AGENTS.md](local/AGENTS.md).
 - `npm run eval` measures world consistency on synthetic stories; see "Improving the story system" above.
@@ -55,22 +55,15 @@ applies there.
 |-----------------|-------------------------------------------------------------------|
 | `local/`        | The bot: Telegram transport, storage, model adapters, memory, UI, eval and probes, with tests next to the code. |
 | `local/agent-api.ts`, `agent-cli.ts`, `mcp.ts` | The agent interface: CLI and MCP server over a separate agent library ([docs/agent-interface.md](docs/agent-interface.md)). |
-| `lib/library.ts`| Pure story-library logic shared by the bot and the cloud draft.   |
+| `lib/library.ts`| Pure story-library logic: the library's types and the operations on it. |
 | `examples/`     | Synthetic seeds and eval scenarios. Safe to read and to send to models. |
 | `gpu/`          | Bootstrap and start scripts for llama.cpp on a rented GPU ([docs/gpu.md](docs/gpu.md)). |
 | `docs/`         | Reference docs, the improvement loop and its log.                 |
-| `schema.js`, `handlers/`, other `lib/` files | The undeployed Telegram Serverless draft, see below. |
 | `data/`, `backups/`, `exports/`, `logs/`, `.env*` | Local state, gitignored. See Privacy above. |
 | `.tgcloud/`     | CLI state (credentials, snapshot, cached layout). **Never edit or read from here** — it's gitignored machine state. |
 
-## The cloud draft (not deployed)
+## Telegram Serverless
 
-`schema.js`, `handlers/` and the hand-written JS in `lib/` are an earlier draft for Telegram's serverless platform
-(V8 isolate, `tgcloud` CLI). It is not deployed and the local bot does not use it, apart from the shared
-`lib/library.ts`. `lib/library.js` is generated from `lib/library.ts` by `npm run cloud:lib` and stays plain JS; edit
-only the `.ts` source and regenerate. The rest of `lib/` and `handlers/` stays hand-written JS.
-
-The platform's rules differ from Node's: modules are imported by bare name (`'schema'`, `'lib/cart'`, `'sdk'`), never
-by a relative path or with an extension; there is no filesystem and no npm at runtime; every DB call is async; there
-are no foreign keys; drops happen only via `.deprecated('reason')`; deploying never touches the database. Read
-[docs/tgcloud-sdk.md](docs/tgcloud-sdk.md) before touching those files.
+The owner's account is on the waiting list for Telegram's serverless platform. The draft for it (`schema.js`,
+`handlers/`, the JS in `lib/`, `docs/tgcloud-sdk.md`) was removed while there is no access; its last version is at
+commit ea88089, to bring back from there.

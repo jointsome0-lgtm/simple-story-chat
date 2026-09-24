@@ -1,4 +1,4 @@
-// Shared story domain. lib/library.js is emitted from lib/library.ts by `npm run cloud:lib`; edit only the TypeScript file.
+// The story domain: the library's types and the pure operations on it, used across local/.
 
 // Library format v1 as stored by the local bot. Store.read checks only `version`; everything
 // else is trusted as written by this code, and readers of optional fields tolerate their absence.

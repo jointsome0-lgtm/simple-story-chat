@@ -1,8 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as source from '../lib/library.ts';
-// The committed cloud artifact; `npm run check` verifies that it is the current tsc output of lib/library.ts.
-import * as artifact from '../lib/library.js';
 import type { Library } from '../lib/library.ts';
 import { Store } from './store.ts';
 
@@ -61,56 +59,6 @@ test('a library written before the language choice has no language, and a chosen
   assert.deepEqual(store.read('1'), { ...structuredClone(stored), language: 'ja' });
 });
 
-// The same operations on a copy of the stored library: scenes, a checkpoint, compaction, a fork and deletions.
-// Each result or expected rejection is recorded with the state after it.
-function exercise(domain: typeof source) {
-  const state: Library = JSON.parse(payload);
-  const results: unknown[] = [];
-  const keep = (value: unknown) => { results.push(structuredClone({ value, state })); };
-  const reject = (operation: () => unknown) => {
-    try { operation(); } catch (error) { keep({ userError: error instanceof domain.UserError, error: String(error), key: (error as { key?: string }).key }); return; }
-    assert.fail('the operation should be rejected');
-  };
-  const { story, branch, seed } = domain.active(state);
-  keep(['2026-08-02 20:04', '2024-02-29 23:59', '2026-02-29 20:04', '2026-13-01 20:04', '2026-08-02 24:00', '206-08-02 20:04', '20:04']
-    .map(time => domain.validTime(time)));
-  keep(domain.history(story, branch.head));
-  keep(domain.context(story, branch));
-  keep([domain.jobTarget(state, 'j20'), domain.jobTarget(state, 'j0')]);
-  reject(() => domain.beginJob(state, 'Ещё раз.', 6000));
-  reject(() => domain.commitTurn(state, 'j20', 'Без даты.\n\nСцена 4.'));
-  const turn = domain.commitTurn(state, 'j20', '2026-08-02 20:04\n\nСцена 4.')!;
-  keep(turn);
-  // Pictures in the chat: of a scene both branches share, and of the scene just written on one of them.
-  domain.recordPicture(state, { storyId: story.id, nodeId: 'n6', messageId: 501, at: 1000 });
-  domain.recordPicture(state, { storyId: story.id, nodeId: turn.nodeId, messageId: 502, at: 2000 });
-  // A portrait of one of the story's people shows no scene.
-  domain.recordPicture(state, { storyId: story.id, messageId: 503, at: 2500 });
-  keep(state.sentPictures);
-  keep(domain.saveCheckpoint(state, story, branch, 'Сцена 4', 'scene'));
-  const job = domain.beginJob(state, 'Продолжай.', 7000);
-  reject(() => domain.commitMemory(state, job.id, ['n9'], { facts: [] }));
-  keep(domain.commitMemory(state, job.id, ['n12'], { facts: [{ kind: 'event', at: '2026-08-02 20:03', text: 'Ключ спрятан.', source: ['n12'] }] }));
-  keep(domain.memoryChain(story, branch.memory));
-  state.job = null;
-  keep(domain.fork(state, story.id, 'c16'));
-  reject(() => domain.addSeed(state, 'Без даты'));
-  keep(domain.newStory(state, domain.addSeed(state, 'Порт\n2026-08-03 09:00\nСинтетическая гавань.').id));
-  keep(domain.deleteBranch(state, story.id, branch.id));
-  keep(domain.forgetLostPictures(state, 3000));
-  reject(() => domain.deleteBranch(state, story.id, branch.id));
-  keep(domain.deleteSeed(state, seed.id));
-  keep(domain.forgetLostPictures(state, 3000));
-  reject(() => domain.deleteSeed(state, seed.id));
-  // Names in another interface language are stored as given; the defaults above are the Russian ones.
-  const labels = { firstBranch: 'Start', seedCheckpoint: 'Seed', forkBranch: (from: string) => `From ${from}`, forkCheckpoint: 'Fork point', afterCompaction: 'After' };
-  const harbour = domain.newStory(state, domain.addSeed(state, 'Harbour\n2026-08-03 09:00\nA synthetic harbour.').id, labels);
-  keep(domain.fork(state, harbour.story.id, Object.keys(harbour.story.checkpoints)[0], labels));
-  keep(domain.setLanguage(state, 'en'));
-  keep([domain.emptyLibrary(), domain.id(state, 'x')]);
-  return { results, state };
-}
-
 test('pictures are recorded as sent, and a deletion forgets those of its lost scenes and those too old to delete', () => {
   const state: Library = JSON.parse(payload);
   const hour = 60 * 60 * 1000;
@@ -146,9 +94,4 @@ test('pictures are recorded as sent, and a deletion forgets those of its lost sc
   for (let n = 0; n < source.SENT_PICTURES_MAX + 5; n++) source.recordPicture(state, sent(100 + n, 'n6', now + n));
   assert.equal(ids()?.length, source.SENT_PICTURES_MAX);
   assert.equal(ids()?.[0], 105);
-});
-
-test('the generated cloud domain behaves like lib/library.ts on a stored v1 library', () => {
-  assert.notEqual(artifact.UserError, source.UserError);
-  assert.deepEqual(exercise(artifact), exercise(source));
 });
