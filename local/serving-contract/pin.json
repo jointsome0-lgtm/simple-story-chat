@@ -1,0 +1,8 @@
+{
+  "about": "cases-v1.json is an exact copy of the shared cases of simple-serving's contract, never edited here. To update it, copy the file again from a commit of that repository and change this pin in the same commit (contract/README.md there, \"Changing the cases\").",
+  "contract": "1",
+  "repository": "jointsome0-lgtm/simple-serving",
+  "path": "contract/cases-v1.json",
+  "commit": "ed1565df98267f9bb0158c9ec9e4f8ee74b055e8",
+  "sha256": "1fc2972b31d3c82e93d3edfcdc92b083c8144f8e3992ee838b82d7c061a7fdcd"
+}
