@@ -17,28 +17,33 @@ device="${SIMPLE_CHAT_IMAGE_GPU:-1}"
 (( port > 0 && port <= 65535 )) || exit 1
 [[ -x "$comfy_dir/.venv/bin/python" ]] || { echo 'Run image-bootstrap.sh first.' >&2; exit 1; }
 [[ "$(git -C "$comfy_dir" rev-parse HEAD)" = "$COMFYUI_REVISION" ]] || { echo 'Unexpected ComfyUI revision; rerun image-bootstrap.sh.' >&2; exit 1; }
-image_source="${SIMPLE_CHAT_IMAGE_SOURCE:-comfy}"
-if [[ "$image_source" = official ]]; then
-  encoder="$OFFICIAL_ENCODER_FILE"; vae="$OFFICIAL_VAE_FILE"
-else
-  encoder="$IMAGE_ENCODER_FILE"; vae="$IMAGE_VAE_FILE"
+# The Qwen checkpoint is additive (`true`): the same server serves it, from its own three files and its own two
+# graphs. `only` is a box image-bootstrap.sh gave Qwen's files and nothing of Krea's, and it serves Qwen alone.
+qwen="${SIMPLE_CHAT_IMAGE_QWEN:-false}"
+[[ "$qwen" = true || "$qwen" = false || "$qwen" = only ]] || { echo 'Use SIMPLE_CHAT_IMAGE_QWEN=true, false or only.' >&2; exit 1; }
+if [[ "$qwen" != only ]]; then
+  image_source="${SIMPLE_CHAT_IMAGE_SOURCE:-comfy}"
+  if [[ "$image_source" = official ]]; then
+    encoder="$OFFICIAL_ENCODER_FILE"; vae="$OFFICIAL_VAE_FILE"
+  else
+    encoder="$IMAGE_ENCODER_FILE"; vae="$IMAGE_VAE_FILE"
+  fi
+  for file in "models/diffusion_models/$IMAGE_MODEL_FILE" "models/text_encoders/$encoder" "models/vae/$vae"; do
+    [[ -f "$comfy_dir/$file" ]] || { echo "Missing $file; rerun image-bootstrap.sh." >&2; exit 1; }
+  done
+  # image-bootstrap.sh writes this graph with the file names of the source it installed, after verifying them; the
+  # bot posts it. Without it the server would answer /prompt with loaders pointing at files nobody fetched.
+  workflow="$gpu_dir/$IMAGE_WORKFLOW"
+  [[ -f "$workflow" ]] || { echo "Missing $workflow; rerun image-bootstrap.sh." >&2; exit 1; }
+  grep -q "\"$encoder\"" "$workflow" || { echo "$workflow names another encoder than $image_source installed." >&2; exit 1; }
 fi
-for file in "models/diffusion_models/$IMAGE_MODEL_FILE" "models/text_encoders/$encoder" "models/vae/$vae"; do
-  [[ -f "$comfy_dir/$file" ]] || { echo "Missing $file; rerun image-bootstrap.sh." >&2; exit 1; }
-done
-# image-bootstrap.sh writes this graph with the file names of the source it installed, after verifying them; the bot
-# posts it. Without it the server would answer /prompt with loaders pointing at files nobody fetched.
-workflow="$gpu_dir/$IMAGE_WORKFLOW"
-[[ -f "$workflow" ]] || { echo "Missing $workflow; rerun image-bootstrap.sh." >&2; exit 1; }
-grep -q "\"$encoder\"" "$workflow" || { echo "$workflow names another encoder than $image_source installed." >&2; exit 1; }
-# The Qwen checkpoint is additive: the same server serves it, from its own three files and its own two graphs. This
-# refuses to start with the flag on and the files absent, rather than let the first cell of a timed run find out.
-if [[ "${SIMPLE_CHAT_IMAGE_QWEN:-false}" = true ]]; then
+# This refuses to start with Qwen on and its files absent, rather than let the first cell of a timed run find out.
+if [[ "$qwen" != false ]]; then
   for file in "models/diffusion_models/$IMAGE_QWEN_MODEL_FILE" "models/text_encoders/$IMAGE_QWEN_ENCODER_FILE" "models/vae/$IMAGE_QWEN_VAE_FILE"; do
-    [[ -f "$comfy_dir/$file" ]] || { echo "Missing $file; rerun image-bootstrap.sh with SIMPLE_CHAT_IMAGE_QWEN=true." >&2; exit 1; }
+    [[ -f "$comfy_dir/$file" ]] || { echo "Missing $file; rerun image-bootstrap.sh with SIMPLE_CHAT_IMAGE_QWEN=$qwen." >&2; exit 1; }
   done
   for graph in "$IMAGE_QWEN_WORKFLOW" "$IMAGE_QWEN_EDIT_WORKFLOW"; do
-    [[ -f "$gpu_dir/$graph" ]] || { echo "Missing $gpu_dir/$graph; rerun image-bootstrap.sh with SIMPLE_CHAT_IMAGE_QWEN=true." >&2; exit 1; }
+    [[ -f "$gpu_dir/$graph" ]] || { echo "Missing $gpu_dir/$graph; rerun image-bootstrap.sh with SIMPLE_CHAT_IMAGE_QWEN=$qwen." >&2; exit 1; }
   done
 fi
 # Krea 2 produces garbage under SageAttention, and several rented ComfyUI templates turn it on through their own
@@ -73,7 +78,11 @@ sweeper="$task_dir/image-sweeper.py"
 [[ -f "$sweeper" ]] || { echo "Missing $sweeper; copy it beside this script." >&2; exit 1; }
 export CUDA_VISIBLE_DEVICES="$device"
 ulimit -c 0
-echo "Starting ComfyUI $COMFYUI_VERSION for $IMAGE_MODEL_NAME on GPU $device, loopback port $port, temp in $temp_root; post $workflow."
+if [[ "$qwen" = only ]]; then
+  echo "Starting ComfyUI $COMFYUI_VERSION for $IMAGE_QWEN_NAME alone on GPU $device, loopback port $port, temp in $temp_root; post $gpu_dir/$IMAGE_QWEN_WORKFLOW or $gpu_dir/$IMAGE_QWEN_EDIT_WORKFLOW."
+else
+  echo "Starting ComfyUI $COMFYUI_VERSION for $IMAGE_MODEL_NAME on GPU $device, loopback port $port, temp in $temp_root; post $workflow."
+fi
 # The sweeper starts before the exec, with this shell's PID, which the exec hands to ComfyUI, and it stops by itself
 # once that PID is gone. Its rows are counts and codes, in this script's log beside the server's own lines.
 "$comfy_dir/.venv/bin/python" "$sweeper" --pid "$$" --temp "$temp_root/temp" --port "$port" &

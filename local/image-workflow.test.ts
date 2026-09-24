@@ -244,7 +244,17 @@ test('the opt-in is off by default and adds the three Qwen files when it is on',
   assert.ok(on.stdout.includes(manifest.get('IMAGE_MODEL_FILE')!));
   assert.ok(on.stdout.includes(manifest.get('IMAGE_TURBO_FILE')!));
   const refused = bootstrap(['--dry-run'], { ...environment, SIMPLE_CHAT_IMAGE_QWEN: 'yes' });
-  assert.equal(refused.status, 1, 'a value that is not true or false is refused rather than read as false');
+  assert.equal(refused.status, 1, 'a value that is not true, false or only is refused rather than read as false');
+  // `only`, the identity measurement's box: Qwen's three files, 16 GiB, and nothing of Krea's, so no token either.
+  const alone = bootstrap(['--dry-run'], { SIMPLE_CHAT_GPU_DIR: directory, SIMPLE_CHAT_CIVITAI_TOKEN: '', SIMPLE_CHAT_HF_TOKEN: '',
+    SIMPLE_CHAT_IMAGE_QWEN: 'only' });
+  assert.equal(alone.status, 0, alone.stderr);
+  assert.match(alone.stdout, /^Qwen only, 16 GiB to fetch:/);
+  for (const file of files) assert.ok(alone.stdout.includes(file), `${file} is missing with only`);
+  for (const key of ['IMAGE_MODEL_FILE', 'IMAGE_ENCODER_FILE', 'IMAGE_VAE_FILE', 'IMAGE_TURBO_FILE']) {
+    assert.ok(!alone.stdout.includes(manifest.get(key)!), `${key} is fetched with only`);
+  }
+  assert.equal(bootstrap(['--print-workflow'], { SIMPLE_CHAT_IMAGE_QWEN: 'only' }).status, 1, 'there is no Krea graph to print');
 });
 
 // The rest drives gpu/image-bootstrap.sh itself, in the two modes that touch nothing: no download, no clone, no
