@@ -29,18 +29,20 @@ const rest = args.filter(argument => argument !== '--print-body');
 // twin on the same box, or the "two independent machines" the owner asked for share a link, a disk and a failure.
 // A replacement names two: the host it replaces and the other lane's. On 2026-09-23 the measured text host drew
 // 525 W on a card our idle server did not touch, and with one ID the next in line was the picture machine's host.
-const options = { '--gpus': '1', '--lane': 'both', '--avoid-host': '' };
+// `--hours 1|2|3` is when trial-onstart.sh's guard deletes the machine, three hours unless a session asks for less;
+// the guard never extends it, and ends it sooner when told to (docs/illustrations-plan.md, "we're done").
+const options = { '--gpus': '1', '--lane': 'both', '--avoid-host': '', '--hours': '3' };
 let known = rest.length % 2 === 0;
 for (let at = 0; known && at < rest.length; at += 2) {
   if (Object.hasOwn(options, rest[at])) options[rest[at]] = rest[at + 1]; else known = false;
 }
-const gpus = Number(options['--gpus']), lane = options['--lane'];
+const gpus = Number(options['--gpus']), lane = options['--lane'], hours = Number(options['--hours']);
 const avoidHosts = options['--avoid-host'] === '' ? [] : options['--avoid-host'].split(',');
-if (!avoidHosts.every(host => /^[1-9]\d*$/.test(host))) known = false;
+if (!avoidHosts.every(host => /^[1-9]\d*$/.test(host)) || !/^[123]$/.test(options['--hours'])) known = false;
 let plan = null;
 try { if (known && MAX_DPH_BY_GPUS[gpus]) plan = rentPlan({ gpus, lane }); } catch { /* reported below */ }
 if (!plan) {
-  console.log(JSON.stringify({ event: 'bad_arguments', usage: 'rent.mjs [--gpus 1|2] [--lane both|text|pictures] [--avoid-host ID[,ID...]] [--print-body]' }));
+  console.log(JSON.stringify({ event: 'bad_arguments', usage: 'rent.mjs [--gpus 1|2] [--lane both|text|pictures] [--avoid-host ID[,ID...]] [--hours 1|2|3] [--print-body]' }));
   process.exit(1);
 }
 // --print-body is reviewed before a rental, so it must not need the API key to be exported.
@@ -60,16 +62,16 @@ if (!publicKey.startsWith('ssh-ed25519 ') || publicKey.includes('\n') || publicK
 // Beside this file, not below the working directory: the script is run from wherever the owner happens to be.
 const script = await readFile(join(dirname(fileURLToPath(import.meta.url)), 'trial-onstart.sh'), 'utf8');
 const lines = script.split('\n');
-// The key is set as a shell variable ahead of the script's own body, so installing it does not depend on Vast
-// passing environment variables through.
-const onstart = [lines[0], `SIMPLE_CHAT_SSH_PUBLIC_KEY='${publicKey}'`, ...lines.slice(1)].join('\n');
+// The key and the rental's length are set as shell variables ahead of the script's own body, so neither depends on
+// Vast passing environment variables through.
+const onstart = [lines[0], `SIMPLE_CHAT_SSH_PUBLIC_KEY='${publicKey}'`, `SIMPLE_CHAT_TRIAL_SECONDS=${hours * 3600}`, ...lines.slice(1)].join('\n');
 const body = createBody({ plan, onstart });
 
 // The request that spends the money, with the key and the script left out of it. It is printed before the search so
 // that it can be reviewed even on a day when no offer fits, and the search is skipped without an API key.
 if (printBody) {
   console.log(JSON.stringify({ event: 'create_request', method: 'PUT', url: 'https://console.vast.ai/api/v0/asks/<offer>/',
-    gpus: plan.gpus, lane: plan.lane, maxHour: plan.maxHour, minRamGb: plan.minRamGb, sessionHours: plan.sessionHours,
+    gpus: plan.gpus, lane: plan.lane, hours, maxHour: plan.maxHour, minRamGb: plan.minRamGb, sessionHours: plan.sessionHours,
     sessionGb: Math.round(plan.sessionBytes / 1e9), body: redactedBody(body) }));
   if (!key) process.exit(0);
 }

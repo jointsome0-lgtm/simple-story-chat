@@ -260,7 +260,7 @@ test('the create body asks for direct ssh, and --print-body shows it without the
 // machine, with no ssh key either. Both runs below stop before the search; nothing here reaches vast.ai.
 test('--print-body prints the request without a key, and says so in one line when there is no ssh key', () => {
   const home = mkdtempSync(join(tmpdir(), 'simple-chat-rent-'));
-  const run = () => spawnSync(process.execPath, [RENT, '--print-body'],
+  const run = (...extra: string[]) => spawnSync(process.execPath, [RENT, '--print-body', ...extra],
     { env: { PATH: process.env.PATH ?? '', HOME: home }, encoding: 'utf8', timeout: 30000 });
   try {
     const missing = run();
@@ -277,6 +277,12 @@ test('--print-body prints the request without a key, and says so in one line whe
     assert.equal(shown.body.disk, rentPlan().diskGb);
     assert.match(shown.body.onstart, /^\[redacted: \d+ lines, \d+ bytes, ssh key inside\]$/);
     assert.ok(!printed.stdout.includes('AAAAC3NzaC1secret'), 'the key stays out of the terminal');
+    // The guard deletes the machine after three hours unless the session asks for one or two, and never after more.
+    assert.equal(shown.hours, 3);
+    assert.equal(JSON.parse(run('--hours', '1').stdout.trim()).hours, 1);
+    const longer = run('--hours', '4');
+    assert.equal(longer.status, 1);
+    assert.equal(JSON.parse(longer.stdout.trim()).event, 'bad_arguments');
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
