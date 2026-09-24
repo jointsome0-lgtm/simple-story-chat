@@ -5,9 +5,9 @@ import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { crc32, deflateSync } from 'node:zlib';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createBot } from './bot.ts';
@@ -23,10 +23,11 @@ import { createLlama } from './llama.ts';
 import type { ErrorDetails } from './model-error.ts';
 import { safeErrorDetails } from './model-error.ts';
 import type { GenerateControls, GenerationResult, ModelRequest, Provider } from './model.ts';
-import { clothesOf, createIllustrator, foldedPrompt, wornAt } from './picture.ts';
+import { clothesOf, createIllustrator, encoderTokens, foldedPrompt, wornAt } from './picture.ts';
 import { PRESETS } from './picture-style.ts';
 import { Store } from './store.ts';
 import type { TelegramPayload } from './telegram.ts';
+import { loadTokenizers, qwenPromptTokens } from './tokenizer.ts';
 import { render, scenePrefix, sceneKeyboard } from './ui.ts';
 import type { SeedDraft, Story } from '../lib/library.ts';
 
@@ -250,7 +251,7 @@ function fixture(t: TestContext, options: Options = {}) {
   const boot = () => {
     const illustrator = images && createIllustrator(images, { store, provider, pollMs: 2, now: () => Date.now() + (options.offsetMs ?? 0),
       model: { model: options.llama?.illustratorModel ?? 'test-model', provider: 'claude-code', contextTokens: 65536 },
-      promptTokens: options.promptTokens });
+      promptTokens: () => options.promptTokens });
     const bot = createBot({ store, api, provider, illustrator, allowedUsers: new Set(['1', '2']), maxOutputTokens: 4096,
       render, scenePrefix, sceneKeyboard, model: 'test-model', ownerId: '1',
       compactAtTokens: options.compactAtTokens, keepScenes: options.keepScenes,
@@ -436,6 +437,20 @@ test('a sample of a style is the last scene drawn once more: its frame and seed,
   assert.deepEqual(photos(f.sent)[2].payload.reply_markup?.inline_keyboard.flat().map(button => button.callback_data), ['view:style']);
   assert.equal(f.rows.filter(one => one.event === 'picture_sample').at(-1)!.pictureStyle, 'custom');
   assert.doesNotMatch(JSON.stringify(f.rows), /Charcoal|Уголь/);
+});
+
+// The count under a picture, with the real vocabulary when `npm run tokenizers` has written it: the prompt and the
+// tokens of each encoder's template that stay, and six more for each reference picture of the edit graph.
+test('the tokens under a picture are what the pinned graph\'s encoder conditions on', { skip: !existsSync(resolve('tokenizers/qwen-2.5.json.gz'))
+  && 'no tokenizers/qwen-2.5.json.gz; npm run tokenizers writes it' }, () => {
+  const qwen = loadTokenizers(resolve('tokenizers')).qwen()!;
+  const counter = (file: string) => encoderTokens(qwen, JSON.parse(readFileSync(resolve(file), 'utf8')))!;
+  const prompt = 'A lighthouse keeper reads by the lamp. Oil painting, warm candlelight';
+  const own = qwenPromptTokens(qwen, prompt, 'qwen_image').prompt;
+  assert.equal(counter('gpu/image-workflow-qwen.json')(prompt), own + 8);
+  assert.equal(counter('gpu/image-workflow.json')(prompt), own + 5);
+  assert.equal(counter('gpu/image-workflow-qwen-edit.json')(prompt), own + 8 + 6 * 6);
+  assert.equal(encoderTokens(qwen, defaultWorkflow()), undefined);
 });
 
 // The prompt under a photo, for the reader to read, copy and tune a style line against (docs/telegram-ui.md).

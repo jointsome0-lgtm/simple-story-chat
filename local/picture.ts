@@ -32,7 +32,8 @@ import { recordPicture } from '../lib/library.ts';
 import type { Library, SceneNode, Story } from '../lib/library.ts';
 import type { ImageConfig } from './config.ts';
 import { estimateTokens, requestStamp, sameContext } from './context.ts';
-import { SAMPLER_DEFAULTS, apiGraph, applyToWorkflow, drawOne, latentSizeOf, previewOnly, samplerSettingsOf, settled } from './image-batch.ts';
+import { SAMPLER_DEFAULTS, apiGraph, applyToWorkflow, drawOne, latentSizeOf, previewOnly, referenceSlots, samplerSettingsOf, settled,
+  textEncoderOf } from './image-batch.ts';
 import type { Comfy, Graph } from './image-batch.ts';
 import { STYLE, askJson, assemblePrompt, frameRequest, matchSheet, sheetOf, sheetRequest, sheetWithoutOutfits } from './illustrate.ts';
 import type { Character, Description, Excerpt } from './illustrate.ts';
@@ -45,6 +46,8 @@ import { contextParts, storyNarration } from './prompt.ts';
 import type { Store } from './store.ts';
 import type { Chat, Screen } from './telegram.ts';
 import { texts } from './text.ts';
+import { qwenPromptTokens } from './tokenizer.ts';
+import type { QwenTokenizer } from './tokenizer.ts';
 import { inTurn } from './turn.ts';
 
 // What the bot knows when the scene is on its way out. `sceneAt` is the moment the scene's own message was sent:
@@ -131,6 +134,15 @@ export function foldedPrompt(summary: string, prompt: string): string {
 // images"). Which seed it is is never logged: it says nothing a count can say.
 const seedOf = (storyId: string) => parseInt(createHash('sha256').update(storyId).digest('hex').slice(0, 8), 16);
 
+// How many tokens of a prompt the picture model is conditioned on, counted as the graph's text encoder counts them
+// (local/tokenizer.ts, docs/tokenizers.md): the prompt, the few tokens of the encoder's template that stay, and six
+// for each reference picture of an edit graph. Undefined for a graph whose encoder that tokenizer does not know.
+export function encoderTokens(qwen: QwenTokenizer, graph: Graph): ((prompt: string) => number) | undefined {
+  const encoder = textEncoderOf(graph);
+  const images = referenceSlots(graph).length;
+  return encoder ? prompt => qwenPromptTokens(qwen, prompt, encoder, { images }).conditioning : undefined;
+}
+
 export function createIllustrator(config: ImageConfig, deps: {
   store: Store; provider: Provider;
   // The story model as the bot names it in each scene's request stamp, and its context. Without it every description
@@ -140,9 +152,10 @@ export function createIllustrator(config: ImageConfig, deps: {
   // fake ComfyUI in milliseconds. `drawOne` waits for ComfyUI's websocket to say the job is over and polls the job's
   // record beside it; a fake without the socket is answered by the polls alone.
   now?: () => number; pollMs?: number;
-  // The tokens of a prompt as the picture model's text encoder reads it, for the note under each photo and its log
-  // row (`promptSize`). Without it the note gives the prompt's characters alone.
-  promptTokens?: (prompt: string) => number;
+  // A counter of a prompt's tokens as the text encoder of the graph read below takes them (`encoderTokens`), for the
+  // note under each photo and its log row (`promptSize`). Asked once, at startup; without an answer the note gives
+  // the prompt's characters alone.
+  promptTokens?: (graph: Graph) => ((prompt: string) => number) | undefined;
 }) {
   const { store, provider, now = Date.now, pollMs } = deps;
   // The graph is read once, here, so that a workflow that is not a ComfyUI API export fails when the bot starts
@@ -160,6 +173,7 @@ export function createIllustrator(config: ImageConfig, deps: {
     throw Object.assign(new Error('SIMPLE_CHAT_IMAGE_WORKFLOW must name a readable ComfyUI graph exported in API format'),
       { code: 'workflow_unreadable' });
   }
+  const promptTokens = deps.promptTokens?.(graph);
   const latent = latentSizeOf(graph);
   if (!latent) throw new Error('SIMPLE_CHAT_IMAGE_WORKFLOW needs a sampler whose latent_image comes from a node with a width and a height');
   const size = latent;
@@ -259,9 +273,9 @@ export function createIllustrator(config: ImageConfig, deps: {
   const promptSize = (prompt: string, line: string) => {
     const promptCharacters = [...prompt].length;
     try {
-      if (deps.promptTokens) {
-        const pictureTokens = deps.promptTokens(prompt);
-        const described = deps.promptTokens(prompt.slice(0, prompt.length - line.length).trimEnd());
+      if (promptTokens) {
+        const pictureTokens = promptTokens(prompt);
+        const described = promptTokens(prompt.slice(0, prompt.length - line.length).trimEnd());
         return { promptCharacters, pictureTokens, styleTokens: Math.max(0, pictureTokens - described) };
       }
     } catch { /* the characters alone */ }

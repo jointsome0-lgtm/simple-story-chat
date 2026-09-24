@@ -20,6 +20,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { safeErrorDetails } from './model-error.ts';
 import { matchSheet } from './illustrate.ts';
 import type { Case } from './illustrate-probe.ts';
+import type { PictureEncoder } from './tokenizer.ts';
 
 // A checkpoint's place in the comparison. The bot logs this role, never the file name (local/model-error.ts).
 export type Role = 'primary' | 'alternate';
@@ -192,6 +193,17 @@ export function referenceSlots(graph: Graph): { node: string; key: string; loade
     }
   }
   return found.sort((a, b) => a.order - b.order).map(({ node, key, loader }) => ({ node, key, loader }));
+}
+
+// The text encoder a graph conditions its picture with, as local/tokenizer.ts counts for it: the type of the
+// CLIPLoader behind the node on the sampler's positive input (Qwen Image 2.1's own node, or Krea's CLIPTextEncode).
+// A checkpoint's own CLIP, or a loader of any other type, is no encoder that tokenizer knows.
+export function textEncoderOf(graph: Graph): PictureEncoder | undefined {
+  const sampler = samplerOf(graph);
+  const positive = sampler ? linkedTo(graph, sampler[1].inputs, 'positive') : null;
+  const loader = positive ? linkedTo(graph, positive.inputs, 'clip') : null;
+  const type = loader?.class_type === 'CLIPLoader' ? loader.inputs.type : undefined;
+  return type === 'qwen_image' || type === 'krea2' ? type : undefined;
 }
 
 // Fills a graph by the role of each node rather than by its id, so a workflow pinned on the card keeps working as

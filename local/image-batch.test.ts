@@ -10,7 +10,7 @@ import { deflateSync, inflateSync, crc32 } from 'node:zlib';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { draw, buildBundles, bundlesOf, applyToWorkflow, defaultWorkflow, drawOne, latentSizeOf, parseSeeds, portraitsFor, referenceSlots, samplerSettingsOf, settled, stripPngMetadata, taskMarkdown, REVIEW } from './image-batch.ts';
+import { draw, buildBundles, bundlesOf, applyToWorkflow, defaultWorkflow, drawOne, latentSizeOf, parseSeeds, portraitsFor, referenceSlots, samplerSettingsOf, settled, stripPngMetadata, taskMarkdown, textEncoderOf, REVIEW } from './image-batch.ts';
 import type { Graph, Picture, References } from './image-batch.ts';
 import type { Case } from './illustrate-probe.ts';
 
@@ -444,6 +444,15 @@ test('a person the sheet does not cover, or covers without a portrait, is left o
   const edit: Graph = JSON.parse(readFileSync(resolve('gpu/image-workflow-qwen-edit.json'), 'utf8'));
   assert.deepEqual(referenceSlots(edit).map(slot => slot.key), ['images.image_1', 'images.image_2',
     'images.image_3', 'images.image_4', 'images.image_5', 'images.image_6']);
+});
+
+// The encoder each pinned graph conditions with, for the token count under a picture (local/picture.ts `encoderTokens`).
+test('the text encoder of a graph is the type of the CLIPLoader behind its positive prompt', () => {
+  const graph = (file: string): Graph => JSON.parse(readFileSync(resolve(file), 'utf8'));
+  assert.equal(textEncoderOf(graph('gpu/image-workflow.json')), 'krea2');
+  assert.equal(textEncoderOf(graph('gpu/image-workflow-qwen.json')), 'qwen_image');
+  assert.equal(textEncoderOf(graph('gpu/image-workflow-qwen-edit.json')), 'qwen_image');
+  assert.equal(textEncoderOf(defaultWorkflow()), undefined);
 });
 
 // Which face is whose is carried by the order and by nothing else: the encoder's tokenizer writes its own
