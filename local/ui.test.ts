@@ -5,9 +5,13 @@ import type { ContextStats } from './context.ts';
 import type { InlineKeyboard, Screen } from './telegram.ts';
 import type { GpuInfo, ModelInfo, RenderDetails } from './ui.ts';
 import { render, renderContext, scenePrefix, sceneKeyboard } from './ui.ts';
-import { personTag } from './picture.ts';
+import { LOOK_CHARS, personTag } from './picture.ts';
 import { PRESETS } from './picture-style.ts';
 import { texts } from './text.ts';
+
+const t = texts('ru');
+// The fixture's story as the screens name it.
+const STORY = t.common.storyName(t.format.quote('Маяк'), 1);
 
 function node(id: string, parent: string | null, time: string, body: string, input = 'Ввод'): SceneNode {
   return { id, parent, input, text: `${time}\n\n${body}`, time, truncated: false, delivery: 'sent' };
@@ -45,13 +49,23 @@ function fixture(): Library {
 }
 
 // The story's people as its first picture wrote them, and a first scene that dressed Мира otherwise than the sheet did.
+const LOOK = 'Tall, short grey hair, a scar on the left cheek.';
 function drawn(): Library {
   const state = fixture();
-  state.stories.h2.sheet = [{ name: 'Мира', look: 'Tall, short grey hair, a scar on the left cheek.', outfit: 'a dark wool coat' },
+  state.stories.h2.sheet = [{ name: 'Мира', look: LOOK, outfit: 'a dark wool coat' },
     { name: 'Олег', look: 'A broad-shouldered man with a shaved head.', outfit: 'a fisherman sweater' }];
   state.stories.h2.nodes.n5.clothes = { Мира: 'a yellow raincoat' };
   return state;
 }
+// The same, with a portrait of Мира kept, drawn from the look she has or from an earlier one.
+function portrayed(look: string): Library {
+  const state = drawn();
+  state.stories.h2.sheet![0].portrait = { file: '0123456789abcdef0123456789abcdef.png', seed: 7, look, clothes: 'plain', style: 'neutral', graph: '0123456789abcdef',
+    checkpoint: 'synthetic.safetensors', width: 720, height: 1280, steps: 8, cfg: 1, sampler: 'euler', scheduler: 'simple', at: 1 };
+  return state;
+}
+// A reader whose scenes are drawn, with the semi preset as the owner's standard line.
+const on = { pictures: true, standardStyle: PRESETS.semi };
 // A button names a person by their place on the sheet and the hash of their name (local/picture.ts `personTag`).
 const mira = `h2:0:${personTag('Мира')}`, oleg = `h2:1:${personTag('Олег')}`;
 
@@ -70,8 +84,15 @@ function forked(): Library {
   return state;
 }
 
-// A reader's own picture style, chosen.
+// A reader's own picture style, chosen; stored entries that are no styles, one of them chosen; and an owner's standard
+// line that is no preset. The picker of a reader who wrote no style offers every preset.
 const styled = (): Library => ({ ...fixture(), pictureStyles: { y7: { id: 'y7', name: 'Масло при свечах', line: 'Oil painting, warm candlelight' } }, pictureStyle: 'y7' });
+const unstyled: Library = { ...fixture(), pictureStyles: { y1: { id: 'y1', name: ' ', line: 'Ink.' }, x2: { id: 'x2', name: 'X', line: 'Ink.' } }, pictureStyle: 'y1' };
+const owner = { pictures: true, standardStyle: 'An owner line.' };
+const PICKER = [...Object.keys(PRESETS).map(key => `view:style:${key}`), 'style-new', 'style-samples', 'view:home'];
+// A seed being collected from the parts sent so far.
+const drafting = (parts: string[]): Library => ({ ...fixture(), ui: { input: 'seed', draftId: 'd123', parts } });
+const TWO_PARTS = ['Маяк\n2026-08-02 20:00\nСеверный остров.', 'Вторая часть описания.'];
 
 // The UI reads only a job's presence, kind and story; these jobs carry just that, including kinds the bot never writes.
 const partialJob = (fields: { id: string; kind?: string; storyId: string; branchId: string }) => fields as Job;
@@ -115,8 +136,7 @@ function gpuInfo(overrides: Record<string, unknown> = {}) {
 type Row = [string, unknown, unknown];
 
 test('each state offers only the actions it allows: the scene keyboard, compaction, characters, the GPU and stale routes', () => {
-  const on = { pictures: true, standardStyle: PRESETS.semi };
-  const at = (fields: Partial<Library>, base = fixture()): Library => ({ ...base, ...fields });
+  const at =(fields: Partial<Library>, base = fixture()): Library => ({ ...base, ...fields });
   const job = (kind?: string) => partialJob({ id: 'j12', kind, storyId: 'h2', branchId: 'b3' });
   const menu = callbacks(render(drawn(), 'home', on));
   // The model screen's buttons, and whether it shows the GPU at all.
@@ -137,21 +157,28 @@ test('each state offers only the actions it allows: the scene keyboard, compacti
     ['compaction without a story', callbacks(render(at({ active: null }), 'context', { contextStats: current() })).includes('compact'), false],
     ...[undefined, 'scene', 'compact'].map((kind): Row => [`compaction during a job of kind ${kind}`,
       [{ contextStats: current() }, {}].some(details => callbacks(render(at({ job: job(kind) }), 'context', details)).includes('compact')), false]),
-    // Characters: beside each story only for a reader whose scenes are drawn; a list, a card, a look to write.
+    // Characters: beside each story only for a reader whose scenes are drawn, and beside the style for the story being
+    // played; a list, which says when the people come and writes nothing while there is no sheet; a card with the look
+    // and the clothes each to copy; a look to write.
     ...['home', 'seed:s1', 'story:h2'].map((route): Row => [`the way to characters from ${route}, with and without pictures`,
       [on, {}].map(details => callbacks(render(fixture(), route, details)).includes('view:characters:h2')), [true, false]]),
-    ['characters before the first picture', callbacks(render(fixture(), 'characters:h2', on)), ['view:story:h2', 'view:home']],
+    ['the menu\'s last row with pictures', grid(render(fixture(), 'home', on).reply_markup)?.at(-1), ['view:language', 'view:style', 'view:characters:h2']],
+    ['characters before the first picture', (state => (screen => [screen.text, callbacks(screen), state.stories.h2.sheet])(render(state, 'characters:h2', on)))(fixture()),
+      [`${t.characters.title(STORY)}\n\n${t.characters.none}`, ['view:story:h2', 'view:home'], undefined]],
     ['characters of a sheet', callbacks(render(drawn(), 'characters:h2', on)), [`view:character:${mira}`, `view:character:${oleg}`, 'view:story:h2', 'view:home']],
-    ['a card with pictures', callbacks(render(drawn(), `character:${mira}`, on)), [`look-edit:${mira}`, `portrait:${mira}`, 'view:characters:h2']],
+    ['a card with pictures', preAndButtons(render(drawn(), `character:${mira}`, on)), [[LOOK, 'a yellow raincoat'], [`look-edit:${mira}`, `portrait:${mira}`, 'view:characters:h2']]],
     ['a card without pictures', callbacks(render(drawn(), `character:${mira}`)), [`look-edit:${mira}`, 'view:characters:h2']],
     // Somebody not on the sheet, or a button of one whose place another person took since, is the list, never a card.
     ...['character:h2:7', 'character:h2:x', 'character:h2:0', 'character:h2:0:00000000', `character:h2:1:${personTag('Мира')}`].map((route): Row =>
       [`a stale person: ${route}`, callbacks(render(drawn(), route, on)), callbacks(render(drawn(), 'characters:h2', on))]),
     ['a look without the wait for one', callbacks(render(drawn(), 'look-input', on)), menu],
-    ['a look for Мира', callbacks(render(at({ ui: { input: 'look', storyId: 'h2', name: 'Мира' } }, drawn()), 'look-input', on)), [`view:character:${mira}`]],
+    ['a look for Мира', preAndButtons(render(at({ ui: { input: 'look', storyId: 'h2', name: 'Мира' } }, drawn()), 'look-input', on)), [[LOOK], [`view:character:${mira}`]]],
     ['a look for somebody gone from the sheet', callbacks(render(at({ ui: { input: 'look', storyId: 'h2', name: 'Нет такой' } }, drawn()), 'look-input', on)), menu],
-    // A portrait's keep button carries its own candidate; a portrait of somebody not found offers none.
-    ['a portrait', grid(render(drawn(), `portrait:${mira}:0a1b2c3d`, on).reply_markup), [[`portrait:${mira}`, 'portrait-keep:0a1b2c3d'], [`view:character:${mira}`]]],
+    // A portrait's keep button carries its own candidate, and its caption says what it shows; a portrait kept leads back
+    // to its person; a portrait of somebody not found offers none.
+    ['a portrait', (screen => [screen.text, grid(screen.reply_markup)])(render(drawn(), `portrait:${mira}:0a1b2c3d`, on)),
+      [t.characters.caption('Мира'), [[`portrait:${mira}`, 'portrait-keep:0a1b2c3d'], [`view:character:${mira}`]]]],
+    ['a portrait kept', (screen => [screen.text, callbacks(screen)])(render(drawn(), 'portrait-kept:h2:0', on)), [t.characters.kept('Мира'), [`view:character:${mira}`]]],
     ...[`portrait:h99:0:${personTag('Мира')}:0a1b2c3d`, `portrait:h2:7:${personTag('Мира')}:0a1b2c3d`, `portrait:h2:1:${personTag('Мира')}:0a1b2c3d`, 'portrait-kept:h2:7']
       .map((route): Row => [`a stale portrait: ${route}`, callbacks(render(drawn(), route, on)).some(data => data.startsWith('portrait')), false]),
     // GPU power follows canStart and canPause alone, whatever the status says; there is no GPU for Claude or without one.
@@ -169,11 +196,34 @@ test('each state offers only the actions it allows: the scene keyboard, compacti
       [true, false]]),
     ['the menu for Claude', render(fixture(), 'home', { modelInfo: modelInfo({ provider: 'claude-code' }), gpuInfo: gpuInfo() }).text.includes('🖥'), false],
     // A new seed: an example to copy in one tap, and a way out of the wait for a seed.
-    ['a new seed', preAndButtons(render(fixture(), 'new-seed')), [[texts('ru').newSeed.example], ['cancel']]],
+    ['a new seed', preAndButtons(render(fixture(), 'new-seed')), [[t.newSeed.example], ['cancel']]],
+    // A seed being collected: before its first part the same screen, then a receipt with the save and the way out, and
+    // nothing in it to copy.
+    ['a seed draft before its first part', preAndButtons(render(drafting([]), 'new-seed')), [[t.newSeed.example], ['cancel']]],
+    ...[TWO_PARTS, ['# Маяк']].map((parts): Row => [`a seed draft of ${parts.length} parts`, preAndButtons(render(drafting(parts), 'new-seed')), [undefined, ['save-seed:d123', 'cancel']]]),
     // Writing a style: only while the bot waits for one, a new one with an example to copy, an edit with the line as it is.
     ['a style without the wait for one', callbacks(render(styled(), 'style-input', on)), callbacks(render(styled(), 'style', on))],
-    ['a new style', preAndButtons(render({ ...styled(), ui: { input: 'style' } }, 'style-input', on)), [[texts('ru').pictureStyle.exampleText], ['view:style']]],
+    ['a new style', preAndButtons(render({ ...styled(), ui: { input: 'style' } }, 'style-input', on)), [[t.pictureStyle.exampleText], ['view:style']]],
     ['an edit of a style', preAndButtons(render({ ...styled(), ui: { input: 'style', styleId: 'y7' } }, 'style-input', on)), [['Oil painting, warm candlelight'], ['view:style:y7']]],
+    // The picker: every style opens its card, and the one pictures are drawn in is marked. The owner's standard line has a
+    // card only when it is no preset, a sample of all styles is offered only to a reader whose scenes are drawn, and a
+    // stored entry that is no style of the reader's is left out.
+    ['the style picker', (screen => [callbacks(screen), screen.reply_markup!.inline_keyboard.flat().filter(button => button.text.startsWith('✅ ')).map(button => button.callback_data)])(
+      render(fixture(), 'style', on)), [PICKER, ['view:style:semi']]],
+    ['the style picker without pictures', callbacks(render(fixture(), 'style')).includes('style-samples'), false],
+    ['the style picker with an owner line', callbacks(render(fixture(), 'style', owner)).slice(0, 2), ['view:style:standard', 'view:style:semi']],
+    ['the owner line', preAndButtons(render(fixture(), 'style:standard', owner))[0], ['An owner line.']],
+    ['the standard line that is a preset', callbacks(render(fixture(), 'style:standard', on)), PICKER],
+    ...['style', 'style:x2'].map((route): Row => [`stored entries that are no styles: ${route}`, callbacks(render(unstyled, route, on)), PICKER]),
+    // A card: the whole line to copy, a way to choose it unless it is chosen, a sample only with pictures, and for a style
+    // of the reader's own a way to change or delete it, the deletion only after a confirmation.
+    ['a preset', preAndButtons(render(fixture(), 'style:film', on)), [[PRESETS.film], ['style:film', 'style-sample:film', 'view:style']]],
+    ['the preset pictures are drawn in', callbacks(render(fixture(), 'style:semi', on)), ['style-sample:semi', 'view:style']],
+    ['a preset without pictures', callbacks(render(fixture(), 'style:film')), ['style:film', 'view:style']],
+    ['a style of the reader\'s own', preAndButtons(render(styled(), 'style:y7', on)), [['Oil painting, warm candlelight'], ['style-sample:y7', 'style-edit:y7', 'view:delete-style:y7', 'view:style']]],
+    ['the picker with a style of the reader\'s own', callbacks(render(styled(), 'style', on)).slice(-4), ['view:style:y7', 'style-new', 'style-samples', 'view:home']],
+    ['the deletion of a style', callbacks(render(styled(), 'delete-style:y7', on)), ['remove-style:y7', 'view:style:y7']],
+    ['the deletion of a style that is gone', callbacks(render(styled(), 'delete-style:y8', on)), callbacks(render(styled(), 'style', on))],
     // The story tree: a straight run of scenes is one line, which ends where the story forks or a name points at it, the
     // branch being played marked among them, in a pre block that keeps it monospaced, and no scene's text.
     ['the story tree', (screen => [...preAndButtons(screen), screen.text.includes('Ветер бьёт')])(render(forked(), 'tree:h2')),
@@ -196,7 +246,6 @@ test('each state offers only the actions it allows: the scene keyboard, compacti
 });
 
 test('a screen says what it shows: what a deletion takes, a job, the context, the model and the GPU, and a number it lacks as unknown', () => {
-  const t = texts('ru');
   const single = fixture();
   delete single.stories.h2.branches.b8;
   for (const id of ['c10', 'c11']) delete single.stories.h2.checkpoints[id];
@@ -247,12 +296,9 @@ test('a screen says what it shows: what a deletion takes, a job, the context, th
   ];
   for (const [label, screen, numbers] of shown) assert.equal(/≈\d/.test(screen.text), numbers, label);
 
-  // A pause is Vast's confirmed stop, with the disk still paid for; a state the bot does not know is never a pause.
+  // A paused card names no price and does not promise that a message starts it. The jobs are a count, never whose.
   const gpu = (overrides: Record<string, unknown>) => render(fixture(), 'model', { modelInfo: modelInfo(), gpuInfo: gpuInfo(overrides) }).text;
-  const paused = gpu({ status: 'paused', canStart: true, canPause: false });
-  assert.ok(paused.includes(t.gpu.paused) && /диск оплачивается/.test(paused), 'a paused GPU');
-  for (const status of ['unknown', 'error', 'weird', undefined]) assert.ok(!gpu({ status, canPause: false }).includes(t.gpu.paused), `a GPU ${status}`);
-  // Only a count of the jobs, nothing about who runs them.
+  assert.doesNotMatch(gpu({ status: 'paused', activeJobs: 0, canStart: true, canPause: false }), /\$|₽|руб|USD|\/ч|бесплатн|напиши|сообщени/i, 'a paused GPU');
   assert.doesNotMatch(gpu({ activeJobs: 3, users: ['Алиса'], storyTitle: 'Секрет' }), /Алиса|Секрет/);
 
   // What a screen says of the state it shows: [what, the text and its buttons, what it says, what it must not say].
@@ -263,6 +309,11 @@ test('a screen says what it shows: what a deletion takes, a job, the context, th
     render({ ...fixture(), job: partialJob({ id: 'j12', kind, storyId: 'h2', branchId: 'b3' }) }, route, { contextStats: current() }));
   const home = (details: RenderDetails) => render(fixture(), 'home', details).text;
   const modelLine = `🤖 ${t.model.providers['llama-cpp'].short} · gemma-4-31b-heretic-Q4_K_M`;
+  const ch = t.characters, s = t.pictureStyle;
+  const lone = fixture();
+  lone.seeds.s12 = { id: 's12', title: 'Пусто', startTime: '2026-08-02 20:00', text: 'Ничего.' };
+  const unclothed = drawn();
+  delete unclothed.stories.h2.sheet![1].outfit;
   const says: Say[] = [
     // A compaction and a scene are told apart wherever a job shows.
     ...[['the menu', 'home', t.home.compactJobNote, t.home.sceneJobNote], ['the cancel button', 'home', t.buttons.cancelCompaction, t.buttons.cancelScene],
@@ -284,9 +335,32 @@ test('a screen says what it shows: what a deletion takes, a job, the context, th
     ...([[3250, 'usage', t.scenePrefix.context(5, false)], [3250, 'bytes', t.scenePrefix.context(5, true)], [300, 'usage', t.scenePrefix.contextBelowOne(false)],
       [70000, 'usage', t.scenePrefix.context(107, false)]] as const).map(([tokens, source, share]): Say =>
       [`the header of a request of ${tokens} tokens by ${source}`, scenePrefix(current({ request: { estimatedTokens: tokens, estimateSource: source } })), [`_${share}_\n\n`], []]),
-    // A model has answered only after a check it passed. The menu names the model and what its last check found, even
-    // on a route it does not know, and says nothing of a model it knows nothing about.
-    ['a model never checked', render(fixture(), 'model', { modelInfo: modelInfo({ status: 'configured' }) }).text, [t.model.configured], [t.model.readyNote]],
+    // The model screen names the provider, the model and where it runs, and what the last check found: an answer with its
+    // time if known, a failure with its time, or no check yet, a model having answered only after a check it passed;
+    // nothing of the card's hardware, and nothing at all without model data.
+    ...(['claude-code', 'llama-cpp'] as const).flatMap((provider): Say[] => {
+      const screen = (status: string, checkedAt: string | null = '2026-09-16T10:05:30.000Z') => render(fixture(), 'model', { modelInfo: modelInfo({ provider, status, checkedAt }) }).text;
+      const about = [t.model.provider(t.model.providers[provider].full), t.model.name('gemma-4-31b-heretic-Q4_K_M'), t.model.notes[provider]];
+      return [[`${provider} that answered`, screen('ready'), [...about, t.model.ready('2026-09-16 10:05 UTC'), t.model.readyNote], ['RTX', '5090', 'ГиБ', 'VRAM']],
+        [`${provider} that answered at a time not known`, screen('ready', null), [t.model.ready(null)], []],
+        [`${provider} that failed its check`, screen('unavailable'), [...about, t.model.unavailable('2026-09-16 10:05 UTC'), t.model.unavailableNote], ['✅']],
+        [`${provider} never checked`, screen('configured'), [...about, t.model.configured], ['✅']]];
+    }),
+    ...[undefined, {}, { modelInfo: null }, { modelInfo: { provider: 'other', model: 'x' } }].map((details, n): Say =>
+      [`the model screen without model data, ${n}`, render(fixture(), 'model', details as RenderDetails).text, [t.model.noData], []]),
+    // The GPU there: shared by everybody; while it works, the jobs, when it pauses by itself and, with no job, how soon; a
+    // pause waits for the jobs; a paused card is Vast's confirmed stop with the disk still paid for and the stories kept;
+    // a start takes time; and a state the bot does not know is never a pause.
+    ['a GPU at work', gpu({ activeJobs: 0, idleRemainingSeconds: 600 }), [t.gpu.title, t.gpu.ready(0), t.gpu.autoPause(15), t.gpu.untilPause(10), t.gpu.pauseHint], []],
+    ['a GPU at work on two jobs', gpu({ activeJobs: 2 }), [t.gpu.ready(2)], [t.gpu.untilPause(10), t.gpu.untilPauseSoon]],
+    ['a GPU at work with less than a minute to its pause', gpu({ activeJobs: 0, idleRemainingSeconds: 20 }), [t.gpu.untilPauseSoon], []],
+    ['a GPU pausing', gpu({ status: 'draining', activeJobs: 2, canPause: false }), [t.gpu.draining(2), t.gpu.drainingNote], []],
+    ['a paused GPU', gpu({ status: 'paused', activeJobs: 0, canStart: true, canPause: false }), [t.gpu.paused, t.gpu.pausedNote, t.gpu.storageNote, t.gpu.startHint], []],
+    ['a GPU starting', gpu({ status: 'starting', canPause: false }), [t.gpu.starting], []],
+    ...([['unknown', t.gpu.unknown], ['error', t.gpu.error], ['weird', t.gpu.unknown], [undefined, t.gpu.unknown]] as const).map(([status, unclear]): Say =>
+      [`a GPU ${status}`, gpu({ status, canPause: false }), [unclear], [t.gpu.paused]]),
+    // The menu names the model and what its last check found, even on a route it does not know, and says nothing of a
+    // model it knows nothing about.
     ['the menu of a model that answered', home({ modelInfo: modelInfo() }), [`${modelLine} · ${t.model.short.ready('2026-09-16 10:05 UTC')}`], []],
     ['the menu of a model never checked', home({ modelInfo: modelInfo({ provider: 'claude-code', status: 'configured' }) }),
       [`🤖 ${t.model.providers['claude-code'].short} · gemma-4-31b-heretic-Q4_K_M · ${t.model.short.configured}`], []],
@@ -297,6 +371,38 @@ test('a screen says what it shows: what a deletion takes, a job, the context, th
     ...([['draining', t.gpu.short.draining(2)], ['paused', t.gpu.short.paused], ['weird', t.gpu.short.unknown]] as const).map(([status, short]): Say =>
       [`the menu with a GPU ${status}`, home({ modelInfo: modelInfo(), gpuInfo: gpuInfo({ status, activeJobs: 2 }) }), [t.home.gpu(short)], status === 'paused' ? [] : [t.home.gpu(t.gpu.short.paused)]]),
     ['the menu with a GPU and no model data', home({ gpuInfo: gpuInfo({ status: 'paused' }) }), [`${t.home.title}\n\n${t.home.gpu(t.gpu.short.paused)}\n\n`], []],
+    // Characters: a seed without a story says when the people come, to a reader who is drawn for. The list names each
+    // person with their look. A card names whose clothes it shows, those of the branch being played where a scene dressed
+    // the person and the sheet's otherwise, and what a portrait is for or which look the kept one was drawn from, only
+    // with pictures unless one is kept; a look being written is named with its limit.
+    ['a seed without a story, to a reader who is drawn for', render(lone, 'seed:s12', on).text, [ch.none], []],
+    ['a seed without a story', render(lone, 'seed:s12').text, [], [ch.none]],
+    ['the characters of a sheet', render(drawn(), 'characters:h2', on).text, [`\n1. Мира — ${LOOK}\n2. Олег — A broad-shouldered man with a shaved head.`], []],
+    ['the card of a person the branch dressed', words, [ch.cardTitle('Мира', STORY), `\n${ch.clothesOfBranch(t.format.quote('Начало'))}\na yellow raincoat\n`, ch.sizeNote, ch.scope,
+      `\n\n${ch.portraitNone}`], []],
+    ['the card of a person no scene dressed', render(drawn(), `character:${oleg}`, on).text, [`\n${ch.clothesAtStart}\na fisherman sweater\n`], []],
+    ['the card of a person in a story not being played', render({ ...drawn(), active: null }, `character:${mira}`, on).text, [`\n${ch.clothesAtStart}\na dark wool coat\n`], []],
+    ['the card of a person without clothes', render(unclothed, `character:${oleg}`, on).text, [`\n${ch.noClothes}\n`], []],
+    ['a card without pictures', render(drawn(), `character:${mira}`).text, [], ['🖼']],
+    ['the card of a person with a portrait', render(portrayed(LOOK), `character:${mira}`, on).text, [`\n\n${ch.portraitKept}`], []],
+    ['the card of a person with a portrait of an earlier look', render(portrayed('An earlier look.'), `character:${mira}`).text, [`\n\n${ch.portraitStale}`], []],
+    ['a look being written', render({ ...drawn(), ui: { input: 'look', storyId: 'h2', name: 'Мира' } }, 'look-input', on).text,
+      [`${ch.editTitle('Мира', STORY)}\n\n${ch.editNote(LOOK_CHARS)}`], []],
+    // Picture styles: which one pictures are drawn in, that they are not drawn yet, and where they go once the chosen style
+    // is deleted; a reader's own style shows its line as written, and nothing the bot adds to a prompt.
+    ['the style picker', render(fixture(), 'style', on).text, [s.current(s.presets.semi)], []],
+    ['the preset pictures are drawn in', render(fixture(), 'style:semi', on).text, [s.chosen], []],
+    ['a preset without pictures', render(fixture(), 'style:film').text, [s.off], []],
+    ['a style of the reader\'s own, chosen', render(styled(), 'style:y7', on).text, [`${s.own('Масло при свечах')}\n${s.chosen}`], ['adults', 'взросл']],
+    ['the picker with a style of the reader\'s own', render(styled(), 'style', on).text, [s.current(s.own('Масло при свечах'))], []],
+    ['the deletion of the style pictures are drawn in', render(styled(), 'delete-style:y7', on).text,
+      [s.removeTitle(t.format.quote('Масло при свечах')), s.removeChosen(t.format.quote(s.presets.semi))], []],
+    // A seed being collected: the new seed screen says how to send it; a receipt says it is not saved yet and counts the
+    // parts and their characters, repeating none of them, and warns of nothing.
+    ['a seed draft before its first part', render(drafting([]), 'new-seed').text, [t.newSeed.steps], []],
+    ['a seed draft of two parts', render(drafting(TWO_PARTS), 'new-seed').text, [t.draft.title, t.draft.received(2, [...TWO_PARTS.join('\n\n')].length), t.draft.more],
+      ['Маяк', '2026-08-02', 'Северный остров', 'Вторая часть', '⚠️', 'ток']],
+    ['a seed draft of a title alone', render(drafting(['# Маяк']), 'new-seed').text, [t.draft.received(1, 6)], ['Маяк', '⚠️']],
     // A log or a tree of something gone says so.
     ['the log of a branch that is gone', render(forked(), 'log:h2:missing:0').text, [t.branch.notFound], []],
     ['the tree of a story that is gone', render(forked(), 'tree:missing').text, [t.story.notFound], []],
@@ -335,7 +441,7 @@ test('long collections paginate and long texts fit', () => {
   // A seed pasted in parts: the receipt counts them without repeating any, and keeps its save and cancel.
   state.ui = { input: 'seed', draftId: 'd456', parts: ['x'.repeat(50000)] };
   const draft = render(state, 'new-seed');
-  assert.ok(draft.text.length < 1000 && !draft.text.includes('xxx'), 'a 50,000-character draft');
+  assert.ok(draft.text.length < 1000 && draft.text.includes(t.draft.received(1, 50000)) && !draft.text.includes('xxx'), 'a 50,000-character draft');
   assert.deepEqual(callbacks(draft), ['save-seed:d456', 'cancel']);
   state.ui = null;
 
