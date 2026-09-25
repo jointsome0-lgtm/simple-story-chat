@@ -121,7 +121,8 @@ stories are [sealed](#sealed).
 Whether a scene reached its target is the first thing the judges answer, before any picture exists: whether the
 contact happens, whether each participant it needs is in it, and whether the moment can be told apart. A scene that
 missed stays in the run as written and is never asked again. The report counts the misses and shows every gate over
-the scenes that reached their target beside the main count.
+the scenes that reached their target beside the main count. A pass those scenes do not repeat is reported as a pass
+of the main count alone, never as success on the moments the set was built for.
 
 <a id='text-run'></a>
 
@@ -138,8 +139,9 @@ class `internal`:
 4. the bot's frame, by `frameRequest`;
 5. the variant frame.
 
-That is 95 calls before retries, 5 seeds and five calls for each of the 18 stories, and the adapter may count a
-request's input before it sends it. Two stories run at once, since the gateway admits two `internal` calls; that is a
+That is 95 calls before retries, 5 seeds and five calls for each of the 18 stories. The gateway's smoke, the marker
+check, the retries and the counts the adapter may ask for before it sends are requests on top of these, and the
+report gives them apart. Two stories run at once, since the gateway admits two `internal` calls; that is a
 provisional limit of its contract, not a measured throughput.
 
 The bot's `askJson` only parses a reply. The harness wraps the provider and records every attempt: its kind, the
@@ -149,14 +151,14 @@ decided by rules fixed now:
 
 - `unparsed`: `askJson`'s second try did not parse either;
 - `truncated`: a reply that parsed but finished on `length`;
-- `schema`: a reply that parsed and breaks its schema, such as a required field missing, a value outside an enum,
-  or more than six people;
+- `schema`: a reply that parsed and breaks its schema, checked on the raw reply before `sheetOf` could drop an
+  entry: a required field missing, a value outside an enum, more than six people, or, in the variant, two
+  participants with the same role, compared trimmed and without case;
 - `empty_sheet`: a sheet with no entry;
 - `failed`: the call failed, with the adapter's code.
 
 A failure takes out what needs its output: a scene or the sheet, the whole story; the bot's frame, arm A; the
-variant, A+, L, C, V and T. A variant frame that gives two people one role takes T out of that scene, because T's
-instruction names people by role. Nothing is asked again by choice.
+variant, A+, L, C, V and T. Nothing is asked again by choice.
 
 The run is pinned to the local end of `cli up`'s tunnel, held in the foreground, the served name
 `gemma-4-31b-heretic-nvfp4`, a context of 65536, the bot's sampling for this provider, and the instructions and
@@ -183,16 +185,19 @@ objects, as change 7 says.
 2. Every participant of the main action is in `people`, up to six: people, animals and creatures alike, each as an
    entry of their own even when they are alike, so two guards are two entries. People who only watch may be left out.
    Over six, a crop leaves the rest out, and part of a group is never shown as the whole of it.
-3. `role`, new and required: two to six English words, one phrase for one participant, used for nobody else and
+3. `role`, new and required: two to eight English words, one phrase for one participant, used for nobody else and
    repeated word for word wherever `moment`, `props`, `state` and `action` name that participant. It names their part
    in the moment and their place, with an explicit owner of anything it mentions ("the running father", "the girl in
    the father's left arm", "the rear lifter of the near pod"), and never their appearance or name. Species and scale
-   stay in it where they are the scene's premise ("the crouching giant", "the tiny sailor").
-4. `facing`, new and required, one of `viewer`, `away`, `screen-left` and `screen-right`: where the front of the
-   person's torso points as the camera sees it. A three-quarter view takes the nearer value, and one exactly between
-   two takes the one nearer `viewer`. Lying face up under a camera from above is `viewer`, and face down is `away`.
-   `facing` speaks of the screen alone: body sides stay the person's own, as the bot's rule says, and where the head
-   turns and the eyes look belongs to `action`.
+   stay in it where they are the scene's premise ("the crouching giant", "the tiny sailor"). Code checks that no two
+   participants share a role; the length is advice to the model and is not checked.
+4. `facing`, new and required, one of `viewer`, `away`, `screen-left`, `screen-right` and `other`: where the front
+   of the person's torso points as the camera sees it. A three-quarter view takes the nearer value, and one exactly
+   between two takes the one nearer `viewer`. Lying face up under a camera from above is `viewer`, and face down is
+   `away`. `other` is for what the four cannot describe: a creature without a front, or a torso that points up or down
+   the picture, as a body lying face up seen from the side. `facing` speaks of the screen alone: body sides stay the
+   person's own, as the bot's rule says, so a person in profile turned toward the left of the picture shows the camera
+   their own left side. Where the head turns and the eyes look belongs to `action`.
 5. No lasting appearance outside `look`: no hair, face, skin, build, age or colour of clothes in `moment`, `shot`,
    `setting`, `objects`, `props`, `role`, `state` or `action`, and clothes only in `clothes`. The action needs some
    words that look like appearance, and they stay: expressions, fresh wounds and dressings, the body parts of a
@@ -227,14 +232,15 @@ wrong; the judges' check of the portraits says whether they did.
 
 Code assembles every prompt from the two frames and the sheet, without a card and without a model.
 
-- **The binding manifest** is written for each variant frame before anything is drawn. It lists, in the frame's order
-  with the sheet's people moved first, each person's sheet entry by `matchSheet`, their portrait and their slot. A
-  person the sheet does not name, a creature or a stranger of one scene, is not bound and keeps the frame's own `look`
-  in every arm. Two people matched to one entry, an entry without a portrait, or one portrait in two slots stops the
-  manifest with a code, and the scene leaves C, V and T. The number bound is checked against the sheet's people in the
-  frame before the card. One manifest decides every variant arm: whose looks L drops, and which portraits C, V and T
-  send in which slots. It takes the place of `bindingPlan`, which stops at the first person without a portrait and
-  could bind fewer.
+- **The binding manifest** is planned for each variant frame before the card. It lists, in the frame's order with
+  the sheet's people moved first, each person's sheet entry by `matchSheet`, the id of the portrait planned for that
+  entry, and the slot. A person the sheet does not name, a creature or a stranger of one scene, is not bound and keeps
+  the frame's own `look` in every arm. Two people matched to one entry, or one portrait planned for two slots, stops
+  the plan with a code, and the scene leaves L, C, V and T, since the plan is what drops L's looks; A and A+ stay.
+  The number bound is checked against the sheet's people in the frame. On the card, each portrait's file is checked
+  against the plan before a frame that needs it is sent. One manifest decides every variant arm: whose looks L drops,
+  and which portraits C, V and T send in which slots. It takes the place of `bindingPlan`, which stops at the first
+  person without a portrait and could bind fewer.
 - **A** is `assemblePrompt(frame, sheet)`, the bot's frame and nothing else.
 - **A+** writes each person as "look, role, facing, clothes, state: action", with the look taken from the sheet as the
   bot takes it. `assemblePrompt` and `withoutLooks` know neither `role` nor `facing`, so this assembler is the
@@ -248,8 +254,9 @@ Code assembles every prompt from the two frames and the sheet, without a card an
   from the person in image N", with N counted from 2. A person missing from L's picture is still named, and the
   judges' answers show what the edit made of that. T samples from an empty latent at full denoise like every frame,
   so keeping image 1 is an instruction to the model, not a copy of pixels.
-- `facing` becomes "facing the viewer", "with the back to the viewer", "turned toward the left of the picture" or
-  "turned toward the right of the picture".
+- `facing` becomes "body facing the viewer", "back to the viewer", "body turned toward the left of the picture" or
+  "body turned toward the right of the picture", which speak of the torso and leave the head and the gaze to the
+  action. `other` adds no words.
 - Names and ages are stripped as the bot strips them, and the style line ends every frame's prompt.
 
 The assembly prints counts only: words, tokens as the encoder counts them, people per frame and people bound, and the
@@ -263,8 +270,9 @@ A front portrait is drawn for each person a manifest binds, by the identity run'
 ([portraits](identity-experiment.md#portrait-recipe)): the whole figure from the front, in the bot's plain clothes,
 before a grey backdrop, on the text-to-image graph at 720x1280, seed 7.
 
-A view is drawn only where a frame needs one. For each bound person whose `facing` is not `viewer`, one view is drawn
-as an edit of their full-size front, with this prompt and the portraits' style line:
+A view is drawn only where a frame needs one. For each bound person whose `facing` is `away`, `screen-left` or
+`screen-right`, one view is drawn as an edit of their full-size front, with this prompt and the portraits' style
+line:
 
 > Image 1 shows one person. Draw the same person, with the same face, hair, build, marks and clothes, on the same
 > plain grey backdrop, the whole body in frame, arms relaxed, now {with the back to the viewer | turned toward the
@@ -276,12 +284,15 @@ is never a mirrored portrait, since a mirror moves a scar or a parting to the ot
 drawn once, and none is drawn again or chosen among.
 
 **References reach the encoder at 352x640** in C, V and T, half the identity run's size. Each portrait and view goes
-through a scale node of its own to 352x640 on its way to its slot, and the encode node stays at `resolution` 0, so
-T's first image, L's picture, keeps the canvas size. One `resolution` for the whole node could not do both. The edit
-graph gets a seventh slot for T. Every picture loses its metadata on the way to the card and back, as
-`local/image-batch.ts` already does. The identity run's 704x1280 took 82 s a frame with four portraits, longer than a
-reader would wait, and a frame here binds up to six. The results hold for this size and this recipe: no arm compares
-sizes, and none is compared with the identity run.
+through a scale node of its own to 352x640 on its way to its slot, and the encode node stays at `resolution` 0, so T's
+first image, L's picture, keeps the canvas size. One `resolution` for the whole node could not do both. The edit graph
+gets a seventh slot for T. `local/image-batch.ts` takes the node on a slot for the file's loader, so the drawing code
+learns the scale node: it finds each slot through it, names the file on the loader behind it, drops a whole chain a
+frame does not use, and counts the geometry after the scale. Its tests check the graphs as they are submitted, with no
+references, with C's and V's, and with T's unscaled first slot. Every picture loses its metadata on the way to the
+card and back, as `local/image-batch.ts` already does. The identity run's 704x1280 took 82 s a frame with four
+portraits, longer than a reader would wait, and a frame here binds up to six. The results hold for this size and this
+recipe: no arm compares sizes, and none is compared with the identity run.
 
 ## Drawing
 
@@ -291,19 +302,21 @@ sizes, and none is compared with the identity run.
 - Seed 7 decides, and seed 11 repeats it only if [the time](#time) admits it after seed 7. The order on the card is
   [the smoke](#picture-smoke), the rest of the front portraits, the rest of the views, seed 7 in all arms scene by
   scene, then seed 11 the same way. L is drawn before T of the same scene and seed.
-- Where every bound person of a variant frame faces the viewer, V's inputs equal C's. V is then not drawn, and C's
+- Where no bound person of a variant frame needs a view, V's inputs equal C's. V is then not drawn, and C's
   picture counts for V.
-- A failed front takes its scene out of C, V and T, and a failed view out of V. A failed frame is that cell alone,
-  and a T whose L is missing is never submitted. A cell left undrawn by the deadline or the admission is
-  `not_submitted`, nobody's failure. Nothing is drawn again, and every file is kept.
+- A manifest whose plan stopped takes its scene out of L, C, V and T, a failed front out of C, V and T, and a failed
+  view out of V. A failed frame is that cell alone, and a T whose L is missing is never submitted. A cell left undrawn
+  by the deadline or the admission is `not_submitted`, nobody's failure. Nothing is drawn again, and every file is
+  kept.
 - Each frame records what the identity run's frames record ([telemetry](identity-experiment.md#telemetry)). The run is
   pinned as that one was ([pins](identity-experiment.md#pins)), with the variant's hash, the views' and T's templates,
   the reference size and the manifests added, and the text run's model and gateway versions beside them.
 
 <a id='picture-smoke'></a>
 
-**The smoke** is the scene with the most bound people, at seed 7: its portraits, its views and its six arms. Its
-cells are the main run's cells of that scene and seed, drawn once. It passes when all of these hold:
+**The smoke** is the scene with the most bound people among those that need at least one view, at seed 7: its
+portraits, its views and its six arms. Its cells are the main run's cells of that scene and seed, drawn once. It
+passes when all of these hold:
 
 - every cell is drawn and none failed;
 - the geometry is right: frames 1280x704, fronts 720x1280, views 704x1280, and the scaled references, saved by the
@@ -318,13 +331,17 @@ face are what the judges measure, on every scene.
 
 <a id='time'></a>
 
-**The time.** The harness takes an absolute end, `--until`, as the identity run did
-([one hour](identity-experiment.md#one-hour)): five minutes before the earlier of the guard's deadline and the
-operator's own. Nothing is sent after it. After the smoke, the harness prices the rest of seed 7, the portraits and
-views included, from the smoke's slowest times for each kind of cell: text to image, an edit by its number of
-references, and T. Each cell gets that time plus a quarter and three seconds. Seed 7 begins only if all of it can end
-by `--until`; if it cannot, the rental ends as a smoke result and is never extended. After seed 7, seed 11 is priced
-the same way and begins only if it fits whole. If it does not, the verdict stands on seed 7 alone, as it would anyway.
+**The time.** The harness takes an absolute end, `--until`, as the identity run did ([one
+hour](identity-experiment.md#one-hour)): five minutes before the earlier of the guard's deadline and the operator's
+own. Nothing is sent after it. After the smoke, the harness prices the rest of seed 7, the portraits and views
+included, from the smoke's own slowest times: a portrait by its slowest portrait, a view by its slowest view, a frame
+without references by its slowest of A, A+ and L, an edit with k references by its slowest edit with the fewest
+references at or above k, which is C's or V's, and T by its T. Those times include the smoke's first, cold loads. Each
+cell gets its time plus a quarter and three seconds for the transfers, as the identity run priced them. A kind of cell
+the smoke did not draw, such as an edit with more references than any it drew, is priced as its slowest edit, never at
+nothing. Seed 7 begins only if all of it can end by `--until`; if it cannot, the rental ends as a smoke result and is
+never extended. After seed 7, seed 11 is priced the same way and begins only if it fits whole. If it does not, the
+verdict stands on seed 7 alone, as it would anyway.
 
 The estimate, from the identity run's 15 s for a frame without references and its 15% more for one full-size
 portrait:
@@ -356,8 +373,8 @@ hypothesis or a threshold. Four kinds of session work on each scene.
 
 1. **The checklist**, from the narrator's action scene, its target and the sheet, after the text run and before any
    picture exists. It lists:
-   - the participants, each with an id, a short handle and the sheet entry that is them, if any;
-   - the relations of the moment the scene ends in, each with an id, one subject, one verb and one object, and the
+   - the participants, each with a short handle and the sheet entry that is them, if any;
+   - the relations of the moment the scene ends in, each with one subject, one verb and one object, and the
      body part and its side only where the scene gives them. A side the scene does not give is never made up, a
      contact both ways is one relation, and each relation is marked essential or not. The essential ones are the
      contacts the main action is made of, at least one per scene. Each carries a short quote from the scene;
@@ -365,7 +382,9 @@ hypothesis or a threshold. Four kinds of session work on each scene.
    - whether the scene reached its target (see [the set](#the-set)), and where the sheet's line for a person
      contradicts the scene.
 
-   Code takes the checklist out and stores it, and no later session changes it.
+   Code takes the checklist out, gives every item an id of its own, and stores it; no later session changes it. The
+   checklist's words, its handles, relations and quotes, stay with its story, under `sealed/` for a sharp one. What
+   the scoring reads is its projection: the ids, the kind of each item, and which relations are essential.
 2. **The text and the portraits**, after the card: the checklist, the sheet, the prompts of A and A+, the front
    portraits, and each view beside its front with the direction it was asked for. It says which relations, gazes and
    clothes each of the two prompts states; whether each bound person's `facing` fits the moment and the shot; whether
@@ -373,8 +392,8 @@ hypothesis or a threshold. Four kinds of session work on each scene.
    turned the way it was asked.
 3. **The pictures**, one session per scene and seed: the action scene, the sheet, the checklist, and that seed's
    pictures, six at most, in an order drawn by code and named by hashes. C's picture, when it stands for V, is shown
-   once. For each picture the session first says who is who: each participant present or not, and where, told by
-   their looks and place before any action is scored. Then:
+   once. For each picture the session first says who is who: each participant present, absent or `unsure`, and
+   where, told by their looks and place before any action is scored. Then:
    - each relation, gaze, face, clothes item and scale item: `yes`, `no` or `unsure`. A contact hidden by a body is
      `unsure` unless the picture shows it; a contact the frame's edge cuts off is `no`;
    - a mix-up of each kind: an action done by the wrong person, two people's looks swapped, two people merged into
@@ -385,14 +404,23 @@ hypothesis or a threshold. Four kinds of session work on each scene.
    people, the same references for every arm. For each picture and each bound person: present or not, and whether the
    face and the build each match the front.
 
-A session sees its pictures together, and it may compare them; nothing here prevents that. Four clean scenes, picked
-by code from the set's hash before the run, get a second session 3 at seed 7, to show how far two judges differ. It
-is reported and never replaces the first.
+The narrator's scene decides who takes part and what they do; the sheet decides the looks score, and the front
+portraits the identity score. A judge who cannot tell who is who in a picture answers `unsure` for that participant,
+rather than decide it by the action being scored.
 
-Each report ends with its answers as one JSON block. Code takes the block out and checks it against a strict schema:
-the ids it was given, values from the enums, and nothing else. A block with anything more or anything missing is
-invalid, and the report's prose stays with the report. With both seeds that is 18 checklists, 18 sessions of text and
-portraits, 36 of pictures, 36 of identity and 4 repeats: 112 sessions after the card has gone.
+A session sees its pictures together, and it may compare them; nothing here prevents that, so the answers are
+comparative judgments. Four clean scenes, picked by code from the set's hash before the run, get a second session 3
+at seed 7. The report gives how often the two agree on each kind of item, and which verdicts would change if the
+second's answers stood on those four scenes. The repeat never replaces the first, and it covers neither the sharp
+scenes nor identity.
+
+Each report ends with its answers as one JSON block, and each kind of session has a schema of its own, pinned by its
+hash. The checklist's schema describes the items it lists. The other three take only the ids code gave and values from
+their enums, and a block with anything more or anything missing is invalid; the report's prose stays with the report.
+A clean scene's report without a valid block gets one fresh session of the same kind, and a second one without counts
+as a judge's failure; a sharp scene's goes as [below](#sealed). With both seeds there are 18 checklists before the
+picture card, and 94 sessions after it: 18 of text and portraits, 36 of pictures, 36 of identity and 4 repeats. With
+seed 7 alone there are 58 after it. The fresh sessions for invalid reports come on top.
 
 <a id='gates'></a>
 
@@ -408,7 +436,13 @@ Each picture gets these scores:
 - **looks**: the share of the scene's sheet people who are present and look as their line says, counted over all of
   them, so a person missing counts as not;
 - **identity**: the share of the scene's bound people who are present with both the face and the build of their
-  front, counted over all of them the same way.
+  front, counted over all of them the same way. It says that a picture matches its portraits, not that it matches
+  the story's person; the portrait check says how well the portraits match their lines.
+
+A score with nothing to count in a picture, such as scale in a scene without one, gazes in a scene that names none,
+or identity in a frame that binds nobody, is `not_applicable`: neither a failure nor `unsure`, and the picture is
+left out of that score's mean. A scene whose checklist has no essential relation is out of the contact scores and
+stays in the count of cells; no essential relation is ever made up.
 
 An arm's score is the mean over scenes, so a scene with many relations weighs no more than one with few. The report
 gives the numerators, the difference between the arms of each pair scene by scene, in how many scenes each arm is
@@ -419,11 +453,20 @@ judged right.
 
 The gates are fixed before the paid run and counted by code on seed 7, as thresholds for the next decision and not
 as proof. At 18 pictures one picture is 5.6 points, and the two seeds share one text and one set of portraits, so they
-are not more scenes. A `no` and an `unsure` both count against a picture. "At most n/10 more" means at most a tenth of
-the gate's n matched pictures, rounded down, and never less than one. Each gate reads the seed-7 scenes where every
-arm it compares is scored, and it is **inconclusive** when fewer than 14 of the 18, or fewer than 10 of the 13 clean
-ones, are left; gate 4 needs 6 scenes where V was drawn. An arm that passes must also show at least half of the
-essential contacts, whatever its gain.
+are not more scenes. A `no` and an `unsure` both count against a picture. "At most n/10 more" means at most
+max(1, ⌊n/10⌋) more of the gate's n matched pictures: one at 18 scenes, and still one at the six scenes gate 4 may
+have, which is 17% of them. "No more mix-ups" counts the pictures with a mix-up of any kind; the kinds are reported.
+
+- Gates 1, 2, 3 and 5 read the seed-7 scenes where every arm they compare is scored. Each is **inconclusive** when
+  fewer than 14 of the 18, or fewer than 10 of the 13 clean ones, are left.
+- Gate 4 reads the matched scenes where V was drawn, and its only minimum is 6 of them.
+- Each clause counts the gate's matched scenes where its score applies. A gain, a clause that asks for more
+  contacts or more identity, needs at least 6 of them, or its gate is inconclusive. A safeguard, a clause that asks
+  for no loss, such as no lower scale, counts whatever scenes it has; with none it is `not_applicable` and does not
+  stop a pass, and the report says so.
+- The sharp scenes count in every gate as part of the 18. Their own numbers are descriptive, and nothing is claimed
+  of the sharp scenes alone.
+- An arm that passes must also have a contacts score of at least 50%, the mean over scenes, whatever its gain.
 
 1. **The variant text.** A+ passes against A when its contacts are at least 10 points higher, and it has at least as
    many pictures with all contacts and with every participant, no more mix-ups, at most n/10 more anatomy errors, and
@@ -435,13 +478,15 @@ essential contacts, whatever its gain.
 3. **Portraits worth pursuing.** C passes against A+ when its contacts are at most 5 points lower, its identity at
    least 15 points higher and its looks at most 5 lower, with no more mix-ups, at most n/10 fewer complete pictures
    and n/10 more anatomy errors, and clothes no more than 10 points lower.
-4. **Views.** Over the scenes where V was drawn, V passes against C when its contacts are at least 5 points higher,
-   or its identity at least 10 points higher with contacts no lower; with no more mix-ups, no fewer complete
-   pictures, at most n/10 more anatomy errors, and at least 80% of the views judged the same person turned the way
-   asked.
-5. **Two passes.** T passes when its contacts are at most 5 points below L's, its pictures show at least 80% of the
-   essential relations L's pictures showed, counted together over the scenes, its identity is at least 15 points
-   above L's and at most 5 below C's, with no more mix-ups than L and at most n/10 more anatomy errors.
+4. **Views.** Over the scenes where V was drawn, V passes against C when its contacts are at least 5 points higher
+   with identity at most 5 lower, or its identity at least 10 points higher with contacts no lower; with no more
+   mix-ups, no fewer complete pictures, at most n/10 more anatomy errors, clothes no more than 10 points lower, no
+   lower scale, and at least 80% of the views judged the same person turned the way asked.
+5. **Two passes.** T passes when its contacts are at most 5 points below L's; it keeps at least 80% of L's shown
+   essential relations, the ones shown in both L and T over the ones shown in L, pooled over the scenes, where a
+   scene in which L shows none adds nothing and fewer than 10 in all make the clause inconclusive; its identity is at
+   least 15 points above L's and at most 5 below C's; and it has no more mix-ups than L, at most n/10 more anatomy
+   errors and n/10 fewer complete pictures, clothes no more than 10 points lower and no lower scale.
 
 Each gate is also shown for the clean scenes alone and for the scenes that reached their target, and seed 11's
 numbers stand beside seed 7's as a repetition: whether each difference points the same way. Neither changes a
@@ -487,10 +532,14 @@ Where every piece of a sharp story lives, and what leaves it:
 
 **The boundary test**, before any card: the dry run puts a made-up word into a sharp seed, into the fake model's
 replies, into the body of a fake provider error, into the metadata of the fake ComfyUI's pictures, into a fake judge's
-prose and into a malformed answers block. Code then searches every file the run wrote outside `sealed/`, the
-temporary directory, and the harness's own stdout and stderr, for that word. One hit fails the test. On the text card,
-before the five sharp seeds are asked for, one synthetic story marked sealed, with a made-up name in its seed, goes
-through the sealed path, and the same search runs; a hit stops the sharp stories.
+prose and into a malformed answers block. Code then searches every file the run wrote outside `sealed/`, the temporary
+directory, and the harness's own stdout and stderr, for that word. A stripped picture carries no word, so the test
+also lists every file the run wrote: each one outside `sealed/` must be one of the harness's clean outputs, and none
+may have the hash of a sealed picture, raw or stripped. One hit fails the test. Before the first card, the real judge
+launcher runs once on a synthetic bundle marked sealed, with the made-up word and a fake picture, in one real
+`gpt-6-astra` session, and the same checks cover `~/.codex`, the temporary directory and the repository outside
+`sealed/`. On the text card, before the five sharp seeds are asked for, one synthetic story marked sealed, with a
+made-up name in its seed, goes through the sealed path, and the same search runs; a hit stops the sharp stories.
 
 ## The rentals
 
@@ -499,10 +548,12 @@ Each card needs the owner's explicit «да», with its price and its end, under
 flow against scripted fakes of the adapter and against simple-serving's dev launcher, the pictures against
 [fake-comfy.ts](../local/fake-comfy.ts), the judging on made-up answers, and the boundary test.
 
-1. **The text card** is simple-serving's first rental, a 5090 rented as its README says for that rental, with a trial
-   guard of two hours and its own rules. The operator watches it from its creation. The gateway's smoke comes first,
-   then the marker check, then the text run, and then the card is deleted with `--destroy` and read back as gone. The
-   gateway's stop is not an end: a stopped trial keeps its disk, and its guard does not run.
+1. **The text card** is simple-serving's first rental, a 5090 rented as its README says for that rental, with its own
+   rules and the trial guard of its contract, which deletes it three hours after its first start. The operator reads
+   the guard's deadline before the stop and after the resume, and it must not change; the owner's deadline for the
+   first attempt is chosen apart, before the creation. The operator watches the card from its creation. The gateway's
+   smoke comes first, then the marker check, then the text run, and then the card is deleted with `--destroy` and read
+   back as gone. The gateway's stop is not an end: a stopped trial keeps its disk, and its guard does not run.
 2. **The checklists** are written between the two cards, from the texts alone.
 3. **The picture card** is a 5090 from `npm run gpu:rent -- --lane pictures --qwen only --hours 3`. It is rented only
    when every prompt is assembled and counted and every checklist is stored, and it ends as the identity run's card
