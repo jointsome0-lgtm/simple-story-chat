@@ -226,6 +226,8 @@ for (const lang of [undefined, ...REGISTERED]) {
       assert.doesNotMatch(screen.text, /undefined|\[object|NaN/, name);
       // Plain text: a screen is never sent with a parse mode.
       assert.equal((screen as { parse_mode?: unknown }).parse_mode, undefined, name);
+      // Telegram refuses a keyboard with an empty row.
+      assert.ok(screen.reply_markup?.inline_keyboard.every(row => row.length > 0) ?? true, `${name}: an empty row of buttons`);
       for (const button of screen.reply_markup?.inline_keyboard.flat() ?? []) {
         assert.ok(button.text.trim().length > 0, `${name}: empty label for ${button.callback_data}`);
         assert.ok(Buffer.byteLength(button.callback_data, 'utf8') <= 64, `${name}: ${button.callback_data}`);
