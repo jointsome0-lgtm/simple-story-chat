@@ -10,7 +10,7 @@ import { deflateSync, inflateSync, crc32 } from 'node:zlib';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { draw, buildBundles, bundlesOf, applyToWorkflow, defaultWorkflow, drawOne, encoderResolution, latentSizeOf, phasesOf, pngSize, portraitsFor, referenceGeometry, referenceSlots, samplerSettingsOf, settled, stripPngMetadata, REVIEW } from './image-batch.ts';
+import { draw, buildBundles, bundlesOf, applyToWorkflow, defaultWorkflow, drawOne, encoderResolution, latentSizeOf, parseSeeds, phasesOf, pngSize, portraitsFor, referenceGeometry, referenceSlots, samplerSettingsOf, settled, stripPngMetadata, textEncoderOf, REVIEW } from './image-batch.ts';
 import type { BatchIndex, Comfy, DrawOptions, Graph, Picture, References } from './image-batch.ts';
 import type { Case } from './illustrate-probe.ts';
 
@@ -261,9 +261,10 @@ test('the negative text never lands on the positive node, and the size goes on t
   const pinned = (file: string): Graph => JSON.parse(readFileSync(resolve(file), 'utf8'));
   const nodes = (graph: Graph, type: string) => Object.values(graph).filter(node => node.class_type === type);
   const rows: [string, Graph, Partial<typeof values>, object | ((filled: Graph, label: string, graph: Graph) => void)][] = [
-    ['the built-in graph', defaultWorkflow(), {}, (filled, label) => assert.deepEqual([filled['1'].inputs.ckpt_name,
-      filled['2'].inputs.text, filled['3'].inputs.text, filled['5'].inputs.seed, filled['4'].inputs.width],
-    ['k.safetensors', 'a picture', 'blurry', 11, 1344], label)],
+    // Its text encoder is the checkpoint's own, which no tokenizer counts for.
+    ['the built-in graph', defaultWorkflow(), {}, (filled, label, graph) => assert.deepEqual([filled['1'].inputs.ckpt_name,
+      filled['2'].inputs.text, filled['3'].inputs.text, filled['5'].inputs.seed, filled['4'].inputs.width, textEncoderOf(graph)],
+    ['k.safetensors', 'a picture', 'blurry', 11, 1344, undefined], label)],
     ['a graph with no sampler', { '1': { class_type: 'SaveImage', inputs: {} } }, {}, /sampler/],
     // Both conditionings on one text node: writing the negative over it sent the card an empty prompt, while the
     // bundle still showed the assembled one, so a judging session would have graded a picture drawn from nothing.
@@ -288,7 +289,8 @@ test('the negative text never lands on the positive node, and the size goes on t
     // the negative through ConditioningZeroOut, and the assembled prompt has to land on it.
     ['the pinned Krea graph', pinned('gpu/image-workflow.json'), { checkpoint: 'kreamania_variant8_fp8.safetensors', seed: 7,
       width: 1280, height: 720 }, (filled, label, graph) => {
-      assert.deepEqual(latentSizeOf(graph), { width: 1280, height: 720 }, label);
+      // The encoder the tokens under a picture are counted for: the type of the CLIPLoader behind the positive prompt.
+      assert.deepEqual([latentSizeOf(graph), textEncoderOf(graph)], [{ width: 1280, height: 720 }, 'krea2'], label);
       assert.deepEqual([nodes(filled, 'UNETLoader')[0].inputs.unet_name, nodes(filled, 'KSampler')[0].inputs.seed,
         nodes(filled, 'CLIPTextEncode').map(node => node.inputs.text)], ['kreamania_variant8_fp8.safetensors', 7, ['a picture']], label);
     }],
@@ -296,8 +298,8 @@ test('the negative text never lands on the positive node, and the size goes on t
     // not the node: skipping the node would have drawn every Qwen picture from an empty prompt.
     ['the pinned Qwen graph', pinned('gpu/image-workflow-qwen.json'), { checkpoint: 'qwen_image_2.1_int8_convrot.safetensors',
       seed: 7, steps: 25, sampler: 'euler', width: 1280, height: 720 }, (filled, label, graph) => {
-      assert.deepEqual([latentSizeOf(graph), samplerSettingsOf(graph)],
-        [{ width: 1280, height: 720 }, { steps: 25, sampler: 'euler', scheduler: 'simple', cfg: 1 }], label);
+      assert.deepEqual([latentSizeOf(graph), samplerSettingsOf(graph), textEncoderOf(graph)],
+        [{ width: 1280, height: 720 }, { steps: 25, sampler: 'euler', scheduler: 'simple', cfg: 1 }, 'qwen_image'], label);
       const [encode] = nodes(filled, 'TextEncodeQwenImage21');
       assert.deepEqual([encode.inputs.prompt, encode.inputs.negative_prompt, nodes(filled, 'UNETLoader')[0].inputs.unet_name],
         ['a picture', 'blurry', 'qwen_image_2.1_int8_convrot.safetensors'], label);
@@ -320,6 +322,11 @@ test('a run draws its graph at the graph\'s own settings with each frame\'s own 
   const qwen = { ...own, checkpoints: ['qwen_image_2.1_int8_convrot.safetensors'] };
   const [krea, t2i, edit] = ['gpu/image-workflow.json', 'gpu/image-workflow-qwen.json', 'gpu/image-workflow-qwen-edit.json'].map(file => resolve(file));
   const clean = (index: BatchIndex, label: string) => assert.equal(index.failures.length, 0, `${label}: ${JSON.stringify(index.failures)}`);
+  // The file ComfyUI's Save menu writes, the UI format ({nodes:[...],links:[...]}), not the API format the harness fills.
+  const saved = corpus();
+  t.after(() => rmSync(saved, { recursive: true, force: true }));
+  writeFileSync(join(saved, 'ui.json'), JSON.stringify({ last_node_id: 71, version: 0.4, links: [],
+    nodes: [{ id: 55, type: 'UNETLoader', widgets_values: ['krea2_turbo_fp8_scaled.safetensors'] }] }));
   const rows: [string, { card?: Parameters<typeof fakeComfy>[0]; references?: References; portrait?: Buffer }, Partial<DrawOptions>,
     RegExp | ((index: BatchIndex, comfy: ReturnType<typeof fakeComfy>, label: string) => void)][] = [
     // Without --size the graph's own size is drawn and recorded: the harness default (1344x768) is another resolution
@@ -346,6 +353,8 @@ test('a run draws its graph at the graph\'s own settings with each frame\'s own 
       assert.deepEqual([index.failures.map(failure => [failure.code, failure.httpStatus]), index.error],
         [[['comfy_http_error', 400]], 'comfy_http_error'], label);
     }],
+    // It used to throw a TypeError inside applyToWorkflow and be written down as `image_failed`, once a cell.
+    ['a workflow saved in the UI format', {}, { workflow: join(saved, 'ui.json') }, /API format/],
     // A portrait as it comes off the card, with ComfyUI's own text chunks in it. One portrait, two frames: the same
     // face is not paid for twice on a card billed by the minute, and it goes up under the hash of its stripped bytes,
     // so neither the sheet name, the story nor the prompt that drew it is written onto the rented disk.
@@ -390,6 +399,10 @@ test('a run draws its graph at the graph\'s own settings with each frame\'s own 
     const run = draw({ ...options(root, url), ...more, ...(references ? { references: join(root, 'references.json') } : {}) });
     if (expected instanceof RegExp) await assert.rejects(run, expected, label);
     else expected(await run, comfy, label);
+  }
+  // The seeds a run draws, as --seeds names them: `Number('')` is 0, and seed 0 is a whole extra pass over every case.
+  for (const [seeds, parsed] of [['7', [7]], ['7, 11', [7, 11]], ['7,', [7]], ['', []], ['7,-1', []], ['7,x', []]] as const) {
+    assert.deepEqual(parseSeeds(seeds), parsed, `--seeds '${seeds}'`);
   }
 });
 
@@ -462,7 +475,7 @@ test('the edit graph holds as many faces as a character sheet has people, so one
   assert.deepEqual(referenceGeometry(720, 1280, 0), [704, 1280]);
   assert.deepEqual(referenceGeometry(1280, 720, 1024), [1376, 768]);
   assert.deepEqual(referenceGeometry(2, 2, 0), [32, 32]);
-  assert.equal(encoderResolution(edit), 0);
+  assert.deepEqual([encoderResolution(edit), textEncoderOf(edit)], [0, 'qwen_image']);
   // The text-to-image graph takes no reference, so it has no size to hand one at.
   assert.equal(encoderResolution(JSON.parse(readFileSync(resolve('gpu/image-workflow-qwen.json'), 'utf8'))), undefined);
   assert.deepEqual(pngSize(pngWithMetadata('{}')), { width: 2, height: 2 });
