@@ -29,9 +29,9 @@ function readyRun(root: string, id: string) {
 
 // The card bills every minute and a resume must not redraw or lose what is drawn: a seed that cannot end by --until is
 // not begun, a resume draws nothing again, a failure that stopped the run included, a picture whose file is gone is
-// refused as data lost, and a directory drawn under other pins is refused before its record is touched. The fake's
-// jobs take long enough for the memory to be sampled while they run, as the smoke asks.
-test('a seed that cannot end in time is not begun, a resume draws nothing again, and other pins leave the record as it was', async t => {
+// refused as data lost, and plans changed after `prompts` are refused before the record is touched. The fake's jobs
+// take long enough for the memory to be sampled while they run, as the smoke asks.
+test('a seed that cannot end in time is not begun, a resume draws nothing again, and other plans leave the record as it was', async t => {
   const root = mkdtempSync(join(tmpdir(), 'simple-chat-action-draw-'));
   const fake = await startFakeComfy({ jobMs: 15, referenceMs: 0, requireUploads: true });
   t.after(async () => { await fake.close(); rmSync(root, { recursive: true, force: true }); });
@@ -57,8 +57,10 @@ test('a seed that cannot end in time is not begun, a resume draws nothing again,
   await assert.rejects(stage('main'), /data lost/);
   assert.deepEqual([fake.jobs.length, readFileSync(join(root, 'draw.json')).equals(kept)], [all, true]);
   writeFileSync(lost, picture);
-  writeFileSync(join(root, 'prompts.json'), JSON.stringify({ ...JSON.parse(readFileSync(join(root, 'prompts.json'), 'utf8')), plans: 'other' }));
-  await assert.rejects(stage('main'), /another plans/);
+  // A plan changed after `prompts`, whatever prompts.json says: its files are hashed as they are read.
+  const planFile = join(storyDir(root, 'flight'), 'plan.json');
+  writeFileSync(planFile, JSON.stringify({ ...JSON.parse(readFileSync(planFile, 'utf8')), changed: true }));
+  await assert.rejects(stage('main'), /plan\.json changed/);
   assert.ok(readFileSync(join(root, 'draw.json')).equals(kept));
   // A kind of cell the smoke did not draw is never priced at nothing, and a sharp story's pictures are sealed.
   assert.equal(pricing([])({ key: '', kind: 'frame', story: 'flight', id: '', seed: 7, arm: 'T', refs: ['L'], prompt: '' }), Infinity);

@@ -342,10 +342,11 @@ export async function dryRun(out: string, options: { tokenizers?: string } = {})
     await draw('main');
     say(`   a resume: ${fake.jobs.length - jobs} jobs`);
     expect(fake.jobs.length === jobs, 'a resume draws nothing again');
-    const plansFile = join(root, 'prompts.json'), plans = readFileSync(plansFile), drawn = readFileSync(join(root, 'draw.json'));
-    writeFileSync(plansFile, JSON.stringify({ ...JSON.parse(plans.toString('utf8')), plans: 'other' }));
-    await refused('a resume under other plans', () => draw('main'));
-    writeFileSync(plansFile, plans);
+    // A plan changed after `prompts`: the stage hashes the plan files as it reads them.
+    const planFile = join(storyDir(root, textStories()[0].id), 'plan.json'), plan = readFileSync(planFile), drawn = readFileSync(join(root, 'draw.json'));
+    writeFileSync(planFile, JSON.stringify({ ...JSON.parse(plan.toString('utf8')), changed: true }));
+    await refused('a resume under a plan changed after prompts', () => draw('main'));
+    writeFileSync(planFile, plan);
     expect(readFileSync(join(root, 'draw.json')).equals(drawn), 'draw.json unchanged by the refusal');
 
     const bundles = pictureBundles(root);

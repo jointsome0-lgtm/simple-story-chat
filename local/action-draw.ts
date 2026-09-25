@@ -25,7 +25,7 @@ import type { QwenTokenizer } from './tokenizer.ts';
 import { Refusal } from './action-boundary.ts';
 import { ARMS, isSharp, readJson, storyDir, textStories } from './action-text.ts';
 import type { ActionArm } from './action-text.ts';
-import { T_OPENING, VIEW_TURNS, readPlan } from './action-prompts.ts';
+import { T_OPENING, VIEW_TURNS, readPlans } from './action-prompts.ts';
 import type { PromptsRecord, StoryPlan } from './action-prompts.ts';
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -212,16 +212,21 @@ const settings = (graph: Graph) => {
 
 // What the pictures depend on (docs/action-experiment.md#drawing): the identity run's pins, the action graph and the
 // canvases, the reference size, the views' and T's templates, every plan by its hash, and the text run's model.
-function pinsFor(root: string, card: ReturnType<typeof cardOf>, base: Graph): Record<string, string | number> {
+// `plans` is the hash of the plan files as they were read for this stage (action-prompts.ts `readPlans`): a plan.json
+// that changed after `prompts` is refused here, before anything is asked of the card.
+function pinsFor(root: string, card: ReturnType<typeof cardOf>, base: Graph, plans: string): Record<string, string | number> {
   const texts = readJson<{ pins: Record<string, string | number> }>(join(root, 'texts.json'));
   const prompts = readJson<PromptsRecord>(join(root, 'prompts.json'));
   if (!texts || !prompts) throw new Refusal('The pictures are drawn from the texts and the prompts: run `texts` and `prompts` in this directory first');
+  if (plans !== prompts.plans) {
+    throw new Refusal('The plan files in this directory are not those prompts.json records: a plan.json changed after `prompts`, and nothing is drawn from it');
+  }
   const cache = Object.values(base).find(node => node.class_type === 'QwenImage21Cache');
   const gateway = Object.fromEntries(Object.entries(texts.pins).filter(([key]) => key.startsWith('gateway')).map(([key, value]) => [`text.${key}`, value]));
   return { ...pinsOf(card), actionGraph: sha256(readFileSync(ACTION_GRAPH)), cacheDevice: String(cache?.inputs.device ?? 'none'),
     resolution: encoderResolution(base) ?? -1, canvas: `${FRAME_CANVAS.width}x${FRAME_CANVAS.height}`, viewCanvas: `${VIEW_CANVAS.width}x${VIEW_CANVAS.height}`,
     referenceSize: `${SCALED.width}x${SCALED.height}`, seeds: ACTION_SEEDS.join(','), views: sha256(JSON.stringify(VIEW_TURNS)), t: sha256(T_OPENING),
-    plans: prompts.plans, texts: sha256(JSON.stringify(texts.pins)), textRoute: String(texts.pins.route), textWeights: String(texts.pins.weights), ...gateway };
+    plans, texts: sha256(JSON.stringify(texts.pins)), textRoute: String(texts.pins.route), textWeights: String(texts.pins.weights), ...gateway };
 }
 
 export async function drawStage(options: DrawStageOptions): Promise<DrawIndex> {
@@ -235,8 +240,8 @@ export async function drawStage(options: DrawStageOptions): Promise<DrawIndex> {
   try { card = cardOf(join(root, 'card.txt')); }
   catch { throw new Refusal(`card.txt in ${root} is missing or differs from gpu/image-manifest.env: copy image-verified.txt off the card as the runbook says before anything is drawn`); }
   const base = readGraph(ACTION_GRAPH), frontGraph = readGraph(FRONT_GRAPH);
-  const plans = new Map(textStories().flatMap(story => { const plan = readPlan(root, story.id); return plan ? [[story.id, plan] as const] : []; }));
-  const own = pinsFor(root, card, base);
+  const read = readPlans(root, textStories()), plans = read.plans;
+  const own = pinsFor(root, card, base, read.hash);
   const file = join(root, 'draw.json');
   const earlier = readJson<DrawIndex>(file);
   // A picture draw.json records as drawn whose file is gone is data lost: it is not drawn again, and nothing more is

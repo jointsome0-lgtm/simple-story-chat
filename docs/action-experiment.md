@@ -679,7 +679,7 @@ fake judge's prose and a malformed answers block. On the way it goes through eve
   view's front, and V stands on C's picture there;
 - the rest of seed 7 refused with five seconds left, before any job is sent;
 - a failed front and a failed view, and the cells they take out;
-- a resume that draws nothing, and one under other plans refused with `draw.json` unchanged;
+- a resume that draws nothing, and one after a plan changed since `prompts` refused with `draw.json` unchanged;
 - judges' reports with valid, invalid and missing blocks: a clean scene's fresh session, a clean judge's failure, sharp
   sessions that go to `gpt-6-sol` and to the owner's page, and an identity session that waits for its pictures' page;
 - the report and both galleries;
@@ -732,7 +732,8 @@ the answers where the page says, and `collect` reads them as strictly as a judge
 sessions failed is a judge's failure: its scene has no scores, and it does not hold the card back. The picture card is
 rented only with `ready: true`, and `portraits` and `draw` refuse without it: the text run complete, the prompts made
 from the texts as they are now, so that a text written after `prompts` needs `prompts` again, and no checklist left to
-run or waiting for the owner.
+run or waiting for the owner. Each drawing stage also hashes the plan files as it reads them, and refuses them before
+anything is asked of the card when that is not the hash `prompts.json` records.
 
 **The picture card** is rented, guarded, watched and ended as the identity run's card was
 ([operator](identity-experiment.md#operator), [termination](identity-experiment.md#termination)), for three hours.

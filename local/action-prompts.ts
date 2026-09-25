@@ -12,7 +12,7 @@ import { PORTRAIT_STYLE, portraitPrompt } from './image-portraits.ts';
 import { armsOut, readJson, storyDir } from './action-text.ts';
 import type { ActionArm, Facing, StoryText, TextStory, VariantFrame, VariantPerson } from './action-text.ts';
 
-const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
+const sha256 = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
 
 // How `facing` is written in a clause: the torso alone, the head and the gaze left to the action. `other` adds nothing.
 export const FACING_WORDS: Record<Facing, string> = { viewer: 'body facing the viewer', away: 'back to the viewer',
@@ -212,6 +212,10 @@ export function textsHash(root: string, stories: TextStory[]): string {
   }
   return hash.digest('hex');
 }
+// Every plan by one hash, which the picture run is pinned to: each story's plan.json by its bytes, and `-` for a story
+// never begun, which keeps none.
+const planLine = (id: string, bytes: string | Buffer | undefined) =>
+  `${id}\0${bytes === undefined ? '-' : sha256(bytes)}\n`;
 export function planAll(root: string, stories: TextStory[], tokens?: Tokens): PromptsRecord {
   const record: PromptsRecord = { plans: '', texts: textsHash(root, stories), stories: {} };
   const hash = createHash('sha256');
@@ -221,8 +225,9 @@ export function planAll(root: string, stories: TextStory[], tokens?: Tokens): Pr
     const written = JSON.stringify(plan, null, 2);
     // The story's directory exists once its text run has begun; a story never begun keeps no plan, and its arms are
     // out with `text_missing` all the same.
-    if (existsSync(dir)) writeFileSync(join(dir, 'plan.json'), written, { mode: 0o600 });
-    hash.update(`${story.id}\0${sha256(written)}\n`);
+    const kept = existsSync(dir);
+    if (kept) writeFileSync(join(dir, 'plan.json'), written, { mode: 0o600 });
+    hash.update(planLine(story.id, kept ? written : undefined));
     record.stories[story.id] = { out: plan.out, vIsC: plan.vIsC, portraits: plan.portraits.map(one => one.id), views: plan.views.map(one => one.id),
       bound: plan.manifest?.bound.length ?? 0, people: plan.manifest ? plan.manifest.entries.length : 0,
       ...(plan.manifest?.stop ? { stop: plan.manifest.stop } : {}), ...(plan.emptyRoles ? { emptyRoles: plan.emptyRoles } : {}),
@@ -232,3 +237,16 @@ export function planAll(root: string, stories: TextStory[], tokens?: Tokens): Pr
   return record;
 }
 export const readPlan = (root: string, id: string): StoryPlan | undefined => readJson<StoryPlan>(join(storyDir(root, id), 'plan.json'));
+// The plans as they are on disk, each file read once, and their hash as `prompts` took it: what the picture run draws
+// is what it hashed. A file that does not parse is left out, and the hash says it changed.
+export function readPlans(root: string, stories: TextStory[]) {
+  const hash = createHash('sha256');
+  const plans = new Map<string, StoryPlan>();
+  for (const story of stories) {
+    const file = join(storyDir(root, story.id), 'plan.json');
+    const bytes = existsSync(file) ? readFileSync(file) : undefined;
+    hash.update(planLine(story.id, bytes));
+    try { if (bytes) plans.set(story.id, JSON.parse(bytes.toString('utf8')) as StoryPlan); } catch { /* the hash tells */ }
+  }
+  return { hash: hash.digest('hex'), plans };
+}
