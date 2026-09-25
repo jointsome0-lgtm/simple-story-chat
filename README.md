@@ -40,7 +40,8 @@ Open the one for the task at hand.
   the scores.
 - [llama.cpp on a rented GPU](docs/llama-cpp.md) and [how to compare its profiles](docs/llama-measurement.md), while
   the bot still runs it
-- [The identity measurement](docs/identity-experiment.md), an active protocol with no result yet
+- [The identity measurement](docs/identity-experiment.md): its protocol, and the run of 2026-09-25, where neither arm
+  with portraits passed
 
 ## Ideas, measurements and decisions
 
@@ -56,7 +57,7 @@ These pages keep the evidence and the reasons behind decisions. They are dated r
 | Which proposed optimizations were unsupported or cost more than they saved? | [The experiment plan and its critique](docs/eval-experiments-plan.md#critique) |
 | What helped pictures match scenes, and what still went wrong? | [The six description and image steps](docs/illustrations-plan.md#description-steps) |
 | Why a fixed style, separate clothes and an editable picture prompt? | [Style decisions](docs/illustrations-plan.md#style-decisions), [clothes](docs/illustrations-plan.md#clothes-decisions), [prompt variants](docs/illustrations-plan.md#prompt-variant-decision) |
-| Will a portrait preserve both a face and a figure across scenes? | [The research question](docs/illustrations-plan.md#qwen-choice), [the active measurement protocol](docs/identity-experiment.md#identity-runbook) |
+| Will a portrait preserve both a face and a figure across scenes? | [The research question](docs/illustrations-plan.md#qwen-choice), [the run of 2026-09-25](docs/identity-experiment.md#result-2026-09-25), [its protocol](docs/identity-experiment.md#identity-runbook) |
 | What did GPU measurements establish about cache, pool size and failures? | [GPU measurements and their limits](docs/knowledge/gpu-measurements.md#pool-2026-09-20), [SSH failures](docs/knowledge/gpu-measurements.md#ssh-failures) |
 | Which model connections were actually checked, and which were only tested with fakes? | [Dated checks](docs/knowledge/provider-checks.md), [the current gateway boundary](docs/model-providers.md#simple-serving-our-gateway) |
 

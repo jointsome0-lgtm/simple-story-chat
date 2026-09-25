@@ -1,11 +1,66 @@
 # The identity measurement
 
 Does a person drawn from a portrait stay recognisable, face and figure, from one frame of a story to the next on
-Qwen-Image 2.1? This page is the protocol of the paid hour that is meant to answer it. The harness and its dry run
-against a fake ComfyUI were merged on 2026-09-25 (d4ca6a0). No paid run has been confirmed, so nothing on this page is
-a result, and it stays the working protocol until the run and the owner's decision are recorded. The question and why
-Qwen was chosen for it are in [illustrations-plan.md](illustrations-plan.md#qwen-choice). A rental follows
-[the owner's rules](gpu.md#while-the-cards-are-paid-for).
+Qwen-Image 2.1? This page is the protocol of the paid hour that answers it, and [the result of its one
+run](#result-2026-09-25). The harness and its dry run against a fake ComfyUI were merged on 2026-09-25 (d4ca6a0). The
+question and why Qwen was chosen for it are in [illustrations-plan.md](illustrations-plan.md#qwen-choice). A rental
+follows [the owner's rules](gpu.md#while-the-cards-are-paid-for).
+
+<a id='result-2026-09-25'></a>
+
+## The run of 2026-09-25
+
+One RTX 5090 on Vast ran the hour on 2026-09-25 from 02:12 to 02:53 UTC. The code was the tree at 833157b, whose
+harness is unchanged since d4ca6a0; the set hashes to f5baa31059ca. The rental cost about $0.46: 40.5 minutes at
+$0.498 an hour from its creation to the confirmed deletion, and the plan's estimate of $0.12 for the download.
+
+The run is complete by the rule of [a complete run](#complete-run). The smoke passed its geometry, memory and
+telemetry checks. The six portraits, all 48 cells (8 frames, 2 seeds, 3 arms) and the three frames of the control were
+drawn at the pinned geometry, and none failed. The control came out bit for bit the same as A's frames of the same
+scenes and seed, so A draws what the bot's text-to-image graph draws. Each of the six bundles was read by a fresh
+Claude Fable 5.1 session that opened only the files of its own bundle, and every item has an answer.
+
+| | A | B | C |
+| --- | --- | --- | --- |
+| Face kept, of 26 transitions | 88% | 96% | 85% |
+| Figure kept, of 26 | 92% | 92% | 85% |
+| Both kept, of 26 | 81% | 88% | 69% |
+| Pictures with two people mixed up, of 14 | 0 | 0 | 1 |
+| Pictures with an action error, of 16 | 0 | 8 | 7 |
+| The frames' own changes of clothes shown, of 8 | 8 | 8 | 6 |
+| Warm frames: median and slowest, ms | 15258, 16605 | 20290, 83419 | 20603, 82644 |
+
+| Gate | B | C |
+| --- | --- | --- |
+| 1. Recognition | pass | fail: 85% and 85%, one picture mixed up |
+| 2. Against A | fail: 88% against A's 81%, where 15 points above A are needed | fail: 69% |
+| 3. Clothes | fail: 8 action errors against A's 0 | fail: 6 of 8, and 7 action errors |
+| 4. Time | fail: the median is 1.33 times A's, the slowest frame 83 s where 33 s is allowed | fail: 1.35 times, 83 s |
+| 5. Memory | pass: no OOM, 9638 MiB free at the tightest frame of four | pass |
+
+**B fails, and C fails.** The owner's decision on what follows is not recorded yet.
+
+What the numbers leave open, and what the run showed besides:
+
+- One judge read each bundle, and the judges did not hold one threshold: two of them said they count a person
+  looking the wrong way as an action error. Still, each of the four bundles with portraits has three or four action
+  errors and both bundles of A have none. The judges of B and C describe the same failure: people stand facing the
+  viewer and look into the lens, as they do in their portraits, instead of reading or rehearsing.
+- Every frame of four portraits took about 82 s, about 75 s of it sampling, against about 15 s for the same frames in
+  A. One portrait added about 15% and two about 30%. At four portraits the card held less memory than at two, 22.3 GB
+  against 24.4. The cause was not measured.
+- The ComfyUI log warned that its optimised CUDA operations need PyTorch built for CUDA 13.0, and the run had 2.11
+  built for 12.8. That holds for all three arms.
+- What the judges found in the frame text holds for A too, which is how the bot draws. The small marks of the
+  character sheet (a mole, freckles, the colour of the eyes, a scar, a braided beard, a crooked nose) were almost
+  never drawn, so the two young women of the set were told apart only by their hair and their dresses. A left or right
+  hand or shoulder was often mirrored. Two buckets named both in an action and among the objects came out as four.
+  People who read or speak looked at the viewer unless the text said where they looked.
+
+The pictures, the bundle keys, the answers and the judges' full reports stay on the owner's computer, in the
+gitignored `illustrations/identity/`.
+
+## The protocol
 
 The protocol below is the text of 2026-09-25, moved here from illustrations-plan.md without changes. In order:
 [geometry](#geometry), [the set and its three arms](#identity-runbook), [the portraits](#portrait-recipe),

@@ -421,7 +421,9 @@ Where they stand on 2026-09-25, when this page became a record:
 3. Answered in part. Step 6 found pictures that stop contradicting their scene in most of what they show, on three
    hosted pictures, and the rate needs the wider run of item 1. The bot draws with one seed per story, not per
    location ([what shipped](#shipped-2026-09-22)). Whether a person stays recognisable is the question of
-   [the identity measurement](identity-experiment.md), and no paid run of it has been confirmed.
+   [the identity measurement](identity-experiment.md). Its one run, on 2026-09-25, found portraits only slightly
+   better than the text alone at keeping a person recognisable, with an action error in half the pictures, and
+   neither arm with portraits passed ([the result](identity-experiment.md#result-2026-09-25)).
 
 Tests, and the identity harness with its fake ComfyUI, close none of these.
 
