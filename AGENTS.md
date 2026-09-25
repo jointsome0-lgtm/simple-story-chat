@@ -24,7 +24,8 @@ Whoever runs the bot brings the model; adapters behind one interface are describ
 - Rented cards bill every minute, working or idle. Before renting, read the owner's rules in
   [docs/gpu.md](docs/gpu.md#while-the-cards-are-paid-for).
 - `npm test` needs no `npm install`, network, Telegram or model. `npm run check` (after `npm install`) type-checks
-  `local/` and `lib/`.
+  `local/` and `lib/`. A test goes in only where a failure would cost money, leak something or lose data unnoticed.
+  The owner wants fewer tests, not more ([local/AGENTS.md](local/AGENTS.md)).
 - `local/*.ts` import each other with explicit `.ts` specifiers and use erasable syntax only. More in
   [local/AGENTS.md](local/AGENTS.md).
 

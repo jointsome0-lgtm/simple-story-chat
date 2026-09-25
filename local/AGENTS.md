@@ -6,4 +6,4 @@ Do not read `.tgcloud/`. Never print credentials, story text, model prompts, raw
 
 The owner delegates the native Telegram UI to Opus 5. Integrate its pure renderer here; keep storage, Telegram transport and model invocation separate. Save a completed scene before sending it, deduplicate updates, and never regenerate automatically after an uncertain delivery.
 
-Tests: a new case goes in as a row of the table for the promise it tests, and a new test file needs a stated reason.
+Tests: fewer, not more (the owner, 2026-09-25). A check stays or goes in only where a failure would cost money (a card or a request left running, a loop without a bound), leak something (a key, a story, a prompt, a sealed scene) or lose data without anyone noticing, one check per such risk. The rest is left to tsc, the dry runs and the bot's own use, and a mutant that survives is no reason for a check by itself. A new case goes in as a row of the table for the promise it tests, and a new test file needs a stated reason.
