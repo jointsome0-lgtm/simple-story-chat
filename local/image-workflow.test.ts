@@ -29,8 +29,8 @@ const manifest = new Map(sourced.stdout.split('\0').filter(Boolean).map(entry =>
 }));
 // gpu/image-bootstrap.sh in the modes that touch nothing: no download, no clone, no virtual environment. They are the
 // checks that would otherwise only fail on a card that bills by the minute.
-const bootstrap = (args: string[], environment: Record<string, string>) =>
-  spawnSync('bash', [resolve('gpu/image-bootstrap.sh'), ...args], { encoding: 'utf8', input: '', env: { ...process.env, ...environment } });
+const bootstrap = (args: string[], environment: Record<string, string>, input = '') =>
+  spawnSync('bash', [resolve('gpu/image-bootstrap.sh'), ...args], { encoding: 'utf8', input, env: { ...process.env, ...environment } });
 const oneOf = (graph: Graph, type: string, label: string) => {
   const found = Object.values(graph).filter(node => node.class_type === type);
   assert.equal(found.length, 1, `${label}: expected exactly one ${type}`);
@@ -50,16 +50,22 @@ test('the image workflow is a connected API-format graph of core ComfyUI nodes',
   // One encode node hands Qwen both conditionings, positive from slot 0 and negative from slot 1. Crossing them would
   // draw every picture from the negative prompt and nothing here would say so.
   const conditioned: Wire[] = [['KSampler', 'positive', 'TextEncodeQwenImage21', 0], ['KSampler', 'negative', 'TextEncodeQwenImage21', 1]];
-  const rows: [string, Graph, string[], Wire[]][] = [
+  // The settings each graph was tested at on the card, which the bot and the batch draw at unless told otherwise:
+  // Krea 2 Turbo's eight er_sde steps at cfg 1.0, ComfyUI's "no guidance", and the Qwen templates' 25 euler steps, at
+  // 16:9. The edit graph samples 16 rows fewer: at `resolution: 0` its encode node rounds a 720-row reference to 704,
+  // as Python rounds 22.5, and a canvas of another size shifts the edit.
+  const turbo = { steps: 8, cfg: 1, sampler_name: 'er_sde', scheduler: 'simple', denoise: 1, frame: [1280, 720] };
+  const template = { ...turbo, steps: 25, sampler_name: 'euler' };
+  const rows: [string, Graph, string[], Wire[], typeof turbo][] = [
     // Krea 2 Turbo runs without guidance, and the blueprint still wires a negative made by zeroing the positive.
     ['the Krea graph', workflow, krea, [...drawn, ['ConditioningZeroOut', 'conditioning', 'CLIPTextEncode', 0],
-      ['KSampler', 'negative', 'ConditioningZeroOut', 0]]],
-    ['the Qwen graph', qwen, qwenCore, [...drawn, ...conditioned, ['KSampler', 'model', 'UNETLoader', 0]]],
+      ['KSampler', 'negative', 'ConditioningZeroOut', 0]], turbo],
+    ['the Qwen graph', qwen, qwenCore, [...drawn, ...conditioned, ['KSampler', 'model', 'UNETLoader', 0]], template],
     // The edit graph is the t2i one plus the cache node the template puts between the loader and the sampler.
     ['the Qwen edit graph', qwenEdit, qwenCore, [...drawn, ...conditioned, ['QwenImage21Cache', 'model', 'UNETLoader', 0],
-      ['KSampler', 'model', 'QwenImage21Cache', 0]]],
+      ['KSampler', 'model', 'QwenImage21Cache', 0]], { ...template, frame: [1280, 704] }],
   ];
-  for (const [label, graph, core, wires] of rows) {
+  for (const [label, graph, core, wires, settings] of rows) {
     for (const [id, node] of Object.entries(graph)) {
       assert.ok(core.includes(node.class_type), `${label}: ${id} is an unexpected node ${node.class_type}`);
       for (const [name, value] of Object.entries(node.inputs)) {
@@ -71,6 +77,9 @@ test('the image workflow is a connected API-format graph of core ComfyUI nodes',
     for (const [type, input, from, slot] of wires) {
       assert.deepEqual(oneOf(graph, type, label).inputs[input], [idIn(graph, from), slot], `${label}: ${type}.${input}`);
     }
+    const { steps, cfg, sampler_name, scheduler, denoise } = oneOf(graph, 'KSampler', label).inputs;
+    const { width, height } = oneOf(graph, 'EmptyLatentImage', label).inputs;
+    assert.deepEqual({ steps, cfg, sampler_name, scheduler, denoise, frame: [width, height] }, settings, `${label}: its settings`);
   }
 });
 
@@ -130,7 +139,7 @@ test('a dry run fetches the files its opt-in asks for and nothing else, and thro
   const qwenFiles = ['IMAGE_QWEN_MODEL_FILE', 'IMAGE_QWEN_ENCODER_FILE', 'IMAGE_QWEN_VAE_FILE'];
   const part = join(directory, 'ComfyUI/models/vae', `${manifest.get('IMAGE_VAE_FILE')}.part`);
   const rows: [string, string[], Record<string, string>, { status?: number; says?: RegExp; fetched?: string[]; skipped?: string[];
-    leftover?: true }][] = [
+    leftover?: true; input?: string }][] = [
     // Off by default: local/rent-plan.ts prices the session from what a default run downloads, and a run that pulled
     // 17 GB nobody asked for would make that number a lie in the direction that costs money.
     ['the opt-in off', ['--dry-run'], environment, { skipped: qwenFiles }],
@@ -145,6 +154,10 @@ test('a dry run fetches the files its opt-in asks for and nothing else, and thro
       skipped: ['IMAGE_MODEL_FILE', 'IMAGE_ENCODER_FILE', 'IMAGE_VAE_FILE', 'IMAGE_TURBO_FILE'] }],
     // There is no Krea graph to print on that box.
     ['the Krea graph asked of a Qwen-only box', ['--print-workflow'], { SIMPLE_CHAT_IMAGE_QWEN: 'only' }, { status: 1 }],
+    // `printf 'civitai=%s' "$token"` pipes a secret without leaving a newline in a history file; dropping that last
+    // line reported a missing token, which points at the wrong cause and cannot be debugged from the logs.
+    ['a token piped without a closing newline', ['--dry-run', '--tokens-stdin'], { SIMPLE_CHAT_GPU_DIR: directory,
+      SIMPLE_CHAT_CIVITAI_TOKEN: '' }, { input: 'civitai=synthetic' }],
     // The discarding belongs to this pre-flight, which holds the run's lock and ends before a fetcher exists. Done
     // later, it would take the .part out from under the curl that is writing it.
     ['a leftover longer than the pinned file', ['--dry-run'], environment, { leftover: true }],
@@ -156,7 +169,7 @@ test('a dry run fetches the files its opt-in asks for and nothing else, and thro
       ftruncateSync(file, Number(manifest.get('IMAGE_VAE_BYTES')) + 1);
       closeSync(file);
     }
-    const run = bootstrap(args, env);
+    const run = bootstrap(args, env, expected.input);
     assert.equal(run.status, expected.status ?? 0, `${label}: ${run.stderr}`);
     if (expected.says) assert.match(run.stdout, expected.says, label);
     for (const key of expected.fetched ?? []) assert.ok(run.stdout.includes(manifest.get(key)!), `${label}: ${key} is not fetched`);
