@@ -53,9 +53,10 @@ does the same in every registered language.
 - **Story tree and scene log:** История → «🌳 Дерево истории» ("Story tree") draws the story the way a commit graph
   reads. Only the places that mean something are nodes: a memory compaction (🗜), a fork, a checkpoint the author saved
   (📍) and the head of a branch (🌿, ✅ for the active one). A straight run between them is one line with its scene
-  count and the world time of its last scene, in a `pre` block of at most 40 lines. «📜 Сцены ветки» ("Scenes of the
-  branch") lists one branch's scenes, newest first, 8 to a page, with those marks, ⑂ where another branch leaves, ⚠️
-  for a truncated scene, and the first words of the author's input. Each scene opens its checkpoint preview, where
+  count and the world time of its last scene, in a `pre` block of at most 40 lines. Under it, and on the branch
+  screen, «📜 Сцены ветки» ("Scenes of the branch") lists every scene of one branch, newest first, 8 per page: number,
+  world time, the names that point at the scene (🌿, 🗜, 📍, ⑂ where another branch leaves the line, ⚠️ for a
+  truncated scene) and the first words of the author's input. Each scene opens its checkpoint preview, where
   «🌿 Продолжить отсюда» forks.
 
 Stories made from the same seed share its title, so they are called «История N» (by creation order) within that seed.
@@ -160,10 +161,14 @@ message ([limits](#telegram-limits)).
   - «🎨 Рисую вариант…» stands while it is drawn. The variant is a photo of its own under the same scene, with its prompt folded under it: the tokens are those of that prompt, with no style share. Its note has the same button, and it is deleted with the scene like the first.
   - The language model is not asked or held, and nothing of the story changes. One variant at a time per reader; the reader's next move, /cancel or a new job stops it, and a failure is told once and not retried. The button, and the prompt when it arrives, are refused while pictures are off and while a scene is being written.
 
-The reader's permission, the scene and its recipe are checked when the button is pressed, when the prompt arrives,
-before the drawing and before the photo goes out. The row is `picture_variant`, with `edited: true` beside the counts
-`picture` has and no word of the prompt. A prompt may have 4000 characters (`PROMPT_CHARS` in
-`local/picture-style.ts`): at five characters for every escaped `&`, the note still fits the 32768 of a rich message.
+The note under the variant counts the tokens of that prompt and gives no style share, which nobody knows for a prompt
+written whole. The reader's permission, the scene and its recipe are checked when the button is pressed, when the
+prompt arrives, before the drawing and before the photo goes out. A variant asks the language model nothing and holds
+none of its card, and it changes nothing of the story: not the sheet, the clothes or the frame kept for samples. The
+row is `picture_variant`, with `edited: true` beside the counts `picture` has and no word of the prompt. The bot keeps
+the prompt in neither its library nor its technical logs, not even while it waits for it. A prompt may have 4000
+characters (`PROMPT_CHARS` in `local/picture-style.ts`): at five characters for every escaped `&`, the note still fits
+the 32768 of a rich message.
 
 The recipe pins the request and not the card: the graph with the file names in it, the checkpoint's name, the seed,
 the size and the sampler settings. The card's software, and weights replaced under the same file name, are not in it,
