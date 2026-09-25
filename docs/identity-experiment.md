@@ -18,7 +18,8 @@ The run is complete by the rule of [a complete run](#complete-run). The smoke pa
 telemetry checks. The six portraits, all 48 cells (8 frames, 2 seeds, 3 arms) and the three frames of the control were
 drawn at the pinned geometry, and none failed. For the three control frames, at seed 7 and 1280x704, A and the bot's
 text-to-image graph produced identical PNG files. Each of the six bundles was read by a fresh Claude Fable 5.1 session
-that opened only the files of its own bundle, and every item has an answer.
+that opened only the files of its own bundle, and every item has an answer. A second panel, of GPT-6 sessions, read
+the same bundles afterwards ([below](#second-panel)).
 
 | | A | B | C |
 | --- | --- | --- | --- |
@@ -38,11 +39,12 @@ that opened only the files of its own bundle, and every item has an answer.
 | 4. Time | fail: the slowest frame took 83 s where 33 s is allowed; the median, 1.33 times A's, is within 1.5 | fail: 83 s; the median 1.35 times |
 | 5. Memory | pass: no OOM, 9638 MiB free at the tightest frame of four | pass |
 
-**B fails, and C fails.** The owner's decision on what follows is not recorded yet.
+**B fails, and C fails**, by the answers of either panel. The owner's next step, chosen the same day, is to test
+references where many people touch, on the bot's own path.
 
 What the numbers leave open, and what the run showed besides:
 
-- One judge read each bundle, and the judges did not hold one threshold: two of them said they count a person
+- One Claude judge read each bundle, and the judges did not hold one threshold: two of them said they count a person
   looking the wrong way as an action error. Still, each of the four bundles with portraits has three or four action
   errors and both bundles of A have none. The judges of B and C describe the same failure: people stand facing the
   viewer and look into the lens, as they do in their portraits, instead of reading or rehearsing.
@@ -57,8 +59,42 @@ What the numbers leave open, and what the run showed besides:
   hand or shoulder was often mirrored. Two buckets named both in an action and among the objects came out as four.
   People who read or speak looked at the viewer unless the text said where they looked.
 
-The pictures, the bundle keys, the answers and the judges' full reports stay on the owner's computer, in the
-gitignored `illustrations/identity/`.
+<a id='second-panel'></a>
+
+### The second panel
+
+After the first panel the owner asked for GPT-6 judges, as the stronger reader of pictures. The same six bundles went
+to six fresh sessions of `gpt-6-astra` through `codex exec`, at high reasoning effort in a read-only sandbox, each
+started in its own copy of one bundle with its eight pictures attached and given the same task. Their command logs
+show that each opened only `TASK.md`, `cases.json` and `checks.json` of its own copy, and every item has an answer.
+The first panel's answers stay the run's record; these are counted beside them by the same code.
+
+| GPT-6 panel | A | B | C |
+| --- | --- | --- | --- |
+| Face kept, of 26 transitions | 65% | 100% | 92% |
+| Figure kept, of 26 | 73% | 81% | 65% |
+| Both kept, of 26 | 50% | 81% | 58% |
+| Pictures with two people mixed up, of 14 | 0 | 0 | 1 |
+| Pictures with an action error, of 16 | 10 | 13 | 12 |
+| The frames' own changes of clothes shown, of 8 | 7 | 6 | 8 |
+
+By these answers B passes gate 2, with both kept in 81% of transitions against A's 50%. It still fails gate 1 on the
+figure, 81%; gate 3 on clothes and action, 6 of 8 and 13 action errors against A's 10; and gate 4 on time. C fails
+gates 1 to 4. The verdict is the same.
+
+The two panels agree in direction and differ in strictness:
+
+- Portraits keep a face: B against A is 96% against 88% for Claude and 100% against 65% for GPT-6. Neither panel finds
+  that they help the action.
+- Of the 48 action items the panels answered 28 alike. In the other 20 Claude found the action shown and GPT-6 did
+  not, never the reverse. GPT-6 counts an action that is not visibly performed as an error: a speech with the mouth
+  closed, an axe raised over a block with no log on it, darning with no stitch.
+- Of the 78 figure items they answered 59 alike, and in 16 of the rest Claude kept the figure and GPT-6 did not. Of
+  the 78 face items they answered 65 alike; the rest split 8 and 5.
+
+The pictures, the bundle keys, the answers of both panels and the judges' full reports stay on the owner's computer,
+in the gitignored `illustrations/identity/`; the second panel's answers, reports and command logs are in its
+`run/panel-gpt6/`.
 
 ## The protocol
 
