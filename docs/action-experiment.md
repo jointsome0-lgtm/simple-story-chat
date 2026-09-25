@@ -629,11 +629,18 @@ SIMPLE_CHAT_RENT_DRY_RUN=1 npm run gpu:rent -- --lane pictures --qwen only --hou
 npm run gpu:rent -- --lane pictures --qwen only --hours 3    # with the owner's «да»; `rented` names ID and destroyBy
 npm run gpu:rent -- --show ID    # present, at once
 destroy_by=DESTROY_BY            # from `rented`
-# As soon as ssh answers, the guard, as the identity run checked it: a failed guard is end=0, and the termination.
+# As soon as ssh answers, the guard, as the identity run checked it. A failed guard is the termination at once, and
+# the runbook ends there: nothing is copied onto the card or started on it.
 guard=$(timeout 20 ssh -o ConnectTimeout=10 simple-chat-vast \
   'flock -n -E 75 /root/.simple-chat-trial-guard.lock true; [ $? -eq 75 ] && cat /root/.simple-chat-trial-deadline')
-if [[ $guard =~ ^[1-9][0-9]{0,11}$ ]] && (( guard <= destroy_by )); then end=$(( guard - 300 ))
-else end=0; echo 'failed guard: terminate now'; fi
+if [[ $guard =~ ^[1-9][0-9]{0,11}$ ]] && (( guard <= destroy_by )); then
+  end=$(( (guard < destroy_by ? guard : destroy_by) - 300 ))    # min(guard, destroy_by) - 300
+else
+  echo 'failed guard: the termination, and nothing more'
+  timeout 20 ssh -o ConnectTimeout=10 simple-chat-vast 'date +%s > /root/.simple-chat-trial-deadline'
+  npm run gpu:rent -- --destroy ID    # destroy_confirmed; anything else goes to the owner at once
+  exit 1
+fi
 ssh simple-chat-vast 'mkdir -p /workspace/simple-chat/gpu'
 tar -cf - -C gpu . | ssh simple-chat-vast 'tar -xf - -C /workspace/simple-chat/gpu'
 ssh simple-chat-vast 'SIMPLE_CHAT_IMAGE_QWEN=only bash /workspace/simple-chat/gpu/image-bootstrap.sh'
