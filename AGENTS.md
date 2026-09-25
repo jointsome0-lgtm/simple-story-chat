@@ -49,7 +49,7 @@ comments or automatic imports to make a size count smaller.
 | The agent CLI and MCP server | [agent-interface.md](docs/agent-interface.md) |
 | A rental, the picture card, image privacy | [gpu.md](docs/gpu.md), from [the owner's rules](docs/gpu.md#while-the-cards-are-paid-for) |
 | Prompts, memory, the eval | [improve-loop.md](docs/improve-loop.md), [eval.md](docs/eval.md) |
-| The identity or a llama.cpp experiment | [identity-experiment.md](docs/identity-experiment.md), [llama-measurement.md](docs/llama-measurement.md) |
+| The identity, action or llama.cpp experiment | [identity-experiment.md](docs/identity-experiment.md), [action-experiment.md](docs/action-experiment.md), [llama-measurement.md](docs/llama-measurement.md) |
 
 ## Privacy: whose data you may read
 

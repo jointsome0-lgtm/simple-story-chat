@@ -42,6 +42,8 @@ Open the one for the task at hand.
   the bot still runs it
 - [The identity measurement](docs/identity-experiment.md): its protocol, and the run of 2026-09-25, where neither arm
   with portraits passed
+- [The action measurement](docs/action-experiment.md): its protocol, for scenes where several people touch, with
+  portraits, views and the bot's own text path; not run yet
 
 ## Ideas, measurements and decisions
 
