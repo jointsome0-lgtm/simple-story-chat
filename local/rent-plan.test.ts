@@ -71,9 +71,13 @@ test('the Qwen comparison is pinned beside the rest and is priced only by the se
   // And it still fits the disk the plan rents: the pinned files, the opt-in, and about 13 GiB for torch.
   assert.ok((plan.sessionBytes + qwen) / 1e9 + 14 < plan.diskGb, 'the opt-in does not fit the rented disk');
   // A picture machine that pulls Qwen alone, as the identity runbook's does, is priced by those three files and torch,
-  // on the same disk; any other machine is refused the flag rather than priced for less than it pulls.
+  // on a disk of its own that holds them; any other machine is refused the flag rather than priced for less than it
+  // pulls.
   const alone = rentPlan({ lane: 'pictures', qwenOnly: true });
-  assert.deepEqual([alone.sessionBytes, alone.diskGb], [qwen + 5000000000, rentPlan({ lane: 'pictures' }).diskGb]);
+  assert.deepEqual([alone.sessionBytes, alone.diskGb], [qwen + 5000000000, 60]);
+  assert.ok(alone.sessionBytes / 1e9 + 14 < alone.diskGb, 'Qwen alone does not fit its disk');
+  assert.equal(offerQuery(alone).disk_space.gte, 60);
+  assert.equal(createBody({ plan: alone, onstart: '' }).disk, 60);
   assert.throws(() => rentPlan({ qwenOnly: true }), /picture machine/);
 });
 
@@ -94,6 +98,11 @@ test('a session on two machines rents each lane its own disk and prices it by it
   assert.ok(text.maxHour < pictures.maxHour && pictures.maxHour < both.maxHour);
   assert.equal(offerQuery(pictures).disk_space.gte, 100);
   assert.equal(createBody({ plan: pictures, onstart: '' }).disk, 100);
+  // The picture lane's RAM floor is its own: a 32 GB share that reports 31.2 GB is taken there, not for the language.
+  assert.deepEqual([pictures.minRamGb, offerQuery(pictures).cpu_ram.gte, text.minRamGb], [30, 30000, 32]);
+  const share = [offer({ id: 1, cpu_ram: 31197, dph_total: 0.5 })];
+  assert.deepEqual(chooseOffers(share, pictures).candidates.map(one => one.id), [1]);
+  assert.equal(chooseOffers(share, text).droppedForRam, 1);
   // One lane is one card, and a lane nobody defined is refused rather than rented as something else.
   assert.throws(() => rentPlan({ gpus: 2, lane: 'text' }), /one lane has one card/);
   assert.throws(() => rentPlan({ lane: 'video' as 'text' }), /no such lane/);

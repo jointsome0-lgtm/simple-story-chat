@@ -50,6 +50,10 @@ const QWEN_BYTES = 7256783064 + 9350798360 + 675509688;
 // with one card or two. Of the 6 GB of wheels and packages, torch is five and belongs to the picture lane. The
 // language machine's 60 GB is the disk of the rental measured in docs/gpu.md; the picture machine's 100 GB holds
 // the pinned files (31.5 GB), the Qwen opt-in (17.3 GB), torch and ComfyUI (about 13 GB) and the pictures.
+// A picture machine that pulls Qwen alone needs none of the pinned files: 60 GB, like the language machine's, which
+// held more. The disk is priced by the hour, and on 2026-09-25 the cheapest 5090 in the console, $0.476, charged
+// $0.87 per GB a month for it, so its 100 GB came to $0.595.
+const QWEN_ONLY_DISK_GB = 60;
 export type Lane = 'both' | 'text' | 'pictures';
 const LANES: Record<Lane, { diskGb: number; bytes: number }> = {
   both: { diskGb: DISK_GB, bytes: TEXT_BYTES + PICTURE_BYTES + 6000000000 },
@@ -64,6 +68,9 @@ const BLOCKED_COUNTRIES = ['CN'];
 // container's share, not the machine's: a container on the measured 256-core host held 30.72 cores of it. Without a
 // floor there is no guarantee that SIMPLE_CHAT_GPU_CACHE_RAM has memory to live in.
 const RAM_GB_PER_GPU = 32;
+// The picture lane has no cache to feed and loads at most Qwen's 17.3 GB. A 32 GB share can report 31.2 GB, as the
+// cheapest machines of 2026-09-25 did, which the language lane's floor refused.
+const PICTURE_RAM_GB = 30;
 // Two hours and a half: the instance life the session is billed for, not the work window. Work stops about a
 // quarter of an hour before teardown and Vast bills until the instance is deleted, so the shorter figure would
 // weight the hourly price too lightly. The hourly price is weighted by it against the one-off traffic cost when
@@ -94,10 +101,12 @@ export function rentPlan({ gpus = 1, lane = 'both', preferredHost = PREFERRED_HO
   // One lane is one card: a second card on a machine that runs one server is paid for and idle.
   if (lane !== 'both' && gpus !== 1) throw new Error('a machine for one lane has one card');
   if (qwenOnly && lane !== 'pictures') throw new Error('only a picture machine pulls Qwen alone');
-  const { diskGb, bytes } = LANES[lane];
+  const { bytes } = LANES[lane];
+  const diskGb = qwenOnly ? QWEN_ONLY_DISK_GB : LANES[lane].diskGb;
   const maxHour = Math.round((maxDph + STORAGE_PER_GB_MONTH * diskGb / 730) * 1000) / 1000;
   return {
-    lane, gpus, maxHour, diskGb, minRamGb: RAM_GB_PER_GPU * gpus, minDirectPorts: MIN_DIRECT_PORTS,
+    lane, gpus, maxHour, diskGb, minRamGb: lane === 'pictures' ? PICTURE_RAM_GB : RAM_GB_PER_GPU * gpus,
+    minDirectPorts: MIN_DIRECT_PORTS,
     sessionHours: hours === undefined ? SESSION_HOURS : hours + (BOOT_SECONDS + DONE_SECONDS + DESTROY_SECONDS) / 3600,
     // Qwen's files and torch's five gigabytes, the only wheels the picture lane pulls.
     sessionBytes: qwenOnly ? QWEN_BYTES + 5000000000 : bytes, image: IMAGE, preferredHost,
