@@ -1,7 +1,7 @@
 // The action measurement (docs/action-experiment.md): scenes where several people touch, written on the text card,
 // drawn in six arms on the picture card, and judged by fresh GPT-6 sessions, with the sharp scenes sealed. The
-// commands, in the runbook's order (docs/action-experiment.md#runbook), all in one directory (`--dir`,
-// illustrations/action by default):
+// commands, in the runbook's order (docs/action-experiment.md#runbook), all in illustrations/action, whose sealed/ the
+// owner's deny covers; only `dry-run` takes another `--dir`:
 //   texts       on the text card, through simple-serving's gateway: `--marker` first, the marker check of the sealed
 //               path, then the 18 stories. `--smoke-record` names the record of the gateway's smoke, which route A
 //               starts on; `--model gpu:<label>` takes the llama.cpp fallback from .env.gpu instead
@@ -14,14 +14,15 @@
 //   collect     the owner's answers to the sessions both judges left, and the counts
 //   report      report.json, and the owner's report.md
 //   gallery     the owner's pages: gallery.html, and sealed/gallery.html for the sharp scenes
-//   dry-run     all of it against fakes, with the boundary test
+//   dry-run     all of it against fakes, with the boundary test; `--dev` then takes the texts through simple-serving's
+//               dev launcher
 // What it prints is ids, codes, counts and times, one JSON object a line: never a word of a story, a prompt or a key.
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { MARKER_STORY, SHARP_THEMES } from '../examples/action-set.ts';
 import { apiGraph, comfyUrl, textEncoderOf } from './image-batch.ts';
 import { writeCardRecord } from './image-identity.ts';
@@ -247,8 +248,8 @@ function ownerAnswers(root: string, word: string) {
 // pictures' metadata and the judge's prose and malformed blocks; the boundary test then searches every file of `out`
 // outside `run/sealed/`, `tmp/` and all the dry run printed for it, and fails on anything it cannot read; and the whole
 // of `run/`, `tmp/` and the output for the keys. On the way it goes through the refusals the paid run relies on. No
-// card, no model, no network. Beside `run/` it leaves the key file, the smoke record and `dev.json`, which the
-// runbook's run of the texts against simple-serving's dev launcher takes up.
+// card, no model, no network. Beside `run/` it leaves the key file, the smoke record and `dev.json`, which `devRun`
+// takes up.
 export async function dryRun(out: string, options: { tokenizers?: string } = {}) {
   const dry = resolve(out), root = join(dry, 'run'), temp = join(dry, 'tmp');
   mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -387,11 +388,44 @@ export async function dryRun(out: string, options: { tokenizers?: string } = {})
   }
 }
 
+// The texts against simple-serving's dev launcher, after a dry run in `out` (the runbook's first step): the marker
+// check, then the text run, in `dev/` beside the dry run's `run/`, through the gateway at `url`, with the dry run's
+// own key file and smoke record. Its client key is made up, so only a launcher started on the dry run's dev.json
+// answers it, and that launcher's engine is a fake whose sheets never parse: a marker check that passes means that a
+// model answered, and no sharp story is asked for outside illustrations/action.
+export async function devRun(out: string | undefined, url: string) {
+  const dry = out === undefined ? undefined : resolve(out);
+  if (!dry || !existsSync(join(dry, 'dev.json'))) throw new Refusal('dry-run --dev takes the --dir of a dry run, which holds its key file and dev.json');
+  const root = join(dry, 'dev');
+  const options: TextsOptions = { smokeRecord: join(dry, 'serving-smoke.jsonl'), keyFile: join(dry, 'config.json'), baseUrl: url, log: print };
+  const marker = await markerCommand(root, options);
+  print(marker);
+  if (marker.pass) {
+    throw new Refusal('The marker check passed against the dev launcher, whose fake engine parses no sheet: a model answered it, and no sharp story is asked for outside illustrations/action');
+  }
+  print(await textsCommand(root, options));
+}
+
 // ---- The command line ----
+
+// Every command but the dry run works in illustrations/action alone, the one directory whose sealed/ the owner's deny
+// covers (docs/action-experiment.md#sealed): another --dir, or a link on the way to sealed/, would put the sharp
+// stories where no deny is.
+function liveRoot(dir: string | undefined) {
+  if (dir !== undefined && resolve(dir) !== RUN_DIR) {
+    throw new Refusal('Only dry-run takes another --dir: every other command works in illustrations/action, whose sealed/ the owner\'s deny covers');
+  }
+  for (const path of [join(ROOT, 'illustrations'), RUN_DIR, join(RUN_DIR, 'sealed')]) {
+    if (lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      throw new Refusal(`${relative(ROOT, path)} is a link: the sharp stories would land where the owner's deny is not`);
+    }
+  }
+  return RUN_DIR;
+}
 
 async function main(args: string[]) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
-    dir: { type: 'string' },
+    dir: { type: 'string' }, dev: { type: 'string' },
     marker: { type: 'boolean', default: false }, 'smoke-record': { type: 'string' }, model: { type: 'string' }, 'base-url': { type: 'string' },
     'key-file': { type: 'string' },
     smoke: { type: 'boolean', default: false }, until: { type: 'string' }, comfy: { type: 'string', default: 'http://127.0.0.1:8188' },
@@ -399,7 +433,13 @@ async function main(args: string[]) {
     kind: { type: 'string' }, parallel: { type: 'string', default: '4' },
   } });
   const command = positionals[0] ?? '';
-  const root = resolve(values.dir ?? RUN_DIR);
+  if (command === 'dry-run') {
+    if (values.dev !== undefined) return devRun(values.dir, values.dev);
+    const result = await dryRun(values.dir ?? mkdtempSync(join(tmpdir(), 'simple-chat-action-dry-')), { tokenizers: values.tokenizers });
+    if (!result.pass) process.exitCode = 1;
+    return;
+  }
+  const root = liveRoot(values.dir);
   const parallel = Number(values.parallel);
   if (!Number.isInteger(parallel) || parallel < 1 || parallel > 8) throw new Refusal('--parallel takes 1 to 8 sessions at a time');
   const kinds = values.kind?.split(',').map(kind => kind.trim());
@@ -443,9 +483,6 @@ async function main(args: string[]) {
     print(reportCommand(root));
   } else if (command === 'gallery') {
     print({ event: 'gallery', ...writeGalleries(root) });
-  } else if (command === 'dry-run') {
-    const result = await dryRun(values.dir ?? mkdtempSync(join(tmpdir(), 'simple-chat-action-dry-')), { tokenizers: values.tokenizers });
-    if (!result.pass) process.exitCode = 1;
   } else throw new Refusal('Use: image-action.ts texts|prompts|checklists|draw|portraits|bundles|judge|collect|report|gallery|dry-run (docs/action-experiment.md#runbook)');
 }
 

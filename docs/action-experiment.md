@@ -592,10 +592,11 @@ card, about $3 with the downloads. Each dry-run's `session` replaces it before t
 
 The owner's step is done: on 2026-09-25 the owner added `Read(./illustrations/action/sealed/**)` to the denies of
 `.claude/settings.json` ([sealed](#sealed)). Before each card the operator checks that it is still there, and edits
-nothing in that file. Everything lives in one directory, `illustrations/action` unless `--dir` names another. Each
-command but `dry-run` prints one JSON object a line, of ids, codes, counts and times: a sharp story shows as its id,
-and an error as the harness's own refusal or as a class and a code, never as what a parser read.
-`SIMPLE_SERVING_CHECKOUT` is simple-serving's checkout, as `npm run test:serving` names it. The runbook, in its order:
+nothing in that file. Everything lives in one directory, `illustrations/action`, whose `sealed/` that deny covers:
+every command but `dry-run` refuses another `--dir`, and a link on the way to `sealed/`. Each command but `dry-run`
+prints one JSON object a line, of ids, codes, counts and times: a sharp story shows as its id, and an error as the
+harness's own refusal or as a class and a code, never as what a parser read. `SIMPLE_SERVING_CHECKOUT` is
+simple-serving's checkout, as `npm run test:serving` names it. The runbook, in its order:
 
 ```sh
 # Before any card: all of it against fakes, then the texts against simple-serving's dev launcher.
@@ -603,10 +604,7 @@ dry=$(mktemp -d)
 npm run image:action -- dry-run --dir "$dry"    # eleven steps, then "the dry run went as expected"
 # In simple-serving's checkout, in a terminal of its own. dev.json holds the dry run's made-up client key.
 uv run python -m simple_serving.dev --config "$dry/dev.json" --engine-port 8200 --public-port 8201 --control-port 8202
-npm run image:action -- texts --marker --dir "$dry/dev" --base-url http://127.0.0.1:8201 \
-  --key-file "$dry/config.json" --smoke-record "$dry/serving-smoke.jsonl"    # reached false: no sheet parses
-npm run image:action -- texts --dir "$dry/dev" --base-url http://127.0.0.1:8201 \
-  --key-file "$dry/config.json" --smoke-record "$dry/serving-smoke.jsonl"    # 13 stories, the sharp ones held
+npm run image:action -- dry-run --dir "$dry" --dev http://127.0.0.1:8201    # reached false, then 13 stories
 grep -cF 'illustrations/action/sealed' .claude/settings.json    # before each card: 1 or more
 # The text card (the rentals, 2), prepared as simple-serving's README says in "The card". In that checkout, once SSH
 # to the card works, `trial` names this card in the configuration, and `up`, in a terminal of its own, holds the tunnel.
@@ -684,12 +682,14 @@ contracts the harness talks to, and model no card, no model and no judge.
 
 The dry run also leaves `config.json`, a key file of three made-up keys as simple-serving's configuration holds them,
 `serving-smoke.jsonl`, a smoke record that passes, and `dev.json`, a service block for simple-serving's dev launcher
-with the served name, the context and that client key. With the launcher up, the two `texts` commands take the texts
-through the real gateway in front of its fake engine: the adapter, the client key read alone, class `internal`, the
-gateway's times in each `text_attempt`, and the requests counted apart. The fake engine answers every call with one
-sentence, so the scenes pass and no sheet parses: the marker check prints `reached: false`, and `texts` 13 stories
-whose sheet is `unparsed`, with the five sharp ones held as `marker_failed`. Anything else, a refusal or a failed scene
-above all, is looked into before any card.
+with the served name, the context and that client key. With the launcher up, `dry-run --dev` runs the marker check and
+the texts in `dev/` beside `run/`, with that key file and that smoke record, through the real gateway in front of its
+fake engine: the adapter, the client key read alone, class `internal`, the gateway's times in each `text_attempt`, and
+the requests counted apart. The fake engine answers every call with one sentence, so the scenes pass and no sheet
+parses: the marker check prints `reached: false`, and `texts` 13 stories whose sheet is `unparsed`, with the five
+sharp ones held as `marker_failed`. A marker check that passes there means that a model answered, and `dry-run --dev`
+stops before the texts, so that no sharp story is asked for outside `illustrations/action`. Anything else, a refusal
+or a failed scene above all, is looked into before any card.
 
 **The text card** follows the rehearsal (the rentals, 1), and is watched and ended as [the rentals](#the-rentals) say.
 Until `trial` has run on it, simple-serving's configuration names the rehearsal's card, which is gone: `up` would
