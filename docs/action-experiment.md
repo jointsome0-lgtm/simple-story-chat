@@ -736,8 +736,10 @@ passes with `tOut`, and T leaves the run. `portraits` prices the rest of seed 7 
 before any job is sent, and the termination follows. `draw` prints each cell and the admission of seed 11, then
 `drawn`: the pictures drawn by kind and seed, and the failed and the out by code. `stopped: admission` after seed 7 is
 seed 11 that did not fit, and the verdict stands on seed 7; `stopped: until` is the end that came. Every ending is the
-termination, and a resume draws nothing again. The saved pictures stay on the card until its destroy is read back; the
-harness reads no log of the card for a sharp story, and nobody reads the server's output.
+termination, and a resume draws nothing again, a cell whose failure stopped the run included; a picture `draw.json`
+records whose file is gone is data lost, refused before anything is drawn and never drawn again. The saved pictures
+stay on the card until its destroy is read back; the harness reads no log of the card for a sharp story, and nobody
+reads the server's output.
 
 **After the card**, no card is needed. `bundles` prints the bundles built and those skipped, by reason. `judge` runs
 every session that is ready, four at a time (`--parallel`, and `--kind` for some kinds alone), prints each

@@ -237,13 +237,20 @@ export async function drawStage(options: DrawStageOptions): Promise<DrawIndex> {
   const base = readGraph(ACTION_GRAPH), frontGraph = readGraph(FRONT_GRAPH);
   const plans = new Map(textStories().flatMap(story => { const plan = readPlan(root, story.id); return plan ? [[story.id, plan] as const] : []; }));
   const own = pinsFor(root, card, base);
+  const file = join(root, 'draw.json');
+  const earlier = readJson<DrawIndex>(file);
+  // A picture draw.json records as drawn whose file is gone is data lost: it is not drawn again, and nothing more is
+  // drawn before someone has looked.
+  const lost = Object.values(earlier?.cells ?? {}).filter(one => one.status === 'drawn' && !(one.file && existsSync(join(root, one.file))));
+  if (lost.length) {
+    throw new Refusal(`draw.json records ${lost.length} pictures whose files are gone from ${root}, ${lost[0].key} the first: that is data lost, `
+      + 'to be looked into; nothing is drawn, and they are never drawn again');
+  }
   const server = await serverPins(comfy, true).catch(() => {
     throw new Refusal(comfy.end?.aborted ? 'The end (--until) came before the server said what it is; nothing is drawn'
       : 'The server did not say what it is on /system_stats (ComfyUI, PyTorch and the card), and the run is pinned to that too; nothing is drawn');
   });
   const pins = { ...own, ...server };
-  const file = join(root, 'draw.json');
-  const earlier = readJson<DrawIndex>(file);
   if (earlier) {
     const changed = [...new Set([...Object.keys(pins), ...Object.keys(earlier.pins)])].find(key => earlier.pins[key] !== pins[key]);
     if (changed) throw new Refusal(`${file} was drawn under another ${changed}; one run directory holds one set of pins`);
@@ -285,7 +292,7 @@ export async function drawStage(options: DrawStageOptions): Promise<DrawIndex> {
   // waits for its own time.
   const admit = (seed: number, cells: ActionCell[]) => {
     if (index.admitted?.[seed]) return true;
-    const left = cells.filter(cell => !settledCell(run, cell));
+    const left = cells.filter(cell => !index.cells[cell.key]);
     const needMs = left.reduce((sum, cell) => sum + price(cell), 0), leftMs = options.until - Date.now();
     const admitted = needMs <= leftMs;
     (index.admission ??= []).push({ seed, cells: left.length, needMs: Math.min(needMs, Number.MAX_SAFE_INTEGER), leftMs: Math.max(0, leftMs), admitted });
@@ -316,14 +323,6 @@ async function finish(run: Run, ended: 'done' | 'until' | 'stopped' | 'admission
   return run.index;
 }
 
-// A cell with its outcome: drawn with its file there, failed for its own reason, or out. A failure that stopped the
-// run was the server's or the graph's, and that cell is drawn again on a resume.
-function settledCell(run: Run, cell: ActionCell) {
-  const known = run.index.cells[cell.key];
-  return !!known && ((known.status === 'drawn' && !!known.file && existsSync(join(run.root, known.file)))
-    || (known.status === 'failed' && !stopsTheRun(known.code ?? '')) || known.status === 'out');
-}
-
 // The files a cell's slots send, each checked against the record of the cell that drew it: drawn, and the very file
 // that was drawn, on its canvas. Anything else keeps the cell from the card with the code of what is missing.
 function referencesOf(run: Run, cell: ActionCell): { files: { path: string; bytes: Buffer }[] } | { out: string } {
@@ -348,7 +347,9 @@ function referencesOf(run: Run, cell: ActionCell): { files: { path: string; byte
 async function drawCells(run: Run, cells: ActionCell[], smoke: boolean, price?: (cell: ActionCell) => number): Promise<'done' | 'until' | 'stopped'> {
   const { index, comfy, log } = run;
   for (const cell of cells) {
-    if (settledCell(run, cell)) continue;
+    // A cell with an outcome keeps it: drawn, out, or failed, a failure that stopped the run included. Nothing is drawn
+    // again (docs/action-experiment.md#drawing).
+    if (index.cells[cell.key]) continue;
     const sealed = isSharp(cell.story);
     const base = { key: cell.key, kind: cell.kind, story: cell.story, id: cell.id, seed: cell.seed, ...(cell.arm ? { arm: cell.arm } : {}),
       references: cell.refs.length, ...(smoke ? { smoke } : {}) };
@@ -432,7 +433,7 @@ async function drawCells(run: Run, cells: ActionCell[], smoke: boolean, price?: 
       index.cells[cell.key] = { ...base, status: 'failed', code, ...(httpStatus === undefined ? {} : { httpStatus }), ...(oom ? { oom } : {}) };
       run.save();
       log({ event: 'cell_failed', key: cell.key, code, ...(httpStatus === undefined ? {} : { httpStatus }), ...(oom ? { oom } : {}) });
-      // The graph or the server, not this picture: the run stops, and a resume starts from this cell.
+      // The graph or the server, not this picture: the run stops, and a resume goes on after this cell.
       if (stopsTheRun(code)) { index.error = code; return 'stopped'; }
     }
   }
