@@ -4,7 +4,7 @@
 // in the \u-escaped form JSON and ComfyUI's text chunks write it in. Only counts and the harness's own relative paths
 // are reported; the word itself never is.
 import { randomInt } from 'node:crypto';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 // A refusal of the harness: what the operator must do, in the harness's own words, written where it is thrown. It is
@@ -28,26 +28,43 @@ export function markerForms(word: string): Buffer[] {
 }
 
 // Every file under `dir` but those `skip` names, and which of them hold one of `needles`, in their bytes or in their
-// name or a directory's. A hit's path may hold the word itself: it is counted, never printed.
+// name or a directory's. A symbolic link is searched as what it points to. What cannot be searched, a directory or a
+// file that cannot be read or a link that points nowhere, is `unread`, and a search with anything unread has not
+// found the word absent. A hit's path may hold the word itself: it is counted, never printed.
 export function searchTree(dir: string, needles: Buffer[], skip: (path: string) => boolean = () => false) {
-  const found = { files: 0, bytes: 0, hits: [] as string[] };
+  const found = { files: 0, bytes: 0, hits: [] as string[], unread: [] as string[] };
   const holds = (bytes: Buffer) => needles.some(needle => bytes.includes(needle));
+  const walked = new Set<string>();
   const walk = (at: string) => {
     let entries;
-    try { entries = readdirSync(at, { withFileTypes: true }); } catch { return; }
+    try {
+      // A directory reached twice, through a link, is searched once.
+      const real = realpathSync(at);
+      if (walked.has(real)) return;
+      walked.add(real);
+      entries = readdirSync(at, { withFileTypes: true });
+    } catch { found.unread.push(relative(dir, at) || '.'); return; }
     for (const entry of entries) {
       const path = join(at, entry.name);
       if (skip(path)) continue;
       const named = holds(Buffer.from(entry.name, 'utf8'));
-      if (entry.isDirectory()) {
+      let kind = entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : 'other';
+      if (entry.isSymbolicLink()) {
+        try {
+          const target = statSync(path);
+          kind = target.isDirectory() ? 'directory' : target.isFile() ? 'file' : 'other';
+        } catch { found.unread.push(relative(dir, path)); continue; }
+      }
+      if (kind === 'directory') {
         if (named) found.hits.push(relative(dir, path));
         walk(path);
-      } else if (entry.isFile()) {
-        const bytes = readFileSync(path);
+      } else if (kind === 'file') {
+        let bytes: Buffer;
+        try { bytes = readFileSync(path); } catch { found.unread.push(relative(dir, path)); continue; }
         found.files++;
         found.bytes += bytes.length;
         if (named || holds(bytes)) found.hits.push(relative(dir, path));
-      }
+      } else if (named) found.hits.push(relative(dir, path));
     }
   };
   walk(dir);
@@ -71,16 +88,18 @@ export function capture() {
   };
 }
 
-// The boundary test: the run's root without its `sealed/`, the temporary directory, and the output. One hit anywhere
-// fails it.
-export function searchBoundary({ root, tempDir, word, output }: { root: string; tempDir: string; word: string; output: string }) {
+// The boundary test (docs/action-experiment.md#sealed), over every place the harness writes: `root`, the directory
+// that holds the run and everything written beside it, without `sealed` (the run's `sealed/`, by default root's); the
+// temporary directory; and the output. One hit anywhere fails it, and so does anything the search could not read.
+export function searchBoundary({ root, sealed = join(root, 'sealed'), tempDir, word, output }: { root: string; sealed?: string; tempDir: string;
+  word: string; output: string }) {
   const needles = markerForms(word);
-  const sealed = join(root, 'sealed');
   const files = searchTree(root, needles, path => path === sealed || path === tempDir);
   const temp = searchTree(tempDir, needles);
   const printed = needles.some(needle => Buffer.from(output, 'utf8').includes(needle));
-  return { pass: !files.hits.length && !temp.hits.length && !printed, files: files.files, bytes: files.bytes + temp.bytes,
-    tempFiles: temp.files, hits: { files: files.hits, temp: temp.hits.length, output: printed } };
+  const unread = files.unread.length + temp.unread.length;
+  return { pass: !files.hits.length && !temp.hits.length && !printed && !unread, files: files.files, bytes: files.bytes + temp.bytes,
+    tempFiles: temp.files, unread, hits: { files: files.hits, temp: temp.hits.length, output: printed } };
 }
 
 // A name nobody wrote: Cyrillic syllables drawn at random, capitalised, that the files outside `sealed/` do not hold

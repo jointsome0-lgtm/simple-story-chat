@@ -100,7 +100,7 @@ export const textsCommand = (root: string, options: TextsOptions) => withTextMod
 export const markerCommand = (root: string, options: TextsOptions) => withTextModel(options, async model => {
   const check = await markerCheck({ root, model, smoke: options.smokeRecord, say: options.log });
   return { event: 'marker_check', pass: check.pass, reached: check.reached, steps: check.steps, files: check.files, bytes: check.bytes,
-    tempFiles: check.tempFiles, hits: check.hits, requests: check.requests };
+    tempFiles: check.tempFiles, unread: check.unread, hits: check.hits, requests: check.requests };
 });
 
 // ---- Between the cards ----
@@ -241,14 +241,14 @@ function ownerAnswers(root: string, word: string) {
 }
 
 // The whole runbook against fakes, in its order, in `out`: the run in `run/`, and `tmp/` as the temporary directory of
-// the harness while it runs. simple-serving's gateway is local/action-fakes.ts's behind the real adapter, reached with a
-// key file that also holds the two keys the harness must not read; ComfyUI is local/fake-comfy.ts; the judge writes
+// the harness while it runs. simple-serving's gateway is local/action-fakes.ts's behind the real adapter, reached with
+// a key file that also holds the two keys the harness must not read; ComfyUI is local/fake-comfy.ts; the judge writes
 // made-up answers. A made-up word goes wherever a sharp story's words would, and into the fakes' error bodies, the
-// pictures' metadata and the judge's prose and malformed blocks; the boundary test then searches every file of `run/`
-// outside `sealed/`, `tmp/` and all the dry run printed for it, and the whole of `run/`, `tmp/` and the output for
-// the keys. On the way it goes through the refusals the paid run relies on. No card, no model, no network. Beside
-// `run/` it leaves the key file, the smoke record and `dev.json`, which the runbook's run of the texts against
-// simple-serving's dev launcher takes up.
+// pictures' metadata and the judge's prose and malformed blocks; the boundary test then searches every file of `out`
+// outside `run/sealed/`, `tmp/` and all the dry run printed for it, and fails on anything it cannot read; and the whole
+// of `run/`, `tmp/` and the output for the keys. On the way it goes through the refusals the paid run relies on. No
+// card, no model, no network. Beside `run/` it leaves the key file, the smoke record and `dev.json`, which the
+// runbook's run of the texts against simple-serving's dev launcher takes up.
 export async function dryRun(out: string, options: { tokenizers?: string } = {}) {
   const dry = resolve(out), root = join(dry, 'run'), temp = join(dry, 'tmp');
   mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -283,7 +283,7 @@ export async function dryRun(out: string, options: { tokenizers?: string } = {})
     say(`1 texts before the marker check: ${early.stories} stories written, ${Object.keys(early.held).length} held (${JSON.stringify(tally(Object.values(early.held)))})`);
     expect(!gateway.calls.some(call => call.story.startsWith('sharp-')), 'no sharp story asked before the marker check');
     const marker = await markerCommand(root, { smokeRecord, keyFile, fetch: gateway.fetch });
-    say(`2 marker check: pass ${marker.pass}, steps ${JSON.stringify(marker.steps)}; searched ${marker.files} files and ${marker.tempFiles} temporary ones, hits ${JSON.stringify(marker.hits)}`);
+    say(`2 marker check: pass ${marker.pass}, steps ${JSON.stringify(marker.steps)}; searched ${marker.files} files and ${marker.tempFiles} temporary ones, ${marker.unread} unread, hits ${JSON.stringify(marker.hits)}`);
     expect(marker.pass, 'the marker check passes');
     const full = await texts();
     say(`3 texts: ${full.stories} stories, ${full.ok} of ${full.steps} steps ok, the rest ${JSON.stringify(full.other)}; requests ${JSON.stringify(full.requests)}`);
@@ -366,12 +366,14 @@ export async function dryRun(out: string, options: { tokenizers?: string } = {})
     const gallery = writeGalleries(root);
     say(`10 gallery: ${gallery.clean} clean stories on gallery.html, ${gallery.sharp} sharp on sealed/gallery.html`);
 
-    const found = searchBoundary({ root, tempDir: temp, word, output: output.text() });
+    // Every place the dry run wrote: the whole of `out` but run/sealed/, the key file and the smoke record beside run/
+    // included, then tmp/ and the output.
+    const found = searchBoundary({ root: dry, sealed: join(root, 'sealed'), tempDir: temp, word, output: output.text() });
     // A search that finds nothing proves something only where the word is: inside sealed/, as the sharp words are.
     const inside = searchTree(join(root, 'sealed'), markerForms(word)).hits.length;
     const needles = Object.values(keys).map(key => Buffer.from(key, 'utf8'));
     const keyHits = searchTree(root, needles).hits.length + searchTree(temp, needles).hits.length + Number(needles.some(key => output.text().includes(key.toString('utf8'))));
-    say(`11 boundary: ${found.files} files outside sealed/, ${found.tempFiles} temporary, ${found.bytes} bytes: hits ${JSON.stringify({ files: found.hits.files.length, temp: found.hits.temp, output: found.hits.output })}; `
+    say(`11 boundary: ${found.files} files outside sealed/, ${found.tempFiles} temporary, ${found.bytes} bytes, ${found.unread} unread: hits ${JSON.stringify({ files: found.hits.files.length, temp: found.hits.temp, output: found.hits.output })}; `
       + `the word is in ${inside} files inside sealed/; the keys found ${keyHits} times`);
     expect(inside > 0, 'the word inside sealed/');
     expect(found.pass, 'the word nowhere outside sealed/');

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SMOKE_PROBES, markerCheck, readClientKey, runTexts, servingModel, textStories } from './action-text.ts';
@@ -24,19 +24,37 @@ test('the key is the client key alone, and no error says what the file holds', t
   }
 });
 
-// A leak nobody sees: a search that misses one form of the word passes a run that leaked it. The word is found as it
-// is and \u-escaped both ways, outside sealed/, in the temporary directory and in what was printed.
+// A leak nobody sees: a search that misses one form of the word passes a run that leaked it, and so does one that
+// skips what it cannot read. The word is found as it is and \u-escaped both ways, outside sealed/, beside the run's
+// directory, through a link, in the temporary directory and in what was printed; a link to nothing and a directory that
+// cannot be read fail the search.
 test('the boundary search finds each form of the word outside sealed/', t => {
-  const root = temp(t);
+  const root = temp(t), elsewhere = temp(t);
   const word = 'Зурбаганец';
   const [, lower, upper] = markerForms(word).map(form => form.toString('utf8'));
-  for (const [file, content] of [['sealed/a/story.txt', word], ['plain.txt', `x ${word} x`], ['lower.json', `"${lower}"`], ['upper.json', `"${upper}"`],
-    ['tmp/one.txt', word]]) {
+  for (const [file, content] of [['run/sealed/a/story.txt', word], ['run/plain.txt', `x ${word} x`], ['run/lower.json', `"${lower}"`],
+    ['run/upper.json', `"${upper}"`], ['tmp/one.txt', word], ['escaped.txt', word]]) {
     mkdirSync(join(root, file, '..'), { recursive: true });
     writeFileSync(join(root, file), content);
   }
-  const found = searchBoundary({ root, tempDir: join(root, 'tmp'), word, output: `line ${lower}` });
-  assert.deepEqual([found.pass, found.hits.files.sort(), found.hits.temp, found.hits.output], [false, ['lower.json', 'plain.txt', 'upper.json'], 1, true]);
+  writeFileSync(join(elsewhere, 'linked.txt'), word);
+  symlinkSync(join(elsewhere, 'linked.txt'), join(root, 'run', 'link.txt'));
+  const search = () => searchBoundary({ root, sealed: join(root, 'run', 'sealed'), tempDir: join(root, 'tmp'), word, output: `line ${lower}` });
+  const found = search();
+  assert.deepEqual([found.pass, found.hits.files.sort(), found.hits.temp, found.hits.output, found.unread],
+    [false, ['escaped.txt', 'run/link.txt', 'run/lower.json', 'run/plain.txt', 'run/upper.json'], 1, true, 0]);
+  // Without a hit anywhere: a search that could not read everything still fails.
+  for (const file of ['run/plain.txt', 'run/lower.json', 'run/upper.json', 'tmp/one.txt', 'escaped.txt', 'run/link.txt']) rmSync(join(root, file));
+  const clean = () => searchBoundary({ root, sealed: join(root, 'run', 'sealed'), tempDir: join(root, 'tmp'), word, output: '' });
+  assert.equal(clean().pass, true);
+  symlinkSync(join(elsewhere, 'gone.txt'), join(root, 'run', 'dangling'));
+  assert.deepEqual([clean().pass, clean().unread], [false, 1]);
+  unlinkSync(join(root, 'run', 'dangling'));
+  mkdirSync(join(root, 'run', 'closed'), { mode: 0 });
+  const closed = clean();
+  chmodSync(join(root, 'run', 'closed'), 0o700);
+  // A process that reads everything, as root does, reads the closed directory too.
+  if (process.getuid?.() !== 0) assert.deepEqual([closed.pass, closed.unread], [false, 1]);
 });
 
 // A leak and the text card's minutes: no sharp story is asked for before a marker check has found its made-up name

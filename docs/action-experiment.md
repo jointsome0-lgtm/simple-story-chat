@@ -675,8 +675,9 @@ fake judge's prose and a malformed answers block. On the way it goes through eve
 - judges' reports with valid, invalid and missing blocks: a clean scene's fresh session, a clean judge's failure, sharp
   sessions that go to `gpt-6-sol` and to the owner's page, and an identity session that waits for its pictures' page;
 - the report and both galleries;
-- the boundary test: the word found inside `sealed/`, and nowhere in the files outside it, in the temporary directory
-  or in all it printed; and none of the three keys of its key file anywhere.
+- the boundary test: the word found inside `sealed/`, and nowhere in the files outside it, those beside `run/`
+  included, in the temporary directory or in all it printed, with nothing left unread; and none of the three keys of
+  its key file anywhere.
 
 Its made-up answers are drawn from each enum by a hash, so the verdicts it prints mean nothing. The fakes keep the
 contracts the harness talks to, and model no card, no model and no judge.
@@ -698,9 +699,10 @@ and the texts follow each other at once, and the destroy follows the texts. The 
 card's own, so that no earlier record, the rehearsal's among them, can stand for it.
 
 `texts --marker` prints each attempt, then `marker_check`: `pass`, `reached`, each step's outcome, the files and bytes
-searched, and the hits as counts. `pass: true` lets `texts` ask for the sharp seeds. A hit keeps them out for the rest
-of the card: the leak is the harness's, its fix is code, and no code is written on a paid card. `texts` then writes
-the clean stories and holds the sharp ones as `marker_failed`, and with 13 scenes at most every gate but the fourth is
+searched, what it could not read, and the hits as counts; a directory, a file or a link the search cannot read fails
+it as a hit does. `pass: true` lets `texts` ask for the sharp seeds. A hit keeps them out for the rest of the card:
+the leak is the harness's, its fix is code, and no code is written on a paid card. `texts` then writes the clean
+stories and holds the sharp ones as `marker_failed`, and with 13 scenes at most every gate but the fourth is
 inconclusive, so whether the picture card still comes is the owner's question. `reached: false` with no hit is a
 synthetic story the model did not take through every step, and a check again is a new story with a new name.
 

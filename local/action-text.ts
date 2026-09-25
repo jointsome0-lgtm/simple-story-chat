@@ -567,7 +567,7 @@ export async function markerCheck(options: Omit<TextsOptions, 'stories'> & { tem
   const found = searchBoundary({ root, tempDir, word: name, output: output.text() });
   rmSync(tempDir, { recursive: true, force: true });
   const reached = Object.values(steps).length === 5 && Object.values(steps).every(step => step.outcome === 'ok');
-  const result = { pass: found.pass && reached, reached, files: found.files, bytes: found.bytes, tempFiles: found.tempFiles,
+  const result = { pass: found.pass && reached, reached, files: found.files, bytes: found.bytes, tempFiles: found.tempFiles, unread: found.unread,
     hits: { files: found.hits.files.length, temp: found.hits.temp, output: found.hits.output }, pins: pinsHash(pins), at: new Date().toISOString(),
     steps: Object.fromEntries(Object.entries(steps).map(([step, one]) => [step, one.outcome])), requests: { ...options.model.requests } };
   writeJson(join(root, 'marker.json'), result);
