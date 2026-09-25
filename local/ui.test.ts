@@ -65,15 +65,21 @@ function forked(): Library {
   story.branches.b3.head = 'n16';
   story.checkpoints.c14 = { id: 'c14', branchId: 'b8', label: 'Перед дверью', kind: 'manual', head: 'n12', memory: null };
   story.checkpoints.c17 = { id: 'c17', branchId: 'b3', label: 'После сжатия', kind: 'compaction', head: 'n15', memory: null };
+  story.checkpoints.c18 = { id: 'c18', branchId: 'b8', label: 'Сцена 3', kind: 'scene', head: 'n12', memory: null };
   state.active = { storyId: 'h2', branchId: 'b8' };
   return state;
 }
+
+// A reader's own picture style, chosen.
+const styled = (): Library => ({ ...fixture(), pictureStyles: { y7: { id: 'y7', name: 'Масло при свечах', line: 'Oil painting, warm candlelight' } }, pictureStyle: 'y7' });
 
 // The UI reads only a job's presence, kind and story; these jobs carry just that, including kinds the bot never writes.
 const partialJob = (fields: { id: string; kind?: string; storyId: string; branchId: string }) => fields as Job;
 
 const grid = (keyboard: InlineKeyboard | undefined) => keyboard?.inline_keyboard.map(row => row.map(button => button.callback_data));
 const callbacks = (message: Screen) => grid(message.reply_markup)?.flat() ?? [];
+// What a screen puts in pre blocks, to be copied in one tap or kept monospaced, and its buttons.
+const preAndButtons = (screen: Screen) => [screen.entities?.map(e => e.type === 'pre' ? screen.text.slice(e.offset, e.offset + e.length) : e.type), callbacks(screen)];
 
 // Stats may reach the renderer incomplete, so overrides can replace any field with any value.
 function stats(overrides: Record<string, unknown> = {}) {
@@ -126,7 +132,8 @@ test('each state offers only the actions it allows: the scene keyboard, compacti
     ['compaction of the idle current branch', callbacks(render(fixture(), 'context', { contextStats: current() }))[0], 'compact'],
     ['compaction of the idle current branch without stats', callbacks(render(fixture(), 'context')).includes('compact'), true],
     ['compaction at a checkpoint', callbacks(render(fixture(), 'context:h2:c7', { contextStats: stats() })).includes('compact'), false],
-    ['compaction from the detailed view', [current(), stats()].some(one => callbacks(renderContext(one)).includes('compact')), false],
+    ['the detailed views of the branch and of a checkpoint', [current(), stats()].map(one => callbacks(renderContext(one))),
+      [['view:context', 'view:checkpoints:h2:b3:0', 'view:home'], ['view:checkpoint:h2:c7', 'view:home']]],
     ['compaction without a story', callbacks(render(at({ active: null }), 'context', { contextStats: current() })).includes('compact'), false],
     ...[undefined, 'scene', 'compact'].map((kind): Row => [`compaction during a job of kind ${kind}`,
       [{ contextStats: current() }, {}].some(details => callbacks(render(at({ job: job(kind) }), 'context', details)).includes('compact')), false]),
@@ -162,15 +169,23 @@ test('each state offers only the actions it allows: the scene keyboard, compacti
       [true, false]]),
     ['the menu for Claude', render(fixture(), 'home', { modelInfo: modelInfo({ provider: 'claude-code' }), gpuInfo: gpuInfo() }).text.includes('🖥'), false],
     // A new seed: an example to copy in one tap, and a way out of the wait for a seed.
-    ['a new seed', (screen => [screen.entities?.map(e => [e.type, screen.text.slice(e.offset, e.offset + e.length)]), callbacks(screen)])(render(fixture(), 'new-seed')),
-      [[['pre', texts('ru').newSeed.example]], ['cancel']]],
+    ['a new seed', preAndButtons(render(fixture(), 'new-seed')), [[texts('ru').newSeed.example], ['cancel']]],
+    // Writing a style: only while the bot waits for one, a new one with an example to copy, an edit with the line as it is.
+    ['a style without the wait for one', callbacks(render(styled(), 'style-input', on)), callbacks(render(styled(), 'style', on))],
+    ['a new style', preAndButtons(render({ ...styled(), ui: { input: 'style' } }, 'style-input', on)), [[texts('ru').pictureStyle.exampleText], ['view:style']]],
+    ['an edit of a style', preAndButtons(render({ ...styled(), ui: { input: 'style', styleId: 'y7' } }, 'style-input', on)), [['Oil painting, warm candlelight'], ['view:style:y7']]],
     // The story tree: a straight run of scenes is one line, which ends where the story forks or a name points at it, the
-    // branch being played marked among them, in a pre block that keeps it monospaced. A branch's log is newest first.
-    ['the story tree', (screen => [screen.entities?.map(e => screen.text.slice(e.offset, e.offset + e.length)), callbacks(screen)])(render(forked(), 'tree:h2')),
+    // branch being played marked among them, in a pre block that keeps it monospaced, and no scene's text.
+    ['the story tree', (screen => [...preAndButtons(screen), screen.text.includes('Ветер бьёт')])(render(forked(), 'tree:h2')),
       [[['🌱 начало', '└─ 1 сцена до 02.08 20:00', '  ├─ 2 сцены до 02.08 22:00 · 🗜 сжатие памяти', '  │ └─ 1 сцена до 02.08 22:30 · 🌿 Начало',
         '  └─ 2 сцены до 02.08 21:00 · 📍 Перед дверью', '    └─ 1 сцена до 02.08 21:20 · 🌿 От Сцена 1 ✅'].join('\n')],
-      ['view:log:h2:b3:0', 'view:log:h2:b8:0', 'view:story:h2', 'view:home']]],
-    ['a branch\'s log', render(forked(), 'log:h2:b8:0').text.match(/^\d+\./gm), ['4.', '3.', '2.', '1.']],
+      ['view:log:h2:b3:0', 'view:log:h2:b8:0', 'view:story:h2', 'view:home'], false]],
+    ['the way to the tree', callbacks(render(forked(), 'story:h2')).includes('view:tree:h2'), true],
+    // A branch's log reads like a commit log: every scene newest first, with its input and the names that point at it, and
+    // a button to the checkpoint of each scene that has one, a saved one first.
+    ['a branch\'s log', (screen => [screen.text.match(/^\d+\. .*\n {3}✍️ .*$/gm), callbacks(screen), screen.text.includes('Шаги на лестнице')])(render(forked(), 'log:h2:b8:0')),
+      [['4. 2026-08-02 21:20 · 🌿 От Сцена 1\n   ✍️ Ввод', '3. 2026-08-02 21:00 · 📍 Перед дверью\n   ✍️ Ввод', '2. 2026-08-02 20:40\n   ✍️ Ввод',
+        '1. 2026-08-02 20:00 · ⑂ Начало\n   ✍️ Ввод'], ['view:checkpoint:h2:c14', 'view:checkpoint:h2:c11', 'view:checkpoint:h2:c5', 'view:tree:h2', 'view:branch:h2:b8', 'view:home'], false]],
     // A stale or malformed route leads back to the menu or the seeds.
     ...['seed:s99', 'story:h99', 'branch:h2:b99', 'checkpoints:h9:b3:0', 'checkpoint:h2:c99', 'delete-seed:s99', 'delete-branch:h2:b99', 'seed:constructor',
       'story:__proto__', 'nonsense', '', 'seeds:-1', 'seeds:abc', 'context:h2:c99', 'characters:h99', 'tree:h99', 'log:h2:b99:0'].map((route): Row =>
@@ -241,27 +256,50 @@ test('a screen says what it shows: what a deletion takes, a job, the context, th
   assert.doesNotMatch(gpu({ activeJobs: 3, users: ['Алиса'], storyTitle: 'Секрет' }), /Алиса|Секрет/);
 
   // What a screen says of the state it shows: [what, the text and its buttons, what it says, what it must not say].
+  type Say = [string, string, string[], string[]];
   const c = t.context, num = t.format.number;
+  const size = (bytes: number, tokens: number) => `${c.bytes(num(bytes))} · ${c.tokens(num(tokens))}`;
   const during = (kind: string, route: string) => (screen => [screen.text, ...(screen.reply_markup?.inline_keyboard.flat() ?? []).map(button => button.text)].join('\n'))(
     render({ ...fixture(), job: partialJob({ id: 'j12', kind, storyId: 'h2', branchId: 'b3' }) }, route, { contextStats: current() }));
   const home = (details: RenderDetails) => render(fixture(), 'home', details).text;
-  const says: [string, string, string[], string[]][] = [
+  const modelLine = `🤖 ${t.model.providers['llama-cpp'].short} · gemma-4-31b-heretic-Q4_K_M`;
+  const says: Say[] = [
     // A compaction and a scene are told apart wherever a job shows.
     ...[['the menu', 'home', t.home.compactJobNote, t.home.sceneJobNote], ['the cancel button', 'home', t.buttons.cancelCompaction, t.buttons.cancelScene],
       ['a seed', 'seed:s1', t.busy.compact.startOrDeleteSeed, t.busy.scene.startOrDeleteSeed], ['the context', 'context', c.duringCompaction, c.duringScene],
-      ['a new seed', 'new-seed', t.newSeed.compactRunning, t.newSeed.sceneRunning]].flatMap(([what, route, compact, scene]): [string, string, string[], string[]][] =>
+      ['a new seed', 'new-seed', t.newSeed.compactRunning, t.newSeed.sceneRunning]].flatMap(([what, route, compact, scene]): Say[] =>
       [[`${what} during a compaction`, during('compact', route), [compact], [scene]], [`${what} during a scene`, during('scene', route), [scene], [compact]]]),
-    // The detailed context: a budget used up is a warning, an estimate says how rough it is, a compacted memory has its
-    // parts, and the last request's input comes before its output.
+    // The detailed context: the window, the next request with its share and how it was estimated, the budget, automatic
+    // compaction, the snapshot's sizes, and the last request measured, input before output; never the model's name. A
+    // budget used up is a warning, an estimate from bytes says it is rough, and a compacted memory has its parts.
+    ['the detailed context', renderContext(current()).text, [c.window(num(65536), num(4096)), c.nextRequest(num(3250), '5%'), c.estimateFromUsage,
+      c.budget(num(3250), num(61440)), c.remaining(num(58190)), c.forecastNote, c.autoCompaction(num(54000), 4), c.snapshot, c.memory(c.memoryEmpty),
+      c.prefix(size(1200, 300)), c.whole(size(10000, 2500)), c.lastRequest(num(2700), num(500), num(3200)), c.lastRequestNote], [c.estimateFromBytes, 'haiku']],
     ['a budget used up', renderContext(current({ budget: { inputTokens: 62000, limitTokens: 61440, remainingTokens: -560 } })).text, [c.exhausted], [c.remaining(num(-560))]],
     ['an estimate from bytes', renderContext(current({ request: { bytes: 13000, estimatedTokens: 3250, estimateSource: 'bytes' } })).text, [c.estimateFromBytes], [c.estimateFromUsage]],
-    ['an estimate from usage', renderContext(current()).text, [c.estimateFromUsage, c.lastRequest(num(2700), num(500), num(3200))], [c.estimateFromBytes]],
-    ['a compacted memory', renderContext(current({ memory: { count: 2, bytes: 900, estimatedTokens: 225 } })).text, [t.count.parts(2)], [c.memoryEmpty]],
-    // A model has answered only after a check it passed, and the menu's line about the GPU says what the GPU does.
+    ['a compacted memory', renderContext(current({ memory: { count: 2, bytes: 900, estimatedTokens: 225 } })).text, [c.memory(`${t.count.parts(2)} · ${size(900, 225)}`)], [c.memoryEmpty]],
+    // Compaction is explained where it is offered.
+    ['the context of the idle current branch', render(fixture(), 'context', { contextStats: current() }).text, [c.compactNote(4)], []],
+    // The scene header gives the share of the window the next request takes, says when it is rough, and is never 0 %.
+    ...([[3250, 'usage', t.scenePrefix.context(5, false)], [3250, 'bytes', t.scenePrefix.context(5, true)], [300, 'usage', t.scenePrefix.contextBelowOne(false)],
+      [70000, 'usage', t.scenePrefix.context(107, false)]] as const).map(([tokens, source, share]): Say =>
+      [`the header of a request of ${tokens} tokens by ${source}`, scenePrefix(current({ request: { estimatedTokens: tokens, estimateSource: source } })), [`_${share}_\n\n`], []]),
+    // A model has answered only after a check it passed. The menu names the model and what its last check found, even
+    // on a route it does not know, and says nothing of a model it knows nothing about.
     ['a model never checked', render(fixture(), 'model', { modelInfo: modelInfo({ status: 'configured' }) }).text, [t.model.configured], [t.model.readyNote]],
-    ['the menu of a model that failed its check', home({ modelInfo: modelInfo({ status: 'unavailable' }) }), [t.model.short.unavailable], []],
-    ...([['draining', t.gpu.short.draining(2)], ['paused', t.gpu.short.paused], ['weird', t.gpu.short.unknown]] as const).map(([status, short]): [string, string, string[], string[]] =>
+    ['the menu of a model that answered', home({ modelInfo: modelInfo() }), [`${modelLine} · ${t.model.short.ready('2026-09-16 10:05 UTC')}`], []],
+    ['the menu of a model never checked', home({ modelInfo: modelInfo({ provider: 'claude-code', status: 'configured' }) }),
+      [`🤖 ${t.model.providers['claude-code'].short} · gemma-4-31b-heretic-Q4_K_M · ${t.model.short.configured}`], []],
+    ['the menu of a model that failed its check', home({ modelInfo: modelInfo({ status: 'unavailable' }) }), [`${modelLine} · ${t.model.short.unavailable}`], []],
+    ['the menu on a stale route', render(fixture(), 'nonsense', { modelInfo: modelInfo() }).text, [modelLine], []],
+    ['the menu without model data', home({}), [], ['🤖']],
+    // The menu's line about the GPU says what the GPU does, and a blank line parts it from what follows.
+    ...([['draining', t.gpu.short.draining(2)], ['paused', t.gpu.short.paused], ['weird', t.gpu.short.unknown]] as const).map(([status, short]): Say =>
       [`the menu with a GPU ${status}`, home({ modelInfo: modelInfo(), gpuInfo: gpuInfo({ status, activeJobs: 2 }) }), [t.home.gpu(short)], status === 'paused' ? [] : [t.home.gpu(t.gpu.short.paused)]]),
+    ['the menu with a GPU and no model data', home({ gpuInfo: gpuInfo({ status: 'paused' }) }), [`${t.home.title}\n\n${t.home.gpu(t.gpu.short.paused)}\n\n`], []],
+    // A log or a tree of something gone says so.
+    ['the log of a branch that is gone', render(forked(), 'log:h2:missing:0').text, [t.branch.notFound], []],
+    ['the tree of a story that is gone', render(forked(), 'tree:missing').text, [t.story.notFound], []],
   ];
   for (const [label, text, said, unsaid] of says) {
     for (const part of said) assert.ok(text.includes(part), `${label}: ${part}`);
