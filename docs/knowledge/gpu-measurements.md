@@ -1,9 +1,10 @@
 # GPU measurements
 
 Measurements and incidents from the rented cards, 2026-09-17 to 2026-09-24, moved here from [gpu.md](../gpu.md) on
-2026-09-25. The paragraphs are as they were written, apart from headings, anchors and link addresses. Each number is
-what one run on one machine saw, not a speed, a price or a capacity to expect. The instructions that rely on them are
-in [gpu.md](../gpu.md), [llama-cpp.md](../llama-cpp.md) and [llama-measurement.md](../llama-measurement.md).
+2026-09-25. The paragraphs are as they were written, apart from headings, anchors and link addresses;
+[simple-serving's rehearsal](#serving-rehearsal-2026-09-25) was written here on its day. Each number is what one run on
+one machine saw, not a speed, a price or a capacity to expect. The instructions that rely on them are in
+[gpu.md](../gpu.md), [llama-cpp.md](../llama-cpp.md) and [llama-measurement.md](../llama-measurement.md).
 
 <a id='verified-2026-09-17'></a>
 
@@ -169,3 +170,45 @@ The same three files in bf16 would be 32.44 GB, which does not fit one 32 GB car
 The rental is billed per minute, so a pause longer than two or three minutes is a reason to stop the machine: running costs about $0.01 per minute, and storage of a stopped machine costs $0.017 per hour. But the disk is tied to the host, and while the machine is stopped, another renter can take its card; the storage is still charged during that time. The rule: for a pause inside a work session (up to two or three hours), stop the machine, and if the machine did not come up within a couple of minutes, delete it and take another one, the loss is one cent; for "that is all for today" or when the return time is unknown, delete at once: a preparation from zero on a good link costs about $0.15 and 15 minutes, and a night of storage costs $0.20.
 
 The rule in force is in [gpu.md](../gpu.md#ending-the-rental).
+
+<a id='serving-rehearsal-2026-09-25'></a>
+
+## simple-serving's rehearsal on small cards, 2026-09-25
+
+Before the heretic goes on a 5090, simple-serving ran whole on small cards with Google's Gemma 4 E2B from its branch
+`rehearsal-e2b`: vLLM 0.30.0, the gateway of contract v2, and the first-rental runbook of its README. Six cards came
+from `npm run gpu:rent -- --lane small`, and each ended with `--destroy` read back as gone. By their minutes at the
+hourly price they cost about $0.21 together, traffic fees not counted.
+
+- **RTX A4500, Czechia, host 513248, driver 595.84, $0.124 an hour.** Vast said `running` 3 minutes after the rental,
+  and SSH never worked. The direct port closed each of 18 connections in 4 minutes before sshd's greeting, and the
+  proxy did not answer. Deleted after about 10 minutes, $0.02. The cause is not known.
+- **RTX 5060 Ti, New Jersey, host 87213, driver 595.71.05, $0.189.** Vast answered the card's own container key with
+  200 from the card and with 401 from the owner's machine, where `up`, `status` and `sleep` read the instance. Deleted
+  after 5 minutes, $0.02. The owner then made a restricted key, and `cli trial` writes only the instance's id and the
+  SSH host since simple-serving 50983ac.
+- **RTX 5060 Ti, Italy, host 92578, driver 595.80, $0.189.** The preparation took 5 minutes. The card stopped itself
+  25 s after `sleep`, the owner's restricted key confirmed the stop and resumed the card, and the gateway was ready
+  again within a minute. The smoke passed 6 of its 11 probes, and `refusal`, a pattern with an unclosed group, got 503
+  `engine_unavailable` instead of 400. vLLM checks a schema only after its 200 and refuses it with the stream's first
+  event, an error the gateway did not read then; it reads that event's `code` since simple-serving 5f9c3d8. Deleted,
+  $0.05.
+- **RTX A4000, Romania, host 425719, driver 580.159.03, $0.125.** The engine ended about 100 s into its load, and the
+  launcher gave up and stopped the card, as it is built to. The reason was only in the card's own log, which went with
+  the card. Deleted, $0.03. It was the day's only Ampere card and its only 580 driver, so either may be the cause. The
+  small lane takes Blackwell cards only since 8e6aa7b, and the operator now copies the launcher's log to the owner's
+  machine while a card loads.
+- **RTX 5060 Ti, British Columbia, host 197411, driver 595.71.05, $0.146.** The runbook ran through `abort`. The first
+  load took 203 s: weights of 9042 MiB and a KV cache of 645 MiB, which holds 101729 tokens. The card stopped 54 s
+  after `sleep`, as `status` and `--show` both read, and was ready 56 s after `up`. `refusal` got 400
+  `invalid_request`. `schemas` failed on `frame`, whose answer ran out the bot's 900 tokens with 1668 characters.
+  Deleted, $0.04.
+- **RTX 5060 Ti, Connecticut, host 348060, driver 595.84, $0.159.** vLLM builds a schema's JSON with xgrammar alone and
+  no whitespace between its tokens since simple-serving 1c3a93a. `schemas` passed 12 of 12, `frame` with 646
+  characters in 201 tokens, and `counts` and `privacy` passed. The load took 266 s, with the same KV cache. Deleted
+  after 17 minutes, $0.05.
+
+Two questions stay open. Whitespace as the cause of `frame`'s overrun rests on one answer at temperature 0.8, and the
+smoke's new counts of whitespace and of characters outside ASCII have not yet seen an answer cut short. Why the A4000
+did not load is not known; simple-serving's contract already says that CUDA 13 on a 580 driver runs only by
+minor-version compatibility.
