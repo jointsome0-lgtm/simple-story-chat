@@ -120,7 +120,8 @@ function fakeComfy(options: { failCase?: string; refuse?: number; refuseUpload?:
 // `/interrupt` stops the job the card is working through, and one given a `prompt_id` only while that is the job it
 // names (server.py:1163-1191); the interrupted job is recorded as failed, as ComfyUI records an interrupted prompt.
 // `afterQueueRead` runs once, the moment the next read of the queue has been answered, and `onSubmit` once, the
-// moment the card has taken the next job and before it answers with the job's id.
+// moment the card has taken the next job and before it answers with the job's id. A `stubborn` card takes an
+// interrupt and goes on drawing.
 function serialComfy(jobMs: number) {
   const prompts = new Map<string, string>();
   const finishAt = new Map<string, number>();
@@ -128,7 +129,7 @@ function serialComfy(jobMs: number) {
   const polls = new Map<string, number>();
   const seen = { submitted: 0, interrupts: 0, queueDeletes: 0, interrupted: [] as string[] };
   let busyUntil = 0;
-  let afterQueueRead: (() => void) | undefined, onSubmit: (() => void) | undefined;
+  let afterQueueRead: (() => void) | undefined, onSubmit: (() => void) | undefined, stubborn = false;
   const settle = () => { for (const [id, at] of [...finishAt]) if (Date.now() >= at) { finishAt.delete(id); history.set(id, prompts.get(id)!); } };
   const running = () => [...finishAt.entries()].sort((a, b) => a[1] - b[1])[0]?.[0];
   const server = createServer((request, response) => {
@@ -153,7 +154,7 @@ function serialComfy(jobMs: number) {
         const named = (await body().catch(() => ({})) as { prompt_id?: unknown }).prompt_id;
         const id = running();
         // An interrupted prompt lands in the history too, with the whole graph in it.
-        if (id && (named === undefined || named === id)) {
+        if (id && (named === undefined || named === id) && !stubborn) {
           finishAt.delete(id);
           history.set(id, prompts.get(id)!);
           seen.interrupted.push(id);
@@ -197,7 +198,7 @@ function serialComfy(jobMs: number) {
   // The job `id` is done now, as one that was nearly done would be, and the next one takes the card.
   const end = (id: string) => { finishAt.set(id, Date.now()); settle(); };
   return { server, history, polls, seen, settle, onTheCard, end, set afterQueueRead(then: () => void) { afterQueueRead = then; },
-    set onSubmit(then: () => void) { onSubmit = then; },
+    set onSubmit(then: () => void) { onSubmit = then; }, set stubborn(value: boolean) { stubborn = value; },
     listen: () => new Promise<string>(done => server.listen(0, '127.0.0.1', () => done(`http://127.0.0.1:${(server.address() as AddressInfo).port}`))) };
 }
 
@@ -566,6 +567,16 @@ test('a picture that outlives the wait is stopped on the card and leaves no reco
   const past = Date.now() - until;
   assert.deepEqual([cut.pictures.length, cut.failures.length, cut.stopped, slow.seen.posted.length, slow.seen.cleared], [0, 0, 'budget', 1, ['p1']]);
   assert.ok(past < 100, `the run ended ${past} ms past the end`);
+
+  // A card that takes the interrupt and goes on drawing is looked at until the reserve and not past it: the pause
+  // between two looks, five seconds here, ends there too, so the reserve's minute is all a stop can take.
+  comfy.stubborn = true;
+  const reserve = Date.now() + 1000;
+  await assert.rejects(drawOne({ baseUrl: url, timeoutMs: 5000, end: AbortSignal.timeout(500), reserve: AbortSignal.timeout(1000) },
+    defaultWorkflow(), { pollMs: 5000, waitMs: 20000 }), { code: 'out_of_time' });
+  const over = Date.now() - reserve;
+  assert.deepEqual([comfy.seen.submitted, comfy.seen.interrupts, comfy.seen.interrupted.length], [3, 3, 2]);
+  assert.ok(over < 500, `the stop went on ${over} ms past the reserve`);
 });
 
 // Two readers share one card (local/picture.ts). A reader who gives up before their picture is submitted puts nothing

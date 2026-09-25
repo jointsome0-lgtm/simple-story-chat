@@ -509,7 +509,9 @@ async function stopJob(comfy: Comfy, promptId: string, pollMs: number) {
     // card that then still has neither is writing no record at all, and the rest of the wait would buy nothing.
     const gone = await readQueue(comfy);
     if (![...gone.running, ...gone.pending].includes(promptId) && ++missing > 1) return;
-    await delay(pollMs);
+    // The reserve (`end` here, `afterAbort`) ends the pause as it ends every request: the stop is over at it.
+    await delay(pollMs, undefined, { signal: comfy.end }).catch(() => undefined);
+    if (comfy.end?.aborted) return;
   }
 }
 
