@@ -571,11 +571,12 @@ go. A fix, such as the cache node off `auto` or smaller portraits, is another ru
 running, and which nothing extends. The guard can fail, though. It does not start without the container's key, `curl`
 and `flock`; it retries a refused delete forever; it takes its own delete's success for the outcome; and without ssh
 nobody can tell it "we're done". So the rental also has an end outside the box, below, and the owner is asked for the
-whole paid time, from the creation to a destroy read back as done. For one hour that is up to 1 h 20 min 20 s at
-the offer's price: the guard's hour, the quarter of an hour the box is given to start before the guard's clock does,
-twenty seconds for "we're done" and five minutes for the destroy to be read back. The traffic comes on top.
-`gpu/rent.mjs --hours 1 --qwen only` prices each offer that way, by Qwen's files alone, and its dry run prints the
-sum as `session`.
+whole paid time, from the creation to a destroy read back as done. For one hour the procedure takes up to 1 h 20 min
+20 s at the offer's price: the guard's hour, the quarter of an hour the box is given to start before the guard's clock
+does, twenty seconds for "we're done" and five minutes for the destroy to be read back. The traffic comes on top.
+That is when the procedure ends, not a cap on the bill: a destroy it cannot read back as done goes to the owner then,
+and the machine may bill until the owner deletes it in the console. `gpu/rent.mjs --hours 1 --qwen only` prices each
+offer that way, by Qwen's files alone, and its dry run prints the sum as `session`.
 
 The harness takes an absolute end, `--until`: five minutes before the earlier of the guard's deadline and the
 operator's own. Nothing is sent to the card after it, and every wait and request of a stage ends there: the socket's
