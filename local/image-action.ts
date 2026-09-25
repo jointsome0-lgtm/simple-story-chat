@@ -4,7 +4,8 @@
 // owner's deny covers; only `dry-run` takes another `--dir`:
 //   texts       on the text card, through simple-serving's gateway: `--marker` first, the marker check of the sealed
 //               path, then the 18 stories. `--smoke-record` names the record of the gateway's smoke, which route A
-//               starts on; `--model gpu:<label>` takes the llama.cpp fallback from .env.gpu instead
+//               starts on; `--model gpu:<label>` takes the llama.cpp fallback from .env.gpu instead. `--again id,...`
+//               asks once more the sheets that came back empty (docs/action-experiment.md#again)
 //   prompts     the manifests, the six arms' prompts, the fronts and the views
 //   checklists  the 18 checklists, from the texts alone, before the picture card; it says whether the card may come
 //   draw        on the picture card: `--smoke` first; `portraits` then draws the rest of the fronts and views, and
@@ -73,7 +74,7 @@ export function safeError(error: unknown) {
 // ---- The text card ----
 
 export type TextsOptions = { smokeRecord?: string; model?: string; baseUrl?: string; keyFile?: string; fetch?: Fetch;
-  log?: (event: object) => void };
+  log?: (event: object) => void; again?: string[] };
 // Route A with the client key alone, or the llama.cpp fallback from .env.gpu, each configured on an empty directory of
 // its own so that no .env is read.
 function textModel(options: TextsOptions, configRoot: string): TextModel {
@@ -89,14 +90,15 @@ function textsSummary(record: TextsRecord) {
   const steps = Object.values(record.stories).flatMap(one => Object.entries(one).map(([step, result]) => ({ step, ...result! })));
   return { stories: Object.keys(record.stories).length, steps: steps.length, ok: steps.filter(one => one.outcome === 'ok').length,
     other: tally(steps.filter(one => one.outcome !== 'ok').map(one => `${one.step}:${one.outcome}${one.code ? `:${one.code}` : ''}`)),
-    held: record.skipped ?? {}, requests: requestCounts(record), complete: !!record.completedAt && !record.skipped };
+    held: record.skipped ?? {}, again: Object.keys(record.again ?? {}).length, requests: requestCounts(record),
+    complete: !!record.completedAt && !record.skipped };
 }
 async function withTextModel<T>(options: TextsOptions, work: (model: TextModel) => Promise<T>): Promise<T> {
   const configRoot = mkdtempSync(join(tmpdir(), 'simple-chat-action-config-'));
   try { return await work(textModel(options, configRoot)); } finally { rmSync(configRoot, { recursive: true, force: true }); }
 }
 export const textsCommand = (root: string, options: TextsOptions) => withTextModel(options, async model =>
-  ({ event: 'texts', ...textsSummary(await runTexts({ root, model, smoke: options.smokeRecord, say: options.log })) }));
+  ({ event: 'texts', ...textsSummary(await runTexts({ root, model, smoke: options.smokeRecord, say: options.log, again: options.again })) }));
 // `texts --marker`. Where a hit is, is not printed: a path may hold the word.
 export const markerCommand = (root: string, options: TextsOptions) => withTextModel(options, async model => {
   const check = await markerCheck({ root, model, smoke: options.smokeRecord, say: options.log });
@@ -428,7 +430,7 @@ async function main(args: string[]) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     dir: { type: 'string' }, dev: { type: 'string' },
     marker: { type: 'boolean', default: false }, 'smoke-record': { type: 'string' }, model: { type: 'string' }, 'base-url': { type: 'string' },
-    'key-file': { type: 'string' },
+    'key-file': { type: 'string' }, again: { type: 'string' },
     smoke: { type: 'boolean', default: false }, until: { type: 'string' }, comfy: { type: 'string', default: 'http://127.0.0.1:8188' },
     wait: { type: 'string', default: '300' }, timeout: { type: 'string', default: '60' }, tokenizers: { type: 'string' },
     kind: { type: 'string' }, parallel: { type: 'string', default: '4' },
@@ -446,7 +448,9 @@ async function main(args: string[]) {
   const kinds = values.kind?.split(',').map(kind => kind.trim());
   if (kinds?.some(kind => !KINDS.includes(kind as SessionKind))) throw new Refusal(`--kind takes ${KINDS.join(', ')}, comma separated`);
   if (command === 'texts') {
-    const options = { smokeRecord: values['smoke-record'], model: values.model, baseUrl: values['base-url'], keyFile: values['key-file'], log: print };
+    const options = { smokeRecord: values['smoke-record'], model: values.model, baseUrl: values['base-url'], keyFile: values['key-file'], log: print,
+      again: values.again?.split(',').map(id => id.trim()).filter(Boolean) };
+    if (values.marker && options.again) throw new Refusal('--again belongs to the texts, not to the marker check');
     if (values.marker) {
       const check = await markerCommand(root, options);
       print(check);

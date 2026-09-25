@@ -146,8 +146,10 @@ export const STEPS: StepName[] = ['seed', 'opening', 'action', 'sheet', 'frame',
 export type StepResult = { outcome: Outcome; code?: string; attempts: number; ms: number } & Details;
 // What a story's text run keeps in its directory: each step's outcome and what the steps that succeeded returned. The
 // scenes are in `story.sqlite` beside it.
+// `earlier` is a sheet's first outcome where `texts --again` asked it once more (docs/action-experiment.md#again).
 export type StoryText = { id: string; pins: string; steps: Partial<Record<StepName, StepResult>>; nodeId?: string;
-  sharp?: { seed: string; action: string }; sheet?: Character[]; worn?: Character[]; frame?: Description; variant?: VariantFrame };
+  sharp?: { seed: string; action: string }; sheet?: Character[]; worn?: Character[]; frame?: Description; variant?: VariantFrame;
+  earlier?: { sheet: StepResult } };
 // The arms a step's failure takes out (docs/action-experiment.md#text-run): a scene or the sheet, the whole story; the
 // bot's frame, A; the variant, A+, L, C, V and T.
 export const ARMS = ['A', 'A+', 'L', 'C', 'V', 'T'] as const;
@@ -467,7 +469,8 @@ export async function runStory(story: TextStory, run: RunContext): Promise<Story
 export type TextsRecord = { pins: Record<string, string | number>; startedAt: string; completedAt?: string;
   smoke?: { probes: number; versions: Record<string, string> };
   stories: Record<string, Partial<Record<StepName, Pick<StepResult, 'outcome' | 'code' | 'attempts'>>>>;
-  attempts: Attempt[]; requests: Record<string, number>; skipped?: Record<string, string> };
+  attempts: Attempt[]; requests: Record<string, number>; skipped?: Record<string, string>;
+  again?: Record<string, { sheet: Outcome; at: string }> };
 
 // The requests apart from the main calls (docs/action-experiment.md#text-run): the calls are the first attempts, the
 // retries the second, and the checks and the counts before a send are the adapter's own routes.
@@ -480,7 +483,30 @@ export function requestCounts(record: Pick<TextsRecord, 'attempts' | 'requests'>
 }
 
 export type TextsOptions = { root: string; model: TextModel; stories?: TextStory[]; concurrency?: number; smoke?: string;
-  say?: (event: object) => void; gateway?: Record<string, string | number> };
+  say?: (event: object) => void; gateway?: Record<string, string | number>; again?: string[] };
+// The owner's exception of 2026-09-25 (docs/action-experiment.md#again): a sheet that came back empty is asked once
+// more, with the frame and the variant after it, on the scenes already written. Its first outcome moves to the story's
+// `earlier` and to the record's `again`. A story whose sheet did anything else is refused before any request, and one
+// already moved goes on from where it stopped.
+function askAgain(root: string, ids: string[], record: TextsRecord) {
+  const known = new Set(textStories().map(story => story.id));
+  const moves = ids.map(id => {
+    if (!known.has(id)) throw new Refusal(`--again names ${id}, which is not a story of the set`);
+    const file = join(storyDir(root, id), 'text.json');
+    const text = readJson<StoryText>(file);
+    if (text?.earlier) return null;
+    if (text?.steps.sheet?.outcome !== 'empty_sheet') throw new Refusal(`--again takes a story whose sheet came back empty, and ${id}'s did not`);
+    return { id, file, text };
+  });
+  for (const move of moves) {
+    if (!move) continue;
+    const { id, file, text } = move;
+    text.earlier = { sheet: text.steps.sheet! };
+    delete text.steps.sheet;
+    writeJson(file, text);
+    (record.again ??= {})[id] = { sheet: text.earlier.sheet.outcome, at: new Date().toISOString() };
+  }
+}
 // The text run: the clean stories always, the sharp ones only after the marker check passed on these pins, two at a
 // time. Returns the run's record; a sharp story held back is in `skipped` with its code.
 export async function runTexts(options: TextsOptions): Promise<TextsRecord> {
@@ -512,6 +538,8 @@ export async function runTexts(options: TextsOptions): Promise<TextsRecord> {
   const held = markerCode ? all.filter(story => isSharp(story.id)) : [];
   const skipped: Record<string, string> = Object.fromEntries(held.map(story => [story.id, markerCode!]));
   const stories = all.filter(story => !held.includes(story));
+  askAgain(root, (options.again ?? []).filter(id => !held.some(story => story.id === id)), record);
+  save();
   const context: RunContext = { root, model: options.model, pins: pinsHash(pins), say,
     log: row => { record.attempts.push(row); save(); say({ event: 'text_attempt', ...row }); } };
   let next = 0;

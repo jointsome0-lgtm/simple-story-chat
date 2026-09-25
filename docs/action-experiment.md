@@ -161,6 +161,15 @@ decided by rules fixed now:
 A failure takes out what needs its output: a scene or the sheet, the whole story; the bot's frame, arm A; the
 variant, A+, L, C, V and T. Nothing is asked again by choice.
 
+<a id='again'></a>
+One exception, the owner's of 2026-09-25. On the text cards of that day simple-serving's gateway forbade whitespace
+between a schema's tokens, and 5 of the 18 sheets came back with nobody on them
+([the note](knowledge/gpu-measurements.md#text-cards-2026-09-25)). Those five sheets are asked once more on a card
+whose gateway allows whitespace, with `texts --again` and their ids, and the frame and the variant after them. The
+scenes stay as they were written. A sheet's first outcome stays in its story's `text.json` as `earlier` and in
+`texts.json` as `again`, and `--again` refuses a story whose sheet did anything else. The pins cannot tell the two
+gateways apart, since the whitespace rule is the card's and not the adapter's, so `again` is what names the five.
+
 The run is pinned to the local end of `cli up`'s tunnel, held in the foreground, the served name
 `gemma-4-31b-heretic-nvfp4`, a context of 65536, the bot's sampling for this provider, and the instructions and
 schemas by their hash. The adapter's timeout is 900 s, the gateway's own wall for `internal`, where the bot's default
@@ -620,6 +629,8 @@ uv run python -m simple_serving.smoke | tee logs/smoke-text-card.jsonl    # exit
 smoke="$SIMPLE_SERVING_CHECKOUT/logs/smoke-text-card.jsonl"    # back in this checkout, from now on
 npm run image:action -- texts --marker --smoke-record "$smoke"    # pass true, before any sharp seed is asked for
 npm run image:action -- texts --smoke-record "$smoke"    # complete true, exit 0
+# Only for the five sheets of 2026-09-25 (#again), after the marker check on that card:
+npm run image:action -- texts --smoke-record "$smoke" --again demon,lineout,cheer,twister,sharp-2    # again 5
 npm run gpu:rent -- --destroy ID    # destroy_confirmed; anything else goes to the owner at once
 # Between the cards:
 npm run image:action -- prompts       # the six arms' prompts, fronts and views, as counts
