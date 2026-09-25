@@ -28,10 +28,12 @@ does the same in every registered language.
   the draft while it is open; the text says so. A paste that the client split into several messages is collected in
   order like any other parts. The title and the date stay the first two non-empty lines, and later parts extend the
   description. A rich message counts as its text, with its paragraphs, lists, tables and expandable blocks
-  (`local/incoming.ts`). The draft survives a restart.
+  (`local/incoming.ts`). One that holds an attachment, a block the bot does not read or merged table cells is refused
+  as a whole, in play as well, and nothing of it is saved. The draft survives a restart.
 - **Files:** a `.txt` or `.md` attachment in UTF-8 is one more part, with the same receipt, and still needs Save. The
-  whole draft may be up to 256 KiB. A file may hold the whole seed, with title and date in its first lines, or the
-  description alone after a message with the title and date. Captions are ignored, and PDF and DOCX are not supported.
+  whole draft may be up to 256 KiB. A file may hold the whole seed, with title and date in its first lines as in
+  [the example](../examples/seed.txt), or the description alone after a message with the title and date. Captions are
+  ignored, and PDF and DOCX are not supported.
   The 256 KiB are counted on the bytes received, and a damaged or partly downloaded file leaves the draft as it was.
   Outside seed input a file is not downloaded and does not continue the story.
 - **Play:** the menu shows the current story, branch, scene count and world time. A message (speech, action or author
@@ -251,6 +253,7 @@ seed. With no more than the kept number of scenes uncompacted, the bot says that
   and what remains of it, a forecast, since the real input is checked again when the model starts answering, before
   any text is shown; the compaction threshold and how many scenes stay verbatim; the sizes of the seed, the memory,
   the uncompacted scenes and the whole snapshot; and the last measured request. Checkpoint sizes appear only here.
+  Opening the view calls no model.
 - **Labels:** byte sizes are exact, and every token estimate carries «≈». The last request is marked measured, and its
   output may include hidden reasoning. A missing number is shown as unknown, never 0. The model name is not shown.
 - **Matching stats:** stats are used only if they match the route: a checkpoint's view needs that checkpoint's, the
