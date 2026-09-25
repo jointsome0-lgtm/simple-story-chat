@@ -329,6 +329,13 @@ test('a screen says what it shows: what a deletion takes, a job, the context, th
     ['a budget used up', renderContext(current({ budget: { inputTokens: 62000, limitTokens: 61440, remainingTokens: -560 } })).text, [c.exhausted], [c.remaining(num(-560))]],
     ['an estimate from bytes', renderContext(current({ request: { bytes: 13000, estimatedTokens: 3250, estimateSource: 'bytes' } })).text, [c.estimateFromBytes], [c.estimateFromUsage]],
     ['a compacted memory', renderContext(current({ memory: { count: 2, bytes: 900, estimatedTokens: 225 } })).text, [c.memory(`${t.count.parts(2)} · ${size(900, 225)}`)], [c.memoryEmpty]],
+    // A number the context lacks is unknown where it would stand, and no total is made of half its parts.
+    ['the last request with its input unknown', context({ lastRequest: { inputTokens: null, outputTokens: 500, totalTokens: null } }),
+      [c.lastRequest(t.format.unknown, num(500), t.format.unknown)], []],
+    ['no request measured', context({ lastRequest: null }), [c.lastRequestNone, c.lastRequestNote], []],
+    ['a request not estimated', context({ request: null }), [c.nextRequestUnknown], []],
+    ['the seed with its tokens unknown', context({ seed: { bytes: 1200, estimatedTokens: null } }), [c.seed(`${c.bytes(num(1200))} · ${c.tokensUnknown}`)], []],
+    ['the input budget with its use unknown', context({ budget: { inputTokens: null, limitTokens: 61440, remainingTokens: null } }), [c.budget(null, num(61440))], []],
     // Compaction is explained where it is offered.
     ['the context of the idle current branch', render(fixture(), 'context', { contextStats: current() }).text, [c.compactNote(4)], []],
     // The scene header gives the share of the window the next request takes, says when it is rough, and is never 0 %.
