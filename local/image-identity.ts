@@ -114,8 +114,8 @@ export function cardOf(file: string) {
   }
   return { comfyuiRevision: revision!, model: manifest.IMAGE_QWEN_MODEL_FILE, transformer: wanted.transformer[0]!, encoder: wanted.encoder[0]!, vae: wanted.vae[0]! };
 }
-// That record as the bootstrap writes it, made from the manifest for the dry run.
-function writeCardRecord(file: string) {
+// That record as the bootstrap writes it, made from the manifest for the dry run (the action run's too).
+export function writeCardRecord(file: string) {
   const manifest = readManifest(MANIFEST);
   const files = ['MODEL', 'ENCODER', 'VAE'].map(kind => `${manifest[`IMAGE_QWEN_${kind}_SHA256`]}  ${manifest[`IMAGE_QWEN_${kind}_FILE`]}`);
   writeFileSync(file, [`revision ${manifest.COMFYUI_REVISION}`, ...files, ''].join('\n'), { mode: 0o600 });

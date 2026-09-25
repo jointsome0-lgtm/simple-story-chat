@@ -116,6 +116,8 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
   const log: { t: string; m: string }[] = [];
   const uploads: string[] = [];
   const uploaded = new Map<string, Buffer>();
+  // The path of every request, in order: which routes a caller asked for, and never what it sent.
+  const paths: string[] = [];
   let running: Job | undefined;
   let count = 0, lines = 0;
   // app/logger.py keeps the last 300 lines, each stamped to the microsecond.
@@ -206,6 +208,7 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
 
   const server = createServer((request, response) => {
     const url = new URL(request.url!, 'http://127.0.0.1');
+    paths.push(url.pathname);
     const read = async () => { const parts: Buffer[] = []; for await (const part of request) parts.push(part as Buffer); return Buffer.concat(parts); };
     const json = (value: unknown) => { response.setHeader('content-type', 'application/json'); response.end(JSON.stringify(value)); };
     void (async () => {
@@ -287,7 +290,7 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
   });
   await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
   return {
-    url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, jobs, uploads, options,
+    url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, jobs, uploads, paths, options,
     close: () => new Promise<void>(done => { for (const socket of sockets) socket.destroy(); server.close(() => done()); }),
   };
 }
