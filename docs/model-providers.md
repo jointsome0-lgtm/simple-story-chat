@@ -61,7 +61,7 @@ tmux keeps the local bot process, and for each continuation the adapter starts `
 `--output-format stream-json --verbose --include-partial-messages`, with telemetry off. In `system/init` it checks
 that the CLI has no tool and no MCP server and runs the model asked for. A request with a schema adds `--json-schema`,
 which gives the CLI only its `StructuredOutput` tool. The CLI signs in with the
-subscription's ordinary login ([setup](setup.md#running)); the adapter removes the Anthropic keys and addresses, the
+subscription's ordinary login ([setup](setup.md#preparation)); the adapter removes the Anthropic keys and addresses, the
 bot's `SIMPLE_CHAT_*` settings and `TELEGRAM_BOT_TOKEN` from its environment. We do not use `--bare` with a subscription: this mode turns off OAuth and requires a separate API authorization.
 
 The scene's text is the stream's text parts up to the final `result`, which must report success, and the process

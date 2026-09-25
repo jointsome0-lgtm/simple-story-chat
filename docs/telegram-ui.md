@@ -25,14 +25,21 @@ does the same in every registered language.
   written, now or on save. It never shows draft text: no title, date, body or filename. The backend's seed parser
   checks the format on Save and names any error, and the draft stays open. The screen has Save and
   «🗑 Отменить черновик» ("Discard draft", `cancel`) and no Menu button, because the backend sends navigation back to
-  the draft while it is open; the text says so.
+  the draft while it is open; the text says so. A paste that the client split into several messages is collected in
+  order like any other parts. The title and the date stay the first two non-empty lines, and later parts extend the
+  description. A rich message counts as its text, with its paragraphs, lists, tables and expandable blocks
+  (`local/incoming.ts`). The draft survives a restart.
 - **Files:** a `.txt` or `.md` attachment in UTF-8 is one more part, with the same receipt, and still needs Save. The
   whole draft may be up to 256 KiB. A file may hold the whole seed, with title and date in its first lines, or the
   description alone after a message with the title and date. Captions are ignored, and PDF and DOCX are not supported.
+  The 256 KiB are counted on the bytes received, and a damaged or partly downloaded file leaves the draft as it was.
+  Outside seed input a file is not downloaded and does not continue the story.
 - **Play:** the menu shows the current story, branch, scene count and world time. A message (speech, action or author
   direction) continues the story, «▶️ Продолжить» ("Continue") asks for the next scene with no input, and
   «📄 Последняя сцена» ("Last scene") shows it again. While a scene is being written, its keyboard has only stop,
-  context and menu.
+  context and menu. /last shows the saved scene without generating it again. A reply that hit the output token limit
+  is saved as it came, and a separate message says that it may be cut off. The narrator's rules ask for at most 12
+  paragraphs; the bot does not cut a longer scene.
 - **Browse:** the seeds, a seed's stories, a story's branches and a branch, 8 to a page. Opening a screen changes
   nothing in the story and generates nothing.
 
@@ -220,9 +227,16 @@ Everything the model reads and writes — the narrator's rules, the memory extra
 
 `render(state, route, {modelInfo})` accepts public metadata only: `{provider, model, status, checkedAt}`. Home and `sceneKeyboard` link to `view:model`. The backend refreshes the server check before rendering that screen. The screen shows the selected provider, model, status and check time in UTC; it does not change the deployment. Configured, a past successful check and an unavailable server have distinct labels.
 
+`/model` opens the same screen. Checking a server generates no text, and the time of a successful check or reply does
+not promise that the server is still up. For Claude Code and Codex CLI the screen names the subscription the model
+runs on.
+
 `scenePrefix(stats, provenance)` adds the scene's own `{provider, model}` before its context percentage. The backend stores this metadata with new scenes. Old scenes without provenance keep their unlabelled prefix even after a deployment change. No status, endpoint or credential is included in the narrative prompt.
 
 The idle current-context screen offers `compact`. Historical checkpoints and busy screens do not. The backend preserves the last configured number of scenes, archives originals and creates checkpoints before and after compaction. A compaction job uses `state.job.kind = 'compact'`, and the renderer shows compaction wording while navigation and cancellation remain available.
+
+`/compact` asks for the same compaction without waiting for the threshold. It writes no scene and never compacts the
+seed. With no more than the kept number of scenes uncompacted, the bot says that there is nothing to compact yet.
 
 ## Context indicators
 
