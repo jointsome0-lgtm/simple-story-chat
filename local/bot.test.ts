@@ -463,14 +463,15 @@ test('a running job refuses another and /cancel keeps its late answer out; no st
   };
   const text = '2026-08-02 20:00\n\nСинтетическая сцена.';
   // A scene waiting for the shared model shows its place in the queue in the scene's own draft: each status after the
-  // one before, one superseded before it went out skipped, and nothing about the queue once the model has started.
+  // one before, one superseded before it went out skipped, and nothing about the queue once the model has started,
+  // though there is the time for one to go out before the scene.
   const queue = fixture(t, { generate: async (request, controls) => {
     const out = () => new Promise(resolve => setImmediate(resolve));
     controls.onWait?.(2); await out();
     controls.onWait?.(5); controls.onWait?.(1); await out();
     controls.onWait?.(0); await out();
     controls.onStart?.(); await out();
-    controls.onWait?.(3);
+    controls.onWait?.(3); await out();
     await controls.onText(text);
     return { text, finishReason: 'stop', usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 } };
   } });
