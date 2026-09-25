@@ -402,12 +402,13 @@ test('a replay or a delivery failure never regenerates a completed scene', async
 });
 
 test('a running job refuses another and /cancel keeps its late answer out; no status lands after the scene or a cancel', async t => {
-  // A scene, then a compaction: another input is refused while it runs, and the answer that comes after /cancel
-  // commits nothing.
+  // A scene, then a compaction: another input is refused while it runs, /cancel stops the model call, and the answer
+  // that comes anyway commits nothing.
   for (const compact of [false, true]) {
     const label = compact ? 'a compaction' : 'a scene';
-    let release: (() => void) | undefined;
-    const f = fixture(t, { generate: request => new Promise<GenerationResult>(resolve => {
+    let release: (() => void) | undefined, signal: AbortSignal | undefined;
+    const f = fixture(t, { generate: (request, controls) => new Promise<GenerationResult>(resolve => {
+      signal = controls.signal;
       release = () => resolve(compact ? compactResult(request) : { text: '2026-08-02 20:00\n\nПоздний ответ.', finishReason: 'stop' });
     }) });
     if (compact) { await battleFixture(f); await f.bot.handle(f.message('/compact')); }
@@ -416,6 +417,7 @@ test('a running job refuses another and /cancel keeps its late answer out; no st
     await f.bot.handle(f.message(compact ? '/continue' : 'Нельзя запустить вторую генерацию.'));
     assert.equal(f.requests.length, 1, label);
     await f.bot.handle(f.message('/cancel'));
+    assert.equal(signal?.aborted, true, label);
     release!();
     await f.bot.idle();
     const state = f.store.read(1);
