@@ -23,7 +23,7 @@ fi
 command -v curl >/dev/null
 command -v flock >/dev/null
 
-# Used only by the trial guard and the owner's SSH setup; never echo it.
+# Used by the trial guard, the owner's SSH setup and simple-serving's launcher; never echo it.
 printf '%s' "$CONTAINER_API_KEY" > /root/.simple-chat-instance-api-key
 printf '%s' "$CONTAINER_ID" > /root/.simple-chat-instance-id
 # The rental's length, set by gpu/rent.mjs ahead of this body; anything but one, two or three hours is three.
@@ -58,3 +58,6 @@ done
 GUARD
 chmod 700 /root/.simple-chat-trial-guard.sh
 nohup flock -n /root/.simple-chat-trial-guard.lock bash /root/.simple-chat-trial-guard.sh </dev/null >/dev/null 2>&1 &
+
+# Starts simple-serving's service once its preparation has put it on the persistent disk, and returns at once.
+if [[ -f /workspace/simple-serving/card/onstart.sh ]]; then bash /workspace/simple-serving/card/onstart.sh; fi
