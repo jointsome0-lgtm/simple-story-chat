@@ -276,10 +276,16 @@ export async function drawStage(options: DrawStageOptions): Promise<DrawIndex> {
     index.smoke = { keys: cells.map(cell => cell.key), ...(choice?.extraView ? { extraView: choice.extraView } : {}) };
     run.save();
     const ended = await drawCells(run, cells, true, () => (options.waitMs ?? WAIT_MS) + CELL_MS);
-    index.smoke.verdict = smokeVerdict(index, index.smoke.keys, front.canvas);
-    if (ended !== 'done') index.smoke.verdict.pass = false;
-    log({ event: 'smoke', ...index.smoke.verdict, failing: index.smoke.verdict.failing.length });
-    return finish(run, ended);
+    const verdict = index.smoke.verdict = smokeVerdict(index, index.smoke.keys, front.canvas);
+    // When T's cell alone failed, T leaves the run and the rest passes (docs/action-experiment.md#picture-smoke), a
+    // failure of T's that stops a run included: T is the smoke's last cell, and every other one was drawn before it.
+    // Not T's alone: the deadline, and a stop the card did not confirm, which may leave T's job drawing. Either fails
+    // the smoke.
+    const tAlone = verdict.tOut && ended === 'stopped' && index.error !== 'comfy_stop_unconfirmed';
+    if (ended === 'until' || (ended === 'stopped' && !tAlone)) verdict.pass = false;
+    if (tAlone) delete index.error;
+    log({ event: 'smoke', ...verdict, failing: verdict.failing.length });
+    return finish(run, tAlone ? 'done' : ended);
   }
   const verdict = index.smoke?.verdict;
   if (!verdict?.pass) {
