@@ -13,8 +13,9 @@ import type { ChecklistInput, Exec, RawChecklist } from './action-judge.ts';
 // What the fake gateway does to one kind of call of one story: `unparsed` answers something that is not JSON twice,
 // `retry` once and then a valid reply, `truncated` a valid reply cut at the limit, `duplicate_roles` a variant whose
 // two participants share a role, `empty_sheet` a sheet with nobody on it, `error` a refusal whose body carries the
-// marker, which the adapter must read the code of and nothing else.
-export type Fault = 'unparsed' | 'retry' | 'truncated' | 'duplicate_roles' | 'empty_sheet' | 'error';
+// marker, which the adapter must read the code of and nothing else, and `all_viewer` a variant whose participants all
+// face the viewer, so that nobody needs a view.
+export type Fault = 'unparsed' | 'retry' | 'truncated' | 'duplicate_roles' | 'empty_sheet' | 'error' | 'all_viewer';
 export type CallKind = 'seed' | 'scene' | 'sheet' | 'frame' | 'variant';
 export type Faults = Record<string, Partial<Record<CallKind, Fault>>>;
 
@@ -96,7 +97,7 @@ export function fakeGateway({ key, model = 'gemma-4-31b-heretic-nvfp4', stories 
       text = JSON.stringify({ moment: `The participants hold each other${secret}`, shot: 'Medium wide shot at three quarters', setting: 'A plain room',
         objects: '', props: '', light: 'Evening light',
         people: people.slice(0, variant ? 6 : 4).map((name, at) => ({ who: name,
-          ...(variant ? { role: fault === 'duplicate_roles' && at === 1 ? 'The Participant 1' : `the participant ${at + 1}`, facing: FACINGS[at % FACINGS.length] } : {}),
+          ...(variant ? { role: fault === 'duplicate_roles' && at === 1 ? 'The Participant 1' : `the participant ${at + 1}`, facing: fault === 'all_viewer' ? 'viewer' : FACINGS[at % FACINGS.length] } : {}),
           look: '', clothes: `wearing a ${['blue', 'green', 'grey', 'brown', 'white', 'black'][at % 6]} tunic`, state: '',
           action: `holds the hand of the participant ${((at + 1) % people.length) + 1}` })) });
     }

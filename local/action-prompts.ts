@@ -3,7 +3,7 @@
 // and views the manifests need. Every prompt goes into its story's own directory, `sealed/<id>/` for a sharp one; what
 // this file returns for the run's level is ids, codes and counts.
 import { createHash } from 'node:crypto';
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ACTION_STORIES } from '../examples/action-set.ts';
 import { STYLE, assemblePrompt, matchSheet, sheetLooks, stripAges, stripNames } from './illustrate.ts';
@@ -198,13 +198,22 @@ export function planStory(story: TextStory, text: StoryText | undefined, tokens?
 // ---- The run ----
 
 // What `prompts` leaves at the run's level: per story, the codes that took arms out, the counts of each arm, the
-// portraits and views planned, and the manifest's numbers; and the hash of every plan, which the picture run is pinned
-// to. No prompt and no name.
-export type PromptsRecord = { plans: string; stories: Record<string, { out: Partial<Record<ActionArm, string>>; vIsC: boolean;
+// portraits and views planned, and the manifest's numbers; the hash of every plan, which the picture run is pinned
+// to; and the hash of the texts they were planned from. No prompt and no name.
+export type PromptsRecord = { plans: string; texts: string; stories: Record<string, { out: Partial<Record<ActionArm, string>>; vIsC: boolean;
   portraits: string[]; views: string[]; bound: number; people: number; stop?: string; emptyRoles?: number;
   counts: StoryPlan['counts']; cast?: StoryPlan['cast'] }> };
+// Every story's text by one hash: a text written after `prompts` leaves its plans behind it.
+export function textsHash(root: string, stories: TextStory[]): string {
+  const hash = createHash('sha256');
+  for (const story of stories) {
+    const file = join(storyDir(root, story.id), 'text.json');
+    hash.update(`${story.id}\0${existsSync(file) ? createHash('sha256').update(readFileSync(file)).digest('hex') : '-'}\n`);
+  }
+  return hash.digest('hex');
+}
 export function planAll(root: string, stories: TextStory[], tokens?: Tokens): PromptsRecord {
-  const record: PromptsRecord = { plans: '', stories: {} };
+  const record: PromptsRecord = { plans: '', texts: textsHash(root, stories), stories: {} };
   const hash = createHash('sha256');
   for (const story of stories) {
     const dir = storyDir(root, story.id);

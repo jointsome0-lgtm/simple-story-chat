@@ -17,21 +17,26 @@ export function markerForms(word: string): Buffer[] {
   return [...new Set([word, escaped(false), escaped(true)])].map(form => Buffer.from(form, 'utf8'));
 }
 
-// Every file under `dir` but those `skip` names, and which of them hold one of `needles`.
+// Every file under `dir` but those `skip` names, and which of them hold one of `needles`, in their bytes or in their
+// name or a directory's. A hit's path may hold the word itself: it is counted, never printed.
 export function searchTree(dir: string, needles: Buffer[], skip: (path: string) => boolean = () => false) {
   const found = { files: 0, bytes: 0, hits: [] as string[] };
+  const holds = (bytes: Buffer) => needles.some(needle => bytes.includes(needle));
   const walk = (at: string) => {
     let entries;
     try { entries = readdirSync(at, { withFileTypes: true }); } catch { return; }
     for (const entry of entries) {
       const path = join(at, entry.name);
       if (skip(path)) continue;
-      if (entry.isDirectory()) walk(path);
-      else if (entry.isFile()) {
+      const named = holds(Buffer.from(entry.name, 'utf8'));
+      if (entry.isDirectory()) {
+        if (named) found.hits.push(relative(dir, path));
+        walk(path);
+      } else if (entry.isFile()) {
         const bytes = readFileSync(path);
         found.files++;
         found.bytes += bytes.length;
-        if (needles.some(needle => bytes.includes(needle))) found.hits.push(relative(dir, path));
+        if (named || holds(bytes)) found.hits.push(relative(dir, path));
       }
     }
   };
