@@ -831,8 +831,11 @@ test('private state cannot be reached from another user, group or unconfirmed de
   assert.deepEqual([Object.keys(mine().pictureStyles!), mine().pictureStyle], [[styleId], undefined], 'a confirmed delete');
   await f.bot.handle(f.click(`style:${copy}`));
   assert.equal(shown(), staleButton, 'the button of a deleted style');
-  // A full library takes no new style.
+  // A full library takes no new style, nor one written while it filled up.
+  await f.bot.handle(f.click('style-new'));
   f.store.mutate(1, library => { for (let n = 1; n < OWN_STYLES_MAX; n++) library.pictureStyles![`y${900 + n}`] = { id: `y${900 + n}`, name: `S${n}`, line: 'Ink.' }; });
+  await f.bot.handle(f.message('Тушь\nInk wash on rice paper'));
+  assert.deepEqual([shown(), mine().ui, Object.keys(mine().pictureStyles!).length], [stylesFull, null, OWN_STYLES_MAX], 'a style written while the library filled up');
   await f.bot.handle(f.click('style-new'));
   assert.deepEqual([shown(), mine().ui], [stylesFull, null], 'a full library');
   // A sample is drawn from the scene the reader is at, and chooses nothing.
