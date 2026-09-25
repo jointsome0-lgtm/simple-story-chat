@@ -608,10 +608,14 @@ npm run image:action -- texts --marker --dir "$dry/dev" --base-url http://127.0.
 npm run image:action -- texts --dir "$dry/dev" --base-url http://127.0.0.1:8201 \
   --key-file "$dry/config.json" --smoke-record "$dry/serving-smoke.jsonl"    # 13 stories, the sharp ones held
 grep -cF 'illustrations/action/sealed' .claude/settings.json    # before each card: 1 or more
-# The text card (the rentals, 2), prepared as simple-serving's README says, with `up` holding its tunnel. In that
-# checkout, in a second terminal, the plain smoke, into a file of this card's own:
-set -o pipefail; uv run python -m simple_serving.smoke | tee logs/smoke-text-card.jsonl    # exit 0, 10 of 10 passed
-smoke="$SIMPLE_SERVING_CHECKOUT/logs/smoke-text-card.jsonl"    # here, from now on
+# The text card (the rentals, 2), prepared as simple-serving's README says in "The card". In that checkout, once SSH
+# to the card works, `trial` names this card in the configuration, and `up`, in a terminal of its own, holds the tunnel.
+uv run python -m simple_serving.cli trial --ssh-host HOST    # HOST: the text card's host in ~/.ssh/config
+uv run python -m simple_serving.cli up    # until it says ready
+# In a second terminal in that checkout, the plain smoke, into a file of this card's own:
+mkdir -p logs; set -o pipefail
+uv run python -m simple_serving.smoke | tee logs/smoke-text-card.jsonl    # exit 0, 10 of 10 passed
+smoke="$SIMPLE_SERVING_CHECKOUT/logs/smoke-text-card.jsonl"    # back in this checkout, from now on
 npm run image:action -- texts --marker --smoke-record "$smoke"    # pass true, before any sharp seed is asked for
 npm run image:action -- texts --smoke-record "$smoke"    # complete true, exit 0
 npm run gpu:rent -- --destroy ID    # destroy_confirmed; anything else goes to the owner at once
@@ -687,9 +691,11 @@ whose sheet is `unparsed`, with the five sharp ones held as `marker_failed`. Any
 above all, is looked into before any card.
 
 **The text card** follows the rehearsal (the rentals, 1), and is watched and ended as [the rentals](#the-rentals) say.
-It falls asleep 13 minutes after our last request (simple-serving's README, "The command"), which would be a stop, so
-the smoke, the marker check and the texts follow each other at once, and the destroy follows the texts. The smoke
-writes into a file of this card's own, so that no earlier record, the rehearsal's among them, can stand for it.
+Until `trial` has run on it, simple-serving's configuration names the rehearsal's card, which is gone: `up` would
+reach for that card, and the smoke's privacy check would read no report of this one. The card falls asleep 13 minutes
+after our last request (simple-serving's README, "The command"), which would be a stop, so the smoke, the marker check
+and the texts follow each other at once, and the destroy follows the texts. The smoke writes into a file of this
+card's own, so that no earlier record, the rehearsal's among them, can stand for it.
 
 `texts --marker` prints each attempt, then `marker_check`: `pass`, `reached`, each step's outcome, the files and bytes
 searched, and the hits as counts. `pass: true` lets `texts` ask for the sharp seeds. A hit keeps them out for the rest
