@@ -6,7 +6,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { BOOT_SECONDS, DESTROY_SECONDS, chooseOffers, createBody, describeOffer, destroyInstance, emptyReason, instanceState, offerQuery, redactedBody, rentPlan } from './rent-plan.ts';
+import { BOOT_SECONDS, DESTROY_SECONDS, chooseOffers, createBody, describeOffer, destroyInstance, emptyReason, instanceState, offerQuery, redactedBody, rentPlan, sshRoute } from './rent-plan.ts';
 import type { Choice, EmptyReason, RawOffer, RentPlan } from './rent-plan.ts';
 
 const RENT = fileURLToPath(new URL('../gpu/rent.mjs', import.meta.url));
@@ -35,24 +35,26 @@ const offer = (fields: RawOffer = {}): RawOffer => ({
 });
 
 test('every machine is priced whole, its card, its own disk and its own downloads, and is rented only at a known price under its ceiling', () => {
-  // [label, plan, disk, downloads, what else its disk has room for, ceiling, the hour and the traffic of an offer at
-  // $0.50/h, $0.10 per GB-month of disk and a cent per GB]. One disk size serves the offer filter, the storage price and
-  // the create body. The downloads are the default run's files and wheels, torch's five gigabytes on the picture lane,
-  // so two single-lane machines pull what one machine for both would. Qwen is priced only where it is asked for, and
-  // fits every disk that draws pictures beside about 13 GiB of torch and ComfyUI.
-  const machines: [string, RentPlan, number, number, number, number, number[]][] = [
-    ['one card for both lanes', rentPlan(), 150, TEXT + PICTURES + 6e9, QWEN, 0.693, [0.521, 0.63]],
-    ['two cards for both lanes', rentPlan({ gpus: 2 }), 150, TEXT + PICTURES + 6e9, QWEN, 1.043, [0.521, 0.63]],
-    ['the language machine', rentPlan({ lane: 'text' }), 60, TEXT + 1e9, 0, 0.667, [0.508, 0.27]],
-    ['the picture machine', rentPlan({ lane: 'pictures' }), 100, PICTURES + 5e9, QWEN, 0.678, [0.514, 0.36]],
-    ['a picture machine that pulls Qwen alone', rentPlan({ lane: 'pictures', qwenOnly: true }), 100, QWEN + 5e9, 0, 0.678, [0.514, 0.22]],
+  // [label, plan, disk, RAM floor in GB, downloads, what else its disk has room for, ceiling, the hour and the traffic
+  // of an offer at $0.50/h, $0.10 per GB-month of disk and a cent per GB]. One disk size serves the offer filter, the
+  // storage price and the create body. The downloads are the default run's files and wheels, torch's five gigabytes on
+  // the picture lane, so two single-lane machines pull what one machine for both would. Qwen is priced only where it is
+  // asked for, and fits every disk that draws pictures beside about 13 GiB of torch and ComfyUI; a machine that pulls
+  // Qwen alone needs none of the pinned files and rents a disk that holds its own. The RAM floor is 32 GB a card, and
+  // the picture lane's own 30 GB: it has no cache to feed.
+  const machines: [string, RentPlan, number, number, number, number, number, number[]][] = [
+    ['one card for both lanes', rentPlan(), 150, 32, TEXT + PICTURES + 6e9, QWEN, 0.693, [0.521, 0.63]],
+    ['two cards for both lanes', rentPlan({ gpus: 2 }), 150, 64, TEXT + PICTURES + 6e9, QWEN, 1.043, [0.521, 0.63]],
+    ['the language machine', rentPlan({ lane: 'text' }), 60, 32, TEXT + 1e9, 0, 0.667, [0.508, 0.27]],
+    ['the picture machine', rentPlan({ lane: 'pictures' }), 100, 30, PICTURES + 5e9, QWEN, 0.678, [0.514, 0.36]],
+    ['a picture machine that pulls Qwen alone', rentPlan({ lane: 'pictures', qwenOnly: true }), 60, 30, QWEN + 5e9, 0, 0.667, [0.508, 0.22]],
   ];
-  for (const [label, plan, disk, bytes, room, ceiling, price] of machines) {
+  for (const [label, plan, disk, ram, bytes, room, ceiling, price] of machines) {
     assert.deepEqual([plan.diskGb, offerQuery(plan).disk_space.gte, createBody({ plan, onstart: '' }).disk], [disk, disk, disk], label);
     assert.ok((bytes + room) / 1e9 + 14 < disk, `${label}: the disk holds what the machine pulls`);
-    // The card count drives the query and the RAM floor as well as the ceiling.
-    assert.deepEqual([plan.sessionBytes, plan.maxHour, offerQuery(plan).num_gpus.eq, offerQuery(plan).cpu_ram.gte],
-      [bytes, ceiling, plan.gpus, 32000 * plan.gpus], label);
+    // The card count drives the query as well as the ceiling, and the search is asked for the RAM floor in MB.
+    assert.deepEqual([plan.sessionBytes, plan.maxHour, offerQuery(plan).num_gpus.eq, plan.minRamGb, offerQuery(plan).cpu_ram.gte],
+      [bytes, ceiling, plan.gpus, ram, ram * 1000], label);
     const { hour, download } = describeOffer(offer({ dph_total: 0.5, storage_cost: 0.1, inet_down_cost: 0.01 }), plan);
     assert.deepEqual([hour, download], price, label);
   }
@@ -62,9 +64,10 @@ test('every machine is priced whole, its card, its own disk and its own download
     ['Qwen alone beside text', { qwenOnly: true }, /picture machine/]] as const) assert.throws(() => rentPlan(wrong), error, label);
 
   // The ceiling is the card price the owner approved, $0.65 for one card and $1.00 for two, and the machine's disk at
-  // the $0.207 per GB-month the measured rental was billed: the top of each quoted range stays rentable on a host
-  // charging that or the commonly quoted $0.10, and a dearer card is refused on either. A price that is missing or not a
-  // number, of the card, the disk or the traffic, is no price: read as zero it would sort first and be rented first.
+  // the $0.207 per GB-month the measured rental was billed (docs/knowledge/gpu-measurements.md#costs-and-downloads):
+  // the top of each quoted range stays rentable on a host charging that or the commonly quoted $0.10, and a dearer card
+  // is refused on either. A price that is missing or not a number, of the card, the disk or the traffic, is no price:
+  // read as zero it would sort first and be rented first.
   const [one, two] = [rentPlan(), rentPlan({ gpus: 2 })];
   const offers: [string, RentPlan, RawOffer, 'rented' | 'over' | 'unknown'][] = [
     ['a card of unknown price', two, { dph_total: undefined }, 'unknown'],
@@ -97,6 +100,9 @@ test('each rule counts the offers it drops and names itself when it empties the 
   // The measured host's one card of eight on 2026-09-23: the console showed "64/516 GB" and the search answered
   // `cpu_ram` 64469 beside `gpu_frac` 0.125. Read as the machine's RAM times the share it was 8 GB, under every floor.
   const measured = { id: 'measured', host_id: 402342, cpu_ram: 64469, gpu_frac: 0.125, dph_total: 0.508, storage_cost: 0.133 };
+  // A 32 GB share that reports 31.2 GB, as the cheapest machines did on 2026-09-25: over the picture lane's floor and
+  // under the language lane's.
+  const share = offer({ id: 'share', cpu_ram: 31197, dph_total: 0.5 });
   // [label, plan, offers, the ids left in the order they are tried, counts, the reason an empty list gives]
   const rows: [string, RentPlan, RawOffer[], unknown[], Partial<Choice>, EmptyReason?][] = [
     // The cheapest two are the blocked ones. An offer that names no place is kept, like one that names no RAM.
@@ -116,6 +122,8 @@ test('each rule counts the offers it drops and names itself when it empties the 
     ['only too little RAM for two cards', two, [offer({ cpu_ram: 32000 })], [], { droppedForRam: 1 }, 'none_with_enough_ram'],
     ['the measured host\'s share, on the language machine', rentPlan({ lane: 'text' }), [offer(measured)], ['measured'], {}],
     ['the measured host\'s share, on the picture machine', rentPlan({ lane: 'pictures' }), [offer(measured)], ['measured'], {}],
+    ['a share of 31.2 GB, on the picture machine', rentPlan({ lane: 'pictures' }), [share], ['share'], { droppedForRam: 0 }],
+    ['a share of 31.2 GB, on the language machine', rentPlan({ lane: 'text' }), [share], [], { droppedForRam: 1 }, 'none_with_enough_ram'],
     // The measured host first while it fits the ceiling, then the cheapest over the rental's two and a half hours: the
     // $0.08/h the cheaper card saves outweighs the $0.15 of traffic it costs extra, which over 45 minutes it would not.
     ['the order they are tried in', two, [offer({ id: 'dear-by-the-hour', dph_total: 0.94, storage_cost: 0 }),
@@ -138,10 +146,12 @@ test('each rule counts the offers it drops and names itself when it empties the 
 // virtual: a pause takes none of the real kind and moves both clocks on by its length, and the answer that creates
 // the machine takes fifty seconds. Every request is written to STUB_LOG with the second it was sent at and the bound
 // its signal was given, and a create request with the seconds its body gives the guard. `fetch` is replaced before
-// gpu/rent.mjs is loaded, so no request below leaves this machine.
+// gpu/rent.mjs is loaded, so no request below leaves this machine. The record of a present instance carries its
+// address, with a newline after it, and its ports.
 const STUB = `import { appendFileSync } from 'node:fs';
 const reads = (process.env.STUB_READS ?? '').split(',');
-const answers = { present: [200, { instances: { id: 123, actual_status: 'running', intended_status: 'running' } }],
+const answers = { present: [200, { instances: { id: 123, actual_status: 'running', intended_status: 'running',
+  public_ipaddr: '203.0.113.7\\n', ports: { '22/tcp': [{ HostIp: '0.0.0.0', HostPort: '41022' }] }, ssh_host: 'ssh5.vast.ai', ssh_port: 36500 } }],
   gone: [200, { instances: null }], missing: [404, {}], failing: [500, {}], empty: [200, {}], other: [200, { instances: { id: 124 } }] };
 let skew = 0;
 const later = globalThis.setTimeout, wall = Date.now, monotonic = performance.now.bind(performance);
@@ -210,8 +220,8 @@ test('the create body asks for the devel image, direct ssh and a guard of one to
   const plan = rentPlan({ gpus: 2 });
   const body = createBody({ plan, onstart: "#!/bin/bash\nSIMPLE_CHAT_SSH_PUBLIC_KEY='ssh-ed25519 AAAAC3NzaC1secret owner@host'\nsleep 1\n" });
   assert.deepEqual([body.runtype, body.env, body.use_jupyter_lab], ['ssh_direc ssh_proxy', { '-p 22:22': '1' }, false], 'direct ssh');
-  // The image measured in docs/gpu.md. gpu/bootstrap.sh compiles llama-server on the machine and a runtime image has no
-  // nvcc, so the session would be paid for and build nothing.
+  // The image measured in docs/knowledge/gpu-measurements.md#verified-2026-09-17. gpu/bootstrap.sh compiles
+  // llama-server on the machine and a runtime image has no nvcc, so the session would be paid for and build nothing.
   assert.equal(body.image, 'vastai/base-image:cuda-13.0.3-cudnn-devel-ubuntu24.04-py312-2026-09-07', 'the devel image');
   // What --print-body shows: every field that decides what is rented, and the script's size in place of the script.
   const printed = JSON.stringify(redactedBody(body));
@@ -232,7 +242,8 @@ test('the create body asks for the devel image, direct ssh and a guard of one to
     }],
     ['the review with the account key', {}, ['--print-body', '--gpus', '2'], 0, ['create_request', 'candidates', 'would_try', 'would_try'], 'GET 0s'],
     ['an hour of a picture machine that pulls Qwen alone', review, ['--print-body', '--lane', 'pictures', '--hours', '1', '--qwen', 'only'], 0,
-      ['create_request'], '', ({ label, events: [shown] }) => assert.deepEqual([shown.hours, shown.sessionHours, shown.sessionGb], [1, 1.34, 22], label)],
+      ['create_request'], '', ({ label, events: [shown] }) =>
+        assert.deepEqual([shown.body.disk, shown.hours, shown.sessionHours, shown.sessionGb], [60, 1, 1.34, 22], label)],
     ['four hours', {}, ['--gpus', '2', '--hours', '4'], 1, ['bad_arguments'], ''],
     ['Qwen alone on a machine that serves text too', {}, ['--qwen', 'only'], 1, ['bad_arguments'], ''],
     ['a Qwen flag of another value', {}, ['--lane', 'pictures', '--qwen', 'true'], 1, ['bad_arguments'], ''],
@@ -250,6 +261,20 @@ test('an answer that is not certain is never taken for the outcome, of a rental 
     assert.equal(instanceState('123', status, body).state, state, label);
   }
   assert.deepEqual(instanceState('123', 200, present), { state: 'present', status: 200, actual: 'exited', intended: null }, 'its words');
+  // Where ssh reaches it, from the same read: an address and a port, or null for any part that is not one. Each row
+  // spoils one field of a record that routes both ways.
+  const route = { public_ipaddr: '203.0.113.7', ports: { '22/tcp': [{ HostPort: '41022' }] }, ssh_host: 'ssh5.vast.ai', ssh_port: 36500 };
+  const [direct, proxy] = ['203.0.113.7:41022', 'ssh5.vast.ai:36500'];
+  for (const [label, id, fields, routed] of [['its record', 123, {}, { direct, proxy }],
+    ['a box still loading, with no port mapped yet', 123, { ports: {} }, { direct: null, proxy }],
+    ['an address with a command after it', 123, { public_ipaddr: '203.0.113.7; rm -rf /' }, { direct: null, proxy }],
+    ['a mapped port out of range', 123, { ports: { '22/tcp': [{ HostPort: '70000' }] } }, { direct: null, proxy }],
+    ['a proxy that is not Vast\'s', 123, { ssh_host: 'evil.example' }, { direct, proxy: null }],
+    ['a proxy host with an option after it', 123, { ssh_host: 'ssh5.vast.ai -o ProxyCommand=x' }, { direct, proxy: null }],
+    ['a proxy port with an option after it', 123, { ssh_port: '22 -o ProxyCommand=x' }, { direct, proxy: null }],
+    ['another instance', 124, {}, { direct: null, proxy: null }]] as const) {
+    assert.deepEqual(sshRoute('123', 200, { instances: { ...route, id, ...fields } }), routed, label);
+  }
 
   // The destroy's own clock, virtual, against a Vast that answers every request after 19 s, one whose reads never
   // answer, one whose deletes never do, and one that answers in five seconds, which leaves a last pause to be cut. A
@@ -312,8 +337,8 @@ test('an answer that is not certain is never taken for the outcome, of a rental 
     ['--destroy without an ID', {}, ['--destroy'], 1, ['bad_arguments'], ''],
     ['--show of an ID that is not a number', {}, ['--show', '123/'], 1, ['bad_arguments'], ''],
     ['--show', { STUB_READS: 'present' }, ['--show', '123'], 0, ['instance'], 'GET 0s', ({ label, events, requests }) => assert.deepEqual([events, requests],
-      [[{ event: 'instance', instance: '123', state: 'present', status: 200, actual: 'running', intended: 'running' }],
-        ['GET 0s 20000ms /api/v0/instances/123/']], label)],
+      [[{ event: 'instance', instance: '123', state: 'present', status: 200, actual: 'running', intended: 'running',
+        ssh: { direct: '203.0.113.7:41022', proxy: 'ssh5.vast.ai:36500' } }], ['GET 0s 20000ms /api/v0/instances/123/']], label)],
     // A destroy's dry run only reads, and an instance the guard deletes within its minute is read as gone and never
     // deleted with the account's key. One still there after the minute is deleted, and read every ten seconds until a
     // read says it is gone; the delete's own `success` is no such read, and it is sent again after half a minute.

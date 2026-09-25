@@ -442,8 +442,8 @@ test('an illustrated scene: a status line, one description call, a prompt with o
   const bytes = Buffer.from(photo.payload.photo);
   assert.ok(bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) && !bytes.includes('tEXt') && !bytes.includes(STYLE_LINE));
 
-  // The prompt the card drew goes to the reader alone, folded under the photo (docs/telegram-ui.md), with its tokens in
-  // the picture model's tokenizer, the style line's share of them, and its characters.
+  // The prompt the card drew goes to the reader alone, folded under the photo (docs/telegram-ui.md#picture-prompts),
+  // with its tokens in the picture model's tokenizer, the style line's share of them, and its characters.
   const note = notes(f.sent)[0];
   assert.deepEqual([note.payload.reply_parameters?.message_id, idOf(f.sent, note) > idOf(f.sent, photo)], [idOf(f.sent, photo), true]);
   const summary = htmlOf(note).match(/^<details><summary>(.*)<\/summary>/)![1];
@@ -484,8 +484,9 @@ test('an illustrated scene: a status line, one description call, a prompt with o
   assert.deepEqual([described.outcome, described.namesStripped, described.withoutLook], ['ready', 2, 0], 'an empty sheet');
 });
 
-// A rich message holds 32768 characters (docs/setup.md), counted here in UTF-8 bytes, which are never fewer. The prompt
-// in it is plain text a phone wraps: nothing in it is read as a tag, and only the fold itself closes.
+// A rich message holds 32768 characters (docs/telegram-ui.md#telegram-limits), counted here in UTF-8 bytes, which are
+// never fewer. The prompt in it is plain text a phone wraps: nothing in it is read as a tag, and only the fold itself
+// closes.
 test('the longest prompt a reader may write fits its note, every character escaped, under the summary of any language', () => {
   for (const [summary, prompt, folded] of [['S', 'A quiet harbour. Painterly.', '<details><summary>S</summary>A quiet harbour. Painterly.</details>'],
     ['S & T', 'A sign reads </details> <summary>x</summary> & ```code```. Done.',

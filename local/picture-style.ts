@@ -1,5 +1,5 @@
 // The look of a reader's pictures. The style is only ever the last sentence of the prompt (local/illustrate.ts
-// `assemblePrompt`): the describing model never sees one, because step 1 of docs/illustrations-plan.md measured it
+// `assemblePrompt`): the describing model never sees one, because docs/illustrations-plan.md#step-1 measured it
 // picking a different style every time. The bot's own line — `SIMPLE_CHAT_IMAGE_STYLE`, or `STYLE` without it — is
 // the standard one. A reader picks a preset or one of the styles of their own library, which holds at most
 // OWN_STYLES_MAX of them; the choice and the library are kept as `pictureStyle` and `pictureStyles`
@@ -34,7 +34,7 @@ export const OWN_NAME_CHARS = 40;
 export const OWN_STYLES_MAX = 10;
 // A whole prompt a reader writes for a variant of a picture (local/picture.ts `variant`) is at most PROMPT_CHARS
 // characters: short enough that its note, every character escaped to the five of `&amp;` and its summary line added,
-// stays inside the 32768 characters of a rich message (docs/setup.md).
+// stays inside the 32768 characters of a rich message (docs/telegram-ui.md#telegram-limits).
 export const PROMPT_CHARS = 4000;
 // A reader's own line ends the prompt as written, with nothing of the bot's after it: it is what the tester sets a
 // style and runs tests with. The bot's tail took a sentence of meaning into every such picture — natural proportions

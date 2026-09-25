@@ -1,5 +1,5 @@
-// The first half of the identity test (docs/illustrations-plan.md): one portrait per person of the synthetic
-// stories, drawn on the card, and the file that binds those portraits to the frames they belong in.
+// The first half of the identity test (docs/identity-experiment.md#portrait-recipe): one portrait per person of the
+// synthetic stories, drawn on the card, and the file that binds those portraits to the frames they belong in.
 //   `prompts`    turns the character sheets inside an illustrate-probe prompts directory into a prompts directory
 //                of its own, one case per person, which local/image-batch.ts draws like any other.
 //   `references` turns the run directory that came out of it into the `--references` file of the frame run.

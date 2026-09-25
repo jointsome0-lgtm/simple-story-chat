@@ -28,11 +28,13 @@ turbo="${SIMPLE_CHAT_IMAGE_TURBO:-true}"
 # Qwen-Image 2.1 is the opt-in third checkpoint: 17.28 GB that local/rent-plan.ts does not price, so a session that
 # wants it says so before it rents. Off by default, unlike Turbo, because it is a comparison somebody chose to make.
 # `only` fetches Qwen's three files and nothing of Krea's, Turbo included, and so needs no token: the box of the
-# identity measurement (docs/illustrations-plan.md), which draws nothing else and pays for every minute of 48.7 GB.
+# identity measurement (docs/identity-experiment.md#one-hour, docs/gpu.md#qwen-image), which draws nothing else and
+# pays for every minute of 48.7 GB.
 qwen="${SIMPLE_CHAT_IMAGE_QWEN:-false}"
 [[ "$qwen" = true || "$qwen" = false || "$qwen" = only ]] || { echo 'Use SIMPLE_CHAT_IMAGE_QWEN=true, false or only.' >&2; exit 1; }
-# An offer that advertises 1171 Mbit/s has delivered 115 (docs/gpu.md). Below the floor the answer is to destroy the
-# machine and take the next candidate, not to wait: 22 GB at 100 Mbit/s is half the session.
+# An offer that advertises 1171 Mbit/s has delivered 115 (docs/knowledge/gpu-measurements.md#costs-and-downloads).
+# Below the floor the answer is to destroy the machine and take the next candidate, not to wait: 22 GB at 100 Mbit/s
+# is half the session.
 min_mbit="${SIMPLE_CHAT_IMAGE_MIN_MBIT:-200}"
 window="${SIMPLE_CHAT_IMAGE_SPEED_WINDOW:-60}"
 [[ "$min_mbit" =~ ^[0-9]+$ && "$window" =~ ^[1-9][0-9]*$ ]] || { echo 'Invalid SIMPLE_CHAT_IMAGE_MIN_MBIT/WINDOW.' >&2; exit 1; }

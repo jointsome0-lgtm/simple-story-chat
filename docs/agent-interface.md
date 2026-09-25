@@ -7,7 +7,7 @@ A way for an AI agent to use the story engine without Telegram. It serves two us
   checkpoints.
 
 It is not a way into the Telegram libraries of people, and it is not another eval (`npm run eval` measures world
-consistency on fixed scenarios, see [improve-loop.md](improve-loop.md)).
+consistency on fixed scenarios, see [eval.md](eval.md)).
 
 A turn runs the same code as the bot: `local/turn.ts` takes the job lock, generates the scene (with automatic
 compaction), saves it with its usage and request stamp, and saves the scene's checkpoint. The bot adds Telegram
@@ -29,11 +29,11 @@ prompts or model output. The stories and results themselves are in the agent lib
 
 ## Model access
 
-The same model configuration as the bot (`.env`, or `.env.gpu` with the `:gpu` scripts), and the same consent gate: an
-`openai-compatible` or `codex-cli` provider needs `SIMPLE_CHAT_ALLOW_HOSTED=stories-leave-this-computer`, exactly as
-for the bot.
+The same model configuration as the bot (`.env`, or `.env.gpu` with the `:gpu` scripts), and the same
+[consent gate](model-providers.md#consent-to-a-hosted-connection-for-the-bot): an `openai-compatible` or `codex-cli`
+provider needs `SIMPLE_CHAT_ALLOW_HOSTED=stories-leave-this-computer`, exactly as for the bot.
 
-When the bot runs with GPU control it serves its model queue on `<bot database>.model.sock` (`local/background.ts`).
+When the bot runs with [GPU control](llama-cpp.md#managed-gpu) it serves its model queue on `<bot database>.model.sock` (`local/background.ts`).
 If that socket answers, agent turns go through it in their own queue (`local/scheduler.ts`), between people and
 disposable probes:
 

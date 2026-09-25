@@ -1,6 +1,6 @@
 # Local prototype
 
-This directory implements the owner-approved local fallback while Telegram Serverless is waitlisted. It runs on Node 24 as native strict TypeScript (`.ts` files with explicit `.ts` import specifiers, erasable syntax only, type-checked by `npm run check`), uses node:sqlite, imports the shared domain from `../lib/library.ts`, and is not deployed by tgcloud. The root scaffold's V8/SDK-only restrictions describe the cloud files, not this directory.
+This directory implements the owner-approved local fallback while Telegram Serverless is waitlisted. It runs on Node 24 as native strict TypeScript (`.ts` files with explicit `.ts` import specifiers, erasable syntax only, type-checked by `npm run check`), uses node:sqlite, imports the shared domain from `../lib/library.ts`, and is not deployed by tgcloud.
 
 Do not read `.tgcloud/`. Never print credentials, story text, model prompts, raw model streams or raw provider errors in technical logs. Test with synthetic stories. Each Telegram user's library is separate; bot access does not grant permission to inspect that user's messages.
 

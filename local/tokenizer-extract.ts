@@ -4,7 +4,7 @@
 // from the three files ComfyUI ships at the revision gpu/image-manifest.env pins, from GitHub or from `--qwen dir`,
 // checked against the SHA-256 that manifest pins. Each file is built the way its server builds the tokenizer, must
 // give the ids those servers gave for local/tokenizer-probe.json, and only then replaces the one in tokenizers/.
-// docs/tokenizers.md has the whole story.
+// docs/tokenizers.md#files has the whole story.
 import { createHash } from 'node:crypto';
 import { closeSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';

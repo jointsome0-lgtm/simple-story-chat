@@ -1,5 +1,14 @@
 # The economics of experiments on prompts and memory
 
+Status on 2026-09-25. A dated proposal of 2026-09-19, not a plan in force. Its numbers belong to that week: the
+production model under llama.cpp on one rented RTX 5090 (Gemma 4 31B heretic Q6_K, one slot, KV `q8_0`, ubatch 128),
+Vast rates of $0.5–0.7 an hour, and the hosted channels and the eval of that time. Today's budget and sample sizes do
+not follow from them by themselves: another card, model or tariff needs its own measurement, and n = 5 is this note's
+estimate, not a rule of [improve-loop.md](improve-loop.md). [eval-experiments-plan.md](eval-experiments-plan.md) was
+written beside it, and [its critique](eval-experiments-plan.md#critique-statistics) notes that the power tables of §2.2
+were computed for K = 35, the holdout pack, and were not recounted for smaller screening batches. Where a fact cited
+here has moved to another page since, the reference points to its new place.
+
 2026-09-19 · Opus 5 (scout) · analysis with no code edits and no paid requests. A research note: numbers marked [M] were taken from local technical logs, which are not published.
 
 Goal: raise eval speed, statistical power and the return per rental dollar. Below, **[M]** measured facts
@@ -13,6 +22,8 @@ What I read: `docs/improve-loop.md`, `docs/improve-log.md`, `docs/gpu.md`, `docs
 `logs/bot-gpu.jsonl`. The holdout pack, `data/` and `.env*` were not opened; only counters and codes were taken from the logs.
 
 ---
+
+<a id='cost-model'></a>
 
 ## 0. The constants everything else is computed from
 
@@ -43,7 +54,7 @@ We get 35, which is 49 % of the ceiling.
 
 ### What was measured on the batches of 18–19 September
 
-**[M]** 15 s per scene with one slot, 8 s per scene with a 5-slot server (`improve-log.md`, the 19 September entry).
+**[M]** 15 s per scene with one slot, 8 s per scene with a 5-slot server ([improve-runs.md](knowledge/improve-runs.md#narrator-rule-2026-09-19), the 19 September entry).
 
 **[D]** But with `samples: 3` and `parallel: 5` the code at `local/memory-probe.ts:180` starts
 `Math.max(1, Math.floor(parallel / samples))` = **one** chain, which means **three** simultaneous requests, not five.
@@ -175,6 +186,8 @@ is noisy on 3 questions out of 8 and is not the production model.
 | Unmeasured judge noise | ±3 pp of unaccounted variance | [D] |
 
 ---
+
+<a id='power-and-assumptions'></a>
 
 ## 2. How many samples are needed and which comparison protocol to use
 
@@ -340,7 +353,7 @@ bought again with every rental.
 **Rationale.** [D] The aggregate decode speed at batch 3 is 66 tok/s, with an ideal of 105 and a card ceiling of ≈71 per
 stream. The previous scout's finding about dequantizing `q8_0` to f16 on every step at ≥3 slots hits exactly decode,
 which is 85 % of the cost. Memory allows it: at ctx 65536 the KV with SWA (10 full-attention layers + 50 with a 1024 window)
-takes **[D]** ≈1.5 GB in `q8_0` and ≈2.9 GB in `f16`, and by the measurement in `docs/gpu.md` ≈4.2 GB is free.
+takes **[D]** ≈1.5 GB in `q8_0` and ≈2.9 GB in `f16`, and by [the measurement](knowledge/gpu-measurements.md#verified-2026-09-17) ≈4.2 GB is free.
 `--ubatch-size 512` affects only prefill, which is 10–15 % of the cost, so it is not the first candidate, contrary to
 how it sounds.
 
@@ -523,10 +536,10 @@ a minute of work $0.01, a minute of idling $0.01, a minute of being stopped $0.0
 6. **A ready binary instead of a build** (upload `llama-server` and the needed `.so` files to a private HF repository, as is already
    done for the holdout pack through `local/pack-hf.ts`) cuts the entry roughly in half: from $0.15 to $0.07–0.08.
    Risk: a glibc and CUDA mismatch between images; this is covered by the image already being pinned by digest in
-   `docs/gpu.md`. After this, the weights download becomes the dominant part of the preparation, and from then on only item 5 cuts it further.
+   [gpu-measurements.md](knowledge/gpu-measurements.md#verified-2026-09-17). After this, the weights download becomes the dominant part of the preparation, and from then on only item 5 cuts it further.
    The value depends on the number of **cold** entries: with three it is ≈$0.22, with one it is nothing.
    Since items 3 and 4 reduce the number of cold entries, this item should be done last of the six.
-7. Do not forget the price of traffic: `docs/gpu.md` records a spread from $2.6 to $52 per TB, which is from $0.07 to $1 for
+7. Do not forget the price of traffic: [gpu-measurements.md](knowledge/gpu-measurements.md#costs-and-downloads) records a spread from $2.6 to $52 per TB, which is from $0.07 to $1 for
    one download of the weights, from half to seven times the cost of the whole preparation. Compare offers by the sum
    "rate + download", as it says there.
 

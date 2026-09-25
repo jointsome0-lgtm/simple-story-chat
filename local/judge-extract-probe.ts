@@ -183,10 +183,11 @@ export function scorePairs(items: ItemResult[]): PairScore {
       overCorrection: rate(overCorrected.length, withControls.length) }, unpaired };
 }
 
-// The companion docs/eval-experiments-plan.md:210 (S5) requires of every number: what a degenerate answerer scores on
-// the very same slots. Over 266 yes/no verdicts constant "yes" scored 0.955 against the judge's 0.906, and a key whose
-// `ask` names the claim the scene must resist hands the same free points to a constant `refused`. The baseline is
-// reported beside the score so that the count is never read naked: an extractor that does not beat it measures nothing.
+// The companion docs/eval-experiments-plan.md#s5-controls (S5) requires of every number: what a degenerate answerer
+// scores on the very same slots. Over 266 yes/no verdicts constant "yes" scored 0.955 against the judge's 0.906, and
+// a key whose `ask` names the claim the scene must resist hands the same free points to a constant `refused`. The
+// baseline is reported beside the score so that the count is never read naked: an extractor that does not beat it
+// measures nothing.
 // The quote of the degenerate card is the opening of the scene — a real sentence, so `pass` is not won by the quote
 // check alone either.
 export type Baseline = { slots: number; statuses: { status: Status; keyPass: number; pass: number }[];
@@ -327,8 +328,8 @@ export type ExtractReport = {
   items: ItemResult[];
   // `passed`/`total` count the slots the judge was asked about and nothing else. A trap missing from report.json, a
   // truncated scene and, offline, a card nobody paid for are the `asked - scored` items instead of failures, as
-  // docs/eval-experiments-plan.md:216 (S6) requires of every denominator. `total` is then `baseline.slots`, so the
-  // score and the constant it has to beat are rates over the same questions.
+  // docs/eval-experiments-plan.md#s6-denominators (S6) requires of every denominator. `total` is then
+  // `baseline.slots`, so the score and the constant it has to beat are rates over the same questions.
   passed: number; total: number; scored: number; asked: number; pairs: PairScore; versus: Versus;
   // What a constant answerer scores on the same slots and scenes. A score at or below it is not a measurement.
   baseline: Baseline; agreement?: Agreement;

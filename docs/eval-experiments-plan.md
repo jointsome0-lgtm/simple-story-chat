@@ -1,5 +1,13 @@
 # Plan of experiments over prompts and memory
 
+<a id='status'></a>
+
+Status on 2026-09-25. A research plan of 2026-09-19 with its own critique in [§8](#critique), not an approved
+backlog: the loop in force is [improve-loop.md](improve-loop.md), and a step taken from here goes through it. The
+protocol of §2 is a proposal, to be read with the critique of its test and its power in
+[§8.3, K3 and K4](#critique-statistics). Its numbers belong to the scenarios, the eval and the card of that week;
+[eval-economics-proposal.md](eval-economics-proposal.md) was written beside it.
+
 2026-09-19 · Opus 5 (swarm summary) · analysis only: no code was changed, not a single paid or rate-limited request
 was made to any model, no GPU was rented. This is a research note: the numbers marked [M] were taken from local
 technical logs, which are not published.
@@ -180,6 +188,9 @@ report and runs on a subscription. There is one danger: judging without turning 
 
 ## 2. Statistical protocol of a comparison (follow it literally)
 
+A proposal of 2026-09-19, not a rule of the loop in force. [§8.3, K3 and K4](#critique-statistics) find its test
+scheme open to two readings and its power figures carried over without a recount.
+
 **S0. Before the batch, in writing, in the log.** One hypothesis in one sentence. **One primary measure** (usually
 `sceneScore`, mode `plain`) and **one primary model** (the production Gemma on the GPU). The expected direction of
 the shift. How many traps the hypothesis can physically flip: this is counted from past `report.json` files without
@@ -203,6 +214,8 @@ arms, permute the arm labels **inside the trap**, 10,000 permutations, the stati
 differences, the hypothesis is one-sided. Next to it, a cluster bootstrap over traps: a 95 % CI for the difference
 of rates. The conclusion is written as "+16 pp, CI [+8, +23], p < 0.01", not as "74 against 62".
 
+<a id='s5-controls'></a>
+
 **S5. Required companions of the number** (all are computed by code, without a judge and without a GPU):
 - contribution per trap: how many points of the difference each trap gave. This shows whether the effect rests on
   three traps or is spread out;
@@ -212,6 +225,8 @@ of rates. The conclusion is written as "+16 pp, CI [+8, +23], p < 0.01", not as 
 - `judgeYesRate` and the "always yes" baseline over the same set of questions (§1.7);
 - the share of `truncated` (a truncated scene fails all questions of the trap without a judge call,
   `scene-judge.ts:38`).
+
+<a id='s6-denominators'></a>
 
 **S6. Discard traps that were not written.** `scene-judge.ts:38` sets `pass: false` for all traps of the fixture
 that are missing from the report. With `lab.only` the denominator is inflated by phantom failures. The analyzer
@@ -308,9 +323,12 @@ runs of one scenario).
 **Effort.** M (~150 lines + a test on a synthetic matrix). **Risk.** Low. The risk is in interpretation: the test
 is valid only inside one memory run.
 **Check.** A placebo arm, or two arms with the same text under different keys: p must be uniformly distributed and
-the CI must cover zero. **There is nothing to apply it to retroactively**: there is not a single `lab/` directory
-on the machine (I checked: 45 directories `/tmp/simple-chat-memory-*`, none of them has a `lab/` subdirectory). The
-tool works only on future batches.
+the CI must cover zero. There is not a single `lab/` directory on the machine
+(I checked: 45 directories `/tmp/simple-chat-memory-*`, none of them has a `lab/` subdirectory), but in the snapshot
+recounted in [§8.1](#critique-recount) 32 mode reports held 245 trap scenes, and 29 of them held 266 verdicts: the
+repeatability of the measure, `judgeYesRate`, the share of truncations and the spread per trap could be computed from
+them. Corrected on 2026-09-25 from §8.1; the first version said that there was nothing to apply the tool to
+retroactively.
 
 ### 5. Deterministic measures of scene shape (`local/scene-shape.ts`)
 
@@ -488,7 +506,7 @@ a minute of work $0.01; a minute of idle time also $0.01; a minute of a stopped 
 5. Count the scenes in the queue. **Fewer than ≈115 scenes: the session is not justified** (the entry is more than
    half of the bill); the question is postponed and accumulated. It is good from ≈340.
 6. Put extra samples of the **base** arm at the end of the queue: this is the cheapest power there is.
-7. Choice of machine: compare offers by the sum "rate + traffic", not by the hourly price (`docs/gpu.md`: traffic
+7. Choice of machine: compare offers by the sum "rate + traffic", not by the hourly price ([gpu-measurements.md](knowledge/gpu-measurements.md#costs-and-downloads): traffic
    prices differ by a factor of 20). The network link is checked in the first minute with the existing
    `gpu/progress.sh` (it prints Mbit/s and the remainder): below ~300 Mbit/s, delete the instance and take the next
    one; the test costs ~$0.01.
@@ -638,6 +656,8 @@ buy numbers for which it is unknown whether they can be told from noise.
 
 ---
 
+<a id='critique'></a>
+
 ## 8. Criticism and open questions
 
 2026-09-19 · Opus 5 (completeness critic) · read only: no code was changed, no model was called, no GPU was rented,
@@ -647,6 +667,8 @@ not a single paid or rate-limited request. I checked the text of the plan agains
 from `logs/gpu-q6-final-*.jsonl` and against the 45 probe directories `/tmp/simple-chat-memory-*` (synthetic
 scenarios: 230 trap scenes, joined with 266 judge verdicts). The holdout pack, `data/` and `.env*` were not opened.
 Markers: **[M]** measured again by me, **[D]** derived, **[A]** assumption.
+
+<a id='critique-recount'></a>
 
 ### 8.1 What was confirmed on recount and what was not
 
@@ -717,6 +739,8 @@ D ≈ 43.6. Under this model a lost prefix costs 1.4 s, not 4.6 s. Also, the ran
 from §1.3 divides seconds of **single-stream** prefill by the **net** scene time in a five-slot batch. The honest
 wording is: **from +15 % to +55 %, [A]**. This is enough for the decision "do not mix `system` variants and `tail`
 variants", but not enough for planning the budget of a session.
+
+<a id='critique-statistics'></a>
 
 **K3. The scheme of the permutation test is not defined, and the "five traps" gate depends on it.** S4 says "the
 arm labels are permuted inside the trap", which can be read in two ways. If **whole arms** are permuted (a sign
@@ -858,7 +882,7 @@ slots, or its place is taken by a micro-batch of one trap. Now this is a guarant
    "screening + confirmation" does not fit them. Either a third session is needed, or an explicit decision that the
    holdout score runs in a separate rental.
 2. **The risk of a broken SSH tunnel is not in the register.** The only documented expensive rental failure
-   (`docs/gpu.md`, the night of 17 September: new SSH sessions hung, compactions failed) is absent from §1.9 and
+   ([gpu-measurements.md](knowledge/gpu-measurements.md#ssh-failures), the night of 17 September: new SSH sessions hung, compactions failed) is absent from §1.9 and
    §3, although a batch of 330 scenes goes through one tunnel with **two** requests per scene (`llama.ts:170`
    counts tokens with a separate POST). ★3 is the cure, but it is worded around recall and a manual stop; a
    transport break must be added to the check of ★3.

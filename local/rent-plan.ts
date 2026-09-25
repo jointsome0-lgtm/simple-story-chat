@@ -8,19 +8,21 @@
 
 // What the owner approved for the machine itself, by card count. A table, not a formula: these are the ranges the
 // owner quoted from the live list when this session was planned (one 5090 $0.44-0.53, the machine measured in
-// docs/gpu.md inside it at $0.519; two cards in one machine $0.89-0.96, which is cheaper per card than two
-// rentals), rounded up so that the top of each range and its immediate neighbours are admitted and nothing dearer
-// is. A count with no agreed rate is refused rather than guessed. One card went up to $0.65 on 2026-09-24: the only
-// offer left under $0.55 was on a host whose card another tenant was already loading.
+// docs/knowledge/gpu-measurements.md#costs-and-downloads inside it at $0.519; two cards in one machine $0.89-0.96,
+// which is cheaper per card than two rentals), rounded up so that the top of each range and its immediate neighbours
+// are admitted and nothing dearer is. A count with no agreed rate is refused rather than guessed. One card went up to
+// $0.65 on 2026-09-24: the only offer left under $0.55 was on a host whose card another tenant was already loading.
 export const MAX_DPH_BY_GPUS: Record<number, number> = { 1: 0.65, 2: 1.0 };
 // Vast bills the disk by the hour beside the machine and offers are judged on the two together, so the ceiling has
 // to carry the disk too. Otherwise growing DISK_GB quietly lowers the card price allowed: at 60 GB the old flat
 // $0.55 left room for a $0.541 card, at 150 GB the same number refuses the $0.53 top of the quoted range. The rate
 // budgeted is the one this repo has actually seen, not the $0.10 per GB per month commonly quoted: the 60 GB
-// rental in docs/gpu.md was billed $0.017 an hour for its disk, which is $0.207 per GB per month. At the cheaper
-// rate that same $0.53 card is refused again as soon as the host charges what the measured one did.
+// rental in docs/knowledge/gpu-measurements.md#costs-and-downloads was billed $0.017 an hour for its disk, which is
+// $0.207 per GB per month. At the cheaper rate that same $0.53 card is refused again as soon as the host charges what
+// the measured one did.
 const STORAGE_PER_GB_MONTH = 0.207;
-// The machine measured in docs/gpu.md ($0.519/h) is tried first when it is in the list and still fits the ceiling.
+// The machine measured in docs/knowledge/gpu-measurements.md#costs-and-downloads ($0.519/h) is tried first when it is
+// in the list and still fits the ceiling.
 const PREFERRED_HOST = 402342;
 const IMAGE = 'vastai/base-image:cuda-13.0.3-cudnn-devel-ubuntu24.04-py312-2026-09-07';
 // The host driver has to run the CUDA the image carries: a 570 driver stops at 12.8, and llama-server built by the
@@ -48,8 +50,13 @@ const QWEN_BYTES = 7256783064 + 9350798360 + 675509688;
 // each lane keeps a machine's memory to itself, and the two downloads run over two links at once. Each machine is
 // then asked for its own lane's disk and priced by its own lane's downloads. `both` is one machine for both lanes,
 // with one card or two. Of the 6 GB of wheels and packages, torch is five and belongs to the picture lane. The
-// language machine's 60 GB is the disk of the rental measured in docs/gpu.md; the picture machine's 100 GB holds
+// language machine's 60 GB is the disk of the rental measured in
+// docs/knowledge/gpu-measurements.md#costs-and-downloads; the picture machine's 100 GB holds
 // the pinned files (31.5 GB), the Qwen opt-in (17.3 GB), torch and ComfyUI (about 13 GB) and the pictures.
+// A picture machine that pulls Qwen alone needs none of the pinned files: 60 GB, like the language machine's, which
+// held more. The disk is priced by the hour, and on 2026-09-25 the cheapest 5090 in the console, $0.476, charged
+// $0.87 per GB a month for it, so its 100 GB came to $0.595.
+const QWEN_ONLY_DISK_GB = 60;
 export type Lane = 'both' | 'text' | 'pictures';
 const LANES: Record<Lane, { diskGb: number; bytes: number }> = {
   both: { diskGb: DISK_GB, bytes: TEXT_BYTES + PICTURE_BYTES + 6000000000 },
@@ -60,10 +67,13 @@ const LANES: Record<Lane, { diskGb: number; bytes: number }> = {
 // machine there can pass the speed test and still never fetch the weights. The last part of Vast's `geolocation`
 // ("Zhejiang, CN") is the country code.
 const BLOCKED_COUNTRIES = ['CN'];
-// docs/gpu.md asks for at least 32 GB of RAM for the language lane; the image lane wants its own. This is the
-// container's share, not the machine's: a container on the measured 256-core host held 30.72 cores of it. Without a
-// floor there is no guarantee that SIMPLE_CHAT_GPU_CACHE_RAM has memory to live in.
+// docs/llama-cpp.md#requirements asks for at least 32 GB of RAM for the language lane; the image lane wants its own.
+// This is the container's share, not the machine's: a container on the measured 256-core host held 30.72 cores of it.
+// Without a floor there is no guarantee that SIMPLE_CHAT_GPU_CACHE_RAM has memory to live in.
 const RAM_GB_PER_GPU = 32;
+// The picture lane has no cache to feed and loads at most Qwen's 17.3 GB. A 32 GB share can report 31.2 GB, as the
+// cheapest machines of 2026-09-25 did, which the language lane's floor refused.
+const PICTURE_RAM_GB = 30;
 // Two hours and a half: the instance life the session is billed for, not the work window. Work stops about a
 // quarter of an hour before teardown and Vast bills until the instance is deleted, so the shorter figure would
 // weight the hourly price too lightly. The hourly price is weighted by it against the one-off traffic cost when
@@ -73,7 +83,7 @@ const SESSION_HOURS = 2.5;
 // It is billed from its creation, and the guard's clock starts only once the image is pulled and the box has started,
 // which the operator allows a quarter of an hour (`destroyBy` in gpu/rent.mjs). It is billed until a destroy is read
 // back as done: "we're done" over ssh, which the runbook bounds to twenty seconds, then `destroyInstance` below, five
-// minutes at most whatever Vast answers (docs/illustrations-plan.md, "The termination").
+// minutes at most whatever Vast answers (docs/identity-experiment.md#termination).
 export const BOOT_SECONDS = 900, DESTROY_SECONDS = 300;
 const DONE_SECONDS = 20;
 // A machine without direct ports is reachable only through Vast's proxy, and on 2026-09-20 one such rental refused
@@ -94,10 +104,12 @@ export function rentPlan({ gpus = 1, lane = 'both', preferredHost = PREFERRED_HO
   // One lane is one card: a second card on a machine that runs one server is paid for and idle.
   if (lane !== 'both' && gpus !== 1) throw new Error('a machine for one lane has one card');
   if (qwenOnly && lane !== 'pictures') throw new Error('only a picture machine pulls Qwen alone');
-  const { diskGb, bytes } = LANES[lane];
+  const { bytes } = LANES[lane];
+  const diskGb = qwenOnly ? QWEN_ONLY_DISK_GB : LANES[lane].diskGb;
   const maxHour = Math.round((maxDph + STORAGE_PER_GB_MONTH * diskGb / 730) * 1000) / 1000;
   return {
-    lane, gpus, maxHour, diskGb, minRamGb: RAM_GB_PER_GPU * gpus, minDirectPorts: MIN_DIRECT_PORTS,
+    lane, gpus, maxHour, diskGb, minRamGb: lane === 'pictures' ? PICTURE_RAM_GB : RAM_GB_PER_GPU * gpus,
+    minDirectPorts: MIN_DIRECT_PORTS,
     sessionHours: hours === undefined ? SESSION_HOURS : hours + (BOOT_SECONDS + DONE_SECONDS + DESTROY_SECONDS) / 3600,
     // Qwen's files and torch's five gigabytes, the only wheels the picture lane pulls.
     sessionBytes: qwenOnly ? QWEN_BYTES + 5000000000 : bytes, image: IMAGE, preferredHost,
@@ -227,7 +239,7 @@ export function redactedBody(body: CreateBody): CreateBody {
 
 // One read of a rental by its ID (GET /api/v0/instances/ID/, gpu/rent.mjs --show and --destroy), and whether it says
 // the instance is gone. Two answers do: a 404, and a 200 whose `instances` is null. Vast documents neither for a
-// destroyed instance (docs/illustrations-plan.md, "Not verified without a card"), so everything else is `unknown`, a
+// destroyed instance (docs/identity-experiment.md#not-verified), so everything else is `unknown`, a
 // destroy never ends on it, and the operator hears that the deletion is not confirmed rather than that it is done:
 // no answer, another status, a body without `instances`, or the record of another ID. A record carries the machine's
 // address and ports as well; of it only two status words are kept, and a value that is not a plain word is dropped.
@@ -241,6 +253,27 @@ export function instanceState(id: string, status: number, body: unknown): Instan
   const word = (value: unknown) => typeof value === 'string' && /^[a-z_]{1,32}$/.test(value) ? value : null;
   const { actual_status: actual, intended_status: intended } = record as { actual_status?: unknown; intended_status?: unknown };
   return { state: 'present', status, actual: word(actual), intended: word(intended) };
+}
+
+// Where ssh reaches the instance, from the same read, so that the operator needs nothing from the console: the host
+// port Vast maps to the container's 22 on the machine's address, and Vast's proxy, which admits account keys only
+// (docs/gpu.md#ssh-access). Nothing else of the record is kept, and a part that does not look like an address and a
+// port is null.
+export type SshRoute = { direct: string | null; proxy: string | null };
+export function sshRoute(id: string, status: number, body: unknown): SshRoute {
+  const record = status === 200 && typeof body === 'object' && body !== null && 'instances' in body ? body.instances : undefined;
+  if (typeof record !== 'object' || record === null || String((record as { id?: unknown }).id) !== id) return { direct: null, proxy: null };
+  const { public_ipaddr: ip, ports, ssh_host: proxyHost, ssh_port: proxyPort } = record as Record<string, unknown>;
+  const port = (value: unknown) => {
+    const number = typeof value === 'string' && /^\d{1,5}$/.test(value) ? Number(value) : value;
+    return typeof number === 'number' && Number.isInteger(number) && number > 0 && number < 65536 ? number : null;
+  };
+  const address = typeof ip === 'string' && /^\d{1,3}(\.\d{1,3}){3}$/.test(ip.trim()) ? ip.trim() : null;
+  const mapped = typeof ports === 'object' && ports !== null ? (ports as Record<string, unknown>)['22/tcp'] : undefined;
+  const directPort = Array.isArray(mapped) ? port((mapped[0] as { HostPort?: unknown } | undefined)?.HostPort) : null;
+  const host = typeof proxyHost === 'string' && /^ssh\d{0,3}\.vast\.ai$/.test(proxyHost) ? proxyHost : null;
+  return { direct: address && directPort ? `${address}:${directPort}` : null,
+    proxy: host && port(proxyPort) ? `${host}:${port(proxyPort)}` : null };
 }
 
 // The destroy of one rental by its ID (gpu/rent.mjs --destroy), on one monotonic clock that starts before its first

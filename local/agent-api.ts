@@ -1,6 +1,6 @@
-// The agent interface (docs/agent-interface.md): plain functions over a separate agent library, shared by the CLI
-// (agent-cli.ts) and the MCP server (mcp.ts). It never opens the bot's database. No package import here, so `npm test`
-// runs it without `npm install`.
+// The agent interface (docs/agent-interface.md#the-contract): plain functions over a separate agent library, shared
+// by the CLI (agent-cli.ts) and the MCP server (mcp.ts). It never opens the bot's database. No package import here,
+// so `npm test` runs it without `npm install`.
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync } from 'node:fs';

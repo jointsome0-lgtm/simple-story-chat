@@ -52,12 +52,13 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   'estimateTokens',
   // Which run of local/prepare.ts a row belongs to, counted from the start of the process.
   'prepareRun',
-  // One illustrated scene (docs/illustrations-plan.md): the description call, then the image server from submit to
+  // One illustrated scene (docs/gpu.md#bot-log): the description call, then the image server from submit to
   // file, and what the reader waits from the end of the scene to the picture. The seed stays out: it is drawn from
   // 0..2^64-1 and is not a safe integer, and so do the prompt, the description and the file name, which are the
   // reader's scene in another form.
-  // `pictureSeconds` is the same wait as `pictureAfterSceneMs`, rounded: the plan asks for the seconds from the end
-  // of the scene to the picture as a non-negative integer, and that is the number a reader's patience is read in.
+  // `pictureSeconds` is the same wait as `pictureAfterSceneMs`, rounded:
+  // docs/illustrations-plan.md#reader-experience-history asks for the seconds from the end of the scene to the
+  // picture as a non-negative integer, and that is the number a reader's patience is read in.
   // The three counts of the description are all anybody can see of it: how many people the story's character sheet
   // holds (one for a whole story is almost certainly a wrong sheet), how many names the assembly had to cut out of
   // a field the instruction forbids them in, and how many people reached the prompt with no appearance at all.

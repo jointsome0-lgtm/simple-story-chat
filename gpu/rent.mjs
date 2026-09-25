@@ -1,10 +1,11 @@
 // Rents one machine with RTX 5090s -- one card by default, `--gpus 2` for the session that runs the language lane
 // and the image lane side by side -- at or below the price the owner approved for that many cards, preferring host
-// 402342 (the machine measured in docs/gpu.md, $0.519/h). Vast re-issues offer ids every few minutes, so a price
-// agreed from a list goes stale before it can be taken: the offers are looked up live and the candidates tried in
-// order until one is actually taken. Run it with SIMPLE_CHAT_RENT_DRY_RUN=1 or --print-body first -- that names the
-// offers it would take, at their present prices, and the exact request that takes one, which is what the owner is
-// agreeing to, and it spends nothing. Renting is theirs to approve; this script only carries it out.
+// 402342 (the machine measured in docs/knowledge/gpu-measurements.md#costs-and-downloads, $0.519/h). Vast re-issues
+// offer ids every few minutes, so a price agreed from a list goes stale before it can be taken: the offers are looked
+// up live and the candidates tried in order until one is actually taken. Run it with SIMPLE_CHAT_RENT_DRY_RUN=1 or
+// --print-body first -- that names the offers it would take, at their present prices, and the exact request that
+// takes one, which is what the owner is agreeing to, and it spends nothing. Renting is theirs to approve; this script
+// only carries it out.
 // `--show ID` and `--destroy ID` are the other end of a rental, below. The API key, the public key and the onstart
 // script are never printed.
 //
@@ -14,7 +15,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BOOT_SECONDS, MAX_DPH_BY_GPUS, REQUEST_MS, chooseOffers, createBody, destroyInstance, emptyReason, instanceState,
-  offerQuery, redactedBody, rentPlan } from '../local/rent-plan.ts';
+  offerQuery, redactedBody, rentPlan, sshRoute } from '../local/rent-plan.ts';
 
 const ATTEMPTS = 4;
 // Every request carries a deadline. A search that never answers would hang with the owner watching; a create
@@ -29,7 +30,7 @@ const dryRun = process.env.SIMPLE_CHAT_RENT_DRY_RUN === '1';
 
 // `--show ID` and `--destroy ID` reach one rental with the account's key and nothing on the machine: not its ssh, not
 // the key Vast gave the container, not its guard (trial-onstart.sh), any of which may be what failed. They end every
-// rental of the identity runbook (docs/illustrations-plan.md, "The termination"). Nothing picks an instance by
+// rental of the identity runbook (docs/identity-experiment.md#termination). Nothing picks an instance by
 // itself: the ID is always given, the one `rented` printed. `--show` reads it once. `--destroy` keeps to five minutes
 // on its own clock, whatever Vast answers: the guard's minute of reads, then deletes with the account's key until a
 // read says the instance is gone (`destroyInstance`, which keeps the time; this file only fetches). So a key that may
@@ -58,9 +59,12 @@ if (args[0] === '--show' || args[0] === '--destroy') {
     const { status, body } = await ask('DELETE', ms);
     return { status, success: typeof body?.success === 'boolean' ? body.success : null };
   };
+  // `--show` adds where ssh reaches the instance (`sshRoute`): an address and a port, nothing else of the record.
   if (mode === '--show' || dryRun) {
-    const seen = await read(REQUEST_MS);
-    console.log(JSON.stringify({ event: mode === '--show' ? 'instance' : 'would_destroy', instance: id, ...seen }));
+    const { status, body } = await ask('GET', REQUEST_MS);
+    const seen = instanceState(id, status, body);
+    console.log(JSON.stringify({ event: mode === '--show' ? 'instance' : 'would_destroy', instance: id, ...seen,
+      ...(mode === '--show' ? { ssh: sshRoute(id, status, body) } : {}) }));
     process.exit(seen.state === 'unknown' ? 1 : 0);
   }
   const end = await destroyInstance({ read, remove, now: () => performance.now(), sleep: ms => new Promise(done => setTimeout(done, ms)),
@@ -80,9 +84,9 @@ const rest = args.filter(argument => argument !== '--print-body');
 // A replacement names two: the host it replaces and the other lane's. On 2026-09-23 the measured text host drew
 // 525 W on a card our idle server did not touch, and with one ID the next in line was the picture machine's host.
 // `--hours 1|2|3` is when trial-onstart.sh's guard deletes the machine, three hours unless a session asks for less;
-// the guard never extends it, and ends it sooner when told to (docs/illustrations-plan.md, "we're done"). A session
-// that gives its hours is priced by them (`rentPlan`), and `--qwen only` prices a picture machine by Qwen's files
-// alone, which is what SIMPLE_CHAT_IMAGE_QWEN=only pulls.
+// the guard never extends it, and ends it sooner when told to (docs/identity-experiment.md#termination,
+// "we're done"). A session that gives its hours is priced by them (`rentPlan`), and `--qwen only` prices a picture
+// machine by Qwen's files alone, which is what SIMPLE_CHAT_IMAGE_QWEN=only pulls.
 const options = { '--gpus': '1', '--lane': 'both', '--avoid-host': '', '--hours': '', '--qwen': '' };
 let known = rest.length % 2 === 0;
 for (let at = 0; known && at < rest.length; at += 2) {
@@ -198,7 +202,7 @@ for (const offer of candidates.slice(0, ATTEMPTS)) {
   const rented = status >= 200 && status < 300 && parsed?.success !== false && parsed?.new_contract;
   // `destroyBy` is the operator's own deadline on this machine's clock, in epoch seconds, counted from just before the
   // request that created the machine: the guard's hours and the quarter of an hour allowed for the box to start.
-  // Whatever the box says, the rental's termination begins then at the latest (docs/illustrations-plan.md, "One hour").
+  // Whatever the box says, the rental's termination begins then at the latest (docs/identity-experiment.md#one-hour).
   if (rented) {
     console.log(JSON.stringify({ event: 'rented', ...machine, instance: parsed.new_contract, reason: null,
       destroyBy: Math.floor(asked / 1000) + hours * 3600 + BOOT_SECONDS }));

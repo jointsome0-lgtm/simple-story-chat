@@ -630,7 +630,8 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         try { store.sweepPortraits(userId); } catch (error) { log('portraits_unswept', fileErrorCode(error)); }
       }
       if (plan.gpuAction) {
-        // simple-serving starts and sleeps its own card, so there is nothing here to start (docs/model-providers.md).
+        // simple-serving starts and sleeps its own card, so there is nothing here to start
+        // (docs/model-providers.md#simple-serving-our-gateway).
         const notices = texts(store.read(userId).language).notices;
         if (!gpu) await safeSend(chat, { text: providerName === 'simple-serving' ? notices.modelServiceSeparate : notices.gpuNotConfigured }, log);
         else {
