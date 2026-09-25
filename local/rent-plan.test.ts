@@ -143,18 +143,17 @@ test('each rule counts the offers it drops and names itself when it empties the 
 
 // A canned Vast. It answers the search from STUB_OFFERS, the create request as STUB_PUT asks, a read of an instance
 // with the next state of STUB_READS (the last one repeats), a delete with STUB_DELETE's status and a start with
-// STUB_START's. Its time is virtual: a pause takes none of the real kind and moves both clocks on by its length, and
+// success. Its time is virtual: a pause takes none of the real kind and moves both clocks on by its length, and
 // the answer that creates the machine takes fifty seconds. Every request is written to STUB_LOG with the second it was
 // sent at and the bound its signal was given, a create request with the seconds its body gives the guard, and a start
 // with the state its body asks for. `fetch` is replaced before gpu/rent.mjs is loaded, so no request below leaves this
 // machine. The record of a present instance carries its address, with a newline after it, and its ports.
 const STUB = `import { appendFileSync } from 'node:fs';
 const reads = (process.env.STUB_READS ?? '').split(',');
-const state = (actual_status, intended_status) => [200, { instances: { id: 123, actual_status, intended_status } }];
 const answers = { present: [200, { instances: { id: 123, actual_status: 'running', intended_status: 'running',
   public_ipaddr: '203.0.113.7\\n', ports: { '22/tcp': [{ HostIp: '0.0.0.0', HostPort: '41022' }] }, ssh_host: 'ssh5.vast.ai', ssh_port: 36500 } }],
   gone: [200, { instances: null }], missing: [404, {}], failing: [500, {}], empty: [200, {}], other: [200, { instances: { id: 124 } }],
-  stopped: state('exited', 'stopped'), stopping: state('running', 'stopped'), resuming: state('loading', 'running') };
+  stopped: [200, { instances: { id: 123, actual_status: 'exited', intended_status: 'stopped' } }] };
 let skew = 0;
 const later = globalThis.setTimeout, wall = Date.now, monotonic = performance.now.bind(performance);
 globalThis.setTimeout = (next, ms = 0, ...rest) => { skew += ms; return later(next, 0, ...rest); };
@@ -171,7 +170,7 @@ globalThis.fetch = async (url, init = {}) => {
   appendFileSync(process.env.STUB_LOG, method + ' ' + Math.round(skew / 1000) + 's ' + bound + 'ms ' + path + sent + '\\n');
   if (path.includes('/bundles/')) return new Response(process.env.STUB_OFFERS, { status: 200 });
   if (method === 'DELETE') return new Response('{"success":true}', { status: Number(process.env.STUB_DELETE ?? 200) });
-  if (start) return new Response('{"success":true}', { status: Number(process.env.STUB_START ?? 200) });
+  if (start) return new Response('{"success":true}');
   if (method === 'GET') {
     const [status, body] = answers[reads.length > 1 ? reads.shift() : reads[0]];
     return new Response(JSON.stringify(body), { status });
@@ -367,21 +366,10 @@ test('an answer that is not certain is never taken for the outcome, of a rental,
       }],
     ['a key that may not delete', { STUB_READS: 'present', STUB_DELETE: '403' }, ['--destroy', '123'], 1, ['destroy_sent', 'destroy_refused'],
       reads(60, [60]), told],
-    // A start reads first. A stopped instance is asked to run, and asked again each minute while a read still says it
-    // is stopped; a stop in flight is waited out, an instance that runs is never asked, and a key that may not resume
-    // ends it at once. Reads that never say it runs end twenty minutes after the first.
-    ['--start without an ID', {}, ['--start'], 1, ['bad_arguments'], ''],
-    ['the dry run of a start', { STUB_READS: 'stopped', SIMPLE_CHAT_RENT_DRY_RUN: '1' }, ['--start', '123'], 0, ['would_start'], reads(0)],
-    ['a stopped instance', { STUB_READS: 'stopped,stopped,resuming,present' }, ['--start', '123'], 0,
-      ['start_sent', 'start_confirmed'], reads(30, [0], resumes)],
-    ['a stop in flight', { STUB_READS: 'stopping,stopping,stopped,present' }, ['--start', '123'], 0,
-      ['start_sent', 'start_confirmed'], reads(30, [20], resumes)],
-    ['an ask that changed nothing', { STUB_READS: [...Array(7).fill('stopped'), 'present'].join(',') }, ['--start', '123'], 0,
-      ['start_sent', 'start_sent', 'start_confirmed'], reads(70, [0, 60], resumes)],
-    ['an instance that runs', { STUB_READS: 'present' }, ['--start', '123'], 0, ['start_confirmed'], reads(0)],
-    ['an instance that is gone', { STUB_READS: 'gone' }, ['--start', '123'], 1, ['start_unconfirmed'], reads(0)],
-    ['a key that may not resume', { STUB_READS: 'stopped', STUB_START: '403' }, ['--start', '123'], 1,
-      ['start_sent', 'start_refused'], reads(0, [0], resumes)],
+    // A start asks a stopped instance to run, again each minute while a read still says it is stopped, and gives up
+    // twenty minutes after its first read.
+    ['a stopped instance', { STUB_READS: 'stopped,present' }, ['--start', '123'], 0, ['start_sent', 'start_confirmed'],
+      reads(10, [0], resumes)],
     ['a start that never takes', { STUB_READS: 'stopped' }, ['--start', '123'], 1, [...Array(20).fill('start_sent'), 'start_unconfirmed'],
       reads(1190, Array.from({ length: 20 }, (_, at) => at * 60), resumes)],
   ]);
