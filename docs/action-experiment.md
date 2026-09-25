@@ -314,9 +314,11 @@ recipe: no arm compares sizes, and none is compared with the identity run.
 
 <a id='picture-smoke'></a>
 
-**The smoke** is the scene with the most bound people among those that need at least one view, at seed 7: its
-portraits, its views and its six arms. Its cells are the main run's cells of that scene and seed, drawn once. It
-passes when all of these hold:
+**The smoke** is the scene with the most bound people, the first in the set's order on a tie, at seed 7: its
+portraits, its views and its six arms. It therefore sends the most references any C, V or T of the run will send. If
+its frame needs no view, the smoke also draws the first view another scene needs, so that views are timed, and the
+main run keeps that view as drawn; if no scene needs one, V is never drawn and gate 4 is inconclusive. Its cells are
+the main run's cells of that scene and seed, drawn once. It passes when all of these hold:
 
 - every cell is drawn and none failed;
 - the geometry is right: frames 1280x704, fronts 720x1280, views 704x1280, and the scaled references, saved by the
@@ -374,17 +376,20 @@ hypothesis or a threshold. Four kinds of session work on each scene.
 1. **The checklist**, from the narrator's action scene, its target and the sheet, after the text run and before any
    picture exists. It lists:
    - the participants, each with a short handle and the sheet entry that is them, if any;
-   - the relations of the moment the scene ends in, each with one subject, one verb and one object, and the
-     body part and its side only where the scene gives them. A side the scene does not give is never made up, a
-     contact both ways is one relation, and each relation is marked essential or not. The essential ones are the
-     contacts the main action is made of, at least one per scene. Each carries a short quote from the scene;
+   - the relations of the moment the scene ends in, each with one subject, one verb and one object, and the body part
+     and its side only where the scene gives them. A side the scene does not give is never made up, a contact both
+     ways is one relation, and each relation is marked essential or not. The essential ones are the contacts the main
+     action is made of; a scene whose text shows none lists none, rather than make one up. Each carries a short quote
+     from the scene;
    - the gazes and faces the scene names, the clothes it names for the moment, and the scale where it is a premise;
    - whether the scene reached its target (see [the set](#the-set)), and where the sheet's line for a person
      contradicts the scene.
 
    Code takes the checklist out, gives every item an id of its own, and stores it; no later session changes it. The
    checklist's words, its handles, relations and quotes, stay with its story, under `sealed/` for a sharp one. What
-   the scoring reads is its projection: the ids, the kind of each item, and which relations are essential.
+   the scoring reads is its projection: the ids, the kind of each item, which relations are essential, which
+   participant is which sheet entry and so which portrait, and whether the scene reached its target. Only that
+   projection leaves a sharp story, never the checklist's own answers block.
 2. **The text and the portraits**, after the card: the checklist, the sheet, the prompts of A and A+, the front
    portraits, and each view beside its front with the direction it was asked for. It says which relations, gazes and
    clothes each of the two prompts states; whether each bound person's `facing` fits the moment and the shot; whether
@@ -460,13 +465,16 @@ have, which is 17% of them. "No more mix-ups" counts the pictures with a mix-up 
 - Gates 1, 2, 3 and 5 read the seed-7 scenes where every arm they compare is scored. Each is **inconclusive** when
   fewer than 14 of the 18, or fewer than 10 of the 13 clean ones, are left.
 - Gate 4 reads the matched scenes where V was drawn, and its only minimum is 6 of them.
-- Each clause counts the gate's matched scenes where its score applies. A gain, a clause that asks for more
-  contacts or more identity, needs at least 6 of them, or its gate is inconclusive. A safeguard, a clause that asks
-  for no loss, such as no lower scale, counts whatever scenes it has; with none it is `not_applicable` and does not
-  stop a pass, and the report says so.
+- Each clause counts the gate's matched scenes where its score applies. A gain, a clause that asks for more contacts
+  or more identity, needs at least 6 of them, or its gate is inconclusive. Gate 4's two gains are alternatives, each
+  with its own safeguard: the gate passes when a branch whose gain has 6 scenes passes and the shared clauses hold,
+  fails when a shared clause fails or both branches have 6 scenes and fail, and is inconclusive otherwise. A
+  safeguard, a clause that asks for no loss, such as no lower scale, counts whatever scenes it has; with none it is
+  `not_applicable` and does not stop a pass, and the report says so.
 - The sharp scenes count in every gate as part of the 18. Their own numbers are descriptive, and nothing is claimed
   of the sharp scenes alone.
-- An arm that passes must also have a contacts score of at least 50%, the mean over scenes, whatever its gain.
+- An arm that passes must also have a contacts score of at least 50%, the mean over scenes, whatever its gain; with no
+  scene to count it in, the gate is inconclusive.
 
 1. **The variant text.** A+ passes against A when its contacts are at least 10 points higher, and it has at least as
    many pictures with all contacts and with every participant, no more mix-ups, at most n/10 more anatomy errors, and
@@ -523,23 +531,23 @@ Where every piece of a sharp story lives, and what leaves it:
 - `codex exec` runs with `--ephemeral`, so it keeps no session file of its own, in a working directory inside the
   sealed bundle and with `TMPDIR` in `sealed/tmp`.
 - For a sharp story the harness prints its id, `sharp-1` to `sharp-5`, codes from a fixed list, counts and times. An
-  error prints its code and the fields that pass `safeErrorDetails`, never a message or a body. The card's copy of
-  each picture job is deleted after the picture, as `local/image-batch.ts` does.
+  error prints its code and the fields that pass `safeErrorDetails`, never a message or a body. After each picture the
+  card's record of the job is deleted, as `local/image-batch.ts` does. The file the graph saved stays on the card,
+  with its prompt in its text chunks, until the card is destroyed and read back as gone; nothing reads it there but
+  the harness's download. No Claude session reads a card's files or logs while a sharp story is on it.
 - What leaves `sealed/` is the validated answers, ids and enum values, and the counts made from them.
-- Before the text run the owner adds that path to the denies of `.claude/settings.json`, which only the owner edits.
+- The owner added that path to the denies of `.claude/settings.json` on 2026-09-25; only the owner edits that file.
   A deny covers the file tools and not a subprocess, so no Claude session runs a command that reads there: the harness
   is the only reader.
 
 **The boundary test**, before any card: the dry run puts a made-up word into a sharp seed, into the fake model's
 replies, into the body of a fake provider error, into the metadata of the fake ComfyUI's pictures, into a fake judge's
 prose and into a malformed answers block. Code then searches every file the run wrote outside `sealed/`, the temporary
-directory, and the harness's own stdout and stderr, for that word. A stripped picture carries no word, so the test
-also lists every file the run wrote: each one outside `sealed/` must be one of the harness's clean outputs, and none
-may have the hash of a sealed picture, raw or stripped. One hit fails the test. Before the first card, the real judge
-launcher runs once on a synthetic bundle marked sealed, with the made-up word and a fake picture, in one real
-`gpt-6-astra` session, and the same checks cover `~/.codex`, the temporary directory and the repository outside
-`sealed/`. On the text card, before the five sharp seeds are asked for, one synthetic story marked sealed, with a
-made-up name in its seed, goes through the sealed path, and the same search runs; a hit stops the sharp stories.
+directory, and the harness's own stdout and stderr, for that word. One hit fails the test. What `codex exec` keeps in
+its own files is not checked: the owner decided on 2026-09-25 that the judges read and keep what they are given
+without limits, and no Claude session opens `~/.codex`. On the text card, before the five sharp seeds are asked for,
+one synthetic story marked sealed, with a made-up name in its seed, goes through the sealed path, and the same search
+runs; a hit stops the sharp stories.
 
 ## The rentals
 
@@ -552,8 +560,10 @@ flow against scripted fakes of the adapter and against simple-serving's dev laun
    rules and the trial guard of its contract, which deletes it three hours after its first start. The operator reads
    the guard's deadline before the stop and after the resume, and it must not change; the owner's deadline for the
    first attempt is chosen apart, before the creation. The operator watches the card from its creation. The gateway's
-   smoke comes first, then the marker check, then the text run, and then the card is deleted with `--destroy` and read
-   back as gone. The gateway's stop is not an end: a stopped trial keeps its disk, and its guard does not run.
+   smoke comes first, with its privacy check (its contract's section 15, step 2: a synthetic marker shows up in no log
+   of the engine, the proxy or the gateway), then the marker check of the sealed path, then the text run, and then the
+   card is deleted with `--destroy` and read back as gone. The gateway's stop is not an end: a stopped trial keeps its
+   disk, and its guard does not run.
 2. **The checklists** are written between the two cards, from the texts alone.
 3. **The picture card** is a 5090 from `npm run gpu:rent -- --lane pictures --qwen only --hours 3`. It is rented only
    when every prompt is assembled and counted and every checklist is stored, and it ends as the identity run's card
