@@ -1,17 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { Job, Library, SceneNode } from '../lib/library.ts';
+import { addSeed, emptyLibrary } from '../lib/library.ts';
 import { contextStats } from './context.ts';
 import { renderCompaction } from './compact-view.ts';
 import type { CompactionStatus } from './compact-view.ts';
 import type { GpuStatus } from './gpu.ts';
-import { personTag } from './picture.ts';
-import { OWN_STYLES_MAX, PRESETS } from './picture-style.ts';
+import { LOOK_CHARS, personTag } from './picture.ts';
+import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX, PRESETS, PROMPT_CHARS } from './picture-style.ts';
 import type { Screen } from './telegram.ts';
-import { REGISTERED, commandSets, langFromTelegram, texts } from './text.ts';
+import { LANGS, LANGUAGE_BUTTON, REGISTERED, commandSets, langFromTelegram, texts } from './text.ts';
 import type { Lang } from './text.ts';
 import type { RenderDetails } from './ui.ts';
 import { LIMIT, render, renderContext, scenePrefix, sceneKeyboard } from './ui.ts';
+
+const CYRILLIC = /[Ѐ-ӿ]/;
 
 // Every callback the bot acts on (local/bot.ts); it answers any other as a stale button.
 const ACTION = /^(view:.+|new-seed|save-seed:[^:]+|start:[^:]+|use:[^:]+:[^:]+|fork:[^:]+:[^:]+|remove-seed:[^:]+|remove-branch:[^:]+:[^:]+|continue|cancel|last|compact|gpu:start|gpu:pause|lang:[a-z]{2}|style:[a-z0-9]+|style-new|style-edit:y\d+|remove-style:y\d+|style-sample:[a-z0-9]+|style-samples|look-edit:[^:]+:\d+:[0-9a-f]{8}|portrait:[^:]+:\d+:[0-9a-f]{8}|portrait-keep:[0-9a-f]+)$/;
@@ -205,8 +208,10 @@ const PATHS: [string, string[], RegExp?][] = [
 for (const lang of [undefined, ...REGISTERED]) {
   test(`every screen in ${lang ?? 'a library without a language'} is a valid payload`, () => {
     const t = texts(lang);
-    // A library from before the language choice belongs to a Russian-speaking reader.
+    // A library from before the language choice belongs to a Russian-speaking reader, and so does anything that is no
+    // language, a name every object has included.
     assert.equal(t, texts(lang ?? 'ru'));
+    if (!lang) for (const odd of [null, 7, 'xx', 'constructor']) assert.equal(texts(odd), t, String(odd));
     // A first contact from a Telegram app in this language, its region written either way, gets it; one with no code,
     // or in a language without a catalog, gets English.
     const codes = lang ? [lang, lang.toUpperCase(), `${lang}-XX`, `${lang}_xx`] : [undefined, '', 'rue', 'uk', 'de-DE'];
@@ -234,14 +239,39 @@ for (const lang of [undefined, ...REGISTERED]) {
     }
     // Without pictures the menu leads to neither styles nor characters.
     assert.ok(!callbacks(render(library(lang), 'home')).some(data => /^view:(style|characters)/.test(data)), 'a menu without pictures');
+    // The picker lists the registered languages by their own names and marks the one shown; the way to it reads the
+    // same in every language, so that a reader in a wrong one still finds it.
+    const buttons = (route: string) => render(library(lang), route).reply_markup!.inline_keyboard.flat().map(button => [button.callback_data, button.text]);
+    assert.deepEqual(buttons('language').filter(([data]) => data.startsWith('lang:')), REGISTERED.map(code => [`lang:${code}`, `${code === (lang ?? 'ru') ? '✅ ' : ''}${LANGS[code]}`]));
+    assert.ok(buttons('home').some(([data, text]) => data === 'view:language' && text === LANGUAGE_BUTTON), 'the way to the picker');
+    // An English reader reads no Russian, apart from the name of Russian in the picker.
+    if (lang === 'en') for (const [name, screen] of all) {
+      assert.doesNotMatch(screen.text, CYRILLIC, name);
+      for (const button of screen.reply_markup?.inline_keyboard.flat() ?? []) if (button.callback_data !== 'lang:ru') assert.doesNotMatch(button.text, CYRILLIC, name);
+    }
+    // The texts name the limits the code keeps, and an example works once copied.
+    for (const [text, limits] of [[t.errors.styleTooLong, [OWN_STYLE_CHARS]], [t.errors.stylesFull, [OWN_STYLES_MAX]],
+      [t.pictureStyle.inputNote(OWN_STYLE_CHARS, OWN_NAME_CHARS), [OWN_STYLE_CHARS, OWN_NAME_CHARS]], [t.pictureStyle.editNote(OWN_STYLE_CHARS), [OWN_STYLE_CHARS]],
+      [t.errors.promptTooLong, [PROMPT_CHARS]], [t.variant.note(PROMPT_CHARS), [PROMPT_CHARS]], [t.errors.lookTooLong, [LOOK_CHARS]],
+      [t.characters.editNote(LOOK_CHARS), [LOOK_CHARS]]] as const) for (const limit of limits) assert.match(text, new RegExp(`\\b${limit}\\b`), text);
+    const [name, line, ...rest] = t.pictureStyle.exampleText.split('\n');
+    assert.ok(name && [...name].length <= OWN_NAME_CHARS && line && [...line].length <= OWN_STYLE_CHARS && !rest.length && !/[^\x20-\x7e]/.test(line), 'the example style');
+    assert.doesNotThrow(() => addSeed(emptyLibrary(), t.newSeed.example), 'the example seed');
+    // The scene header goes out as Markdown, so none of its own words may be Markdown.
+    for (const text of [t.scenePrefix.context(12, true), t.scenePrefix.contextBelowOne(true), ...Object.values(t.model.providers).map(provider => provider.short)]) {
+      assert.doesNotMatch(text, /[_*`[\]()~>#+=|{}.!\\-]/, text);
+    }
 
-    // The command menu in this language fits Telegram's limits; GPU commands come only with a GPU, /style only with pictures.
+    // The command menu in this language fits Telegram's limits, and only the Russian one is in Russian; GPU commands come
+    // only with a GPU, /style only with pictures.
     assert.deepEqual(commandSets(false).map(set => set.language_code), [undefined, ...REGISTERED]);
     for (const [gpu, pictures] of [[false, false], [true, false], [false, true]]) {
       const sets = commandSets(gpu, pictures);
       const { commands } = sets.find(set => set.language_code === lang)!;
       if (!lang) assert.deepEqual(commands, sets.find(set => set.language_code === 'en')!.commands, 'the default list is English');
-      for (const { command, description } of commands) assert.ok(/^[a-z_]{1,32}$/.test(command) && description.length >= 1 && description.length <= 256, `/${command}`);
+      for (const { command, description } of commands) {
+        assert.ok(/^[a-z_]{1,32}$/.test(command) && description.length >= 1 && description.length <= 256 && (lang === 'ru' || !CYRILLIC.test(description)), `/${command}`);
+      }
       assert.deepEqual(commands.map(item => item.command).filter(command => /^(language|style|gpu_\w+)$/.test(command)),
         ['language', ...pictures ? ['style'] : [], ...gpu ? ['gpu_pause', 'gpu_start'] : []], `gpu ${gpu}, pictures ${pictures}`);
     }
