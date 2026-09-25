@@ -265,9 +265,9 @@ for (const lang of [undefined, ...REGISTERED]) {
     }
 
     // The command menu in this language fits Telegram's limits, and only the Russian one is in Russian; GPU commands come
-    // only with a GPU, /style only with pictures.
+    // only with a GPU, /style only with pictures, which a caller that does not say has none of.
     assert.deepEqual(commandSets(false).map(set => set.language_code), [undefined, ...REGISTERED]);
-    for (const [gpu, pictures] of [[false, false], [true, false], [false, true]]) {
+    for (const [gpu, pictures] of [[false, undefined], [true, false], [false, true]] as const) {
       const sets = commandSets(gpu, pictures);
       const { commands } = sets.find(set => set.language_code === lang)!;
       if (!lang) assert.deepEqual(commands, sets.find(set => set.language_code === 'en')!.commands, 'the default list is English');
