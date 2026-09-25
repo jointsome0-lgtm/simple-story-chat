@@ -176,7 +176,7 @@ test('manual pause drains all users and refuses new jobs without interrupting ex
   }],
   ['other work, which neither wakes a paused card nor takes back a pause', async (f, label) => {
     const work = f.gpu.keepAwake();
-    f.gpu.pause();
+    f.gpu.pause(); assert.equal(f.status(), 'draining', label);
     // Work that begins while the pause waits leaves the pause in place, and the pause waits for it too.
     const more = f.gpu.keepAwake();
     await f.tick(); assert.deepEqual([f.status(), f.gpu.snapshot().canPause, f.writes], ['draining', false, []], label);
