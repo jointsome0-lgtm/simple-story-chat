@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { emptyGold, loadGold, saveGold, pathOf, trunk, addNode, agree, trunkTasks, renderGold, noteLater, stats, noteSeen, promote, pathText } from './walk-gold.ts';
+import { emptyGold, loadGold, saveGold, pathOf, trunk, addNode, agree, trunkTasks, renderGold, noteLater, stats, noteSeen, promote, pathText, goldPaths } from './walk-gold.ts';
 
 const node = (parent: string | null, depth: number, step: string, text: string) => ({ parent, depth, step, input: step || 'Продолжай.', text, author: 'x', attempts: 1,
   approved: { at: 't', judges: ['a', 'b', 'c', 'd'], dissent: 0 }, read: false });
@@ -36,6 +36,9 @@ test('a gold tree keeps its seed hash, grows by ids, and gives a node its path f
   assert.equal(Object.keys(loadGold(path, 'w', walk.seed).nodes).length, 3);
   assert.throws(() => loadGold(path, 'w', 'Сид\n2026-01-01 10:00\nДругой мир.'), /does not match/);
   assert.equal(Object.keys(loadGold(join(path, '..', 'none.json'), 'w', 'x').nodes).length, 0);
+  // Next to a built-in walk, or in the scenario's own directory of a pack, so two scenarios never share a gold.
+  assert.deepEqual(goldPaths('/r', 'w'), { tree: '/r/examples/walk/w.gold.json', story: '/r/examples/walk/w.gold.md' });
+  assert.deepEqual(goldPaths('/r', 'w', '/p'), { tree: '/p/w/gold.json', story: '/p/w/gold.md' });
 });
 
 test('a candidate becomes gold by its ledger: agreed rechecks, enough deeper scenes over it, no standing later finding, no audit issue', () => {
