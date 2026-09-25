@@ -181,9 +181,9 @@ is a clean place to start.
 
 SSH protects the data in transit. The administrator of the rented host still controls the machine on which the prompt is processed; take this into account when you choose a place for personal stories.
 
-Adult content never goes to a hosted API. The owner's one exception, for judging pictures drawn on the rented card,
-is narrow and written out in [improve-loop.md](improve-loop.md#acceptance-on-gpu); read it before sending any picture
-to a hosted model. Consent to a hosted text connection for the bot is in
+Adult content never goes to a hosted API. The owner's two exceptions, both for judging pictures drawn on the rented
+card, are narrow and written out in [improve-loop.md](improve-loop.md#acceptance-on-gpu); read them before sending
+any picture or sharp text to a hosted model. Consent to a hosted text connection for the bot is in
 [model-providers.md](model-providers.md#consent-to-a-hosted-connection-for-the-bot).
 
 ## Bot log

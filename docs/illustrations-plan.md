@@ -622,9 +622,9 @@ These rules already hold in the code and in the pages named; this section only c
   reason Qwen's text-to-image frame is 1280x720 like Krea's ([above](#qwen-choice)).
 - Only synthetic scenes are drawn for a review, never a reader's story (`local/blind-review.ts`,
   `local/image-batch.ts`).
-- Adult content never goes to a hosted API. The owner's one exception, for judging pictures drawn on the rented
-  card, is written out in [improve-loop.md](improve-loop.md#acceptance-on-gpu); read it before a picture goes to a
-  hosted model.
+- Adult content never goes to a hosted API. The owner's two exceptions, both for judging pictures drawn on the
+  rented card, are written out in [improve-loop.md](improve-loop.md#acceptance-on-gpu); read them before a picture
+  or a sharp text goes to a hosted model.
 
 From step 2 on, a fresh GPT-6 session read each step's pictures; each step says what it was asked.
 The identity measurement builds bundles of its own and decides by its gates:
