@@ -14,7 +14,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BOOT_SECONDS, MAX_DPH_BY_GPUS, REQUEST_MS, chooseOffers, createBody, destroyInstance, emptyReason, instanceState,
-  offerQuery, redactedBody, rentPlan } from '../local/rent-plan.ts';
+  offerQuery, redactedBody, rentPlan, sshRoute } from '../local/rent-plan.ts';
 
 const ATTEMPTS = 4;
 // Every request carries a deadline. A search that never answers would hang with the owner watching; a create
@@ -58,9 +58,12 @@ if (args[0] === '--show' || args[0] === '--destroy') {
     const { status, body } = await ask('DELETE', ms);
     return { status, success: typeof body?.success === 'boolean' ? body.success : null };
   };
+  // `--show` adds where ssh reaches the instance (`sshRoute`): an address and a port, nothing else of the record.
   if (mode === '--show' || dryRun) {
-    const seen = await read(REQUEST_MS);
-    console.log(JSON.stringify({ event: mode === '--show' ? 'instance' : 'would_destroy', instance: id, ...seen }));
+    const { status, body } = await ask('GET', REQUEST_MS);
+    const seen = instanceState(id, status, body);
+    console.log(JSON.stringify({ event: mode === '--show' ? 'instance' : 'would_destroy', instance: id, ...seen,
+      ...(mode === '--show' ? { ssh: sshRoute(id, status, body) } : {}) }));
     process.exit(seen.state === 'unknown' ? 1 : 0);
   }
   const end = await destroyInstance({ read, remove, now: () => performance.now(), sleep: ms => new Promise(done => setTimeout(done, ms)),

@@ -252,6 +252,26 @@ export function instanceState(id: string, status: number, body: unknown): Instan
   return { state: 'present', status, actual: word(actual), intended: word(intended) };
 }
 
+// Where ssh reaches the instance, from the same read, so that the operator needs nothing from the console: the host
+// port Vast maps to the container's 22 on the machine's address, and Vast's proxy, which admits account keys only
+// (docs/gpu.md). Nothing else of the record is kept, and a part that does not look like an address and a port is null.
+export type SshRoute = { direct: string | null; proxy: string | null };
+export function sshRoute(id: string, status: number, body: unknown): SshRoute {
+  const record = status === 200 && typeof body === 'object' && body !== null && 'instances' in body ? body.instances : undefined;
+  if (typeof record !== 'object' || record === null || String((record as { id?: unknown }).id) !== id) return { direct: null, proxy: null };
+  const { public_ipaddr: ip, ports, ssh_host: proxyHost, ssh_port: proxyPort } = record as Record<string, unknown>;
+  const port = (value: unknown) => {
+    const number = typeof value === 'string' && /^\d{1,5}$/.test(value) ? Number(value) : value;
+    return typeof number === 'number' && Number.isInteger(number) && number > 0 && number < 65536 ? number : null;
+  };
+  const address = typeof ip === 'string' && /^\d{1,3}(\.\d{1,3}){3}$/.test(ip.trim()) ? ip.trim() : null;
+  const mapped = typeof ports === 'object' && ports !== null ? (ports as Record<string, unknown>)['22/tcp'] : undefined;
+  const directPort = Array.isArray(mapped) ? port((mapped[0] as { HostPort?: unknown } | undefined)?.HostPort) : null;
+  const host = typeof proxyHost === 'string' && /^ssh\d{0,3}\.vast\.ai$/.test(proxyHost) ? proxyHost : null;
+  return { direct: address && directPort ? `${address}:${directPort}` : null,
+    proxy: host && port(proxyPort) ? `${host}:${port(proxyPort)}` : null };
+}
+
 // The destroy of one rental by its ID (gpu/rent.mjs --destroy), on one monotonic clock that starts before its first
 // read: five minutes, whatever Vast answers or fails to, and nothing is sent after them. The first minute is the
 // guard's, told "we're done" just before, and only reads, every ten seconds. After it, while no read says the

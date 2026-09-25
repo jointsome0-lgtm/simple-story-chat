@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { BOOT_SECONDS, DESTROY_SECONDS, chooseOffers, createBody, describeOffer, destroyInstance, emptyReason, instanceState, offerQuery, redactedBody, rentPlan } from './rent-plan.ts';
+import { BOOT_SECONDS, DESTROY_SECONDS, chooseOffers, createBody, describeOffer, destroyInstance, emptyReason, instanceState, offerQuery, redactedBody, rentPlan, sshRoute } from './rent-plan.ts';
 import type { RawOffer } from './rent-plan.ts';
 
 const RENT = fileURLToPath(new URL('../gpu/rent.mjs', import.meta.url));
@@ -317,7 +317,8 @@ test('--print-body prints the request without a key, and says so in one line whe
 // this machine.
 const STUB = `import { appendFileSync } from 'node:fs';
 const reads = (process.env.STUB_READS ?? '').split(',');
-const answers = { present: [200, { instances: { id: 123, actual_status: 'running', intended_status: 'running' } }],
+const answers = { present: [200, { instances: { id: 123, actual_status: 'running', intended_status: 'running',
+  public_ipaddr: '203.0.113.7\\n', ports: { '22/tcp': [{ HostIp: '0.0.0.0', HostPort: '41022' }] }, ssh_host: 'ssh5.vast.ai', ssh_port: 36500 } }],
   gone: [200, { instances: null }], missing: [404, {}], failing: [500, {}], empty: [200, {}], other: [200, { instances: { id: 124 } }] };
 let skew = 0;
 const later = globalThis.setTimeout, wall = Date.now, monotonic = performance.now.bind(performance);
@@ -351,6 +352,15 @@ test('an answer that is not certain is never taken for the outcome, of a rental 
     [200, present]] as const).map(([status, body]) => instanceState('123', status, body).state),
   ['gone', 'gone', 'unknown', 'unknown', 'unknown', 'unknown', 'present']);
   assert.deepEqual(instanceState('123', 200, present), { state: 'present', status: 200, actual: 'exited', intended: null });
+  // Where ssh reaches it, from the same read: an address and a port, or null for anything that is not one.
+  const routed = (fields: object, id = 123) => sshRoute('123', 200, { instances: { id, ...fields } });
+  assert.deepEqual(routed({ public_ipaddr: '203.0.113.7', ports: { '22/tcp': [{ HostPort: '41022' }] }, ssh_host: 'ssh5.vast.ai', ssh_port: 36500 }),
+    { direct: '203.0.113.7:41022', proxy: 'ssh5.vast.ai:36500' });
+  assert.deepEqual(routed({ public_ipaddr: '203.0.113.7', ports: {}, ssh_host: 'ssh5.vast.ai', ssh_port: 36500 }),
+    { direct: null, proxy: 'ssh5.vast.ai:36500' }, 'a box still loading has no mapped port yet');
+  assert.deepEqual(routed({ public_ipaddr: '203.0.113.7; rm -rf /', ports: { '22/tcp': [{ HostPort: '70000' }] },
+    ssh_host: 'evil.example', ssh_port: '22 -o ProxyCommand=x' }), { direct: null, proxy: null });
+  assert.deepEqual(routed({ public_ipaddr: '203.0.113.7', ports: { '22/tcp': [{ HostPort: '41022' }] } }, 124), { direct: null, proxy: null });
 
   // The destroy's own clock, virtual, against a Vast that answers every request after 19 s, one whose reads never
   // answer, one whose deletes never do, and one that answers in five seconds, which leaves a last pause to be cut. A
@@ -428,7 +438,8 @@ test('an answer that is not certain is never taken for the outcome, of a rental 
     }
     const shown = run({ STUB_READS: 'present' }, '--show', '123');
     assert.deepEqual([shown.status, shown.events, shown.requests],
-      [0, [{ event: 'instance', instance: '123', state: 'present', status: 200, actual: 'running', intended: 'running' }], ['GET 0s 20000ms /api/v0/instances/123/']]);
+      [0, [{ event: 'instance', instance: '123', state: 'present', status: 200, actual: 'running', intended: 'running',
+        ssh: { direct: '203.0.113.7:41022', proxy: 'ssh5.vast.ai:36500' } }], ['GET 0s 20000ms /api/v0/instances/123/']]);
     // The rest by the stub's clock: which request went out at which second.
     const timeline = (requests: string[]) => requests.map(request => request.split(' ').slice(0, 2).join(' ')).join(', ');
     const reads = (...seconds: number[]) => seconds.map(second => `GET ${second}s`).join(', ');
