@@ -8,7 +8,7 @@ import type { GpuStatus } from './gpu.ts';
 import { personTag } from './picture.ts';
 import { OWN_STYLES_MAX, PRESETS } from './picture-style.ts';
 import type { Screen } from './telegram.ts';
-import { REGISTERED, commandSets, texts } from './text.ts';
+import { REGISTERED, commandSets, langFromTelegram, texts } from './text.ts';
 import type { Lang } from './text.ts';
 import type { RenderDetails } from './ui.ts';
 import { LIMIT, render, renderContext, scenePrefix, sceneKeyboard } from './ui.ts';
@@ -207,6 +207,10 @@ for (const lang of [undefined, ...REGISTERED]) {
     const t = texts(lang);
     // A library from before the language choice belongs to a Russian-speaking reader.
     assert.equal(t, texts(lang ?? 'ru'));
+    // A first contact from a Telegram app in this language, its region written either way, gets it; one with no code,
+    // or in a language without a catalog, gets English.
+    const codes = lang ? [lang, lang.toUpperCase(), `${lang}-XX`, `${lang}_xx`] : [undefined, '', 'rue', 'uk', 'de-DE'];
+    for (const code of codes) assert.equal(langFromTelegram(code), lang ?? 'en', `the Telegram code ${code}`);
     const { all, offered } = screens(lang);
     assert.ok(all.length > 150, 'the crawl reaches the whole interface');
     for (const [name, screen] of all) {
