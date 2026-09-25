@@ -6,8 +6,6 @@ what their numbers mean. The keys of the hosted APIs are in `.env.eval` (templat
 assistant does not open ([the rule](improve-loop.md#frozen-boundaries)). The probes run in an empty directory, so the
 bot's `.env` does not reach them.
 
-<a id='replay-and-scenes'></a>
-
 ## Replay and scenes
 
 ```
@@ -33,8 +31,6 @@ model, and do not measure the quality of the prose.
 `npm run eval -- watch` in another terminal shows the current run: the last event of each model, scenario and mode,
 and the day's spending. The events go to `logs/eval.jsonl`, as codes and counters without text.
 
-<a id='diagnostics'></a>
-
 ## Diagnostics
 
 A failed sum can be analysed without a model. For a numeric answer of two or more digits the probe writes `stated`: whether the number is present in the memory message (`memory`), in the scenes that remained as text (`scenes`), or nowhere (`none`). `readingMisses` in the result file are the failed questions whose answer was present in memory: memory is right, reading made the error. A failure with `none` means that the sum had to be added up at answer time. This is a diagnostic, not a score: a short number can match by chance.
@@ -50,8 +46,6 @@ npm run eval -- walk --models claude:claude-haiku-4-5-20251001,claude:claude-opu
 ```
 
 Every judge's verdicts with their quotes stay next to the probe's report (`walk-judge-<judge>.json`, the council's checks in `walk-cross-<judge>.json`; the report directory is in the cell), and `npm run eval -- walk-judge --judge <model> --resume <directory>` adds a judge to a finished walk (`--cross` for its second round). Several judges are the point: one judge misreads a quote or has a taste of its own, and a model under test may also sit on the panel, so no scene is judged by one model alone. A walk is not a fixed set of questions: the model writes a different story each run, so compare walks the way [the noise section](improve-loop.md#noise) compares scenes, several runs per side.
-
-<a id='seed-audit'></a>
 
 ## Seed audit
 

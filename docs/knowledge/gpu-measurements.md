@@ -45,8 +45,6 @@ Two cards cost about $1.2 an hour, and Vast bills every minute whether they draw
 The owner's rules that followed, in force since 2026-09-24, are in
 [gpu.md](../gpu.md#while-the-cards-are-paid-for).
 
-<a id='ssh-failures'></a>
-
 ## SSH failures
 
 The public key must be on the Vast **account**, under Account → SSH Keys, before the instance is created. Many machines offer no direct ports (`direct_port_start` 65535 with `direct_port_end` -1), and then the only route is Vast's proxy, `sshN.vast.ai`. The proxy admits account keys alone, so a key placed only inside the container, by an onstart script or by hand, never gets the chance to be used: the connection is closed before the container's own sshd sees it. The symptom is `Connection closed by <address> port <port>` on every attempt, with no mention of authentication. Adding the key to the account fixes a running instance without recreating it.
@@ -143,8 +141,6 @@ On the RX 580 with Gemma 3 1B, three slots and the same load in each run, the sc
 | Shared cache, `--no-cache-idle-slots` | kept | 91 150 | 1.0x |
 
 The numbers are a small old card's and mean nothing for the 5090; the order between the three does. The measurement that mattered was the first one: without that flag a pool is worse than no pool at all.
-
-<a id='picture-downloads'></a>
 
 ## Picture downloads
 

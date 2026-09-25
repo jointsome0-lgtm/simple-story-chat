@@ -26,13 +26,9 @@ We do the initial probe ourselves on Claude Haiku 4.5: one seed and several cont
 
 After our run, the tester checks stories more deeply on Gemma 4 Uncensored. For the GPU, the dense build 31B Heretic Q6_K is used, fixed in the [manifest](../../gpu/manifest.env). Capacity was checked separately from memory quality. The tester reports problems themselves; we do not read their correspondence and do not export it for debugging. The adapters do not write the text of requests, of responses or of raw provider errors to the technical logs. [Tester privacy rules](../../README.md#privacy).
 
-<a id='codex-cli-2026-09-19'></a>
-
 ## Codex CLI, 2026-09-19
 
 Checked on 19 September 2026: the set of arguments is accepted by CLI 0.154.0 under `--strict-config`, the key `model_instructions_file` exists. A successful response was not checked live: on that day the account hit the usage limit (`turn.failed`). The format of successful events is taken from the `codex exec --json` documentation and is covered by tests on a fake process; the first live check is `npm run eval -- ceiling --model codex:<model>` on a synthetic scenario.
-
-<a id='hosted-limits-2026-09-18'></a>
 
 ## Hosted limits, 2026-09-18
 
