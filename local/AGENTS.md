@@ -5,3 +5,5 @@ This directory implements the owner-approved local fallback while Telegram Serve
 Do not read `.tgcloud/`. Never print credentials, story text, model prompts, raw model streams or raw provider errors in technical logs. Test with synthetic stories. Each Telegram user's library is separate; bot access does not grant permission to inspect that user's messages.
 
 The owner delegates the native Telegram UI to Opus 5. Integrate its pure renderer here; keep storage, Telegram transport and model invocation separate. Save a completed scene before sending it, deduplicate updates, and never regenerate automatically after an uncertain delivery.
+
+Tests: a new case goes in as a row of the table for the promise it tests, and a new test file needs a stated reason.
