@@ -9,9 +9,10 @@ accepted**: tried and reverted. **Measurement**: numbers without a decision on a
 waits. An open line is unfinished work, not an order to finish it.
 
 - 2026-09-23 · **measurement** · [A gold tree, version 1](knowledge/improve-runs.md#gold-v1-2026-09-23). The seed was
-  audited once, and four writers grew 63 scenes under the agreement of four judges. They are candidates, none promoted:
-  the ledger, the recheck's noise and a person's reading are still owed. Version 2 is a separate set of the owner's
-  decisions ([improve-loop.md](improve-loop.md#gold-v2)).
+  audited once, and four writers grew 63 scenes under the agreement of four judges. They are candidates, none promoted.
+  The ledgers, a whole-trunk audit and a fresh recheck are recorded: 61 of 63 nodes were agreed again. The rewritten
+  seed was not audited again before the tree grew, so version 1 stays a draft; version 2 is a separate set of the
+  owner's decisions ([improve-loop.md](improve-loop.md#gold-v2)).
 - 2026-09-22 · **accepted** · [The walk](knowledge/improve-runs.md#walk-2026-09-22): the model writes its own story
   and a council of four judges reads every scene. One walk each of Haiku and Opus. The spread between two walks of one
   model, and whether a memory change shows on the walk at all, are not known.
