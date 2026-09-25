@@ -30,11 +30,16 @@ Whoever runs the bot brings the model; adapters behind one interface are describ
 
 ## Reading the project docs
 
-Read the working instructions for the task at hand; they are not a startup reading list. Start with the relevant heading or index and open the sections you need.
+Read the working instructions for the task at hand; they are not a startup reading list. Start with the relevant
+heading or index and open the sections you need.
 
-README links both working instructions and the owner's knowledge pages. Research plans, ideas and past measurements are read for a specific question. Their dates, configurations and unresolved limits matter. A historical note does not authorize a new rental, a higher budget or a publication, and does not override current rules.
+README links both working instructions and the owner's knowledge pages. Research plans, ideas and past measurements
+are read for a specific question. Their dates, configurations and unresolved limits matter. A historical note does not
+authorize a new rental, a higher budget or a publication, and does not override current rules.
 
-When shortening a document, keep useful evidence, ideas and reasons accessible through ordinary links. Remove a substantive passage only when its replacement is identified or its error is explained. Do not move history into code comments or automatic imports to make a size count smaller.
+When shortening a document, keep useful evidence, ideas and reasons accessible through ordinary links. Remove a
+substantive passage only when its replacement is identified or its error is explained. Do not move history into code
+comments or automatic imports to make a size count smaller.
 
 | Task | Read |
 | --- | --- |
