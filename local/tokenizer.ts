@@ -3,8 +3,8 @@
 // U+2581, BPE over whole lines by merge rank, bytes for what the vocabulary lacks. The picture lane's text encoders
 // (gpu/image-manifest.env) both read ComfyUI's qwen25_tokenizer through transformers' Qwen2Tokenizer: added tokens
 // first, NFC, the Qwen2 split, GPT-2 bytes, BPE. The vocabularies are too big for the repository: `npm run tokenizers`
-// writes them to tokenizers/ (docs/tokenizers.md), and without those files loadTokenizers answers undefined and the
-// bot keeps its estimate.
+// writes them to tokenizers/ (docs/tokenizers.md#files), and without those files loadTokenizers answers undefined and
+// the bot keeps its estimate.
 import { readFileSync } from 'node:fs';
 import { endianness } from 'node:os';
 import { join } from 'node:path';

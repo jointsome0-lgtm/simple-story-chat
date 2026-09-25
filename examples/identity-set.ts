@@ -1,4 +1,4 @@
-// The fixed synthetic set of the identity measurement (docs/illustrations-plan.md, "The identity runbook"): one story,
+// The fixed synthetic set of the identity measurement (docs/identity-experiment.md#identity-runbook): one story,
 // its character sheet and eight frames, written here before any card is rented, so that nothing about the set is
 // chosen after a picture has been seen. `npm run image:identity -- set` writes it as a prompts directory, and each
 // frame is drawn in three arms from two seeds: 48 pictures.

@@ -42,7 +42,7 @@ else
   (( ctx_size <= 262144 )) || { echo 'Isolated slots ask for too many cells; lower the context or the slots.' >&2; exit 1; }
   cache=(--no-kv-unified)
 fi
-# Speculative decoding with the pinned draft model (docs/gpu.md). Off unless asked for.
+# Speculative decoding with the pinned draft model (docs/llama-cpp.md#prepare-server). Off unless asked for.
 draft="${SIMPLE_CHAT_GPU_DRAFT:-false}"
 [[ "$draft" = true || "$draft" = false ]] || { echo 'Use SIMPLE_CHAT_GPU_DRAFT=true or false.' >&2; exit 1; }
 speculative=()

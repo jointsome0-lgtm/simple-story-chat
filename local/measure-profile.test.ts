@@ -165,7 +165,7 @@ test('the pooled profiles differ from each other in slots alone, at a pool the c
   assert.ok(unified.length >= 2, 'a session with one pooled profile decides nothing about slots');
   const cells = new Set(unified.map(environment => environment.SIMPLE_CHAT_GPU_POOL));
   assert.equal(cells.size, 1, `the pooled profiles move the pool and the slots at once: ${[...cells].join(', ')}`);
-  // The floor is the scheduler's (docs/gpu.md, "The pool has a floor"); 131072 is the ceiling local/config.ts
+  // The floor is the scheduler's (docs/knowledge/gpu-measurements.md#pool-floor); 131072 is the ceiling local/config.ts
   // allows SIMPLE_CHAT_POOL_TOKENS, which the pool has to stay within to be the bot's own.
   const pool = Number([...cells][0]);
   assert.ok(pool >= 78970 && pool <= 131072, `${pool} cells`);

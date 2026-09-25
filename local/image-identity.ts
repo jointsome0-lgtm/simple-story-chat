@@ -1,4 +1,4 @@
-// The identity measurement of docs/illustrations-plan.md ("The identity runbook"): does a person drawn from a portrait
+// The identity measurement (docs/identity-experiment.md#identity-runbook): does a person drawn from a portrait
 // come back the same in the next frame, face and figure, and what does that cost the card. Three arms over one fixed
 // synthetic set (examples/identity-set.ts), every frame from two seeds, all on one canvas, 1280x704:
 //   A  text only on the edit graph: the frame's text, looks included, with every reference slot taken out. A matched
@@ -49,7 +49,7 @@ const median = (values: number[]) => {
 // Every frame of every arm, and of the control, is drawn on this canvas whatever size the portraits are: the sampler's
 // latent is the edit graph's own `EmptyLatentImage`, never the latent the encode node would make of the first portrait.
 export const IDENTITY_CANVAS = { width: 1280, height: 704 };
-// The numbers the measurement is judged by, fixed before the paid run (docs/illustrations-plan.md, "The gates"), and
+// The numbers the measurement is judged by, fixed before the paid run (docs/identity-experiment.md#gates), and
 // the budget's. No other number in this file decides anything.
 export const CRITERIA = {
   transitions: 20, face: 0.9, figure: 0.9, // gate 1: recognition, over at least this many transitions
@@ -424,7 +424,7 @@ export function scoresOf(root: string, cases: Case[]): Partial<Record<Arm, Tally
 type Gate = { gate: number; status: 'pass' | 'fail' | 'unscored' | 'unmeasured'; detail: string };
 const percent = (part: number, whole: number) => whole ? `${Math.round(part / whole * 100)}%` : '-';
 
-// The gates, fixed before the paid run (docs/illustrations-plan.md), for a candidate arm against A.
+// The gates, fixed before the paid run (docs/identity-experiment.md#gates), for a candidate arm against A.
 function gatesOf(arm: Arm, pictures: Picture[], failures: Failure[], tallies: Partial<Record<Arm, Tally>>,
   text: Record<Arm, number | undefined>): Gate[] {
   const own = tallies[arm], base = tallies.A;
@@ -732,7 +732,7 @@ async function main(args: string[]) {
     for (const line of reportLines(identityReport(dir))) console.log(line);
   } else if (command === 'dry-run') {
     await dryRun(values.dir ?? mkdtempSync(join(tmpdir(), 'simple-chat-identity-dry-')), values.tokenizers);
-  } else throw new Error('Use: image-identity.ts set|portraits|draw|report|bundles|dry-run (docs/illustrations-plan.md, "The identity runbook")');
+  } else throw new Error('Use: image-identity.ts set|portraits|draw|report|bundles|dry-run (docs/identity-experiment.md#runbook)');
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

@@ -40,7 +40,7 @@ export type Story = {
   id: string; seedId: string; title: string; branches: Record<string, Branch>; checkpoints: Record<string, Checkpoint>;
   nodes: Record<string, SceneNode>; memories: Record<string, MemoryVersion>;
   // The character sheet the illustrations use: one fixed appearance line per recurring person, written once from
-  // the story's own history and kept beside its memory (docs/illustrations-plan.md, step 3), and the clothes they
+  // the story's own history and kept beside its memory (docs/illustrations-plan.md#step-3), and the clothes they
   // wore when it was written. A sheet without `outfit` is older and had clothes in `look`; the next picture writes it
   // again. Only the local bot writes it, and only when pictures are switched on; a story without pictures never has it.
   // `edited` marks a look the reader wrote themselves, which that rewrite keeps.
@@ -68,7 +68,7 @@ export type OwnStyle = { id: string; name: string; line: string };
 // How a picture was drawn, all but its prompt (local/picture.ts): its seed, a hash of the graph, the checkpoint's file
 // name, and the size and sampler settings the graph was filled with. A variant of it is drawn with the same. It pins
 // the request and not the card: after a change to the card's software, or to weights under the same file name, the
-// same recipe can draw another picture (docs/illustrations-plan.md).
+// same recipe can draw another picture (docs/telegram-ui.md#picture-variants).
 export type PictureRecipe = { seed: number; graph: string; checkpoint: string; width: number; height: number;
   steps: number; cfg: number; sampler: string; scheduler: string };
 // A picture the local bot sent into its reader's chat (local/picture.ts): the scene it shows, the message it is, and

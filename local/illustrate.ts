@@ -1,8 +1,9 @@
-// The description step of docs/illustrations-plan.md: one character sheet per story, one structured description of
-// one frame per scene, and the text-to-image prompt assembled here, in code (step 3 of the plan: the model writing
-// the prompt itself dropped fields it had filled). Two callers share it and must keep sharing it — local/picture.ts,
-// which illustrates a reader's scene in the bot, and local/illustrate-probe.ts, which describes the frozen synthetic
-// stories on a hosted model — so that what the six steps measured is what the bot sends. Nothing is drawn here.
+// The description step (docs/telegram-ui.md#picture-pipeline): one character sheet per story, one structured
+// description of one frame per scene, and the text-to-image prompt assembled here, in code
+// (docs/illustrations-plan.md#step-3: the model writing the prompt itself dropped fields it had filled). Two callers
+// share it and must keep sharing it — local/picture.ts, which illustrates a reader's scene in the bot, and
+// local/illustrate-probe.ts, which describes the frozen synthetic stories on a hosted model — so that what the six
+// steps measured is what the bot sends. Nothing is drawn here.
 import type { ChatMessage, GenerateControls, ModelRequest, Provider } from './model.ts';
 
 // One recurring person of a story: the name as the story writes it, the fixed appearance line the assembly puts in
@@ -180,10 +181,11 @@ export function assemblePrompt(description: Description, sheet: Character[], sty
   return { prompt, namesStripped, fromSheet, withoutLook };
 }
 
-// The two instruction texts are kept as they were iterated against the readers' reports (docs/illustrations-plan.md,
-// steps 1-6). The changes since: the name ban, which step 6 found stated in one bullet about `people` while `moment`
-// carried names to the image model; clothes taken out of `look` into `outfit` and `clothes` (2026-09-24); and the age
-// words, which say young adult where they said young, since no line after the prompt says the people are adults.
+// The two instruction texts are kept as they were iterated against the readers' reports
+// (docs/illustrations-plan.md#description-steps). The changes since: the name ban, which step 6 found stated in one
+// bullet about `people` while `moment` carried names to the image model; clothes taken out of `look` into `outfit`
+// and `clothes` (2026-09-24); and the age words, which say young adult where they said young, since no line after the
+// prompt says the people are adults.
 const SHEET = `Не продолжай историю. Составь лист внешности для художника: по одной записи на КАЖДОГО человека, названного в истории по имени или по постоянной роли (командир, лекарь, судья) и появляющегося больше чем в одной сцене. Обычно их от трёх до шести; одна запись на целую историю — почти наверняка ошибка.
 - name: имя так, как оно пишется в истории.
 - look: по-английски, 15-25 слов, без имени и БЕЗ ОДЕЖДЫ: пол, возраст ТОЛЬКО словом (young adult, middle-aged, elderly) и никогда числом, даже если история называет годы, телосложение, волосы, лицо, постоянные приметы (шрам, татуировка, очки). Всё, что история называет, бери из истории; чего она не называет — придумай один раз, правдоподобно для мира истории, и так, чтобы персонажи заметно отличались друг от друга силуэтом и волосами.

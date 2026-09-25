@@ -25,7 +25,7 @@ export type RenderDetails = {
   modelInfo?: ModelInfo | null; gpuInfo?: GpuInfo | null; contextStats?: ContextStats | null; pictures?: boolean; standardStyle?: string;
   textTokens?: (text: string) => number | null;
 };
-// State is read defensively (docs/telegram-ui.md), so any library field may be missing.
+// State is read defensively (docs/telegram-ui.md#renderer), so any library field may be missing.
 type State = Partial<Library>;
 type Row = (InlineButton | null)[];
 type Page<T> = { page: number; pages: number; start: number; items: T[] };
