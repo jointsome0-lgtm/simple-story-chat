@@ -7,8 +7,8 @@ and true.
 ## Improving the story system
 
 If the owner asks you to improve prompts or memory, follow [docs/improve-loop.md](docs/improve-loop.md): what may
-change, what may not, how one step is measured with `npm run eval`, and when to stop. Past steps are in
-`docs/improve-log.md`.
+change, what may not, how one step is measured with [`npm run eval`](docs/eval.md), and when to stop. Past steps are
+in [docs/improve-log.md](docs/improve-log.md).
 
 When you delegate: Opus subagents run at `max` reasoning effort, GPT-6 (codex) sessions at `high`; Fable and GPT-6
 are kept for the steps that decide something. The owner's rule, 2026-09-21; details in the same document.
@@ -27,7 +27,29 @@ Whoever runs the bot brings the model; adapters behind one interface are describ
   `local/` and `lib/`.
 - `local/*.ts` import each other with explicit `.ts` specifiers and use erasable syntax only. More in
   [local/AGENTS.md](local/AGENTS.md).
-- `npm run eval` measures world consistency on synthetic stories; see "Improving the story system" above.
+
+## Reading the project docs
+
+Read the working instructions for the task at hand; they are not a startup reading list. Start with the relevant
+heading or index and open the sections you need.
+
+README links both working instructions and the owner's knowledge pages. Research plans, ideas and past measurements
+are read for a specific question. Their dates, configurations and unresolved limits matter. A historical note does not
+authorize a new rental, a higher budget or a publication, and does not override current rules.
+
+When shortening a document, keep useful evidence, ideas and reasons accessible through ordinary links. Remove a
+substantive passage only when its replacement is identified or its error is explained. Do not move history into code
+comments or automatic imports to make a size count smaller.
+
+| Task | Read |
+| --- | --- |
+| Setup, settings, access, backup | [setup.md](docs/setup.md) |
+| A model adapter, hosted consent | [model-providers.md](docs/model-providers.md), [llama-cpp.md](docs/llama-cpp.md) |
+| Telegram screens and pictures | [telegram-ui.md](docs/telegram-ui.md) |
+| The agent CLI and MCP server | [agent-interface.md](docs/agent-interface.md) |
+| A rental, the picture card, image privacy | [gpu.md](docs/gpu.md), from [the owner's rules](docs/gpu.md#while-the-cards-are-paid-for) |
+| Prompts, memory, the eval | [improve-loop.md](docs/improve-loop.md), [eval.md](docs/eval.md) |
+| The identity or a llama.cpp experiment | [identity-experiment.md](docs/identity-experiment.md), [llama-measurement.md](docs/llama-measurement.md) |
 
 ## Privacy: whose data you may read
 
@@ -57,8 +79,9 @@ applies there.
 | `local/agent-api.ts`, `agent-cli.ts`, `mcp.ts` | The agent interface: CLI and MCP server over a separate agent library ([docs/agent-interface.md](docs/agent-interface.md)). |
 | `lib/library.ts`| Pure story-library logic: the library's types and the operations on it. |
 | `examples/`     | Synthetic seeds and eval scenarios. Safe to read and to send to models. |
-| `gpu/`          | Bootstrap and start scripts for llama.cpp on a rented GPU ([docs/gpu.md](docs/gpu.md)). |
-| `docs/`         | Reference docs, the improvement loop and its log.                 |
+| `gpu/`          | Renting a card and setting up llama.cpp or ComfyUI on it ([docs/gpu.md](docs/gpu.md), [docs/llama-cpp.md](docs/llama-cpp.md)). |
+| `docs/`         | Working instructions and the research notes that the README lists. |
+| `docs/knowledge/` | Dated measurements, checks and the full records of past steps. |
 | `data/`, `backups/`, `exports/`, `logs/`, `.env*` | Local state, gitignored. See Privacy above. |
 | `.tgcloud/`     | CLI state (credentials, snapshot, cached layout). **Never edit or read from here** — it's gitignored machine state. |
 

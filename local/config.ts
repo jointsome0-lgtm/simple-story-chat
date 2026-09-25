@@ -14,7 +14,7 @@ export type ModelConfig = {
   budget: { requests: number | undefined; tokens: number | undefined };
 };
 export type GpuConfig = { instanceId: string; apiKey: string; sshHost: string; idleMinutes: number };
-// A picture under each scene (docs/illustrations-plan.md), off unless SIMPLE_CHAT_IMAGE_URL is set. `style` is the
+// A picture under each scene (docs/setup.md#pictures), off unless SIMPLE_CHAT_IMAGE_URL is set. `style` is the
 // one fixed style line of every prompt; without it the line the six steps were measured with is used
 // (local/illustrate.ts `STYLE`). `users` are the Telegram IDs whose scenes may be drawn — nobody by default.
 export type ImageConfig = {
@@ -22,8 +22,8 @@ export type ImageConfig = {
   waitMs: number; timeoutMs: number;
 };
 export type Config = ModelConfig & { gpu: GpuConfig | undefined; images: ImageConfig | undefined; token: string; allowedUsers: Set<string>; ownerId: string; dbPath: string };
-// The agent interface (docs/agent-interface.md): its own library file, and the bot's model queue if the bot serves one.
-// `agentId` names the library inside that file when the client does not pass one.
+// The agent interface (docs/agent-interface.md#privacy-a-separate-library): its own library file, and the bot's model
+// queue if the bot serves one. `agentId` names the library inside that file when the client does not pass one.
 export type AgentConfig = ModelConfig & { dbPath: string; modelSocket: string; waitSeconds: number; agentId: string | undefined };
 
 function environment(directory: string, inherited: Env): Env {
@@ -129,11 +129,11 @@ export function gpuConfig(env: Env, provider: string): GpuConfig | undefined {
   return { instanceId, apiKey, sshHost, idleMinutes };
 }
 
-// The picture lane, which is a second card and never this computer's or the language model's (the plan's "Two
-// constraints that do not bend": the language model holds 22-25 GB of the 32, and the image model needs its own).
-// `SIMPLE_CHAT_IMAGE_URL` is therefore the loopback end of the ssh tunnel to that other machine, as
-// `gpu/tunnel.sh --pictures` forwards it (127.0.0.1:8188), and never a published address: a scene is drawn from a
-// reader's own text, so it may leave this computer only through a tunnel to a card we run.
+// The picture lane, which is a second card and never this computer's or the language model's
+// (docs/illustrations-plan.md#two-constraints-that-do-not-bend: the language model holds 22-25 GB of the 32, and the
+// image model needs its own). `SIMPLE_CHAT_IMAGE_URL` is therefore the loopback end of the ssh tunnel to that other
+// machine, as `gpu/tunnel.sh --pictures` forwards it (127.0.0.1:8188), and never a published address: a scene is
+// drawn from a reader's own text, so it may leave this computer only through a tunnel to a card we run.
 //
 //   SIMPLE_CHAT_IMAGE_URL=http://127.0.0.1:8188
 //   SIMPLE_CHAT_IMAGE_WORKFLOW=gpu/image-workflow-qwen.json   # the graph, in ComfyUI's API format

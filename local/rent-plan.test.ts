@@ -139,10 +139,11 @@ test('the ceiling carries the disk at the rate a real disk costs, not only at th
   const rentable = (gpus: number, dph: number, storage: number) =>
     chooseOffers([offer({ dph_total: dph, storage_cost: storage })],
       rentPlan({ gpus })).candidates.length === 1;
-  // $0.10 per GB per month is the rate commonly quoted; $0.207 is what the 60 GB rental in docs/gpu.md was billed
-  // ($0.017 an hour). The quoted range for one card is $0.44-0.53 with the measured machine at $0.519, widened to
-  // $0.65 on 2026-09-24, and $0.89-0.96 for two in one machine. All of it must stay rentable at 150 GB of disk on a
-  // host charging either rate: against a flat ceiling the storage term alone refused the top of the range.
+  // $0.10 per GB per month is the rate commonly quoted; $0.207 is what the 60 GB rental in
+  // docs/knowledge/gpu-measurements.md#costs-and-downloads was billed ($0.017 an hour). The quoted range for one card
+  // is $0.44-0.53 with the measured machine at $0.519, widened to $0.65 on 2026-09-24, and $0.89-0.96 for two in one
+  // machine. All of it must stay rentable at 150 GB of disk on a host charging either rate: against a flat ceiling
+  // the storage term alone refused the top of the range.
   for (const storage of [0.1, 0.207]) {
     const disk = `, disk at $${storage}`;
     for (const dph of [0.44, 0.519, 0.53, 0.548, 0.6, 0.65]) assert.ok(rentable(1, dph, storage), `one card at $${dph}/h${disk}`);
@@ -174,8 +175,9 @@ test('offers are ordered for a session of hours, not of minutes', () => {
 
 test('the image and the host tried first are pinned, because a rental pays for a wrong one', () => {
   const plan = rentPlan();
-  // The image measured in docs/gpu.md: a CUDA 13 *devel* image, because gpu/bootstrap.sh compiles llama-server on
-  // the machine and a runtime image has no nvcc. The session would be paid for and build nothing.
+  // The image measured in docs/knowledge/gpu-measurements.md#verified-2026-09-17: a CUDA 13 *devel* image, because
+  // gpu/bootstrap.sh compiles llama-server on the machine and a runtime image has no nvcc. The session would be paid
+  // for and build nothing.
   assert.equal(plan.image, 'vastai/base-image:cuda-13.0.3-cudnn-devel-ubuntu24.04-py312-2026-09-07');
   // The host of that measurement: known driver, known ports, known link speed. Dropping the default would send
   // every rental to an unmeasured machine without anything failing.

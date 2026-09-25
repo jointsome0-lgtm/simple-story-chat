@@ -76,12 +76,12 @@ try {
   store.recover(log);
   if (gpu) background = await serveBackground({ socketPath: config.dbPath + '.model.sock', scheduler,
     status: () => ({ model: config.model, contextTokens: config.contextTokens, gpu: gpu!.snapshot() }) });
-  // Pictures under the scenes, if this computer has a second card tunnelled for them (docs/illustrations-plan.md).
+  // Pictures under the scenes, if this computer has a second card tunnelled for them (docs/gpu.md#picture-card).
   // The graph is read and checked here, at startup: a workflow that is not a ComfyUI API export must fail now and
   // not under the first reader who gets a scene.
   // The note under each picture counts the prompt in the picture model's tokens when `npm run tokenizers` has written
-  // the vocabulary (docs/tokenizers.md). A missing or broken file costs the count alone: the note gives characters.
-  // The characters' card counts each field of a sheet the same way, on its own.
+  // the vocabulary (docs/tokenizers.md#files). A missing or broken file costs the count alone: the note gives
+  // characters. The characters' card counts each field of a sheet the same way, on its own.
   const tokenizers = loadTokenizers(fileURLToPath(new URL('../tokenizers', import.meta.url)));
   const counter = (count: typeof encoderTokens) => (graph: Parameters<typeof encoderTokens>[1]) => {
     try {

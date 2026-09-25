@@ -1,12 +1,14 @@
 // Draws the assembled prompts of local/illustrate-probe.ts on a rented card and prepares blind review bundles.
 // It talks to one ComfyUI server through an ssh tunnel on loopback: POST /prompt, then its websocket and a poll of the
-// job's /history record until the job is over, then GET /view. Two rules come from docs/illustrations-plan.md and
-// AGENTS.md and are not options:
+// job's /history record until the job is over, then GET /view. Two rules come from AGENTS.md and the docs named
+// below, and are not options:
 //   - a picture is derived from somebody's scene, so every PNG we keep is rewritten without its text chunks. ComfyUI
 //     puts the whole prompt and workflow into tEXt/iTXt/zTXt, and the server's /history keeps every job until it is
 //     cleared. What this harness can reach it clears; what it cannot, the file a node writes, is named at `drawOne`:
-//     a preview's goes from the card's RAM seconds later (gpu/image-sweeper.py), a saved one stays with the card.
-//   - a review bundle never names the checkpoint that drew a picture; the key stays on our side of the bundle.
+//     a preview's goes from the card's RAM seconds later (gpu/image-sweeper.py), a saved one stays with the card
+//     (docs/gpu.md#what-the-card-keeps-of-a-picture).
+//   - a review bundle never names the checkpoint that drew a picture; the key stays on our side of the bundle
+//     (docs/illustrations-plan.md#blind-review).
 // The prompts of the frozen synthetic stories are the only input; no reader's story is drawn here. `--references`
 // adds reference portraits for a model that keeps a face across frames (Qwen Image 2.1): they are uploaded under
 // the hash of their bytes, so no name reaches the card, and they are stripped on the way like every other picture.
@@ -24,9 +26,10 @@ import type { PictureEncoder } from './tokenizer.ts';
 
 // A checkpoint's place in the comparison. The bot logs this role, never the file name (local/model-error.ts).
 export type Role = 'primary' | 'alternate';
-// An arm of the identity comparison (docs/illustrations-plan.md). A draws a frame from its text alone, as the bot
-// does today; B draws it with the portraits of the people bound to it and the same text; C with the same portraits
-// and the text of those people without their appearance, each named by the number of their picture instead.
+// An arm of the identity comparison (docs/identity-experiment.md#identity-runbook). A draws a frame from its text
+// alone, as the bot does today; B draws it with the portraits of the people bound to it and the same text; C with the
+// same portraits and the text of those people without their appearance, each named by the number of their picture
+// instead.
 export type Arm = 'A' | 'B' | 'C';
 export const ARMS: Arm[] = ['A', 'B', 'C'];
 export type Cell = { caseId: string; checkpoint: string; role: Role; seed: number; arm?: Arm };
@@ -332,7 +335,7 @@ type HistoryEntry = { status?: { completed?: boolean; status_str?: string; messa
   outputs?: Record<string, { images?: { filename: string; subfolder: string; type: string }[] }> };
 // A minute: the id of a job submitted just before the end, then its stop and the delete of its record, on a card
 // that answers at all, take a few seconds of it. `--until` stands five minutes before the rental's own deadline, so
-// this ends four minutes before it (docs/illustrations-plan.md, "One hour, ended on the wall clock").
+// this ends four minutes before it (docs/identity-experiment.md#one-hour).
 const CLEANUP_RESERVE_MS = 60000;
 // The same server without the caller's signal, and with the reserve for its end: what stops an abandoned job must
 // still reach the card after either has fired, or the card would go on drawing a picture nobody waits for (`stopJob`).
@@ -790,10 +793,11 @@ export type DrawOptions = {
   minutes?: number; until?: number; estimate?: (references: number, first: boolean) => number;
   // The portraits file of the identity run, read for the paths it names; see `portraitsFor`.
   references?: string; log?: (event: object) => void;
-  // An identity run (docs/illustrations-plan.md): every cell once per arm, all on one canvas, and a failed cell left
-  // as it failed. `only` draws these cases of prompts.json and no others (the smoke); `pins` joins the index and makes
-  // the server's own pins mandatory; `tokens` counts a prompt as the graph's encoder reads it, with this many
-  // pictures ahead of it; `requireSocket` fails a cell whose job the socket could not hear from its start.
+  // An identity run (docs/identity-experiment.md#complete-run): every cell once per arm, all on one canvas, and a
+  // failed cell left as it failed. `only` draws these cases of prompts.json and no others (the smoke); `pins` joins
+  // the index and makes the server's own pins mandatory; `tokens` counts a prompt as the graph's encoder reads it,
+  // with this many pictures ahead of it; `requireSocket` fails a cell whose job the socket could not hear from its
+  // start.
   arms?: Arm[]; only?: string[]; pins?: Record<string, string | number>; requireSocket?: boolean;
   tokens?: (prompt: string, images: number) => { prompt: number; conditioning: number } | undefined;
 };
@@ -928,7 +932,8 @@ export async function draw(options: DrawOptions): Promise<BatchIndex> {
     // The arms differ in the portraits and in the looks and in nothing else, so all three are drawn on one canvas,
     // the graph's own, and every portrait reaches the encoder at one size: portraits of two sizes are two runs. The
     // portraits are upright and the frames wide, so the first of them is not the canvas, as the encode node's own
-    // latent would make it; docs/illustrations-plan.md says why that latent is not wired, and what that leaves open.
+    // latent would make it; docs/identity-experiment.md#geometry says why that latent is not wired, and what that
+    // leaves open.
     if (encoded.size !== 1) {
       throw new Error(encoded.size ? `The portraits reach the encoder at ${[...encoded].join(' and ')}; one run has one size of portrait`
         : 'An identity run needs --references with the portraits of these frames, and a graph whose encode node takes them');
@@ -1107,7 +1112,7 @@ export function bundlesOf(pictures: Picture[], count: number): Bundle[] {
   return bundles.filter(bundle => bundle.pictures.length);
 }
 
-// Modelled on the task the fifth reading session was given (docs/illustrations-plan.md, step 6), widened from three
+// Modelled on the task the fifth reading session was given (docs/illustrations-plan.md#step-6), widened from three
 // pictures to a bundle: the question is a rate of rejection, and contradiction is counted apart from omission.
 // Question 5 asks about the style and about the people apart, and about a face and a figure apart: an even style
 // hides changing faces, and a face kept on a body that lost its build is not a person kept. An identity bundle

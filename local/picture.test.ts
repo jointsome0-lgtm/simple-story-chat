@@ -509,7 +509,8 @@ test('the tokens under a picture are what the pinned graph\'s encoder conditions
   assert.equal(textTokens(qwen, defaultWorkflow()), undefined);
 });
 
-// The prompt under a photo, for the reader to read, copy and tune a style line against (docs/telegram-ui.md).
+// The prompt under a photo, for the reader to read, copy and tune a style line against
+// (docs/telegram-ui.md#picture-prompts).
 test('the prompt of every photo is folded under it, with its size in characters and in the picture model\'s tokens', async t => {
   const comfy = fakeComfy();
   const root = await comfy.listen();
@@ -589,7 +590,8 @@ test('a folded prompt is plain text a phone wraps, and nothing in it is read as 
   assert.equal(folded.match(/<\/details>/g)!.length, 1, 'only the fold itself closes');
 });
 
-// A rich message holds 32768 characters (docs/setup.md). Counted here in UTF-8 bytes, which are never fewer.
+// A rich message holds 32768 characters (docs/telegram-ui.md#telegram-limits). Counted here in UTF-8 bytes, which are
+// never fewer.
 test('the longest prompt a reader may write fits its note, every character escaped, under the summary of any language', () => {
   for (const lang of REGISTERED) {
     const summary = texts(lang).notices.promptSummary(PROMPT_CHARS, 999_999, null);

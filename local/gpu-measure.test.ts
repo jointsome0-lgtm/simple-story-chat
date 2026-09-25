@@ -546,7 +546,8 @@ test('the scheduler is told the shape of the server the bot runs under, cache mo
 });
 
 test('a report written before memory was recorded per card is still judged, without a card number', () => {
-  // The owner's `measurements/` holds these, and docs/gpu.md tells the operator to run `--decide` over them.
+  // The owner's `measurements/` holds these, and docs/llama-measurement.md#compare-profiles tells the operator to run
+  // `--decide` over them.
   const legacy = make({ vram: { samples: 4, totalMiB: 32768, usedMiBMax: 32000, freeMiBMin: 768 } as unknown as Vram });
   assert.deepEqual(serverCard(legacy), { index: null, freeMiBMin: 768 });
   assert.deepEqual([of(legacy, 1).verdict, of(legacy, 1).measured], ['fail', '768 MiB free']);
@@ -671,8 +672,9 @@ test('video memory is sampled per card through one SSH session, and the card is 
   // The hand-given card is contradicted by the driver's own attribution, and the operator is told so.
   const events = stdout.trim().split('\n').map(line => JSON.parse(line) as { event: string; named?: number; card?: number });
   assert.deepEqual(events.filter(event => event.event === 'vram_card_mismatch'), [{ event: 'vram_card_mismatch', named: 0, card: 1 }]);
-  // One login for the whole run: a session per sample was what the bot was backed off from (docs/gpu.md). The
-  // session asks for the cards and the processes on them, and for no server events.
+  // One login for the whole run: a session per sample was what the bot was backed off from
+  // (docs/knowledge/gpu-measurements.md#ssh-failures). The session asks for the cards and the processes on them, and
+  // for no server events.
   assert.equal(readFileSync(sessions, 'utf8').trim().split('\n').length, 1);
   assert.equal(readFileSync(asked, 'utf8'), 'python3 - --events 0 --every 1 --parts gpus,processes');
 });
@@ -706,7 +708,7 @@ test('a sampler that cannot reach the instance says so while the block is still 
   const saved = JSON.parse(readFileSync(join(directory, 'report.json'), 'utf8')) as Report;
   assert.deepEqual([saved.vram.samples, saved.vram.card, saved.vram.cards], [0, null, []]);
   // One attempt in a run this short: a sampler that logged in again every couple of seconds would be the pile-up
-  // on sshd the bot itself was backed off from (docs/gpu.md).
+  // on sshd the bot itself was backed off from (docs/knowledge/gpu-measurements.md#ssh-failures).
   assert.equal(readFileSync(sessions, 'utf8').trim().split('\n').length, 1);
   assert.doesNotMatch(stdout, /PRIVATE/);
 });

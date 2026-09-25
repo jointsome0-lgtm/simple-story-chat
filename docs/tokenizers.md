@@ -13,6 +13,8 @@ repository; without them `loadTokenizers` answers `undefined` and the bot keeps 
   `conditioning`, the span of the encoder's output the picture model is conditioned on. `comfyTokens` is the whole
   sequence the encoder runs over. `images` is the number of reference pictures of the edit graph.
 
+<a id='files'></a>
+
 ## The files
 
 `npm run tokenizers` writes two gzipped JSON files to `tokenizers/` (gitignored):
@@ -55,6 +57,9 @@ the probe then fails, finding out why.
   every string tested. A character newer than one of those tables could split differently.
 - A lone surrogate is counted as U+FFFD. Both servers refuse a request that contains one.
 
+The count of a whole chat request holds only for the template that `gemmaChatPrompt` reproduces. A server that renders
+another template needs its own check before its counts are called exact.
+
 ## Checking a running server
 
 `gemma.encode(text, { special: true })` must equal what `POST /tokenize` returns for
@@ -62,12 +67,5 @@ the probe then fails, finding out why.
 the server has this vocabulary. The same strings with `parse_special: false` should match `gemma.encode(text)`.
 `GET /props` gives the `chat_template`, whose SHA-256 must be `GEMMA_TEMPLATE_SHA256`.
 
-## How it was checked
-
-- 1099 synthetic strings (15 synthetic texts in five languages, their paragraphs, picture prompts, edge cases): the
-  same ids as the card's llama-server with and without `parse_special`, and as transformers 5.17 and ComfyUI's
-  `QwenImage21Tokenizer` and `Krea2Tokenizer` on the card.
-- 8 chats, 16 to 5779 tokens: the same rendered prompt, the same ids, and a count equal to `input_tokens`.
-- 170,080 random strings against libllama at the pinned revision, about 16.7 million tokens, in both modes.
-- 10,014 random strings, some with reference pictures, against transformers 5.17 and ComfyUI's tokenizer classes
-  loaded from the pinned sources: the same ids, sequences and kept spans.
+How the counts were checked against the servers on the rented cards, on 2026-09-24, is in
+[provider-checks.md](knowledge/provider-checks.md#tokenizer-checks).

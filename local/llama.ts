@@ -222,7 +222,7 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
         const props = await json('/props', null, current) as Props;
         // The server reports what one slot may use: its own cells, or the limit a shared cache puts on a slot
         // (`--kv-unified-per-slot`, else the whole cache). The size of a shared pool is not in the API at all, so
-        // only one request's room is verified here; the pool is the operator's to match (docs/gpu.md).
+        // only one request's room is verified here; the pool is the operator's to match (docs/llama-cpp.md#slot-pool).
         const contextTokens = count(props.default_generation_settings?.n_ctx);
         if (contextTokens === null || contextTokens < config.contextTokens) throw new ModelError('context_limit');
         if (props.total_slots !== slots) throw new ModelError('unexpected_slots');

@@ -1,11 +1,11 @@
-// A picture under a scene, in the reader's chat (docs/illustrations-plan.md, "What the reader sees").
+// A picture under a scene, in the reader's chat (docs/telegram-ui.md#picture-delivery).
 //
 // It runs after the scene has been saved and sent, never before: the reader has the text, and what is left is the
 // wait for the picture. A status line stands under the scene while it is made and is replaced by the photo; if the
 // reader answers before it arrives, the picture is dropped, because a picture of the scene before last is worse
 // than none. The story is never affected by any of this — a failure here leaves the scene exactly as it was.
 //
-// Two rules of the plan hold the shape of this file:
+// Two rules of docs/illustrations-plan.md hold the shape of this file:
 //   - the description is a second model call on OUR model, and the prompt for the image model is assembled in code
 //     from its fields (local/illustrate.ts). No name of a character reaches the image model.
 //   - the picture is drawn on a SECOND card, reached through an ssh tunnel on loopback (local/image-batch.ts).
@@ -17,7 +17,7 @@
 // `drawOne` before it is sent, because ComfyUI writes the whole prompt into them, and the card keeps no copy of it for
 // long either: the job record is cleared, and a saving node in the workflow is loaded as a preview one
 // (`previewOnly`), whose file is in RAM and is deleted by gpu/image-sweeper.py seconds later. The server's node cache
-// still holds the last job in memory until the next one runs (docs/gpu.md, "What the card keeps of a picture").
+// still holds the last job in memory until the next one runs (docs/gpu.md#what-the-card-keeps-of-a-picture).
 //
 // A picture in flight is stopped by the reader's next message and by `/cancel`. It is not offered as a button of
 // its own: by the time it is being drawn the job lock is clear, so the bot shows no cancel control, and moving
@@ -176,9 +176,9 @@ const PORTRAIT_HELD_MS = 30 * 60 * 1000;
 const PORTRAIT_BYTES = 10 * 1024 * 1024;
 
 // The prompt of a picture as a rich message folded to one line, `summary`, which the reader opens to read or copy it
-// (docs/telegram-ui.md). It is Telegram's rich HTML with the prompt as plain text, which wraps to the width of a
-// phone: a code block does not, and the first one sent this way was read by scrolling sideways. Escaping the three
-// characters HTML gives a meaning to keeps anything a description holds from being read as a tag.
+// (docs/telegram-ui.md#picture-prompts). It is Telegram's rich HTML with the prompt as plain text, which wraps to the
+// width of a phone: a code block does not, and the first one sent this way was read by scrolling sideways. Escaping
+// the three characters HTML gives a meaning to keeps anything a description holds from being read as a tag.
 export function foldedPrompt(summary: string, prompt: string): string {
   const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   return `<details><summary>${escape(summary)}</summary>${escape(prompt)}</details>`;
@@ -190,8 +190,9 @@ export function foldedPrompt(summary: string, prompt: string): string {
 const seedOf = (storyId: string) => parseInt(createHash('sha256').update(storyId).digest('hex').slice(0, 8), 16);
 
 // How many tokens of a prompt the picture model is conditioned on, counted as the graph's text encoder counts them
-// (local/tokenizer.ts, docs/tokenizers.md): the prompt, the few tokens of the encoder's template that stay, and six
-// for each reference picture of an edit graph. Undefined for a graph whose encoder that tokenizer does not know.
+// (local/tokenizer.ts, docs/tokenizers.md#when-the-counts-are-exact): the prompt, the few tokens of the encoder's
+// template that stay, and six for each reference picture of an edit graph. Undefined for a graph whose encoder that
+// tokenizer does not know.
 export function encoderTokens(qwen: QwenTokenizer, graph: Graph): ((prompt: string) => number) | undefined {
   const encoder = textEncoderOf(graph);
   const images = referenceSlots(graph).length;

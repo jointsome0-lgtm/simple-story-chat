@@ -1,4 +1,4 @@
-// The description step of docs/illustrations-plan.md, brought in from the scratch script it was iterated in. For
+// The description step of docs/illustrations-plan.md#step-1, brought in from the scratch script it was iterated in. For
 // chosen scenes of the frozen synthetic stories it asks the story model for one character sheet per story and then a
 // structured description of one frame, and assembles the text-to-image prompt here, in code (step 3 of the plan: the
 // model writing the prompt itself dropped fields it had filled). Nothing is drawn here; local/image-batch.ts draws.

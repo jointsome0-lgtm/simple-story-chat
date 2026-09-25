@@ -15,8 +15,9 @@
 // `verdictKey` is the yes/no question of examples/scene-traps.ts that carries the same claim, so the agreement report
 // can put the two instruments side by side on the same scene. A slot without one is new ground and is not compared.
 // One slot carries one question, never two: a slot that folds a second claim in and points at the easier question
-// scores the yes/no judge on the half it got right. docs/eval-experiments-plan.md:206-211 (S5) names `seal_allowed`'s
-// two questions as a control pair for exactly that reason, and the test holds every built-in key to it.
+// scores the yes/no judge on the half it got right. docs/eval-experiments-plan.md#s5-controls (S5) names
+// `seal_allowed`'s two questions as a control pair for exactly that reason, and the test holds every built-in key to
+// it.
 import type { Keys } from './judge-extract-probe.ts';
 
 // Every built-in scenario that has traps. Item keys are trap keys of examples/scene-traps.ts.

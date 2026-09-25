@@ -1,8 +1,9 @@
-// A blind comparison of the pictures several checkpoints drew for the same scenes (docs/illustrations-plan.md).
-// `build` takes run directories of local/image-batch.ts and writes, for one rater, either a page a person opens in a
-// browser or a bundle a clean model session reads. Neither names a checkpoint: pictures get names that say nothing,
-// the order under the letters is shuffled for every scene and differently for every rater, and the key is written
-// beside the output, never inside it. `score` opens the key and counts. Only synthetic scenes are drawn here.
+// A blind comparison of the pictures several checkpoints drew for the same scenes
+// (docs/illustrations-plan.md#blind-review). `build` takes run directories of local/image-batch.ts and writes, for
+// one rater, either a page a person opens in a browser or a bundle a clean model session reads. Neither names a
+// checkpoint: pictures get names that say nothing, the order under the letters is shuffled for every scene and
+// differently for every rater, and the key is written beside the output, never inside it. `score` opens the key and
+// counts. Only synthetic scenes are drawn here.
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -50,9 +51,9 @@ const contender = (entry: Entry) => entry.arm ? `${entry.checkpoint}#${entry.arm
 
 // A scene drawn by one checkpoint only is no comparison and is left out, and so is one whose pictures were drawn on
 // canvases of different sizes: a rater shown a wide picture beside a narrower one has been told which run is which,
-// and a frame drawn around a reference of its own size is not the frame drawn without one (docs/illustrations-plan.md).
-// `mixed` counts those. A rater's name goes into the seed, so two raters never share an order, and into the picture
-// names, so their files cannot be matched by name either.
+// and a frame drawn around a reference of its own size is not the frame drawn without one
+// (docs/identity-experiment.md#geometry). `mixed` counts those. A rater's name goes into the seed, so two raters
+// never share an order, and into the picture names, so their files cannot be matched by name either.
 export function deal(entries: Entry[], scenes: Scene[], rater: string, seed: number) {
   const next = random(seed ^ parseInt(createHash('sha256').update(rater).digest('hex').slice(0, 8), 16));
   const groups = new Map<string, Entry[]>();

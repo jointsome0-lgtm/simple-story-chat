@@ -1,8 +1,19 @@
-# Plan for illustrated scenes (text to image)
+# How pictures came into the bot
+
+A record of the plan for illustrated scenes, text to image, from its first version on 2026-09-20 to the owner's
+decisions of 2026-09-25. Each section is true of its date, and a proposal in it is not a task for today. The tester
+asked how text to image fits in at all. The six steps kept running into a second question, whether a person stays
+recognisable from one frame to the next, and no confirmed paid run has answered it yet. What the bot does now is
+described elsewhere: what the reader gets in [telegram-ui.md](telegram-ui.md#picture-delivery), the picture card in
+[gpu.md](gpu.md#picture-card), its licences in [gpu.md](gpu.md#image-licences), and the working protocol of the
+identity measurement in [identity-experiment.md](identity-experiment.md#identity-runbook). The header below is the
+first version's.
 
 2026-09-20 · Opus 5, corrected and measured 2026-09-21 · Fable 5.1 · three images were generated on a hosted API,
 no GPU was rented, no code was changed. Markers as in [eval-experiments-plan.md](eval-experiments-plan.md): **[M]**
 measured here, **[D]** derived from measured values, **[A]** an assumption that a measurement must close.
+
+<a id='research-question'></a>
 
 The tester asked for it and offered to fund the Vast budget. What he wants first is modest and worth keeping in
 mind: to see **how text to image fits in at all**, not to ship a finished visual novel.
@@ -18,6 +29,8 @@ is no such thing: a scene is plain text streamed to the reader as it is written 
 the streaming. The tester's shape was the right one.
 
 The picture covers the place, the atmosphere and **what people are doing**, by role and action. Not by name.
+
+<a id='description-cost'></a>
 
 ## What the second call costs
 
@@ -36,6 +49,8 @@ What remains against it is not tokens:
 - It **takes a slot a second time**, 6–23 s on a hosted endpoint for 270–410 output tokens [M, below]. The pool
   holds two or three, and the scheduler counts them (`local/scheduler.ts`).
 - The reader has the scene already, so the wait is for the picture only, and it is the image model's wait as well.
+
+<a id='text-identity'></a>
 
 ## What survives without reference images, and what does not
 
@@ -61,6 +76,19 @@ image model become the next expense.
 
 His second suggestion supports this: run the image model plainly, no workflow, no LoRA, no upscaler. That isolates
 one variable. A weak picture then means a weak description, not a mis-tuned pipeline.
+
+<a id='description-steps'></a>
+
+## Six steps on 2026-09-21
+
+On 2026-09-21 six steps tried the description on the synthetic stories and then drew from it on a hosted API, each
+step starting from what the one before had found. [Step 1](#step-1) asks for the description through structured
+output, [step 2](#step-2) draws the first pictures, [step 3](#step-3) assembles the prompt in code from fixed fields,
+[step 4](#step-4) tries prompts written by hand, [step 5](#step-5) a larger hosted model, and [step 6](#step-6)
+frames chosen for what the image model can draw. The pipeline the bot uses now is in
+[telegram-ui.md](telegram-ui.md#picture-pipeline).
+
+<a id='step-1'></a>
 
 ## Step 1, measured 2026-09-21
 
@@ -92,6 +120,8 @@ in the repository. One run per scene, one model, read by one reader: a first loo
 
 What this does not show: whether these prompts make good pictures, anything about the uncensored build the bot runs,
 or anything about adult scenes, which are never sent to a hosted API.
+
+<a id='step-2'></a>
 
 ## Step 2, first pictures, 2026-09-21
 
@@ -146,6 +176,8 @@ fp8 or the encoder offloaded. Which hosted name the open weights correspond to i
 against `medium` from 17 pictures an hour and against `medium-turbo` from 35 [D]; one active reader with a picture
 per scene is already there. Hosted is for looking, not for running.
 
+<a id='step-3'></a>
+
 ## Step 3, the prompt assembled in code, 2026-09-21
 
 The same three scenes again, with the second reader's points applied. The description lost its `prompt` field:
@@ -189,6 +221,8 @@ assembly, send `moment`, the new style sentence, the reader's per-scene wording 
 can follow at all — and its question is whether Krea can draw a stated contact between two things. If it cannot
 with a prompt written by hand, no instruction to the describing model will fix it.
 
+<a id='step-4'></a>
+
 ## Step 4, prompts written by hand, 2026-09-21
 
 The question of step 3, asked directly: the second reader's own wording for the three scenes, put over the step 3
@@ -220,6 +254,8 @@ and the place just before or after the action — and code refuses frames that d
 this is the model or its distilled 8-step variant: the same three prompts through `krea-2-large` cost $0.18, and
 on a rented card `Krea-2-Raw` can be set against `Krea-2-Turbo`.
 
+<a id='step-5'></a>
+
 ## Step 5, the larger hosted model, 2026-09-21
 
 The three hand-written prompts of step 4 and the same seed through `krea-2-large`: $0.06 and 27–31 s a picture
@@ -237,6 +273,8 @@ models A and B, unnamed, and marked every stated relation for each.
 
 So four times the price and three times the wait buy nothing here, and the failure is the family's, not the
 distillation's. The way forward is the first of step 4's two: frames chosen for what this model can draw.
+
+<a id='step-6'></a>
 
 ## Step 6, frames chosen for what can be drawn, 2026-09-21
 
@@ -276,41 +314,28 @@ three pictures cannot give it. The next measurement is wider, not deeper: twenty
 synthetic stories, one verdict each, to learn how often a reader would reject the picture. About $0.45 on the
 hosted model, or the same on the rented card where the seconds are measured too.
 
-## What the reader sees
+<a id='reader-experience-history'></a>
+
+## What the reader sees (2026-09-21)
 
 Settled with the owner 2026-09-21. The tester funds the second card by topping up the vast.ai account, so the card
 is rented and run by us and story text stays on our side. The picture comes after the text; what the reader needs
 is to know how long. So: a status line under the scene while the picture is made, replaced by the picture; the
 seconds from the end of the scene to the picture logged as a non-negative integer, and measured in the rental's
 last block together with the wait of the next turn. Hosted `medium-turbo` took 9.5–10.3 s a picture over six
-pictures [M]; the description call on our card and `Krea-2-Turbo` fp8 on a second card are not measured. What
-happens to a picture still in flight when the reader answers is the owner's to decide; cancelling it is the
-proposal.
+pictures [M]; the description call on our card and `Krea-2-Turbo` fp8 on a second card are not measured.
+What happens to a picture still in flight when the reader answers was the owner's to decide, and cancelling it was
+the proposal. The build of 2026-09-22 stops it at the reader's next message and at `/cancel`
+([what shipped](#shipped-2026-09-22)). How the bot delivers a picture now is in
+[telegram-ui.md](telegram-ui.md#picture-delivery).
 
 ## The licence, read 2026-09-21
 
-Krea 2 Community License Agreement v.1 of 2026-06-22 and the Acceptable Use Policy it incorporates [M, both read
-in full]. Not legal advice.
+The Krea 2 Community License Agreement and the Acceptable Use Policy it incorporates were read in full on 2026-09-21,
+and the owner decided that day how the bot meets the licence's clause on content filters. The reading and the
+decision are kept word for word in [gpu.md](gpu.md#image-licences), where they are the rule for the picture card.
 
-- **Only `Raw` and `Turbo` are downloadable.** The licence names exactly those two variants. `large` and `medium`
-  exist as hosted names only, so a card of ours runs `Turbo` or `Raw`, and a hosted `large` picture says nothing
-  certain about what our card would draw.
-- **The repositories are gated**: a HuggingFace account has to press "Agree" with a name, an e-mail and a company,
-  and the bootstrap needs that account's token. That is the owner's act, not a script's.
-- Commercial use is allowed below $1M of yearly revenue. Outputs belong to whoever generated them.
-- **A deployer must run content filters** (4.2): "reasonable and appropriate" measures against prohibited output,
-  with an image classifier, a moderation API or human review given as examples. Not doing so is a breach, and a
-  breach ends the licence at once. A bot that draws from free-form stories is a deployment in this sense.
-  Owner's decision 2026-09-21: while the bot is tested by the owner and the tester, each of whom sees his own
-  pictures, that human review is the measure, and no classifier is added. It comes back when pictures are made
-  for people whose pictures neither of them sees.
-- The policy forbids sexual content with minors, intimate images of real people, deception about real people, and
-  content "obscene or otherwise objectionable under applicable law". It does not forbid adult content as such. The
-  test-ground rule stays as it is: nothing adult goes to a hosted API.
-- Distribution of the weights needs the licence text, a "Krea" name prefix and a notice file. We do not distribute;
-  the pin in a manifest is a reference, not a copy.
-- Krea may end the licence for any reason on 30 days' notice, after which the weights must be deleted. A feature
-  built on them can be taken away.
+<a id='model-choice'></a>
 
 ## The model, if it gets that far
 
@@ -320,6 +345,8 @@ figures, not measured here]. The tester pointed at `Kreamania`, a community fine
 and HuggingFace. Any such checkpoint must be pinned the way the language model is pinned in
 [gpu/manifest.env](../gpu/manifest.env) — repository, revision, SHA256, size. A community checkpoint on a community
 host is exactly the kind of file that changes underneath a project.
+
+<a id='qwen-choice'></a>
 
 ## Qwen-Image 2.1, a third checkpoint, prepared 2026-09-21
 
@@ -334,17 +361,10 @@ end the whole timeboxed run in `workflow_too_few_reference_slots`, and a graph w
 than the run directory was opened with. A different mechanism for the same goal, and the only one on the list that
 can be tried in the same rented hour.
 
-It is **opt-in**: `SIMPLE_CHAT_IMAGE_QWEN=true`, 17.28 GB on top of the session's download. Off by default because
-[rent-plan.ts](../local/rent-plan.ts) prices an offer's traffic from what a default run pulls, and a comparison
-nobody asked for should not be in that number. The bytes and the minutes are in [gpu.md](gpu.md).
-
-**Licence, accepted for the test.** Qwen Research License (the repository's own `license_name: qwen-research`),
-non-commercial, read as what it says on the card and not verified clause by clause here [A]. The owner accepted it
-in their own words on 2026-09-22, asked whether they take it for as long as only the owner and the tester use the
-bot. It is a narrower permission than Krea's, which allows commercial use below $1M: it makes Qwen a comparison
-checkpoint rather than a candidate for a bot that earns money, and if this feature ever reaches people beyond the
-owner and the tester, Qwen has to be decided again. The opt-in stays a flag of the session
-(`SIMPLE_CHAT_IMAGE_QWEN=true`), off by default, because the default download is what a rental is priced by.
+It is opt-in and off by default, because a rental is priced by the default download and a comparison nobody asked for
+should not be in that price. The flag, the 17.28 GB it adds and the `only` mode of the identity measurement are in
+[gpu.md](gpu.md#qwen-image). The owner accepted its licence, the Qwen Research License, for the test on 2026-09-22;
+the decision and what it rules out are in [gpu.md](gpu.md#image-licences).
 
 **The "Uncensored GGUF" reuploads are not used, and not because of the name.** Checked 2026-09-21 on
 `KasugaiSakura/Qwen-Image-2.1-Uncensored-GGUF`: its own card says `base_model_relation: quantized` and "GGUF
@@ -363,378 +383,23 @@ the templates' 25 steps, cfg 1, euler and simple; the upstream card's 40 steps a
 text-to-image frame is 1280x720 like Krea's, because a blind bundle holding one square picture and one wide one has
 already told the rater which model drew which.
 
-**The identity frames are 1280x704, and the portraits are upright.** The encode node of the edit graph is at the
-template's `resolution: 0`, which keeps each reference at its own size rounded to a multiple of 32 (Python's
-`round(720 / 32)` is 22, not 23). A portrait is drawn on the text-to-image graph's latent turned upright, 720x1280,
-because a standing figure in a wide frame gets a third of the pixels, and it reaches the encoder at 704x1280. The node
-also hands out an empty latent of the first reference's size, with the warning that sampling has to match it because
-"any other size shifts the edit", and the template samples from it through a switch whose other branch is a free-size
-canvas. That output stays unwired here. The sampler starts from the graph's own `EmptyLatentImage`, so every frame is
-1280x704 whatever its references are, and the run pins `canvas` 1280x704 beside `referenceSize` 704x1280.
-`applyToWorkflow` would refuse a sampler latent without a width and a height anyway, rather than draw one size and
-record another. The pinned model gives each reference a place of its own in the sequence and centres its grid on the
-target (`build_sequence` in `comfy/ldm/qwen_image21/model.py`), so a reference of another shape than the canvas is a
-case it is built for. Whether an upright portrait keeps a person as well as a wide one would is not verified. The
-node's warning reads as one about an edit shifting against its first picture, and a frame keeps nothing of a portrait
-in place, but that is a reading of the source, not a measurement. Neither size is Krea's 1280x720, so a Krea frame
-and an identity frame are not the same canvas; the blind page compares Krea against the text-to-image graph, which is.
-
-**The identity runbook, 2026-09-25.** One fixed synthetic set,
-[examples/identity-set.ts](../examples/identity-set.ts), written before any card is rented: one story, a sheet of six
-people and eight frames, each frame drawn from two seeds in three arms, 48 pictures on one canvas. Each arm goes by
-what it is, here, in the report and in the bundle keys (`armIs`):
-
-- **A, text only on the edit graph, 1280x704**: the frame's text, looks included, with every reference slot of the
-  edit graph taken out. A matched text-only baseline for B and C, and not the bot, which draws a frame on the
-  text-to-image graph; the control below prices that graph;
-- **B, the same text and the bound portraits**;
-- **C, the bound portraits, their looks replaced by the number of their picture**: the whole look of each bound
-  person, build included, becomes "the person from image N". Clothes, state and action stay, and no arm's text holds
-  a name.
-
-B against A says whether a portrait helps at all; C against B, whether the look can go once the portrait is there.
-**C is the owner's question.** The reference is meant to carry the whole figure, so that a frame need not say every
-time that a man is huge and grim as a barbarian: does the build come from the portrait alone? No frame of the set
-says who is big or small outside the looks, so in C nothing else can carry it.
-
-What the eight frames cover, each on purpose:
-
-- a very muscular, heavy man and a slight, thin woman, and a very tall man beside a very short one. Both pairs appear
-  together in one frame and again in swapped order;
-- two women who look alike on purpose, together and swapped;
-- one, two and four portraits in a frame;
-- a ferryman nobody drew a portrait of, standing between the two women, where the binding stops;
-- three frames that change clothes, and a new pose and place in every frame.
-
-The second seed is an independent repeat, never a second chance. A cell that failed, an OOM above all, stays failed:
-drawing it again until it comes out would be choosing the picture.
-
-**The portraits carry the figure, by the bot's own recipe.** They are drawn on the card first, by the text-to-image
-graph, so that the references are the model's own people and not photographs of anybody. The recipe is the one the
-bot draws its portraits with: `PORTRAIT_CLOTHES`, `PORTRAIT_STYLE`, `PORTRAIT_ACTION` and `portraitPrompt` in
-[image-portraits.ts](../local/image-portraits.ts), which `local/picture.ts` takes them from. Each portrait is:
-
-- one per person, from that person's sheet line and nothing else;
-- the whole body in frame, seen from the front, before a plain grey backdrop;
-- standing upright facing the viewer, arms relaxed at the sides;
-- in a plain close-fitting white tank top, close-fitting dark grey trousers and plain dark shoes, which show the build
-  where a robe or a coat would hide it;
-- in a neutral reference style of its own, never a story's, on the upright canvas above.
-
-The run pins the recipe, that is the clothes, the style, the action, the canvas and the text-to-image graph's hash,
-so a resume under another one is refused. No expression is asked for. A face told to be calm argues with a look line
-that says grim, and a permanent bearing is the look's to carry. No frame dresses anybody as the portraits are
-dressed, so in B and C every appearance also asks whether the clothes came from the text or from the portrait. A face
-reaches the card once, under the hash of its own bytes. The sheet name picks the file and goes no further: the rule
-that no name reaches the image model is unchanged. Portraits pass through `stripPngMetadata` on the way up, as every
-picture here passes through it on the way down.
-
-**All six portraits, or no smoke.** Before the smoke the tool checks that all six people have a portrait on the
-portrait canvas, that none failed, and that every frame binds exactly the people `IDENTITY_BINDING` in the set names,
-in that order, which fixes each frame's number of references. A portrait missing or failed ends the measurement
-there, incomplete: no portrait is drawn again, retried or chosen among. Without that check the binding below would
-quietly give the two look-alikes no face and much of C its look back.
-
-**One binding plan, and slot N is person N of the prompt.** Nothing else says whose face is whose. The encoder's
-tokenizer writes its own `<image1> <image2> …` block in front of the prompt. The prompt names people in the order of
-`description.people`, and the slots are filled in that order. One plan, `bindingPlan` in
-[image-batch.ts](../local/image-batch.ts), says both which portraits a frame sends and whose look arm C drops, so the
-two cannot disagree.
-
-The plan stops at the first person of a frame who has no portrait, rather than skipping them. That person may be
-somebody off the sheet, a stranger of one scene, or a sheet person the portrait run drew nothing for. Skipping them
-would move every later face up a slot and put a portrait against another person's clause. The people after the stop
-keep their look in every arm, and `references` in the index counts what was actually bound. C's "image N" is the
-slot's number. The swapped frames test whether the model follows that number rather than the order alone.
-
-**One canvas, one set of pins.** All three arms, and the control, are drawn at 1280x704, and one run directory holds
-one graph and one canvas. The tool refuses portraits of two sizes and a resume under another canvas, other arms,
-another prompts file or other pins. It checks all of that before it writes anything, so a refused resume leaves the
-run directory byte for byte as it was. A run is pinned to:
-
-- what the card was verified to run: the ComfyUI revision and the SHA256 of each Qwen file, from the bootstrap's own
-  record (the runbook below). There is no checkpoint to choose: every stage draws with the transformer that record
-  verified, and the tool refuses a `--checkpoint`;
-- the portraits' recipe;
-- the graph's cache device and resize, the canvas, and the size a portrait reaches the encoder at;
-- the set, the portraits and the seeds;
-- what the server says of itself: ComfyUI, PyTorch and the card. A server that does not say all three on
-  `/system_stats` is refused, never read as saying nothing.
-
-Smaller portraits and a waist-up crop are each a short run of their own after this one, with their own arm A. They
-are never a full factorial of sizes, crops and costumes.
-
-**What each frame records:**
-
-- the reference sizes after the resize, the number of portraits bound, the arm and the seed;
-- the time from submit to file, with the upload apart from it, and the encode and sampling phases the websocket
-  reports. The server tells a job's start only to a socket that is connected when it starts, so the job is sent once
-  the socket is open, two seconds at most. Here a socket that does not open stops the run before the job is sent, as
-  a server that refuses a job does, and a resume starts from that cell; the bot's own pictures fall back to the polls
-  as before;
-- `loaderCacheMiss`: whether any loader node of the job ran rather than being answered from ComfyUI's node cache
-  (`execution_cached`). It proves nothing about weights moving to the card, and a model the server offloads and
-  brings back inside a job stays inside that job's time;
-- `first`: whether the frame is its arm's first. A **warm** frame has no loader cache miss and is not its arm's first;
-- the video memory sampled every half second while the job ran, counting torch's reserved pool as occupied: a
-  sampled high-water mark, which the true peak can exceed between two samples. Counting the pool narrows that gap
-  and does not close it;
-- the system RAM, which counts every process on the machine and not ComfyUI alone;
-- `partialModelLoadEvents`: the partial loads ComfyUI's own log reports during the job. The cache node on `auto`
-  moves what does not fit into RAM rather than failing, so a run without an OOM may still have spilled; a count of 0
-  does not prove the models stayed on the card.
-
-The portrait run, and each arm's first frame, are shown apart from the warm frames. The prompt is counted in text
-tokens as the encoder reads it, or in characters when `tokenizers/` is missing. C's shorter text is fewer words for
-the encoder to read, and no promise of less compute: a reference adds a vision pass and a longer sequence.
-
-**The text-to-image control.** Arm A is not the bot, so the graph the bot draws with is drawn too, on the same
-1280x704 canvas: frames 1, 2 and 3 at the first seed, picked before the run by the rule the arms follow, so one first
-frame and two after it. It is drawn once, with nothing chosen among, and only after a complete main set: a main set
-with a failed cell gets none, and a control the end cut short is not resumed, which the report says. The report gives
-it as cost only, outside every gate: its first frame, and its warm median against A's warm frames of the same scenes.
-The bot's own 1280x720 is skipped: one more canvas for one more number.
-
-**Judging.** `bundles` writes one bundle per arm and seed under `review/`, and only for a run that has a verdict
-(below). A transition compares two frames of one arm, and a session shown the arms side by side would judge the arms.
-Bundles and pictures are named by hashes, and the key stays in `keys/`. Every frame is shown with `frame_text`, the
-text with all its looks, whichever arm drew it, because arm C's own text would name the arm.
-
-The bundle's `checks.json` is the sheet the gates are counted from:
-
-- **transition**: each sheet person in each pair of frames that follow each other, with `face` and `figure` apart. A
-  face kept on a body that lost its build is `figure: no`;
-- **picture**: each picture's `action`. Where two people of the sheet share the picture, also `apart` (nobody has
-  another's face or figure) and `swap` (nobody took both another's look and clothes);
-- **clothes**: each appearance's `clothes`;
-- **style**: one answer for the bundle.
-
-Question 5 of TASK.md asks about the style and the people apart, and about the face and the figure apart. Each bundle
-goes to a reading session of its own. The session's report ends with its answers as one JSON block, which is saved
-as `answers/bundle-N.json` in the run directory for `report` to count. Bundles are built once, because the answers are
-read against them.
-
-`image:blind` now deals the arms as contenders of their own. It leaves out any question whose pictures were drawn on
-two canvases, and counts them. The identity run is judged by its own bundles all the same.
-
-**The gates, fixed before the paid run.** These are Astra's engineering gates of 2026-09-24, as `report` counts them;
-their numbers are one table, `CRITERIA` in [image-identity.ts](../local/image-identity.ts). They are thresholds for
-the next decision, not a statistical proof. The 26 transitions of an arm are repeated observations of six people, not
-26 independent characters. A transition checks that two frames of one arm agree, and the figure against the look; it
-does not compare a face with its portrait. So a pass proves no exact transfer of a face from reference to scene, and
-a small experiment promises no identity beyond its own set. Each gate is counted for B and for C against A, over all
-the arm's bundles. A `no` and an `unsure` both count against the picture. An arm with an item unanswered is
-unscored, never passed.
-
-1. **Recognition.** At least 20 transitions; the set gives 13 per seed, 26 per arm. The face is kept (`face`) in at
-   least 90% of them, and the figure (`figure`) in at least 90%. No picture mixes two people up (`apart`).
-2. **Against A.** The share of transitions that keep both face and figure is at least 15 points above A's. If A is
-   at 90% or above, B cannot pass. C passes then only if all three hold: it is at most 5 points below A, its median
-   prompt is shorter than A's, and it has no more action errors than A.
-3. **Clothes.** The frames' own changes of clothes are Бран's in frame 1, Ива's in frame 4, and Лада's and Вера's in
-   frame 6: eight appearances per arm over the two seeds. At least 90% of them show the clothes the frame gives,
-   which on this set means all eight, so 7 of 8 fails. No case where a person's identity and clothes carried over to
-   another person (`swap`), and no more action errors than A. Every appearance that differs from the neutral
-   portrait, changed by the story or not, is shown beside the gate as a number of its own. It gates nothing and does
-   not dilute the explicit changes.
-4. **Time.** The frames counted are the arm's warm frames, each matched with A's warm frame of the same scene and
-   seed. Over them, the arm's median time is at most 1.5× A's, and its slowest at most 2× A's slowest. The portraits,
-   the first frames and the control are shown, not counted here. With no matched frame the gate is unmeasured, and
-   so it is with one frame of the arm or of A whose job the socket did not hear from its start: that frame is neither
-   warm nor cold, and leaving it out could leave out the slowest.
-5. **Memory.** No OOM. Every frame of four references is drawn, sampled while it ran, and leaves at least 2 GiB of
-   the card free at its sampled peak. A frame of four that failed or was never sampled fails the gate. RAM and partial
-   loads are shown, not gated: what they cost is time, and gate 4 counts time.
-
-**Complete, or no verdict.** An arm passes with all five, and only in a complete run. Complete means all 48 cells
-drawn on the right geometry, with no failure, no stop and no error. The right geometry is the file at 1280x704, as
-many references as the set binds for its frame (none in A), and each of them at 704x1280. A failed cell stays in the
-record as the cell's result, and the set it belongs to is **incomplete**: no gates, no verdict and no bundles,
-whatever the surviving cells would say. A run whose smoke or geometry failed gets no verdict either, and neither does
-one the end of the rental cut short.
-
-**The smoke** is the frame with one portrait and the frame with four, at the first seed, in all three arms. It passes
-only if all of these hold:
-
-- all six cells are drawn and none failed;
-- they are on the right geometry;
-- they are within the card's memory, by gate 5's rule on its two frames of four;
-- they give what gate 4 needs: every picture's phases and loader answer heard on the socket, and a warm frame of B
-  and of C matched in A.
-
-Anything less, and the tool refuses the main set in that directory: the measurement ends there and the card is let
-go. A fix, such as the cache node off `auto` or smaller portraits, is another run with its own pins.
-
-**One hour, ended on the wall clock.** The card is rented only with the owner's explicit consent and under
-[the owner's rules](gpu.md#while-the-cards-are-paid-for). `gpu/rent.mjs --hours 1` sets the guard of
-[trial-onstart.sh](../gpu/trial-onstart.sh), which deletes the machine an hour after the box started, whatever is
-running, and which nothing extends. The guard can fail, though. It does not start without the container's key, `curl`
-and `flock`; it retries a refused delete forever; it takes its own delete's success for the outcome; and without ssh
-nobody can tell it "we're done". So the rental also has an end outside the box, below, and the owner is asked for the
-whole paid time, from the creation to a destroy read back as done. For one hour the procedure takes up to 1 h 20 min
-20 s at the offer's price: the guard's hour, the quarter of an hour the box is given to start before the guard's clock
-does, twenty seconds for "we're done" and five minutes for the destroy to be read back. The traffic comes on top.
-That is when the procedure ends, not a cap on the bill: a destroy it cannot read back as done goes to the owner then,
-and the machine may bill until the owner deletes it in the console. `gpu/rent.mjs --hours 1 --qwen only` prices each
-offer that way, by Qwen's files alone, and its dry run prints the sum as `session`.
-
-The harness takes an absolute end, `--until`: five minutes before the earlier of the guard's deadline and the
-operator's own. Nothing is sent to the card after it, and every wait and request of a stage ends there: the socket's
-opening, an upload, a poll, a picture's download. A picture that is not in hand with its measurements by then is cut,
-even one the card has finished. Its cell stays undrawn and is nobody's failure, and the run stops, incomplete. A job
-already submitted gets one minute more, for its id, its stop and the delete of its record, and nothing else does; that
-minute ends four minutes before the guard. Once the smoke has timed its frames, no cell is submitted that cannot end
-by `--until`. A cell's time is taken from the smoke's slowest frames of one and of four portraits, on a straight line
-between them, plus a quarter and three seconds. The main set is priced whole that way before it begins, and so is the
-control after it. One that cannot end by `--until` is not begun, and the run ends incomplete rather than half-drawn.
-The rental is never extended.
-
-What the hour holds, counted from the guard's start, at the floor the rent filter asks of an offer
-(`inet_down` ≥ 300 Mbit/s, [rent-plan.ts](../local/rent-plan.ts)) and at the bootstrap's own floor of 200:
-
-| | minutes at 300 Mbit/s | at 200 Mbit/s | |
-|---|---|---|---|
-| ssh in, the scripts copied | 2 | 2 | not measured |
-| Qwen's three files, 17.28 GB, with `SIMPLE_CHAT_IMAGE_QWEN=only` | 7.7 | 11.5 | |
-| torch and its wheels, about 5 GB, on the same link | 2.2 | 3.3 | rent-plan.ts's figure |
-| the install: the ComfyUI checkout, pip | - | - | while the files download; any time beyond them is not measured |
-| the verification, the server, the tunnel and the card's record | 2 | 2 | not measured |
-| 57 cells: 6 portraits, the smoke's 6, the main set's 42, the control's 3 | 41 | 36 | what is left |
-| the margin before the guard: a submitted job's minute, the last report, "we're done" | 5 | 5 | `--until` |
-
-That is about 43 seconds a cell at 300 Mbit/s and 38 at 200, with the first loads of the models inside it. The rows
-not measured are guesses, not margin: if they run longer, the cells get less. Whether a 25-step frame of four
-portraits fits that is the first thing the smoke answers. If it does not, the main set is refused on the smoke's own
-numbers. The hour has then bought the smoke's times, which say what a longer rental would need, and that rental is
-the owner's decision, never an extension.
-
-**The operator** is the Claude session that runs the hour. It keeps the card from the creation until its destroy is
-read back as done. During the hour it only runs and watches: the code and its tests are ready before the rental, so a
-failure that needs new code ends the hour. The owner's rules apply as written, the 10-minute idle rule included.
-
-- `rented` prints the instance's ID and `destroyBy`: the guard's hour and the quarter of an hour, on the operator's
-  clock, counted from just before the create request that succeeded, so however long its answer took. That is the
-  operator's own deadline.
-- `npm run gpu:rent -- --show ID` reads `present` at once, or the termination follows. It is the path to the rental
-  that needs nothing on the box: the account's key, from `.env.gpu` through `node --env-file`, never printed.
-- As soon as ssh answers, and no later than a quarter of an hour after the creation, the guard is checked, in twenty
-  seconds at most. The runbook's command prints the guard's deadline only while the guard holds its lock, when
-  `flock -n -E 75` exits 75, and on no other outcome. Anything but a whole number of seconds no later than `destroyBy`
-  is a failed guard: nothing printed, a flock that failed, a deadline file that says something else, a deadline too
-  late. The termination follows at once. A flock without `-E` (util-linux before 2.26) prints nothing: a failed guard.
-
-**The termination** is one procedure for every ending: a whole run, a failed smoke, a set that cannot end in time, a
-bootstrap or ssh that failed, a failed guard, and `destroyBy` itself, which starts it whatever the card is doing.
-
-1. "We're done" over ssh, if ssh works, in twenty seconds at most: the guard deletes the machine within ten seconds.
-2. `npm run gpu:rent -- --destroy ID`, with the account's key, as soon as step 1 ends or its twenty seconds run out.
-   It takes five minutes at most, on its own monotonic clock from before its first read, whatever Vast answers or
-   fails to: every request is cut at twenty seconds or at the time left, the answer's body included, every pause at
-   ten seconds or at the time left, and nothing is sent after the five minutes. For its first 60 seconds, the guard's,
-   it only reads, every ten seconds. After them, while no read says the instance is gone, it deletes it with the
-   account's key, and again every half minute.
-3. `destroy_confirmed` ends the rental. Anything else, `destroy_unconfirmed`, `destroy_refused` or no answer, goes to
-   the owner at once, with the ID, as a deletion not confirmed that may still be billing, never as "the hour is over".
-
-A stop is not a destroy: a stopped instance keeps its disk, and Vast bills the disk. Nor is the destroy's own
-`success` a read-back: only a read that says the instance is gone ends the procedure.
-
-The runbook, in its order:
-
-```sh
-npm run image:identity -- dry-run    # before renting: all of it against a fake ComfyUI, with made-up answers
-npm run image:identity -- set        # the set and the portraits' prompts, in illustrations/identity
-SIMPLE_CHAT_RENT_DRY_RUN=1 npm run gpu:rent -- --lane pictures --hours 1 --qwen only    # each offer's `session`
-npm run gpu:rent -- --lane pictures --hours 1 --qwen only    # with the owner's consent; `rented` names ID and destroyBy
-npm run gpu:rent -- --show ID    # present, at once
-destroy_by=DESTROY_BY            # from `rented`
-# As soon as ssh answers. The deadline is printed only on flock's 75, the lock the guard holds. Anything but a whole
-# number no later than destroy_by is a failed guard: terminate now. The number is checked before any arithmetic.
-guard=$(timeout 20 ssh -o ConnectTimeout=10 simple-chat-vast \
-  'flock -n -E 75 /root/.simple-chat-trial-guard.lock true; [ $? -eq 75 ] && cat /root/.simple-chat-trial-deadline')
-if [[ $guard =~ ^[1-9][0-9]{0,11}$ ]] && (( guard <= destroy_by )); then end=$(( guard - 300 ))    # min(guard, destroy_by) - 300
-else end=0; echo 'failed guard: terminate now'; fi    # 0: a past end that every stage refuses
-ssh simple-chat-vast 'mkdir -p /workspace/simple-chat/gpu'
-tar -cf - -C gpu . | ssh simple-chat-vast 'tar -xf - -C /workspace/simple-chat/gpu'
-ssh simple-chat-vast 'SIMPLE_CHAT_IMAGE_QWEN=only bash /workspace/simple-chat/gpu/image-bootstrap.sh'
-# The server on the machine's one card, and the tunnel to it, each in a terminal of its own:
-ssh -t simple-chat-vast \
-  'SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 bash /workspace/simple-chat/gpu/image-serve.sh'
-bash gpu/tunnel.sh --pictures-only simple-chat-vast
-ssh simple-chat-vast cat /workspace/simple-chat-gpu/image-verified.txt > illustrations/identity/card.txt
-npm run image:identity -- portraits --until "$end"
-npm run image:identity -- draw --smoke --until "$end"
-npm run image:identity -- report
-npm run image:identity -- draw --until "$end"    # the main set, then the control
-npm run image:identity -- report
-# The termination, here and after every other ending: we're done, then the destroy whatever the ssh did.
-timeout 20 ssh -o ConnectTimeout=10 simple-chat-vast 'date +%s > /root/.simple-chat-trial-deadline'; \
-  npm run gpu:rent -- --destroy ID    # destroy_confirmed; anything else goes to the owner at once
-npm run image:identity -- bundles    # no card needed from here on
-npm run image:identity -- report     # once answers/ holds every bundle
-```
-
-`image-verified.txt` is what the bootstrap wrote once every file was verified: the ComfyUI revision it checked out
-and each file's SHA256 as computed on the box. Every drawing stage refuses to start without it, or with a record that
-differs from the manifest, and pins the run to it. "We're done" writes the present time into the guard's deadline.
-The guard reads that file again every ten seconds and takes an earlier time, never a later one. The drawing stages
-also take `--comfy`, `--wait`, `--timeout` and `--tokenizers`, whose defaults the runbook keeps. Everything lives in
-one directory, `illustrations/identity` unless `--dir` names another:
-
-- `set/` and `portrait-prompts/`, the prompts;
-- `card.txt`, the card's record;
-- `portraits/` and `references.json`;
-- `run/`, the arms, with `review/`, `keys/` and `answers/`;
-- `control/`.
-
-The graphs are the repository's `gpu/image-workflow-qwen.json` and `gpu/image-workflow-qwen-edit.json`. They have one
-source and one set of names, so the repository's copy and the box's are the same file.
-
-`dry-run` goes through all of it against [fake-comfy.ts](../local/fake-comfy.ts), with a socket that opens late on
-purpose and made-up answers. On the way it goes through every refusal the paid run relies on:
-
-- the main set before the smoke;
-- two lost portraits, and after them the smoke and a redraw refused;
-- a smoke that fails at one portrait;
-- a resume with another set, and the run byte for byte unchanged after it;
-- a main set that cannot end in time, and a job the end cuts;
-- bundles of a run with no verdict.
-
-Its made-up answers put C at 7 of 8 on gate 3 and B at 8 of 8, so its verdict is "B passes, C fails". The fake keeps
-the contract the harness talks to, with delays, failures and telemetry set by hand, and models no card.
-
-**Not verified without a card**, in the order it would bite:
-
-- how long the image takes to pull and the box to start, which the quarter of an hour before `destroyBy` allows for;
-- that the int8 transformer and the int8 encoder load through `UNETLoader` with `weight_dtype: default` and
-  `CLIPLoader` with `type: qwen_image` (read from the pinned source, never run);
-- that `SIMPLE_CHAT_IMAGE_QWEN=only` prepares and serves a box. It was checked dry: the bootstrap's `--dry-run`, its
-  verification step on a synthetic file, and image-serve.sh on a synthetic box;
-- how long one 25-step frame takes, which decides whether 57 cells fit the hour at all;
-- whether four references of 704x1280, plus the encoder, plus the transformer stay inside 32 GB, and how much the
-  cache node on `auto` spills to RAM;
-- whether an upright portrait on a wide canvas keeps a person as well as a wide portrait would;
-- what a frame of the text-to-image graph costs against A's, which the control prices;
-- whether the websocket messages, `/system_stats` and the log ring are what [fake-comfy.ts](../local/fake-comfy.ts)
-  says they are, from the pinned source;
-- that the account's key may destroy an instance, which `--destroy` learns only when it is used;
-- what Vast answers to a read of a destroyed instance. `--destroy` takes only a 404, or a 200 whose record is null,
-  for gone, so any other answer ends as a deletion not confirmed and goes to the owner. The fake API of
-  [rent-plan.test.ts](../local/rent-plan.test.ts) answers both ways, and a Vast that answers neither would raise a
-  false alarm, never a false all-clear.
-
-The fake's numbers are made up and say nothing about the card.
+**The identity measurement.** Its protocol was written in this section and moved on 2026-09-25, word for word, to
+[identity-experiment.md](identity-experiment.md): the geometry of the frames, the synthetic set and its three arms,
+the portraits, the gates and the commands of the paid hour. The harness and its dry run against a fake ComfyUI were
+merged that day (d4ca6a0). No paid run has been confirmed, so the question this section asks is still open.
 
 ## Two constraints that do not bend
 
-**It does not share our card.** The language model holds 22–25 GB of the 32 GB, and the pool floor already fails
-threshold 7 (docs/gpu.md). Krea 2 needs roughly 26 GB at bf16 or 13 at fp8 [A]. A second card, not a second process.
+**It does not share our card.** The language model holds 22–25 GB of the 32 GB, and [the pool floor](knowledge/gpu-measurements.md#pool-floor) already fails
+[threshold 7](llama-measurement.md#thresholds). Krea 2 needs roughly 26 GB at bf16 or 13 at fp8 [A]. A second card, not a second process.
 
-**Story text may not go to the tester's machine.** An illustration is made from the text of somebody's scene. The
-rule in [AGENTS.md](../AGENTS.md) stands in the other direction already — the tester's own library stays closed even
-when his failure is the one being debugged — and funding a card does not make other people's stories his. Two
-honest shapes: a rented card we run, or the feature enabled only for his own stories on his own machine. The second
-is a clean place to start.
+That was the rule on 2026-09-21. How a session runs the two lanes now, on two cards, on one card in turn or on two
+machines, is in [gpu.md](gpu.md#renting).
+
+**Story text may not go to the tester's machine.** The rule, with the two honest shapes it leaves, is kept word for
+word in [gpu.md](gpu.md#story-text-boundary).
+
+<a id='open-questions'></a>
 
 ## What must be measured before any of this is believed
 
@@ -746,32 +411,40 @@ is a clean place to start.
    the scene? The cheapest route is the tester's own machine with these synthetic descriptions: no story of a real
    person is involved.
 
+Where they stand on 2026-09-25, when this page became a record:
+
+1. No wider reading is recorded. Step 6 proposed twenty to thirty scenes across all the synthetic stories, one
+   verdict each, and no result of such a run is written down here.
+2. Open. The bot logs what would answer it, `scene_request_completed` and `pictureSeconds` in each `picture` row
+   ([the log](gpu.md#bot-log)), and no measurement of it is recorded. Nor is the wait from the end of a scene to the
+   photo, or how often a card fails or times out under a real reader.
+3. Answered in part. Step 6 found pictures that stop contradicting their scene in most of what they show, on three
+   hosted pictures, and the rate needs the wider run of item 1. The bot draws with one seed per story, not per
+   location ([what shipped](#shipped-2026-09-22)). Whether a person stays recognisable is the question of
+   [the identity measurement](identity-experiment.md), and no paid run of it has been confirmed.
+
+Tests, and the identity harness with its fake ComfyUI, close none of these.
+
+<a id='shipped-2026-09-22'></a>
+
 ## What shipped on 2026-09-22
 
 The feature is in the bot, off by default. `local/illustrate.ts` holds the description step the probe and the bot
 now share — the two schemas, the two instructions, the name and age stripping, and `assemblePrompt`; `local/picture.ts`
 runs one picture, `local/image-batch.ts` draws it on the card, `local/telegram.ts` gained `sendPhoto` (multipart) and
-`deleteMessage`, and `local/config.ts` reads the settings. The flow: the scene is saved and sent, a status line goes
-up under it, the character sheet is written once per story and the frame of this scene after it — both in one
-scheduler turn that shares the scene's prefix, on the language model's card, holding its GPU no longer than a job
-would — then the prompt is assembled in code, ComfyUI draws it over the loopback tunnel, the PNG is stripped of its
-text chunks, the photo replaces the status line, and one `picture` row records the outcome, the whole seconds the
-reader waited and three counts. A failure or a card that is busy leaves the story exactly as it was.
+`deleteMessage`, and `local/config.ts` reads the settings.
+The flow it shipped with, from the saved scene to the `picture` row, is the one
+[telegram-ui.md](telegram-ui.md#picture-delivery) gives now. The six settings are in [setup.md](setup.md#pictures),
+with the reasons above `imageConfig` in `local/config.ts`.
 
-The six settings are `SIMPLE_CHAT_IMAGE_URL`, `_WORKFLOW`, `_CHECKPOINT`, `_USERS`, `_STYLE` and `_WAIT_SECONDS`,
-documented row by row in [setup.md](setup.md) and, with the reasons, above `imageConfig` in `local/config.ts`.
-Without the URL there is no second call, no status line and no picture; `_USERS` is empty by default, so nobody is
-drawn until an ID is written there, and every ID must also be on the access list. The URL must be loopback and must
-not be the language model's own server.
-
-Decisions the plan left open, taken here. The status line is a message of its own, deleted once the photo is there
-and rewritten to one line only when the picture really failed — a reader who has moved on gets no apology. The photo
-is sent as a reply to its own scene, with no caption. The character sheet is stored once per story beside its memory
+Decisions the plan left open, taken here. The ones about the status line, the reply to the scene and what
+stops a picture in flight are rules in [telegram-ui.md](telegram-ui.md#picture-delivery). The reasons for the others
+stay here. The character sheet is stored once per story beside its memory
 and reused by every later frame, which is what kept a person recognisable in step 6. The seed is derived from the
 story id, so one story keeps one visual family and a redraw repeats. Sheet and frame run in one turn with the
 prefix shared, so the server pays for the appended instruction alone and the reader's own next scene ends that turn.
-A picture in flight is stopped by the reader's next message and by `/cancel`; moving around the menus does not stop
-it, and no cancel button is offered, because by then the job lock is already clear. A workflow node that saves its
+
+A workflow node that saves its
 picture is loaded as one that previews it: `SaveImage` writes the picture, with the prompt in its text chunks, into
 a directory no route of ComfyUI's API can empty. This paragraph first said that left the card with no copy of a
 reader's scene. It did not: the preview's own file stayed in the temp directory until the server restarted. Since
@@ -786,6 +459,9 @@ hosted measurement of step 2 plus an assumption about the second card. Nothing i
 of this is believed" is closed by this commit: the wait from the end of a scene to the photo, what the second call
 does to the turn that follows it, and how often a card fails or times out under a real reader are all open, and the
 first rental with the tunnel up is what closes them.
+Their status on 2026-09-25 is [above](#open-questions).
+
+<a id='style-decisions'></a>
 
 ## Picture styles and samples (2026-09-24)
 
@@ -796,8 +472,7 @@ last sentence of the prompt, never seen by the describing model. `local/picture-
 - `novel`, the `STYLE` the six steps were measured with;
 - `film`, `graphic` and `watercolor`.
 
-The same file keeps the rules for a reader's own line: 400 characters under a name of 40, at most 10 in a library.
-The line ends the prompt as written. Until 2026-09-24 the bot followed it with a tail of its own: natural proportions
+A style line ends the prompt as written. Until 2026-09-24 the bot followed it with a tail of its own: natural proportions
 and no lettering, which the owner took off because they fought a line that wanted a look of its own, and then that
 all people are adults. That sentence went too, the same night: the tester sets styles and tests them by this line,
 and a sentence of the bot's after it changed every picture it was compared on. The age of the people moved into
@@ -831,20 +506,20 @@ Measured on that run: the text card with MTP decoding, one slot, the picture car
 | A sample of a reader's own style with the frame reused | drawing 17.6 s, no language-model call |
 | Right after each sample, on the card | 0 temp files, 0 history records, nothing on its disk |
 
+<a id='picture-lifecycle-decisions'></a>
+
 ## Pictures go with their scenes (2026-09-24)
 
-Deleting a seed or a branch used to leave the pictures of its scenes in the chat. Now every photo the bot sends — a
-scene's own picture and every sample, the all-styles batch included — is recorded in the reader's library as
-`sentPictures`: story, scene, message id and the time it was sent (`recordPicture` in `lib/library.ts`). Telegram
-lets a bot delete its own message for 48 hours only, so every write drops the older entries, and the newest 1000 are
-kept at most, because the library is read and written whole on every update.
-
-After `remove-seed` or `remove-branch`, `forgetLostPictures` takes the pictures whose story or scene is gone out of
-the list. Once the deletion screen is out, `removeAll` in `local/telegram.ts` deletes them with `deleteMessages`, 100
-to a call. A call that fails is tried message by message with `deleteMessage`: a message Telegram refuses (400) costs
-only itself, and any other failure — the network, the rate limit, a chat closed to the bot — ends the attempt. The
-reader is told nothing, and the removal runs beside the next updates, so the deletion screen neither waits for it nor
-changes. A deleted branch takes only the pictures of the scenes that no other branch has.
+Deleting a seed or a branch used to leave the pictures of its scenes in the chat.
+Since then every photo the bot sends is recorded in the reader's library and leaves the chat with its scene; the
+rules are in [telegram-ui.md](telegram-ui.md#deletion). The record keeps the newest 1000 at most because the library
+is read and written whole on every update (`recordPicture` in `lib/library.ts`). After `remove-seed` or
+`remove-branch`, `forgetLostPictures` takes the pictures whose story or scene is gone out of the list, and
+`removeAll` in `local/telegram.ts` deletes them with `deleteMessages`, 100 to a call.
+A call that fails is tried message by message with `deleteMessage`: a message Telegram refuses (400) costs
+only itself, and any other failure — the network, the rate limit, a chat closed to the bot — ends the attempt.
+The removal runs beside the next updates, so the deletion screen neither waits for it nor
+changes.
 
 A picture must not arrive after its scene is gone. `sendKept` in `local/picture.ts` looks at the library just
 before sending, and records the photo in a write that looks for the scene once more; a deletion that landed while
@@ -857,6 +532,8 @@ One `pictures_removed` row per deletion that took pictures carries `picturesRemo
 `actor`; a photo taken back on its way puts the same two counts into its own `picture` or `picture_sample` row. No
 message id, story id or text is logged. All of this has met the fake Bot API only: how a real chat answers a batch
 that holds a message just past its 48 hours is not measured, and the message-by-message fallback is there for it.
+
+<a id='clothes-decisions'></a>
 
 ## Clothes follow the story (2026-09-24)
 
@@ -872,6 +549,7 @@ the clothes of the nearest picture above this scene in its own line of the story
 none (`wornAt` in `local/picture.ts`). The model is told to repeat that line word for word unless the story changed
 it since. What the frame answers is kept on the scene as `clothes`, by sheet name, and is where the next picture below
 it starts. A branch walks only its own parents, so a change in one line of the story never dresses another.
+The rule as it stands is in [telegram-ui.md](telegram-ui.md#picture-pipeline).
 
 A sheet written before this has clothes inside `look` and no `outfit`. It is written once more at the next picture of
 that story, from the history as it stands. The `picture_sheet_written` row then carries `sheetRewritten: true`, and
@@ -880,11 +558,13 @@ Nothing of the clothes is logged. How well the model notices a change of clothes
 or one that the memory of a compacted story no longer mentions, is not measured yet; the carried line is there so
 that such a change is lost only once and not undone later.
 
+<a id='prompt-under-picture'></a>
+
 ## The prompt under the picture (2026-09-24)
 
 The tester asked to see the prompt of each picture and how long it is, to tune a style line against it. Every photo,
 the scene's own and every sample, now gets a reply right after it: a rich message folded to one line that gives the
-prompt's size, which opens to the prompt as plain text that wraps on a phone (`foldedPrompt`, docs/telegram-ui.md). The prompt goes to
+prompt's size, which opens to the prompt as plain text that wraps on a phone (`foldedPrompt`, [telegram-ui.md](telegram-ui.md#picture-prompts)). The prompt goes to
 the reader of the story it was drawn from and to nobody else; the logs still carry counts alone. The note is sent
 through `sendKept` like the photo, so a deletion of the scene takes it out of the chat with the photo. A note that
 Telegram refuses costs the note alone and leaves a `picture_prompt_unsent` row with Telegram's code. A photo already
@@ -897,13 +577,17 @@ illustrator's deps), its tokens as the text encoder reads them, with the style l
 prompt less the count of the description before the line, so that the token where the two meet is the line's. The
 `picture` and `picture_sample` rows carry the same numbers as `promptCharacters`, `pictureTokens` and `styleTokens`.
 Until the tokenizer is wired in, the note and the rows give characters alone.
+The tokenizer was wired in the same day, as the tokens the graph's text encoder conditions on (`encoderTokens` in
+`local/picture.ts`). The note as it is now is in [telegram-ui.md](telegram-ui.md#picture-prompts).
+
+<a id='prompt-variant-decision'></a>
 
 ## A variant from the reader's own prompt (2026-09-24)
 
 The owner asked for a way to edit the prompt of the picture after a scene, for tests. The note under a scene's own
 picture now has a button that asks for a whole prompt: the reader copies the prompt from the note, edits it and sends
 it, and the bot draws it as it came. Nothing is assembled, no name or age is cut out, no style line is added. The
-screens are in [telegram-ui.md](telegram-ui.md#picture-styles).
+screens are in [telegram-ui.md](telegram-ui.md#picture-variants).
 
 Two prompts compared mean nothing if anything else differs, so a variant is drawn by the recipe of the picture it
 varies, never by the configuration of the day. The scene keeps, as `picture`, the seed of its own picture, a hash of
@@ -916,19 +600,30 @@ no longer has is refused with the reason, rather than drawn with another. There 
 would mix what the words do with what the noise does. Samples get no button and no recipe, because this first
 version answers the request about the picture after a scene.
 
-The recipe pins the request and not the card: the graph with the file names in it, the checkpoint's name, the seed,
-the size and the sampler settings. The card's software, and weights replaced under the same file name, are not in it,
-and after a change to either the same recipe can draw a different picture.
+The variant's note gives no style share, which nobody knows for a prompt written whole. A variant changes nothing of
+the story, not the sheet, the clothes or the frame kept for samples. What the recipe does not pin, and the rest of
+the variant's contract, are in [telegram-ui.md](telegram-ui.md#picture-variants).
 
-The variant goes under the same scene as a photo of its own. The note under it counts the tokens of that prompt and
-gives no style share, which nobody knows for a prompt written whole. It was drawn by the scene's recipe, so its note
-has the same button, and it leaves the chat with the scene. The reader's permission, the scene and its recipe are
-checked when the button is pressed, when the prompt arrives, before the drawing and before the photo goes out. A
-variant asks the language model nothing and holds none of its card, and it changes nothing of the story: not the
-sheet, the clothes or the frame kept for samples. The reader's next move stops it, and a failure is told once and
-never tried again. The row is `picture_variant`, with `edited: true` beside the counts `picture` has and no word of
-the prompt. The bot keeps the prompt in neither its library nor its technical logs, not even while it waits for it.
-Telegram keeps the reader's message and the note under the variant, and the card holds the job as long as it holds
-any picture's ([gpu.md](gpu.md#what-the-card-keeps-of-a-picture)). A prompt may have 4000 characters
-(`PROMPT_CHARS` in `local/picture-style.ts`): at five characters for every escaped `&`, the note still fits the 32768
-of a rich message.
+<a id='blind-review'></a>
+
+## Blind review of pictures
+
+These rules already hold in the code and in the pages named; this section only collects them.
+
+- Neither the page a person opens nor the bundle a clean model session reads names a checkpoint. Pictures get names
+  that say nothing, the order under the letters is shuffled for every scene and differently for every rater, and the
+  key is written beside the output, never inside it. `score` opens the key and counts (`local/blind-review.ts`).
+- A rater's name goes into the seed of the shuffle and into the picture names, so two raters never share an order
+  and their files cannot be matched by name.
+- A scene drawn by one checkpoint only is left out, and so is one whose pictures were drawn on canvases of different
+  sizes: a wide picture beside a narrower one tells the rater which run is which. `mixed` counts those. For the same
+  reason Qwen's text-to-image frame is 1280x720 like Krea's ([above](#qwen-choice)).
+- Only synthetic scenes are drawn for a review, never a reader's story (`local/blind-review.ts`,
+  `local/image-batch.ts`).
+- Adult content never goes to a hosted API. The owner's one exception, for judging pictures drawn on the rented
+  card, is written out in [improve-loop.md](improve-loop.md#acceptance-on-gpu); read it before a picture goes to a
+  hosted model.
+
+From step 2 on, a fresh GPT-6 session read each step's pictures; each step says what it was asked.
+The identity measurement builds bundles of its own and decides by its gates:
+[judging](identity-experiment.md#judging) and [the gates](identity-experiment.md#gates) are the main copy for it.
