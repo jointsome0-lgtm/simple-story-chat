@@ -222,10 +222,11 @@ export const readGpuEnv = (file = join(ROOT, '.env.gpu')): Env => {
   try { return parseEnv(readFileSync(file, 'utf8')); } catch { throw new Error('Cannot read .env.gpu'); }
 };
 
-// simple-serving's smoke, by its own record (the JSON lines `python -m simple_serving.smoke` prints): every probe it
-// names ran and passed. The text run starts on nothing less. What the record says of versions is kept as pins, as
-// names and digits only.
-export const SMOKE_PROBES = ['state', 'completion', 'fields', 'reasoning', 'finish', 'refusal', 'abort', 'schemas', 'counts'];
+// simple-serving's smoke, by its own record: the JSON lines its `--after` run prints, after the stop and the resume
+// (simple-serving's README, "The first rental", step 6). Every probe of that run ran and passed, the lifecycle of the
+// resume and the privacy probe included: eleven of eleven. The text run starts on nothing less. What the record says
+// of versions is kept as pins, as names and digits only.
+export const SMOKE_PROBES = ['lifecycle', 'state', 'completion', 'fields', 'reasoning', 'finish', 'refusal', 'abort', 'schemas', 'counts', 'privacy'];
 export function smokeRecord(file: string) {
   const lines = readFileSync(file, 'utf8').split('\n').filter(line => line.trim()).map(line => {
     try { return JSON.parse(line) as { probe?: unknown; ok?: unknown; versions?: unknown }; } catch { return {}; }
@@ -460,7 +461,7 @@ export async function runTexts(options: TextsOptions): Promise<TextsRecord> {
   const root = resolve(options.root);
   const say = options.say ?? (() => undefined);
   const smoke = options.smoke ? smokeRecord(options.smoke) : undefined;
-  if (options.model.route === 'simple-serving' && !smoke) throw new Error('Route A starts only on the gateway\'s passed smoke: give --smoke with its record');
+  if (options.model.route === 'simple-serving' && !smoke) throw new Error('Route A starts only on the gateway\'s passed smoke: name its record with --smoke-record');
   const gateway = options.gateway ?? await gatewayFacts(options.model);
   const pins = textPins(options.model, { ...gateway, ...Object.fromEntries(Object.entries(smoke?.versions ?? {}).map(([name, value]) => [`gateway.${name}`, value])) });
   mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -511,7 +512,7 @@ export async function markerCheck(options: Omit<TextsOptions, 'stories'> & { tem
   const root = resolve(options.root);
   mkdirSync(root, { recursive: true, mode: 0o700 });
   const smoke = options.smoke ? smokeRecord(options.smoke) : undefined;
-  if (options.model.route === 'simple-serving' && !smoke) throw new Error('Route A starts only on the gateway\'s passed smoke: give --smoke with its record');
+  if (options.model.route === 'simple-serving' && !smoke) throw new Error('Route A starts only on the gateway\'s passed smoke: name its record with --smoke-record');
   const gateway = options.gateway ?? await gatewayFacts(options.model);
   const pins = textPins(options.model, { ...gateway, ...Object.fromEntries(Object.entries(smoke?.versions ?? {}).map(([name, value]) => [`gateway.${name}`, value])) });
   const sealed = join(root, 'sealed');
