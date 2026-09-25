@@ -40,9 +40,11 @@ export const FRAME_CANVAS = { width: 1280, height: 704 };
 export const VIEW_CANVAS = { width: 704, height: 1280 };
 export const SCALED = { width: 352, height: 640 };
 // The smoke's floor of free video memory at the sampled peak, and a cell's price: its slowest time in the smoke, a
-// quarter more, and three seconds for the transfers (docs/action-experiment.md#time).
+// quarter more, and three seconds for the transfers (docs/action-experiment.md#time). Before the smoke nothing is
+// measured, and a smoke cell's price is the longest a picture may take: its whole wait (`--wait`) and the three
+// seconds.
 export const FREE_MIB = 2048;
-export const MARGIN = 1.25, CELL_MS = 3000;
+export const MARGIN = 1.25, CELL_MS = 3000, WAIT_MS = 300000;
 // The codes a cell fails under (docs/action-experiment.md#sealed): local/image-batch.ts's for a picture, the graph
 // and the server, and the harness's own. A code is one of them because it is in this list; any other is
 // `image_failed`.
@@ -266,7 +268,7 @@ export async function drawStage(options: DrawStageOptions): Promise<DrawIndex> {
     const choice = smokeChoice(ordered);
     index.smoke = { keys: cells.map(cell => cell.key), ...(choice?.extraView ? { extraView: choice.extraView } : {}) };
     run.save();
-    const ended = await drawCells(run, cells, true);
+    const ended = await drawCells(run, cells, true, () => (options.waitMs ?? WAIT_MS) + CELL_MS);
     index.smoke.verdict = smokeVerdict(index, index.smoke.keys, front.canvas);
     if (ended !== 'done') index.smoke.verdict.pass = false;
     log({ event: 'smoke', ...index.smoke.verdict, failing: index.smoke.verdict.failing.length });
@@ -357,7 +359,10 @@ async function drawCells(run: Run, cells: ActionCell[], smoke: boolean, price?: 
       log({ event: 'cell_out', key: cell.key, code: refs.out });
       continue;
     }
-    if (comfy.end?.aborted || (price && Date.now() + price(cell) > run.until)) return 'until';
+    // A cell begins only if it can end by `--until`, and that is asked again right before its job goes out, after the
+    // uploads, the log and the socket, which may have taken the time it had (image-batch.ts `drawOne`'s `admit`).
+    const fits = () => !comfy.end?.aborted && (!price || Date.now() + price(cell) <= run.until);
+    if (!fits()) return 'until';
     try {
       let uploadMs = 0;
       const names: string[] = [];
@@ -384,8 +389,8 @@ async function drawCells(run: Run, cells: ActionCell[], smoke: boolean, price?: 
       const slotsRight = sent.length === names.length && sent.every((slot, at) => slot.file === names[at] && slot.scaled === scaled.includes(at + 1));
       if (!slotsRight) throw Object.assign(new Error('workflow_slot_mismatch'), { code: 'workflow_slot_mismatch' });
       const before = sealed ? undefined : await logLines(comfy);
-      const drawn = await drawOne(comfy, filled, { pollMs: run.options.pollMs, waitMs: run.options.waitMs ?? 300000, sampleEvery: 1, requireSocket: true,
-        ...(built.copies.length ? { copies: built.copies } : {}) });
+      const drawn = await drawOne(comfy, filled, { pollMs: run.options.pollMs, waitMs: run.options.waitMs ?? WAIT_MS, sampleEvery: 1, requireSocket: true,
+        admit: fits, ...(built.copies.length ? { copies: built.copies } : {}) });
       await settled();
       const partialModelLoadEvents = sealed ? undefined : partialLoadsSince(before, await logLines(comfy));
       if (comfy.end?.aborted) return 'until';
@@ -414,8 +419,9 @@ async function drawCells(run: Run, cells: ActionCell[], smoke: boolean, price?: 
       const code = typeof raw === 'string' && DRAW_CODES.includes(raw) ? raw : 'image_failed';
       const { httpStatus } = safeErrorDetails(error);
       const oom = (error as { oom?: unknown }).oom === true;
-      // Whatever failed once the end had come was cut by it, and is not this cell's result.
-      if (comfy.end?.aborted) return 'until';
+      // Whatever failed once the end had come was cut by it, and a job its time no longer covered was never sent:
+      // neither is this cell's result.
+      if (comfy.end?.aborted || raw === 'not_admitted') return 'until';
       index.cells[cell.key] = { ...base, status: 'failed', code, ...(httpStatus === undefined ? {} : { httpStatus }), ...(oom ? { oom } : {}) };
       run.save();
       log({ event: 'cell_failed', key: cell.key, code, ...(httpStatus === undefined ? {} : { httpStatus }), ...(oom ? { oom } : {}) });

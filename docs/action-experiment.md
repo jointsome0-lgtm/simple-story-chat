@@ -336,15 +336,18 @@ face are what the judges measure, on every scene.
 
 **The time.** The harness takes an absolute end, `--until`, as the identity run did ([one
 hour](identity-experiment.md#one-hour)): five minutes before the earlier of the guard's deadline and the operator's
-own. Nothing is sent after it. After the smoke, the harness prices the rest of seed 7, the portraits and views
-included, from the smoke's own slowest times: a portrait by its slowest portrait, a view by its slowest view, a frame
-without references by its slowest of A, A+ and L, an edit with k references by its slowest edit with the fewest
-references at or above k, which is C's or V's, and T by its T. Those times include the smoke's first, cold loads. Each
-cell gets its time plus a quarter and three seconds for the transfers, as the identity run priced them. A kind of cell
-the smoke did not draw, such as an edit with more references than any it drew, is priced as its slowest edit, never at
-nothing. Seed 7 begins only if all of it can end by `--until`; if it cannot, the rental ends as a smoke result and is
-never extended. After seed 7, seed 11 is priced the same way and begins only if it fits whole. If it does not, the
-verdict stands on seed 7 alone, as it would anyway.
+own. Nothing is sent after it, and no job is sent that its price says could not end by then; that is asked once more
+right before the job goes out, after its uploads and its socket. Nothing is measured before the smoke, so each of its
+cells is priced at the longest a picture may take, its whole wait (`--wait`, five minutes) and three seconds. After
+the smoke, the harness prices the rest of seed 7, the portraits and views included, from the smoke's own slowest
+times: a portrait by its slowest portrait, a view by its slowest view, a frame without references by its slowest of A,
+A+ and L, an edit with k references by its slowest edit with the fewest references at or above k, which is C's or V's,
+and T by its T. Those times include the smoke's first, cold loads. Each cell gets its time plus a quarter and three
+seconds for the transfers, as the identity run priced them. A kind of cell the smoke did not draw, such as an edit
+with more references than any it drew, is priced as its slowest edit, never at nothing. Seed 7 begins only if all of
+it can end by `--until`; if it cannot, the rental ends as a smoke result and is never extended. After seed 7, seed 11
+is priced the same way and begins only if it fits whole. If it does not, the verdict stands on seed 7 alone, as it
+would anyway.
 
 The estimate, from the identity run's 15 s for a frame without references and its 15% more for one full-size
 portrait:

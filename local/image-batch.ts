@@ -669,8 +669,11 @@ type Watch = ReturnType<typeof watchJob>;
 // which measures the card, samples at every poll. `requireSocket`: see `SOCKET_OPEN_MS`. `copies`: saving nodes whose
 // pictures are not the frame but a check of it, such as the action smoke's copies of its scaled references
 // (docs/action-experiment.md#drawing); the frame is the one picture of the other nodes, and each copy is read
-// back after it, stripped, in `copies`.
-type DrawOneOptions = { pollMs?: number; waitMs?: number; sampleEvery?: number; requireSocket?: boolean; copies?: string[] };
+// back after it, stripped, in `copies`. `admit`: the caller's last word before the submit, asked once the socket is
+// open, such as whether the job can still end by the harness's `--until`; a job it refuses is not sent, and fails
+// as `not_admitted`.
+type DrawOneOptions = { pollMs?: number; waitMs?: number; sampleEvery?: number; requireSocket?: boolean; copies?: string[];
+  admit?: () => boolean };
 // The card tells a job's news only to a socket that is connected when it is sent, and the first of it, the job's start
 // and the nodes its cache answered, comes at the very start of the job (execution.py:683-720). So the submit waits
 // for the socket to open, this long at most. One that does not open in time leaves the bot's picture to the polls,
@@ -680,7 +683,7 @@ const SOCKET_OPEN_MS = 2000;
 export async function drawOne(comfy: Comfy, graph: Graph, options: DrawOneOptions = {}) {
   // A caller who has let go, or a stage whose end has come, puts nothing on the card: that is asked before the socket
   // opens and again once it has, and either ends the wait for it at once. Nothing is awaited between the second
-  // asking and the submit.
+  // asking, the caller's `admit` and the submit.
   halt(comfy);
   const watch = watchJob(comfy);
   const began = performance.now(), waitMs = options.waitMs ?? 600000;
@@ -692,6 +695,7 @@ export async function drawOne(comfy: Comfy, graph: Graph, options: DrawOneOption
     // The wait is the caller's, and the socket has had its share of it: a wait the socket used up submits nothing.
     if (open === undefined && waitMs <= SOCKET_OPEN_MS) throw Object.assign(new Error('image_timeout'), { code: 'image_timeout' });
     if (!open && options.requireSocket) throw Object.assign(new Error('comfy_socket_unavailable'), { code: 'comfy_socket_unavailable' });
+    if (options.admit && !options.admit()) throw Object.assign(new Error('not_admitted'), { code: 'not_admitted' });
     return await drawWatched(comfy, graph, watch, { ...options, waitMs: waitMs - Math.round(performance.now() - began) });
   } finally { watch.close(); }
 }
