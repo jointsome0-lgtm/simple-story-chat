@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { askJson, assemblePrompt, frameRequest, matchSheet, sheetLooks, sheetOf, sheetRequest, stripAges, stripNames, DESCRIBE_TOKENS, STYLE } from './illustrate.ts';
 import type { Assembled, Character, Description, Excerpt } from './illustrate.ts';
 import type { GenerationResult, ModelRequest, Provider } from './model.ts';
+import { scenesWanted } from './illustrate-probe.ts';
 
 // A synthetic sheet and frame in the shape the describing model fills. No reader's story is involved.
 const sheet: Character[] = [
@@ -166,4 +167,10 @@ test('a description is asked for in its schema after the scene, once more when i
       error.code === 'unparsed_description' && !/PRIVATE/.test(`${error.message} ${JSON.stringify(error)}`), label);
     assert.equal(asked, attempts, `${label}: the attempts`);
   }
+  // `--scenes battle-2,battle-2` paid for the frame twice and wrote one id twice into prompts.json, which the drawing
+  // step then refused as a whole run. Unnamed, the scenes are every other one of the three frozen stories.
+  assert.deepEqual(scenesWanted('battle-2,battle-2, dance-12').map(scene => scene.id), ['battle-2', 'dance-12'], 'a scene named twice');
+  assert.deepEqual(scenesWanted('battle-2'), [{ id: 'battle-2', scenario: 'battle', index: 2 }], 'one scene');
+  const every = scenesWanted(undefined).map(scene => scene.id);
+  assert.deepEqual([every.length, new Set(every).size], [24, 24], 'no scene named');
 });
