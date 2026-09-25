@@ -571,10 +571,11 @@ go. A fix, such as the cache node off `auto` or smaller portraits, is another ru
 running, and which nothing extends. The guard can fail, though. It does not start without the container's key, `curl`
 and `flock`; it retries a refused delete forever; it takes its own delete's success for the outcome; and without ssh
 nobody can tell it "we're done". So the rental also has an end outside the box, below, and the owner is asked for the
-whole paid time, from the creation to a destroy read back as done. For one hour that is up to 1 h 20 min at the
-offer's price: the guard's hour, the quarter of an hour the box is given to start before the guard's clock does, and
-five minutes for the destroy to be read back. The traffic comes on top. `gpu/rent.mjs --hours 1 --qwen only` prices
-each offer that way, by Qwen's files alone, and its dry run prints the sum as `session`.
+whole paid time, from the creation to a destroy read back as done. For one hour that is up to 1 h 20 min 20 s at
+the offer's price: the guard's hour, the quarter of an hour the box is given to start before the guard's clock does,
+twenty seconds for "we're done" and five minutes for the destroy to be read back. The traffic comes on top.
+`gpu/rent.mjs --hours 1 --qwen only` prices each offer that way, by Qwen's files alone, and its dry run prints the
+sum as `session`.
 
 The harness takes an absolute end, `--until`: five minutes before the earlier of the guard's deadline and the
 operator's own. Nothing is sent to the card after it, and every wait and request of a stage ends there: the socket's
@@ -610,21 +611,27 @@ the owner's decision, never an extension.
 read back as done. During the hour it only runs and watches: the code and its tests are ready before the rental, so a
 failure that needs new code ends the hour. The owner's rules apply as written, the 10-minute idle rule included.
 
-- `rented` prints the instance's ID and `destroyBy`: the creation, the guard's hour and the quarter of an hour, on the
-  operator's clock. That is the operator's own deadline, fixed at the creation.
+- `rented` prints the instance's ID and `destroyBy`: the guard's hour and the quarter of an hour, on the operator's
+  clock, counted from just before the create request that succeeded, so however long its answer took. That is the
+  operator's own deadline.
 - `npm run gpu:rent -- --show ID` reads `present` at once, or the termination follows. It is the path to the rental
   that needs nothing on the box: the account's key, from `.env.gpu` through `node --env-file`, never printed.
-- As soon as ssh answers, and no later than a quarter of an hour after the creation, the guard is checked. The
-  runbook's command prints the guard's deadline only while the guard holds its lock. Nothing printed, or a deadline
-  later than `destroyBy`, is a failed guard, and the termination follows at once.
+- As soon as ssh answers, and no later than a quarter of an hour after the creation, the guard is checked, in twenty
+  seconds at most. The runbook's command prints the guard's deadline only while the guard holds its lock, when
+  `flock -n -E 75` exits 75, and on no other outcome. Anything but a whole number of seconds no later than `destroyBy`
+  is a failed guard: nothing printed, a flock that failed, a deadline file that says something else, a deadline too
+  late. The termination follows at once. A flock without `-E` (util-linux before 2.26) prints nothing: a failed guard.
 
 **The termination** is one procedure for every ending: a whole run, a failed smoke, a set that cannot end in time, a
 bootstrap or ssh that failed, a failed guard, and `destroyBy` itself, which starts it whatever the card is doing.
 
-1. "We're done" over ssh, if ssh works: the guard deletes the machine within ten seconds.
-2. `npm run gpu:rent -- --destroy ID`, with the account's key, at once. It reads the instance every ten seconds for
-   five minutes. The first minute is the guard's and only reads; after it, while the instance is not gone, it is
-   deleted with the account's key.
+1. "We're done" over ssh, if ssh works, in twenty seconds at most: the guard deletes the machine within ten seconds.
+2. `npm run gpu:rent -- --destroy ID`, with the account's key, as soon as step 1 ends or its twenty seconds run out.
+   It takes five minutes at most, on its own monotonic clock from before its first read, whatever Vast answers or
+   fails to: every request is cut at twenty seconds or at the time left, the answer's body included, every pause at
+   ten seconds or at the time left, and nothing is sent after the five minutes. For its first 60 seconds, the guard's,
+   it only reads, every ten seconds. After them, while no read says the instance is gone, it deletes it with the
+   account's key, and again every half minute.
 3. `destroy_confirmed` ends the rental. Anything else, `destroy_unconfirmed`, `destroy_refused` or no answer, goes to
    the owner at once, with the ID, as a deletion not confirmed that may still be billing, never as "the hour is over".
 
@@ -640,9 +647,12 @@ SIMPLE_CHAT_RENT_DRY_RUN=1 npm run gpu:rent -- --lane pictures --hours 1 --qwen 
 npm run gpu:rent -- --lane pictures --hours 1 --qwen only    # with the owner's consent; `rented` names ID and destroyBy
 npm run gpu:rent -- --show ID    # present, at once
 destroy_by=DESTROY_BY            # from `rented`
-# As soon as ssh answers. Nothing printed, or a deadline later than destroy_by, is a failed guard: terminate now.
-guard=$(ssh simple-chat-vast 'flock -n /root/.simple-chat-trial-guard.lock true || cat /root/.simple-chat-trial-deadline')
-end=$(( (guard < destroy_by ? guard : destroy_by) - 300 ))    # with no guard, a past end that every stage refuses
+# As soon as ssh answers. The deadline is printed only on flock's 75, the lock the guard holds. Anything but a whole
+# number no later than destroy_by is a failed guard: terminate now. The number is checked before any arithmetic.
+guard=$(timeout 20 ssh -o ConnectTimeout=10 simple-chat-vast \
+  'flock -n -E 75 /root/.simple-chat-trial-guard.lock true; [ $? -eq 75 ] && cat /root/.simple-chat-trial-deadline')
+if [[ $guard =~ ^[1-9][0-9]{0,11}$ ]] && (( guard <= destroy_by )); then end=$(( guard - 300 ))    # min(guard, destroy_by) - 300
+else end=0; echo 'failed guard: terminate now'; fi    # 0: a past end that every stage refuses
 ssh simple-chat-vast 'mkdir -p /workspace/simple-chat/gpu'
 tar -cf - -C gpu . | ssh simple-chat-vast 'tar -xf - -C /workspace/simple-chat/gpu'
 ssh simple-chat-vast 'SIMPLE_CHAT_IMAGE_QWEN=only bash /workspace/simple-chat/gpu/image-bootstrap.sh'
@@ -656,9 +666,9 @@ npm run image:identity -- draw --smoke --until "$end"
 npm run image:identity -- report
 npm run image:identity -- draw --until "$end"    # the main set, then the control
 npm run image:identity -- report
-# The termination, here and after every other ending:
-ssh simple-chat-vast 'date +%s > /root/.simple-chat-trial-deadline'    # we're done, if ssh works
-npm run gpu:rent -- --destroy ID    # destroy_confirmed; anything else goes to the owner at once
+# The termination, here and after every other ending: we're done, then the destroy whatever the ssh did.
+timeout 20 ssh -o ConnectTimeout=10 simple-chat-vast 'date +%s > /root/.simple-chat-trial-deadline'; \
+  npm run gpu:rent -- --destroy ID    # destroy_confirmed; anything else goes to the owner at once
 npm run image:identity -- bundles    # no card needed from here on
 npm run image:identity -- report     # once answers/ holds every bundle
 ```
