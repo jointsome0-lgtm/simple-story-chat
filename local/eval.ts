@@ -261,8 +261,10 @@ if (positionals[0] === 'watch') {
   }
 } else if (positionals[0] === 'judge') {
   // Judges the trap scenes of a finished replay again, to compare judges or question wordings on the same scenes.
-  if (!values.judge || !values.resume || !values.mode) throw new Error('Use: eval judge --judge <host>:<id> --resume directory --mode plain|sgr');
-  await probe('scene-judge.ts', ['--report', values.resume, '--mode', values.mode], modelEnv(values.judge), values.judge, { scenario: 'judge', mode: values.mode });
+  // A scenario of a pack is read from its pack again: without --pack only the repository's own scenarios are found.
+  // --scenarios names it, or the eval loads every directory of the pack first, a walk's among them.
+  if (!values.judge || !values.resume || !values.mode) throw new Error('Use: eval judge --judge <host>:<id> --resume directory --mode plain|sgr [--pack directory --scenarios name]');
+  await probe('scene-judge.ts', ['--report', values.resume, '--mode', values.mode, ...(values.pack ? ['--pack', values.pack] : [])], modelEnv(values.judge), values.judge, { scenario: 'judge', mode: values.mode });
 } else if (positionals[0] === 'seed-audit') {
   // Every judge reads the seed of a walk for contradictions and ambiguities; the merged list is written per scenario.
   const judges = (values.judges ?? '').split(',').filter(Boolean);

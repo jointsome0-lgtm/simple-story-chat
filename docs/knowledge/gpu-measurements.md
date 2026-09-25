@@ -2,10 +2,10 @@
 
 Measurements and incidents from the rented cards, 2026-09-17 to 2026-09-24, moved here from [gpu.md](../gpu.md) on
 2026-09-25. The paragraphs are as they were written, apart from headings, anchors and link addresses;
-[simple-serving's rehearsal](#serving-rehearsal-2026-09-25), [the two text cards](#text-cards-2026-09-25) and
-[the third](#text-card-3-2026-09-25) were written here on their day. Each number is what one run on
-one machine saw, not a speed, a price or a capacity to expect. The instructions that rely on them are in
-[gpu.md](../gpu.md), [llama-cpp.md](../llama-cpp.md) and [llama-measurement.md](../llama-measurement.md).
+[simple-serving's rehearsal](#serving-rehearsal-2026-09-25), [the two text cards](#text-cards-2026-09-25),
+[the third](#text-card-3-2026-09-25) and [the fourth](#text-card-4-2026-09-26) were written here on their day. Each
+number is what one run on one machine saw, not a speed, a price or a capacity to expect. The instructions that rely on
+them are in [gpu.md](../gpu.md), [llama-cpp.md](../llama-cpp.md) and [llama-measurement.md](../llama-measurement.md).
 
 <a id='verified-2026-09-17'></a>
 
@@ -285,3 +285,39 @@ $0.81 at the hourly price, traffic fees not counted. The card had work for all o
 - **What the reboot took.** The eval's summaries were copied out of `/tmp` before the reboot. The probes' own
   directories, with the memories and the scenes, stayed there and went with it, so no judge can read them again
   ([eval.md](../eval.md#own-card) now says where to keep them).
+
+<a id='text-card-4-2026-09-26'></a>
+
+## The fourth text card: the texts kept, and both routes with their drafters, 2026-09-25/26
+
+An RTX 5090 in Korea, host 336596, driver 595.71.05, $0.633 an hour, 16 cores, 61 GB of RAM and 734 Mbit/s; Vast
+charged $0.0026 for each GB downloaded and $0.0039 for each GB uploaded. The owner ran the rent command with the same
+gate as before, the earlier cards' hosts left out and a 595 driver on the dry run's first offer. Rented at 23:33
+Moscow time and deleted with `--destroy` read back as gone at 00:36: 63 minutes, about $0.67 at the hourly price and
+about $0.14 for some 54 GB of downloads. The card had work for all of it but the minute and a half it stood stopped.
+
+- **Route A prepared.** simple-serving 899f36c's preparation took 5.3 minutes, the weights at about 94 MiB/s, and the
+  pair was ready 2.2 minutes later: vLLM's weights took 19149 MiB, and its fp8 cache 7240 MiB, 126003 tokens.
+- **llama.cpp prepared beside it**, at nice 19 with 4 jobs, while route A's first pass ran. The fetch passed at its
+  first try this time, and the build, the Q6_K and the draft with their hash checks were done 14 minutes after the
+  start.
+- **The eval, with the probes' directories kept** ([the entry](improve-runs.md#route-a-2026-09-26)). On vLLM
+  `hospital` ran beside `assault` and `dance`, and a pass of the three took 5 to 6 minutes; on llama.cpp's one slot
+  they ran one after another in 7.5. Both times include the judge, which runs on the owner's machine while the card
+  waits.
+- **A bfloat16 cache does not fit.** With `KV_CACHE_DTYPE=auto` vLLM had 7281 MiB for the cache, about 63000 tokens,
+  fewer than the 65536 of one request. The engine exited with `kv_cache_too_small`, the launcher gave up and stopped
+  the instance at once, as simple-serving's launcher does with a pair that never became ready. The operator asked the
+  owner, resumed the instance through Vast's API, and SSH answered 20 seconds later. The resumed container's launcher
+  waited for `--retry`; `card --stop` ended it before its idle interval could stop the instance again, and the
+  manifest went back to fp8.
+- **The Q6_K with its draft** (`SIMPLE_CHAT_GPU_DRAFT=true` in `serve.env`): llama-server answered its health check
+  within 30 seconds. It decoded the compaction requests at 136 tokens a second (132 to 142 over 24 requests), against
+  47.5 without the draft [on the third card](#text-card-3-2026-09-25), and accepted 18863 of 20736 drafted tokens.
+- **Route A with its drafter**, simple-serving 5c9cd5e with `MTP_SPECULATIVE_TOKENS=3`: the checkout was copied again,
+  the preparation fetched the drafter's 0.94 GB and checked its hashes, and `card --retry` ran the pair, ready in 102
+  s. The weights took 20070 MiB and the cache 6011 MiB, 104492 tokens. With two requests at once each decoded its
+  memory at 123 to 171 tokens a second, against 57 to 67 without the drafter, and vLLM accepted 21718 of 34343
+  drafted tokens, scenes included: 78, 62 and 49 per cent at the three positions.
+- The speeds are not one comparison: llama.cpp served one request at a time and vLLM two, and a drafter's gain
+  depends on the text; the compaction's JSON is the easiest to draft.

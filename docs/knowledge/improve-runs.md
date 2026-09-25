@@ -11,6 +11,84 @@ line per decision. A new step gets its full entry here, on top, and its line the
 Paths to result directories say where the numbers came from at the time. They do not promise that the files still
 exist or that you may read them.
 
+<a id='route-a-2026-09-26'></a>
+
+## 2026-09-26 · Opus 5.5 · route A against the Q6_K again, with the texts kept and three judges
+
+Not a step of the loop, and the second measurement of simple-serving's contract step 6 after
+[the first](#route-a-2026-09-25), whose texts a reboot took. The owner asked what route A's degradation consists of,
+judged by Fable and Astra. One RTX 5090 in Korea ([the card](gpu-measurements.md#text-card-4-2026-09-26)) ran both
+routes, and every probe kept its directory under `~/simple-story-chat-runs/2026-09-25/texts/<run>/tmp/`. Route A was
+`serving:nvfp4`, simple-serving 899f36c with the fp8 cache, and then 5c9cd5e with Gemma 4's multi-token prediction.
+The Q6_K was `gpu:q6k` with its draft model. A drafter changes neither distribution, since the model verifies every
+drafted token, so the drafted runs count as more samples of their route. The public pack, mode `plain`, only
+`hospital`, `assault` and `dance`. On vLLM `hospital` ran beside the other two; llama.cpp ran them one after another.
+
+Memory and Opus's scene count, one pair per run:
+
+| Scenario | Route A, fp8 · fp8 · with its drafter | Q6_K with its draft |
+| --- | --- | --- |
+| `hospital` | 3/12, 10/12 · 4/12, 8/12 · 4/12, 9/12 | 4/12, 9/12 · 4/12, 8/12 |
+| `assault` | 8/12, 9/12 · 8/12, 10/12 · 8/12, 11/12 | 8/12, 11/12 · 8/12, 11/12 |
+| `dance` in the passes | 13/13, 6/6 · 11/13, 6/6 · 12/13, 6/6 | 11/13, 6/6 · 11/13, 6/6 |
+| `dance` alone | 13/13, 5/6 · 10/13, 5/6 · 13/13, 5/6 · 11/13, 6/6 | 13/13, 6/6 · 13/13, 6/6 |
+
+- **The memory does not separate the routes on this card.** On `hospital` and `assault` both lose the same keys in
+  every run, but for route A's one `bridge_limit` (8 bridge passes, not 6). On `dance` route A missed `b_clean` and
+  `all_clean` in 3 runs of 7 and `cancelled_tango` in 2; the Q6_K missed `b_clean` and `all_clean` in 2 of 4, and
+  `cancelled_tango` in none. Both readers below found the right 17 and 18 clean repeats of version B in every memory
+  of both routes, summed to 34 and 78 in the answers, so the twins are lost in the reading, the same way on both
+  routes. Every memory chain of both routes dropped the 40 cancelled tango repeats; the reader finds them only in
+  scene 16, which stays whole after the last compaction.
+- So [the first card's](#route-a-2026-09-25) three identical `dance` passes read better as one sample. Runs made the
+  same way repeat at temperature 0.2: the Q6_K's two passes lost the same keys in all three scenarios, and its two
+  `dance` runs alone found all 13 both times. Route A's runs, each with another request beside it on vLLM, varied.
+  The first card's rule found route A worse on `dance`; on this card by the same rule it is not. Its mean memory on
+  `dance` is 11.9 of 13 over 7 runs against the Q6_K's 12.0 over 4, and on `assault` and `hospital` its means stay
+  within the spread of its own runs.
+- **The scenes, by three judges.** Fable 5.1 and Astra judged copies of every run's trap scenes again (`eval judge`,
+  which now takes `--pack`):
+
+  | Scenario | Route A: Opus, Fable, Astra | Q6_K: Opus, Fable, Astra |
+  | --- | --- | --- |
+  | `assault`, 3 and 2 runs | 30, 32, 31 of 36 | 22, 23, 22 of 24 |
+  | `hospital`, 3 and 2 runs | 27, 28, 27 of 36 | 17, 18, 17 of 24 |
+  | `dance`, 7 and 4 runs | 39, 39, 40 of 42 | 24, 24, 24 of 24 |
+
+  The three judges' counts differ by two questions at most. Route A lost `one_tunnel_barrier` and `two_tunnel_barriers` of
+  `assault` in one or two runs of three, and `samira_corrected` of `dance` in two or three of seven, which the Q6_K
+  kept in every run. The Q6_K lost `key_in_klim_pocket` and `order_explained` of `hospital` in both its runs, which
+  route A kept in one of three.
+- **What the texts show.** Fable 5.1 and Astra each read every run's memories, answers and trap scenes and compared
+  the routes with quotes. They agree that both routes hold the same facts, and that route A loses in counting and in
+  how firmly a scene refutes a false premise:
+  - In the `mid_tunnel_stock` trap of `assault` route A lost count of the ampoules in two scenes of three, one of them
+    left with «восемь целых ампул» after 14 less 4, 2 and 6. The Q6_K counted right in both of its scenes.
+  - In the `samira` trap of `dance` route A's Samira refuted the false date softly or not at all in three scenes of
+    seven, the Q6_K's plainly in four of four. Both readers call one of the three disputable.
+  - Fable found three differences in the memory's own text, the same in every run of a route. In `assault` the Q6_K
+    keeps a running stock after each event (12 and 14 lines with «остаток»), route A almost never (0, 1 and 0), and
+    route A's answers about stocks and barriers land further from the truth, though both routes fail them. Route A
+    writes a hyphen in 56 of the 105 ranges the story writes with an en dash, the Q6_K in none of 61. Route A writes
+    «ё» for 1.3 to 1.4 per cent of е and ё, the Q6_K 4.2 and the story 7.8. The last two change no meaning; rarer
+    tokens losing to common ones is what a coarser quantization would be expected to do, which was not tested.
+  - The Russian is alike: 4 or 5 foreign or broken words a route in 102 and 64 trap scenes, route A's «amidst»,
+    «事務» inside a word and «на десятогое», the Q6_K's «shouting» and «anlamно». Neither looped or broke off.
+- **Speed.** Each route's drafter more than doubled its decoding of the memory: the Q6_K from 47.5 to 136 tokens a
+  second on one slot, route A from 57–67 to 123–171 per request with two at once
+  ([the card](gpu-measurements.md#text-card-4-2026-09-26)).
+
+Limitations:
+- Seven `dance` runs of route A and four of the Q6_K, two or three of the others; `battle` and `chess` were not run.
+- The engine, the weights and the KV cache changed together. A bfloat16 cache for route A does not fit at this context
+  on a 5090, so the cache's part stays unmeasured.
+- Only the trap scenes are the model's own; the 16 scenes of each story are the frozen reference.
+- `stated: memory` looks for the answer's digits anywhere in the memory, so for `cancelled_tango` it counts as a
+  reading miss a number the memory never held: every chain dropped the 40, and a partial repeat's 40 matched.
+- Results: `~/simple-story-chat-runs/2026-09-25/texts/`, a directory per run with its summary, progress lines and
+  probes, `judged/fable/` and `judged/astra/` with the judges' copies, `judges.mjs` for the table, and the two
+  comparisons, `astra-compare.md` and `fable-compare.md`.
+
 <a id='route-a-2026-09-25'></a>
 
 ## 2026-09-25 · Opus 5.5 · route A against the production Q6_K, on one 5090
@@ -54,7 +132,9 @@ Memory, then scenes, one pair per pass:
 The rule, written down before the runs: route A is worse if its mean on `assault` and `hospital` falls below the
 Q6_K's by more than the spread between passes, or if it drops on `battle`, `chess` or `dance`. It drops on `dance` on
 three passes of three, so by that rule route A is worse. The rule's first half cannot be applied: the Q6_K has one pass
-on `assault` and `hospital` here, and its spread is not known.
+on `assault` and `hospital` here, and its spread is not known. [The next card](#route-a-2026-09-26) did not bear this
+out: there the Q6_K lost `b_clean` and `all_clean` too, route A found all 13 in three runs of seven, and the three
+passes here read better as one sample.
 
 Limitations:
 - The Q6_K has one pass on this card; 09-22's run on another 5090 is the second on four scenarios.

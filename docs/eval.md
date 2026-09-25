@@ -21,7 +21,8 @@ through `story:probe`, continuing from the last saved scene on `rate_limited`; t
 With `--judge openai:gpt-5.4`, after the memory questions each model writes one scene for each trap move of
 `examples/scene-traps.ts`, and the judge answers fixed yes/no questions (`local/scene-judge.ts`). The result is
 `sceneScore` next to `score`. `npm run eval -- judge --judge <model> --resume <probe directory> --mode plain` judges
-the finished scenes again.
+the finished scenes again, with `--pack` and `--scenarios` for a scenario of a pack. It writes its verdicts over the old
+ones in the probe's `report.json`, so each judge gets a copy of the directory.
 
 `score` for each mode is the share of correct answers of the worst model, so a change cannot win because of the most
 obedient model. An unfinished mode gives zero answers, and its error code stays in the report. The full report with
