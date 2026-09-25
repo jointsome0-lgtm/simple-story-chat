@@ -585,3 +585,166 @@ card, about $3 with the downloads. Each dry-run's `session` replaces it before t
 - how long an edit takes with six references of 352x640, and with T's seven;
 - whether the views keep the person and turn the way they are asked;
 - whether references of 352x640 keep a face.
+
+<a id='runbook'></a>
+
+## Runbook
+
+The owner's step is done: on 2026-09-25 the owner added `Read(./illustrations/action/sealed/**)` to the denies of
+`.claude/settings.json` ([sealed](#sealed)). Before each card the operator checks that it is still there, and edits
+nothing in that file. Everything lives in one directory, `illustrations/action` unless `--dir` names another. Each
+command but `dry-run` prints one JSON object a line, of ids, codes, counts and times: a sharp story shows as its id,
+and an error as the harness's own refusal or as a class and a code, never as what a parser read.
+`SIMPLE_SERVING_CHECKOUT` is simple-serving's checkout, as `npm run test:serving` names it. The runbook, in its order:
+
+```sh
+# Before any card: all of it against fakes, then the texts against simple-serving's dev launcher.
+dry=$(mktemp -d)
+npm run image:action -- dry-run --dir "$dry"    # eleven steps, then "the dry run went as expected"
+# In simple-serving's checkout, in a terminal of its own. dev.json holds the dry run's made-up client key.
+uv run python -m simple_serving.dev --config "$dry/dev.json" --engine-port 8200 --public-port 8201 --control-port 8202
+npm run image:action -- texts --marker --dir "$dry/dev" --base-url http://127.0.0.1:8201 \
+  --key-file "$dry/config.json" --smoke-record "$dry/serving-smoke.jsonl"    # reached false: no sheet parses
+npm run image:action -- texts --dir "$dry/dev" --base-url http://127.0.0.1:8201 \
+  --key-file "$dry/config.json" --smoke-record "$dry/serving-smoke.jsonl"    # 13 stories, the sharp ones held
+grep -cF 'illustrations/action/sealed' .claude/settings.json    # before each card: 1 or more
+# The text card (the rentals, 2), prepared as simple-serving's README says, with `up` holding its tunnel. In that
+# checkout, in a second terminal, the plain smoke, into a file of this card's own:
+set -o pipefail; uv run python -m simple_serving.smoke | tee logs/smoke-text-card.jsonl    # exit 0, 10 of 10 passed
+smoke="$SIMPLE_SERVING_CHECKOUT/logs/smoke-text-card.jsonl"    # here, from now on
+npm run image:action -- texts --marker --smoke-record "$smoke"    # pass true, before any sharp seed is asked for
+npm run image:action -- texts --smoke-record "$smoke"    # complete true, exit 0
+npm run gpu:rent -- --destroy ID    # destroy_confirmed; anything else goes to the owner at once
+# Between the cards:
+npm run image:action -- prompts       # the six arms' prompts, fronts and views, as counts
+npm run image:action -- checklists    # the checklist sessions; ready true, or a page waits for the owner
+npm run image:action -- collect       # once the owner has saved each page's answers; ready true
+# The picture card (the rentals, 4), only once ready is true:
+SIMPLE_CHAT_RENT_DRY_RUN=1 npm run gpu:rent -- --lane pictures --qwen only --hours 3    # each offer's `session`
+npm run gpu:rent -- --lane pictures --qwen only --hours 3    # with the owner's «да»; `rented` names ID and destroyBy
+npm run gpu:rent -- --show ID    # present, at once
+destroy_by=DESTROY_BY            # from `rented`
+# As soon as ssh answers, the guard, as the identity run checked it: a failed guard is end=0, and the termination.
+guard=$(timeout 20 ssh -o ConnectTimeout=10 simple-chat-vast \
+  'flock -n -E 75 /root/.simple-chat-trial-guard.lock true; [ $? -eq 75 ] && cat /root/.simple-chat-trial-deadline')
+if [[ $guard =~ ^[1-9][0-9]{0,11}$ ]] && (( guard <= destroy_by )); then end=$(( guard - 300 ))
+else end=0; echo 'failed guard: terminate now'; fi
+ssh simple-chat-vast 'mkdir -p /workspace/simple-chat/gpu'
+tar -cf - -C gpu . | ssh simple-chat-vast 'tar -xf - -C /workspace/simple-chat/gpu'
+ssh simple-chat-vast 'SIMPLE_CHAT_IMAGE_QWEN=only bash /workspace/simple-chat/gpu/image-bootstrap.sh'
+# The server and the tunnel, each in a terminal of its own. The server's output is the card's log: it goes nowhere.
+ssh -t simple-chat-vast \
+  'SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 bash /workspace/simple-chat/gpu/image-serve.sh' >/dev/null 2>&1
+bash gpu/tunnel.sh --pictures-only simple-chat-vast
+ssh simple-chat-vast cat /workspace/simple-chat-gpu/image-verified.txt > illustrations/action/card.txt
+npm run image:action -- draw --smoke --until "$end"    # the smoke's verdict; pass false is the termination
+npm run image:action -- portraits --until "$end"    # seed 7 priced whole, then the rest of the fronts and views
+npm run image:action -- draw --until "$end"    # seed 7 scene by scene, then seed 11 if it fits whole
+# The termination, here and after every other ending: we're done, then the destroy whatever the ssh did.
+timeout 20 ssh -o ConnectTimeout=10 simple-chat-vast 'date +%s > /root/.simple-chat-trial-deadline'; \
+  npm run gpu:rent -- --destroy ID    # destroy_confirmed; anything else goes to the owner at once
+# After the card:
+npm run image:action -- bundles    # one bundle a session, and those skipped, by reason
+npm run image:action -- judge      # the text, pictures, repeat and identity sessions, four at a time
+npm run image:action -- collect    # once the owner has saved each page's answers
+npm run image:action -- judge      # the identity sessions that waited for those pages
+npm run image:action -- report     # report.json, and report.md for the owner
+npm run image:action -- gallery    # gallery.html, and sealed/gallery.html for the owner
+```
+
+**Before any card**, `dry-run` goes through all of it against fakes: simple-serving's gateway as
+[action-fakes.ts](../local/action-fakes.ts) plays it behind the real adapter, [fake-comfy.ts](../local/fake-comfy.ts),
+and a judge that writes made-up answers, in a directory of its own with `tmp/` as the temporary directory. A made-up
+word goes wherever a sharp story's words would, and into a fake provider error's body, the fake pictures' metadata, a
+fake judge's prose and a malformed answers block. On the way it goes through every refusal the paid run relies on:
+
+- the sharp stories held until a marker check has passed, and a check that passes;
+- each outcome of [the text run](#text-run) once, `schema` by a shared role and `failed` by a provider error, and a
+  retry that parses;
+- a finished text run that asks nothing again, and another address refused with `texts.json` byte for byte unchanged;
+- the smoke refused while a sharp checklist waits for the owner's page, and the rest refused before the smoke;
+- a smoke on the largest scene, whose people all face the viewer, so that it also draws another scene's view and that
+  view's front, and V stands on C's picture there;
+- the rest of seed 7 refused with five seconds left, before any job is sent;
+- a failed front and a failed view, and the cells they take out;
+- a resume that draws nothing, and one under other plans refused with `draw.json` unchanged;
+- judges' reports with valid, invalid and missing blocks: a clean scene's fresh session, a clean judge's failure, sharp
+  sessions that go to `gpt-6-sol` and to the owner's page, and an identity session that waits for its pictures' page;
+- the report and both galleries;
+- the boundary test: the word found inside `sealed/`, and nowhere in the files outside it, in the temporary directory
+  or in all it printed; and none of the three keys of its key file anywhere.
+
+Its made-up answers are drawn from each enum by a hash, so the verdicts it prints mean nothing. The fakes keep the
+contracts the harness talks to, and model no card, no model and no judge.
+
+The dry run also leaves `config.json`, a key file of three made-up keys as simple-serving's configuration holds them,
+`serving-smoke.jsonl`, a smoke record that passes, and `dev.json`, a service block for simple-serving's dev launcher
+with the served name, the context and that client key. With the launcher up, the two `texts` commands take the texts
+through the real gateway in front of its fake engine: the adapter, the client key read alone, class `internal`, the
+gateway's times in each `text_attempt`, and the requests counted apart. The fake engine answers every call with one
+sentence, so the scenes pass and no sheet parses: the marker check prints `reached: false`, and `texts` 13 stories
+whose sheet is `unparsed`, with the five sharp ones held as `marker_failed`. Anything else, a refusal or a failed scene
+above all, is looked into before any card.
+
+**The text card** follows the rehearsal (the rentals, 1), and is watched and ended as [the rentals](#the-rentals) say.
+It falls asleep 13 minutes after our last request (simple-serving's README, "The command"), which would be a stop, so
+the smoke, the marker check and the texts follow each other at once, and the destroy follows the texts. The smoke
+writes into a file of this card's own, so that no earlier record, the rehearsal's among them, can stand for it.
+
+`texts --marker` prints each attempt, then `marker_check`: `pass`, `reached`, each step's outcome, the files and bytes
+searched, and the hits as counts. `pass: true` lets `texts` ask for the sharp seeds. A hit keeps them out for the rest
+of the card: the leak is the harness's, its fix is code, and no code is written on a paid card. `texts` then writes
+the clean stories and holds the sharp ones as `marker_failed`, and with 13 scenes at most every gate but the fourth is
+inconclusive, so whether the picture card still comes is the owner's question. `reached: false` with no hit is a
+synthetic story the model did not take through every step, and a check again is a new story with a new name.
+
+`texts` prints each attempt and each step, then `texts`: the steps by outcome, the stories held back, `requests` (the
+calls, the retries, the gateway's checks, the counts before a send and the generations) and `complete`, which exits 0.
+An interrupted run resumes where it stopped, and a call with an outcome is never asked again. If the smoke fails, the
+texts wait for the fallback card, where `--model gpu:LABEL` takes the model from `.env.gpu` in place of
+`--smoke-record`.
+
+**Between the cards**, `prompts` prints the scenes left in each arm, the scenes where V is C's picture, the codes that
+took arms out, the fronts and views planned, the most people and bound people in a frame, the manifests' stops, the
+letters outside the Latin script, and each arm's longest prompt in words and, with `tokenizers/`, in the encoder's
+tokens. `checklists` prints each `session_done`, then the sessions by state and `pictures`: `ready`, `textsDone`,
+`promptsCurrent`, and the checklists stored, failed, waiting for the owner and not yet run. A sharp checklist that
+both judges left without a valid block gets a page in `sealed/owner/`, named by its story and session; the owner saves
+the answers where the page says, and `collect` reads them as strictly as a judge's. A clean checklist whose two
+sessions failed is a judge's failure: its scene has no scores, and it does not hold the card back. The picture card is
+rented only with `ready: true`, and `portraits` and `draw` refuse without it: the text run complete, the prompts made
+from the texts as they are now, so that a text written after `prompts` needs `prompts` again, and no checklist left to
+run or waiting for the owner.
+
+**The picture card** is rented, guarded, watched and ended as the identity run's card was
+([operator](identity-experiment.md#operator), [termination](identity-experiment.md#termination)), for three hours.
+`draw --smoke` prints each cell, then `smoke`: `pass`, and whether the cells were drawn, on their geometry, with the
+right slots, heard on the socket and within the memory. `pass: false` is the termination; a smoke where only T failed
+passes with `tOut`, and T leaves the run. `portraits` prices the rest of seed 7 from the smoke's times and prints
+`admission`: the cells, the minutes they need and the minutes left. A seed 7 that does not fit stops as `admission`
+before any job is sent, and the termination follows. `draw` prints each cell and the admission of seed 11, then
+`drawn`: the pictures drawn by kind and seed, and the failed and the out by code. `stopped: admission` after seed 7 is
+seed 11 that did not fit, and the verdict stands on seed 7; `stopped: until` is the end that came. Every ending is the
+termination, and a resume draws nothing again. The saved pictures stay on the card until its destroy is read back; the
+harness reads no log of the card for a sharp story, and nobody reads the server's output.
+
+**After the card**, no card is needed. `bundles` prints the bundles built and those skipped, by reason. `judge` runs
+every session that is ready, four at a time (`--parallel`, and `--kind` for some kinds alone), prints each
+`session_done`, and then `judged`: the sessions by kind and state, and the attempts. A sharp session both judges
+leave gets a page, as a checklist does, and an identity session waits for its pictures' answers, so `judge` runs again
+after `collect`. `report` writes `report.json` and the owner's `report.md`, and prints the scenes, each gate's verdict
+on seed 7, over the clean scenes, over the scenes that reached their target and at seed 11, the repeats, the sharp
+scenes no judge answered, and whether seed 7 is complete. `gallery` writes the owner's two pages. No Claude session
+opens anything under `sealed/`, the pages among them.
+
+The drawing stages also take `--comfy`, `--wait`, `--timeout` and `--tokenizers`, whose defaults the runbook keeps. The
+directory holds:
+
+- `texts.json` and `marker.json`, the records of the text run and of the marker check;
+- `clean/<id>/` for each clean story, and `sealed/<id>/` for each sharp one and the marker's: its store, `text.json`,
+  `plan.json`, `checklist.json`, `portraits/`, `views/`, `pictures/`, `bundles/`, `keys/` and `answers/`;
+- `prompts.json`, `checklists.json` with the checklists' projections, and `judging.json`;
+- `sessions/`, and `sealed/sessions/` for the sharp scenes: each session's copy of its bundle, its events, its stderr
+  and its report; `sealed/tmp/`, their temporary directory; and `sealed/owner/`, the owner's pages;
+- `card.txt` and `draw.json`, the card's record and the pictures';
+- `report.json`, `report.md`, `gallery.html` and `sealed/gallery.html`.

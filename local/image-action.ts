@@ -240,7 +240,7 @@ function ownerAnswers(root: string, word: string) {
 // pictures' metadata and the judge's prose and malformed blocks; the boundary test then searches every file of `run/`
 // outside `sealed/`, `tmp/` and all the dry run printed for it, and the whole of `run/`, `tmp/` and the output for
 // the keys. On the way it goes through the refusals the paid run relies on. No card, no model, no network. Beside
-// `run/` it leaves the key file, the smoke record and `dev.json`, which the runbook's rehearsal of the texts against
+// `run/` it leaves the key file, the smoke record and `dev.json`, which the runbook's run of the texts against
 // simple-serving's dev launcher takes up.
 export async function dryRun(out: string, options: { tokenizers?: string } = {}) {
   const dry = resolve(out), root = join(dry, 'run'), temp = join(dry, 'tmp');
@@ -263,12 +263,12 @@ export async function dryRun(out: string, options: { tokenizers?: string } = {})
     say(`dry run in ${dry}: fakes of simple-serving's gateway, ComfyUI and the judge; no card, no model, no network, and every word made up`);
     const keyFile = join(dry, 'config.json'), smokeRecord = join(dry, 'serving-smoke.jsonl');
     writeFileSync(keyFile, JSON.stringify(keys), { mode: 0o600 });
-    // The same client key for simple-serving's dev launcher, which the runbook's rehearsal of the texts starts in front
-    // of its fake engine: a service block with the served name, the context, and the key's one class, whose calls
-    // name the scope `internal`.
+    // The same client key for simple-serving's dev launcher, which the runbook starts in front of its fake engine for a
+    // run of the texts before any card: a service block with the served name, the context, and the key's one class,
+    // whose calls name the scope `internal`.
     writeFileSync(join(dry, 'dev.json'), JSON.stringify({ service: { alias: SERVING.model, context_tokens: SERVING.contextTokens,
       keys: { [keys.client_key]: { label: 'action', classes: ['internal'], default: 'internal', scopes: true, control: false } } } }), { mode: 0o600 });
-    writeFileSync(smokeRecord,SMOKE_PROBES.map(probe => JSON.stringify({ probe, ok: true, ...(probe === 'state' ? { versions: { gateway: '0.1.0' } } : {}) })).join('\n') + '\n');
+    writeFileSync(smokeRecord, SMOKE_PROBES.map(probe => JSON.stringify({ probe, ok: true, ...(probe === 'state' ? { versions: { gateway: '0.1.0' } } : {}) })).join('\n') + '\n');
     const gateway = fakeGateway({ key: keys.client_key, sharp: [...SHARP_THEMES.map(theme => theme.id), MARKER_STORY.id], marker: word, faults: DRY_FAULTS });
     const texts = (extra: TextsOptions = {}) => textsCommand(root, { smokeRecord, keyFile, fetch: gateway.fetch, ...extra });
 
