@@ -380,7 +380,7 @@ pause or start resets the delay. While the bot waits, its checks write `gpu_chec
 which means that ssh was not started at that moment.
 
 Before deleting the instance save its server events with `npm run gpu:diagnose -- --pull`, as
-[gpu.md](gpu.md#ending-the-rental) asks: afterwards there is nowhere to get them from.
+[gpu.md](gpu.md#ending-the-rental) asks. The command saves all events of `server-events.jsonl` together with the rotations to `logs/gpu-server-events-DATE.jsonl`. Only the time, the event name, the category, the PID, the exit code and the signal reach the file. Afterwards there is nowhere to get them from.
 
 <a id='adapter'></a>
 
