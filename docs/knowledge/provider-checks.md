@@ -36,6 +36,14 @@ Limits as of 18 September 2026: the free OpenRouter models give 20 requests per 
 
 The limits the code sets for itself are in [eval.md](../eval.md#daily-limits).
 
+<a id='free-gemma-2026-09-19'></a>
+
+## The free Gemma for the eval, 2026-09-19
+
+Why the eval's main group took the paid Gemma, as improve-loop.md put it on 19 September 2026:
+
+> Gemma here is paid (`openrouter-paid`, limit 600 000 tokens per day, about $0.20): the free Gemma does not enforce the schema and answers 429 for hours.
+
 <a id='cloud-draft'></a>
 
 ## The Telegram Serverless draft
