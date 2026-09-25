@@ -237,10 +237,14 @@ test('the create body asks for the devel image, direct ssh and a guard of one to
   // one line that there is no ssh key either; with the account's key it searches too, and creates nothing. The guard
   // deletes the machine after three hours unless the session asks for one or two, and never after more. The printed
   // field is not what the machine is told, so a longer rental is refused before anything is sent, and the stub reads
-  // the seconds out of the body that is.
+  // the seconds out of the body that is. An onstart script past the size Vast's own checks keep to is refused before
+  // anything is printed or sent.
   const home = canned(t), review = { SIMPLE_CHAT_VAST_API_KEY: '' };
+  mkdirSync(join(home, 'long', '.ssh'), { recursive: true });
+  writeFileSync(join(home, 'long', '.ssh', 'simple_chat_vast_ed25519.pub'), `ssh-ed25519 AAAAC3NzaC1secret ${'x'.repeat(400)}\n`);
   runs(home, [
     ['a machine with no ssh key yet', { ...review, HOME: join(home, 'fresh') }, ['--print-body'], 1, ['no_public_key'], ''],
+    ['an onstart script past 4048 bytes', { ...review, HOME: join(home, 'long') }, ['--print-body'], 1, ['onstart_too_long'], ''],
     ['the review before the account key is set', review, ['--print-body'], 0, ['create_request'], '', ({ label, events: [shown] }) => {
       assert.deepEqual([shown.body.disk, shown.hours, shown.sessionHours], [150, 3, 2.5], label);
       assert.match(shown.body.onstart, /^\[redacted: \d+ lines, \d+ bytes, ssh key inside\]$/, label);

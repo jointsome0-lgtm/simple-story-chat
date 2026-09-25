@@ -14,8 +14,8 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BOOT_SECONDS, MAX_DPH_BY_GPUS, REQUEST_MS, chooseOffers, createBody, destroyInstance, emptyReason, instanceState,
-  offerQuery, redactedBody, rentPlan, sshRoute, startInstance } from '../local/rent-plan.ts';
+import { BOOT_SECONDS, MAX_DPH_BY_GPUS, ONSTART_MAX_BYTES, REQUEST_MS, chooseOffers, createBody, destroyInstance, emptyReason,
+  instanceState, offerQuery, redactedBody, rentPlan, sshRoute, startInstance } from '../local/rent-plan.ts';
 
 const ATTEMPTS = 4;
 // Every request carries a deadline. A search that never answers would hang with the owner watching; a create
@@ -136,6 +136,10 @@ const lines = script.split('\n');
 // The key and the rental's length are set as shell variables ahead of the script's own body, so neither depends on
 // Vast passing environment variables through.
 const onstart = [lines[0], `SIMPLE_CHAT_SSH_PUBLIC_KEY='${publicKey}'`, `SIMPLE_CHAT_TRIAL_SECONDS=${hours * 3600}`, ...lines.slice(1)].join('\n');
+if (Buffer.byteLength(onstart) > ONSTART_MAX_BYTES) {
+  console.log(JSON.stringify({ event: 'onstart_too_long', bytes: Buffer.byteLength(onstart), limit: ONSTART_MAX_BYTES }));
+  process.exit(1);
+}
 const body = createBody({ plan, onstart });
 
 // The request that spends the money, with the key and the script left out of it. It is printed before the search so

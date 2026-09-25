@@ -229,6 +229,12 @@ export function createBody({ plan, onstart }: { plan: RentPlan; onstart: string 
   };
 }
 
+// Vast's reference for creating an instance gives the onstart script no maximum, but the checks of Vast's own Claude
+// plugin keep it within 4048 characters (github.com/vast-ai/vast-claude-plugin, TESTING.md), so gpu/rent.mjs sends no
+// longer one. With the key and the guard's hours in it, the script measured 3774 bytes on 2026-09-25. It counts bytes,
+// which are never fewer than characters.
+export const ONSTART_MAX_BYTES = 4048;
+
 // What --print-body shows: every field that decides what is rented, and in place of the onstart script its size
 // alone. That script carries the account's public key and the trial guard, neither of which belongs in a terminal
 // the owner may paste from.
