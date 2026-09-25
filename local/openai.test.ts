@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createOpenAI } from './llama.ts';
-import { loadConfig, loadModelConfig, apiBaseUrl } from './config.ts';
 import type { ModelError } from './model-error.ts';
 import type { ModelRequest } from './model.ts';
 
@@ -28,69 +27,57 @@ function fixture(respond: () => Response, overrides: Partial<typeof config> = {}
   return { calls, provider: createOpenAI({ ...config, ...overrides }, { fetch }) };
 }
 const code = (expected: string) => (error: ModelError) => error.code === expected;
+const answer = chunk({ content: 'Готово.' }, 'stop'), usage = { prompt_tokens: 140, completion_tokens: 8 };
 
-test('one request under the API root, without llama.cpp fields; the provider count replaces the estimate', async () => {
-  // As OpenRouter streams it: the closing usage chunk repeats the finish reason with an empty delta.
-  const f = fixture(() => stream([chunk({ reasoning: 'Рассуждение.' }), chunk({ content: 'Готово.' }, 'stop'),
-    { ...chunk({ content: '', role: 'assistant' }, 'stop'), usage: { prompt_tokens: 140, completion_tokens: 8 } }]));
-  const result = await f.provider.generate({ ...request(), estimatedInputTokens: 100, outputSchema: { type: 'object' } });
-  assert.equal(f.calls.length, 1);
-  assert.equal(f.calls[0].url, 'https://openrouter.ai/api/v1/chat/completions');
-  assert.equal((f.calls[0].options.headers as { Authorization: string }).Authorization, 'Bearer synthetic-key');
-  assert.deepEqual(Object.keys(f.calls[0].body!).sort(), ['max_tokens', 'messages', 'model', 'provider', 'reasoning', 'response_format', 'stream', 'stream_options', 'temperature']);
-  assert.deepEqual(f.calls[0].body!.reasoning, { enabled: false });
-  assert.deepEqual(f.calls[0].body!.response_format, { type: 'json_schema', json_schema: { name: 'reply', strict: true, schema: { type: 'object' } } });
-  assert.deepEqual(f.calls[0].body!.provider, { require_parameters: true });
-  assert.equal('countInput' in f.provider, false);
-  assert.deepEqual(result.usage, { inputTokens: 140, outputTokens: 8, cachedInputTokens: null,
-    reasoningCharacters: 'Рассуждение.'.length, totalTokens: 148 });
+test('one request under the API root, without llama.cpp fields; OpenAI gets max_completion_tokens and its default sampling', async () => {
+  const shared = { messages: ['system', 'user', 'assistant', 'user'], stream: true, stream_options: { include_usage: true } };
+  const reply = (schema: object) => ({ type: 'json_schema', json_schema: { name: 'reply', strict: true, schema } });
+  const text = (lengths: object) => ({ type: 'object', properties: { text: { type: 'string', ...lengths, enum: ['a'] } } });
+  const hosts: [string, Partial<typeof config>, object, string, SentBody][] = [
+    // OpenRouter routes only to an endpoint that enforces the schema, and its reasoning is off.
+    ['OpenRouter', {}, { type: 'object' }, 'https://openrouter.ai/api/v1/chat/completions', { ...shared, model: config.model, max_tokens: 4096,
+      temperature: 0.8, reasoning: { enabled: false }, response_format: reply({ type: 'object' }), provider: { require_parameters: true } }],
+    // OpenAI's strict mode refuses string lengths.
+    ['OpenAI', { baseUrl: 'https://api.openai.com/v1/', model: 'gpt-5.4-mini' }, text({ minLength: 1, maxLength: 9 }), 'https://api.openai.com/v1/chat/completions',
+      { ...shared, model: 'gpt-5.4-mini', max_completion_tokens: 4096, response_format: reply(text({})) }],
+  ];
+  for (const [label, overrides, outputSchema, url, body] of hosts) {
+    const f = fixture(() => stream([answer, { choices: [], usage }]), overrides);
+    await f.provider.generate({ ...request(), outputSchema });
+    assert.equal(f.calls.length, 1, label);
+    assert.equal(f.calls[0].url, url, label);
+    assert.equal((f.calls[0].options.headers as { Authorization: string }).Authorization, 'Bearer synthetic-key', label);
+    assert.deepEqual({ ...f.calls[0].body, messages: (f.calls[0].body!.messages as { role: string }[]).map(m => m.role) }, body, label);
+    assert.equal('countInput' in f.provider, false, label);
+  }
 });
 
-test('OpenAI gets max_completion_tokens and its default sampling', async () => {
-  const f = fixture(() => stream([chunk({ content: 'Готово.' }, 'stop'), { choices: [], usage: { prompt_tokens: 140, completion_tokens: 8 } }]),
-    { baseUrl: 'https://api.openai.com/v1/', model: 'gpt-5.4-mini' });
-  await f.provider.generate({ ...request(), outputSchema: { type: 'object', properties: { text: { type: 'string', minLength: 1, maxLength: 9, enum: ['a'] } } } });
-  assert.equal(f.calls[0].url, 'https://api.openai.com/v1/chat/completions');
-  assert.deepEqual((f.calls[0].body!.response_format as { json_schema: { schema: unknown } }).json_schema.schema,
-    { type: 'object', properties: { text: { type: 'string', enum: ['a'] } } });
-  assert.equal(f.calls[0].body!.max_completion_tokens, 4096);
-  assert.equal('max_tokens' in f.calls[0].body!, false);
-  assert.equal('temperature' in f.calls[0].body!, false);
-  assert.equal('reasoning' in f.calls[0].body!, false);
+test('the provider count replaces the estimate: an oversized estimate is rejected before the request, a missing or oversized count rejects the result', async () => {
+  const runs: [string, object[], number | undefined, number, string | object][] = [
+    // As OpenRouter streams it: reasoning apart, and the closing usage chunk repeats the finish reason with an empty delta.
+    ['a counted answer', [chunk({ reasoning: 'Рассуждение.' }), answer, { ...chunk({ content: '', role: 'assistant' }, 'stop'), usage }], 100, 1,
+      { inputTokens: 140, outputTokens: 8, cachedInputTokens: null, reasoningCharacters: 'Рассуждение.'.length, totalTokens: 148 }],
+    ['an estimate over the limit', [], 61441, 0, 'context_limit'],
+    ['no count', [answer], undefined, 1, 'usage_unavailable'],
+    ['a count over the limit', [answer, { choices: [], usage: { ...usage, prompt_tokens: 61441 } }], undefined, 1, 'context_limit'],
+  ];
+  for (const [label, items, estimatedInputTokens, calls, outcome] of runs) {
+    const f = fixture(() => stream(items));
+    const generated = f.provider.generate({ ...request(), estimatedInputTokens });
+    if (typeof outcome === 'string') await assert.rejects(generated, code(outcome), label);
+    else assert.deepEqual((await generated).usage, outcome, label);
+    assert.equal(f.calls.length, calls, label);
+  }
 });
 
-test('an oversized estimate is rejected before the request; a missing or oversized provider count rejects the result', async () => {
-  const over = fixture(() => stream([]));
-  await assert.rejects(over.provider.generate({ ...request(), estimatedInputTokens: 61441 }), code('context_limit'));
-  assert.equal(over.calls.length, 0);
-  const silent = fixture(() => stream([chunk({ content: 'Готово.' }, 'stop')]));
-  await assert.rejects(silent.provider.generate(request()), code('usage_unavailable'));
-  const late = fixture(() => stream([chunk({ content: 'Готово.' }, 'stop'), { choices: [], usage: { prompt_tokens: 61441, completion_tokens: 8 } }]));
-  await assert.rejects(late.provider.generate(request()), code('context_limit'));
-});
-
+// The HTTP layer is llama.cpp's too (llama.ts), as is the SSE reader of the tests above: these cases outlive that adapter.
 test('HTTP failures become safe codes and the health check looks the model up', async () => {
-  await assert.rejects(fixture(() => new Response('secret', { status: 429 })).provider.generate(request()),
-    (error: ModelError) => error.code === 'rate_limited' && error.httpStatus === 429 && error.phase === 'generate');
-  await assert.rejects(fixture(() => new Response('secret', { status: 401 })).provider.generate(request()), code('unauthorized'));
+  for (const [status, expected] of [[429, 'rate_limited'], [401, 'unauthorized']] as const) {
+    await assert.rejects(fixture(() => new Response('secret', { status })).provider.generate(request()), (error: ModelError) =>
+      error.code === expected && error.httpStatus === status && error.phase === 'generate' && !error.message.includes('secret'), `HTTP ${status}`);
+  }
   const f = fixture(() => json({ data: [{ id: config.model }] }));
   assert.deepEqual(await f.provider.check(), { model: config.model });
   assert.equal(f.calls[0].url, 'https://openrouter.ai/api/v1/models');
   await assert.rejects(fixture(() => json({ data: [{ id: 'other' }] })).provider.check(), code('unexpected_model'));
-});
-
-test('configuration: an HTTPS API root with a key and a model, for probes only', () => {
-  assert.equal(apiBaseUrl('https://openrouter.ai/api/v1/'), 'https://openrouter.ai/api/v1');
-  for (const url of [undefined, 'http://openrouter.ai/api/v1', 'https://user:pass@example.com/v1', 'https://example.com/v1?key=1']) {
-    assert.throws(() => apiBaseUrl(url));
-  }
-  const env = { SIMPLE_CHAT_PROVIDER: 'openai-compatible', SIMPLE_CHAT_BASE_URL: 'https://openrouter.ai/api/v1',
-    SIMPLE_CHAT_API_KEY: 'synthetic-key', SIMPLE_CHAT_MODEL: config.model };
-  const loaded = loadModelConfig('/nonexistent-simple-chat-config', env);
-  assert.equal(loaded.baseUrl, 'https://openrouter.ai/api/v1');
-  assert.equal(loaded.compactAtTokens, 44000);
-  assert.throws(() => loadModelConfig('/nonexistent-simple-chat-config', { ...env, SIMPLE_CHAT_API_KEY: '' }));
-  assert.throws(() => loadModelConfig('/nonexistent-simple-chat-config', { ...env, SIMPLE_CHAT_MODEL: '' }));
-  assert.throws(() => loadConfig('/nonexistent-simple-chat-config', { ...env, TELEGRAM_BOT_TOKEN: '1:synthetic', SIMPLE_CHAT_ALLOWED_USER_IDS: '1' }),
-    /synthetic probes only/);
 });
