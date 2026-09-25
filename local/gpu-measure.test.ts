@@ -632,7 +632,7 @@ test('video memory is sampled per card through one SSH session, and the card is 
   const directory = mkdtempSync(join(tmpdir(), 'gpu-measure-vram-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   // A stand-in for ssh that lives as long as the session it stands for: it records the session and the remote
-  // command, then keeps printing what the remote script prints, one line every 150 ms, until it is killed. The
+  // command, then keeps printing what the remote script prints, one line every 60 ms, until it is killed. The
   // shebang is this very Node, because the measurer's PATH holds nothing else. Card 0 is nearly full and card 1
   // holds llama-server: a measurer that kept one number for the machine, or believed the `--card 0` given below,
   // would report the image model's shortage as this server's.

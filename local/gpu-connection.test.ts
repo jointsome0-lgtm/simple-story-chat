@@ -138,4 +138,16 @@ test('failed SSH attempts are retried after 10, 20 and then every 30 seconds; a 
   assert.equal(f.workers.length, 7);
   f.connection.close();
   await assert.rejects(next, { code: 'gpu_connection_failed' });
+  // A close lifts a wait that has not yet run out, and the next attempt starts at once.
+  const g = fixture();
+  const failed = g.connection.ensure();
+  g.workers[0].emit('exit', 255, null);
+  await assert.rejects(failed, { code: 'gpu_connection_failed' });
+  await assert.rejects(g.connection.ensure(), { code: 'gpu_connection_failed', phase: 'ssh_wait' });
+  g.connection.close();
+  const lifted = g.connection.ensure();
+  assert.equal(g.workers.length, 2);
+  g.ready(1);
+  await lifted;
+  g.connection.close();
 });
