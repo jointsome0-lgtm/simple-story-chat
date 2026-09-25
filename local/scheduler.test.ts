@@ -95,6 +95,12 @@ test('people are served one at a time and in order, and agents and probes wait f
     f.time = 130000; f.scheduler.tick(); assert.equal(f.calls[1].name, 'experiment', label);
     f.calls[1].finish(); await low;
   } },
+  // The bot reports the model as answering only after a check that verified something.
+  { label: 'a provider\'s check passes through, and a provider without one (a CLI) gets none', run: async (f, label) => {
+    assert.equal('check' in f.scheduler.foreground, false, label);
+    const server = createScheduler({ generate: async () => 'done', check: async () => ({ model: 'synthetic' }) });
+    try { assert.deepEqual(await server.foreground.check!(), { model: 'synthetic' }, label); } finally { await server.close(); }
+  } },
   { label: 'paused or draining GPU cancels background and does not acquire or renew a user lease', run: async (f, label) => {
     f.allowed = false;
     const low = f.scheduler.background.generate('experiment');
