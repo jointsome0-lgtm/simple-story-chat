@@ -13,7 +13,10 @@
 //   report     geometry, time, memory and prompt length per arm, and the gates once the answers are in
 //   bundles    one blind bundle per arm and seed, with the sheet of checks the gates count
 //   dry-run    all of it against local/fake-comfy.ts, with fake answers, and no card
-// Every stage that draws takes `--until`, the end of the rental on the wall clock, and waits for nothing past it.
+// Every stage that draws takes `--until`, the end of its work on the wall clock in epoch seconds: nothing is sent after
+// it, and only a job already submitted gets a minute more, for its own stop (image-batch.ts `DrawOptions`). It also
+// takes `--comfy`, the tunnel's address, `--wait`, the seconds one picture may take (300), `--timeout`, the seconds one
+// request may take (60), and `--tokenizers`. The transformer is the one the card's record verified, and no other.
 // Nothing here talks to a model, and what it prints is counts, sizes, times and verdicts.
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -109,7 +112,7 @@ export function cardOf(file: string) {
     throw new Error(`${lines.length ? `The card's record ${file} differs from gpu/image-manifest.env in ${wrong.join(', ')}` : `No record of the card at ${file}`}; `
       + 'copy image-verified.txt off the card as the runbook says before anything is drawn');
   }
-  return { comfyuiRevision: revision!, verified, encoder: wanted.encoder[0]!, vae: wanted.vae[0]! };
+  return { comfyuiRevision: revision!, model: manifest.IMAGE_QWEN_MODEL_FILE, transformer: wanted.transformer[0]!, encoder: wanted.encoder[0]!, vae: wanted.vae[0]! };
 }
 // That record as the bootstrap writes it, made from the manifest for the dry run.
 function writeCardRecord(file: string) {
@@ -119,13 +122,14 @@ function writeCardRecord(file: string) {
 }
 
 // What the pictures depend on beyond the graph, whose hash the index keeps already. Every stage: the revision and the
-// weights the card's record says the bootstrap verified — a transformer it did not verify is pinned by its name, as
-// unverified — and the portraits' recipe, so that nobody resumes under another. The frames add the set, the portraits
-// themselves, the seeds, the canvas, the size a portrait reaches the encoder at and where the graph keeps its cache.
-// image-batch.ts refuses a resume under any other value, and under a server that no longer says what it is.
-export function pinsOf(card: ReturnType<typeof cardOf>, checkpoint: string): Record<string, string | number> {
+// weights the card's record says the bootstrap verified — the experiment draws with that transformer and no other,
+// so there is no checkpoint to choose — and the portraits' recipe, so that nobody resumes under another. The frames
+// add the set, the portraits themselves, the seeds, the canvas, the size a portrait reaches the encoder at and where
+// the graph keeps its cache. image-batch.ts refuses a resume under any other value, and under a server that no longer
+// says what it is.
+export function pinsOf(card: ReturnType<typeof cardOf>): Record<string, string | number> {
   const canvas = portraitCanvas(readGraph(PORTRAIT_GRAPH));
-  return { comfyuiRevision: card.comfyuiRevision, transformer: card.verified.get(checkpoint) ?? `unverified ${checkpoint}`,
+  return { comfyuiRevision: card.comfyuiRevision, transformer: card.transformer,
     encoder: card.encoder, vae: card.vae, portraitClothes: PORTRAIT_CLOTHES, portraitStyle: PORTRAIT_STYLE, portraitAction: PORTRAIT_ACTION,
     portraitCanvas: `${canvas.width}x${canvas.height}`, portraitGraph: sha256(readFileSync(PORTRAIT_GRAPH)) };
 }
@@ -197,6 +201,8 @@ function memoryOf(pictures: Picture[], failures: Failure[]) {
     pass: !oom && !lost && four.length > 0 && least !== undefined && least >= CRITERIA.headroomMiB };
 }
 
+// A frame whose job the socket heard from its start: where its time went, and whether any loader ran.
+const heard = (picture: Picture) => picture.phases?.sampleMs !== undefined && picture.loaderCacheMiss !== undefined;
 // A warm frame: every loader of its job was answered from the node cache, and it is not its arm's first.
 const warm = (picture: Picture) => picture.loaderCacheMiss === false && !picture.first;
 // What gate 4 compares: each warm frame of the arm, with A's warm frame of the same scene and seed.
@@ -214,8 +220,7 @@ export function smokeOf(index: BatchIndex, root: string) {
   const pictures = ours(index.pictures), failures = ours(index.failures);
   const drawn = !failures.length && IDENTITY_SMOKE.every(caseId => ARMS.every(arm => pictures.some(one => one.caseId === caseId && one.arm === arm)));
   const geometry = geometryOf(index, root, pictures).pass, memory = memoryOf(pictures, failures).pass;
-  const telemetry = pictures.length > 0 && pictures.every(one => one.phases?.sampleMs !== undefined && one.loaderCacheMiss !== undefined)
-    && pairsOf('B', pictures).length > 0 && pairsOf('C', pictures).length > 0;
+  const telemetry = pictures.length > 0 && pictures.every(heard) && pairsOf('B', pictures).length > 0 && pairsOf('C', pictures).length > 0;
   return { drawn, geometry, memory, telemetry, pass: drawn && geometry && memory && telemetry };
 }
 
@@ -232,21 +237,22 @@ export function etaOf(index: BatchIndex): (references: number, first: boolean) =
     : one + (references - 1) * Math.max(0, four - one) / 3);
 }
 
-export type StageOptions = { stage: 'portraits' | 'smoke' | 'main'; dir: string; comfy: string; until: number; checkpoint?: string;
+export type StageOptions = { stage: 'portraits' | 'smoke' | 'main'; dir: string; comfy: string; until: number;
   tokenizers?: string; timeoutMs?: number; waitMs?: number; pollMs?: number; log?: (event: object) => void };
 // The one runner around image-batch.ts `draw`, for each drawing stage of the runbook. Each reads the card's record
-// first and is pinned to it, asks for the socket that hears a job from its start and fails a cell without it, waits
-// for nothing past `until`, and draws no cell again that failed:
+// first and is pinned to it, asks for the socket that hears a job from its start and fails a cell without it, sends
+// nothing and waits for nothing past `until` but a submitted job's own stop (`DrawOptions`), and draws no cell again
+// that failed:
 //   portraits  one per person on the text-to-image graph, upright on its canvas turned, and the references file;
 //   smoke      once the portraits are all there and bind as the set says;
 //   main       once the smoke has passed, and only if the whole set can end before `until` by the smoke's own times;
-//              then the control: the text-to-image graph at the frames' canvas, drawn once, cost only.
+//              then, after a complete main set, the control: the text-to-image graph at the frames' canvas, cost only,
+//              and once: a control the end cut short, or that was never begun because it could not end in time, stays so.
 export async function drawStage(options: StageOptions): Promise<BatchIndex> {
   const paths = layout(options.dir);
   const card = cardOf(paths.card);
-  const checkpoint = options.checkpoint ?? readManifest(MANIFEST).IMAGE_QWEN_MODEL_FILE;
-  const pins = pinsOf(card, checkpoint);
-  const common = { comfy: options.comfy, checkpoints: [checkpoint], negative: '', timeoutMs: options.timeoutMs ?? 60000,
+  const pins = pinsOf(card);
+  const common = { comfy: options.comfy, checkpoints: [card.model], negative: '', timeoutMs: options.timeoutMs ?? 60000,
     waitMs: options.waitMs ?? 300000, pollMs: options.pollMs, until: options.until, requireSocket: true, log: options.log };
   if (options.stage === 'portraits') {
     if (readIndex(paths.portraits)?.failures.some(failure => !stopsTheRun(failure.code))) {
@@ -275,7 +281,7 @@ export async function drawStage(options: StageOptions): Promise<BatchIndex> {
   }
   const estimate = etaOf(drawn);
   const index = await draw({ ...arms, seeds: IDENTITY_SEEDS, estimate });
-  if (!index.stopped && !index.error && !readIndex(paths.control)) {
+  if (identityReport(options.dir).complete && !readIndex(paths.control)) {
     await draw({ ...common, prompts: paths.set, out: paths.control, workflow: PORTRAIT_GRAPH, ...IDENTITY_CANVAS,
       seeds: IDENTITY_SEEDS.slice(0, 1), only: IDENTITY_CONTROL, pins: { ...pins, set: framed.set, canvas: framed.canvas }, estimate });
   }
@@ -452,9 +458,13 @@ function gatesOf(arm: Arm, pictures: Picture[], failures: Failure[], tallies: Pa
       detail: `the frames' own changes of clothes right in ${changedYes} of ${changed}, ${swapFailed} swapped, action errors ${actionFailed} against A's ${base!.actionFailed}; `
         + `every appearance, not gated: ${clothesYes} of ${clothes}` });
   }
+  // A frame the socket did not hear is neither warm nor cold but unknown, and dropping it could take the slowest frames
+  // out of the count: one such frame of the arm or of A leaves the gate unmeasured, never passed.
   const pairs = pairsOf(arm, pictures);
-  if (!pairs.length) gates.push({ gate: 4, status: 'unmeasured', detail: 'no warm frame matched in A' });
-  else {
+  const unheard = pictures.filter(picture => (picture.arm === arm || picture.arm === 'A') && !heard(picture)).length;
+  if (unheard || !pairs.length) {
+    gates.push({ gate: 4, status: 'unmeasured', detail: unheard ? `${unheard} frames of ${arm} and A without the socket's account of their job` : 'no warm frame matched in A' });
+  } else {
     const [mine, theirs] = [median(pairs.map(pair => pair[0]))!, median(pairs.map(pair => pair[1]))!];
     const [slowest, baseline] = [Math.max(...pairs.map(pair => pair[0])), Math.max(...pairs.map(pair => pair[1]))];
     gates.push({ gate: 4, status: mine <= CRITERIA.median * theirs && slowest <= CRITERIA.slowest * baseline ? 'pass' : 'fail',
@@ -539,9 +549,9 @@ export function reportLines(report: IdentityReport): string[] {
   ];
   const { portraits, control } = report;
   if (portraits) lines.push(`  portraits, a run of their own at ${portraits.canvas}: ${portraits.drawn} drawn, ${portraits.failed} failed, the first ${portraits.firstMs ?? '-'} ms, the rest median ${portraits.medianMs ?? '-'} ms`);
-  lines.push(control ? `  control, the text-to-image graph at ${IDENTITY_CANVAS.width}x${IDENTITY_CANVAS.height}, cost only and not gated: ${control.drawn} drawn`
-    + `${control.stopped === 'budget' ? ', stopped by the end of the rental' : ''}, the first ${control.firstMs ?? '-'} ms, warm median ${control.warmMedianMs ?? '-'} ms`
-    + ` over ${control.warm}, against ${control.matchedMs ?? '-'} ms for the same frames in A` : '  control: not drawn');
+  lines.push(control ? `  control, the text-to-image graph at ${IDENTITY_CANVAS.width}x${IDENTITY_CANVAS.height}, cost only and not gated, drawn once: ${control.drawn} drawn`
+    + `${control.stopped === 'budget' ? ', stopped by the end of the rental and never resumed' : ''}, the first ${control.firstMs ?? '-'} ms, warm median ${control.warmMedianMs ?? '-'} ms`
+    + ` over ${control.warm}, against ${control.matchedMs ?? '-'} ms for the same frames in A` : '  control: not drawn; it follows a complete main set only');
   lines.push('  arm  frames  refs per frame      warm  median ms  slowest ms  first ms  upload ms  encode ms  sample ms');
   for (const [arm, one] of Object.entries(arms)) {
     const refs = Object.entries(one.references).map(([count, frames]) => `${count}:${frames}`).join(' ');
@@ -695,7 +705,7 @@ const report = (value: object) => console.log(JSON.stringify(value)); // counts,
 
 async function main(args: string[]) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
-    dir: { type: 'string' }, comfy: { type: 'string', default: 'http://127.0.0.1:8188' }, checkpoint: { type: 'string' },
+    dir: { type: 'string' }, comfy: { type: 'string', default: 'http://127.0.0.1:8188' },
     until: { type: 'string' }, wait: { type: 'string', default: '300' }, timeout: { type: 'string', default: '60' },
     tokenizers: { type: 'string' }, smoke: { type: 'boolean', default: false },
   } });
@@ -705,14 +715,14 @@ async function main(args: string[]) {
     writeSet(dir);
     report({ event: 'identity_set_written', directory: dir, frames: identityFrames.length, people: identitySheet.length });
   } else if (command === 'portraits' || command === 'draw') {
-    // `--until` is the end of the rental in epoch seconds, read off the card a few minutes before its guard deletes it.
+    // `--until` is the end of the work in epoch seconds, five minutes before the card's end as the runbook computes it.
     const until = Number(values.until) * 1000, wait = Number(values.wait), timeout = Number(values.timeout);
     if (!Number.isInteger(until) || until <= Date.now() || until > Date.now() + 3 * 3600000 || !Number.isInteger(wait) || wait < 10
       || !Number.isInteger(timeout) || timeout < 10) {
-      throw new Error('Use: portraits|draw [--smoke] --until <epoch seconds, before the card is deleted> [--dir illustrations/identity] [--checkpoint name] [--wait 300] [--timeout 60] [--tokenizers tokenizers] [--comfy http://127.0.0.1:8188]');
+      throw new Error('Use: portraits|draw [--smoke] --until <epoch seconds, before the card is deleted> [--dir illustrations/identity] [--wait 300] [--timeout 60] [--tokenizers tokenizers] [--comfy http://127.0.0.1:8188]');
     }
     const stage = command === 'portraits' ? 'portraits' : values.smoke ? 'smoke' : 'main';
-    const index = await drawStage({ stage, dir, comfy: comfyUrl(values.comfy!), until, checkpoint: values.checkpoint,
+    const index = await drawStage({ stage, dir, comfy: comfyUrl(values.comfy!), until,
       tokenizers: values.tokenizers, timeoutMs: timeout * 1000, waitMs: wait * 1000, log: report });
     report({ event: 'identity_drawn', stage, drawn: index.pictures.length, failed: index.failures.length, stopped: index.stopped, error: index.error });
     if (index.error || index.stopped || index.failures.length) process.exitCode = 1;

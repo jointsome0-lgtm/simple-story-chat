@@ -1,14 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { bindingPlan, pngSize, withoutLooks } from './image-batch.ts';
-import type { BatchIndex, References } from './image-batch.ts';
-import { buildIdentityBundles, cardOf, checksOf, drawStage, dryRun, identityCases, identityReport, pinsOf } from './image-identity.ts';
+import type { BatchIndex, Picture, References } from './image-batch.ts';
+import { buildIdentityBundles, cardOf, checksOf, drawStage, dryRun, identityCases, identityReport, layout, pinsOf } from './image-identity.ts';
 import { startFakeComfy } from './fake-comfy.ts';
 import { readManifest } from './tokenizer-extract.ts';
-import { IDENTITY_BINDING, IDENTITY_SEEDS, IDENTITY_STORY, identitySheet } from '../examples/identity-set.ts';
+import { IDENTITY_BINDING, IDENTITY_SEEDS, IDENTITY_SMOKE, IDENTITY_STORY, identitySheet } from '../examples/identity-set.ts';
 
 // Every person of the sheet has a portrait, as after the portrait run.
 const everybody: References = { [IDENTITY_STORY]: Object.fromEntries(identitySheet.map(one => [one.name, `${one.name}.png`])) };
@@ -138,6 +138,16 @@ test('a dry run draws the set in three arms on one canvas, refuses what would sp
   assert.equal(report.verdict, 'B passes, C fails');
   // C against B, split where C's text lost the look (22 transitions) and where the binding stopped and it stayed (4).
   assert.deepEqual([arms.C.tally!.removed.transitions, arms.C.tally!.kept.transitions], [22, 4]);
+  // Astra's second case: the fourteen frames of B outside the smoke lost the socket's account of their job, and each
+  // took 100 s. They are not cold but unknown, and gate 4 is not passed on the frames that are left.
+  const whole = readFileSync(join(run, 'index.json'), 'utf8');
+  const smoked = (picture: Picture) => picture.seed === IDENTITY_SEEDS[0] && IDENTITY_SMOKE.includes(picture.caseId);
+  writeFileSync(join(run, 'index.json'), JSON.stringify({ ...index, pictures: index.pictures.map(picture => picture.arm === 'B' && !smoked(picture)
+    ? { ...picture, phases: undefined, loaderCacheMiss: undefined, totalMs: 100000 } : picture) }));
+  const unheard = identityReport(root);
+  assert.deepEqual([unheard.complete, unheard.judged, unheard.smoke.pass, unheard.gates.B[3].status, unheard.gates.B[3].detail, unheard.verdict],
+    [true, true, true, 'unmeasured', '14 frames of B and A without the socket\'s account of their job', 'B is open, C fails']);
+  writeFileSync(join(run, 'index.json'), whole);
   // A bundle nobody has answered leaves its arm unscored rather than passed.
   rmSync(join(run, 'answers', readdirSync(join(run, 'keys')).find(file => JSON.parse(readFileSync(join(run, 'keys', file), 'utf8')).arm === 'B')!));
   const open = identityReport(root);
@@ -146,7 +156,6 @@ test('a dry run draws the set in three arms on one canvas, refuses what would sp
 
   // Astra's case: one cell of B failed and the rest are there. The failure stays in the record as the cell's result,
   // and the set is incomplete: no gates, no verdict, whatever the survivors would say.
-  const whole = readFileSync(join(run, 'index.json'), 'utf8');
   const lost = index.pictures.find(picture => picture.arm === 'B' && picture.caseId === 'troupe-1' && picture.seed === 7)!;
   writeFileSync(join(run, 'index.json'), JSON.stringify({ ...index, pictures: index.pictures.filter(picture => picture !== lost),
     failures: [{ caseId: lost.caseId, checkpoint: lost.checkpoint, role: lost.role, seed: lost.seed, arm: lost.arm, code: 'image_failed' }] }));
@@ -166,12 +175,21 @@ test('a dry run draws the set in three arms on one canvas, refuses what would sp
   const again = await drawStage({ stage: 'smoke', dir: join(root, 'aside', 'oom'), comfy: fake.url, until: Date.now() + 60000, pollMs: 20, waitMs: 10000 });
   assert.deepEqual([again.pictures.length, again.failures.length, fake.jobs.length], [2, 4, 0]);
   assert.ok(again.failures.every(failure => failure.oom && failure.arm !== 'A'));
+  // A main set that lost a cell and ran to its end, with no stop and no error, gets no control: three more cells
+  // would be paid for after a result that is incomplete anyway.
+  const failed = join(root, 'aside', 'failed-main');
+  for (const part of ['set', 'portraitPrompts', 'card', 'portraits', 'references', 'run'] as const) cpSync(layout(root)[part], layout(failed)[part], { recursive: true });
+  const later = index.pictures.find(picture => picture.arm === 'B' && picture.caseId === 'troupe-3' && picture.seed === 11)!;
+  writeFileSync(join(layout(failed).run, 'index.json'), JSON.stringify({ ...index, pictures: index.pictures.filter(picture => picture !== later),
+    failures: [{ caseId: later.caseId, checkpoint: later.checkpoint, role: later.role, seed: later.seed, arm: later.arm, code: 'image_failed' }] }));
+  const rest = await drawStage({ stage: 'main', dir: failed, comfy: fake.url, until: Date.now() + 60000, pollMs: 20, waitMs: 10000 });
+  assert.deepEqual([rest.pictures.length, rest.failures.length, rest.stopped, fake.jobs.length, existsSync(layout(failed).control)], [47, 1, undefined, 0, false]);
 
-  // The card's record: another revision, or no record at all, refuses every stage; a checkpoint the bootstrap did
-  // not verify is pinned by its name, never by the standard transformer's hash.
+  // The card's record: another revision, or no record at all, refuses every stage, and the transformer is the one it
+  // verified: there is no other checkpoint to draw with.
   const card = join(root, 'card.txt');
   const good = readFileSync(card, 'utf8');
-  assert.equal(pinsOf(cardOf(card), 'other.safetensors').transformer, 'unverified other.safetensors');
+  assert.equal(pinsOf(cardOf(card)).transformer, manifest.IMAGE_QWEN_MODEL_SHA256);
   writeFileSync(card, good.replace(manifest.COMFYUI_REVISION, 'f'.repeat(40)));
   assert.throws(() => cardOf(card), /differs from gpu\/image-manifest.env in comfyuiRevision;/);
   rmSync(card);
