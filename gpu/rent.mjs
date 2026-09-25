@@ -6,8 +6,8 @@
 // --print-body first -- that names the offers it would take, at their present prices, and the exact request that
 // takes one, which is what the owner is agreeing to, and it spends nothing. Renting is theirs to approve; this script
 // only carries it out.
-// `--show ID` and `--destroy ID` are the other end of a rental, below. The API key, the public key and the onstart
-// script are never printed.
+// `--show ID`, `--start ID` and `--destroy ID` are the other end of a rental, below. The API key, the public key and the
+// onstart script are never printed.
 //
 // What to ask for and what an offer costs is in local/rent-plan.ts, with tests; this file does the fetching.
 import { readFile } from 'node:fs/promises';
@@ -15,7 +15,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BOOT_SECONDS, MAX_DPH_BY_GPUS, REQUEST_MS, chooseOffers, createBody, destroyInstance, emptyReason, instanceState,
-  offerQuery, redactedBody, rentPlan, sshRoute } from '../local/rent-plan.ts';
+  offerQuery, redactedBody, rentPlan, sshRoute, startInstance } from '../local/rent-plan.ts';
 
 const ATTEMPTS = 4;
 // Every request carries a deadline. A search that never answers would hang with the owner watching; a create
@@ -37,38 +37,46 @@ const dryRun = process.env.SIMPLE_CHAT_RENT_DRY_RUN === '1';
 // not delete raises no alarm over a machine the guard has deleted. The delete's own `success` is no read, and a
 // stopped instance is not gone either, since its disk is kept and billed. A key without the right to delete is not
 // answered by asking again: the owner deletes it in the console. With SIMPLE_CHAT_RENT_DRY_RUN=1 it reads once and
-// deletes nothing.
-if (args[0] === '--show' || args[0] === '--destroy') {
+// deletes nothing. `--start` resumes a stopped rental with the same key, for simple-serving's first rental when the
+// card's own key cannot (`startInstance`, which keeps its twenty minutes); its dry run reads once and asks nothing.
+if (args[0] === '--show' || args[0] === '--start' || args[0] === '--destroy') {
   const [mode, id] = args;
   if (args.length !== 2 || !/^[1-9]\d{0,11}$/.test(id)) {
-    console.log(JSON.stringify({ event: 'bad_arguments', usage: 'rent.mjs --show ID | --destroy ID, the ID `rented` printed' }));
+    console.log(JSON.stringify({ event: 'bad_arguments', usage: 'rent.mjs --show ID | --start ID | --destroy ID, the ID `rented` printed' }));
     process.exit(1);
   }
   if (!key) { console.log(JSON.stringify({ event: 'no_key' })); process.exit(1); }
   const url = `https://console.vast.ai/api/v0/instances/${id}/`;
   // One request of `ms` at most: the signal cuts the answer's body as well as the wait for it. `status: 0` is no
   // answer, as below. The body is never printed, only what `instanceState` keeps of it.
-  const ask = async (method, ms) => {
+  const ask = async (method, ms, sent) => {
     try {
-      const response = await fetch(url, { method, headers, signal: AbortSignal.timeout(ms) });
+      const response = await fetch(url, { method, signal: AbortSignal.timeout(ms), ...(sent
+        ? { headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(sent) } : { headers }) });
       return { status: response.status, body: await response.json().catch(() => null) };
     } catch { return { status: 0, body: null }; }
   };
   const read = async ms => { const { status, body } = await ask('GET', ms); return instanceState(id, status, body); };
-  const remove = async ms => {
-    const { status, body } = await ask('DELETE', ms);
+  const outcome = async (method, ms, sent) => {
+    const { status, body } = await ask(method, ms, sent);
     return { status, success: typeof body?.success === 'boolean' ? body.success : null };
   };
   // `--show` adds where ssh reaches the instance (`sshRoute`): an address and a port, nothing else of the record.
   if (mode === '--show' || dryRun) {
     const { status, body } = await ask('GET', REQUEST_MS);
     const seen = instanceState(id, status, body);
-    console.log(JSON.stringify({ event: mode === '--show' ? 'instance' : 'would_destroy', instance: id, ...seen,
-      ...(mode === '--show' ? { ssh: sshRoute(id, status, body) } : {}) }));
+    const event = { '--show': 'instance', '--start': 'would_start', '--destroy': 'would_destroy' }[mode];
+    console.log(JSON.stringify({ event, instance: id, ...seen, ...(mode === '--show' ? { ssh: sshRoute(id, status, body) } : {}) }));
     process.exit(seen.state === 'unknown' ? 1 : 0);
   }
-  const end = await destroyInstance({ read, remove, now: () => performance.now(), sleep: ms => new Promise(done => setTimeout(done, ms)),
-    log: event => console.log(JSON.stringify({ ...event, instance: id })) });
+  const clock = { now: () => performance.now(), sleep: ms => new Promise(done => setTimeout(done, ms)),
+    log: event => console.log(JSON.stringify({ ...event, instance: id })) };
+  if (mode === '--start') {
+    const end = await startInstance({ read, resume: ms => outcome('PUT', ms, { state: 'running' }), ...clock });
+    console.log(JSON.stringify({ ...end, instance: id }));
+    process.exit(end.event === 'start_confirmed' ? 0 : 1);
+  }
+  const end = await destroyInstance({ read, remove: ms => outcome('DELETE', ms), ...clock });
   const confirmed = end.event === 'destroy_confirmed';
   console.log(JSON.stringify({ ...end, instance: id,
     ...(confirmed ? {} : { tell: 'the owner, now: the deletion is not confirmed, and the instance may still be billing' }) }));
@@ -104,7 +112,7 @@ try {
 } catch { /* reported below */ }
 if (!plan) {
   console.log(JSON.stringify({ event: 'bad_arguments', usage: 'rent.mjs [--gpus 1|2] [--lane both|text|pictures] [--avoid-host ID[,ID...]] '
-    + '[--hours 1|2|3] [--qwen only] [--print-body] | --show ID | --destroy ID' }));
+    + '[--hours 1|2|3] [--qwen only] [--print-body] | --show ID | --start ID | --destroy ID' }));
   process.exit(1);
 }
 // --print-body is reviewed before a rental, so it must not need the API key to be exported.

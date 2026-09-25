@@ -314,3 +314,40 @@ export async function destroyInstance({ read, remove, now, sleep, log }: {
   }
   return { event: 'destroy_unconfirmed', ...seen };
 }
+
+// The resume of one rental by its ID (gpu/rent.mjs --start), for simple-serving's first rental when the card's own key
+// cannot resume it from outside (simple-serving's contract, Decided, 2026-09-25). It does what simple-serving's `up`
+// does: a stop in flight is waited out, never started against, and a stopped instance is asked to run with the
+// account's key, again each minute while a read still says it is stopped. It reads every ten seconds until a read says
+// the instance runs, on one monotonic clock of twenty minutes, the contract's ten for a stop to end and ten for a
+// start. The words are the bot's (local/gpu.ts): stopped is `stopped` or `exited` with the intent `stopped`, and
+// running is `running` both ways. A key that may not resume ends it at once. The four functions are the caller's, as
+// for a destroy.
+export const START_SECONDS = 1200;
+const ASK_EVERY_MS = 60000;
+export type StartEnd = ({ event: 'start_confirmed' | 'start_unconfirmed' } & InstanceState) | { event: 'start_refused'; status: number };
+export async function startInstance({ read, resume, now, sleep, log }: {
+  read: (ms: number) => Promise<InstanceState>; resume: (ms: number) => Promise<Removal>;
+  now: () => number; sleep: (ms: number) => Promise<void>; log: (event: object) => void;
+}): Promise<StartEnd> {
+  const started = now();
+  const left = () => Math.floor(started + START_SECONDS * 1000 - now());
+  let seen: InstanceState = { state: 'unknown', status: 0, actual: null, intended: null };
+  let asked: number | undefined;
+  for (let budget = left(); budget > 0; budget = left()) {
+    seen = await read(Math.min(REQUEST_MS, budget));
+    if (seen.state === 'gone') break;
+    if (seen.actual === 'running' && seen.intended === 'running') return { event: 'start_confirmed', ...seen };
+    const at = now(), rest = left();
+    const stopped = (seen.actual === 'stopped' || seen.actual === 'exited') && seen.intended === 'stopped';
+    if (rest > 0 && stopped && (asked === undefined || at - asked >= ASK_EVERY_MS)) {
+      asked = at;
+      const { status, success } = await resume(Math.min(REQUEST_MS, rest));
+      log({ event: 'start_sent', second: Math.round((at - started) / 1000), status, success });
+      if (status === 401 || status === 403) return { event: 'start_refused', status };
+    }
+    const pause = left();
+    if (pause > 0) await sleep(Math.min(READ_EVERY_MS, pause));
+  }
+  return { event: 'start_unconfirmed', ...seen };
+}

@@ -30,6 +30,8 @@ Machines in mainland China are not asked for and are dropped from the answer (`d
 
 Offers are sorted by `hour * 2.5 + download`, the cost of the session the instance is billed for, with the measured host first. With `--hours`, the session is those hours and 20 minutes 20 seconds more: the quarter of an hour of start before the guard's clock begins, and after it twenty seconds of "we're done" and the five minutes a destroy is given to be read back. `--qwen only` prices a picture machine by the Qwen files alone, which is what `SIMPLE_CHAT_IMAGE_QWEN=only` pulls, and asks for 60 GB of disk instead of 100: a host prices its disk by the hour, and the cheapest 5090 on 2026-09-25 charged $0.87 per GB a month. A picture machine's RAM floor is 30 GB, not the language lane's 32: a 32 GB share can report 31.2 GB. The dry run prints each offer's sum as `session`. Offers with fewer than two direct ports are dropped and the count of them is reported: an offer with no ports can only be reached through Vast's proxy. That rule has never yet excluded anything — every 5090 within this price has had ports — so treat it as a guard, not as an explanation of any failure.
 
+With a rental's ID and the account's key alone, `--show ID` reads it, `--destroy ID` deletes it, and `--start ID` resumes it after a stop and reads until it runs. `--start` is for simple-serving's first rental, in case the card's own key cannot resume it from outside.
+
 ### While the cards are paid for
 
 Vast bills every minute whether the cards draw or wait. The owner's rules since 2026-09-24, written after a night when they mostly waited ([what happened](knowledge/gpu-measurements.md#paid-idle-2026-09-23)):
