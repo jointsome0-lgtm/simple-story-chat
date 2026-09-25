@@ -56,8 +56,10 @@ test('a style of the reader\'s own ends the prompt as written, and is logged as 
     ['Уголь\r\nCharcoal sketch\non rough   paper', { name: 'Уголь', line: 'Charcoal sketch on rough paper' }],
     ['\n\nУголь\n\n  \nCharcoal​ sketch\t\n', { name: 'Уголь', line: 'Charcoal sketch' }], [' \n\t ', null]];
   for (const [text, style] of sent) assert.deepEqual(ownStyleInput(text), style, JSON.stringify(text));
-  // A name fits a button: cut at a word near the limit, or at the limit.
-  assert.equal(styleName('Oil painting with visible impasto brushstrokes, warm candlelight'), 'Oil painting with visible impasto…');
-  assert.equal(styleName('b'.repeat(80)), `${'b'.repeat(OWN_NAME_CHARS - 1)}…`);
+  // A name fits a button: whole up to the limit, beyond it cut at a word near the limit, or at the limit.
+  const names: [string, string][] = [['Уголь', 'Уголь'], ['a'.repeat(OWN_NAME_CHARS), 'a'.repeat(OWN_NAME_CHARS)],
+    ['Oil painting with visible impasto brushstrokes, warm candlelight', 'Oil painting with visible impasto…'],
+    ['b'.repeat(80), `${'b'.repeat(OWN_NAME_CHARS - 1)}…`]];
+  for (const [text, name] of names) assert.equal(styleName(text), name, text);
   assert.equal([...styleName('🎨'.repeat(60))].length, OWN_NAME_CHARS);
 });
