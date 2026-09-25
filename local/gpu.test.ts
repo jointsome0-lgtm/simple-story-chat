@@ -258,6 +258,27 @@ test('an error or an unknown state is taken neither for readiness nor for a stop
     await f.tick(); assert.notEqual(f.status(), 'ready', label);
     f.health(true); await f.tick(); assert.equal(f.status(), 'ready', label);
   }, { paused: true }],
+  // Started outside the bot (the Vast console) while paused, and resumed during its health check: the start is consumed.
+  ['a resume while an instance started outside is health-checked', async (f, label) => {
+    f.setRemote({ actual: 'running', intended: 'running' });
+    const held = f.hold('check'); const inflight = f.gpu.tick(); await turn();
+    f.gpu.resume(); assert.equal(f.status(), 'starting', label);
+    held.go(); await inflight; assert.deepEqual([f.status(), f.writes], ['ready', []], label);
+    f.fail(); await f.tick(1000); assert.deepEqual([f.status(), f.gpu.snapshot().checkDegraded], ['ready', true], label);
+  }, { paused: true }],
+  // A transient failure of the control API or of the model's check keeps recent readiness for 30 seconds at most, even
+  // with a recovery check still pending when they end, and is no stop.
+  ...(['control', 'health'] as const).map((failure): Row => [`a transient ${failure} failure`, async (f, label) => {
+    if (failure === 'control') f.fail(); else f.health('cancelled');
+    await f.tick(10000); assert.deepEqual([f.status(), f.gpu.snapshot().checkDegraded], ['ready', true], label);
+    f.gpu.acquire()();
+    await f.tick(19999); assert.equal(f.status(), 'ready', label);
+    f.fail(false); f.health(true); const held = f.hold('check'); const recovering = f.gpu.tick(); await turn();
+    f.advance(1); assert.equal(f.status(), 'error', label);
+    assert.throws(() => f.gpu.acquire(), { code: 'gpu_not_ready' }, label);
+    held.go(); await recovering;
+    assert.deepEqual([f.status(), f.gpu.snapshot().checkDegraded, f.writes], ['ready', false, []], label);
+  }]),
   // Only an instance that went down empties the model server's caches, which a pool then stops reserving room in.
   ['a restart counted for a real stop, not for a failing control API or a stop taken back', async (f, label) => {
     assert.equal(f.gpu.snapshot().starts, 1, label);
