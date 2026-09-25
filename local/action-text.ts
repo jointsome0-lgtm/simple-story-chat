@@ -260,11 +260,25 @@ export function textPins(model: TextModel, gateway: Record<string, string | numb
 const pinsHash = (pins: Record<string, string | number>) => sha256(JSON.stringify(pins));
 
 // What the gateway says of itself on /v1/state with our key: the contract, the model and the context, and nothing
-// that changes with a boot. Its versions need the control key, which the harness never reads.
+// that changes with a boot. Its versions need the control key, which the harness never reads. The request has the
+// adapter's own timeout, which bounds the read of its body too, and no more than `STATE_BYTES` of the body are read: a
+// longer one says nothing, like one that is not JSON or answers an error.
+const STATE_BYTES = 65536;
 export async function gatewayFacts(model: TextModel): Promise<Record<string, string | number>> {
   if (model.route !== 'simple-serving') return {};
-  const response = await model.fetch(`${model.config.baseUrl}/v1/state`, { headers: { Authorization: `Bearer ${model.config.apiKey}` } });
-  const state = response.ok ? await response.json().catch(() => null) as { contract?: unknown; model?: unknown; context_tokens?: unknown } | null : null;
+  const response = await model.fetch(`${model.config.baseUrl}/v1/state`, { headers: { Authorization: `Bearer ${model.config.apiKey}` },
+    signal: AbortSignal.timeout(model.config.timeoutMs) });
+  const bounded = async () => {
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    for await (const chunk of response.body ?? []) {
+      bytes += chunk.byteLength;
+      if (bytes > STATE_BYTES) return null;
+      chunks.push(Buffer.from(chunk));
+    }
+    return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
+  };
+  const state = response.ok ? await bounded().catch(() => null) as { contract?: unknown; model?: unknown; context_tokens?: unknown } | null : null;
   const facts: Record<string, string | number> = {};
   if (typeof state?.contract === 'string' && /^\d{1,4}$/.test(state.contract)) facts.gatewayContract = state.contract;
   if (typeof state?.model === 'string' && /^[A-Za-z0-9._:-]{1,120}$/.test(state.model)) facts.gatewayModel = state.model;

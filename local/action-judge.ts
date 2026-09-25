@@ -403,27 +403,40 @@ export function codexArgs({ model, dir, report, images, prompt }: { model: strin
     '--color', 'never', '-m', model, '-c', `model_reasoning_effort="${JUDGE.effort}"`, '-C', dir, '-o', report,
     ...images.flatMap(image => ['-i', image]), '--', prompt];
 }
-// How a session is started: its command and arguments, its working directory and environment, and the files its
-// stdout (the events) and stderr go to. It answers with the exit code.
-export type Exec = (command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; stdout: string; stderr: string }) => Promise<number>;
-export const spawnExec: Exec = (command, args, { cwd, env, stdout, stderr }) => new Promise(done => {
+// How a session is started: its command and arguments, its working directory and environment, the files its stdout
+// (the events) and stderr go to, and its deadline. It answers with the exit code once the process has exited: at the
+// deadline it is asked to stop, killed two seconds later if it has not, and still waited for, so nothing of it runs on.
+export type Exec = (command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; stdout: string; stderr: string;
+  signal: AbortSignal }) => Promise<number>;
+export const spawnExec: Exec = (command, args, { cwd, env, stdout, stderr, signal }) => new Promise(done => {
   const out = openSync(stdout, 'w', 0o600), err = openSync(stderr, 'w', 0o600);
-  let ended = false;
+  let ended = false, kill: NodeJS.Timeout | undefined;
+  const child = spawn(command, args, { cwd, env, stdio: ['ignore', out, err] });
+  const stop = () => {
+    child.kill('SIGTERM');
+    kill ??= setTimeout(() => child.kill('SIGKILL'), 2000);
+  };
   const end = (code: number) => {
     if (ended) return;
     ended = true;
+    clearTimeout(kill);
+    signal.removeEventListener('abort', stop);
     closeSync(out);
     closeSync(err);
     done(code);
   };
-  const child = spawn(command, args, { cwd, env, stdio: ['ignore', out, err] });
   child.on('error', () => end(-1));
   child.on('close', code => end(code ?? -1));
+  if (signal.aborted) stop();
+  else signal.addEventListener('abort', stop, { once: true });
 });
+// A session's deadline. One still running at it, waiting on the network or anywhere else, is ended as above, and its
+// attempt is recorded as `timeout`: an attempt without answers, as one without a valid block is.
+export const SESSION_MS = 30 * 60000;
 
 // A report's answers: its last JSON block, parsed. Nothing of a block that does not parse is kept or shown: the parser's
 // message quotes it.
-export type Read = { code: 'ok' | 'no_report' | 'no_block' | 'unparsed_block' | 'schema'; value?: unknown };
+export type Read = { code: 'ok' | 'no_report' | 'no_block' | 'unparsed_block' | 'schema' | 'timeout'; value?: unknown };
 export function answersOf(report: string | undefined): Read {
   if (report === undefined) return { code: 'no_report' };
   const block = [...report.matchAll(/```json\s*([\s\S]*?)```/g)].at(-1)?.[1];
@@ -499,9 +512,12 @@ export async function judgeSessions(options: JudgeOptions): Promise<JudgingRecor
     const tmp = join(root, 'sealed', 'tmp');
     if (sealed) mkdirSync(tmp, { recursive: true, mode: 0o700 });
     const began = performance.now();
+    const deadline = AbortSignal.timeout(SESSION_MS);
     const exitCode = await exec(options.codex ?? 'codex', codexArgs({ model, dir: copy, report, images: attachments(copy, session.kind), prompt: taskOf(session.kind) }),
-      { cwd: copy, env: sealed ? { ...process.env, TMPDIR: tmp } : process.env, stdout: join(base, `${name}.events.jsonl`), stderr: join(base, `${name}.stderr.log`) });
-    const read = validated(root, session, answersOf(existsSync(report) ? readFileSync(report, 'utf8') : undefined));
+      { cwd: copy, env: sealed ? { ...process.env, TMPDIR: tmp } : process.env, stdout: join(base, `${name}.events.jsonl`), stderr: join(base, `${name}.stderr.log`),
+        signal: deadline });
+    const read: Read = deadline.aborted ? { code: 'timeout' }
+      : validated(root, session, answersOf(existsSync(report) ? readFileSync(report, 'utf8') : undefined));
     entry.attempts.push({ model, code: read.code, ...(exitCode === 0 ? {} : { exitCode }), ms: Math.round(performance.now() - began) });
     if (read.code === 'ok') {
       store(root, session, read.value);

@@ -736,12 +736,13 @@ harness reads no log of the card for a sharp story, and nobody reads the server'
 
 **After the card**, no card is needed. `bundles` prints the bundles built and those skipped, by reason. `judge` runs
 every session that is ready, four at a time (`--parallel`, and `--kind` for some kinds alone), prints each
-`session_done`, and then `judged`: the sessions by kind and state, and the attempts. A sharp session both judges
-leave gets a page, as a checklist does, and an identity session waits for its pictures' answers, so `judge` runs again
-after `collect`. `report` writes `report.json` and the owner's `report.md`, and prints the scenes, each gate's verdict
-on seed 7, over the clean scenes, over the scenes that reached their target and at seed 11, the repeats, the sharp
-scenes no judge answered, and whether seed 7 is complete. `gallery` writes the owner's two pages. No Claude session
-opens anything under `sealed/`, the pages among them.
+`session_done`, and then `judged`: the sessions by kind and state, and the attempts. A session still running after 30
+minutes is stopped, killed if it does not stop, and waited for, and its attempt is recorded as `timeout`, an attempt
+without answers. A sharp session both judges leave gets a page, as a checklist does, and an identity session waits for
+its pictures' answers, so `judge` runs again after `collect`. `report` writes `report.json` and the owner's
+`report.md`, and prints the scenes, each gate's verdict on seed 7, over the clean scenes, over the scenes that reached
+their target and at seed 11, the repeats, the sharp scenes no judge answered, and whether seed 7 is complete.
+`gallery` writes the owner's two pages. No Claude session opens anything under `sealed/`, the pages among them.
 
 The drawing stages also take `--comfy`, `--wait`, `--timeout` and `--tokenizers`, whose defaults the runbook keeps. The
 directory holds:
