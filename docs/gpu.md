@@ -266,7 +266,7 @@ Stopping the model process or the SSH tunnel does not end the rental. The manage
 
 `gpu/trial-onstart.sh` is meant only for a one-time run on artificial stories. As a Vast onstart script it saves the initial deadline and requests the deletion of its own instance after three hours, or after the one or two that `gpu/rent.mjs --hours` asked for; a repeated start does not extend the deadline. The guard reads the deadline file again every ten seconds and takes an earlier time, never a later one, so `ssh ALIAS 'date +%s > /root/.simple-chat-trial-deadline'` ends the rental within ten seconds: the "we're done" of the [identity runbook](identity-experiment.md#termination). It uses only the `CONTAINER_API_KEY` issued to this instance. You can pass `SIMPLE_CHAT_SSH_PUBLIC_KEY` to add a public key only inside this container. The script is not a Vast money limit: a disconnected container does not run its timer, and a network failure can delay the deletion. An external check that the rental ended is needed: `npm run gpu:rent -- --destroy ID` with the account's key, which deletes the instance if it is still there after the guard's minute and reads it back until it is gone. The identity runbook ends every rental with it. Do not use such a template for permanent work with data.
 
-The timer works while the computer with the bot is on and has access to the Vast API.
+The managed bot's [idle timer](llama-cpp.md#managed-gpu) works while the computer with the bot is on and has access to the Vast API.
 A correct shutdown of the bot also requests the GPU stop; an emergency power-off
 of the computer does not guarantee this. A limited test needs a separate deletion
 deadline for the instance and a check that it was carried out. Stories and checkpoints are
