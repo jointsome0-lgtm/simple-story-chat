@@ -136,7 +136,7 @@ function gpuInfo(overrides: Record<string, unknown> = {}) {
 type Row = [string, unknown, unknown];
 
 test('each state offers only the actions it allows: the scene keyboard, compaction, characters, the GPU and stale routes', () => {
-  const at =(fields: Partial<Library>, base = fixture()): Library => ({ ...base, ...fields });
+  const at = (fields: Partial<Library>, base = fixture()): Library => ({ ...base, ...fields });
   const job = (kind?: string) => partialJob({ id: 'j12', kind, storyId: 'h2', branchId: 'b3' });
   const menu = callbacks(render(drawn(), 'home', on));
   // The model screen's buttons, and whether it shows the GPU at all.
