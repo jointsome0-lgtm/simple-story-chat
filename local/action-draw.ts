@@ -391,9 +391,9 @@ async function drawCells(run: Run, cells: ActionCell[], smoke: boolean, price?: 
       const before = sealed ? undefined : await logLines(comfy);
       const drawn = await drawOne(comfy, filled, { pollMs: run.options.pollMs, waitMs: run.options.waitMs ?? WAIT_MS, sampleEvery: 1, requireSocket: true,
         admit: fits, ...(built.copies.length ? { copies: built.copies } : {}) });
+      // The picture is down, and it is kept whatever comes next, the end included: saved and recorded before anything
+      // more is asked of the card, so that nothing drawn is lost or counted as never sent.
       await settled();
-      const partialModelLoadEvents = sealed ? undefined : partialLoadsSince(before, await logLines(comfy));
-      if (comfy.end?.aborted) return 'until';
       const path = fileOf(run.root, cell);
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
       writeFileSync(path, drawn.bytes, { mode: 0o600 });
@@ -405,15 +405,22 @@ async function drawCells(run: Run, cells: ActionCell[], smoke: boolean, price?: 
       });
       const group = (one: CellRecord) => one.status === 'drawn' && (cell.kind === 'frame' ? one.arm === cell.arm : one.kind === cell.kind);
       const counted = run.tokens?.(cell.prompt, cell.kind === 'front' ? 0 : names.length, cell.kind === 'front');
-      index.cells[cell.key] = { ...base, status: 'drawn', ...recipe, file: relative(run.root, path), sha256: sha256(drawn.bytes), bytes: drawn.bytes.length,
+      const record: CellRecord = { ...base, status: 'drawn', ...recipe, file: relative(run.root, path), sha256: sha256(drawn.bytes), bytes: drawn.bytes.length,
         width: size.width, height: size.height, ...(names.length ? { referenceSizes: sizes } : {}), totalMs: drawn.totalMs, viewMs: drawn.viewMs,
         ...(uploadMs ? { uploadMs: Math.round(uploadMs) } : {}), first: !Object.values(index.cells).some(group), ...drawn.timing,
         vram: drawn.vram, vramSamples: drawn.memory.samples, ...(drawn.memory.ramMiB ? { ramMiB: drawn.memory.ramMiB } : {}),
-        ...(partialModelLoadEvents === undefined ? {} : { partialModelLoadEvents }), promptChars: cell.prompt.length,
-        ...(counted ? { promptTokens: counted.prompt, conditioningTokens: counted.conditioning } : {}), slotsRight,
+        promptChars: cell.prompt.length, ...(counted ? { promptTokens: counted.prompt, conditioningTokens: counted.conditioning } : {}), slotsRight,
         ...(drawn.copies ? { copies: drawn.copies.map(copy => ({ node: copy.node, ...pngSize(copy.bytes) })) } : {}) };
+      index.cells[cell.key] = record;
       run.save();
       log({ event: 'cell_drawn', key: cell.key, totalMs: drawn.totalMs, references: names.length, width: size.width, height: size.height });
+      if (comfy.end?.aborted) return 'until';
+      // The card's log after the job, for a clean story alone, once the picture is safe.
+      const partialModelLoadEvents = sealed ? undefined : partialLoadsSince(before, await logLines(comfy));
+      if (partialModelLoadEvents !== undefined) {
+        record.partialModelLoadEvents = partialModelLoadEvents;
+        run.save();
+      }
     } catch (error) {
       const raw = (error as { code?: unknown }).code;
       const code = typeof raw === 'string' && DRAW_CODES.includes(raw) ? raw : 'image_failed';
