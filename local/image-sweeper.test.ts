@@ -195,7 +195,8 @@ function serveBox(t: Hooks, qwenOnly = false) {
 
 // A temp directory on a tmpfs is where ComfyUI keeps its pictures and the sweeper looks for them, and one on a disk,
 // which a stopped instance keeps, is refused before anything starts. /dev/shm is the tmpfs, and the temporary
-// directory or the checkout the disk; a row whose place this machine does not have is skipped.
+// directory or the checkout the disk; the sweeper's own row runs in python3, and a row whose place this machine does
+// not have is skipped.
 test('image-serve.sh keeps ComfyUI temp directory on a tmpfs and starts the sweeper beside the server', async t => {
   const shm = onTmpfs('/dev/shm') ? mkdtempSync('/dev/shm/simple-chat-serve-test-') : undefined;
   if (shm) t.after(() => rmSync(shm, { recursive: true, force: true }));
@@ -212,7 +213,8 @@ test('image-serve.sh keeps ComfyUI temp directory on a tmpfs and starts the swee
       const server = started.find(line => line.includes('main.py'));
       const sweeping = started.find(line => line.includes('image-sweeper.py'));
       assert.ok(server?.includes(`--temp-directory ${root} `), `${label}: ${server}`);
-      assert.match(sweeping ?? '', new RegExp(`--pid \\d+ --temp ${escaped(root)}/temp --port 8188$`), label);
+      // The script's own PID, which the exec hands to ComfyUI.
+      assert.match(sweeping ?? '', new RegExp(`--pid ${result.pid} --temp ${escaped(root)}/temp --port 8188$`), label);
       assert.equal(statSync(root).mode & 0o777, 0o700, label);
     }],
     // A box with Qwen's files and nothing of Krea's starts with SIMPLE_CHAT_IMAGE_QWEN=only, and is refused without it.
@@ -236,9 +238,30 @@ test('image-serve.sh keeps ComfyUI temp directory on a tmpfs and starts the swee
       assert.match(result.stderr, /not a writable tmpfs.*Refusing to start/, label);
       assert.deepEqual([existsSync(box.started), existsSync(join(place, 'comfy'))], [false, false], label);
     }],
+    // Unset, it is /dev/shm's. Read from the script: a run would share that one directory with this machine's server.
+    ['no temp directory named', serve, async (label, place) =>
+      assert.match(readFileSync(place, 'utf8'), /temp_root="\$\{SIMPLE_CHAT_IMAGE_TEMP_ROOT:-\/dev\/shm\/[a-z-]+\}"/, label)],
+    // The sweeper keeps sweeping while its server lives and stops by itself once it is gone, rather than outlive it
+    // on the box. A sleep stands in for the server.
+    ['the sweeper once its server is gone', pathOf('python3') || undefined, async label => {
+      const comfy = await fakeComfy(t, {});
+      const server = spawn('sleep', ['30'], { stdio: 'ignore' });
+      const child = spawn('python3', [sweeper, '--pid', String(server.pid), '--temp', tempDirectory(t), '--port', String(comfy.port),
+        '--interval', '0.05'], { stdio: ['ignore', 'pipe', 'pipe'] });
+      t.after(() => { server.kill('SIGKILL'); child.kill('SIGKILL'); });
+      let stdout = '';
+      child.stdout.on('data', chunk => { stdout += chunk; });
+      const closed = once(child, 'close');
+      for (let tries = 0; tries < 200 && !stdout.includes('sweeper_started'); tries++) await delay(10);
+      await delay(200);
+      assert.equal(child.exitCode, null, `${label}: stopped while the server lived`);
+      server.kill('SIGKILL');
+      const [status] = await Promise.race([closed, delay(5000, [undefined], { ref: false })]) as [number | null | undefined];
+      assert.deepEqual([status, JSON.parse(stdout.trim().split('\n').at(-1)!)], [0, { event: 'sweeper_stopped', reason: 'server_gone' }], label);
+    }],
   ];
   for (const [label, place, row] of rows) {
     if (place) await row(label, place);
-    else t.diagnostic(`${label}: skipped, this machine has no such directory`);
+    else t.diagnostic(`${label}: skipped, this machine has no such place`);
   }
 });
