@@ -13,8 +13,8 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BOOT_SECONDS, DESTROY_SECONDS, MAX_DPH_BY_GPUS, chooseOffers, createBody, emptyReason, instanceState, offerQuery,
-  redactedBody, rentPlan } from '../local/rent-plan.ts';
+import { BOOT_SECONDS, MAX_DPH_BY_GPUS, REQUEST_MS, chooseOffers, createBody, destroyInstance, emptyReason, instanceState,
+  offerQuery, redactedBody, rentPlan } from '../local/rent-plan.ts';
 
 const ATTEMPTS = 4;
 // Every request carries a deadline. A search that never answers would hang with the owner watching; a create
@@ -29,15 +29,14 @@ const dryRun = process.env.SIMPLE_CHAT_RENT_DRY_RUN === '1';
 
 // `--show ID` and `--destroy ID` reach one rental with the account's key and nothing on the machine: not its ssh, not
 // the key Vast gave the container, not its guard (trial-onstart.sh), any of which may be what failed. They end every
-// rental of the identity runbook (docs/illustrations-plan.md, "One hour"). Nothing picks an instance by itself: the
-// ID is always given, the one `rented` printed. `--show` reads it once. `--destroy` reads it every ten seconds,
-// thirty reads at most: five minutes while Vast answers. The first minute is the guard's, told "we're done" just
-// before, and only reads; after it, while the instance is not gone, it is deleted with the account's key, the delete
-// repeated every third read. So a key that may not delete raises no alarm over a machine the guard has deleted. Only a
-// read that says the instance is gone ends it (`instanceState`): the delete's own `success` is no such read, and a
-// stopped instance is not gone either, since its disk is kept and billed. With SIMPLE_CHAT_RENT_DRY_RUN=1 it reads
-// once and deletes nothing.
-const INSTANCE_TIMEOUT_MS = 20000, READ_EVERY_MS = 10000, GUARD_READS = 6;
+// rental of the identity runbook (docs/illustrations-plan.md, "The termination"). Nothing picks an instance by
+// itself: the ID is always given, the one `rented` printed. `--show` reads it once. `--destroy` keeps to five minutes
+// on its own clock, whatever Vast answers: the guard's minute of reads, then deletes with the account's key until a
+// read says the instance is gone (`destroyInstance`, which keeps the time; this file only fetches). So a key that may
+// not delete raises no alarm over a machine the guard has deleted. The delete's own `success` is no read, and a
+// stopped instance is not gone either, since its disk is kept and billed. A key without the right to delete is not
+// answered by asking again: the owner deletes it in the console. With SIMPLE_CHAT_RENT_DRY_RUN=1 it reads once and
+// deletes nothing.
 if (args[0] === '--show' || args[0] === '--destroy') {
   const [mode, id] = args;
   if (args.length !== 2 || !/^[1-9]\d{0,11}$/.test(id)) {
@@ -46,43 +45,30 @@ if (args[0] === '--show' || args[0] === '--destroy') {
   }
   if (!key) { console.log(JSON.stringify({ event: 'no_key' })); process.exit(1); }
   const url = `https://console.vast.ai/api/v0/instances/${id}/`;
-  // `status: 0` is no answer, as below. The body is never printed, only what `instanceState` keeps of it.
-  const read = async () => {
-    let status = 0, body = null;
+  // One request of `ms` at most: the signal cuts the answer's body as well as the wait for it. `status: 0` is no
+  // answer, as below. The body is never printed, only what `instanceState` keeps of it.
+  const ask = async (method, ms) => {
     try {
-      const response = await fetch(url, { headers, signal: AbortSignal.timeout(INSTANCE_TIMEOUT_MS) });
-      status = response.status;
-      body = await response.json().catch(() => null);
-    } catch { /* no answer: unknown */ }
-    return { instance: id, ...instanceState(id, status, body) };
+      const response = await fetch(url, { method, headers, signal: AbortSignal.timeout(ms) });
+      return { status: response.status, body: await response.json().catch(() => null) };
+    } catch { return { status: 0, body: null }; }
   };
-  let seen = await read();
+  const read = async ms => { const { status, body } = await ask('GET', ms); return instanceState(id, status, body); };
+  const remove = async ms => {
+    const { status, body } = await ask('DELETE', ms);
+    return { status, success: typeof body?.success === 'boolean' ? body.success : null };
+  };
   if (mode === '--show' || dryRun) {
-    console.log(JSON.stringify({ event: mode === '--show' ? 'instance' : 'would_destroy', ...seen }));
+    const seen = await read(REQUEST_MS);
+    console.log(JSON.stringify({ event: mode === '--show' ? 'instance' : 'would_destroy', instance: id, ...seen }));
     process.exit(seen.state === 'unknown' ? 1 : 0);
   }
-  for (let turn = 0; seen.state !== 'gone' && turn < DESTROY_SECONDS * 1000 / READ_EVERY_MS; turn++) {
-    if (turn >= GUARD_READS && (turn - GUARD_READS) % 3 === 0) {
-      let status = 0, success = null;
-      try {
-        const response = await fetch(url, { method: 'DELETE', headers, signal: AbortSignal.timeout(INSTANCE_TIMEOUT_MS) });
-        status = response.status;
-        const answer = await response.json().catch(() => null);
-        if (typeof answer?.success === 'boolean') success = answer.success;
-      } catch { /* no answer: the next read says */ }
-      console.log(JSON.stringify({ event: 'destroy_sent', instance: id, status, success }));
-      // A key without the right to delete is not answered by asking again: the owner deletes it in the console.
-      if (status === 401 || status === 403) {
-        console.log(JSON.stringify({ event: 'destroy_refused', instance: id, status, tell: 'the owner, now' }));
-        process.exit(1);
-      }
-    }
-    await new Promise(done => setTimeout(done, READ_EVERY_MS));
-    seen = await read();
-  }
-  if (seen.state === 'gone') { console.log(JSON.stringify({ event: 'destroy_confirmed', ...seen })); process.exit(0); }
-  console.log(JSON.stringify({ event: 'destroy_unconfirmed', ...seen, tell: 'the owner, now: the instance may still be billing' }));
-  process.exit(1);
+  const end = await destroyInstance({ read, remove, now: () => performance.now(), sleep: ms => new Promise(done => setTimeout(done, ms)),
+    log: event => console.log(JSON.stringify({ ...event, instance: id })) });
+  const confirmed = end.event === 'destroy_confirmed';
+  console.log(JSON.stringify({ ...end, instance: id,
+    ...(confirmed ? {} : { tell: 'the owner, now: the deletion is not confirmed, and the instance may still be billing' }) }));
+  process.exit(confirmed ? 0 : 1);
 }
 
 const printBody = args.includes('--print-body');
@@ -195,6 +181,9 @@ for (const offer of candidates.slice(0, ATTEMPTS)) {
     reliability: offer.reliability, directPorts: offer.directPorts,
   };
   let status = 0, parsed = null;
+  // The moment before the request that may create the machine: none of it exists before, so a deadline counted from
+  // here is never late, however long the answer takes (`destroyBy` below).
+  const asked = Date.now();
   try {
     const response = await fetch(`https://console.vast.ai/api/v0/asks/${offer.id}/`, {
       method: 'PUT',
@@ -207,12 +196,12 @@ for (const offer of candidates.slice(0, ATTEMPTS)) {
     try { parsed = JSON.parse(text); } catch { /* status alone describes a non-JSON body */ }
   } catch { /* status stays 0: the request may have reached Vast all the same */ }
   const rented = status >= 200 && status < 300 && parsed?.success !== false && parsed?.new_contract;
-  // `destroyBy` is the operator's own deadline, fixed now on this machine's clock, in epoch seconds: the guard's
-  // hours and the quarter of an hour allowed for the box to start. Whatever the box says, the rental's termination
-  // begins then at the latest (docs/illustrations-plan.md, "One hour").
+  // `destroyBy` is the operator's own deadline on this machine's clock, in epoch seconds, counted from just before the
+  // request that created the machine: the guard's hours and the quarter of an hour allowed for the box to start.
+  // Whatever the box says, the rental's termination begins then at the latest (docs/illustrations-plan.md, "One hour").
   if (rented) {
     console.log(JSON.stringify({ event: 'rented', ...machine, instance: parsed.new_contract, reason: null,
-      destroyBy: Math.floor(Date.now() / 1000) + hours * 3600 + BOOT_SECONDS }));
+      destroyBy: Math.floor(asked / 1000) + hours * 3600 + BOOT_SECONDS }));
     process.exit(0);
   }
   // A refusal is a status outside 2xx or Vast's own `success: false`, and only a refusal is safe to answer by

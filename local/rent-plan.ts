@@ -71,9 +71,11 @@ const RAM_GB_PER_GPU = 32;
 const SESSION_HOURS = 2.5;
 // A rental given its hours (`--hours`, the guard's) is priced by them instead, and by what the guard does not count.
 // It is billed from its creation, and the guard's clock starts only once the image is pulled and the box has started,
-// which the operator allows a quarter of an hour (`destroyBy` in gpu/rent.mjs); and it is billed until a destroy is
-// read back as done, which gpu/rent.mjs --destroy waits five minutes for while Vast answers.
+// which the operator allows a quarter of an hour (`destroyBy` in gpu/rent.mjs). It is billed until a destroy is read
+// back as done: "we're done" over ssh, which the runbook bounds to twenty seconds, then `destroyInstance` below, five
+// minutes at most whatever Vast answers (docs/illustrations-plan.md, "The termination").
 export const BOOT_SECONDS = 900, DESTROY_SECONDS = 300;
+const DONE_SECONDS = 20;
 // A machine without direct ports is reachable only through Vast's proxy, and on 2026-09-20 one such rental refused
 // the account's own key for its whole life. Two is the least that is useful: one carries ssh, one is spare.
 const MIN_DIRECT_PORTS = 2;
@@ -96,7 +98,7 @@ export function rentPlan({ gpus = 1, lane = 'both', preferredHost = PREFERRED_HO
   const maxHour = Math.round((maxDph + STORAGE_PER_GB_MONTH * diskGb / 730) * 1000) / 1000;
   return {
     lane, gpus, maxHour, diskGb, minRamGb: RAM_GB_PER_GPU * gpus, minDirectPorts: MIN_DIRECT_PORTS,
-    sessionHours: hours === undefined ? SESSION_HOURS : hours + (BOOT_SECONDS + DESTROY_SECONDS) / 3600,
+    sessionHours: hours === undefined ? SESSION_HOURS : hours + (BOOT_SECONDS + DONE_SECONDS + DESTROY_SECONDS) / 3600,
     // Qwen's files and torch's five gigabytes, the only wheels the picture lane pulls.
     sessionBytes: qwenOnly ? QWEN_BYTES + 5000000000 : bytes, image: IMAGE, preferredHost,
     blockedCountries: BLOCKED_COUNTRIES,
@@ -239,4 +241,43 @@ export function instanceState(id: string, status: number, body: unknown): Instan
   const word = (value: unknown) => typeof value === 'string' && /^[a-z_]{1,32}$/.test(value) ? value : null;
   const { actual_status: actual, intended_status: intended } = record as { actual_status?: unknown; intended_status?: unknown };
   return { state: 'present', status, actual: word(actual), intended: word(intended) };
+}
+
+// The destroy of one rental by its ID (gpu/rent.mjs --destroy), on one monotonic clock that starts before its first
+// read: five minutes, whatever Vast answers or fails to, and nothing is sent after them. The first minute is the
+// guard's, told "we're done" just before, and only reads, every ten seconds. After it, while no read says the
+// instance is gone, it is deleted with the account's key, and again every half minute. Every request is bounded by
+// its own twenty seconds or the time left, whichever is less, and gpu/rent.mjs gives that bound to fetch as its
+// signal, which cuts the answer's body too; every pause, by ten seconds or the time left. The first delete follows
+// the first read to end past the minute, so an answer that comes late or never puts it off by a pause and a request's
+// bound at most, half a minute, and the end not at all. Only a read that says the instance is gone ends it early, and
+// a key that may not delete ends it at once. `read` and `remove` fetch, and
+// `now` and `sleep` keep the time, all four the caller's: a test drives them with a virtual clock.
+export const REQUEST_MS = 20000;
+const GUARD_MS = 60000, READ_EVERY_MS = 10000, DELETE_EVERY_MS = 30000;
+export type Removal = { status: number; success: boolean | null };
+export type DestroyEnd = ({ event: 'destroy_confirmed' | 'destroy_unconfirmed' } & InstanceState) | { event: 'destroy_refused'; status: number };
+export async function destroyInstance({ read, remove, now, sleep, log }: {
+  read: (ms: number) => Promise<InstanceState>; remove: (ms: number) => Promise<Removal>;
+  now: () => number; sleep: (ms: number) => Promise<void>; log: (event: object) => void;
+}): Promise<DestroyEnd> {
+  const started = now();
+  // Whole milliseconds, which is what AbortSignal.timeout takes.
+  const left = () => Math.floor(started + DESTROY_SECONDS * 1000 - now());
+  let seen: InstanceState = { state: 'unknown', status: 0, actual: null, intended: null };
+  let deleted: number | undefined;
+  for (let budget = left(); budget > 0; budget = left()) {
+    seen = await read(Math.min(REQUEST_MS, budget));
+    if (seen.state === 'gone') return { event: 'destroy_confirmed', ...seen };
+    const at = now(), rest = left();
+    if (rest > 0 && at - started >= GUARD_MS && (deleted === undefined || at - deleted >= DELETE_EVERY_MS)) {
+      deleted = at;
+      const { status, success } = await remove(Math.min(REQUEST_MS, rest));
+      log({ event: 'destroy_sent', second: Math.round((at - started) / 1000), status, success });
+      if (status === 401 || status === 403) return { event: 'destroy_refused', status };
+    }
+    const pause = left();
+    if (pause > 0) await sleep(Math.min(READ_EVERY_MS, pause));
+  }
+  return { event: 'destroy_unconfirmed', ...seen };
 }

@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { BOOT_SECONDS, chooseOffers, createBody, describeOffer, emptyReason, instanceState, offerQuery, redactedBody, rentPlan } from './rent-plan.ts';
+import { BOOT_SECONDS, DESTROY_SECONDS, chooseOffers, createBody, describeOffer, destroyInstance, emptyReason, instanceState, offerQuery, redactedBody, rentPlan } from './rent-plan.ts';
 import type { RawOffer } from './rent-plan.ts';
 
 const RENT = fileURLToPath(new URL('../gpu/rent.mjs', import.meta.url));
@@ -159,7 +159,7 @@ test('offers are ordered for a session of hours, not of minutes', () => {
   assert.ok(candidates[0].hour * 0.75 + candidates[0].download > candidates[1].hour * 0.75 + candidates[1].download,
     'the same pair in the other order for a 45-minute session');
   // A rental given its hours is billed for them and for what the guard does not count: the quarter of an hour before
-  // its clock starts, and the five minutes a destroy takes to be read back as done.
+  // its clock starts, and the twenty seconds of "we're done" and the five minutes of a destroy after it ends.
   assert.equal(Math.round(rentPlan({ lane: 'pictures', hours: 1 }).sessionHours * 60), 80);
 });
 
@@ -289,7 +289,7 @@ test('--print-body prints the request without a key, and says so in one line whe
     // A session that gives its hours is priced by them, and the identity runbook's by Qwen's download alone.
     assert.deepEqual([shown.hours, shown.sessionHours], [3, 2.5]);
     const hour = JSON.parse(run('--lane', 'pictures', '--hours', '1', '--qwen', 'only').stdout.trim());
-    assert.deepEqual([hour.hours, hour.sessionHours, hour.sessionGb], [1, 1.33, 22]);
+    assert.deepEqual([hour.hours, hour.sessionHours, hour.sessionGb], [1, 1.34, 22]);
     for (const refused of [['--hours', '4'], ['--qwen', 'only'], ['--qwen', 'true']]) {
       const longer = run(...refused);
       assert.equal(longer.status, 1);
@@ -301,18 +301,26 @@ test('--print-body prints the request without a key, and says so in one line whe
 });
 
 // A canned Vast. It answers the search from STUB_OFFERS, the create request as STUB_PUT asks, a read of an instance
-// with the next state of STUB_READS (the last one repeats) and a delete with STUB_DELETE's status. Every request is
-// written to STUB_LOG, and the ten seconds between two reads take none. `fetch` is replaced before gpu/rent.mjs is
-// loaded, so no request in the test below leaves this machine.
+// with the next state of STUB_READS (the last one repeats) and a delete with STUB_DELETE's status. Its time is
+// virtual: a pause takes none of the real kind and moves both clocks on by its length, and the answer that creates
+// the machine takes fifty seconds. Every request is written to STUB_LOG with the second it was sent at and the bound
+// its signal was given. `fetch` is replaced before gpu/rent.mjs is loaded, so no request in the test below leaves
+// this machine.
 const STUB = `import { appendFileSync } from 'node:fs';
 const reads = (process.env.STUB_READS ?? '').split(',');
 const answers = { present: [200, { instances: { id: 123, actual_status: 'running', intended_status: 'running' } }],
   gone: [200, { instances: null }], missing: [404, {}], failing: [500, {}], empty: [200, {}], other: [200, { instances: { id: 124 } }] };
-const later = globalThis.setTimeout;
-globalThis.setTimeout = (next, ms, ...rest) => later(next, 0, ...rest);
+let skew = 0;
+const later = globalThis.setTimeout, wall = Date.now, monotonic = performance.now.bind(performance);
+globalThis.setTimeout = (next, ms = 0, ...rest) => { skew += ms; return later(next, 0, ...rest); };
+Date.now = () => wall() + skew;
+performance.now = () => monotonic() + skew;
+const timeout = AbortSignal.timeout.bind(AbortSignal);
+let bound = 0;
+AbortSignal.timeout = ms => { bound = ms; return timeout(ms); };
 globalThis.fetch = async (url, init = {}) => {
   const path = new URL(url).pathname, method = init.method ?? 'GET';
-  appendFileSync(process.env.STUB_LOG, method + ' ' + path + '\\n');
+  appendFileSync(process.env.STUB_LOG, method + ' ' + Math.round(skew / 1000) + 's ' + bound + 'ms ' + path + '\\n');
   if (path.includes('/bundles/')) return new Response(process.env.STUB_OFFERS, { status: 200 });
   if (method === 'DELETE') return new Response('{"success":true}', { status: Number(process.env.STUB_DELETE ?? 200) });
   if (method === 'GET') {
@@ -320,11 +328,13 @@ globalThis.fetch = async (url, init = {}) => {
     return new Response(JSON.stringify(body), { status });
   }
   if (process.env.STUB_PUT === 'reject') throw new TypeError('fetch failed');
-  return new Response(process.env.STUB_PUT === 'contract' ? '{"success":true,"new_contract":123}' : '{"success":true}', { status: 200 });
+  if (process.env.STUB_PUT !== 'contract') return new Response('{"success":true}', { status: 200 });
+  skew += 50000;
+  return new Response('{"success":true,"new_contract":123}', { status: 200 });
 };
 `;
 
-test('an answer that is not certain is never taken for the outcome, of a rental or of its destroy', () => {
+test('an answer that is not certain is never taken for the outcome, of a rental or of its destroy', async () => {
   // One read of an instance: only a 404, and a 200 whose record is null, say it is gone. Of a record, two status words
   // are kept, and only while they are plain words.
   const present = { instances: { id: 123, actual_status: 'exited', intended_status: 'ssh-ed25519 AAAA' } };
@@ -332,6 +342,33 @@ test('an answer that is not certain is never taken for the outcome, of a rental 
     [200, present]] as const).map(([status, body]) => instanceState('123', status, body).state),
   ['gone', 'gone', 'unknown', 'unknown', 'unknown', 'unknown', 'present']);
   assert.deepEqual(instanceState('123', 200, present), { state: 'present', status: 200, actual: 'exited', intended: null });
+
+  // The destroy's own clock, virtual, against a Vast that answers every request after 19 s, one whose reads never
+  // answer, one whose deletes never do, and one that answers in five seconds, which leaves a last pause to be cut. A
+  // request not answered within its bound comes back empty then, as AbortSignal.timeout makes it in gpu/rent.mjs.
+  // Whatever Vast does, the destroy ends five minutes after it began, nothing is sent after them and no request is
+  // bounded past them, and the first delete waits out the guard's minute. Returned: how it ended, its seconds, the
+  // second of the first delete, and the requests sent.
+  const running = instanceState('123', 200, { instances: { id: 123, actual_status: 'running' } });
+  const clocked = async (readMs: number, removeMs: number) => {
+    let clock = 0;
+    const sent: { method: string; at: number; bound: number }[] = [];
+    const answer = async <T>(method: string, bound: number, takes: number, value: T, none: T) => {
+      sent.push({ method, at: clock, bound });
+      clock += Math.min(takes, bound);
+      return takes <= bound ? value : none;
+    };
+    const end = await destroyInstance({ now: () => clock, sleep: async ms => { clock += ms; }, log: () => undefined,
+      read: bound => answer('GET', bound, readMs, running, instanceState('123', 0, null)),
+      remove: bound => answer('DELETE', bound, removeMs, { status: 200, success: true }, { status: 0, success: null }) });
+    const limit = DESTROY_SECONDS * 1000;
+    assert.ok(sent.every(one => one.at < limit && Number.isInteger(one.bound) && one.bound <= Math.min(20000, limit - one.at)));
+    return [end.event, clock / 1000, sent.find(one => one.method === 'DELETE')!.at / 1000, sent.length];
+  };
+  assert.deepEqual(await clocked(19000, 19000), ['destroy_unconfirmed', 300, 77, 13]);
+  assert.deepEqual(await clocked(Infinity, 0), ['destroy_unconfirmed', 300, 80, 18]);
+  assert.deepEqual(await clocked(0, Infinity), ['destroy_unconfirmed', 300, 60, 22]);
+  assert.deepEqual(await clocked(5000, 5000), ['destroy_unconfirmed', 300, 65, 25]);
 
   const home = mkdtempSync(join(tmpdir(), 'simple-chat-rent-'));
   try {
@@ -363,11 +400,12 @@ test('an answer that is not certain is never taken for the outcome, of a rental 
         [['attempt_uncertain', 'first', reason]], 'only the first offer was asked for');
       assert.match(attempts[0].check, /vast\.ai/, 'and the owner is sent to check the instance list');
     }
-    // An answer that names its instance ends the loop, with the operator's own deadline fixed then: the guard's hour
-    // and the quarter of an hour the box is given to start. Before it, the dry run prices each offer for the whole
-    // of that rental: $0.921 and $0.971 an hour over 1 h 20 min, and $0.16 of traffic.
+    // An answer that names its instance ends the loop, with the operator's own deadline: the guard's hour and the
+    // quarter of an hour the box is given to start, counted from before the request that created the machine, never
+    // from its answer, which took fifty seconds here. Before it, the dry run prices each offer for the whole of that
+    // rental: $0.921 and $0.971 an hour over 1 h 20 min 20 s, and $0.16 of traffic.
     const priced = run({ SIMPLE_CHAT_RENT_DRY_RUN: '1' }, '--gpus', '2', '--hours', '1').events;
-    assert.deepEqual([priced[0].sessionHours, ...priced.slice(1).map(one => [one.id, one.session])], [1.33, ['first', 1.39], ['second', 1.45]]);
+    assert.deepEqual([priced[0].sessionHours, ...priced.slice(1).map(one => [one.id, one.session])], [1.34, ['first', 1.39], ['second', 1.46]]);
     const before = Math.floor(Date.now() / 1000);
     const rented = run({ STUB_PUT: 'contract' }, '--gpus', '2', '--hours', '1').events.at(-1);
     assert.deepEqual([rented.event, rented.offer, rented.instance], ['rented', 'first', 123]);
@@ -379,29 +417,34 @@ test('an answer that is not certain is never taken for the outcome, of a rental 
       const { status, events, requests } = run({}, ...args);
       assert.deepEqual([status, events.map(event => event.event), requests], [1, ['bad_arguments'], []], args.join(' '));
     }
-    const read = 'GET /api/v0/instances/123/';
     const shown = run({ STUB_READS: 'present' }, '--show', '123');
     assert.deepEqual([shown.status, shown.events, shown.requests],
-      [0, [{ event: 'instance', instance: '123', state: 'present', status: 200, actual: 'running', intended: 'running' }], [read]]);
+      [0, [{ event: 'instance', instance: '123', state: 'present', status: 200, actual: 'running', intended: 'running' }], ['GET 0s 20000ms /api/v0/instances/123/']]);
+    // The rest by the stub's clock: which request went out at which second.
+    const timeline = (requests: string[]) => requests.map(request => request.split(' ').slice(0, 2).join(' ')).join(', ');
+    const reads = (...seconds: number[]) => seconds.map(second => `GET ${second}s`).join(', ');
     // A destroy's dry run only reads, and an instance the guard deletes within its minute is read as gone and never
     // deleted with the account's key.
-    for (const [env, event, reads] of [[{ STUB_READS: 'present', SIMPLE_CHAT_RENT_DRY_RUN: '1' }, 'would_destroy', 1],
-      [{ STUB_READS: 'present,present,gone' }, 'destroy_confirmed', 3]] as const) {
+    for (const [env, event, seconds] of [[{ STUB_READS: 'present', SIMPLE_CHAT_RENT_DRY_RUN: '1' }, 'would_destroy', [0]],
+      [{ STUB_READS: 'present,present,gone' }, 'destroy_confirmed', [0, 10, 20]]] as const) {
       const { status, events, requests } = run(env, '--destroy', '123');
-      assert.deepEqual([status, events.map(one => one.event), requests], [0, [event], Array(reads).fill(read)]);
+      assert.deepEqual([status, events.map(one => one.event), timeline(requests)], [0, [event], reads(...seconds)]);
     }
     // One still there after the guard's minute is deleted, and read every ten seconds until a read says it is gone;
-    // the delete's own `success` is no such read, and it is sent again every third read.
+    // the delete's own `success` is no such read, and it is sent again after half a minute.
     const deleted = run({ STUB_READS: [...Array(10).fill('present'), 'missing'].join(',') }, '--destroy', '123');
-    assert.deepEqual([deleted.status, deleted.events.map(event => event.event), deleted.requests.map(request => request.split(' ')[0]).join(' ')],
-      [0, ['destroy_sent', 'destroy_sent', 'destroy_confirmed'], `${'GET '.repeat(7)}DELETE GET GET GET DELETE GET`]);
-    // Reads that say nothing certain end, after five minutes, as a deletion not confirmed, and the owner is to be
-    // told; a key that may not delete ends so at once.
+    assert.deepEqual([deleted.status, deleted.events.map(event => event.event), timeline(deleted.requests)],
+      [0, ['destroy_sent', 'destroy_sent', 'destroy_confirmed'], `${reads(0, 10, 20, 30, 40, 50, 60)}, DELETE 60s, ${reads(70, 80, 90)}, DELETE 90s, GET 100s`]);
+    // Reads that say nothing certain end, five minutes after the first, as a deletion not confirmed, and the owner is
+    // to be told; a key that may not delete ends so at once.
     const unsure = run({ STUB_READS: 'failing,empty,other' }, '--destroy', '123');
-    assert.deepEqual([unsure.status, unsure.events.at(-1).event, unsure.requests.length], [1, 'destroy_unconfirmed', 31 + 8]);
+    assert.deepEqual([unsure.status, unsure.events.at(-1).event, unsure.requests.length, timeline(unsure.requests.slice(-3))],
+      [1, 'destroy_unconfirmed', 30 + 8, 'DELETE 270s, GET 280s, GET 290s']);
+    assert.ok(Number(unsure.requests.at(-1)!.split(' ')[2].replace('ms', '')) <= 10000, 'the last read is cut at the time left');
     assert.match(unsure.events.at(-1).tell, /owner/);
     const refused = run({ STUB_READS: 'present', STUB_DELETE: '403' }, '--destroy', '123');
-    assert.deepEqual([refused.status, refused.events.map(event => event.event), refused.requests.length], [1, ['destroy_sent', 'destroy_refused'], 8]);
+    assert.deepEqual([refused.status, refused.events.map(event => event.event), timeline(refused.requests.slice(-1))],
+      [1, ['destroy_sent', 'destroy_refused'], 'DELETE 60s']);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
