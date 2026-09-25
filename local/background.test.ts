@@ -59,8 +59,7 @@ test('private background socket returns bounded model results and content-free s
   await assert.rejects(serveBackground({ socketPath: f.socketPath, scheduler: f.scheduler, status: () => ({}) }), { code: 'background_socket_in_use' });
 });
 
-// The kinds of abort a caller's signal carries (local/abort.test.ts), sent once the call runs, the two deadlines and a
-// lost agent process.
+// The kinds of abort a caller's signal carries, sent once the call runs, the two deadlines and a lost agent process.
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 type Ending = { label: string; code: string; call: (f: Fixture, running: Promise<AbortSignal>) => Promise<unknown>; early?: true;
   options?: SchedulerOptions; error?: Error };
