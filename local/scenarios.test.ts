@@ -22,22 +22,16 @@ test('a built-in scenario loads with its checks, traps and frozen path, and has 
   assert.deepEqual(battle.authors, []);
   await assert.rejects(loadScenario('../battle'), /Unknown synthetic scenario/);
   await assert.rejects(loadScenario('nothing'), /Unknown synthetic scenario/);
-});
-
-test('a pack scenario outside the repository loads with its authors and its own frozen story', async () => {
+  // A pack scenario outside the repository loads with its authors and its own frozen story.
   const directory = pack(scenario);
   assert.deepEqual(packScenarios(directory), ['hidden']);
   const hidden = await loadScenario('hidden', directory);
-  assert.deepEqual(hidden.authors, ['fable-5.1']);
-  assert.equal(hidden.frozenPath, join(directory, 'hidden', 'frozen.json'));
-  assert.equal(hidden.traps[0].afterTurn, 9);
-});
-
-test('a pack scenario without authors, with too few turns or with a malformed trap is refused', async () => {
-  await assert.rejects(loadScenario('hidden', pack({ ...scenario, authors: [] })), /Invalid scenario/);
-  await assert.rejects(loadScenario('hidden', pack({ ...scenario, turns: scenario.turns.slice(0, 15) })), /Invalid scenario/);
-  await assert.rejects(loadScenario('hidden', pack({ ...scenario, traps: [{ key: 'end', questions: [['q', 'Вопрос?', 'maybe']] }] })), /Invalid scenario/);
-  await assert.rejects(loadScenario('hidden', pack({ ...scenario, traps: [{ key: 'end', questions: [['q', 'Вопрос?', 'yes']] }] })), /Invalid scenario/);
+  assert.deepEqual([hidden.authors, hidden.frozenPath, hidden.traps[0].afterTurn], [['fable-5.1'], join(directory, 'hidden', 'frozen.json'), 9]);
+  const refused: [string, object][] = [['no authors', { ...scenario, authors: [] }],
+    ['too few turns', { ...scenario, turns: scenario.turns.slice(0, 15) }],
+    ['a trap answer that is not yes or no', { ...scenario, traps: [{ key: 'end', questions: [['q', 'Вопрос?', 'maybe']] }] }],
+    ['a trap with neither its turn nor its input', { ...scenario, traps: [{ key: 'end', questions: [['q', 'Вопрос?', 'yes']] }] }]];
+  for (const [label, data] of refused) await assert.rejects(loadScenario('hidden', pack(data)), /Invalid scenario/, label);
 });
 
 test('a walk loads from examples or from a pack; the empty step is the continue signal, a bad seed time or name is refused', async () => {

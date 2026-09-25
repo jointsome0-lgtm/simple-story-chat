@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { askJson, assemblePrompt, frameRequest, matchSheet, sheetLooks, sheetOf, sheetRequest, stripAges, stripNames, DESCRIBE_TOKENS, STYLE } from './illustrate.ts';
+import type { Assembled, Character, Description, Excerpt } from './illustrate.ts';
+import type { GenerationResult, ModelRequest, Provider } from './model.ts';
 import { scenesWanted } from './illustrate-probe.ts';
-import { askJson, assemblePrompt, matchSheet, sheetLooks, sheetRequest, stripAges, stripNames, STYLE } from './illustrate.ts';
-import type { Character, Description } from './illustrate.ts';
-import type { GenerationResult, Provider } from './model.ts';
 
 // A synthetic sheet and frame in the shape the describing model fills. No reader's story is involved.
 const sheet: Character[] = [
@@ -17,213 +17,160 @@ const frame = (over: Partial<Description> = {}): Description => ({
   people: [{ who: 'Элин', look: 'a 30 years old woman in red', state: 'her bandaged left forearm folded against her chest', action: 'leans her back against the door' }],
   ...over,
 });
+// One frame assembled per row: [label, the frame's own fields, the sheet, what the prompt says, never says and counts].
+type Expected = Partial<Pick<Assembled, 'namesStripped' | 'fromSheet' | 'withoutLook'>> & { says?: RegExp[]; never?: RegExp };
+function assembles(rows: [string, Partial<Description>, Character[], Expected][]) {
+  for (const [label, over, people, expected] of rows) {
+    const assembled = assemblePrompt(frame(over), people);
+    for (const said of expected.says ?? []) assert.match(assembled.prompt, said, label);
+    if (expected.never) assert.doesNotMatch(assembled.prompt, expected.never, label);
+    for (const count of ['namesStripped', 'fromSheet', 'withoutLook'] as const) {
+      if (expected[count] !== undefined) assert.equal(assembled[count], expected[count], `${label}: ${count}`);
+    }
+  }
+}
 
-test('an age written as a number is taken out wherever it stands', () => {
-  assert.equal(stripAges('A lean woman, 48-year-old, in grey'), 'A lean woman, in grey');
-  assert.equal(stripAges('A man aged 31, bearded'), 'A man, bearded');
-  assert.equal(stripAges('a 30 years old woman in red'), 'a woman in red');
-  assert.equal(stripAges('An elderly judge in black'), 'An elderly judge in black');
-});
-
-test('a name is cut with its Russian case ending, and a word that only starts like one is kept', () => {
-  assert.deepEqual(stripNames('Элин отступает, Тарека рядом нет', ['Элин', 'Тарек']), { text: 'the figure отступает, the figure рядом нет', removed: 2 });
-  assert.deepEqual(stripNames("Elin's right hand rests on Sava", ['Elin', 'Sava']), { text: "the figure's right hand rests on the figure", removed: 2 });
-  // Up to three letters of an ending are taken; a longer word is a different word.
-  assert.deepEqual(stripNames('Элинарий смотрит', ['Элин']), { text: 'Элинарий смотрит', removed: 0 });
-  assert.deepEqual(stripNames('nobody is named here', ['Элин']), { text: 'nobody is named here', removed: 0 });
-});
-
-// The sheet spells a name as the story does, in Cyrillic; the described fields are English and carry the same name
-// transliterated. Every recorded run where a name got through at all got it through in this form.
-test('a name the describing model transliterated is cut as well, whichever system it used', () => {
-  assert.deepEqual(stripNames('Elin and Tarek defend a salt-cart barricade.', ['Элин', 'Тарек']),
-    { text: 'the figure and the figure defend a salt-cart barricade.', removed: 2 });
-  assert.equal(stripNames("Sava's hands are on the lock", ['Сава']).removed, 1);
-  // Лидия comes back as Lidia, Lidiya or Lidija, depending on what the model felt like.
-  for (const spelling of ['Lidia', 'Lidiya', 'Lidija']) assert.equal(stripNames(`${spelling} turns away`, ['Лидия']).removed, 1, spelling);
-  // The English ending is an ending, not three free letters: a word that starts like a name is still a word.
-  assert.deepEqual(stripNames('the guard is eliminated', ['Элин']), { text: 'the guard is eliminated', removed: 0 });
-});
-
-// A name transliterates into an ordinary English word often enough to matter: Роан is a name in the frozen battle
-// story and "roan" is the colour of a horse. In English the name is capitalised and the word is not.
-test('an ordinary English word that spells like a transliterated name is left alone', () => {
-  assert.deepEqual(stripNames('a roan mare stands at the rail', ['Роан']), { text: 'a roan mare stands at the rail', removed: 0 });
-  assert.equal(stripNames('Roan holds the gate open', ['Роан']).removed, 1);
-  assert.deepEqual(stripNames('a lantern and a mat lie on the boards', ['Мать']), { text: 'a lantern and a mat lie on the boards', removed: 0 });
-  assert.equal(stripNames('an archway of grey stone', ['Ян']).removed, 0);
-  // The story's own alphabet stays case-insensitive: a Russian sentence may start with a name in any case.
-  assert.equal(stripNames('роан стоит у ворот', ['Роан']).removed, 1);
-});
-
-test('a described person is found on the sheet however the model wrote their name', () => {
-  const names = ['Элин', 'Тарек', 'лекарь'];
-  assert.equal(matchSheet('Элин', names), 'Элин');
-  assert.equal(matchSheet('Элину,', names), 'Элин');
-  assert.equal(matchSheet('Elin', names), 'Элин');
-  assert.equal(matchSheet('Tarek', names), 'Тарек');
-  // A role in English is not one of them, and neither is a word that merely starts alike.
-  assert.equal(matchSheet('salt worker', names), null);
-  assert.equal(matchSheet('the scout', names), null);
-  assert.equal(matchSheet('Элеонора', names), null);
+test('no name and no age written as a number reaches the image model, and a word that only spells like a name stays', () => {
+  const ages: [string, string][] = [['A lean woman, 48-year-old, in grey', 'A lean woman, in grey'], ['A man aged 31, bearded', 'A man, bearded'],
+    ['a 30 years old woman in red', 'a woman in red'], ['An elderly judge in black', 'An elderly judge in black']];
+  for (const [text, expected] of ages) assert.equal(stripAges(text), expected, text);
+  // [text, the names, how many are cut, the text after; left out where only the count is pinned]
+  const names: [string, string[], number, string?][] = [
+    // A Russian case ending of up to three letters goes with the name; a longer word is a different word.
+    ['Элин отступает, Тарека рядом нет', ['Элин', 'Тарек'], 2, 'the figure отступает, the figure рядом нет'], ['Элинарий смотрит', ['Элин'], 0],
+    ["Elin's right hand rests on Sava", ['Elin', 'Sava'], 2, "the figure's right hand rests on the figure"], ['nobody is named here', ['Элин'], 0],
+    // The sheet spells a name as the story does, in Cyrillic, and the described fields carry it transliterated by whatever
+    // system the model picked: every recorded run where a name got through at all got it through in this form.
+    ['Elin and Tarek defend a salt-cart barricade.', ['Элин', 'Тарек'], 2, 'the figure and the figure defend a salt-cart barricade.'],
+    ["Sava's hands are on the lock", ['Сава'], 1], ['Lidia turns away', ['Лидия'], 1], ['Lidiya turns away', ['Лидия'], 1], ['Lidija turns away', ['Лидия'], 1],
+    // The English ending is an ending, not three free letters, and a name transliterates into an ordinary word often
+    // enough to matter (Роан is a name in the frozen battle story, "roan" the colour of a horse): in English the name
+    // is capitalised and the word is not, while the story's own alphabet stays case-insensitive.
+    ['the guard is eliminated', ['Элин'], 0], ['a roan mare stands at the rail', ['Роан'], 0], ['Roan holds the gate open', ['Роан'], 1],
+    ['a lantern and a mat lie on the boards', ['Мать'], 0], ['an archway of grey stone', ['Ян'], 0], ['роан стоит у ворот', ['Роан'], 1],
+  ];
+  for (const [text, list, removed, after] of names) {
+    const stripped = stripNames(text, list);
+    assert.equal(stripped.removed, removed, text);
+    if (after !== undefined || !removed) assert.equal(stripped.text, after ?? text, text);
+  }
+  assembles([
+    ['names the instruction let through', { moment: 'Элин stands at the door while Тарек kneels', objects: 'Тарека сумка lies open',
+      people: [{ who: 'the scout', look: 'a young man in grey', state: '', action: 'watches Элин' }] }, sheet, { namesStripped: 4, never: /Элин|Тарек/ }],
+    // The sheet is model output too: a name in an appearance line would otherwise reach every frame of that story.
+    ['a name in a sheet line', {}, [{ name: 'Элин', look: 'A middle-aged woman, Тарека сестра, in grey' }, sheet[1]], { fromSheet: 1, never: /Тарек/ }],
+    // A person of one scene is not on the sheet and is named all the same, in `who` and in the fields that do reach
+    // the image model. An empty sheet is the same case for everybody in the frame.
+    ['a name the sheet never knew', { moment: 'Мирослав waits at the door', objects: 'Мирославова лампа stands on the step',
+      people: [{ who: 'Мирослав', look: 'a stocky young man in a canvas coat', state: '', action: 'waits' }] }, sheet,
+    { namesStripped: 2, never: /Мирослав/, says: [/a stocky young man in a canvas coat/] }],
+    // A role as the instruction asks for it stays: it is what the picture has instead of a name. And a name in a field
+    // of somebody the description does not list at all is the instruction's alone to catch: the net cannot know it.
+    ['a role', { moment: 'The salt worker waits at the door', people: [{ who: 'salt worker', look: 'a stocky young man', state: '', action: 'waits' }] },
+      sheet, { says: [/salt worker/] }],
+    ['a name of nobody listed', { moment: 'Мирослав waits at the door', people: [] }, sheet, { says: [/Мирослав/] }],
+    ['the ages of the sheet line and of the model\'s own look', {}, sheet, { never: /\d/ }],
+  ]);
 });
 
 // Giving a person another person's fixed appearance is worse than giving them none: the frame is then counted as
-// correct and their own look is thrown away, so no counter shows anything.
-test('a name that only shares a stem with a sheet name is not that person', () => {
-  const names = ['Мария', 'Элина', 'Элин'];
-  // Марина is not Мария, however alike they start.
-  assert.equal(matchSheet('Марина', names), null);
+// correct and their own look is thrown away, so no counter shows anything. Clothes change with the story, so they
+// are the frame's: the sheet's outfit is only what a person of the sheet wears when the frame gives them none.
+test('a described person takes their own sheet line, the clothes of the frame and their place in the agreed order', () => {
+  const [three, alike] = [['Элин', 'Тарек', 'лекарь'], ['Мария', 'Элина', 'Элин']];
+  // A role in English is not one of them, and neither is a word that merely starts alike: Марина is not Мария,
   // Элину is the dative of Элин, and Элина is somebody else on the same sheet.
-  assert.equal(matchSheet('Элину', names), 'Элин');
-  assert.equal(matchSheet('Элине', names), 'Элин');
-  assert.equal(matchSheet('Тарелка', ['Тарек']), null);
-  const sheetOfThree: Character[] = [{ name: 'Мария', look: 'An elderly woman, stooped, white braid, black mourning dress' },
-    { name: 'Элина', look: 'A young woman, tall, red hair, green riding coat' }];
-  const lifted = assemblePrompt({ moment: 'A woman at a gate.', shot: 'Medium shot', setting: 'A stone gate', objects: '',
-    props: '', light: 'Morning light', people: [{ who: 'Марина', look: 'a young woman in a blue apron, braided dark hair',
-      state: '', action: 'lifts a basket' }] }, sheetOfThree);
-  assert.equal(lifted.fromSheet, 0);
-  assert.equal(lifted.withoutLook, 0);
-  assert.match(lifted.prompt, /a young woman in a blue apron, braided dark hair: lifts a basket\./);
-  assert.doesNotMatch(lifted.prompt, /mourning dress/);
-});
-
-// `--scenes battle-2,battle-2` paid for the frame twice and wrote prompts.json with one id in it twice, which the
-// drawing step then refused as a whole run, naming a cause that was not the one.
-test('a scene named twice on the command line is described once', () => {
-  assert.deepEqual(scenesWanted('battle-2,battle-2, dance-12').map(scene => scene.id), ['battle-2', 'dance-12']);
-  assert.deepEqual(scenesWanted('battle-2'), [{ id: 'battle-2', scenario: 'battle', index: 2 }]);
-  // The default is every other scene of all three frozen stories.
-  assert.equal(scenesWanted(undefined).length, 24);
-  assert.equal(new Set(scenesWanted(undefined).map(scene => scene.id)).size, 24);
-});
-
-test('the sheet line is the only look of a person the sheet covers, and its age is a word', () => {
+  const matches: [string, string[], string | null][] = [['Элин', three, 'Элин'], ['Элину,', three, 'Элин'], ['Elin', three, 'Элин'], ['Tarek', three, 'Тарек'],
+    ['salt worker', three, null], ['the scout', three, null], ['Элеонора', three, null], ['Марина', alike, null], ['Элину', alike, 'Элин'],
+    ['Элине', alike, 'Элин'], ['Тарелка', ['Тарек'], null]];
+  for (const [who, names, expected] of matches) assert.equal(matchSheet(who, names), expected, who);
   assert.equal(sheetLooks(sheet).get('элин'), 'A middle-aged woman, lean, short ash-grey hair, grey wool coat');
-  const { prompt, fromSheet } = assemblePrompt(frame(), sheet);
-  assert.equal(fromSheet, 1);
-  assert.match(prompt, /short ash-grey hair/);
-  // The model's own look for that person contradicts the sheet, so it is not sent.
-  assert.doesNotMatch(prompt, /woman in red/);
-  assert.doesNotMatch(prompt, /\d/);
-});
-
-// Clothes change with the story, so they are the frame's: the sheet's outfit is only what a person of the sheet wears
-// when the frame gives them none. A full stop at the end of any part of a person would break the clause in two.
-test('a person wears the clothes of the frame, and the sheet\'s outfit only when the frame gives none', () => {
   const dressed: Character[] = [{ name: 'Элин', look: 'A lean woman with short ash-grey hair.', outfit: 'wearing a grey wool coat.' }];
-  const person = { who: 'Элин', look: '', state: '', action: 'leans her back against the door' };
-  const changed = assemblePrompt(frame({ people: [{ ...person, clothes: 'wearing a red silk dress.' }] }), dressed).prompt;
-  assert.match(changed, /A lean woman with short ash-grey hair, wearing a red silk dress: leans her back against the door\. /);
-  assert.doesNotMatch(changed, /grey wool coat/);
-  const left = assemblePrompt(frame({ people: [{ ...person, clothes: ' ' }] }), dressed).prompt;
-  assert.match(left, /short ash-grey hair, wearing a grey wool coat: leans/);
-  // A sheet from before `outfit` gives nothing to fall back on, and a stranger's clothes stand after their own look.
-  assert.match(assemblePrompt(frame({ people: [person] }), [{ name: 'Элин', look: 'A lean woman' }]).prompt, /A lean woman: leans/);
-  const stranger = assemblePrompt(frame({ people: [{ who: 'salt worker', look: 'An old man.', clothes: 'wearing rags', state: 'soaked.', action: 'waits' }] }), dressed);
-  assert.match(stranger.prompt, /An old man, wearing rags, soaked: waits\. /);
-});
-
-test('the assembled prompt keeps the agreed order and ends with our one style sentence', () => {
+  const leaning = { who: 'Элин', look: '', state: '', action: 'leans her back against the door' };
+  assembles([
+    // The model's own look for a person the sheet covers contradicts the sheet, so it is not sent.
+    ['a person of the sheet', {}, sheet, { fromSheet: 1, says: [/short ash-grey hair/], never: /woman in red/ }],
+    ['a name that only shares a stem', { moment: 'A woman at a gate.', shot: 'Medium shot', setting: 'A stone gate', objects: '', props: '', light: 'Morning light',
+      people: [{ who: 'Марина', look: 'a young woman in a blue apron, braided dark hair', state: '', action: 'lifts a basket' }] },
+    [{ name: 'Мария', look: 'An elderly woman, stooped, white braid, black mourning dress' },
+      { name: 'Элина', look: 'A young woman, tall, red hair, green riding coat' }],
+    { fromSheet: 0, withoutLook: 0, says: [/a young woman in a blue apron, braided dark hair: lifts a basket\./], never: /mourning dress/ }],
+    // A full stop at the end of any part of a person would break the clause in two. A sheet from before `outfit` gives
+    // nothing to fall back on, and a stranger's clothes stand after their own look.
+    ['the clothes of the frame', { people: [{ ...leaning, clothes: 'wearing a red silk dress.' }] }, dressed,
+      { says: [/A lean woman with short ash-grey hair, wearing a red silk dress: leans her back against the door\. /], never: /grey wool coat/ }],
+    ['no clothes in the frame', { people: [{ ...leaning, clothes: ' ' }] }, dressed, { says: [/short ash-grey hair, wearing a grey wool coat: leans/] }],
+    ['a sheet from before outfit', { people: [leaning] }, [{ name: 'Элин', look: 'A lean woman' }], { says: [/A lean woman: leans/] }],
+    ['a stranger\'s clothes', { people: [{ who: 'salt worker', look: 'An old man.', clothes: 'wearing rags', state: 'soaked.', action: 'waits' }] }, dressed,
+      { says: [/An old man, wearing rags, soaked: waits\. /] }],
+    // A person the sheet does not cover keeps their described look, and an empty field adds nothing.
+    ['a person the sheet does not cover', { objects: '', props: '   ', people: [{ who: 'salt worker',
+      look: 'a stocky middle-aged man in a canvas apron', state: '', action: 'pours salt into a crate' }] }, sheet,
+    { fromSheet: 0, withoutLook: 0, says: [/a stocky middle-aged man in a canvas apron: pours salt into a crate\./], never: /: {2}|, :/ }],
+    // The instruction orders an empty `look` for everybody on the sheet, so a `who` the sheet does not recognise costs
+    // that person their whole appearance. It must be recognised, and when it cannot be, counted: then the action
+    // stands alone rather than behind a bare colon.
+    ['an inflected and a transliterated who', { people: [{ who: 'Элину', look: '', state: 'a large steel shield', action: 'presses the shield against a cart' },
+      { who: 'Tarek', look: '', state: '', action: 'holds the barricade' }] }, sheet,
+    { fromSheet: 2, withoutLook: 0, says: [/short ash-grey hair, grey wool coat, a large steel shield: presses/,
+      /black curls, brown leather jerkin: holds the barricade/] }],
+    ['nobody found and nothing described', { people: [{ ...leaning, who: 'Мара' }] }, sheet,
+      { fromSheet: 0, withoutLook: 1, says: [/door\. leans her back against the door\./], never: /(^|[.\s]):/ }],
+  ]);
   const { prompt } = assemblePrompt(frame(), sheet);
   const order = ['Medium wide three-quarter shot', 'A narrow stone passage', 'Two figures stand at a closed side door',
     'leans her back against the door', 'A splint of two boards', 'holds the only dagger', 'Overcast morning light'];
-  let at = -1;
-  for (const part of order) {
-    const found = prompt.indexOf(part);
-    assert.ok(found > at, `${part} is out of order`);
-    at = found;
-  }
-  assert.ok(prompt.endsWith(STYLE));
+  order.reduce((at, part) => { assert.ok(prompt.indexOf(part) > at, `${part} is out of order`); return prompt.indexOf(part); }, -1);
+  assert.ok(prompt.endsWith(STYLE), 'our one style sentence ends the prompt');
   assert.doesNotMatch(prompt, /\.\./);
-});
-
-test('a name that gets through the instruction never reaches the image model', () => {
-  const { prompt, namesStripped } = assemblePrompt(frame({
-    moment: 'Элин stands at the door while Тарек kneels', objects: 'Тарека сумка lies open',
-    people: [{ who: 'the scout', look: 'a young man in grey', state: '', action: 'watches Элин' }],
-  }), sheet);
-  assert.equal(namesStripped, 4);
-  assert.doesNotMatch(prompt, /Элин|Тарек/);
-  // The sheet is model output too: a name in an appearance line would otherwise reach every frame of that story.
-  const named = assemblePrompt(frame(), [{ name: 'Элин', look: 'A middle-aged woman, Тарека сестра, in grey' }, sheet[1]]);
-  assert.equal(named.fromSheet, 1);
-  assert.doesNotMatch(named.prompt, /Тарек/);
-});
-
-// A person of one scene is not on the sheet and is named all the same: `who` carries their name, and the fields
-// that do reach the image model carry it too. An empty sheet is the same case for everybody in the frame.
-test('a name the sheet never knew is cut as well, when the description writes it as a name', () => {
-  const stranger = assemblePrompt(frame({
-    moment: 'Мирослав waits at the door', objects: 'Мирославова лампа stands on the step',
-    people: [{ who: 'Мирослав', look: 'a stocky young man in a canvas coat', state: '', action: 'waits' }],
-  }), sheet);
-  assert.doesNotMatch(stranger.prompt, /Мирослав/);
-  assert.equal(stranger.namesStripped, 2);
-  assert.match(stranger.prompt, /a stocky young man in a canvas coat/, 'the person is still described');
-  // A role as the instruction asks for it stays: it is what the picture has instead of a name.
-  const role = assemblePrompt(frame({ moment: 'The salt worker waits at the door',
-    people: [{ who: 'salt worker', look: 'a stocky young man', state: '', action: 'waits' }] }), sheet);
-  assert.match(role.prompt, /salt worker/);
-  // And what the net cannot know: a name in a field of somebody the description does not list at all. The
-  // instruction forbids it in every field, and here that is the only guard there is.
-  const unlisted = assemblePrompt(frame({ moment: 'Мирослав waits at the door', people: [] }), sheet);
-  assert.match(unlisted.prompt, /Мирослав/);
-});
-
-test('a person the sheet does not cover keeps their described look, and an empty field adds nothing', () => {
-  const { prompt, fromSheet, withoutLook } = assemblePrompt(frame({ objects: '', props: '   ',
-    people: [{ who: 'salt worker', look: 'a stocky middle-aged man in a canvas apron', state: '', action: 'pours salt into a crate' }] }), sheet);
-  assert.equal(fromSheet, 0);
-  assert.equal(withoutLook, 0);
-  assert.match(prompt, /a stocky middle-aged man in a canvas apron: pours salt into a crate\./);
-  assert.doesNotMatch(prompt, /: {2}|, :/);
-});
-
-// The instruction orders an empty `look` for everybody on the sheet, so a `who` the sheet does not recognise costs
-// that person their whole appearance. It must be recognised, and when it cannot be, counted.
-test('an inflected or transliterated who still takes its look from the sheet, and a person with none is counted', () => {
-  const people = [{ who: 'Элину', look: '', state: 'a large steel shield', action: 'presses the shield against a cart' },
-    { who: 'Tarek', look: '', state: '', action: 'holds the barricade' }];
-  const { prompt, fromSheet, withoutLook } = assemblePrompt(frame({ people }), sheet);
-  assert.equal(fromSheet, 2);
-  assert.equal(withoutLook, 0);
-  assert.match(prompt, /short ash-grey hair, grey wool coat, a large steel shield: presses/);
-  assert.match(prompt, /black curls, brown leather jerkin: holds the barricade/);
-
-  // Nobody found and nothing described: the action stands alone rather than behind a bare colon.
-  const lost = assemblePrompt(frame({ people: [{ who: 'Мара', look: '', state: '', action: 'leans her back against the door' }] }), sheet);
-  assert.equal(lost.withoutLook, 1);
-  assert.equal(lost.fromSheet, 0);
-  assert.match(lost.prompt, /door\. leans her back against the door\./);
-  assert.doesNotMatch(lost.prompt, /(^|[.\s]):/);
 });
 
 // JSON mode runs away into newlines until the output limit, and the same scene parsed on the next attempt: one
 // retry, and only one, and never a word of what came back (local/illustrate.ts).
-test('a description that did not parse is asked for once more, and never quoted', async () => {
-  const context = { system: 'система', messages: [] };
-  const answers = ['\n\n\n\n', JSON.stringify({ characters: [{ name: 'Элин', look: 'A middle-aged woman' }] })];
-  let asked = 0;
-  const twice: Provider = { generate: async () => ({ text: answers[asked++] ?? '', finishReason: 'stop' }) as GenerationResult };
-  const { value, retried } = await askJson(twice, sheetRequest(context));
-  assert.equal(asked, 2);
-  assert.equal(retried, true);
-  assert.deepEqual(value, { characters: [{ name: 'Элин', look: 'A middle-aged woman' }] });
-
-  let always = 0;
-  const never: Provider = { generate: async () => { always++; return { text: 'PRIVATE_SCENE_TEXT', finishReason: 'stop' } as GenerationResult; } };
-  await assert.rejects(askJson(never, sheetRequest(context)), (error: Error & { code?: string }) =>
-    error.code === 'unparsed_description' && !/PRIVATE/.test(JSON.stringify(error)));
-  assert.equal(always, 2, 'two attempts, not more');
-
+test('a description is asked for in its schema after the scene, once more when it did not parse, and never quoted', async () => {
+  const context: Excerpt = { system: 'система', messages: [{ role: 'user', content: 'Синтетическая сцена.' }] };
+  type Schema = { required: string[]; additionalProperties: boolean; properties: Record<string, { maxItems: number; items: Schema }> };
+  // Both calls continue the scene's own request, their instruction last, in a schema that asks for every field.
+  const requests: [string, ModelRequest, string[], string, number, string[]][] = [
+    ['the sheet', sheetRequest(context), ['characters'], 'characters', 6, ['name', 'look', 'outfit']],
+    ['the frame', frameRequest(context, sheet), ['moment', 'shot', 'setting', 'objects', 'props', 'light', 'people'], 'people', 4,
+      ['who', 'look', 'clothes', 'state', 'action']],
+  ];
+  for (const [label, request, required, list, most, fields] of requests) {
+    const { properties, ...schema } = request.outputSchema as Schema;
+    assert.deepEqual([schema.required, schema.additionalProperties], [required, false], label);
+    assert.deepEqual([properties[list].maxItems, properties[list].items.required, properties[list].items.additionalProperties], [most, fields, false], label);
+    assert.deepEqual([request.system, request.maxOutputTokens, request.messages.slice(0, -1)], [context.system, DESCRIBE_TOKENS, context.messages], label);
+  }
+  // The frame's instruction names the people of the sheet for `who`, and repeats the clothes they wore before.
+  const worn = frameRequest(context, [{ ...sheet[0], outfit: 'wearing a grey wool coat' }, sheet[1]]).messages.at(-1)!.content;
+  assert.match(worn, /\[Элин, Тарек\][^]*\n {2}- Элин: wearing a grey wool coat\n/);
+  // A reply that parsed without a string name or look would otherwise reach the assembly as undefined.
+  assert.deepEqual(sheetOf({ characters: [{ name: 'Элин', look: 'A lean woman' }, { name: 7, look: 'x' }, { name: 'Тарек' }, null] }),
+    [{ name: 'Элин', look: 'A lean woman', outfit: '' }]);
+  assert.deepEqual(sheetOf({ people: [] }), []);
   // A reader who has moved on while the first answer was arriving gets no second attempt: their next scene needs
-  // the slot more than their last one needs a picture.
-  const stop = new AbortController();
-  let cancelled = 0;
-  const late: Provider = { generate: async () => { cancelled++; stop.abort(); return { text: 'not json', finishReason: 'stop' } as GenerationResult; } };
-  await assert.rejects(askJson(late, sheetRequest(context), { signal: stop.signal }),
-    (error: Error & { code?: string }) => error.code === 'unparsed_description');
-  assert.equal(cancelled, 1);
+  // the slot more than their last one needs a picture. [label, the answers, moved on, attempts, the reply]
+  const character = { characters: [{ name: 'Элин', look: 'A middle-aged woman' }] };
+  const replies: [string, string[], boolean, number, object | null][] = [
+    ['a runaway, then JSON', ['\n\n\n\n', JSON.stringify(character)], false, 2, { value: character, retried: true }],
+    ['never JSON', ['PRIVATE_SCENE_TEXT', 'PRIVATE_SCENE_TEXT', 'PRIVATE_SCENE_TEXT'], false, 2, null],
+    ['a reader who moved on', ['not json', 'not json'], true, 1, null],
+  ];
+  for (const [label, answers, movedOn, attempts, expected] of replies) {
+    const stop = new AbortController();
+    let asked = 0;
+    const model: Provider = { generate: async () => { if (movedOn) stop.abort(); return { text: answers[asked++] ?? '', finishReason: 'stop' } as GenerationResult; } };
+    const reply = askJson(model, sheetRequest(context), movedOn ? { signal: stop.signal } : undefined);
+    if (expected) assert.deepEqual(await reply, expected, label);
+    else await assert.rejects(reply, (error: Error & { code?: string }) =>
+      error.code === 'unparsed_description' && !/PRIVATE/.test(`${error.message} ${JSON.stringify(error)}`), label);
+    assert.equal(asked, attempts, `${label}: the attempts`);
+  }
+  // `--scenes battle-2,battle-2` paid for the frame twice and wrote one id twice into prompts.json, which the drawing
+  // step then refused as a whole run. Unnamed, the scenes are every other one of the three frozen stories.
+  assert.deepEqual(scenesWanted('battle-2,battle-2, dance-12').map(scene => scene.id), ['battle-2', 'dance-12'], 'a scene named twice');
+  assert.deepEqual(scenesWanted('battle-2'), [{ id: 'battle-2', scenario: 'battle', index: 2 }], 'one scene');
+  const every = scenesWanted(undefined).map(scene => scene.id);
+  assert.deepEqual([every.length, new Set(every).size], [24, 24], 'no scene named');
 });

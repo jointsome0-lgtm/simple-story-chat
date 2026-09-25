@@ -47,16 +47,11 @@ test('a stored v1 library is read and saved unchanged, and recovery only marks i
   assert.equal(store.db.prepare('SELECT payload FROM libraries WHERE user_id = ?').get('1')!.payload, payload);
   store.recover();
   assert.deepEqual(store.read('1'), { ...structuredClone(stored), job: null, interrupted: true });
-});
-
-test('a library written before the language choice has no language, and a chosen one is stored with the library', t => {
-  const store = new Store(':memory:');
-  t.after(() => store.close());
-  store.db.prepare('INSERT INTO libraries VALUES (?, ?)').run('1', payload);
+  // A library from before the language choice has none, like a new one, and a chosen language is stored with it.
   assert.equal(store.read('1').language, undefined);
   assert.equal(store.read('2').language, undefined);
   store.mutate('1', state => source.setLanguage(state, 'ja'));
-  assert.deepEqual(store.read('1'), { ...structuredClone(stored), language: 'ja' });
+  assert.deepEqual(store.read('1'), { ...structuredClone(stored), job: null, interrupted: true, language: 'ja' });
 });
 
 test('pictures are recorded as sent, and a deletion forgets those of its lost scenes and those too old to delete', () => {

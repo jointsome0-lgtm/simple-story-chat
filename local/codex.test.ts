@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createCodex } from './codex.ts';
 import { loadConfig, loadModelConfig } from './config.ts';
+import type { Env } from './config.ts';
 import type { ModelRequest } from './model.ts';
 
 const request: ModelRequest = { system: 'synthetic system', messages: [{ role: 'user', content: 'synthetic private seed' }], maxOutputTokens: 256 };
@@ -41,56 +42,59 @@ function fixture(t: TestContext, events: object[], exitCode = 0) {
   return { provider, seen, directory };
 }
 
-test('Codex: the last agent message is the scene, usage comes from the completed turn, nothing is left on disk', async t => {
-  const f = fixture(t, [started, { type: 'turn.started' }, { type: 'item.completed', item: { type: 'error', message: 'synthetic warning' } },
-    { type: 'item.completed', item: { type: 'reasoning', text: 'synthetic thought' } }, message('Черновик.'), message('Первая сцена.'), done]);
-  const chunks: string[] = [];
-  const result = await f.provider.generate(request, { onText: async text => { chunks.push(text); } });
-  assert.equal(result.text, 'Первая сцена.');
-  assert.deepEqual(chunks, ['Первая сцена.']);
-  assert.deepEqual(result.usage, { inputTokens: 1200, outputTokens: 30, totalTokens: 1230 });
-  assert.equal(f.seen.instructions, 'synthetic system');
-  assert.deepEqual(readdirSync(f.directory), []);
-});
-
-test('Codex: a schema goes through a file', async t => {
-  const f = fixture(t, [started, message('{"a":"b"}'), done]);
-  const result = await f.provider.generate({ ...request, outputSchema: { type: 'object' } });
-  assert.equal(result.text, '{"a":"b"}');
-  assert.equal(f.seen.schema, '{"type":"object"}');
+test('Codex: the last agent message is the scene, usage comes from the completed turn, a schema goes through a file, nothing is left on disk', async t => {
+  const runs: [string, object[], Partial<ModelRequest>, string, string | undefined][] = [
+    ['a scene after a warning, reasoning and a draft', [started, { type: 'turn.started' }, { type: 'item.completed', item: { type: 'error', message: 'synthetic warning' } },
+      { type: 'item.completed', item: { type: 'reasoning', text: 'synthetic thought' } }, message('Черновик.'), message('Первая сцена.'), done], {}, 'Первая сцена.', undefined],
+    ['a structured answer', [started, message('{"a":"b"}'), done], { outputSchema: { type: 'object' } }, '{"a":"b"}', '{"type":"object"}'],
+  ];
+  for (const [label, events, extra, text, schema] of runs) {
+    const f = fixture(t, events);
+    const chunks: string[] = [];
+    const result = await f.provider.generate({ ...request, ...extra }, { onText: async chunk => { chunks.push(chunk); } });
+    assert.deepEqual({ text: result.text, chunks, usage: result.usage, instructions: f.seen.instructions, schema: f.seen.schema },
+      { text, chunks: [text], usage: { inputTokens: 1200, outputTokens: 30, totalTokens: 1230 }, instructions: 'synthetic system', schema }, label);
+    assert.deepEqual(readdirSync(f.directory), [], label);
+  }
 });
 
 test('Codex: any tool item, a failed turn, a missing end, a bad exit and an empty answer are safe errors', async t => {
-  const cases: [object[], number, string][] = [
-    [[started, { type: 'item.started', item: { type: 'command_execution', command: 'synthetic' } }, message('x'), done], 0, 'unexpected_tools'],
-    [[started, { type: 'item.completed', item: { type: 'mcp_tool_call' } }, message('x'), done], 0, 'unexpected_tools'],
-    [[started, { type: 'error', message: 'synthetic private seed' }, { type: 'turn.failed', error: { message: 'synthetic private seed' } }], 0, 'provider_failed'],
-    [[started, message('x')], 0, 'provider_failed'],
-    [[started, message('x'), done], 1, 'provider_failed'],
-    [[message('x'), done], 0, 'invalid_stream'],
-    [[started, message('  '), done], 0, 'empty_response'],
-    [[started, message('x'), { type: 'turn.completed', usage: { input_tokens: 70000, output_tokens: 1 } }], 0, 'context_limit'],
+  const cases: [string, object[], number, string][] = [
+    ['a command', [started, { type: 'item.started', item: { type: 'command_execution', command: 'synthetic' } }, message('x'), done], 0, 'unexpected_tools'],
+    ['an MCP call', [started, { type: 'item.completed', item: { type: 'mcp_tool_call' } }, message('x'), done], 0, 'unexpected_tools'],
+    ['a failed turn', [started, { type: 'error', message: 'synthetic private seed' }, { type: 'turn.failed', error: { message: 'synthetic private seed' } }], 0, 'provider_failed'],
+    ['no end of the turn', [started, message('x')], 0, 'provider_failed'], ['a bad exit', [started, message('x'), done], 1, 'provider_failed'],
+    ['no thread', [message('x'), done], 0, 'invalid_stream'], ['a blank answer', [started, message('  '), done], 0, 'empty_response'],
+    ['a counted input over the limit', [started, message('x'), { type: 'turn.completed', usage: { input_tokens: 70000, output_tokens: 1 } }], 0, 'context_limit'],
   ];
-  for (const [events, exitCode, code] of cases) {
+  for (const [label, events, exitCode, code] of cases) {
     const f = fixture(t, events, exitCode);
-    await assert.rejects(f.provider.generate(request), (error: Error & { code?: string }) => {
-      assert.equal(error.code, code);
-      assert.ok(!error.message.includes('synthetic private seed'));
-      return true;
-    });
-    assert.deepEqual(readdirSync(f.directory), []);
+    await assert.rejects(f.provider.generate(request),
+      (error: Error & { code?: string }) => error.code === code && !error.message.includes('synthetic private seed'), label);
+    assert.deepEqual(readdirSync(f.directory), [], label);
   }
 });
 
 test('configuration: Codex needs a model; the bot takes a hosted connection only after an explicit consent', () => {
-  const bot = { TELEGRAM_BOT_TOKEN: '1:synthetic', SIMPLE_CHAT_ALLOWED_USER_IDS: '1' };
   const codex = { SIMPLE_CHAT_PROVIDER: 'codex-cli', SIMPLE_CHAT_MODEL: 'test-model' };
-  assert.equal(loadModelConfig('/nonexistent-simple-chat-config', codex).compactAtTokens, 54000);
-  assert.throws(() => loadModelConfig('/nonexistent-simple-chat-config', { SIMPLE_CHAT_PROVIDER: 'codex-cli' }), /SIMPLE_CHAT_MODEL/);
-  const hosted = { SIMPLE_CHAT_PROVIDER: 'openai-compatible', SIMPLE_CHAT_BASE_URL: 'https://openrouter.ai/api/v1', SIMPLE_CHAT_API_KEY: 'synthetic-key', SIMPLE_CHAT_MODEL: 'test-model' };
-  for (const env of [codex, hosted]) {
-    assert.throws(() => loadConfig('/nonexistent-simple-chat-config', { ...bot, ...env }), /synthetic probes only/);
-    assert.throws(() => loadConfig('/nonexistent-simple-chat-config', { ...bot, ...env, SIMPLE_CHAT_ALLOW_HOSTED: '1' }), /synthetic probes only/);
-    assert.equal(loadConfig('/nonexistent-simple-chat-config', { ...bot, ...env, SIMPLE_CHAT_ALLOW_HOSTED: 'stories-leave-this-computer' }).provider, env.SIMPLE_CHAT_PROVIDER);
+  const hosted = { SIMPLE_CHAT_PROVIDER: 'openai-compatible', SIMPLE_CHAT_BASE_URL: 'https://openrouter.ai/api/v1/', SIMPLE_CHAT_API_KEY: 'synthetic-key', SIMPLE_CHAT_MODEL: 'test-model' };
+  // What a probe loads. A hosted API root is HTTPS, with no credentials or query in it, and it keeps its path.
+  const probes: [string, Env, RegExp | { baseUrl: string | undefined; compactAtTokens: number }][] = [
+    ['Codex', codex, { baseUrl: undefined, compactAtTokens: 54000 }],
+    ['Codex without a model', { SIMPLE_CHAT_PROVIDER: 'codex-cli' }, /SIMPLE_CHAT_MODEL/],
+    ['a hosted API', hosted, { baseUrl: 'https://openrouter.ai/api/v1', compactAtTokens: 44000 }],
+    ['a hosted API without a key', { ...hosted, SIMPLE_CHAT_API_KEY: '' }, /SIMPLE_CHAT_API_KEY/],
+    ['a hosted API without a model', { ...hosted, SIMPLE_CHAT_MODEL: '' }, /SIMPLE_CHAT_MODEL/],
+    ...[undefined, 'http://openrouter.ai/api/v1', 'https://user:pass@example.com/v1', 'https://example.com/v1?key=1']
+      .map((url): [string, Env, RegExp] => [`a hosted API at ${url}`, { ...hosted, SIMPLE_CHAT_BASE_URL: url }, /SIMPLE_CHAT_BASE_URL/]),
+  ];
+  for (const [label, env, expected] of probes) {
+    const load = () => loadModelConfig('/nonexistent-simple-chat-config', env);
+    if (expected instanceof RegExp) assert.throws(load, expected, label);
+    else { const { baseUrl, compactAtTokens } = load(); assert.deepEqual({ baseUrl, compactAtTokens }, expected, label); }
+  }
+  for (const env of [codex, hosted].map(env => ({ TELEGRAM_BOT_TOKEN: '1:synthetic', SIMPLE_CHAT_ALLOWED_USER_IDS: '1', ...env }))) {
+    for (const allow of [undefined, '1']) assert.throws(() => loadConfig('/nonexistent-simple-chat-config', { ...env, SIMPLE_CHAT_ALLOW_HOSTED: allow }), /synthetic probes only/, env.SIMPLE_CHAT_PROVIDER);
+    assert.equal(loadConfig('/nonexistent-simple-chat-config', { ...env, SIMPLE_CHAT_ALLOW_HOSTED: 'stories-leave-this-computer' }).provider, env.SIMPLE_CHAT_PROVIDER);
   }
 });

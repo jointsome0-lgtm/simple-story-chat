@@ -5,55 +5,53 @@ import type { TelegramPayload } from './telegram.ts';
 
 // A Telegram that answers when told to, so a test can hold a request in flight the way the network does.
 function pending() {
-  const calls: { method: string; text: string; finish: () => void }[] = [];
-  const api = ((method: string, payload: Record<string, unknown>) => new Promise<never>(resolve => {
+  const calls: { method: string; text: string; finish: () => void; fail: () => void }[] = [];
+  const api = ((method: string, payload: Record<string, unknown>) => new Promise<never>((resolve, reject) => {
     const rich = payload.rich_message as { markdown: string } | undefined;
-    calls.push({ method, text: rich?.markdown ?? '', finish: () => resolve(undefined as never) });
+    calls.push({ method, text: rich?.markdown ?? '', finish: () => resolve(undefined as never),
+      fail: () => reject(Object.assign(new Error('rate'), { retryAfter: 30 })) });
   })) as unknown as Parameters<typeof createChat>[0];
   return { api, calls };
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
-test('a draft does not hold up the scene it is showing', async () => {
+test('a draft does not hold up the scene it is showing', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 0 });
   const { api, calls } = pending();
-  const onText = createChat(api, 1).preview('j7');
+  const onText = createChat(api, 1).preview('j7', 'начало: ');
+  const sent = () => calls.map(call => call.text);
   // The stream hands over a delta and must get on with reading: awaiting the round-trip here stalled the card.
-  const returned = onText('раз');
-  assert.equal(returned, undefined);
+  assert.equal(onText('раз'), undefined);
   await settle();
-  assert.deepEqual(calls.map(call => call.text), ['раз']);
-  assert.equal(calls[0]!.method, 'sendRichMessageDraft');
-});
-
-test('a draft overtaken while another is in flight is dropped, and the newest text is sent once', async () => {
-  const { api, calls } = pending();
-  const onText = createChat(api, 1).preview('j7');
-  onText('раз');
-  await settle();
-  assert.equal(calls.length, 1);
-  // Deltas keep arriving while the first request is still flying. The 1200 ms gate lets none of them through, so
-  // nothing is queued behind it; what matters is that the text kept growing and no request was lost.
+  assert.deepEqual(calls.map(call => [call.method, call.text]), [['sendRichMessageDraft', 'начало: раз']]);
+  // A delta within 1200 ms of a draft only grows the text: nothing is queued behind the draft in flight.
   onText(' два');
-  onText(' три');
-  await settle();
-  assert.equal(calls.length, 1, 'no second request while the first is in flight');
   calls[0]!.finish();
   await settle();
-  assert.equal(calls.length, 1, 'nothing was queued, because the gate refused the later deltas');
-});
-
-test('a failure pushes the next draft away instead of retrying at once', async () => {
-  const failures: string[] = [];
-  const reject = (method: string) => { failures.push(method); return Promise.reject(Object.assign(new Error('rate'), { retryAfter: 30 })); };
-  const api = reject as unknown as Parameters<typeof createChat>[0];
-  const onText = createChat(api, 1).preview('j7', 'начало: ');
-  onText('раз');
+  assert.equal(calls.length, 1, 'the 1200 ms gate held the delta');
+  // A draft due while another is in flight waits for it to land, and the drafts it overtook are dropped: the newest
+  // text goes once.
+  t.mock.timers.tick(1200);
+  onText(' три');
+  t.mock.timers.tick(1200);
+  onText(' четыре');
+  onText(' пять');
   await settle();
-  assert.deepEqual(failures, ['sendRichMessageDraft']);
-  // The retryAfter from Telegram holds the next attempt back; the handler still returns without throwing.
-  onText(' два');
+  assert.deepEqual(sent(), ['начало: раз', 'начало: раз два три'], 'no second request while one is in flight');
+  calls[1]!.finish();
   await settle();
-  assert.equal(failures.length, 1);
+  assert.deepEqual(sent().slice(2), ['начало: раз два три четыре пять'], 'the newest text, once');
+  // A failure pushes the next draft away by Telegram's retryAfter (30 s here), past its own 5 s, instead of retrying.
+  calls[2]!.fail();
+  await settle();
+  t.mock.timers.tick(10_000);
+  onText(' шесть');
+  await settle();
+  assert.equal(calls.length, 3, 'no retry before retryAfter');
+  t.mock.timers.tick(20_000);
+  onText(' семь');
+  await settle();
+  assert.deepEqual(sent().slice(3), ['начало: раз два три четыре пять шесть семь'], 'the next draft after retryAfter');
 });
 
 // A picture under a scene: what the chat asks the Bot API for, and how the bytes are packed for it.
@@ -64,26 +62,33 @@ test('a picture is sent as a photo under the message it belongs to, and the line
     return { message_id: calls.length };
   }) as unknown as Parameters<typeof createChat>[0];
   const one = createChat(api, 7);
-  const bytes = new Uint8Array([137, 80, 78, 71, 1, 2, 3]);
-  // The photo's own message id comes back, for a deletion of its scene to take it out of the chat again.
-  assert.equal(await one.photo(bytes, 42), 1);
-  await one.remove(11);
-  assert.deepEqual(calls.map(call => call.method), ['sendPhoto', 'deleteMessage']);
-  assert.deepEqual(calls[0]!.payload, { chat_id: 7, photo: bytes, reply_parameters: { message_id: 42, allow_sending_without_reply: true } });
-  assert.deepEqual(calls[1]!.payload, { chat_id: 7, message_id: 11 });
-  // A scene whose own message is not known still gets its picture, just not as a reply to it.
-  await one.photo(bytes, undefined);
-  assert.deepEqual(calls[2]!.payload, { chat_id: 7, photo: bytes });
-  // The prompt under the photo is a rich message replying to it, and its id comes back the same way.
-  assert.equal(await one.note('<details><summary>S</summary>P</details>', 3), 4);
-  assert.deepEqual(calls[3], { method: 'sendRichMessage', payload: { chat_id: 7,
-    rich_message: { html: '<details><summary>S</summary>P</details>' },
-    reply_parameters: { message_id: 3, allow_sending_without_reply: true } } });
-  // Under a scene's own picture the note carries the button that asks for a variant of it (local/picture.ts).
+  const bytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 255]);
+  const html = '<details><summary>S</summary>P</details>';
+  const under = (message_id: number) => ({ reply_parameters: { message_id, allow_sending_without_reply: true } });
   const keyboard = { inline_keyboard: [[{ text: 'E', callback_data: 'prompt-edit:3' }]] };
-  await one.note('<details><summary>S</summary>P</details>', 3, keyboard);
-  assert.deepEqual(calls[4]!.payload, { chat_id: 7, rich_message: { html: '<details><summary>S</summary>P</details>' },
-    reply_parameters: { message_id: 3, allow_sending_without_reply: true }, reply_markup: keyboard });
+  // A photo and its note resolve to their own message id, by which a deletion of the scene takes them out again.
+  const rows: [string, () => Promise<unknown>, string, TelegramPayload][] = [
+    ['a photo under its scene', () => one.photo(bytes, 42), 'sendPhoto', { chat_id: 7, photo: bytes, ...under(42) }],
+    ['the line above it, removed by id', () => one.remove(11), 'deleteMessage', { chat_id: 7, message_id: 11 }],
+    ['a scene whose own message is not known', () => one.photo(bytes, undefined), 'sendPhoto', { chat_id: 7, photo: bytes }],
+    ['the prompt under the photo', () => one.note(html, 3), 'sendRichMessage', { chat_id: 7, rich_message: { html }, ...under(3) }],
+    // Under a scene's own picture the note carries the button that asks for a variant of it (local/picture.ts).
+    ['the prompt with its button', () => one.note(html, 3, keyboard), 'sendRichMessage',
+      { chat_id: 7, rich_message: { html }, ...under(3), reply_markup: keyboard }],
+  ];
+  for (const [label, send, method, payload] of rows) {
+    const id = await send();
+    assert.deepEqual(calls.at(-1), { method, payload }, label);
+    if (method !== 'deleteMessage') assert.equal(id, calls.length, label);
+  }
+  assert.equal(calls.length, rows.length, 'one call each');
+  // The upload: the file is the only part with a name and a type, its bytes copied rather than re-encoded, an object
+  // field is JSON as the Bot API reads it back, and a field nobody set adds no part at all.
+  const part = (name: string) => `--BOUNDARY\r\nContent-Disposition: form-data; name="${name}"`;
+  assert.equal(multipartBody(calls[0]!.payload!, 'BOUNDARY').toString('latin1'), `${part('chat_id')}\r\n\r\n7\r\n`
+    + `${part('photo')}; filename="scene.png"\r\nContent-Type: image/png\r\n\r\n${bytes.toString('latin1')}\r\n`
+    + `${part('reply_parameters')}\r\n\r\n{"message_id":42,"allow_sending_without_reply":true}\r\n--BOUNDARY--\r\n`);
+  assert.ok(!multipartBody({ chat_id: 7, photo: bytes, caption: undefined }, 'B').toString('latin1').includes('caption'));
 });
 
 test('messages go a hundred to a call, one by one when a call fails, and no further past a failure of the chat itself', async () => {
@@ -115,19 +120,4 @@ test('messages go a hundred to a call, one by one when a call fails, and no furt
     assert.equal(await chat.removeAll(ids), 0);
     assert.deepEqual(calls.map(call => call.method), ['deleteMessages', 'deleteMessage'], String(code));
   }
-});
-
-test('an upload carries the bytes and every other field beside them, as the Bot API reads them', () => {
-  const bytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 255]);
-  const body = multipartBody({ chat_id: 7, photo: bytes, reply_parameters: { message_id: 42 } }, 'BOUNDARY');
-  const text = body.toString('latin1');
-  assert.ok(text.startsWith('--BOUNDARY\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n7\r\n'));
-  // The file part is the only one with a name and a type, and the bytes are copied, not re-encoded.
-  assert.ok(text.includes('Content-Disposition: form-data; name="photo"; filename="scene.png"\r\nContent-Type: image/png\r\n\r\n'));
-  assert.ok(body.includes(bytes), 'the picture travels byte for byte');
-  // An object field is JSON, which is how reply_parameters and reply_markup are sent beside a file.
-  assert.ok(text.includes('name="reply_parameters"\r\n\r\n{"message_id":42}\r\n'));
-  assert.ok(text.endsWith('--BOUNDARY--\r\n'));
-  // A field nobody set adds no part at all.
-  assert.ok(!multipartBody({ chat_id: 7, photo: bytes, caption: undefined }, 'B').toString('latin1').includes('caption'));
 });

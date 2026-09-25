@@ -157,10 +157,18 @@ test('a watcher keeps one session open, probes the tunnel on every line and reop
 });
 
 test('a watching session that goes quiet is reported as stalled; stopping the watcher ends its SSH process', async () => {
-  const f = fixture(worker => { worker.stdout.write(`${remote()}\n`); });
+  // Killed, this ssh leaves one more line in the pipe, and the watcher reads it after the session has ended.
+  const f = fixture(worker => {
+    worker.stdout.write(`${remote()}\n`);
+    const kill = worker.kill;
+    worker.kill = () => { worker.stdout.write(`${remote()}\n`); return kill(); };
+  });
   const stopped = new AbortController();
   const reports: Report[] = [];
-  await watch({ every: 30, retryMs: 1, silenceMs: 5, script: '', spawn: f.spawn, request: stalls, signal: stopped.signal }, report => {
+  // Every report reads the clock. Once the test has looked, a read throws, so a timer left running ends there.
+  let reads = 0, looked = false;
+  const now = () => { if (looked) throw new Error('a timer outlived the stopped watcher'); reads++; return new Date(0); };
+  await watch({ every: 30, retryMs: 1, silenceMs: 5, script: '', spawn: f.spawn, request: stalls, now, signal: stopped.signal }, report => {
     reports.push(report);
     if (reports.length === 3) stopped.abort();
   });
@@ -168,6 +176,13 @@ test('a watching session that goes quiet is reported as stalled; stopping the wa
     [['ssh_path', undefined, 'timeout'], ['ssh_stalled', 'ssh_silent', 'timeout'], ['ssh_stalled', 'ssh_silent', 'timeout']]);
   // The exit of a stopped session is not reported, and no new session follows.
   assert.deepEqual(f.calls.map(call => call.killed), [true]);
+  // Nor does the line read after the stop start a silence timer, which would re-arm itself every five milliseconds
+  // here and keep the process alive: gpu-measure's vram test hung on it under load.
+  await delay(20);
+  const settled = reads;
+  await delay(50);
+  looked = true;
+  assert.equal(reads, settled, 'nothing reports after the stop');
   // A session that delivers nothing at all is ended and replaced.
   const mute = fixture(() => {});
   const muted = new AbortController();

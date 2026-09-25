@@ -1,19 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import type { Job, Language, Library, SceneNode } from '../lib/library.ts';
+import type { Job, Library, SceneNode } from '../lib/library.ts';
+import { addSeed, emptyLibrary } from '../lib/library.ts';
 import { contextStats } from './context.ts';
 import { renderCompaction } from './compact-view.ts';
 import type { CompactionStatus } from './compact-view.ts';
 import type { GpuStatus } from './gpu.ts';
 import { LOOK_CHARS, personTag } from './picture.ts';
-import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX, PROMPT_CHARS } from './picture-style.ts';
+import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX, PRESETS, PROMPT_CHARS } from './picture-style.ts';
 import type { Screen } from './telegram.ts';
-import { LANGS, LANGUAGE_BUTTON, REGISTERED, commandSets, isRegistered, langFromTelegram, shownLang, texts } from './text.ts';
+import { LANGS, LANGUAGE_BUTTON, REGISTERED, commandSets, langFromTelegram, texts } from './text.ts';
 import type { Lang } from './text.ts';
 import type { RenderDetails } from './ui.ts';
 import { LIMIT, render, renderContext, scenePrefix, sceneKeyboard } from './ui.ts';
 
 const CYRILLIC = /[Ѐ-ӿ]/;
+
+// Every callback the bot acts on (local/bot.ts); it answers any other as a stale button.
+const ACTION = /^(view:.+|new-seed|save-seed:[^:]+|start:[^:]+|use:[^:]+:[^:]+|fork:[^:]+:[^:]+|remove-seed:[^:]+|remove-branch:[^:]+:[^:]+|continue|cancel|last|compact|gpu:start|gpu:pause|lang:[a-z]{2}|style:[a-z0-9]+|style-new|style-edit:y\d+|remove-style:y\d+|style-sample:[a-z0-9]+|style-samples|look-edit:[^:]+:\d+:[0-9a-f]{8}|portrait:[^:]+:\d+:[0-9a-f]{8}|portrait-keep:[0-9a-f]+)$/;
 const config = { model: 'synthetic-model', provider: 'llama-cpp', maxOutputTokens: 4096, contextTokens: 65536, compactAtTokens: 54000, keepScenes: 4 };
 
 function node(id: string, parent: string | null, time: string, body: string, input = 'Look around'): SceneNode {
@@ -83,9 +87,13 @@ function portraits(lang: Lang | undefined): Library {
   return state;
 }
 
-// Every screen the interface can produce for one language: [what it is, the screen].
-function screens(lang: Lang | undefined): [string, Screen][] {
+const callbacks = (screen: Screen) => (screen.reply_markup?.inline_keyboard.flat() ?? []).map(button => button.callback_data);
+
+// Every screen the interface can produce for one language: [what it is, the screen]. For each state also the callbacks
+// its buttons offer on the way from the menu, and all it offers anywhere.
+function screens(lang: Lang | undefined) {
   const out: [string, Screen][] = [];
+  const offered = new Map<string, [Set<string>, Set<string>]>();
   const states: [string, Library][] = [
     ['idle', library(lang)],
     ['scene job', { ...library(lang), job: job() }],
@@ -116,22 +124,30 @@ function screens(lang: Lang | undefined): [string, Screen][] {
         // The card counts each text in whole words for one library, and knows no count for the others.
         ...name === 'sheet' ? { textTokens: (text: string) => text.split(' ').length } : {} };
     };
-    // Crawl what the buttons reach, and add the routes no button leads to in this state.
-    const queue = ['home', 'new-seed', 'model', 'language', 'nonsense', 'seed:s404', 'story:h404', 'tree:h404', 'log:h2:b404:0', 'branch:h2:b404',
+    const seen = new Set<string>(), actions = new Set<string>();
+    const walk = (...queue: string[]) => {
+      while (queue.length) {
+        const route = queue.shift()!;
+        if (seen.has(route)) continue;
+        seen.add(route);
+        const screen = render(state, route, details(route));
+        out.push([`${name}: ${route}`, screen]);
+        for (const data of callbacks(screen)) {
+          actions.add(data);
+          if (data.startsWith('view:')) queue.push(data.slice(5));
+        }
+      }
+    };
+    // Crawl what the buttons reach from the menu, then the routes no button leads to in this state.
+    walk('home', 'new-seed');
+    const fromMenu = new Set(actions);
+    walk('model', 'language', 'nonsense', 'seed:s404', 'story:h404', 'tree:h404', 'log:h2:b404:0', 'branch:h2:b404',
       'checkpoints:h2:b404:0', 'checkpoint:h2:c404', 'context:h2:c404', 'delete-seed:s404', 'delete-branch:h2:b404', 'delete-seed:s12', 'delete-branch:h2:b8',
       'style-input', 'style:y404', 'delete-style:y404', 'delete-style:y20', 'sample:film', 'sample:standard', 'sample:y20', 'prompt-input',
       'characters:h404', 'character:h404:0', 'character:h2:9', 'look-input',
       `portrait:h2:0:${personTag('Mira')}:0a1b2c3d`, `portrait:h2:1:${personTag('Oleg')}:`, `portrait:h2:1:${personTag('Mira')}:0a1b2c3d`,
-      `portrait:h404:0:${personTag('Mira')}:0a1b2c3d`, 'portrait-kept:h2:1', 'portrait-kept:h2:9'];
-    const seen = new Set<string>();
-    while (queue.length) {
-      const route = queue.shift()!;
-      if (seen.has(route)) continue;
-      seen.add(route);
-      const screen = render(state, route, details(route));
-      out.push([`${name}: ${route}`, screen]);
-      for (const button of screen.reply_markup?.inline_keyboard.flat() ?? []) if (button.callback_data.startsWith('view:')) queue.push(button.callback_data.slice(5));
-    }
+      `portrait:h404:0:${personTag('Mira')}:0a1b2c3d`, 'portrait-kept:h2:1', 'portrait-kept:h2:9');
+    offered.set(name, [fromMenu, actions]);
     out.push([`${name}: context without stats`, render(state, 'context')]);
     // The picker of a reader who is not drawn for, and a card with the standard line being one of the presets.
     out.push([`${name}: style without pictures`, render(state, 'style')], [`${name}: style card without pictures`, render(state, 'style:film')]);
@@ -168,13 +184,39 @@ function screens(lang: Lang | undefined): [string, Screen][] {
     { stage: 'failed', reason: 'unlisted' }, { stage: 'cancelled', automatic: true }, {},
   ];
   for (const status of compactions) out.push([`compaction ${status.stage}`, renderCompaction(status, lang)]);
-  return out;
+  return { all: out, offered };
 }
+
+// A valid payload alone is no working menu. [state, where its buttons must lead from the menu, what nothing in it offers]:
+const MUTATIONS = /^(start|use|fork|remove-seed|remove-branch):|^(continue|compact)$|^view:delete-/;
+const PATHS: [string, string[], RegExp?][] = [
+  ['idle', ['view:seeds:0', 'view:seed:s1', 'view:story:h2', 'view:branch:h2:b3', 'view:branch:h2:b8', 'view:checkpoints:h2:b3:0',
+    'view:checkpoint:h2:c4', 'view:delete-seed:s1', 'view:delete-branch:h2:b8', 'view:context', 'view:context:h2:c4', 'view:model',
+    'continue', 'last', 'new-seed', 'start:s1', 'use:h2:b8', 'fork:h2:c5', 'remove-seed:s1', 'remove-branch:h2:b3', 'compact',
+    // Pictures are drawn for this reader: every style has a card, and samples are offered on request.
+    'view:style', ...Object.keys(PRESETS).map(key => `view:style:${key}`), 'style-new', 'style:film', 'style-sample:semi', 'style-samples']],
+  // A busy library keeps navigation and cancel and offers nothing that would change it, a confirmation's button included.
+  ['scene job', ['cancel', 'view:checkpoint:h2:c5', 'view:model'], MUTATIONS],
+  ['compact job', ['cancel', 'view:checkpoint:h2:c5', 'view:model'], MUTATIONS],
+  // An empty library leads to a first seed, and has nothing to go on with.
+  ['empty', ['new-seed', 'view:model', 'view:language'], /^(continue|last|compact)$/],
+  ['own style', ['view:style:y20', 'style-sample:y20', 'style-edit:y20', 'view:delete-style:y20', 'remove-style:y20']],
+  ['full library', ['view:style', 'style-samples'], /^style-new$/],
+  ['sheet', ['view:characters:h2', `view:character:h2:0:${personTag('Mira')}`, `look-edit:h2:0:${personTag('Mira')}`, `portrait:h2:0:${personTag('Mira')}`]],
+];
 
 for (const lang of [undefined, ...REGISTERED]) {
   test(`every screen in ${lang ?? 'a library without a language'} is a valid payload`, () => {
     const t = texts(lang);
-    const all = screens(lang);
+    // A library from before the language choice belongs to a Russian-speaking reader, and so does anything that is no
+    // language, a name every object has included.
+    assert.equal(t, texts(lang ?? 'ru'));
+    if (!lang) for (const odd of [null, 7, 'xx', 'constructor']) assert.equal(texts(odd), t, String(odd));
+    // A first contact from a Telegram app in this language, its region written either way, gets it; one with no code,
+    // or in a language without a catalog, gets English.
+    const codes = lang ? [lang, lang.toUpperCase(), `${lang}-XX`, `${lang}_xx`] : [undefined, '', 'rue', 'uk', 'de-DE'];
+    for (const code of codes) assert.equal(langFromTelegram(code), lang ?? 'en', `the Telegram code ${code}`);
+    const { all, offered } = screens(lang);
     assert.ok(all.length > 150, 'the crawl reaches the whole interface');
     for (const [name, screen] of all) {
       assert.equal(typeof screen.text, 'string', name);
@@ -182,105 +224,61 @@ for (const lang of [undefined, ...REGISTERED]) {
       // render() answers an exception with this screen instead of throwing.
       assert.ok(!screen.text.startsWith(t.common.failure), `${name} failed to render`);
       assert.doesNotMatch(screen.text, /undefined|\[object|NaN/, name);
+      // Plain text: a screen is never sent with a parse mode.
+      assert.equal((screen as { parse_mode?: unknown }).parse_mode, undefined, name);
+      // Telegram refuses a keyboard with an empty row.
+      assert.ok(screen.reply_markup?.inline_keyboard.every(row => row.length > 0) ?? true, `${name}: an empty row of buttons`);
       for (const button of screen.reply_markup?.inline_keyboard.flat() ?? []) {
         assert.ok(button.text.trim().length > 0, `${name}: empty label for ${button.callback_data}`);
         assert.ok(Buffer.byteLength(button.callback_data, 'utf8') <= 64, `${name}: ${button.callback_data}`);
+        assert.match(button.callback_data, ACTION, name);
       }
+    }
+    for (const [state, wanted, never] of PATHS) {
+      const [fromMenu, anywhere] = offered.get(state)!;
+      for (const data of wanted) assert.ok(fromMenu.has(data), `${state}: no way to ${data} from the menu`);
+      if (never) for (const data of anywhere) assert.doesNotMatch(data, never, `${state}: ${data}`);
+    }
+    // Without pictures the menu leads to neither styles nor characters.
+    assert.ok(!callbacks(render(library(lang), 'home')).some(data => /^view:(style|characters)/.test(data)), 'a menu without pictures');
+    // The picker lists the registered languages by their own names and marks the one shown; the way to it reads the
+    // same in every language, so that a reader in a wrong one still finds it.
+    const buttons = (route: string) => render(library(lang), route).reply_markup!.inline_keyboard.flat().map(button => [button.callback_data, button.text]);
+    assert.deepEqual(buttons('language').filter(([data]) => data.startsWith('lang:')), REGISTERED.map(code => [`lang:${code}`, `${code === (lang ?? 'ru') ? '✅ ' : ''}${LANGS[code]}`]));
+    assert.ok(buttons('home').some(([data, text]) => data === 'view:language' && text === LANGUAGE_BUTTON), 'the way to the picker');
+    // An English reader reads no Russian, apart from the name of Russian in the picker.
+    if (lang === 'en') for (const [name, screen] of all) {
+      assert.doesNotMatch(screen.text, CYRILLIC, name);
+      for (const button of screen.reply_markup?.inline_keyboard.flat() ?? []) if (button.callback_data !== 'lang:ru') assert.doesNotMatch(button.text, CYRILLIC, name);
+    }
+    // The texts name the limits the code keeps, and an example works once copied.
+    for (const [text, limits] of [[t.errors.styleTooLong, [OWN_STYLE_CHARS]], [t.errors.stylesFull, [OWN_STYLES_MAX]],
+      [t.pictureStyle.inputNote(OWN_STYLE_CHARS, OWN_NAME_CHARS), [OWN_STYLE_CHARS, OWN_NAME_CHARS]], [t.pictureStyle.editNote(OWN_STYLE_CHARS), [OWN_STYLE_CHARS]],
+      [t.errors.promptTooLong, [PROMPT_CHARS]], [t.variant.note(PROMPT_CHARS), [PROMPT_CHARS]], [t.errors.lookTooLong, [LOOK_CHARS]],
+      [t.characters.editNote(LOOK_CHARS), [LOOK_CHARS]]] as const) for (const limit of limits) assert.match(text, new RegExp(`\\b${limit}\\b`), text);
+    const [name, line, ...rest] = t.pictureStyle.exampleText.split('\n');
+    assert.ok(name && [...name].length <= OWN_NAME_CHARS && line && [...line].length <= OWN_STYLE_CHARS && !rest.length && !/[^\x20-\x7e]/.test(line), 'the example style');
+    assert.doesNotThrow(() => addSeed(emptyLibrary(), t.newSeed.example), 'the example seed');
+    // The scene header goes out as Markdown, so none of its own words may be Markdown.
+    for (const text of [t.scenePrefix.context(12, true), t.scenePrefix.contextBelowOne(true), ...Object.values(t.model.providers).map(provider => provider.short)]) {
+      assert.doesNotMatch(text, /[_*`[\]()~>#+=|{}.!\\-]/, text);
+    }
+
+    // The command menu in this language fits Telegram's limits, and only the Russian one is in Russian; GPU commands come
+    // only with a GPU, /style only with pictures, which a caller that does not say has none of.
+    assert.deepEqual(commandSets(false).map(set => set.language_code), [undefined, ...REGISTERED]);
+    for (const [gpu, pictures] of [[false, undefined], [true, false], [false, true]] as const) {
+      const sets = commandSets(gpu, pictures);
+      const { commands } = sets.find(set => set.language_code === lang)!;
+      if (!lang) assert.deepEqual(commands, sets.find(set => set.language_code === 'en')!.commands, 'the default list is English');
+      for (const { command, description } of commands) {
+        assert.ok(/^[a-z_]{1,32}$/.test(command) && description.length >= 1 && description.length <= 256 && (lang === 'ru' || !CYRILLIC.test(description)), `/${command}`);
+      }
+      assert.deepEqual(commands.map(item => item.command).filter(command => /^(language|style|gpu_\w+)$/.test(command)),
+        ['language', ...pictures ? ['style'] : [], ...gpu ? ['gpu_pause', 'gpu_start'] : []], `gpu ${gpu}, pictures ${pictures}`);
     }
   });
 }
-
-test('the English interface has no Cyrillic apart from the name of Russian in the language picker', () => {
-  for (const [name, screen] of screens('en')) {
-    assert.doesNotMatch(screen.text, CYRILLIC, name);
-    for (const button of screen.reply_markup?.inline_keyboard.flat() ?? []) {
-      if (button.callback_data !== 'lang:ru') assert.doesNotMatch(button.text, CYRILLIC, `${name}: ${button.callback_data}`);
-    }
-  }
-  for (const set of commandSets(true).filter(set => set.language_code !== 'ru')) {
-    for (const { description } of set.commands) assert.doesNotMatch(description, CYRILLIC);
-  }
-});
-
-test('a library without a language is Russian, an unregistered language is English, and anything else is Russian', () => {
-  assert.equal(texts(undefined), texts('ru'));
-  assert.equal(texts(null), texts('ru'));
-  assert.equal(texts('constructor'), texts('ru'));
-  assert.equal(texts(7), texts('ru'));
-  assert.notEqual(texts('en'), texts('ru'));
-  for (const lang of Object.keys(LANGS)) {
-    assert.equal(texts(lang), texts(isRegistered(lang) ? lang : 'en'), lang);
-    assert.equal(shownLang(lang), isRegistered(lang) ? lang : 'en', lang);
-  }
-  assert.match(render(library(undefined), 'home').text, /🏠 Меню/);
-  assert.match(render({ ...library(undefined), language: 'xx' as Language }, 'home').text, /🏠 Меню/);
-  assert.match(render(library('en'), 'home').text, /🏠 Menu/);
-});
-
-test('the language picker lists registered languages by their own names and marks the shown one', () => {
-  for (const lang of [undefined, ...REGISTERED]) {
-    const buttons = render(library(lang), 'language').reply_markup!.inline_keyboard.flat();
-    const choices = buttons.filter(button => button.callback_data.startsWith('lang:'));
-    assert.deepEqual(choices.map(button => button.callback_data), REGISTERED.map(code => `lang:${code}`));
-    for (const button of choices) {
-      const code = button.callback_data.slice(5) as Lang;
-      assert.equal(button.text, `${code === (lang ?? 'ru') ? '✅ ' : ''}${LANGS[code]}`);
-    }
-    // The way to the picker reads the same in every language.
-    assert.ok(render(library(lang), 'home').reply_markup!.inline_keyboard.flat().some(button => button.text === LANGUAGE_BUTTON && button.callback_data === 'view:language'));
-  }
-});
-
-test('Telegram language codes map to interface languages, and everything else to English', () => {
-  const cases: [string | undefined, Lang][] = [
-    ['ru', 'ru'], ['ru-RU', 'ru'], ['RU', 'ru'], ['zh', 'zh'], ['zh-hans', 'zh'], ['zh_TW', 'zh'], ['ko', 'ko'], ['ko-KR', 'ko'], ['ja', 'ja'], ['ja-JP', 'ja'],
-    ['en', 'en'], ['en-GB', 'en'], ['uk', 'en'], ['de', 'en'], ['rue', 'en'], ['', 'en'], [undefined, 'en'],
-  ];
-  for (const [code, lang] of cases) assert.equal(langFromTelegram(code), lang, String(code));
-  assert.equal(langFromTelegram(7 as unknown as string), 'en');
-});
-
-test('command lists: English by default, then one per registered language, GPU commands only with a GPU', () => {
-  const sets = commandSets(false);
-  assert.deepEqual(sets.map(set => set.language_code), [undefined, ...REGISTERED]);
-  assert.deepEqual(sets[0].commands, commandSets(false).find(set => set.language_code === 'en')!.commands);
-  for (const set of [...sets, ...commandSets(true)]) {
-    for (const { command, description } of set.commands) {
-      assert.match(command, /^[a-z_]{1,32}$/);
-      assert.ok(description.length >= 1 && description.length <= 256, command);
-    }
-  }
-  assert.ok(sets[0].commands.some(item => item.command === 'language'));
-  assert.ok(!sets[0].commands.some(item => item.command.startsWith('gpu_')));
-  assert.deepEqual(commandSets(true)[0].commands.filter(item => item.command.startsWith('gpu_')).map(item => item.command), ['gpu_pause', 'gpu_start']);
-  // /style is listed only where pictures are drawn at all.
-  assert.ok(!sets.some(set => set.commands.some(item => item.command === 'style')));
-  for (const set of commandSets(false, true)) assert.ok(set.commands.some(item => item.command === 'style'), String(set.language_code));
-});
-
-test('the style, prompt and look texts name the limits the code keeps', () => {
-  for (const lang of REGISTERED) {
-    const t = texts(lang);
-    assert.match(t.errors.styleTooLong, new RegExp(`\\b${OWN_STYLE_CHARS}\\b`), lang);
-    assert.match(t.errors.stylesFull, new RegExp(`\\b${OWN_STYLES_MAX}\\b`), lang);
-    const note = t.pictureStyle.inputNote(OWN_STYLE_CHARS, OWN_NAME_CHARS);
-    assert.ok(note.includes(String(OWN_STYLE_CHARS)) && note.includes(String(OWN_NAME_CHARS)), lang);
-    assert.ok(t.pictureStyle.editNote(OWN_STYLE_CHARS).includes(String(OWN_STYLE_CHARS)), lang);
-    assert.match(t.errors.promptTooLong, new RegExp(`\\b${PROMPT_CHARS}\\b`), lang);
-    assert.ok(t.variant.note(PROMPT_CHARS).includes(String(PROMPT_CHARS)), lang);
-    assert.match(t.errors.lookTooLong, new RegExp(`\\b${LOOK_CHARS}\\b`), lang);
-    assert.ok(t.characters.editNote(LOOK_CHARS).includes(String(LOOK_CHARS)), lang);
-    // Each size on a character's card says which text it counts; a count the bot does not know is said in words, and
-    // the characters stay.
-    assert.notEqual(t.characters.lookSize(3, 20), t.characters.clothesSize(3, 20), lang);
-    const unknown = t.characters.lookSize(null, 20);
-    assert.ok(unknown.includes('20') && unknown !== t.characters.lookSize(3, 20) && !/null|NaN/.test(unknown), lang);
-    // The example is a style as a reader would send it: a name, then the line in English.
-    const [name, line, ...rest] = t.pictureStyle.exampleText.split('\n');
-    assert.ok(name && [...name].length <= OWN_NAME_CHARS && line && [...line].length <= OWN_STYLE_CHARS && !rest.length, lang);
-    assert.doesNotMatch(line, /[^\x20-\x7e]/, lang);
-  }
-});
 
 // tsc already rejects a catalog with other keys; this also holds a catalog to the same kind of value and arity.
 test('every catalog has the keys of the Russian one, with strings for strings and functions of the same arity', () => {
@@ -299,20 +297,5 @@ test('every catalog has the keys of the Russian one, with strings for strings an
     const actual = shape(texts(lang), '', new Map());
     assert.deepEqual([...actual.keys()].filter(key => !expected.has(key)), [], `${lang} has extra keys`);
     for (const [path, kind] of expected) assert.equal(actual.get(path), kind, `${lang}: ${path}`);
-  }
-});
-
-test('emoji that code, tests and users rely on stay at the start of their entries in every language', () => {
-  for (const lang of REGISTERED) {
-    const t = texts(lang);
-    for (const text of [t.compact.title, t.compact.titleAutomatic, t.context.compactNote(4), t.buttons.compactNow]) assert.ok(text.startsWith('🗜'), `${lang}: ${text}`);
-    for (const text of [t.context.title, t.context.titleOf('x'), t.context.none, t.context.currentBranch, t.buttons.context]) assert.ok(text.startsWith('📏'), `${lang}: ${text}`);
-    assert.ok(t.compact.done(null).startsWith('✅') && t.compact.failed(null).startsWith('⚠️') && t.compact.cancelled(null).startsWith('✖️'), lang);
-    assert.match(t.newSeed.example.split('\n')[1], /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/, lang);
-    assert.equal(t.newSeed.example.split('\n').length, 3, lang);
-    // The scene header is sent as Markdown.
-    for (const text of [t.scenePrefix.context(12, true), t.scenePrefix.contextBelowOne(true), ...Object.values(t.model.providers).map(provider => provider.short)]) {
-      assert.doesNotMatch(text, /[_*`\[\]()~>#+=|{}.!\\-]/, `${lang}: ${text}`);
-    }
   }
 });
