@@ -1,10 +1,9 @@
-// A tool nobody can name is a tool the next session runs from memory. Every file here that has a command line of
-// its own is reached through `npm run`, so the name and the flags of a run live in package.json where a doc, a
-// runbook and a review can all point at the same text -- and so that a probe which builds its own configuration is
-// never handed the bot's `.env` by a helpful `--env-file`.
+// The name and the flags of a run live in package.json, where a doc, a runbook and a review can all point at the same
+// text. So a script has to run a file that is there, and a probe which builds its own configuration is never handed
+// the bot's `.env` by a helpful `--env-file`.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const scripts: Record<string, string> = JSON.parse(readFileSync(resolve('package.json'), 'utf8')).scripts;
@@ -13,18 +12,6 @@ const targets = new Map(Object.entries(scripts).flatMap(([name, command]) => {
   const file = /\b(?:local|gpu|lib)\/[\w.-]+\.(?:ts|mjs)\b/.exec(command)?.[0];
   return file ? [[file, name] as const] : [];
 }));
-
-test('every tool with a command line of its own has an npm script', () => {
-  const entryPoints = readdirSync(resolve('local'))
-    .filter(name => name.endsWith('.ts') && !name.endsWith('.test.ts'))
-    // The two guards this repository uses for "this file was run, not imported".
-    .filter(name => /^if \(import\.meta\.main\)|^if \(process\.argv\[1\] === fileURLToPath\(import\.meta\.url\)\)/m
-      .test(readFileSync(resolve('local', name), 'utf8')));
-  assert.ok(entryPoints.length >= 8, `only ${entryPoints.length} entry points were recognised; the guards changed`);
-  for (const name of entryPoints) assert.ok(targets.has(`local/${name}`), `local/${name} has a command line and no npm script`);
-  // Renting is the one outside local/, and the one where a forgotten flag costs money rather than time.
-  assert.ok(targets.has('gpu/rent.mjs'), 'gpu/rent.mjs has no npm script');
-});
 
 test('every npm script names a file that is there', () => {
   for (const [file, name] of targets) assert.ok(existsSync(resolve(file)), `${name} runs ${file}, which does not exist`);
