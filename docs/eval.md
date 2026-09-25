@@ -31,6 +31,27 @@ model, and do not measure the quality of the prose.
 `npm run eval -- watch` in another terminal shows the current run: the last event of each model, scenario and mode,
 and the day's spending. The events go to `logs/eval.jsonl`, as codes and counters without text.
 
+<a id='own-card'></a>
+
+## Our own card: `gpu:` and `serving:`
+
+Two hosts name the heretic on a rented card, through a tunnel that is already open. Eval never starts, stops or
+reconnects the card, and the label after the colon only names the run.
+
+- `gpu:<label>` is llama.cpp with the bot's Q6_K, as `.env.gpu` sets it up ([llama-cpp.md](llama-cpp.md#connection-and-check)):
+  the provider, the address, the model, the context, the output limit, the timeout and the temperature, and nothing of
+  the rental or SSH.
+- `serving:<label>` is route A, simple-serving's gateway in front of vLLM with its NVFP4 conversion of the same
+  heretic, at the local end of the tunnel that simple-serving's `cli up` holds. The client key comes from
+  simple-serving's own configuration, the rest from the action measurement (`SERVING` in `local/action-text.ts`):
+  context 65536, the gateway's 900 s for class `internal`, and the bot's default output limit and temperature.
+
+Both tunnels hold local port 8080, so a card serves one of them at a time. The two adapters send the same sampling:
+the temperature, `top_p` 0.95, `top_k` 64, `min_p` 0, no repetition penalty, thinking off. A comparison therefore
+holds while `.env.gpu` keeps the context at 65536, the output limit at 4096 and the temperature at 0.8. The two routes
+still differ in the engine, in the weights and in the KV cache, q8_0 on llama.cpp and fp8 on vLLM, and eval measures
+the three together without telling one from another.
+
 ## Diagnostics
 
 A failed sum can be analysed without a model. For a numeric answer of two or more digits the probe writes `stated`: whether the number is present in the memory message (`memory`), in the scenes that remained as text (`scenes`), or nowhere (`none`). `readingMisses` in the result file are the failed questions whose answer was present in memory: memory is right, reading made the error. A failure with `none` means that the sum had to be added up at answer time. This is a diagnostic, not a score: a short number can match by chance.

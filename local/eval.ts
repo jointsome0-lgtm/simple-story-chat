@@ -18,6 +18,7 @@ import type { Task } from './walk-gold.ts';
 import type { TaskFile } from './walk-step.ts';
 import { channelFor, capsFor, readUsage } from './budget.ts';
 import { BUDGET_PATH } from './model.ts';
+import { SERVING, readClientKey } from './action-text.ts';
 
 type Env = NodeJS.Dict<string>;
 // A cell of the result: one model, one scenario, one memory mode.
@@ -86,7 +87,14 @@ function modelEnv(spec: string): Env {
     const names = ['PROVIDER', 'BASE_URL', 'API_KEY', 'MODEL', 'CONTEXT_TOKENS', 'MAX_OUTPUT_TOKENS', 'MODEL_TIMEOUT_MS', 'TEMPERATURE'];
     return Object.fromEntries(names.map(name => [`SIMPLE_CHAT_${name}`, gpu[`SIMPLE_CHAT_${name}`]]));
   }
-  if (!Object.hasOwn(HOSTS, host) || !model) throw new Error('Name a model as <host>:<id>, with host openrouter, openai, cerebras, groq, mistral, claude or gpu');
+  // "serving:<label>" is route A, simple-serving's gateway at the local end of the tunnel `cli up` holds, with the
+  // client key from simple-serving's own configuration and the action measurement's settings (local/action-text.ts).
+  // The output limit and the temperature are the bot's defaults: beside `gpu:<label>` it compares only while .env.gpu
+  // keeps them and the same context (docs/eval.md#own-card).
+  if (host === 'serving' && model) return { SIMPLE_CHAT_PROVIDER: 'simple-serving', SIMPLE_CHAT_BASE_URL: SERVING.baseUrl,
+    SIMPLE_CHAT_API_KEY: readClientKey(), SIMPLE_CHAT_MODEL: SERVING.model, SIMPLE_CHAT_CONTEXT_TOKENS: String(SERVING.contextTokens),
+    SIMPLE_CHAT_MODEL_TIMEOUT_MS: String(SERVING.timeoutMs) };
+  if (!Object.hasOwn(HOSTS, host) || !model) throw new Error('Name a model as <host>:<id>, with host openrouter, openai, cerebras, groq, mistral, claude, codex, gpu or serving');
   const { baseUrl, key } = HOSTS[host as keyof typeof HOSTS];
   const apiKey = process.env[key] || keys[key];
   if (!apiKey) throw new Error(`Set ${key} in .env.eval`);
