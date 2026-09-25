@@ -121,14 +121,14 @@ function fakeComfy(options: { failCase?: string; refuse?: number; refuseUpload?:
 // names (server.py:1163-1191); the interrupted job is recorded as failed, as ComfyUI records an interrupted prompt.
 // `afterQueueRead` runs once, the moment the next read of the queue has been answered, and `onSubmit` once, the
 // moment the card has taken the next job and before it answers with the job's id. A `stubborn` card takes an
-// interrupt and goes on drawing.
+// interrupt and goes on drawing. `failPolls` answers that many of the next reads of a record with a 500.
 function serialComfy(jobMs: number) {
   const prompts = new Map<string, string>();
   const finishAt = new Map<string, number>();
   const history = new Map<string, string>();
   const polls = new Map<string, number>();
   const seen = { submitted: 0, interrupts: 0, queueDeletes: 0, interrupted: [] as string[] };
-  let busyUntil = 0;
+  let busyUntil = 0, failPolls = 0;
   let afterQueueRead: (() => void) | undefined, onSubmit: (() => void) | undefined, stubborn = false;
   const settle = () => { for (const [id, at] of [...finishAt]) if (Date.now() >= at) { finishAt.delete(id); history.set(id, prompts.get(id)!); } };
   const running = () => [...finishAt.entries()].sort((a, b) => a[1] - b[1])[0]?.[0];
@@ -184,6 +184,7 @@ function serialComfy(jobMs: number) {
       if (url.pathname.startsWith('/history/')) {
         const id = url.pathname.slice('/history/'.length);
         polls.set(id, (polls.get(id) ?? 0) + 1);
+        if (failPolls > 0) { failPolls--; response.statusCode = 500; return response.end(); }
         if (!history.has(id)) return json({});
         if (seen.interrupted.includes(id)) return json({ [id]: { status: { completed: false, status_str: 'error' }, outputs: {} } });
         return json({ [id]: { status: { completed: true, status_str: 'success' }, outputs: { 7: { images: [{ filename: `${id}.png`, subfolder: '', type: 'temp' }] } } } });
@@ -199,6 +200,7 @@ function serialComfy(jobMs: number) {
   const end = (id: string) => { finishAt.set(id, Date.now()); settle(); };
   return { server, history, polls, seen, settle, onTheCard, end, set afterQueueRead(then: () => void) { afterQueueRead = then; },
     set onSubmit(then: () => void) { onSubmit = then; }, set stubborn(value: boolean) { stubborn = value; },
+    set failPolls(count: number) { failPolls = count; },
     listen: () => new Promise<string>(done => server.listen(0, '127.0.0.1', () => done(`http://127.0.0.1:${(server.address() as AddressInfo).port}`))) };
 }
 
@@ -588,6 +590,23 @@ test('a picture that outlives the wait is stopped on the card and leaves no reco
       await assert.rejects(drawing, { code: 'cancelled' }, label);
       assert.equal(comfy.seen.interrupts, 1, `${label}: the card was told to stop drawing it`);
       await forgotten(comfy, label);
+    }],
+    // A poll the card answers with an error status while the job is still being drawn: the job is interrupted, and
+    // its record deleted once it has been written. A card that takes the interrupt and draws on is a stop nobody can
+    // confirm, and the code for it stops the run.
+    ['a poll the card answers with an error', async label => {
+      const comfy = serialComfy(60000);
+      const url = await comfy.listen();
+      t.after(() => comfy.server.close());
+      comfy.failPolls = 1;
+      await assert.rejects(drawOne({ baseUrl: url, timeoutMs: 5000 }, defaultWorkflow(), { pollMs: 5, waitMs: 5000 }),
+        { code: 'comfy_http_error' }, label);
+      await settled();
+      assert.deepEqual([comfy.seen.interrupted, comfy.onTheCard(), [...comfy.history.keys()]], [['p1'], 0, []], label);
+      comfy.stubborn = true;
+      comfy.failPolls = 1;
+      await assert.rejects(drawOne({ baseUrl: url, timeoutMs: 5000 }, defaultWorkflow(), { pollMs: 5, waitMs: 5000 }),
+        { code: 'comfy_stop_unconfirmed' }, label);
     }],
   ];
   for (const [label, row] of rows) await row(label);

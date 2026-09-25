@@ -1,11 +1,12 @@
-// A stand-in for ComfyUI on the loopback interface, so that an identity run can be rehearsed end to end before a card
-// is rented (local/image-identity.ts `dry-run`). It keeps the narrow contract local/image-batch.ts relies on: the
-// routes it calls, one job at a time, and the websocket messages the pinned revision sends, in the order it sends
-// them and only to a socket that is open when they are sent. It models no card: no speed, no cache, no memory. What
-// it says about those — how long a job takes, which loaders the cache answered, a failure, an OOM, a partial load in
-// the log, the numbers on /system_stats — is fixed or set by the knobs below, and says nothing about any card. A
-// picture is a flat grey PNG of the latent's size with a text chunk beside the pixels, as a saving node writes one.
-// No prompt it is sent is printed or kept past its job.
+// A stand-in for ComfyUI on the loopback interface, so that an identity or action run can be rehearsed end to end
+// before a card is rented (local/image-identity.ts and local/image-action.ts `dry-run`). It keeps the narrow contract
+// local/image-batch.ts relies on: the routes it calls, one job at a time, and the websocket messages the pinned
+// revision sends, in the order it sends them and only to a socket that is open when they are sent. It models no card:
+// no speed, no cache, no memory. What it says about those — how long a job takes, which loaders the cache answered, a
+// failure, an OOM, a partial load in the log, the numbers on /system_stats — is fixed or set by the knobs below, and
+// says nothing about any card. A picture is a flat grey PNG with a text chunk beside the pixels, as a saving node
+// writes one, of the size of what the node saves: the sampler's latent behind a decode, the size a scale node asks
+// for, or an uploaded file's own. No prompt it is sent is printed or kept past its job.
 import { createServer } from 'node:http';
 import type { IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -14,6 +15,7 @@ import { createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
 import { deflateSync, crc32 } from 'node:zlib';
+import { pngSize } from './image-batch.ts';
 import type { Graph } from './image-batch.ts';
 
 // The knobs, read at every job and every connection, so that a test can turn one between two rows.
@@ -30,9 +32,19 @@ export type FakeComfyOptions = {
   partialLoadAtReferences?: number;
   // Whether a job after the first is told that its loader nodes came from the cache.
   loadersCached?: boolean;
+  // A word every saved picture carries in its metadata beside the pixels, where ComfyUI writes the prompt: once
+  // \u-escaped in a tEXt chunk, as its JSON does, and once as UTF-8 in an iTXt chunk. The action dry run's marker, so
+  // that a copy kept with its metadata is found by the search for it.
+  marker?: string;
+  // Whether `/prompt` refuses a graph whose loader names a file nobody uploaded, as the real server's validation does.
+  requireUploads?: boolean;
 };
-// What a job was, for a test to assert on. Never its text.
-export type FakeJob = { references: number; width: number; height: number; cached: number; outcome: 'success' | 'error' | 'interrupted' };
+// What a job was, for a test to assert on. Never its text. `slots`: each reference slot of the encoder in slot order,
+// the file on the loader behind it, and the size a scale node between them hands on (`null` without one). `images`:
+// each picture a saving node wrote, with its size.
+export type FakeJob = { references: number; width: number; height: number; cached: number; outcome: 'success' | 'error' | 'interrupted';
+  slots: { slot: number; file: string; scaled: { width: number; height: number } | null }[];
+  images: { node: string; width: number; height: number }[] };
 
 const GIB = 1024 ** 3;
 
@@ -57,20 +69,24 @@ const pngChunk = (type: string, data: Buffer) => {
   out.writeUInt32BE(crc32(out.subarray(4, 8 + data.length)) >>> 0, 8 + data.length);
   return out;
 };
-// A flat grey picture; the first pixel carries the job's number, so that no two jobs draw the same bytes.
-export function greyPng(width: number, height: number, number: number): Buffer {
+// A flat grey picture; the first pixels carry the job's number and the node's, so that no two pictures have the same
+// bytes. `marker` goes into the metadata, as `FakeComfyOptions.marker` says.
+export function greyPng(width: number, height: number, number: number, node = 0, marker?: string): Buffer {
   const row = Buffer.alloc(1 + width * 3, 60 + (number * 37) % 160);
   row[0] = 0;
   const rows = Buffer.concat(Array.from({ length: height }, () => row));
   rows[1] = (number >> 8) & 255;
   rows[2] = number & 255;
+  rows[3] = node & 255;
   const header = Buffer.alloc(13);
   header.writeUInt32BE(width, 0);
   header.writeUInt32BE(height, 4);
   header[8] = 8;
   header[9] = 2;
-  return Buffer.concat([SIGNATURE, pngChunk('IHDR', header),
-    pngChunk('tEXt', Buffer.from('prompt\0{"fake":"the graph a saving node writes here"}', 'latin1')),
+  const escaped = JSON.stringify({ fake: `the graph a saving node writes here${marker ? ` ${marker}` : ''}` })
+    .replace(/[\u0080-￿]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
+  return Buffer.concat([SIGNATURE, pngChunk('IHDR', header), pngChunk('tEXt', Buffer.from(`prompt\0${escaped}`, 'latin1')),
+    ...(marker ? [pngChunk('iTXt', Buffer.concat([Buffer.from('parameters\0\0\0\0\0', 'latin1'), Buffer.from(marker, 'utf8')]))] : []),
     pngChunk('IDAT', deflateSync(rows, { level: 1 })), pngChunk('IEND', Buffer.alloc(0))]);
 }
 
@@ -99,6 +115,7 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
   const queue: Job[] = [];
   const log: { t: string; m: string }[] = [];
   const uploads: string[] = [];
+  const uploaded = new Map<string, Buffer>();
   let running: Job | undefined;
   let count = 0, lines = 0;
   // app/logger.py keeps the last 300 lines, each stamped to the microsecond.
@@ -118,6 +135,21 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
     const link = sampler?.inputs.latent_image;
     const latent = Array.isArray(link) ? graph[String(link[0])]?.inputs : undefined;
     const width = Number(latent?.width ?? 1024), height = Number(latent?.height ?? 1024);
+    const source = (value: unknown) => (Array.isArray(value) ? graph[String(value[0])] : undefined);
+    // What a node hands on is the size of: a scale node's own, an uploaded file's, and the latent's for the rest.
+    const sizeOf = (node: Graph[string] | undefined): { width: number; height: number } => {
+      if (node?.class_type === 'ImageScale') return { width: Number(node.inputs.width), height: Number(node.inputs.height) };
+      const file = node?.class_type === 'LoadImage' ? uploaded.get(String(node.inputs.image)) : undefined;
+      return file ? pngSize(file) : { width, height };
+    };
+    const slots = Object.values(graph).flatMap(node => Object.entries(node.inputs).flatMap(([key, value]) => {
+      const slot = /^images\.image_(\d+)$/.exec(key);
+      const linked = source(value);
+      const loader = linked?.class_type === 'ImageScale' ? source(linked.inputs.image) : linked;
+      return slot && loader ? [{ slot: Number(slot[1]), file: String(loader.inputs.image),
+        scaled: linked?.class_type === 'ImageScale' ? sizeOf(linked) : null }] : [];
+    })).sort((a, b) => a.slot - b.slot);
+    const images: FakeJob['images'] = [];
     const messages: [string, object][] = [];
     const record = (type: string, data: object) => { messages.push([type, { ...data, prompt_id: job.id }]); tell(job, type, data); };
     record('execution_start', { timestamp: Date.now() });
@@ -150,8 +182,10 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
       }
       ran.push(id);
       if (type === 'SaveImage' || type === 'PreviewImage') {
-        const file = { filename: `fake_${String(job.number).padStart(5, '0')}_.png`, subfolder: '', type: type === 'SaveImage' ? 'output' : 'temp' };
-        files.set(file.filename, greyPng(width, height, job.number));
+        const file = { filename: `fake_${String(job.number).padStart(5, '0')}_${id}_.png`, subfolder: '', type: type === 'SaveImage' ? 'output' : 'temp' };
+        const size = sizeOf(source(graph[id].inputs.images));
+        files.set(file.filename, greyPng(size.width, size.height, job.number, Number(id) || 0, options.marker));
+        images.push({ node: id, ...size });
         outputs[id] = { images: [file] };
         tell(job, 'executed', { node: id, display_node: id, output: outputs[id] });
       }
@@ -160,7 +194,7 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
     history.set(job.id, { prompt: [job.number, job.id, {}, {}, []], outputs,
       status: { status_str: outcome === 'success' ? 'success' : 'error', completed: outcome === 'success', messages }, meta: {} });
     say(`Prompt executed in ${((performance.now() - began) / 1000).toFixed(2)} seconds`);
-    jobs.push({ references, width, height, cached: cached.length, outcome });
+    jobs.push({ references, width, height, cached: cached.length, outcome, slots, images });
     // The record is written before the socket hears the job is over (main.py), and a delete sent then finds it.
     tell(job, 'executing', { node: null });
   }
@@ -178,6 +212,8 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
       if (request.method === 'POST' && url.pathname === '/prompt') {
         const asked = JSON.parse((await read()).toString('utf8')) as { prompt?: Graph; client_id?: unknown };
         if (!asked.prompt || typeof asked.prompt !== 'object') { response.statusCode = 400; return json({ error: 'no prompt' }); }
+        const missing = Object.values(asked.prompt).some(node => node.class_type === 'LoadImage' && !uploaded.has(String(node.inputs.image)));
+        if (options.requireUploads && missing) { response.statusCode = 400; return json({ error: { type: 'prompt_outputs_failed_validation' }, node_errors: {} }); }
         const job = { id: `fake-${++count}`, number: count, clientId: String(asked.client_id ?? ''), graph: asked.prompt, stop: new AbortController() };
         say('got prompt');
         queue.push(job);
@@ -189,6 +225,7 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
         const file = form.get('image') as File | null;
         if (!file) { response.statusCode = 400; return response.end(); }
         uploads.push(file.name);
+        uploaded.set(file.name, Buffer.from(await file.arrayBuffer()));
         return json({ name: file.name, subfolder: '', type: 'input' });
       }
       if (request.method === 'POST' && url.pathname === '/history') {

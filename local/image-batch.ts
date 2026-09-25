@@ -220,19 +220,24 @@ const promptKey = (node: Graph[string], role: 'positive' | 'negative') => {
 
 // The reference-picture inputs of an edit graph, in slot order. Qwen Image 2.1 takes each reference on its own
 // `images.image_N` input of the encode node (ComfyUI's autogrow inputs), and each of those is wired to a LoadImage
-// that names a file in the server's input directory, which is what `--references` uploads.
-export function referenceSlots(graph: Graph): { node: string; key: string; loader: string }[] {
-  const found: { node: string; key: string; order: number; loader: string }[] = [];
+// that names a file in the server's input directory, which is what `--references` uploads. A slot may reach its loader
+// through one node that takes an image and hands one on, a scale node (the action run's references, at a size of their
+// own: docs/action-experiment.md#portraits-and-views): `scale` is that node, and the file is named on the loader behind it.
+export type Slot = { node: string; key: string; loader: string; scale?: string };
+export function referenceSlots(graph: Graph): Slot[] {
+  const found: (Slot & { order: number })[] = [];
   for (const [node, { inputs }] of Object.entries(graph)) {
     for (const [key, value] of Object.entries(inputs)) {
       const slot = /^images\.image_(\d+)$/.exec(key);
-      const loader = Array.isArray(value) ? String(value[0]) : null;
-      if (slot && loader && graph[loader] && 'image' in graph[loader].inputs) {
-        found.push({ node, key, order: Number(slot[1]), loader });
-      }
+      const linked = Array.isArray(value) ? String(value[0]) : null;
+      if (!slot || !linked || !graph[linked] || !('image' in graph[linked].inputs)) continue;
+      const through = graph[linked].inputs.image;
+      const behind = Array.isArray(through) ? String(through[0]) : null;
+      if (behind === null) found.push({ node, key, order: Number(slot[1]), loader: linked });
+      else if (graph[behind] && typeof graph[behind].inputs.image === 'string') found.push({ node, key, order: Number(slot[1]), loader: behind, scale: linked });
     }
   }
-  return found.sort((a, b) => a.order - b.order).map(({ node, key, loader }) => ({ node, key, loader }));
+  return found.sort((a, b) => a.order - b.order).map(({ order, ...slot }) => slot);
 }
 
 // Python's round(), which takes a half to the even neighbour: ComfyUI rounds 720 / 32 = 22.5 to 22, not 23.
@@ -318,7 +323,12 @@ export function applyToWorkflow(graph: Graph, values: WorkflowValues): Graph {
     }
     slots.forEach((slot, order) => {
       if (order < references.length) filled[slot.loader].inputs.image = references[order];
-      else { delete filled[slot.node].inputs[slot.key]; delete filled[slot.loader]; }
+      else {
+        delete filled[slot.node].inputs[slot.key];
+        delete filled[slot.loader];
+        // The whole chain of a slot this frame does not use: a scale node left behind would read a loader that is gone.
+        if (slot.scale) delete filled[slot.scale];
+      }
     });
   }
   return filled;
@@ -336,7 +346,7 @@ type HistoryEntry = { status?: { completed?: boolean; status_str?: string; messa
 // A minute: the id of a job submitted just before the end, then its stop and the delete of its record, on a card
 // that answers at all, take a few seconds of it. `--until` stands five minutes before the rental's own deadline, so
 // this ends four minutes before it (docs/identity-experiment.md#one-hour).
-const CLEANUP_RESERVE_MS = 60000;
+export const CLEANUP_RESERVE_MS = 60000;
 // The same server without the caller's signal, and with the reserve for its end: what stops an abandoned job must
 // still reach the card after either has fired, or the card would go on drawing a picture nobody waits for (`stopJob`).
 const afterAbort = (comfy: Comfy): Comfy => ({ baseUrl: comfy.baseUrl, timeoutMs: comfy.timeoutMs, end: comfy.reserve });
@@ -473,49 +483,57 @@ export function withoutLooks(one: Case, bound: string[]): string {
 }
 
 // What the card is drawing now and what waits behind it. A queue entry is an array whose second element is the
-// prompt id; a server that answers with anything else, or does not answer at all, is read as an empty queue, and
-// then `stopJob` below waits for no record.
-const promptIds = (list: unknown): string[] => (Array.isArray(list) ? list : [])
+// prompt id. A server that does not answer, or answers without the two lists, has read nothing (`undefined`), and
+// `stopJob` below takes that for a job that may still be on the card.
+type Queue = { running: string[]; pending: string[] };
+const promptIds = (list: unknown[]): string[] => list
   .flatMap(one => (Array.isArray(one) && typeof one[1] === 'string' ? [one[1]] : []));
-async function readQueue(comfy: Comfy): Promise<{ running: string[]; pending: string[] }> {
+async function readQueue(comfy: Comfy): Promise<Queue | undefined> {
   try {
     const seen = await (await call(comfy, '/queue')).json() as { queue_running?: unknown; queue_pending?: unknown };
+    if (!Array.isArray(seen.queue_running) || !Array.isArray(seen.queue_pending)) return undefined;
     return { running: promptIds(seen.queue_running), pending: promptIds(seen.queue_pending) };
-  } catch { return { running: [], pending: [] }; }
+  } catch { return undefined; }
 }
 
-// A picture that outlives the wait is still the card's. ComfyUI runs one job at a time, so the next cell would
-// queue behind the abandoned one and inherit its seconds — and the seconds are what the rental is decided on — and
-// its history entry, which holds the whole prompt and the workflow, is written when it finishes, which is after the
-// delete in `drawOne`'s `finally` has already run. So: out of the queue if it is still waiting, interrupted if it is
-// drawing, and then waited for, so that there is a record for the delete to remove.
+// A picture that outlives the wait, or whose polls fail, is still the card's. ComfyUI runs one job at a time, so the
+// next cell would queue behind the abandoned one and inherit its seconds — and the seconds are what the rental is
+// decided on — and its history entry, which holds the whole prompt and the workflow, is written when it finishes, so
+// a delete sent while it still draws removes nothing. So: out of the queue if it is still waiting, interrupted if it
+// is drawing, and then waited for, so that there is a record for the delete to remove.
+//
+// The answer is whether the stop is confirmed: its record is there, or a read of the queue has the job in neither
+// list (twice, once it has been seen being drawn). A card that answers neither confirms nothing, and nor does one
+// still drawing the job when the ten looks or the reserve run out; `drawWatched` then deletes nothing and stops the
+// run.
 //
 // With one card and two readers, the job being drawn is somebody else's as often as ours, and an interrupt that
 // reached theirs would give them the failure line under a scene they never touched. So the interrupt names this
 // job: the pinned server stops a job named by `prompt_id` only while it is the one being drawn, and does nothing
 // otherwise (server.py:1163-1191), where an interrupt without an id stops whatever is drawn. The queue is read after
 // the delete, when the job can no longer go from waiting to being drawn: one that did so a moment earlier is being
-// drawn now, and is interrupted and waited for like any other. One that is not was taken out by the delete, or is
-// over and has its record, and there is nothing to wait for. The interrupt goes either way, since it can stop no
+// drawn now, and is interrupted and waited for like any other. One in neither list was taken out by the delete, or
+// is over and has its record, and there is nothing to wait for. The interrupt goes either way, since it can stop no
 // other job, and it is all that can stop this one on a card that did not answer the queue.
-async function stopJob(comfy: Comfy, promptId: string, pollMs: number) {
+async function stopJob(comfy: Comfy, promptId: string, pollMs: number): Promise<boolean> {
   await post(comfy, '/queue', { delete: [promptId] }).catch(() => undefined);
   const queue = await readQueue(comfy);
   await post(comfy, '/interrupt', { prompt_id: promptId }).catch(() => undefined);
-  if (!queue.running.includes(promptId)) return;
+  const holds = (seen: Queue | undefined) => !seen || [...seen.running, ...seen.pending].includes(promptId);
+  if (!holds(queue)) return true;
   let missing = 0;
   for (let poll = 0; poll < 10; poll++) {
     const seen: Record<string, HistoryEntry> = await call(comfy, `/history/${promptId}`)
       .then(response => response.json() as Promise<Record<string, HistoryEntry>>).catch(() => ({}));
-    if (seen[promptId]) return;
+    if (seen[promptId]) return true;
     // An interrupted job leaves the queue a moment before its record appears, so one more poll is given to it; a
     // card that then still has neither is writing no record at all, and the rest of the wait would buy nothing.
-    const gone = await readQueue(comfy);
-    if (![...gone.running, ...gone.pending].includes(promptId) && ++missing > 1) return;
+    if (!holds(await readQueue(comfy)) && ++missing > 1) return true;
     // The reserve (`end` here, `afterAbort`) ends the pause as it ends every request: the stop is over at it.
     await delay(pollMs, undefined, { signal: comfy.end }).catch(() => undefined);
-    if (comfy.end?.aborted) return;
+    if (comfy.end?.aborted) return false;
   }
+  return false;
 }
 
 // One picture: submit, wait until the server has it, download it, forget the job. The elapsed time is measured from
@@ -648,8 +666,14 @@ function watchJob(comfy: Comfy) {
 type Watch = ReturnType<typeof watchJob>;
 
 // `sampleEvery` is how many polls pass between two samples of memory: the bot keeps the tunnel quiet, and the harness,
-// which measures the card, samples at every poll. `requireSocket`: see `SOCKET_OPEN_MS`.
-type DrawOneOptions = { pollMs?: number; waitMs?: number; sampleEvery?: number; requireSocket?: boolean };
+// which measures the card, samples at every poll. `requireSocket`: see `SOCKET_OPEN_MS`. `copies`: saving nodes whose
+// pictures are not the frame but a check of it, such as the action smoke's copies of its scaled references
+// (docs/action-experiment.md#drawing); the frame is the one picture of the other nodes, and each copy is read
+// back after it, stripped, in `copies`. `admit`: the caller's last word before the submit, asked once the socket is
+// open, such as whether the job can still end by the harness's `--until`; a job it refuses is not sent, and fails
+// as `not_admitted`.
+type DrawOneOptions = { pollMs?: number; waitMs?: number; sampleEvery?: number; requireSocket?: boolean; copies?: string[];
+  admit?: () => boolean };
 // The card tells a job's news only to a socket that is connected when it is sent, and the first of it, the job's start
 // and the nodes its cache answered, comes at the very start of the job (execution.py:683-720). So the submit waits
 // for the socket to open, this long at most. One that does not open in time leaves the bot's picture to the polls,
@@ -659,7 +683,7 @@ const SOCKET_OPEN_MS = 2000;
 export async function drawOne(comfy: Comfy, graph: Graph, options: DrawOneOptions = {}) {
   // A caller who has let go, or a stage whose end has come, puts nothing on the card: that is asked before the socket
   // opens and again once it has, and either ends the wait for it at once. Nothing is awaited between the second
-  // asking and the submit.
+  // asking, the caller's `admit` and the submit.
   halt(comfy);
   const watch = watchJob(comfy);
   const began = performance.now(), waitMs = options.waitMs ?? 600000;
@@ -671,6 +695,7 @@ export async function drawOne(comfy: Comfy, graph: Graph, options: DrawOneOption
     // The wait is the caller's, and the socket has had its share of it: a wait the socket used up submits nothing.
     if (open === undefined && waitMs <= SOCKET_OPEN_MS) throw Object.assign(new Error('image_timeout'), { code: 'image_timeout' });
     if (!open && options.requireSocket) throw Object.assign(new Error('comfy_socket_unavailable'), { code: 'comfy_socket_unavailable' });
+    if (options.admit && !options.admit()) throw Object.assign(new Error('not_admitted'), { code: 'not_admitted' });
     return await drawWatched(comfy, graph, watch, { ...options, waitMs: waitMs - Math.round(performance.now() - began) });
   } finally { watch.close(); }
 }
@@ -700,8 +725,10 @@ async function drawWatched(comfy: Comfy, graph: Graph, watch: Watch, options: Dr
     sampling = true;
     leave(readStats(comfy).then(seen => mergeStats(memory, seen, during)).finally(() => { sampling = false; }));
   };
-  // The delete of the job's record: sent once, whichever way this ends, and never waited for (`settled`).
-  let forgotten = false;
+  // The delete of the job's record: sent once and never waited for (`settled`), once the card is off the job — its
+  // record said the job was over (`over`), or `stopJob` confirmed the stop (`stopped`) — since a delete that arrives
+  // while the card still draws removes nothing, and the record written after it holds the whole prompt.
+  let forgotten = false, over = false, stopped = false;
   const forget = () => {
     if (forgotten) return;
     forgotten = true;
@@ -739,28 +766,43 @@ async function drawWatched(comfy: Comfy, graph: Graph, watch: Watch, options: Dr
       // request takes its connection with it, and `/view` would pay for a new one.
       if (watch.heard === heard) await watch.wait(pollMs, stop);
     }
-    const image = Object.values(entry.outputs ?? {}).flatMap(output => output.images ?? [])[0];
+    // The loop is left only by a throw or by the record's word that the job is over.
+    over = true;
+    const copies = options.copies ?? [];
+    const image = Object.entries(entry.outputs ?? {}).filter(([node]) => !copies.includes(node)).flatMap(([, output]) => output.images ?? [])[0];
     if (!image || entry.status?.status_str === 'error') {
       const recorded = Array.isArray(entry.status?.messages) ? entry.status.messages : [];
       const oom = watch.oom(promptId) || recorded.some(message => Array.isArray(message) && message[0] === 'execution_error' && outOfMemory(message[1] ?? {}));
       throw Object.assign(new Error('image_failed'), { code: 'image_failed', ...(oom ? { oom } : {}) });
     }
     const viewStarted = performance.now();
-    const query = new URLSearchParams({ filename: image.filename, subfolder: image.subfolder ?? '', type: image.type ?? 'output' });
-    const bytes = new Uint8Array(await (await call(comfy, `/view?${query}`)).arrayBuffer());
+    const view = async (one: { filename: string; subfolder: string; type: string }) => {
+      const query = new URLSearchParams({ filename: one.filename, subfolder: one.subfolder ?? '', type: one.type ?? 'output' });
+      return new Uint8Array(await (await call(comfy, `/view?${query}`)).arrayBuffer());
+    };
+    const bytes = await view(image);
     const viewMs = Math.round(performance.now() - viewStarted);
+    const copied: { node: string; bytes: Uint8Array }[] = [];
+    for (const node of copies) {
+      const one = entry.outputs?.[node]?.images?.[0];
+      if (one) copied.push({ node, bytes: stripPngMetadata(await view(one)) });
+    }
     // The record goes first, on the connection `/view` has just left open, and the last sample after it.
     forget();
     sampleVram(false);
     // `memory` fills in like `vram` did, the last sample after the picture; `timing` is the socket's account of the job.
     return { bytes: stripPngMetadata(bytes), totalMs: Math.round(performance.now() - started), viewMs, vram: memory.vram, memory,
-      timing: watch.timing(promptId, graph) };
+      timing: watch.timing(promptId, graph), ...(copies.length ? { copies: copied } : {}) };
   } catch (error) {
-    // The wait ran out, the caller let go or the stage ended, but the card did not stop by itself: see `stopJob`,
-    // which the reserve bounds. A fetch cut by a signal arrives as an AbortError, so what the signals say is what
-    // this failure is called, whatever was thrown: the picture that was on its way down when the end came too.
-    if (stop?.aborted || (error as { code?: string }).code === 'image_timeout') await stopJob(afterAbort(comfy), promptId, pollMs);
+    // Whatever ended the wait before the record said the job was over — the wait ran out, the caller let go, the
+    // stage ended, the card answered a poll with an error status or the tunnel dropped more polls than the retries —
+    // the card did not stop by itself: see `stopJob`, which the reserve bounds. A fetch cut by a signal arrives as an
+    // AbortError, so what the signals say is what this failure is called, whatever was thrown: the picture that was
+    // on its way down when the end came too. A stop nobody could confirm leaves a job that may still be drawing, with
+    // the next cell queued behind it, and says so under a code that stops the run (`stopsTheRun`).
+    if (!over) stopped = await stopJob(afterAbort(comfy), promptId, pollMs);
     halt(comfy);
+    if (!over && !stopped) throw Object.assign(new Error('comfy_stop_unconfirmed'), { code: 'comfy_stop_unconfirmed' });
     throw error;
   } finally {
     // The server keeps the prompt, the workflow and the outputs of every job it has run until history is cleared.
@@ -769,8 +811,9 @@ async function drawWatched(comfy: Comfy, graph: Graph, watch: Watch, options: Dr
     // gpu/image-sweeper.py deletes a preview's file from RAM a few seconds after this record is gone, and the file
     // and the record both after ten minutes should this delete never arrive. A saving node's file stays until the
     // card goes, which is why the harness, whose graphs save, draws only synthetic scenes. The picture on our disk
-    // is stripped. The delete leaves here on every way out, and nothing waits for its answer but `settled`.
-    forget();
+    // is stripped. The delete leaves here on every way out once the card is off the job, and nothing waits for its
+    // answer but `settled`; after a stop that was not confirmed, the record is the sweeper's.
+    if (over || stopped) forget();
   }
 }
 
@@ -822,9 +865,11 @@ const isCell = (one: Cell, other: Cell) => one.caseId === other.caseId && one.ch
   && one.seed === other.seed && one.arm === other.arm;
 
 // Codes that say the graph or the server is wrong rather than this picture: every cell after them fails in the same
-// way, and on a rental each of those failures is paid for.
+// way, and on a rental each of those failures is paid for. `comfy_stop_unconfirmed`: a job may still be drawing, and
+// every cell after it would queue behind it.
 export const stopsTheRun = (code: string) => code === 'comfy_http_error' || code === 'comfy_rejected_prompt'
-  || code === 'comfy_upload_failed' || code === 'comfy_socket_unavailable' || code.startsWith('workflow_');
+  || code === 'comfy_upload_failed' || code === 'comfy_socket_unavailable' || code === 'comfy_stop_unconfirmed'
+  || code.startsWith('workflow_');
 
 // Checkpoint-major order: a switch reloads the whole checkpoint, and an early stop then leaves whole comparable
 // blocks rather than a little of each. The arms of one frame follow each other, so a stop leaves whole triples, and
@@ -839,14 +884,14 @@ export function cells(cases: Case[], checkpoints: string[], seeds: number[], arm
 // ComfyUI's own log, the last 300 lines of it (/internal/logs/raw, app/logger.py): the one place that says a model
 // was loaded onto the card only in part, which is how the server fits what does not fit instead of failing. Only
 // those lines are counted, and none is kept: the rest of the log can carry a prompt.
-async function logLines(comfy: Comfy): Promise<string[] | undefined> {
+export async function logLines(comfy: Comfy): Promise<string[] | undefined> {
   try {
     const seen = await (await call(comfy, '/internal/logs/raw')).json() as { entries?: { t?: unknown; m?: unknown }[] };
     return Array.isArray(seen.entries) ? seen.entries.map(entry => `${entry.t}\u0000${entry.m}`) : undefined;
   } catch { return undefined; }
 }
 // The partial loads after the last line seen before the job, or in the whole ring when that line has left it.
-function partialLoadsSince(before: string[] | undefined, after: string[] | undefined): number | undefined {
+export function partialLoadsSince(before: string[] | undefined, after: string[] | undefined): number | undefined {
   if (!before || !after) return undefined;
   const last = before.at(-1);
   return after.slice(last === undefined ? 0 : after.lastIndexOf(last) + 1)
@@ -857,7 +902,7 @@ function partialLoadsSince(before: string[] | undefined, after: string[] | undef
 // of its own is held to these as well, so for it a server that does not say all three is refused rather than read as
 // saying nothing: a resume on another card would otherwise pass as the same one.
 const SERVER_PINS = ['comfyui', 'pytorch', 'card'];
-async function serverPins(comfy: Comfy, strict: boolean): Promise<Record<string, string>> {
+export async function serverPins(comfy: Comfy, strict: boolean): Promise<Record<string, string>> {
   const pins: Record<string, string> = {};
   try {
     const stats = await (await call(comfy, '/system_stats')).json() as {
