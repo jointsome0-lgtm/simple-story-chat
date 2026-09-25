@@ -77,6 +77,9 @@ Memory and Opus's scene count, one pair per run:
 - **Speed.** Each route's drafter more than doubled its decoding of the memory: the Q6_K from 47.5 to 136 tokens a
   second on one slot, route A from 57–67 to 123–171 per request with two at once
   ([the card](gpu-measurements.md#text-card-4-2026-09-26)).
+- **The owner's decision.** Route A stays, with multi-token prediction on: two requests at once at 123 to 171 tokens a
+  second each, against the Q6_K's 136 on its one slot, are worth the small loss above. Route B does not follow on
+  quality. simple-serving 15b969d turns the drafter on by default, 3 drafted tokens a step.
 
 Limitations:
 - Seven `dance` runs of route A and four of the Q6_K, two or three of the others; `battle` and `chess` were not run.

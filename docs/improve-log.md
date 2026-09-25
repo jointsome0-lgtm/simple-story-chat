@@ -8,11 +8,12 @@ and the main result with its limit. A new step gets its full entry there and its
 accepted**: tried and reverted. **Measurement**: numbers without a decision on a change. **Open**: a decision still
 waits. An open line is unfinished work, not an order to finish it.
 
-- 2026-09-26 · **open** · [Route A against the Q6_K again, with the texts kept and three judges](knowledge/improve-runs.md#route-a-2026-09-26).
+- 2026-09-26 · **accepted** · [Route A against the Q6_K again, with the texts kept and three judges](knowledge/improve-runs.md#route-a-2026-09-26).
   Both routes hold the same facts in memory, and both lose the `dance` twins in the reading, so the first card's three
   passes were one sample. By three judges and two readers route A loses in counting ampoules within a scene and in
   refuting a false date firmly, and its memory writes hyphens for dashes and fewer «ё». Two or three runs a scenario,
-  and engine, weights and cache changed together. Whether route B follows waits for the owner.
+  and engine, weights and cache changed together. The owner took route A with its drafter, which serves two
+  requests at once, the small loss included; route B does not follow on quality.
 - 2026-09-25 · **measurement** · [Route A against the production Q6_K on one 5090](knowledge/improve-runs.md#route-a-2026-09-25).
   On `dance` route A misses the same three numbers on all three passes, twins the scenario was built with, and the
   Q6_K finds them here and on 09-22; by the rule written down before the runs, route A is worse. The Q6_K has one pass
