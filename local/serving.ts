@@ -203,7 +203,8 @@ export function createServing(config: ServingConfig, { fetch: fetcher = globalTh
         return { model: config.model, contextTokens };
       });
     },
-    // One request at a time over one lane (local/scheduler.ts): a pool's `slot` means nothing to the gateway.
+    // A pool's `slot` is one of the bot's own lanes (local/config.ts) and means nothing to the gateway, which places
+    // and admits calls itself.
     generate(request: ModelRequest, { onText = async () => {}, signal, inputLimitTokens, priority, holder }: GenerateControls = {}) {
       return operation(signal, 'generate', async (current): Promise<GenerationResult> => {
         const work = workOf({ priority, holder });

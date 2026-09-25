@@ -129,7 +129,7 @@ on are in [llama-cpp.md](llama-cpp.md#adapter).
 
 ## simple-serving: our gateway
 
-`local/serving.ts` calls [simple-serving](https://github.com/jointsome0-lgtm/simple-serving), our own gateway in front of vLLM on a rented card. Its API is fixed by its contract v2 (`docs/contract-v2.md` there). The adapter was added on 24 September 2026 and is tested against the contract's shared cases and against the real gateway in front of its fake engine. It has not met one in front of vLLM yet.
+`local/serving.ts` calls [simple-serving](https://github.com/jointsome0-lgtm/simple-serving), our own gateway in front of vLLM on a rented card. Its API is fixed by its contract v2 (`docs/contract-v2.md` there). The adapter was added on 24 September 2026 and is tested against the contract's shared cases and against the real gateway in front of its fake engine. Eval's route A ran through it against the gateway in front of vLLM on 25 and 26 September ([improve-runs](knowledge/improve-runs.md#route-a-2026-09-26)); the bot itself has not run on one yet.
 
 To point the bot at a gateway, set in `.env`:
 
@@ -138,6 +138,7 @@ SIMPLE_CHAT_PROVIDER=simple-serving
 SIMPLE_CHAT_BASE_URL=https://serving.example.com   # the gateway's root, or http://127.0.0.1:<port> through a tunnel
 SIMPLE_CHAT_API_KEY=...                            # the bot's key in the gateway's configuration
 SIMPLE_CHAT_MODEL=...                              # the name the gateway serves the model under, as /v1/models lists it
+SIMPLE_CHAT_SERVING_LANES=2                        # optional: the calls the bot sends at once, 1 to 4
 ```
 
 The address is a root without a path, as for llama.cpp: HTTPS, or HTTP on loopback. The key is the one the gateway's configuration gives the bot. It must allow the classes `reader`, `agent` and `internal` and the naming of cache scopes. It is required on loopback too. It is not the Vast key. The gateway runs on our own card, so the story does not go to a third party and `SIMPLE_CHAT_ALLOW_HOSTED` is not needed.
@@ -146,7 +147,7 @@ Every generation and count says whose it is. A reader's turn is class `reader` w
 
 Differences from llama.cpp:
 
-- The bot sends one request at a time. `SIMPLE_CHAT_GPU_SLOTS` and the pool settings do not apply.
+- The bot sends up to `SIMPLE_CHAT_SERVING_LANES` requests at once: two by default, as route A was measured, and at most four, the readers' places in the contract's section 7. The lanes are the bot's own, run as a pool of isolated slots is ([llama-cpp.md](llama-cpp.md#slot-pool)), but the gateway gets no slot and admits calls itself, so the bot sizes none. `SIMPLE_CHAT_GPU_SLOTS` and the pool settings do not apply.
 - The check reads `/v1/state` (contract `2`, status `ready`, the configured model), then `/v1/models` (the model name, and a context of at least `SIMPLE_CHAT_CONTEXT_TOKENS` that equals the state's `context_tokens`). No text goes to a service that has not passed it: the bot checks it at startup, the agent interface and the probes before their first count or generation, and each of them again before its next call when a check failed or was cancelled. The bot starts while the service is down: a check at startup that finds it not ready, or cannot reach it, is logged as `model_check_deferred`. A wrong key, model, context or contract still stops the start.
 - The bot checks this of the stream: every chunk names the model and holds one choice with index 0 or none; the text and the reasoning are strings, and a tool call is refused; one finish, `stop` or `length`, then only the usage chunk with `prompt_tokens` and `completion_tokens`, then `[DONE]`. A stream that breaks one of these fails, and so does one with an error event or without `[DONE]`; its text never becomes a scene.
 - A refusal is read by its code only; its body is never kept or logged. `class_not_allowed`, `scope_not_allowed` and `forbidden` become `unauthorized`, `queue_full` becomes `rate_limited`, `starting`, `draining`, `drained` and `engine_unavailable` become `model_unavailable`, and `not_found` becomes `unsupported_server`. `unauthorized`, `context_limit` and `timeout` keep their names, and a `context_limit` compacts the story without a second count. Every other code is `provider_failed`. The log row keeps the gateway's own code as `servingCode`.

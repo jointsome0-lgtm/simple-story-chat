@@ -7,8 +7,9 @@ export type ModelConfig = {
   provider: 'claude-code' | 'codex-cli' | 'llama-cpp' | 'openai-compatible' | 'simple-serving'; model: string; baseUrl: string | undefined; apiKey: string; temperature: number;
   memoryMode: 'plain' | 'sgr'; repairCoverage: boolean; timeoutMs: number; contextTokens: number; maxOutputTokens: number;
   compactAtTokens: number; keepScenes: number;
-  // llama.cpp: the server's slots, whether they share one KV cache (`--kv-unified`) and how many cells that is.
-  // With isolated slots `poolTokens` is `contextTokens`: one slot holds one request.
+  // The scheduler's lanes: llama.cpp's slots, or the calls simple-serving takes from the bot at once. For llama.cpp
+  // also whether the slots share one KV cache (`--kv-unified`) and how many cells that is. With isolated slots, and
+  // over the gateway, `poolTokens` is `contextTokens`: one lane holds one request.
   slots: number; poolTokens: number; sharedCache: boolean;
   // Overrides of the daily cap of a hosted API's channel; see budget.ts.
   budget: { requests: number | undefined; tokens: number | undefined };
@@ -92,11 +93,14 @@ function modelConfig(env: Env): ModelConfig {
   // A pool (scheduler.ts) needs a server started with the same slots (gpu/serve.sh). By default each slot holds its own
   // request of `contextTokens` and nothing is divided. `SIMPLE_CHAT_GPU_KV_UNIFIED=true` is llama.cpp's `--kv-unified`:
   // the slots then share `SIMPLE_CHAT_POOL_TOKENS` cells and the scheduler admits calls by size. A simple-serving
-  // gateway has no slots to place a call in, so over it, as over every other provider, the scheduler runs one lane.
-  const slots = provider === 'llama-cpp' ? integer('SIMPLE_CHAT_GPU_SLOTS', 1, 1, 8) : 1;
+  // gateway has no slots to place a call in and admits calls itself, so over it the lanes are the bot's own: as many
+  // calls as it sends at once, two by default, as route A was measured, and at most the readers' four places
+  // (contract section 7). Every other provider runs one lane.
+  const slots = provider === 'llama-cpp' ? integer('SIMPLE_CHAT_GPU_SLOTS', 1, 1, 8)
+    : provider === 'simple-serving' ? integer('SIMPLE_CHAT_SERVING_LANES', 2, 1, 4) : 1;
   const unified = env.SIMPLE_CHAT_GPU_KV_UNIFIED || 'false';
   if (!['true', 'false'].includes(unified)) throw new Error('Invalid SIMPLE_CHAT_GPU_KV_UNIFIED');
-  const sharedCache = unified === 'true';
+  const sharedCache = provider === 'llama-cpp' && unified === 'true';
   const poolTokens = slots > 1 && sharedCache ? integer('SIMPLE_CHAT_POOL_TOKENS', contextTokens, contextTokens, 131072) : contextTokens;
   return {
     slots, poolTokens, sharedCache,

@@ -287,9 +287,6 @@ test('configuration: the gateway\'s root, its key even over the tunnel, and the 
   assert.throws(() => loadModelConfig(nowhere, { ...serving, SIMPLE_CHAT_API_KEY: undefined }), /Set SIMPLE_CHAT_API_KEY to the gateway key/);
   assert.throws(() => loadModelConfig(nowhere, { ...serving, SIMPLE_CHAT_API_KEY: ' ' }), /SIMPLE_CHAT_API_KEY/);
   assert.throws(() => loadModelConfig(nowhere, { ...serving, SIMPLE_CHAT_MODEL: undefined }), /Set SIMPLE_CHAT_MODEL/);
-  // One lane, whatever the pool settings of llama-server say.
-  const pooled = loadModelConfig(nowhere, { ...serving, SIMPLE_CHAT_GPU_SLOTS: '4', SIMPLE_CHAT_GPU_KV_UNIFIED: 'true', SIMPLE_CHAT_POOL_TOKENS: '131072' });
-  assert.deepEqual([pooled.slots, pooled.poolTokens], [1, 65536]);
   // Our own card is not a hosted API: the bot and the agent interface need no consent to send stories there.
   const bot = { ...serving, TELEGRAM_BOT_TOKEN: '1:synthetic', SIMPLE_CHAT_ALLOWED_USER_IDS: '1' };
   assert.equal(loadConfig(nowhere, bot).gpu, undefined);
