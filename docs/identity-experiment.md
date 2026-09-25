@@ -16,9 +16,9 @@ $0.498 an hour from its creation to the confirmed deletion, and the plan's estim
 
 The run is complete by the rule of [a complete run](#complete-run). The smoke passed its geometry, memory and
 telemetry checks. The six portraits, all 48 cells (8 frames, 2 seeds, 3 arms) and the three frames of the control were
-drawn at the pinned geometry, and none failed. The control came out bit for bit the same as A's frames of the same
-scenes and seed, so A draws what the bot's text-to-image graph draws. Each of the six bundles was read by a fresh
-Claude Fable 5.1 session that opened only the files of its own bundle, and every item has an answer.
+drawn at the pinned geometry, and none failed. For the three control frames, at seed 7 and 1280x704, A and the bot's
+text-to-image graph produced identical PNG files. Each of the six bundles was read by a fresh Claude Fable 5.1 session
+that opened only the files of its own bundle, and every item has an answer.
 
 | | A | B | C |
 | --- | --- | --- | --- |
@@ -35,7 +35,7 @@ Claude Fable 5.1 session that opened only the files of its own bundle, and every
 | 1. Recognition | pass | fail: 85% and 85%, one picture mixed up |
 | 2. Against A | fail: 88% against A's 81%, where 15 points above A are needed | fail: 69% |
 | 3. Clothes | fail: 8 action errors against A's 0 | fail: 6 of 8, and 7 action errors |
-| 4. Time | fail: the median is 1.33 times A's, the slowest frame 83 s where 33 s is allowed | fail: 1.35 times, 83 s |
+| 4. Time | fail: the slowest frame took 83 s where 33 s is allowed; the median, 1.33 times A's, is within 1.5 | fail: 83 s; the median 1.35 times |
 | 5. Memory | pass: no OOM, 9638 MiB free at the tightest frame of four | pass |
 
 **B fails, and C fails.** The owner's decision on what follows is not recorded yet.
@@ -47,8 +47,8 @@ What the numbers leave open, and what the run showed besides:
   errors and both bundles of A have none. The judges of B and C describe the same failure: people stand facing the
   viewer and look into the lens, as they do in their portraits, instead of reading or rehearsing.
 - Every frame of four portraits took about 82 s, about 75 s of it sampling, against about 15 s for the same frames in
-  A. One portrait added about 15% and two about 30%. At four portraits the card held less memory than at two, 22.3 GB
-  against 24.4. The cause was not measured.
+  A. One portrait added about 15% and two about 30%. The highest sampled occupied VRAM was 22,471 MiB with four
+  references, against 24,455 MiB with two. The cause was not measured.
 - The ComfyUI log warned that its optimised CUDA operations need PyTorch built for CUDA 13.0, and the run had 2.11
   built for 12.8. That holds for all three arms.
 - What the judges found in the frame text holds for A too, which is how the bot draws. The small marks of the
