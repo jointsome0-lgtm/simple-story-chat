@@ -138,8 +138,9 @@ Only a reader whose scenes are drawn (`SIMPLE_CHAT_IMAGE_USERS`) has «🎨 Ст
   - The note is deleted with its photo when their scene is. A note Telegram refuses leaves the photo as it is, and the reader is told nothing; the log gets a `picture_prompt_unsent` row.
   - A photo already on its way to Telegram when the reader's next move or /cancel stops its picture goes out with its note all the same, and nothing of that picture follows the note. Its log row is `ready` with `cancelled: true`.
 
-The owner decided the last rule on 2026-09-25; the reason is in
-[illustrations-plan.md](illustrations-plan.md#prompt-under-picture). The note is a rich message ([limits](#telegram-limits)).
+The owner decided the last rule on 2026-09-25, because such a photo is in the chat either way and of no use there
+without the prompt it was drawn from ([the record](illustrations-plan.md#prompt-under-picture)). The note is a rich
+message ([limits](#telegram-limits)).
 
 <a id='picture-variants'></a>
 
