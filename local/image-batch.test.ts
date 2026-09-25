@@ -119,7 +119,8 @@ function fakeComfy(options: { failCase?: string; refuse?: number; refuseUpload?:
 // whole graph in it — only once a job is over, so a delete sent while the card is still drawing removes nothing.
 // `/interrupt` stops the job the card is working through, and one given a `prompt_id` only while that is the job it
 // names (server.py:1163-1191); the interrupted job is recorded as failed, as ComfyUI records an interrupted prompt.
-// `afterQueueRead` runs once, the moment the next read of the queue has been answered.
+// `afterQueueRead` runs once, the moment the next read of the queue has been answered, and `onSubmit` once, the
+// moment the card has taken the next job and before it answers with the job's id.
 function serialComfy(jobMs: number) {
   const prompts = new Map<string, string>();
   const finishAt = new Map<string, number>();
@@ -127,7 +128,7 @@ function serialComfy(jobMs: number) {
   const polls = new Map<string, number>();
   const seen = { submitted: 0, interrupts: 0, queueDeletes: 0, interrupted: [] as string[] };
   let busyUntil = 0;
-  let afterQueueRead: (() => void) | undefined;
+  let afterQueueRead: (() => void) | undefined, onSubmit: (() => void) | undefined;
   const settle = () => { for (const [id, at] of [...finishAt]) if (Date.now() >= at) { finishAt.delete(id); history.set(id, prompts.get(id)!); } };
   const running = () => [...finishAt.entries()].sort((a, b) => a[1] - b[1])[0]?.[0];
   const server = createServer((request, response) => {
@@ -142,6 +143,9 @@ function serialComfy(jobMs: number) {
         prompts.set(id, JSON.stringify(graph));
         busyUntil = Math.max(busyUntil, Date.now()) + jobMs;
         finishAt.set(id, busyUntil);
+        const then = onSubmit;
+        onSubmit = undefined;
+        then?.();
         return json({ prompt_id: id });
       }
       if (request.method === 'POST' && url.pathname === '/interrupt') {
@@ -193,6 +197,7 @@ function serialComfy(jobMs: number) {
   // The job `id` is done now, as one that was nearly done would be, and the next one takes the card.
   const end = (id: string) => { finishAt.set(id, Date.now()); settle(); };
   return { server, history, polls, seen, settle, onTheCard, end, set afterQueueRead(then: () => void) { afterQueueRead = then; },
+    set onSubmit(then: () => void) { onSubmit = then; },
     listen: () => new Promise<string>(done => server.listen(0, '127.0.0.1', () => done(`http://127.0.0.1:${(server.address() as AddressInfo).port}`))) };
 }
 
@@ -549,29 +554,54 @@ test('a picture that outlives the wait is stopped on the card and leaves no reco
   assert.equal(comfy.onTheCard(), 0, 'a job the harness gave up on is still the card\'s');
   comfy.settle();
   assert.deepEqual([...comfy.history.keys()], [], 'the record of an abandoned job holds the whole prompt');
+
+  // Astra's case against the end of a stage: a job of 10 ms whose picture takes 300 ms to come down, 150 ms before the
+  // end. The download is cut at the end, the cell stays undrawn and is nobody's failure, and the run stops then, not
+  // before the next cell. The job's record is deleted all the same.
+  const slow = pushingComfy({ jobMs: 10, viewMs: 300 });
+  const slowUrl = await slow.listen();
+  t.after(slow.close);
+  const until = Date.now() + 150;
+  const cut = await draw({ ...options(root, slowUrl), out: join(root, 'cut'), checkpoints: ['a.safetensors'], until, pollMs: 10 });
+  const past = Date.now() - until;
+  assert.deepEqual([cut.pictures.length, cut.failures.length, cut.stopped, slow.seen.posted.length, slow.seen.cleared], [0, 0, 'budget', 1, ['p1']]);
+  assert.ok(past < 100, `the run ended ${past} ms past the end`);
 });
 
-// Two readers share one card (local/picture.ts). A reader who gives up while their own picture is still waiting in
-// the queue must not interrupt anything: the job on the card belongs to somebody who is still waiting for it.
-test('a picture given up while it waits in the queue leaves the one being drawn alone', async t => {
+// Two readers share one card (local/picture.ts). A reader who gives up before their picture is submitted puts nothing
+// on the card. One who gives up once the card has taken it, while it waits in the queue, must not interrupt anything:
+// the job on the card belongs to somebody who is still waiting for it.
+test('a picture given up before its submit never reaches the card, and one given up in the queue leaves the one being drawn alone', async t => {
   const comfy = serialComfy(400);
   const url = await comfy.listen();
   t.after(() => comfy.server.close());
   const busy = drawOne({ baseUrl: url, timeoutMs: 5000 }, defaultWorkflow(), { pollMs: 5, waitMs: 5000 });
   for (let attempt = 0; attempt < 500 && comfy.seen.submitted < 1; attempt++) await new Promise(next => setTimeout(next, 2));
 
-  // The second reader has already moved on by the time their picture is submitted, which is the order `drawOne`
-  // keeps on purpose: a job with no id is a job nobody can stop.
-  const stop = new AbortController();
-  stop.abort();
-  await assert.rejects(drawOne({ baseUrl: url, timeoutMs: 5000, signal: stop.signal }, defaultWorkflow(), { pollMs: 5, waitMs: 5000 }),
-    (error: { code?: string }) => error.code === 'cancelled');
+  const early = new AbortController();
+  early.abort();
+  await assert.rejects(drawOne({ baseUrl: url, timeoutMs: 5000, signal: early.signal }, defaultWorkflow(), { pollMs: 5, waitMs: 5000 }),
+    { code: 'cancelled' });
+  assert.deepEqual([comfy.seen.submitted, comfy.seen.queueDeletes, comfy.seen.interrupts], [1, 0, 0], 'nothing was sent, and nothing stopped');
+
+  // Given up the moment the card has taken the submit: its answer is still read, which is the order `drawOne` keeps on
+  // purpose, since a job with no id is a job nobody can stop.
+  const late = new AbortController();
+  comfy.onSubmit = () => late.abort();
+  await assert.rejects(drawOne({ baseUrl: url, timeoutMs: 5000, signal: late.signal }, defaultWorkflow(), { pollMs: 5, waitMs: 5000 }),
+    { code: 'cancelled' });
   assert.equal(comfy.seen.submitted, 2);
   assert.deepEqual(comfy.seen.interrupted, [], 'the card was drawing another reader\'s picture');
   assert.equal(comfy.seen.queueDeletes, 1, 'and the abandoned one was taken out of the queue');
   // A job that never ran writes no record, so nothing is waited for: the ten polls used to run out under every
   // cancelled picture, and `idle()` waited them out.
   assert.equal(comfy.polls.get('p2') ?? 0, 0);
+  // The end of an identity stage, come the moment the card took a submit, is answered the same way, within the reserve.
+  const end = new AbortController();
+  comfy.onSubmit = () => end.abort();
+  await assert.rejects(drawOne({ baseUrl: url, timeoutMs: 5000, end: end.signal, reserve: AbortSignal.timeout(60000) }, defaultWorkflow(),
+    { pollMs: 5, waitMs: 5000 }), { code: 'out_of_time' });
+  assert.deepEqual([comfy.seen.submitted, comfy.seen.queueDeletes, comfy.polls.get('p3') ?? 0, comfy.seen.interrupted], [3, 2, 0, []]);
   assert.ok((await busy).bytes.length > 0, 'the picture on the card was drawn and delivered');
 });
 
@@ -704,11 +734,11 @@ function acceptSocket(request: IncomingMessage, socket: Duplex) {
 // `executing` with no node. `socket` is what the socket does: 'open' hears whatever is sent once it is open; 'late'
 // opened after the job began and missed its start; 'silent' is accepted and never spoken to; 'closing' hears the
 // start and is hung up on; 'refused' is answered 404. `openMs` holds the handshake back that long, and a job submitted
-// meanwhile is told nothing of its start, as by the real server. `quietEnd` leaves out the last message, and `statsMs`
-// and `deleteMs` hold /system_stats and the delete back that long. Every /history request that is not one `drawOne`
-// may make, a read or a delete of one job by its id, is kept in `bare`.
+// meanwhile is told nothing of its start, as by the real server. `quietEnd` leaves out the last message, and `statsMs`,
+// `deleteMs` and `viewMs` hold /system_stats, the delete and the picture back that long. Every /history request that
+// is not one `drawOne` may make, a read or a delete of one job by its id, is kept in `bare`.
 function pushingComfy(options: { socket?: 'open' | 'late' | 'silent' | 'closing' | 'refused'; openMs?: number;
-  outcome?: 'success' | 'error' | 'interrupted'; quietEnd?: boolean; jobMs?: number; statsMs?: number; deleteMs?: number } = {}) {
+  outcome?: 'success' | 'error' | 'interrupted'; quietEnd?: boolean; jobMs?: number; statsMs?: number; deleteMs?: number; viewMs?: number } = {}) {
   const mode = options.socket ?? 'open';
   const records = new Map<string, object>();
   const files = new Set<string>();
@@ -790,6 +820,7 @@ function pushingComfy(options: { socket?: 'open' | 'late' | 'silent' | 'closing'
         return json({});
       }
       if (url.pathname === '/view' && files.has(String(url.searchParams.get('filename')))) {
+        await delay(options.viewMs ?? 0);
         response.setHeader('content-type', 'image/png');
         return response.end(pngWithMetadata('{"prompt":"PRIVATE_SCENE_TEXT"}'));
       }
@@ -847,6 +878,17 @@ test('the socket\'s word that a job is over ends the wait at once, and a socket 
   const heard = await drawOne({ baseUrl: slowUrl, timeoutMs: 5000 }, defaultWorkflow(), { pollMs: 10000, waitMs: 20000 });
   assert.equal(heard.timing?.loaderCacheMiss, true);
   assert.deepEqual(slow.seen.reads, ['p1']);
+  // Astra's cases, each well inside the socket's 300 ms: a cancel, the end of a stage, and the caller's whole wait.
+  // Each ends the wait for the socket then, and nothing is submitted.
+  const stop = new AbortController();
+  setTimeout(() => stop.abort(), 20);
+  for (const [comfy, waitMs, code] of [[{ signal: stop.signal }, 20000, 'cancelled'], [{ end: AbortSignal.timeout(80) }, 20000, 'out_of_time'],
+    [{}, 80, 'image_timeout']] as const) {
+    const began = performance.now();
+    await assert.rejects(drawOne({ baseUrl: slowUrl, timeoutMs: 5000, ...comfy }, defaultWorkflow(), { pollMs: 10000, waitMs }), { code });
+    assert.ok(performance.now() - began < 200, `${code}: ${Math.round(performance.now() - began)} ms`);
+  }
+  assert.equal(slow.seen.posted.length, 1, 'nothing reached the card after the first picture');
 });
 
 test('a socket that opened after the job began is not taken at its word for the outputs: the record is read', async t => {

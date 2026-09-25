@@ -323,16 +323,34 @@ export function applyToWorkflow(graph: Graph, values: WorkflowValues): Graph {
 
 // `signal` ends the wait from outside: the bot draws while the reader reads, and a reader who sends the next
 // message is not waiting for this picture any more (local/picture.ts). The batch harness passes none.
-export type Comfy = { baseUrl: string; timeoutMs: number; signal?: AbortSignal };
+// `end` is the end of an identity stage (`DrawOptions.until`), a signal that fires then: nothing is asked of the server
+// after it, and every request, the body of its answer included, is cut there. `reserve` fires `CLEANUP_RESERVE_MS`
+// later and bounds what a job already submitted still needs: its id, and its own stop and delete (`afterAbort`). The
+// bot passes neither.
+export type Comfy = { baseUrl: string; timeoutMs: number; signal?: AbortSignal; end?: AbortSignal; reserve?: AbortSignal };
 type HistoryEntry = { status?: { completed?: boolean; status_str?: string; messages?: unknown };
   outputs?: Record<string, { images?: { filename: string; subfolder: string; type: string }[] }> };
-// The same server without the caller's signal: what stops an abandoned job must still reach the card after that
-// signal has fired, or the card would go on drawing a picture nobody waits for (`stopJob`).
-const afterAbort = (comfy: Comfy): Comfy => ({ baseUrl: comfy.baseUrl, timeoutMs: comfy.timeoutMs });
+// A minute: the id of a job submitted just before the end, then its stop and the delete of its record, on a card
+// that answers at all, take a few seconds of it. `--until` stands five minutes before the rental's own deadline, so
+// this ends four minutes before it (docs/illustrations-plan.md, "One hour, ended on the wall clock").
+const CLEANUP_RESERVE_MS = 60000;
+// The same server without the caller's signal, and with the reserve for its end: what stops an abandoned job must
+// still reach the card after either has fired, or the card would go on drawing a picture nobody waits for (`stopJob`).
+const afterAbort = (comfy: Comfy): Comfy => ({ baseUrl: comfy.baseUrl, timeoutMs: comfy.timeoutMs, end: comfy.reserve });
+const any = (...signals: (AbortSignal | undefined)[]) => {
+  const set = signals.filter(one => one !== undefined);
+  return set.length ? AbortSignal.any(set) : undefined;
+};
+// A caller who has let go, or a stage whose end has come, as the error that says which. Nothing is asked of the
+// server after either.
+function halt(comfy: Comfy) {
+  if (comfy.signal?.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
+  if (comfy.end?.aborted) throw Object.assign(new Error('out_of_time'), { code: 'out_of_time' });
+}
 
 const call = async (comfy: Comfy, path: string, init?: RequestInit) => {
-  const timeout = AbortSignal.timeout(comfy.timeoutMs);
-  const response = await fetch(comfy.baseUrl + path, { ...init, signal: comfy.signal ? AbortSignal.any([comfy.signal, timeout]) : timeout });
+  halt(comfy);
+  const response = await fetch(comfy.baseUrl + path, { ...init, signal: any(AbortSignal.timeout(comfy.timeoutMs), comfy.signal, comfy.end) });
   if (!response.ok) throw Object.assign(new Error('comfy_http_error'), { code: 'comfy_http_error', httpStatus: response.status });
   return response;
 };
@@ -634,14 +652,21 @@ type DrawOneOptions = { pollMs?: number; waitMs?: number; sampleEvery?: number; 
 // submitted, because a picture without the start of its job has no account of where its time went.
 const SOCKET_OPEN_MS = 2000;
 export async function drawOne(comfy: Comfy, graph: Graph, options: DrawOneOptions = {}) {
+  // A caller who has let go, or a stage whose end has come, puts nothing on the card: that is asked before the socket
+  // opens and again once it has, and either ends the wait for it at once. Nothing is awaited between the second
+  // asking and the submit.
+  halt(comfy);
   const watch = watchJob(comfy);
-  const began = performance.now();
+  const began = performance.now(), waitMs = options.waitMs ?? 600000;
   try {
-    const open = await Promise.race([watch.opened, delay(SOCKET_OPEN_MS, false, { ref: false })]);
+    // `undefined` once the wait for the socket has run out.
+    const open = await Promise.race([watch.opened,
+      delay(Math.min(SOCKET_OPEN_MS, waitMs), undefined, { ref: false, signal: any(comfy.signal, comfy.end) }).catch(() => undefined)]);
+    halt(comfy);
+    // The wait is the caller's, and the socket has had its share of it: a wait the socket used up submits nothing.
+    if (open === undefined && waitMs <= SOCKET_OPEN_MS) throw Object.assign(new Error('image_timeout'), { code: 'image_timeout' });
     if (!open && options.requireSocket) throw Object.assign(new Error('comfy_socket_unavailable'), { code: 'comfy_socket_unavailable' });
-    // The wait is the caller's, and the socket has had its share of it.
-    const waitMs = (options.waitMs ?? 600000) - Math.round(performance.now() - began);
-    return await drawWatched(comfy, graph, watch, { ...options, waitMs });
+    return await drawWatched(comfy, graph, watch, { ...options, waitMs: waitMs - Math.round(performance.now() - began) });
   } finally { watch.close(); }
 }
 
@@ -651,10 +676,12 @@ async function drawWatched(comfy: Comfy, graph: Graph, watch: Watch, options: Dr
   // 0.3-0.6 s. Half a second does both, and the retries below still span the seconds they always did.
   const pollMs = options.pollMs ?? 500;
   const started = performance.now();
-  // The submit itself is never cut short, however early the caller lets go: a job the card has taken and we have no
-  // id for is a job nobody can stop, and it would draw a whole picture for a reader who has already left. It is one
-  // request to loopback, and the abort is answered on the next line, with an id in hand. It is not repeated either:
-  // a submit that failed may still have reached the card.
+  const stop = any(comfy.signal, comfy.end);
+  // A submit once sent is never cut short, however early the caller lets go or the stage ends: a job the card has
+  // taken and we have no id for is a job nobody can stop, and it would draw a whole picture for a reader who has
+  // already left. It is one request to loopback, bounded by the reserve alone, and the abort or the end is answered
+  // at the top of the loop below, with an id in hand. It is not repeated either: a submit that failed may still have
+  // reached the card.
   const submitted = await (await call(afterAbort(comfy), '/prompt', { method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ prompt: freshPreviews(graph), client_id: watch.clientId }) })).json() as { prompt_id?: string; error?: unknown };
   const promptId = submitted.prompt_id;
@@ -680,9 +707,9 @@ async function drawWatched(comfy: Comfy, graph: Graph, watch: Watch, options: Dr
     let entry: HistoryEntry | undefined;
     let failures = 0;
     for (let poll = 0; ; poll++) {
-      // Asked before the poll rather than after it: a caller who has let go is answered without another request,
-      // and `stopJob` below takes the card off the job it is drawing.
-      if (comfy.signal?.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
+      // Asked before the poll rather than after it: a caller who has let go, or a stage that has ended, is answered
+      // without another request, and `stopJob` below takes the card off the job it is drawing.
+      halt(comfy);
       const heard = watch.heard;
       // A socket that heard the whole job succeed has its record already; the poll is for everything else.
       entry = watch.record(promptId);
@@ -693,9 +720,9 @@ async function drawWatched(comfy: Comfy, graph: Graph, watch: Watch, options: Dr
         failures = 0;
       } catch (error) {
         // A poll that did not arrive is asked again; one the server answered with an error status is its answer.
-        if (comfy.signal?.aborted || (error as { code?: unknown }).code === 'comfy_http_error' || ++failures > POLL_RETRIES
+        if (stop?.aborted || (error as { code?: unknown }).code === 'comfy_http_error' || ++failures > POLL_RETRIES
           || performance.now() > deadline) throw error;
-        if (watch.heard === heard) await watch.wait(pollMs, comfy.signal);
+        if (watch.heard === heard) await watch.wait(pollMs, stop);
         continue;
       }
       entry = seen[promptId];
@@ -705,7 +732,7 @@ async function drawWatched(comfy: Comfy, graph: Graph, watch: Watch, options: Dr
       if (poll % (options.sampleEvery ?? 4) === 0) sampleVram();
       // News that came while the poll was out is acted on at once. A poll is never cut short for it: an aborted
       // request takes its connection with it, and `/view` would pay for a new one.
-      if (watch.heard === heard) await watch.wait(pollMs, comfy.signal);
+      if (watch.heard === heard) await watch.wait(pollMs, stop);
     }
     const image = Object.values(entry.outputs ?? {}).flatMap(output => output.images ?? [])[0];
     if (!image || entry.status?.status_str === 'error') {
@@ -724,11 +751,12 @@ async function drawWatched(comfy: Comfy, graph: Graph, watch: Watch, options: Dr
     return { bytes: stripPngMetadata(bytes), totalMs: Math.round(performance.now() - started), viewMs, vram: memory.vram, memory,
       timing: watch.timing(promptId, graph) };
   } catch (error) {
-    // The wait ran out or the caller let go, but the card did not stop by itself: see `stopJob`. A fetch cut by the
-    // signal arrives as an AbortError, so what the signal says is what this failure is called, whatever was thrown.
-    const cancelled = comfy.signal?.aborted === true;
-    if (cancelled || (error as { code?: string }).code === 'image_timeout') await stopJob(afterAbort(comfy), promptId, pollMs);
-    throw cancelled ? Object.assign(new Error('cancelled'), { code: 'cancelled' }) : error;
+    // The wait ran out, the caller let go or the stage ended, but the card did not stop by itself: see `stopJob`,
+    // which the reserve bounds. A fetch cut by a signal arrives as an AbortError, so what the signals say is what
+    // this failure is called, whatever was thrown: the picture that was on its way down when the end came too.
+    if (stop?.aborted || (error as { code?: string }).code === 'image_timeout') await stopJob(afterAbort(comfy), promptId, pollMs);
+    halt(comfy);
+    throw error;
   } finally {
     // The server keeps the prompt, the workflow and the outputs of every job it has run until history is cleared.
     // This clears the job record, and that is all the API can clear: the file the node wrote stays in ComfyUI's own
@@ -749,10 +777,14 @@ export type DrawOptions = {
   // `timeoutMs` is one HTTP request's own timeout; `waitMs` is how long a picture may take, which is a different
   // number by two orders of magnitude and used to be the same one.
   negative: string; timeoutMs: number; waitMs: number; pollMs?: number; workflow?: string;
-  // The time budget: `minutes` from the start, checked between cells, or `until`, the end of the rental on the wall
-  // clock (milliseconds), which no wait goes past. With `estimate`, what a cell of this many portraits is expected to
-  // take, a cell that cannot end by `until` is not submitted, and a plan whose cells cannot all end by then is not
-  // begun: the identity set gets no verdict unless it is whole, so a half of it would buy nothing.
+  // The time budget: `minutes` from the start, checked between cells, or `until`, the end of the stage on the wall
+  // clock (milliseconds). Nothing is sent to the server after `until`, and every wait and request ends there, the
+  // socket's opening and a picture's download included (`Comfy`'s `end`). A cell whose picture and measurements are
+  // not in hand by then is cut by the clock: it stays undrawn, nobody's failure, and the run stops. A job already
+  // submitted gets `CLEANUP_RESERVE_MS` more for its id and its own stop and delete, and nothing else does. With
+  // `estimate`, what a cell of this many portraits is expected to take, a cell that cannot end by `until` is not
+  // submitted, and a plan whose cells cannot all end by then is not begun: the identity set gets no verdict unless it
+  // is whole, so a half of it would buy nothing.
   minutes?: number; until?: number; estimate?: (references: number, first: boolean) => number;
   // The portraits file of the identity run, read for the paths it names; see `portraitsFor`.
   references?: string; log?: (event: object) => void;
@@ -830,14 +862,18 @@ async function serverPins(comfy: Comfy, strict: boolean): Promise<Record<string,
     keep('card', stats.devices?.[0]?.name);
   } catch { /* judged below */ }
   if (strict && !SERVER_PINS.every(key => pins[key])) {
-    throw new Error('The server did not say what it is on /system_stats (ComfyUI, PyTorch and the card), and a pinned run is pinned to that too');
+    throw new Error(comfy.end?.aborted ? 'The end (--until) came before the server said what it is; nothing is drawn'
+      : 'The server did not say what it is on /system_stats (ComfyUI, PyTorch and the card), and a pinned run is pinned to that too');
   }
   return pins;
 }
 
 export async function draw(options: DrawOptions): Promise<BatchIndex> {
   const log = options.log ?? (() => undefined);
-  const comfy: Comfy = { baseUrl: options.comfy, timeoutMs: options.timeoutMs };
+  // The end as signals, on the monotonic clock from here on: `end` at `until`, `reserve` a minute after it.
+  const at = (ms: number) => AbortSignal.timeout(Math.max(0, Math.round(ms - Date.now())));
+  const comfy: Comfy = { baseUrl: options.comfy, timeoutMs: options.timeoutMs,
+    ...(options.until === undefined ? {} : { end: at(options.until), reserve: at(options.until + CLEANUP_RESERVE_MS) }) };
   // Everything below is read and checked before the run directory is touched: a resume that is refused leaves the
   // experiment exactly as it was, and the first write is after the last check.
   const prompts = readFileSync(join(resolve(options.prompts), 'prompts.json'));
@@ -982,8 +1018,6 @@ export async function draw(options: DrawOptions): Promise<BatchIndex> {
     const first = firstOf(cell);
     const spent = () => { index.stopped = 'budget'; log({ event: 'budget_spent', drawn: index.pictures.length }); };
     if (Date.now() + (options.estimate?.(sent.length, first) ?? 0) > until) { spent(); break; }
-    // With an end on the wall clock no wait goes past it, and a cell cut there is the budget's, not a failure of its own.
-    let waitMs = options.waitMs;
     try {
       let bound: string[] | undefined;
       let uploadMs = 0;
@@ -1005,12 +1039,12 @@ export async function draw(options: DrawOptions): Promise<BatchIndex> {
       const filled = applyToWorkflow(graph, { checkpoint: cell.checkpoint, prompt, negative: options.negative,
         seed: cell.seed, steps, sampler, scheduler, width, height, cfg, references: bound });
       const before = await logLines(comfy);
-      if (options.until !== undefined) waitMs = Math.min(waitMs, options.until - Date.now());
-      if (waitMs <= 0) { spent(); break; }
-      const drawn = await drawOne(comfy, filled, { pollMs: options.pollMs, waitMs, sampleEvery: 1, requireSocket: options.requireSocket });
+      const drawn = await drawOne(comfy, filled, { pollMs: options.pollMs, waitMs: options.waitMs, sampleEvery: 1, requireSocket: options.requireSocket });
       // The last sample of video memory lands after the picture does, and this cell's row records it.
       await settled();
       const partialModelLoadEvents = partialLoadsSince(before, await logLines(comfy));
+      // A picture is the cell's only with its measurements, all in hand by the end.
+      if (comfy.end?.aborted) { spent(); break; }
       const counted = options.tokens?.(prompt, sent.length);
       mkdirSync(join(directory, 'pictures', safeName(cell.checkpoint)), { recursive: true, mode: 0o700 });
       writeFileSync(join(directory, file), drawn.bytes, { mode: 0o600 });
@@ -1035,8 +1069,9 @@ export async function draw(options: DrawOptions): Promise<BatchIndex> {
       const code = /^[a-z_]{1,50}$/.test(raw) ? raw : 'image_failed';
       const { httpStatus } = safeErrorDetails(error);
       const oom = (error as { oom?: unknown }).oom === true;
-      // A wait cut short by the end is not this cell's result: the cell is left undrawn, as one never begun is.
-      if (code === 'image_timeout' && waitMs < options.waitMs) { spent(); break; }
+      // Whatever failed once the end had come was cut by it, an upload or a download as much as a wait, and is not
+      // this cell's result: the cell is left undrawn, as one never begun is.
+      if (comfy.end?.aborted) { spent(); break; }
       index.failures = index.failures.filter(failure => !isCell(failure, cell));
       index.failures.push({ ...cell, code, ...(httpStatus === undefined ? {} : { httpStatus }), ...(oom ? { oom } : {}),
         ...(references ? { references: sent.length } : {}) });
