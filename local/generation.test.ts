@@ -240,6 +240,8 @@ test('one coverage supplement targets only missed scenes and commits complete me
   ];
   for (const [label, miss, drafted, sources] of rows) {
     const f = fixture(t);
+    // Far below the threshold: a compaction asked for by hand does not wait for it.
+    f.config.compactAtTokens = 54000;
     const before = f.store.read('1');
     const requests: string[][] = [];
     answer(f, (data, call, request) => {
@@ -256,15 +258,19 @@ test('one coverage supplement targets only missed scenes and commits complete me
       }
       return { usage: { inputTokens: 1000, outputTokens: 100, totalTokens: 1100 } };
     });
-    await f.compact();
+    const done = await f.compact();
     assert.deepEqual(requests, [requests[0], [requests[0][1]]], label);
-    const story = f.store.read('1').stories[f.job.storyId];
+    const state = f.store.read('1');
+    const story = state.stories[f.job.storyId];
     const memories = Object.values(story.memories);
     assert.equal(memories.length, 1, label);
     assert.deepEqual(memories[0].delta.facts.map(fact => fact.source), sources.map(indexes => indexes.map(index => requests[0][index])), label);
     const { usage, repairScenes } = memories[0];
     assert.deepEqual([repairScenes, usage!.inputTokens, usage!.outputTokens, usage!.totalTokens], [1, 2000, 200, 2200], label);
     assert.deepEqual(story.nodes, before.stories[f.job.storyId].nodes, label);
+    // Only memory changed: the job keeps its lock and the branch its head, and no scene was asked for.
+    assert.deepEqual([done.scenes, done.facts, state.job?.id, story.branches[f.job.branchId].head, f.calls.length],
+      [3, sources.length, f.job.id, f.job.head, 2], label);
     assert.deepEqual(['pre-compaction', 'compaction'].map(kind => Object.values(story.checkpoints).filter(cp => cp.kind === kind).length), [1, 1], label);
     assert.ok(f.events.some(e => e.repairScenes === 1 && e.stage === 'extracting'), label);
     assert.equal(f.events.at(-1)!.stage, 'done', label);
