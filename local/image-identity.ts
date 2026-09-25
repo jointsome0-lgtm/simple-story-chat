@@ -719,7 +719,7 @@ async function main(args: string[]) {
     const until = Number(values.until) * 1000, wait = Number(values.wait), timeout = Number(values.timeout);
     if (!Number.isInteger(until) || until <= Date.now() || until > Date.now() + 3 * 3600000 || !Number.isInteger(wait) || wait < 10
       || !Number.isInteger(timeout) || timeout < 10) {
-      throw new Error('Use: portraits|draw [--smoke] --until <epoch seconds, before the card is deleted> [--dir illustrations/identity] [--wait 300] [--timeout 60] [--tokenizers tokenizers] [--comfy http://127.0.0.1:8188]');
+      throw new Error('Use: portraits|draw [--smoke] --until <epoch seconds, five minutes before the card\'s end> [--dir illustrations/identity] [--wait 300] [--timeout 60] [--tokenizers tokenizers] [--comfy http://127.0.0.1:8188]');
     }
     const stage = command === 'portraits' ? 'portraits' : values.smoke ? 'smoke' : 'main';
     const index = await drawStage({ stage, dir, comfy: comfyUrl(values.comfy!), until,

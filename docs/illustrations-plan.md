@@ -453,8 +453,8 @@ another prompts file or other pins. It checks all of that before it writes anyth
 run directory byte for byte as it was. A run is pinned to:
 
 - what the card was verified to run: the ComfyUI revision and the SHA256 of each Qwen file, from the bootstrap's own
-  record (the runbook below). A `--checkpoint` that record does not list is pinned as `unverified <name>`, never
-  under the standard transformer's hash;
+  record (the runbook below). There is no checkpoint to choose: every stage draws with the transformer that record
+  verified, and the tool refuses a `--checkpoint`;
 - the portraits' recipe;
 - the graph's cache device and resize, the canvas, and the size a portrait reaches the encoder at;
 - the set, the portraits and the seeds;
@@ -490,9 +490,10 @@ the encoder to read, and no promise of less compute: a reference adds a vision p
 
 **The text-to-image control.** Arm A is not the bot, so the graph the bot draws with is drawn too, on the same
 1280x704 canvas: frames 1, 2 and 3 at the first seed, picked before the run by the rule the arms follow, so one first
-frame and two after it. It is drawn once, after the main set, with nothing chosen among. The report gives it as cost
-only, outside every gate: its first frame, and its warm median against A's warm frames of the same scenes. The bot's
-own 1280x720 is skipped: one more canvas for one more number.
+frame and two after it. It is drawn once, with nothing chosen among, and only after a complete main set: a main set
+with a failed cell gets none, and a control the end cut short is not resumed, which the report says. The report gives
+it as cost only, outside every gate: its first frame, and its warm median against A's warm frames of the same scenes.
+The bot's own 1280x720 is skipped: one more canvas for one more number.
 
 **Judging.** `bundles` writes one bundle per arm and seed under `review/`, and only for a run that has a verdict
 (below). A transition compares two frames of one arm, and a session shown the arms side by side would judge the arms.
@@ -538,7 +539,9 @@ unscored, never passed.
    not dilute the explicit changes.
 4. **Time.** The frames counted are the arm's warm frames, each matched with A's warm frame of the same scene and
    seed. Over them, the arm's median time is at most 1.5× A's, and its slowest at most 2× A's slowest. The portraits,
-   the first frames and the control are shown, not counted here; with no matched frame the gate is unmeasured.
+   the first frames and the control are shown, not counted here. With no matched frame the gate is unmeasured, and
+   so it is with one frame of the arm or of A whose job the socket did not hear from its start: that frame is neither
+   warm nor cold, and leaving it out could leave out the slowest.
 5. **Memory.** No OOM. Every frame of four references is drawn, sampled while it ran, and leaves at least 2 GiB of
    the card free at its sampled peak. A frame of four that failed or was never sampled fails the gate. RAM and partial
    loads are shown, not gated: what they cost is time, and gate 4 counts time.
@@ -563,15 +566,26 @@ Anything less, and the tool refuses the main set in that directory: the measurem
 go. A fix, such as the cache node off `auto` or smaller portraits, is another run with its own pins.
 
 **One hour, ended on the wall clock.** The card is rented only with the owner's explicit consent and under
-[the owner's rules](gpu.md#while-the-cards-are-paid-for), for one hour. `gpu/rent.mjs --hours 1` sets the guard of
-[trial-onstart.sh](../gpu/trial-onstart.sh), which deletes the machine then, whatever is running, and which nothing
-extends. The harness takes an absolute end, `--until`, set five minutes before the guard's deadline as read off the
-card. No stage waits for a job past it. A job the end cuts is nobody's failure: its cell stays undrawn, and the run
-stops, incomplete. Once the smoke has timed its frames, no cell is submitted that cannot end by `--until`. A cell's
-time is taken from the smoke's slowest frames of one and of four portraits, on a straight line between them, plus a
-quarter and three seconds. The main set, and then the control, is priced whole that way before it begins. One that
-cannot end by `--until` is not begun, and the run ends incomplete rather than half-drawn. The rental is never
-extended.
+[the owner's rules](gpu.md#while-the-cards-are-paid-for). `gpu/rent.mjs --hours 1` sets the guard of
+[trial-onstart.sh](../gpu/trial-onstart.sh), which deletes the machine an hour after the box started, whatever is
+running, and which nothing extends. The guard can fail, though. It does not start without the container's key, `curl`
+and `flock`; it retries a refused delete forever; it takes its own delete's success for the outcome; and without ssh
+nobody can tell it "we're done". So the rental also has an end outside the box, below, and the owner is asked for the
+whole paid time, from the creation to a destroy read back as done. For one hour that is up to 1 h 20 min at the
+offer's price: the guard's hour, the quarter of an hour the box is given to start before the guard's clock does, and
+five minutes for the destroy to be read back. The traffic comes on top. `gpu/rent.mjs --hours 1 --qwen only` prices
+each offer that way, by Qwen's files alone, and its dry run prints the sum as `session`.
+
+The harness takes an absolute end, `--until`: five minutes before the earlier of the guard's deadline and the
+operator's own. Nothing is sent to the card after it, and every wait and request of a stage ends there: the socket's
+opening, an upload, a poll, a picture's download. A picture that is not in hand with its measurements by then is cut,
+even one the card has finished. Its cell stays undrawn and is nobody's failure, and the run stops, incomplete. A job
+already submitted gets one minute more, for its id, its stop and the delete of its record, and nothing else does; that
+minute ends four minutes before the guard. Once the smoke has timed its frames, no cell is submitted that cannot end
+by `--until`. A cell's time is taken from the smoke's slowest frames of one and of four portraits, on a straight line
+between them, plus a quarter and three seconds. The main set is priced whole that way before it begins, and so is the
+control after it. One that cannot end by `--until` is not begun, and the run ends incomplete rather than half-drawn.
+The rental is never extended.
 
 What the hour holds, counted from the guard's start, at the floor the rent filter asks of an offer
 (`inet_down` ≥ 300 Mbit/s, [rent-plan.ts](../local/rent-plan.ts)) and at the bootstrap's own floor of 200:
@@ -584,20 +598,51 @@ What the hour holds, counted from the guard's start, at the floor the rent filte
 | the install: the ComfyUI checkout, pip | - | - | while the files download; any time beyond them is not measured |
 | the verification, the server, the tunnel and the card's record | 2 | 2 | not measured |
 | 57 cells: 6 portraits, the smoke's 6, the main set's 42, the control's 3 | 41 | 36 | what is left |
-| the margin before the guard: the last report, "we're done" | 5 | 5 | `--until` |
+| the margin before the guard: a submitted job's minute, the last report, "we're done" | 5 | 5 | `--until` |
 
-That is about 43 seconds a cell at 300 Mbit/s and 38 at 200, with the first loads of the models inside it. Whether a
-25-step frame of four portraits fits that is the first thing the smoke answers. If it does not, the main set is
-refused on the smoke's own numbers. The hour has then bought the smoke's times, which say what a longer rental would
-need, and that rental is the owner's decision, never an extension.
+That is about 43 seconds a cell at 300 Mbit/s and 38 at 200, with the first loads of the models inside it. The rows
+not measured are guesses, not margin: if they run longer, the cells get less. Whether a 25-step frame of four
+portraits fits that is the first thing the smoke answers. If it does not, the main set is refused on the smoke's own
+numbers. The hour has then bought the smoke's times, which say what a longer rental would need, and that rental is
+the owner's decision, never an extension.
+
+**The operator** is the Claude session that runs the hour. It keeps the card from the creation until its destroy is
+read back as done. During the hour it only runs and watches: the code and its tests are ready before the rental, so a
+failure that needs new code ends the hour. The owner's rules apply as written, the 10-minute idle rule included.
+
+- `rented` prints the instance's ID and `destroyBy`: the creation, the guard's hour and the quarter of an hour, on the
+  operator's clock. That is the operator's own deadline, fixed at the creation.
+- `npm run gpu:rent -- --show ID` reads `present` at once, or the termination follows. It is the path to the rental
+  that needs nothing on the box: the account's key, from `.env.gpu` through `node --env-file`, never printed.
+- As soon as ssh answers, and no later than a quarter of an hour after the creation, the guard is checked. The
+  runbook's command prints the guard's deadline only while the guard holds its lock. Nothing printed, or a deadline
+  later than `destroyBy`, is a failed guard, and the termination follows at once.
+
+**The termination** is one procedure for every ending: a whole run, a failed smoke, a set that cannot end in time, a
+bootstrap or ssh that failed, a failed guard, and `destroyBy` itself, which starts it whatever the card is doing.
+
+1. "We're done" over ssh, if ssh works: the guard deletes the machine within ten seconds.
+2. `npm run gpu:rent -- --destroy ID`, with the account's key, at once. It reads the instance every ten seconds for
+   five minutes. The first minute is the guard's and only reads; after it, while the instance is not gone, it is
+   deleted with the account's key.
+3. `destroy_confirmed` ends the rental. Anything else, `destroy_unconfirmed`, `destroy_refused` or no answer, goes to
+   the owner at once, with the ID, as a deletion not confirmed that may still be billing, never as "the hour is over".
+
+A stop is not a destroy: a stopped instance keeps its disk, and Vast bills the disk. Nor is the destroy's own
+`success` a read-back: only a read that says the instance is gone ends the procedure.
 
 The runbook, in its order:
 
 ```sh
 npm run image:identity -- dry-run    # before renting: all of it against a fake ComfyUI, with made-up answers
 npm run image:identity -- set        # the set and the portraits' prompts, in illustrations/identity
-SIMPLE_CHAT_RENT_DRY_RUN=1 node --env-file-if-exists=.env.gpu gpu/rent.mjs --lane pictures --hours 1
-node --env-file-if-exists=.env.gpu gpu/rent.mjs --lane pictures --hours 1    # with the owner's consent
+SIMPLE_CHAT_RENT_DRY_RUN=1 npm run gpu:rent -- --lane pictures --hours 1 --qwen only    # each offer's `session`
+npm run gpu:rent -- --lane pictures --hours 1 --qwen only    # with the owner's consent; `rented` names ID and destroyBy
+npm run gpu:rent -- --show ID    # present, at once
+destroy_by=DESTROY_BY            # from `rented`
+# As soon as ssh answers. Nothing printed, or a deadline later than destroy_by, is a failed guard: terminate now.
+guard=$(ssh simple-chat-vast 'flock -n /root/.simple-chat-trial-guard.lock true || cat /root/.simple-chat-trial-deadline')
+end=$(( (guard < destroy_by ? guard : destroy_by) - 300 ))    # with no guard, a past end that every stage refuses
 ssh simple-chat-vast 'mkdir -p /workspace/simple-chat/gpu'
 tar -cf - -C gpu . | ssh simple-chat-vast 'tar -xf - -C /workspace/simple-chat/gpu'
 ssh simple-chat-vast 'SIMPLE_CHAT_IMAGE_QWEN=only bash /workspace/simple-chat/gpu/image-bootstrap.sh'
@@ -606,13 +651,14 @@ ssh -t simple-chat-vast \
   'SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 bash /workspace/simple-chat/gpu/image-serve.sh'
 bash gpu/tunnel.sh --pictures-only simple-chat-vast
 ssh simple-chat-vast cat /workspace/simple-chat-gpu/image-verified.txt > illustrations/identity/card.txt
-end=$(( $(ssh simple-chat-vast cat /root/.simple-chat-trial-deadline) - 300 ))
 npm run image:identity -- portraits --until "$end"
 npm run image:identity -- draw --smoke --until "$end"
 npm run image:identity -- report
 npm run image:identity -- draw --until "$end"    # the main set, then the control
 npm run image:identity -- report
-ssh simple-chat-vast 'date +%s > /root/.simple-chat-trial-deadline'    # we're done: the guard deletes the machine
+# The termination, here and after every other ending:
+ssh simple-chat-vast 'date +%s > /root/.simple-chat-trial-deadline'    # we're done, if ssh works
+npm run gpu:rent -- --destroy ID    # destroy_confirmed; anything else goes to the owner at once
 npm run image:identity -- bundles    # no card needed from here on
 npm run image:identity -- report     # once answers/ holds every bundle
 ```
@@ -620,8 +666,9 @@ npm run image:identity -- report     # once answers/ holds every bundle
 `image-verified.txt` is what the bootstrap wrote once every file was verified: the ComfyUI revision it checked out
 and each file's SHA256 as computed on the box. Every drawing stage refuses to start without it, or with a record that
 differs from the manifest, and pins the run to it. "We're done" writes the present time into the guard's deadline.
-The guard reads that file again every ten seconds and takes an earlier time, never a later one; check in Vast that
-the instance is gone. Everything lives in one directory, `illustrations/identity` unless `--dir` names another:
+The guard reads that file again every ten seconds and takes an earlier time, never a later one. The drawing stages
+also take `--comfy`, `--wait`, `--timeout` and `--tokenizers`, whose defaults the runbook keeps. Everything lives in
+one directory, `illustrations/identity` unless `--dir` names another:
 
 - `set/` and `portrait-prompts/`, the prompts;
 - `card.txt`, the card's record;
@@ -647,6 +694,7 @@ the contract the harness talks to, with delays, failures and telemetry set by ha
 
 **Not verified without a card**, in the order it would bite:
 
+- how long the image takes to pull and the box to start, which the quarter of an hour before `destroyBy` allows for;
 - that the int8 transformer and the int8 encoder load through `UNETLoader` with `weight_dtype: default` and
   `CLIPLoader` with `type: qwen_image` (read from the pinned source, never run);
 - that `SIMPLE_CHAT_IMAGE_QWEN=only` prepares and serves a box. It was checked dry: the bootstrap's `--dry-run`, its
@@ -657,7 +705,12 @@ the contract the harness talks to, with delays, failures and telemetry set by ha
 - whether an upright portrait on a wide canvas keeps a person as well as a wide portrait would;
 - what a frame of the text-to-image graph costs against A's, which the control prices;
 - whether the websocket messages, `/system_stats` and the log ring are what [fake-comfy.ts](../local/fake-comfy.ts)
-  says they are, from the pinned source.
+  says they are, from the pinned source;
+- that the account's key may destroy an instance, which `--destroy` learns only when it is used;
+- what Vast answers to a read of a destroyed instance. `--destroy` takes only a 404, or a 200 whose record is null,
+  for gone, so any other answer ends as a deletion not confirmed and goes to the owner. The fake API of
+  [rent-plan.test.ts](../local/rent-plan.test.ts) answers both ways, and a Vast that answers neither would raise a
+  false alarm, never a false all-clear.
 
 The fake's numbers are made up and say nothing about the card.
 
