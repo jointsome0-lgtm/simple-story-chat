@@ -67,7 +67,8 @@ test('configured CLI deadline terminates a stalled process and reports timeout; 
     setTimeout(() => abort(controller), 30);
     return controller.signal;
   };
-  // The kinds of abort a caller passes down (local/abort.test.ts): the caller's own timeout is a cancellation here too.
+  // Every kind of abort a caller passes down ends the run as cancelled: a bare one, a cancellation, a preempted
+  // background job, and the caller's own timeout, which is not the CLI's deadline.
   const stops: [string, number, (() => AbortSignal) | undefined, string][] = [
     ['the deadline', 80, undefined, 'timeout'],
     ['abort()', 5000, abortLater(c => c.abort()), 'cancelled'],
