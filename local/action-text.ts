@@ -222,11 +222,13 @@ export const readGpuEnv = (file = join(ROOT, '.env.gpu')): Env => {
   try { return parseEnv(readFileSync(file, 'utf8')); } catch { throw new Error('Cannot read .env.gpu'); }
 };
 
-// simple-serving's smoke, by its own record: the JSON lines its `--after` run prints, after the stop and the resume
-// (simple-serving's README, "The first rental", step 6). Every probe of that run ran and passed, the lifecycle of the
-// resume and the privacy probe included: eleven of eleven. The text run starts on nothing less. What the record says
-// of versions is kept as pins, as names and digits only.
-export const SMOKE_PROBES = ['lifecycle', 'state', 'completion', 'fields', 'reasoning', 'finish', 'refusal', 'abort', 'schemas', 'counts', 'privacy'];
+// simple-serving's smoke, by its own record: the JSON lines of the one plain `smoke` the text card runs once `up` holds
+// its tunnel. That card is never stopped and resumed, since the stop and the resume are the rehearsal's on its own
+// small card (the owner, 2026-09-25), so the run has no --before or --after and no `lifecycle`: ten probes, from the
+// gateway's state to its privacy check. Every line passed, and privacy is among them, since a request's words in a log
+// of the card are the sealed scenes' leak; a record of an --after run, whose passed lifecycle line comes first, passes
+// too. The text run starts on nothing less. What the record says of versions is kept as pins, as names and digits only.
+export const SMOKE_PROBES = ['state', 'completion', 'fields', 'reasoning', 'finish', 'refusal', 'abort', 'schemas', 'counts', 'privacy'];
 export function smokeRecord(file: string) {
   const lines = readFileSync(file, 'utf8').split('\n').filter(line => line.trim()).map(line => {
     try { return JSON.parse(line) as { probe?: unknown; ok?: unknown; versions?: unknown }; } catch { return {}; }

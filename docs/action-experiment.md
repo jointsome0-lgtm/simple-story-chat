@@ -128,10 +128,11 @@ of the main count alone, never as success on the moments the set was built for.
 
 ## The text run
 
-It runs on the text card once simple-serving's first-rental smoke has passed whole, by the smoke's own record: its
-contract's section 15, step 1, with the stop, the read-back, the resume with a new boot, the probes and the count
-matrix, not a single completion. Never before. Every call is the bot's own, through the `simple-serving` adapter as
-class `internal`:
+It runs on the text card once simple-serving's smoke has passed whole on that card, by the smoke's own record: every
+probe of one plain run, from the gateway's state through the count matrix to its privacy check, not a single
+completion. Never before. The stop, the read-back and the resume with a new boot are the rehearsal's, on a card of its
+own ([the rentals](#the-rentals)); the text card is never stopped. Every call is the bot's own, through the
+`simple-serving` adapter as class `internal`:
 
 1. for a sharp story, its seed and action;
 2. the opening scene and the action scene, by `generateScene`, in the harness's own store;
@@ -556,16 +557,20 @@ Each card needs the owner's explicit «да», with its price and its end, under
 flow against scripted fakes of the adapter and against simple-serving's dev launcher, the pictures against
 [fake-comfy.ts](../local/fake-comfy.ts), the judging on made-up answers, and the boundary test.
 
-1. **The text card** is simple-serving's first rental, a 5090 rented as its README says for that rental, with its own
-   rules and the trial guard of its contract, which deletes it three hours after its first start. The operator reads
-   the guard's deadline before the stop and after the resume, and it must not change; the owner's deadline for the
-   first attempt is chosen apart, before the creation. The operator watches the card from its creation. The gateway's
-   smoke comes first, with its privacy check (its contract's section 15, step 2: a synthetic marker shows up in no log
-   of the engine, the proxy or the gateway), then the marker check of the sealed path, then the text run, and then the
-   card is deleted with `--destroy` and read back as gone. The gateway's stop is not an end: a stopped trial keeps its
-   disk, and its guard does not run.
-2. **The checklists** are written between the two cards, from the texts alone.
-3. **The picture card** is a 5090 from `npm run gpu:rent -- --lane pictures --qwen only --hours 3`. It is rented only
+1. **The rehearsal** is simple-serving's first rental: the cheapest card of 16 GB or more, from
+   `npm run gpu:rent -- --lane small`, with Gemma 4 E2B from simple-serving's branch `rehearsal-e2b`, which is never
+   merged. It runs that README's whole first-rental runbook, the stop, the resume and `smoke --after` included, and
+   none of this measurement's texts. It ends with `--destroy` read back as gone, as every card here does.
+2. **The text card** is a 5090 with the heretic, rented after the rehearsal and prepared as simple-serving's README
+   says for its card, with the trial guard of its contract, which deletes it three hours after its first start; the
+   owner's deadline for it is chosen apart, before the creation. The operator watches the card from its creation, and
+   it is never stopped and resumed. `up` comes first, then one plain smoke, without `--before` or `--after`, whose last
+   probe is its privacy check (its contract's section 15, step 2: a synthetic marker shows up in no log of the engine,
+   the proxy or the gateway), then the marker check of the sealed path, then the text run, and then the card is
+   deleted with `--destroy` and read back as gone. A stop is not an end: a stopped trial keeps its disk, and its guard
+   does not run.
+3. **The checklists** are written between the text card and the picture card, from the texts alone.
+4. **The picture card** is a 5090 from `npm run gpu:rent -- --lane pictures --qwen only --hours 3`. It is rented only
    when every prompt is assembled and counted and every checklist is stored, and it ends as the identity run's card
    ended ([termination](identity-experiment.md#termination)).
 
