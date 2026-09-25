@@ -537,6 +537,55 @@ test('the edit graph holds as many faces as a character sheet has people, so one
   assert.deepEqual(phasesOf(edit, [], 10), {});
 });
 
+// The action measurement hands some references on through a scale node (docs/action-experiment.md#drawing):
+// C's and V's portraits at 352x640, T's first slot, the finished picture, straight from its loader. Each row is one
+// promise the slot discovery and the filling keep for a graph built that way; local/action-draw.test.ts tests the
+// graphs the harness itself submits.
+test('a slot is found through a scale node, and a frame drops the whole chain of a slot it leaves empty', () => {
+  const action: Graph = JSON.parse(readFileSync(resolve('gpu/image-workflow-qwen-action.json'), 'utf8'));
+  const values = { checkpoint: 'qwen_image_2.1_int8_convrot.safetensors', prompt: 'a picture', negative: '',
+    seed: 7, steps: 25, sampler: 'euler', scheduler: 'simple', width: 1280, height: 704, cfg: 1 };
+  const scaled = structuredClone(action);
+  for (const slot of [2, 3]) {
+    const loader = (scaled['5'].inputs[`images.image_${slot}`] as [string, number])[0];
+    scaled[String(20 + slot)] = { class_type: 'ImageScale', inputs: { upscale_method: 'area', width: 352, height: 640, crop: 'disabled', image: [loader, 0] } };
+    scaled['5'].inputs[`images.image_${slot}`] = [String(20 + slot), 0];
+  }
+  const fill = (count: number) => applyToWorkflow(scaled, { ...values, references: ['a.png', 'b.png', 'c.png'].slice(0, count) });
+  // A link to a node that is not in the graph: what a scale node left behind on a dropped loader would be.
+  const dangling = (graph: Graph) => Object.values(graph).flatMap(node => Object.values(node.inputs))
+    .filter(value => Array.isArray(value) && !graph[String(value[0])]).length;
+  const rows: [string, () => void][] = [
+    ['a slot behind a scale node names the loader behind it, and the scale node beside it', () => {
+      assert.deepEqual(referenceSlots(scaled).slice(0, 4), [{ node: '5', key: 'images.image_1', loader: '11' },
+        { node: '5', key: 'images.image_2', loader: '12', scale: '22' }, { node: '5', key: 'images.image_3', loader: '13', scale: '23' },
+        { node: '5', key: 'images.image_4', loader: '14' }]);
+      assert.equal(referenceSlots(scaled).length, 7);
+    }],
+    ['the files land on the loaders, in slot order, and the scale nodes stay on the slots that are filled', () => {
+      const filled = fill(3);
+      assert.deepEqual(referenceSlots(filled).map(slot => filled[slot.loader].inputs.image), ['a.png', 'b.png', 'c.png']);
+      assert.deepEqual(Object.keys(filled).filter(id => filled[id].class_type === 'ImageScale').sort(), ['22', '23']);
+    }],
+    ['a slot left empty goes with its loader and its scale node, and leaves no link behind', () => {
+      const filled = fill(1);
+      assert.deepEqual(referenceSlots(filled).map(slot => slot.key), ['images.image_1']);
+      assert.ok(['12', '13', '22', '23'].every(id => !filled[id]));
+      assert.equal(dangling(filled), 0);
+    }],
+    ['a frame without references keeps no loader, no scale node and no slot', () => {
+      const filled = fill(0);
+      assert.deepEqual(Object.values(filled).filter(node => /^(LoadImage|ImageScale)$/.test(node.class_type)), []);
+      assert.deepEqual(Object.keys(filled['5'].inputs).filter(key => key.startsWith('images.')), []);
+      assert.equal(dangling(filled), 0);
+    }],
+    ['the canvas is still the graph\'s own latent', () => assert.deepEqual(latentSizeOf(fill(3)), { width: 1280, height: 704 })],
+  ];
+  for (const [promise, check] of rows) {
+    try { check(); } catch (error) { assert.fail(`${promise}: ${(error as Error).message}`); }
+  }
+});
+
 // ComfyUI draws one job at a time. A picture abandoned when the wait runs out keeps the card: the next cell queues
 // behind it and inherits its seconds, and the abandoned job's history entry — the whole prompt and workflow in it —
 // is written when it finishes, which is after the delete of a plain abandon has already run.

@@ -220,19 +220,24 @@ const promptKey = (node: Graph[string], role: 'positive' | 'negative') => {
 
 // The reference-picture inputs of an edit graph, in slot order. Qwen Image 2.1 takes each reference on its own
 // `images.image_N` input of the encode node (ComfyUI's autogrow inputs), and each of those is wired to a LoadImage
-// that names a file in the server's input directory, which is what `--references` uploads.
-export function referenceSlots(graph: Graph): { node: string; key: string; loader: string }[] {
-  const found: { node: string; key: string; order: number; loader: string }[] = [];
+// that names a file in the server's input directory, which is what `--references` uploads. A slot may reach its loader
+// through one node that takes an image and hands one on, a scale node (the action run's references, at a size of their
+// own: docs/action-experiment.md#portraits-and-views): `scale` is that node, and the file is named on the loader behind it.
+export type Slot = { node: string; key: string; loader: string; scale?: string };
+export function referenceSlots(graph: Graph): Slot[] {
+  const found: (Slot & { order: number })[] = [];
   for (const [node, { inputs }] of Object.entries(graph)) {
     for (const [key, value] of Object.entries(inputs)) {
       const slot = /^images\.image_(\d+)$/.exec(key);
-      const loader = Array.isArray(value) ? String(value[0]) : null;
-      if (slot && loader && graph[loader] && 'image' in graph[loader].inputs) {
-        found.push({ node, key, order: Number(slot[1]), loader });
-      }
+      const linked = Array.isArray(value) ? String(value[0]) : null;
+      if (!slot || !linked || !graph[linked] || !('image' in graph[linked].inputs)) continue;
+      const through = graph[linked].inputs.image;
+      const behind = Array.isArray(through) ? String(through[0]) : null;
+      if (behind === null) found.push({ node, key, order: Number(slot[1]), loader: linked });
+      else if (graph[behind] && typeof graph[behind].inputs.image === 'string') found.push({ node, key, order: Number(slot[1]), loader: behind, scale: linked });
     }
   }
-  return found.sort((a, b) => a.order - b.order).map(({ node, key, loader }) => ({ node, key, loader }));
+  return found.sort((a, b) => a.order - b.order).map(({ order, ...slot }) => slot);
 }
 
 // Python's round(), which takes a half to the even neighbour: ComfyUI rounds 720 / 32 = 22.5 to 22, not 23.
@@ -318,7 +323,12 @@ export function applyToWorkflow(graph: Graph, values: WorkflowValues): Graph {
     }
     slots.forEach((slot, order) => {
       if (order < references.length) filled[slot.loader].inputs.image = references[order];
-      else { delete filled[slot.node].inputs[slot.key]; delete filled[slot.loader]; }
+      else {
+        delete filled[slot.node].inputs[slot.key];
+        delete filled[slot.loader];
+        // The whole chain of a slot this frame does not use: a scale node left behind would read a loader that is gone.
+        if (slot.scale) delete filled[slot.scale];
+      }
     });
   }
   return filled;
@@ -336,7 +346,7 @@ type HistoryEntry = { status?: { completed?: boolean; status_str?: string; messa
 // A minute: the id of a job submitted just before the end, then its stop and the delete of its record, on a card
 // that answers at all, take a few seconds of it. `--until` stands five minutes before the rental's own deadline, so
 // this ends four minutes before it (docs/identity-experiment.md#one-hour).
-const CLEANUP_RESERVE_MS = 60000;
+export const CLEANUP_RESERVE_MS = 60000;
 // The same server without the caller's signal, and with the reserve for its end: what stops an abandoned job must
 // still reach the card after either has fired, or the card would go on drawing a picture nobody waits for (`stopJob`).
 const afterAbort = (comfy: Comfy): Comfy => ({ baseUrl: comfy.baseUrl, timeoutMs: comfy.timeoutMs, end: comfy.reserve });
@@ -648,8 +658,11 @@ function watchJob(comfy: Comfy) {
 type Watch = ReturnType<typeof watchJob>;
 
 // `sampleEvery` is how many polls pass between two samples of memory: the bot keeps the tunnel quiet, and the harness,
-// which measures the card, samples at every poll. `requireSocket`: see `SOCKET_OPEN_MS`.
-type DrawOneOptions = { pollMs?: number; waitMs?: number; sampleEvery?: number; requireSocket?: boolean };
+// which measures the card, samples at every poll. `requireSocket`: see `SOCKET_OPEN_MS`. `copies`: saving nodes whose
+// pictures are not the frame but a check of it, such as the action smoke's copies of its scaled references
+// (docs/action-experiment.md#drawing); the frame is the one picture of the other nodes, and each copy is read
+// back after it, stripped, in `copies`.
+type DrawOneOptions = { pollMs?: number; waitMs?: number; sampleEvery?: number; requireSocket?: boolean; copies?: string[] };
 // The card tells a job's news only to a socket that is connected when it is sent, and the first of it, the job's start
 // and the nodes its cache answered, comes at the very start of the job (execution.py:683-720). So the submit waits
 // for the socket to open, this long at most. One that does not open in time leaves the bot's picture to the polls,
@@ -739,22 +752,31 @@ async function drawWatched(comfy: Comfy, graph: Graph, watch: Watch, options: Dr
       // request takes its connection with it, and `/view` would pay for a new one.
       if (watch.heard === heard) await watch.wait(pollMs, stop);
     }
-    const image = Object.values(entry.outputs ?? {}).flatMap(output => output.images ?? [])[0];
+    const copies = options.copies ?? [];
+    const image = Object.entries(entry.outputs ?? {}).filter(([node]) => !copies.includes(node)).flatMap(([, output]) => output.images ?? [])[0];
     if (!image || entry.status?.status_str === 'error') {
       const recorded = Array.isArray(entry.status?.messages) ? entry.status.messages : [];
       const oom = watch.oom(promptId) || recorded.some(message => Array.isArray(message) && message[0] === 'execution_error' && outOfMemory(message[1] ?? {}));
       throw Object.assign(new Error('image_failed'), { code: 'image_failed', ...(oom ? { oom } : {}) });
     }
     const viewStarted = performance.now();
-    const query = new URLSearchParams({ filename: image.filename, subfolder: image.subfolder ?? '', type: image.type ?? 'output' });
-    const bytes = new Uint8Array(await (await call(comfy, `/view?${query}`)).arrayBuffer());
+    const view = async (one: { filename: string; subfolder: string; type: string }) => {
+      const query = new URLSearchParams({ filename: one.filename, subfolder: one.subfolder ?? '', type: one.type ?? 'output' });
+      return new Uint8Array(await (await call(comfy, `/view?${query}`)).arrayBuffer());
+    };
+    const bytes = await view(image);
     const viewMs = Math.round(performance.now() - viewStarted);
+    const copied: { node: string; bytes: Uint8Array }[] = [];
+    for (const node of copies) {
+      const one = entry.outputs?.[node]?.images?.[0];
+      if (one) copied.push({ node, bytes: stripPngMetadata(await view(one)) });
+    }
     // The record goes first, on the connection `/view` has just left open, and the last sample after it.
     forget();
     sampleVram(false);
     // `memory` fills in like `vram` did, the last sample after the picture; `timing` is the socket's account of the job.
     return { bytes: stripPngMetadata(bytes), totalMs: Math.round(performance.now() - started), viewMs, vram: memory.vram, memory,
-      timing: watch.timing(promptId, graph) };
+      timing: watch.timing(promptId, graph), ...(copies.length ? { copies: copied } : {}) };
   } catch (error) {
     // The wait ran out, the caller let go or the stage ended, but the card did not stop by itself: see `stopJob`,
     // which the reserve bounds. A fetch cut by a signal arrives as an AbortError, so what the signals say is what
@@ -839,14 +861,14 @@ export function cells(cases: Case[], checkpoints: string[], seeds: number[], arm
 // ComfyUI's own log, the last 300 lines of it (/internal/logs/raw, app/logger.py): the one place that says a model
 // was loaded onto the card only in part, which is how the server fits what does not fit instead of failing. Only
 // those lines are counted, and none is kept: the rest of the log can carry a prompt.
-async function logLines(comfy: Comfy): Promise<string[] | undefined> {
+export async function logLines(comfy: Comfy): Promise<string[] | undefined> {
   try {
     const seen = await (await call(comfy, '/internal/logs/raw')).json() as { entries?: { t?: unknown; m?: unknown }[] };
     return Array.isArray(seen.entries) ? seen.entries.map(entry => `${entry.t}\u0000${entry.m}`) : undefined;
   } catch { return undefined; }
 }
 // The partial loads after the last line seen before the job, or in the whole ring when that line has left it.
-function partialLoadsSince(before: string[] | undefined, after: string[] | undefined): number | undefined {
+export function partialLoadsSince(before: string[] | undefined, after: string[] | undefined): number | undefined {
   if (!before || !after) return undefined;
   const last = before.at(-1);
   return after.slice(last === undefined ? 0 : after.lastIndexOf(last) + 1)
@@ -857,7 +879,7 @@ function partialLoadsSince(before: string[] | undefined, after: string[] | undef
 // of its own is held to these as well, so for it a server that does not say all three is refused rather than read as
 // saying nothing: a resume on another card would otherwise pass as the same one.
 const SERVER_PINS = ['comfyui', 'pytorch', 'card'];
-async function serverPins(comfy: Comfy, strict: boolean): Promise<Record<string, string>> {
+export async function serverPins(comfy: Comfy, strict: boolean): Promise<Record<string, string>> {
   const pins: Record<string, string> = {};
   try {
     const stats = await (await call(comfy, '/system_stats')).json() as {
