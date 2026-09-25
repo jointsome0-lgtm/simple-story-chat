@@ -41,13 +41,15 @@ test('every machine is priced whole, its card, its own disk and its own download
   // the picture lane, so two single-lane machines pull what one machine for both would. Qwen is priced only where it is
   // asked for, and fits every disk that draws pictures beside about 13 GiB of torch and ComfyUI; a machine that pulls
   // Qwen alone needs none of the pinned files and rents a disk that holds its own. The RAM floor is 32 GB a card, and
-  // the picture lane's own 30 GB: it has no cache to feed.
+  // the picture lane's own 30 GB: it has no cache to feed. The small machine is simple-serving's rehearsal, priced by
+  // Gemma 4 E2B and vLLM, under a ceiling of its own.
   const machines: [string, RentPlan, number, number, number, number, number, number[]][] = [
     ['one card for both lanes', rentPlan(), 150, 32, TEXT + PICTURES + 6e9, QWEN, 0.693, [0.521, 0.63]],
     ['two cards for both lanes', rentPlan({ gpus: 2 }), 150, 64, TEXT + PICTURES + 6e9, QWEN, 1.043, [0.521, 0.63]],
     ['the language machine', rentPlan({ lane: 'text' }), 60, 32, TEXT + 1e9, 0, 0.667, [0.508, 0.27]],
     ['the picture machine', rentPlan({ lane: 'pictures' }), 100, 30, PICTURES + 5e9, QWEN, 0.678, [0.514, 0.36]],
     ['a picture machine that pulls Qwen alone', rentPlan({ lane: 'pictures', qwenOnly: true }), 60, 30, QWEN + 5e9, 0, 0.667, [0.508, 0.22]],
+    ['the small machine', rentPlan({ lane: 'small' }), 60, 16, 10246621918 + 32198128 + 6e9, 0, 0.267, [0.508, 0.16]],
   ];
   for (const [label, plan, disk, ram, bytes, room, ceiling, price] of machines) {
     assert.deepEqual([plan.diskGb, offerQuery(plan).disk_space.gte, createBody({ plan, onstart: '' }).disk], [disk, disk, disk], label);

@@ -1,5 +1,6 @@
 // Rents one machine with RTX 5090s -- one card by default, `--gpus 2` for the session that runs the language lane
-// and the image lane side by side -- at or below the price the owner approved for that many cards, preferring host
+// and the image lane side by side, or with `--lane small` the cheapest card of 16 GB for simple-serving's rehearsal --
+// at or below the price the owner approved for that many cards, preferring host
 // 402342 (the machine measured in docs/knowledge/gpu-measurements.md#costs-and-downloads, $0.519/h). Vast re-issues
 // offer ids every few minutes, so a price agreed from a list goes stale before it can be taken: the offers are looked
 // up live and the candidates tried in order until one is actually taken. Run it with SIMPLE_CHAT_RENT_DRY_RUN=1 or
@@ -86,7 +87,8 @@ if (args[0] === '--show' || args[0] === '--start' || args[0] === '--destroy') {
 const printBody = args.includes('--print-body');
 const rest = args.filter(argument => argument !== '--print-body');
 // `--lane text` and `--lane pictures` rent one single-card machine for one lane: a session on two machines runs
-// this script twice. Without it the machine is for both lanes, with one card or two.
+// this script twice. Without it the machine is for both lanes, with one card or two. `--lane small` is any card
+// of 16 GB or more, Ampere or newer, that vLLM runs Gemma 4 E2B on.
 // `--avoid-host ID[,ID...]` leaves out hosts: the second machine of a two-machine session must not be the first one's
 // twin on the same box, or the "two independent machines" the owner asked for share a link, a disk and a failure.
 // A replacement names two: the host it replaces and the other lane's. On 2026-09-23 the measured text host drew
@@ -111,7 +113,7 @@ try {
   }
 } catch { /* reported below */ }
 if (!plan) {
-  console.log(JSON.stringify({ event: 'bad_arguments', usage: 'rent.mjs [--gpus 1|2] [--lane both|text|pictures] [--avoid-host ID[,ID...]] '
+  console.log(JSON.stringify({ event: 'bad_arguments', usage: 'rent.mjs [--gpus 1|2] [--lane both|text|pictures|small] [--avoid-host ID[,ID...]] '
     + '[--hours 1|2|3] [--qwen only] [--print-body] | --show ID | --start ID | --destroy ID' }));
   process.exit(1);
 }
@@ -192,7 +194,7 @@ if (dryRun || printBody) {
 
 for (const offer of candidates.slice(0, ATTEMPTS)) {
   const machine = {
-    offer: offer.id, host: offer.host, geo: offer.geo, hour: offer.hour, download: offer.download,
+    offer: offer.id, host: offer.host, gpu: offer.gpu, geo: offer.geo, hour: offer.hour, download: offer.download,
     driver: offer.driver, cpus: offer.cpus, ramGb: offer.ramGb, inetDownMbps: offer.inetDownMbps,
     reliability: offer.reliability, directPorts: offer.directPorts,
   };

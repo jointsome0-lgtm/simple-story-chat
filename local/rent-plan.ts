@@ -13,6 +13,10 @@
 // are admitted and nothing dearer is. A count with no agreed rate is refused rather than guessed. One card went up to
 // $0.65 on 2026-09-24: the only offer left under $0.55 was on a host whose card another tenant was already loading.
 export const MAX_DPH_BY_GPUS: Record<number, number> = { 1: 0.65, 2: 1.0 };
+// The small machine is simple-serving's rehearsal (the owner, 2026-09-25): the service checked end to end on the
+// cheapest card vLLM runs Gemma 4 E2B on, before a 5090 serves the real model. Its own ceiling, since one card's would
+// admit a 4090 and call it small.
+const SMALL_MAX_DPH = 0.25;
 // Vast bills the disk by the hour beside the machine and offers are judged on the two together, so the ceiling has
 // to carry the disk too. Otherwise growing DISK_GB quietly lowers the card price allowed: at 60 GB the old flat
 // $0.55 left room for a $0.541 card, at 150 GB the same number refuses the $0.53 top of the quoted range. The rate
@@ -57,11 +61,13 @@ const QWEN_BYTES = 7256783064 + 9350798360 + 675509688;
 // held more. The disk is priced by the hour, and on 2026-09-25 the cheapest 5090 in the console, $0.476, charged
 // $0.87 per GB a month for it, so its 100 GB came to $0.595.
 const QWEN_ONLY_DISK_GB = 60;
-export type Lane = 'both' | 'text' | 'pictures';
+export type Lane = 'both' | 'text' | 'pictures' | 'small';
 const LANES: Record<Lane, { diskGb: number; bytes: number }> = {
   both: { diskGb: DISK_GB, bytes: TEXT_BYTES + PICTURE_BYTES + 6000000000 },
   text: { diskGb: 60, bytes: TEXT_BYTES + 1000000000 },
   pictures: { diskGb: 100, bytes: PICTURE_BYTES + 5000000000 },
+  // Gemma 4 E2B as simple-serving's branch rehearsal-e2b pins it, its tokenizer's files, and vLLM's wheels with torch.
+  small: { diskGb: 60, bytes: 10246621918 + 32198128 + 6000000000 },
 };
 // Hugging Face and CivitAI are not reliably reachable from mainland China, and a session is mostly a download: a
 // machine there can pass the speed test and still never fetch the weights. The last part of Vast's `geolocation`
@@ -74,6 +80,8 @@ const RAM_GB_PER_GPU = 32;
 // The picture lane has no cache to feed and loads at most Qwen's 17.3 GB. A 32 GB share can report 31.2 GB, as the
 // cheapest machines of 2026-09-25 did, which the language lane's floor refused.
 const PICTURE_RAM_GB = 30;
+// E2B's 10.2 GB of weights go to the card; the machine holds vLLM and the gateway.
+const SMALL_RAM_GB = 16;
 // Two hours and a half: the instance life the session is billed for, not the work window. Work stops about a
 // quarter of an hour before teardown and Vast bills until the instance is deleted, so the shorter figure would
 // weight the hourly price too lightly. The hourly price is weighted by it against the one-off traffic cost when
@@ -98,7 +106,7 @@ export type RentPlan = {
 
 export function rentPlan({ gpus = 1, lane = 'both', preferredHost = PREFERRED_HOST, hours, qwenOnly = false }:
   { gpus?: number; lane?: Lane; preferredHost?: number | null; hours?: number; qwenOnly?: boolean } = {}): RentPlan {
-  const maxDph = MAX_DPH_BY_GPUS[gpus];
+  const maxDph = lane === 'small' ? SMALL_MAX_DPH : MAX_DPH_BY_GPUS[gpus];
   if (maxDph === undefined) throw new Error(`no approved price ceiling for ${gpus} GPUs`);
   if (!Object.hasOwn(LANES, lane)) throw new Error(`no such lane: ${lane}`);
   // One lane is one card: a second card on a machine that runs one server is paid for and idle.
@@ -108,7 +116,8 @@ export function rentPlan({ gpus = 1, lane = 'both', preferredHost = PREFERRED_HO
   const diskGb = qwenOnly ? QWEN_ONLY_DISK_GB : LANES[lane].diskGb;
   const maxHour = Math.round((maxDph + STORAGE_PER_GB_MONTH * diskGb / 730) * 1000) / 1000;
   return {
-    lane, gpus, maxHour, diskGb, minRamGb: lane === 'pictures' ? PICTURE_RAM_GB : RAM_GB_PER_GPU * gpus,
+    lane, gpus, maxHour, diskGb,
+    minRamGb: lane === 'pictures' ? PICTURE_RAM_GB : lane === 'small' ? SMALL_RAM_GB : RAM_GB_PER_GPU * gpus,
     minDirectPorts: MIN_DIRECT_PORTS,
     sessionHours: hours === undefined ? SESSION_HOURS : hours + (BOOT_SECONDS + DONE_SECONDS + DESTROY_SECONDS) / 3600,
     // Qwen's files and torch's five gigabytes, the only wheels the picture lane pulls.
@@ -120,8 +129,12 @@ export function rentPlan({ gpus = 1, lane = 'both', preferredHost = PREFERRED_HO
 // The search is a filter on the host, so everything that can be asked for there is: a query the API does not
 // understand is ignored silently, which is why the rules that matter are checked again over the answer.
 export function offerQuery(plan: RentPlan) {
+  // The small machine's card is any that holds E2B in bf16, which vLLM wants and which begins with Ampere (compute
+  // capability 8.0); every other machine's is a 5090.
+  const card = plan.lane === 'small' ? { gpu_ram: { gte: 16000 }, compute_cap: { gte: 800 } }
+    : { gpu_name: { eq: 'RTX 5090' }, gpu_ram: { gte: 32000 } };
   return {
-    gpu_name: { eq: 'RTX 5090' }, num_gpus: { eq: plan.gpus }, gpu_ram: { gte: 32000 },
+    ...card, num_gpus: { eq: plan.gpus },
     disk_space: { gte: plan.diskGb }, cpu_ram: { gte: plan.minRamGb * 1000 },
     cuda_max_good: { gte: CUDA_FLOOR }, rentable: { eq: true }, verified: { eq: true },
     rented: { eq: false }, reliability2: { gte: 0.97 }, inet_down: { gte: 300 },
@@ -132,13 +145,13 @@ export function offerQuery(plan: RentPlan) {
 
 // The fields read from an offer. Vast sends many more and none of them is trusted.
 export type RawOffer = {
-  id?: unknown; host_id?: unknown; geolocation?: unknown; driver_version?: unknown;
+  id?: unknown; host_id?: unknown; gpu_name?: unknown; geolocation?: unknown; driver_version?: unknown;
   direct_port_count?: number | null; cpu_cores_effective?: number | null; cpu_ram?: number | null;
   inet_down?: number | null; reliability2?: number | null;
   dph_total?: number | null; storage_cost?: number | null; inet_down_cost?: number | null;
 };
 export type Offer = {
-  id: unknown; host: unknown; geo: unknown; driver: unknown; directPorts: number;
+  id: unknown; host: unknown; gpu: unknown; geo: unknown; driver: unknown; directPorts: number;
   cpus: number | null; ramGb: number | null; inetDownMbps: number; reliability: number;
   hour: number; download: number;
 };
@@ -149,7 +162,7 @@ const price = (rate: unknown): number => typeof rate === 'number' && Number.isFi
 // disk and this session's downloads rather than for a constant that no longer describes either.
 export function describeOffer(offer: RawOffer, plan: RentPlan): Offer {
   return {
-    id: offer.id, host: offer.host_id, geo: offer.geolocation, driver: offer.driver_version,
+    id: offer.id, host: offer.host_id, gpu: offer.gpu_name, geo: offer.geolocation, driver: offer.driver_version,
     directPorts: Number(offer.direct_port_count ?? 0),
     cpus: offer.cpu_cores_effective ? Math.round(offer.cpu_cores_effective) : null,
     // `cpu_ram` in a search answer is already this offer's own share of the machine, in MB, like
