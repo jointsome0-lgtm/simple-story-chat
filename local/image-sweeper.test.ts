@@ -172,8 +172,9 @@ test('the sweeper stops by itself once the server it serves is gone', needsPytho
   assert.deepEqual(JSON.parse(stdout.trim().split('\n').at(-1)!), { event: 'sweeper_stopped', reason: 'server_gone' });
 });
 
-// A picture box as image-serve.sh expects to find it, with a ComfyUI whose python records its arguments and exits.
-function serveBox(t: Hooks) {
+// A picture box as image-serve.sh expects to find it, with a ComfyUI whose python records its arguments and exits:
+// Krea's files and graph, or with `qwenOnly` Qwen's and nothing of Krea's, as image-bootstrap.sh leaves each.
+function serveBox(t: Hooks, qwenOnly = false) {
   const box = mkdtempSync(join(tmpdir(), 'simple-chat-serve-'));
   t.after(() => rmSync(box, { recursive: true, force: true }));
   const comfy = join(box, 'state/ComfyUI');
@@ -184,19 +185,24 @@ function serveBox(t: Hooks) {
   const revision = '0'.repeat(40);
   writeFileSync(join(box, 'gpu/image-manifest.env'), [`COMFYUI_REVISION=${revision}`, 'COMFYUI_VERSION=0.0.0',
     'IMAGE_MODEL_NAME="Synthetic weights"', 'IMAGE_MODEL_FILE=model.safetensors', 'IMAGE_ENCODER_FILE=encoder.safetensors',
-    'IMAGE_VAE_FILE=vae.safetensors', 'IMAGE_WORKFLOW=image-workflow.json', ''].join('\n'));
-  writeFileSync(join(comfy, 'models/diffusion_models/model.safetensors'), 'model');
-  writeFileSync(join(comfy, 'models/text_encoders/encoder.safetensors'), 'encoder');
-  writeFileSync(join(comfy, 'models/vae/vae.safetensors'), 'vae');
-  writeFileSync(join(box, 'state/image-workflow.json'), '{"8": {"inputs": {"clip_name": "encoder.safetensors"}}}');
+    'IMAGE_VAE_FILE=vae.safetensors', 'IMAGE_WORKFLOW=image-workflow.json', 'IMAGE_QWEN_NAME="Synthetic Qwen"',
+    'IMAGE_QWEN_MODEL_FILE=qwen.safetensors', 'IMAGE_QWEN_ENCODER_FILE=qwen-encoder.safetensors', 'IMAGE_QWEN_VAE_FILE=qwen-vae.safetensors',
+    'IMAGE_QWEN_WORKFLOW=image-workflow-qwen.json', 'IMAGE_QWEN_EDIT_WORKFLOW=image-workflow-qwen-edit.json', ''].join('\n'));
+  const files = qwenOnly ? ['diffusion_models/qwen.safetensors', 'text_encoders/qwen-encoder.safetensors', 'vae/qwen-vae.safetensors']
+    : ['diffusion_models/model.safetensors', 'text_encoders/encoder.safetensors', 'vae/vae.safetensors'];
+  for (const file of files) writeFileSync(join(comfy, 'models', file), 'weights');
+  for (const graph of qwenOnly ? ['image-workflow-qwen.json', 'image-workflow-qwen-edit.json'] : ['image-workflow.json']) {
+    writeFileSync(join(box, 'state', graph), '{"8": {"inputs": {"clip_name": "encoder.safetensors"}}}');
+  }
   writeFileSync(join(box, 'shim/git'), `#!/usr/bin/env bash\necho ${revision}\n`);
   const started = join(box, 'started.log');
   writeFileSync(join(comfy, '.venv/bin/python'), `#!/usr/bin/env bash\necho "$*" >> ${JSON.stringify(started)}\n`);
   chmodSync(join(box, 'shim/git'), 0o755);
   chmodSync(join(comfy, '.venv/bin/python'), 0o755);
-  const run = (tempRoot: string) => spawnSync('bash', [join(box, 'gpu/image-serve.sh')], { encoding: 'utf8', timeout: 30_000,
+  const run = (tempRoot: string, qwen = 'false') => spawnSync('bash', [join(box, 'gpu/image-serve.sh')], { encoding: 'utf8', timeout: 30_000,
     env: { ...process.env, PATH: `${join(box, 'shim')}:${process.env['PATH']}`, SIMPLE_CHAT_GPU_DIR: join(box, 'state'),
-      SIMPLE_CHAT_IMAGE_GPU: '0', SIMPLE_CHAT_IMAGE_TEMP_ROOT: tempRoot, COMFYUI_ARGS: '', CLI_ARGS: '', COMFYUI_EXTRA_ARGS: '' } });
+      SIMPLE_CHAT_IMAGE_GPU: '0', SIMPLE_CHAT_IMAGE_TEMP_ROOT: tempRoot, SIMPLE_CHAT_IMAGE_QWEN: qwen,
+      COMFYUI_ARGS: '', CLI_ARGS: '', COMFYUI_EXTRA_ARGS: '' } });
   // The sweeper is started in the background, so its line may land a moment after the script has exec'd.
   const lines = async (count: number) => {
     for (let tries = 0; tries < 200; tries++) {
@@ -222,6 +228,15 @@ test('image-serve.sh keeps ComfyUI temp directory on a tmpfs and starts the swee
   assert.ok(server?.includes(`--temp-directory ${root} `), server);
   assert.match(sweeping ?? '', new RegExp(`--pid \\d+ --temp ${escaped(root)}/temp --port 8188$`));
   assert.equal(statSync(root).mode & 0o777, 0o700);
+  // A box with Qwen's files and nothing of Krea's starts with SIMPLE_CHAT_IMAGE_QWEN=only, and is refused without it.
+  const qwen = serveBox(t, true);
+  const refused = qwen.run(join(shm, 'krea'));
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /Missing models\/diffusion_models\/model\.safetensors/);
+  const alone = qwen.run(join(shm, 'qwen'), 'only');
+  assert.equal(alone.status, 0, alone.stderr);
+  assert.match(alone.stdout, /for Synthetic Qwen alone .*image-workflow-qwen-edit\.json\.$/m);
+  assert.ok((await qwen.lines(2)).some(line => line.includes('main.py')));
 });
 
 test('image-serve.sh refuses a temp directory that is not on a tmpfs rather than write pictures to disk', async t => {

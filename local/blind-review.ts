@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto';
 import { basename, dirname, join, resolve } from 'node:path';
 
 // What this tool reads from a run directory: `index.json` and `prompts.json` of local/image-batch.ts.
-type Drawn = { caseId: string; checkpoint: string; seed: number; file: string };
+type Drawn = { caseId: string; checkpoint: string; seed: number; file: string; arm?: string; width?: number; height?: number };
 type Scene = { id: string; scene: string };
 export type Entry = Drawn & { run: string };
 // One question: the same scene and seed drawn by different checkpoints, in the order the rater sees them.
@@ -44,25 +44,34 @@ function shuffled<T>(items: T[], next: () => number) {
   return out;
 }
 
-// A scene drawn by one checkpoint only is no comparison and is left out. A rater's name goes into the seed, so two
-// raters never share an order, and into the picture names, so their files cannot be matched by name either.
+// What competes in a question: a checkpoint, and in an identity run a checkpoint in one arm. The arms of one frame
+// share their checkpoint, and keyed by it alone all but the first of them were dropped as repeats.
+const contender = (entry: Entry) => entry.arm ? `${entry.checkpoint}#${entry.arm}` : entry.checkpoint;
+
+// A scene drawn by one checkpoint only is no comparison and is left out, and so is one whose pictures were drawn on
+// canvases of different sizes: a rater shown a wide picture beside a narrower one has been told which run is which,
+// and a frame drawn around a reference of its own size is not the frame drawn without one (docs/illustrations-plan.md).
+// `mixed` counts those. A rater's name goes into the seed, so two raters never share an order, and into the picture
+// names, so their files cannot be matched by name either.
 export function deal(entries: Entry[], scenes: Scene[], rater: string, seed: number) {
   const next = random(seed ^ parseInt(createHash('sha256').update(rater).digest('hex').slice(0, 8), 16));
   const groups = new Map<string, Entry[]>();
   for (const entry of entries) {
     const id = `${entry.caseId}#${entry.seed}`;
     const group = groups.get(id) ?? [];
-    if (!group.some(other => other.checkpoint === entry.checkpoint)) group.push(entry);
+    if (!group.some(other => contender(other) === contender(entry))) group.push(entry);
     groups.set(id, group);
   }
   const questions: (Question & { sources: Entry[] })[] = [];
+  let mixed = 0;
   for (const [id, group] of [...groups].sort(([a], [b]) => a.localeCompare(b))) {
     if (group.length < 2 || group.length > LETTERS.length) continue;
-    const order = shuffled(group.sort((a, b) => a.checkpoint.localeCompare(b.checkpoint)), next);
+    if (new Set(group.map(entry => `${entry.width}x${entry.height}`)).size > 1) { mixed++; continue; }
+    const order = shuffled(group.sort((a, b) => contender(a).localeCompare(contender(b))), next);
     questions.push({
       id, caseId: order[0].caseId, seed: order[0].seed, scene: scenes.find(scene => scene.id === order[0].caseId)?.scene ?? '',
       pictures: order.map((entry, at) => ({ letter: LETTERS[at],
-        name: createHash('sha256').update(`${rater}|${seed}|${id}|${entry.checkpoint}`).digest('hex').slice(0, 16) + '.png' })),
+        name: createHash('sha256').update(`${rater}|${seed}|${id}|${contender(entry)}`).digest('hex').slice(0, 16) + '.png' })),
       sources: order,
     });
   }
@@ -70,8 +79,9 @@ export function deal(entries: Entry[], scenes: Scene[], rater: string, seed: num
   return {
     questions: dealt.map(({ sources, ...question }) => question),
     key: { rater, questions: dealt.map(question => ({ id: question.id,
-      letters: Object.fromEntries(question.sources.map((entry, at) => [LETTERS[at], entry.checkpoint])) })) } satisfies Key,
+      letters: Object.fromEntries(question.sources.map((entry, at) => [LETTERS[at], contender(entry)])) })) } satisfies Key,
     files: dealt.flatMap(question => question.sources.map((entry, at) => ({ from: join(entry.run, entry.file), name: question.pictures[at].name }))),
+    mixed,
   };
 }
 
@@ -216,7 +226,9 @@ function build(values: { run: string; out: string; rater: string; seed: string; 
   const only = values.only?.split(','), exclude = values.exclude?.split(',') ?? [];
   const wanted = entries.filter(entry => (!only || only.includes(entry.caseId)) && !exclude.includes(entry.caseId));
   const dealt = deal(wanted, [...scenes.values()], values.rater, Number(values.seed));
-  if (!dealt.questions.length) throw new Error('No scene was drawn by two checkpoints');
+  if (!dealt.questions.length) {
+    throw new Error(dealt.mixed ? `Every scene drawn twice was drawn on two canvases (${dealt.mixed}), and those are no comparison` : 'No scene was drawn by two checkpoints');
+  }
   const out = resolve(values.out);
   mkdirSync(join(out, 'img'), { recursive: true, mode: 0o700 });
   for (const file of dealt.files) copyFileSync(file.from, join(out, 'img', file.name));
@@ -228,7 +240,7 @@ function build(values: { run: string; out: string; rater: string; seed: string; 
   const keyPath = join(dirname(out), `${basename(out)}.key.json`);
   writeFileSync(keyPath, JSON.stringify(dealt.key, null, 2), { mode: 0o600 });
   console.log(JSON.stringify({ event: 'blind_review_built', rater: values.rater, questions: dealt.questions.length, pictures: dealt.files.length,
-    open: values.bundle ? join(out, 'TASK.md') : join(out, 'review.html'), key: keyPath }));
+    leftOutForCanvas: dealt.mixed, open: values.bundle ? join(out, 'TASK.md') : join(out, 'review.html'), key: keyPath }));
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

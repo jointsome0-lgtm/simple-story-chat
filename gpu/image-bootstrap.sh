@@ -27,8 +27,10 @@ turbo="${SIMPLE_CHAT_IMAGE_TURBO:-true}"
 [[ "$turbo" = true || "$turbo" = false ]] || { echo 'Use SIMPLE_CHAT_IMAGE_TURBO=true or false.' >&2; exit 1; }
 # Qwen-Image 2.1 is the opt-in third checkpoint: 17.28 GB that local/rent-plan.ts does not price, so a session that
 # wants it says so before it rents. Off by default, unlike Turbo, because it is a comparison somebody chose to make.
+# `only` fetches Qwen's three files and nothing of Krea's, Turbo included, and so needs no token: the box of the
+# identity measurement (docs/illustrations-plan.md), which draws nothing else and pays for every minute of 48.7 GB.
 qwen="${SIMPLE_CHAT_IMAGE_QWEN:-false}"
-[[ "$qwen" = true || "$qwen" = false ]] || { echo 'Use SIMPLE_CHAT_IMAGE_QWEN=true or false.' >&2; exit 1; }
+[[ "$qwen" = true || "$qwen" = false || "$qwen" = only ]] || { echo 'Use SIMPLE_CHAT_IMAGE_QWEN=true, false or only.' >&2; exit 1; }
 # An offer that advertises 1171 Mbit/s has delivered 115 (docs/gpu.md). Below the floor the answer is to destroy the
 # machine and take the next candidate, not to wait: 22 GB at 100 Mbit/s is half the session.
 min_mbit="${SIMPLE_CHAT_IMAGE_MIN_MBIT:-200}"
@@ -80,10 +82,12 @@ fi
 records=()
 add_record() { records+=("$1"$'\t'"$2"$'\t'"$3"$'\t'"$4"$'\t'"$5"); }
 hf_url() { printf 'https://huggingface.co/%s/resolve/%s/%s' "$1" "$2" "$3"; }
-add_record "$IMAGE_MODEL_URL" "$models_dir/diffusion_models/$IMAGE_MODEL_FILE" "$IMAGE_MODEL_SHA256" "$IMAGE_MODEL_BYTES" civitai
+[[ "$qwen" = only ]] || add_record "$IMAGE_MODEL_URL" "$models_dir/diffusion_models/$IMAGE_MODEL_FILE" "$IMAGE_MODEL_SHA256" "$IMAGE_MODEL_BYTES" civitai
 # The two file names the graph's loaders have to name: `official` installs different ones, and a graph that kept
 # the `comfy` names would fail inside CLIPLoader on a box that passed every check here.
-if [[ "$image_source" = official ]]; then
+if [[ "$qwen" = only ]]; then
+  encoder_file=''; vae_file=''
+elif [[ "$image_source" = official ]]; then
   encoder_file="$OFFICIAL_ENCODER_FILE"; vae_file="$OFFICIAL_VAE_FILE"
   add_record "$(hf_url "$OFFICIAL_REPO" "$OFFICIAL_REVISION" "$OFFICIAL_ENCODER_PATH")" \
     "$models_dir/text_encoders/$OFFICIAL_ENCODER_FILE" "$OFFICIAL_ENCODER_SHA256" "$OFFICIAL_ENCODER_BYTES" hf
@@ -102,7 +106,7 @@ else
 fi
 # Qwen brings its own transformer, its own text encoder and its own VAE; nothing of Krea's is shared with it, and
 # nothing of Krea's is replaced, so both checkpoints stay drawable from the same box. Public repository, no token.
-if [[ "$qwen" = true ]]; then
+if [[ "$qwen" != false ]]; then
   add_record "$(hf_url "$IMAGE_QWEN_REPO" "$IMAGE_QWEN_REVISION" "$IMAGE_QWEN_MODEL_PATH")" \
     "$models_dir/diffusion_models/$IMAGE_QWEN_MODEL_FILE" "$IMAGE_QWEN_MODEL_SHA256" "$IMAGE_QWEN_MODEL_BYTES" none
   add_record "$(hf_url "$IMAGE_QWEN_REPO" "$IMAGE_QWEN_REVISION" "$IMAGE_QWEN_ENCODER_PATH")" \
@@ -133,7 +137,11 @@ render_qwen() {
     render_workflow "$graph" "$IMAGE_QWEN_MODEL_FILE" "$IMAGE_QWEN_ENCODER_FILE" "$IMAGE_QWEN_VAE_FILE" >"$gpu_dir/$graph"
   done
 }
-[[ "$print_workflow" = false ]] || { render_workflow "$IMAGE_WORKFLOW" "$IMAGE_MODEL_FILE" "$encoder_file" "$vae_file"; exit 0; }
+if [[ "$print_workflow" = true ]]; then
+  [[ "$qwen" != only ]] || { echo 'A Qwen-only box installs no Krea graph to print; it writes the Qwen graphs once verified.' >&2; exit 1; }
+  render_workflow "$IMAGE_WORKFLOW" "$IMAGE_MODEL_FILE" "$encoder_file" "$vae_file"
+  exit 0
+fi
 
 # One run at a time on this machine. Two would resume the same .part from two ends and the corruption would only
 # show in the SHA256, after the whole file has been paid for; a dry run would meanwhile throw away a leftover the
@@ -168,12 +176,12 @@ for token in "$civitai_token" "$hf_token"; do
   [[ "$token" != *[\"\\]* ]] || { echo 'A token contains a quote or a backslash and cannot be passed this way.' >&2; exit 1; }
 done
 if [[ "$dry_run" = true ]]; then
-  echo "Source $image_source, $(( total_bytes / 1024**3 )) GiB to fetch:"
+  echo "$([[ "$qwen" = only ]] && echo 'Qwen only' || echo "Source $image_source"), $(( total_bytes / 1024**3 )) GiB to fetch:"
   for record in "${records[@]}"; do
     IFS=$'\t' read -r url destination digest size auth <<<"$record"
     printf '%s\t%s bytes\t%s\n' "$(basename -- "$destination")" "$size" "$([[ -f "$destination" ]] && echo present || echo 'to fetch')"
   done
-  echo "The graph would load $IMAGE_MODEL_FILE, $encoder_file and $vae_file; --print-workflow prints it."
+  [[ "$qwen" = only ]] || echo "The graph would load $IMAGE_MODEL_FILE, $encoder_file and $vae_file; --print-workflow prints it."
   [[ "$qwen" = false ]] || echo "Qwen is on: $IMAGE_QWEN_WORKFLOW and $IMAGE_QWEN_EDIT_WORKFLOW would load $IMAGE_QWEN_MODEL_FILE, $IMAGE_QWEN_ENCODER_FILE and $IMAGE_QWEN_VAE_FILE."
   exit 0
 fi
@@ -345,9 +353,16 @@ if [[ -n "$guard_pid" ]]; then
 fi
 (( failed == 0 )) || { echo 'A download failed or was ended; nothing is verified.' >&2; exit 1; }
 
+# What this box was verified to run, the ComfyUI revision and each file's SHA256 as computed here, one
+# `<sha256>  <file>` line apiece: the identity runbook copies it home before the first job and local/image-identity.ts
+# pins the run to it. It is written whole or not at all, and a record from an earlier run does not outlive a
+# verification that failed.
+verified="$gpu_dir/image-verified.txt"
+rm -f -- "$verified"
+echo "revision $(git -C "$comfy_dir" rev-parse HEAD)" >"$verified.part"
 for record in "${records[@]}"; do
   IFS=$'\t' read -r url destination digest size auth <<<"$record"
-  python3 - "$destination" "$digest" "$size" <<'PY'
+  python3 - "$destination" "$digest" "$size" "$verified.part" <<'PY'
 import hashlib,pathlib,sys
 target=pathlib.Path(sys.argv[1]); current=target if target.exists() else pathlib.Path(str(target)+'.part')
 def mismatch(message):
@@ -357,11 +372,17 @@ if current.stat().st_size != int(sys.argv[3]): mismatch('size mismatch; not star
 with current.open('rb') as f: digest=hashlib.file_digest(f,'sha256').hexdigest()
 if digest != sys.argv[2]: mismatch('SHA256 mismatch; not starting.')
 if current != target: current.rename(target)
+with open(sys.argv[4],'a') as record: record.write(f'{digest}  {target.name}\n')
 print(f'{target.name}: SHA256 verified.')
 PY
 done
+mv -- "$verified.part" "$verified"
 # The graph is written only once the weights it names are verified, so its presence means the box can render.
-render_workflow "$IMAGE_WORKFLOW" "$IMAGE_MODEL_FILE" "$encoder_file" "$vae_file" >"$gpu_dir/$IMAGE_WORKFLOW"
+[[ "$qwen" = only ]] || render_workflow "$IMAGE_WORKFLOW" "$IMAGE_MODEL_FILE" "$encoder_file" "$vae_file" >"$gpu_dir/$IMAGE_WORKFLOW"
 [[ "$qwen" = false ]] || render_qwen
-echo "Prepared; post $gpu_dir/$IMAGE_WORKFLOW. Start with: bash $task_dir/image-serve.sh"
-[[ "$qwen" = false ]] || echo "Qwen is on: $gpu_dir/$IMAGE_QWEN_WORKFLOW draws frames, $gpu_dir/$IMAGE_QWEN_EDIT_WORKFLOW takes reference portraits."
+if [[ "$qwen" = only ]]; then
+  echo "Prepared, Qwen only: $gpu_dir/$IMAGE_QWEN_WORKFLOW draws frames and portraits, $gpu_dir/$IMAGE_QWEN_EDIT_WORKFLOW takes reference portraits; $verified says what was verified. Start with: SIMPLE_CHAT_IMAGE_QWEN=only bash $task_dir/image-serve.sh"
+else
+  echo "Prepared; post $gpu_dir/$IMAGE_WORKFLOW. Start with: bash $task_dir/image-serve.sh"
+  [[ "$qwen" = false ]] || echo "Qwen is on: $gpu_dir/$IMAGE_QWEN_WORKFLOW draws frames, $gpu_dir/$IMAGE_QWEN_EDIT_WORKFLOW takes reference portraits."
+fi

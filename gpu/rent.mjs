@@ -5,14 +5,16 @@
 // order until one is actually taken. Run it with SIMPLE_CHAT_RENT_DRY_RUN=1 or --print-body first -- that names the
 // offers it would take, at their present prices, and the exact request that takes one, which is what the owner is
 // agreeing to, and it spends nothing. Renting is theirs to approve; this script only carries it out.
-// The API key, the public key and the onstart script are never printed.
+// `--show ID` and `--destroy ID` are the other end of a rental, below. The API key, the public key and the onstart
+// script are never printed.
 //
 // What to ask for and what an offer costs is in local/rent-plan.ts, with tests; this file does the fetching.
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MAX_DPH_BY_GPUS, chooseOffers, createBody, emptyReason, offerQuery, redactedBody, rentPlan } from '../local/rent-plan.ts';
+import { BOOT_SECONDS, MAX_DPH_BY_GPUS, REQUEST_MS, chooseOffers, createBody, destroyInstance, emptyReason, instanceState,
+  offerQuery, redactedBody, rentPlan } from '../local/rent-plan.ts';
 
 const ATTEMPTS = 4;
 // Every request carries a deadline. A search that never answers would hang with the owner watching; a create
@@ -21,6 +23,54 @@ const SEARCH_TIMEOUT_MS = 30000;
 const RENT_TIMEOUT_MS = 60000;
 
 const args = process.argv.slice(2);
+const key = process.env.SIMPLE_CHAT_VAST_API_KEY?.trim();
+const headers = { Authorization: `Bearer ${key}`, Accept: 'application/json' };
+const dryRun = process.env.SIMPLE_CHAT_RENT_DRY_RUN === '1';
+
+// `--show ID` and `--destroy ID` reach one rental with the account's key and nothing on the machine: not its ssh, not
+// the key Vast gave the container, not its guard (trial-onstart.sh), any of which may be what failed. They end every
+// rental of the identity runbook (docs/illustrations-plan.md, "The termination"). Nothing picks an instance by
+// itself: the ID is always given, the one `rented` printed. `--show` reads it once. `--destroy` keeps to five minutes
+// on its own clock, whatever Vast answers: the guard's minute of reads, then deletes with the account's key until a
+// read says the instance is gone (`destroyInstance`, which keeps the time; this file only fetches). So a key that may
+// not delete raises no alarm over a machine the guard has deleted. The delete's own `success` is no read, and a
+// stopped instance is not gone either, since its disk is kept and billed. A key without the right to delete is not
+// answered by asking again: the owner deletes it in the console. With SIMPLE_CHAT_RENT_DRY_RUN=1 it reads once and
+// deletes nothing.
+if (args[0] === '--show' || args[0] === '--destroy') {
+  const [mode, id] = args;
+  if (args.length !== 2 || !/^[1-9]\d{0,11}$/.test(id)) {
+    console.log(JSON.stringify({ event: 'bad_arguments', usage: 'rent.mjs --show ID | --destroy ID, the ID `rented` printed' }));
+    process.exit(1);
+  }
+  if (!key) { console.log(JSON.stringify({ event: 'no_key' })); process.exit(1); }
+  const url = `https://console.vast.ai/api/v0/instances/${id}/`;
+  // One request of `ms` at most: the signal cuts the answer's body as well as the wait for it. `status: 0` is no
+  // answer, as below. The body is never printed, only what `instanceState` keeps of it.
+  const ask = async (method, ms) => {
+    try {
+      const response = await fetch(url, { method, headers, signal: AbortSignal.timeout(ms) });
+      return { status: response.status, body: await response.json().catch(() => null) };
+    } catch { return { status: 0, body: null }; }
+  };
+  const read = async ms => { const { status, body } = await ask('GET', ms); return instanceState(id, status, body); };
+  const remove = async ms => {
+    const { status, body } = await ask('DELETE', ms);
+    return { status, success: typeof body?.success === 'boolean' ? body.success : null };
+  };
+  if (mode === '--show' || dryRun) {
+    const seen = await read(REQUEST_MS);
+    console.log(JSON.stringify({ event: mode === '--show' ? 'instance' : 'would_destroy', instance: id, ...seen }));
+    process.exit(seen.state === 'unknown' ? 1 : 0);
+  }
+  const end = await destroyInstance({ read, remove, now: () => performance.now(), sleep: ms => new Promise(done => setTimeout(done, ms)),
+    log: event => console.log(JSON.stringify({ ...event, instance: id })) });
+  const confirmed = end.event === 'destroy_confirmed';
+  console.log(JSON.stringify({ ...end, instance: id,
+    ...(confirmed ? {} : { tell: 'the owner, now: the deletion is not confirmed, and the instance may still be billing' }) }));
+  process.exit(confirmed ? 0 : 1);
+}
+
 const printBody = args.includes('--print-body');
 const rest = args.filter(argument => argument !== '--print-body');
 // `--lane text` and `--lane pictures` rent one single-card machine for one lane: a session on two machines runs
@@ -29,24 +79,35 @@ const rest = args.filter(argument => argument !== '--print-body');
 // twin on the same box, or the "two independent machines" the owner asked for share a link, a disk and a failure.
 // A replacement names two: the host it replaces and the other lane's. On 2026-09-23 the measured text host drew
 // 525 W on a card our idle server did not touch, and with one ID the next in line was the picture machine's host.
-const options = { '--gpus': '1', '--lane': 'both', '--avoid-host': '' };
+// `--hours 1|2|3` is when trial-onstart.sh's guard deletes the machine, three hours unless a session asks for less;
+// the guard never extends it, and ends it sooner when told to (docs/illustrations-plan.md, "we're done"). A session
+// that gives its hours is priced by them (`rentPlan`), and `--qwen only` prices a picture machine by Qwen's files
+// alone, which is what SIMPLE_CHAT_IMAGE_QWEN=only pulls.
+const options = { '--gpus': '1', '--lane': 'both', '--avoid-host': '', '--hours': '', '--qwen': '' };
 let known = rest.length % 2 === 0;
 for (let at = 0; known && at < rest.length; at += 2) {
   if (Object.hasOwn(options, rest[at])) options[rest[at]] = rest[at + 1]; else known = false;
 }
-const gpus = Number(options['--gpus']), lane = options['--lane'];
+const gpus = Number(options['--gpus']), lane = options['--lane'], hours = Number(options['--hours'] || 3);
 const avoidHosts = options['--avoid-host'] === '' ? [] : options['--avoid-host'].split(',');
-if (!avoidHosts.every(host => /^[1-9]\d*$/.test(host))) known = false;
+if (!avoidHosts.every(host => /^[1-9]\d*$/.test(host)) || !/^[123]?$/.test(options['--hours'])
+  || !/^(only)?$/.test(options['--qwen'])) known = false;
 let plan = null;
-try { if (known && MAX_DPH_BY_GPUS[gpus]) plan = rentPlan({ gpus, lane }); } catch { /* reported below */ }
+try {
+  if (known && MAX_DPH_BY_GPUS[gpus]) {
+    plan = rentPlan({ gpus, lane, ...(options['--hours'] ? { hours } : {}), qwenOnly: options['--qwen'] === 'only' });
+  }
+} catch { /* reported below */ }
 if (!plan) {
-  console.log(JSON.stringify({ event: 'bad_arguments', usage: 'rent.mjs [--gpus 1|2] [--lane both|text|pictures] [--avoid-host ID[,ID...]] [--print-body]' }));
+  console.log(JSON.stringify({ event: 'bad_arguments', usage: 'rent.mjs [--gpus 1|2] [--lane both|text|pictures] [--avoid-host ID[,ID...]] '
+    + '[--hours 1|2|3] [--qwen only] [--print-body] | --show ID | --destroy ID' }));
   process.exit(1);
 }
 // --print-body is reviewed before a rental, so it must not need the API key to be exported.
-const key = process.env.SIMPLE_CHAT_VAST_API_KEY?.trim();
 if (!key && !printBody) { console.log(JSON.stringify({ event: 'no_key' })); process.exit(1); }
-const headers = { Authorization: `Bearer ${key}`, Accept: 'application/json' };
+// The hours the session is priced by, and what an offer costs over them, the hours and the traffic together.
+const sessionHours = Math.round(plan.sessionHours * 100) / 100;
+const session = offer => Math.round((offer.hour * plan.sessionHours + offer.download) * 100) / 100;
 
 // The key is read before --print-body prints anything, because the body carries it. A key that has not been made
 // yet is an ordinary outcome of this script, not a crash: --print-body is run on a machine where nothing is set up.
@@ -60,16 +121,16 @@ if (!publicKey.startsWith('ssh-ed25519 ') || publicKey.includes('\n') || publicK
 // Beside this file, not below the working directory: the script is run from wherever the owner happens to be.
 const script = await readFile(join(dirname(fileURLToPath(import.meta.url)), 'trial-onstart.sh'), 'utf8');
 const lines = script.split('\n');
-// The key is set as a shell variable ahead of the script's own body, so installing it does not depend on Vast
-// passing environment variables through.
-const onstart = [lines[0], `SIMPLE_CHAT_SSH_PUBLIC_KEY='${publicKey}'`, ...lines.slice(1)].join('\n');
+// The key and the rental's length are set as shell variables ahead of the script's own body, so neither depends on
+// Vast passing environment variables through.
+const onstart = [lines[0], `SIMPLE_CHAT_SSH_PUBLIC_KEY='${publicKey}'`, `SIMPLE_CHAT_TRIAL_SECONDS=${hours * 3600}`, ...lines.slice(1)].join('\n');
 const body = createBody({ plan, onstart });
 
 // The request that spends the money, with the key and the script left out of it. It is printed before the search so
 // that it can be reviewed even on a day when no offer fits, and the search is skipped without an API key.
 if (printBody) {
   console.log(JSON.stringify({ event: 'create_request', method: 'PUT', url: 'https://console.vast.ai/api/v0/asks/<offer>/',
-    gpus: plan.gpus, lane: plan.lane, maxHour: plan.maxHour, minRamGb: plan.minRamGb, sessionHours: plan.sessionHours,
+    gpus: plan.gpus, lane: plan.lane, hours, maxHour: plan.maxHour, minRamGb: plan.minRamGb, sessionHours,
     sessionGb: Math.round(plan.sessionBytes / 1e9), body: redactedBody(body) }));
   if (!key) process.exit(0);
 }
@@ -95,7 +156,7 @@ const droppedForHost = choice.candidates.length - candidates.length;
 // the search returned, what the price left, then each later rule -- and `chosen` is what is left to try, which is
 // not `withinPrice`: the price is only the first rule of four.
 console.log(JSON.stringify({ event: 'candidates', offered, withinPrice, chosen: candidates.length,
-  maxHour: plan.maxHour, gpus: plan.gpus, lane: plan.lane, droppedForUnknownPrice, droppedForCountry, droppedForFewCores, droppedForProxyOnly,
+  maxHour: plan.maxHour, gpus: plan.gpus, lane: plan.lane, sessionHours, droppedForUnknownPrice, droppedForCountry, droppedForFewCores, droppedForProxyOnly,
   minDirectPorts: plan.minDirectPorts, droppedForRam, minRamGb: plan.minRamGb, droppedForHost, avoidHost: avoidHosts.join(',') || null }));
 // Which rule emptied the list, so that a session lost to an empty search, to cores, to ports or to RAM is not read
 // as a price to raise.
@@ -106,9 +167,10 @@ if (!candidates.length) {
 
 // SIMPLE_CHAT_RENT_DRY_RUN=1 shows what would be taken and spends nothing. Checking a change to this script by
 // running it would otherwise mean renting a machine, and the offers it would have chosen are what the owner is
-// being asked to approve anyway.
-if (process.env.SIMPLE_CHAT_RENT_DRY_RUN === '1' || printBody) {
-  for (const offer of candidates.slice(0, ATTEMPTS)) console.log(JSON.stringify({ event: 'would_try', ...offer }));
+// being asked to approve anyway. `session` is that approval's sum for each: the offer's hour over the session's
+// hours, and its traffic.
+if (dryRun || printBody) {
+  for (const offer of candidates.slice(0, ATTEMPTS)) console.log(JSON.stringify({ event: 'would_try', ...offer, session: session(offer) }));
   process.exit(0);
 }
 
@@ -119,6 +181,9 @@ for (const offer of candidates.slice(0, ATTEMPTS)) {
     reliability: offer.reliability, directPorts: offer.directPorts,
   };
   let status = 0, parsed = null;
+  // The moment before the request that may create the machine: none of it exists before, so a deadline counted from
+  // here is never late, however long the answer takes (`destroyBy` below).
+  const asked = Date.now();
   try {
     const response = await fetch(`https://console.vast.ai/api/v0/asks/${offer.id}/`, {
       method: 'PUT',
@@ -131,8 +196,12 @@ for (const offer of candidates.slice(0, ATTEMPTS)) {
     try { parsed = JSON.parse(text); } catch { /* status alone describes a non-JSON body */ }
   } catch { /* status stays 0: the request may have reached Vast all the same */ }
   const rented = status >= 200 && status < 300 && parsed?.success !== false && parsed?.new_contract;
+  // `destroyBy` is the operator's own deadline on this machine's clock, in epoch seconds, counted from just before the
+  // request that created the machine: the guard's hours and the quarter of an hour allowed for the box to start.
+  // Whatever the box says, the rental's termination begins then at the latest (docs/illustrations-plan.md, "One hour").
   if (rented) {
-    console.log(JSON.stringify({ event: 'rented', ...machine, instance: parsed.new_contract, reason: null }));
+    console.log(JSON.stringify({ event: 'rented', ...machine, instance: parsed.new_contract, reason: null,
+      destroyBy: Math.floor(asked / 1000) + hours * 3600 + BOOT_SECONDS }));
     process.exit(0);
   }
   // A refusal is a status outside 2xx or Vast's own `success: false`, and only a refusal is safe to answer by

@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { portraitCases, portraitDescription, referencesOf } from './image-portraits.ts';
+import { PORTRAIT_CLOTHES, PORTRAIT_STYLE, portraitCanvas, portraitCases, portraitDescription, portraitPrompt, referencesOf } from './image-portraits.ts';
 import { STYLE } from './illustrate.ts';
 import type { Case } from './illustrate-probe.ts';
 import type { BatchIndex, Picture, References } from './image-batch.ts';
@@ -34,16 +34,28 @@ test('one portrait per person, numbered rather than named, with the appearance t
   assert.deepEqual(elin.sheet, [sheet[0]]);
   assert.equal(elin.scenario, 'battle');
   // The prompt is assembled by the frames' own `assemblePrompt`: the sheet's appearance line, the age taken out of
-  // it as everywhere else, the shared style string at the end, and the name nowhere.
+  // it as everywhere else, the portrait's own style string at the end, and the name nowhere.
   assert.ok(elin.prompt.includes('A middle-aged woman in grey'));
   assert.ok(!elin.prompt.includes('48') && !elin.prompt.includes('Элин'));
-  assert.ok(elin.prompt.endsWith(STYLE));
+  assert.ok(elin.prompt.endsWith(PORTRAIT_STYLE) && !elin.prompt.includes(STYLE));
+  assert.equal(elin.prompt, portraitPrompt('Элин', sheet[0]!.look).prompt, 'the bot\'s own recipe');
   assert.equal(elin.fromSheet, 1);
   assert.equal(elin.withoutLook, 0);
   // Nothing is happening in a reference picture: it is the person, not a moment of the story.
   assert.equal(portraitDescription('Элин').people[0]!.who, 'Элин');
   assert.equal(portraitDescription('Элин').people[0]!.look, '', 'the look comes from the sheet, as it does in a frame');
   assert.equal(portraitCases([]).length, 0);
+  // The owner wants the build to come from the portrait, so the portrait shows it: the whole figure, in clothes that
+  // do not hide it, and no expression that could argue with a look line that says grim. The sheet's robe is what the
+  // man wears in the story; in the portrait it would hide what the portrait is for.
+  const [bran] = portraitCases([{ ...cases[0]!, sheet: [{ name: 'Бран', look: 'A middle-aged man of huge heavy build, grim menacing bearing',
+    outfit: 'wearing a long fur-lined robe' }] }]);
+  assert.ok(bran!.prompt.includes(`A middle-aged man of huge heavy build, grim menacing bearing, ${PORTRAIT_CLOTHES}`));
+  assert.ok(bran!.prompt.includes('the whole body in frame'));
+  assert.ok(!bran!.prompt.includes('robe'));
+  assert.ok(!/expression|calm|smil/i.test(bran!.prompt));
+  // Drawn upright, on the text-to-image graph's latent turned: 720x1280 for the pinned Qwen graph.
+  assert.deepEqual(portraitCanvas(JSON.parse(readFileSync(resolve('gpu/image-workflow-qwen.json'), 'utf8'))), { width: 720, height: 1280 });
 });
 
 const picture = (caseId: string, file: string): Picture => ({ caseId, checkpoint: 'q.safetensors', role: 'primary',

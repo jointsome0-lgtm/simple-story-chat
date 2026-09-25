@@ -13,20 +13,38 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { assemblePrompt } from './illustrate.ts';
 import type { Description } from './illustrate.ts';
 import type { Case } from './illustrate-probe.ts';
-import type { BatchIndex, References } from './image-batch.ts';
+import { latentSizeOf } from './image-batch.ts';
+import type { BatchIndex, Graph, References } from './image-batch.ts';
 
-// A reference portrait is a body and a face with nothing happening: the frame run asks the model to keep this
-// person, not to repeat this moment. The fields are the ones every frame uses, so the style string and the name
-// stripping are the frames' own; only `look` differs, and that comes from the sheet through `assemblePrompt`.
+// A reference portrait carries the whole person, the figure as well as the face, so that a frame need not describe
+// the build every time: the owner's example is a man whose big muscles and barbarian menace should come from the
+// picture (2026-09-24). This is the recipe the bot draws its portraits by (local/picture.ts), fixed before the
+// identity run and pinned by it: the whole figure from the front, in plain close-fitting clothes of the bot's own
+// that hide none of the build and follow the person into no scene, standing, with no expression put on them — a grim
+// face is the look's to say — in a neutral style of its own, never a story's. `look` comes from the sheet through
+// `assemblePrompt`, which strips names and ages here as in every frame, and these clothes stand where a frame would
+// put the sheet's outfit. Two portraits of one look differ by the seed.
+export const PORTRAIT_CLOTHES = 'wearing a plain close-fitting white tank top, close-fitting dark grey trousers and plain dark shoes';
+export const PORTRAIT_STYLE = 'Neutral character reference illustration with natural colors, realistic proportions and clean even rendering, the build, silhouette and permanent marks clearly readable.';
+export const PORTRAIT_ACTION = 'stands upright facing the viewer, arms relaxed at the sides';
 export function portraitDescription(name: string): Description {
   return {
     shot: 'Full-length character reference, the whole body in frame, seen from the front',
     setting: 'A plain even grey backdrop, no scenery',
     moment: 'One person stands still to be looked at',
     objects: '', props: '', light: 'Even soft frontal light, no strong shadows',
-    people: [{ who: name, look: '', state: '',
-      action: 'stands upright facing the viewer, arms relaxed at the sides, calm neutral expression' }],
+    people: [{ who: name, look: '', clothes: PORTRAIT_CLOTHES, state: '', action: PORTRAIT_ACTION }],
   };
+}
+export const portraitPrompt = (name: string, look: string) =>
+  assemblePrompt(portraitDescription(name), [{ name, look, outfit: '' }], PORTRAIT_STYLE);
+
+// The canvas a portrait is drawn on: the text-to-image graph's own latent turned upright, the smaller side across. A
+// standing figure in a wide frame gets a third of the pixels; the bot applies the same rule to its own graph.
+export function portraitCanvas(graph: Graph): { width: number; height: number } {
+  const size = latentSizeOf(graph);
+  if (!size) throw new Error('The portrait graph has no latent size to turn upright');
+  return { width: Math.min(size.width, size.height), height: Math.max(size.width, size.height) };
 }
 
 // One portrait case per person of every story in `cases`. The id carries the story and a number, never the name:
@@ -36,10 +54,8 @@ export function portraitCases(cases: Case[]): Case[] {
   const stories = new Map<string, Case>();
   for (const one of cases) if (!stories.has(one.scenario)) stories.set(one.scenario, one);
   return [...stories.values()].flatMap(story => (story.sheet ?? []).map((character, order) => {
-    const description = portraitDescription(character.name);
-    const assembled = assemblePrompt(description, [character]);
-    return { id: `portrait-${story.scenario}-${order + 1}`, scenario: story.scenario, index: order + 1,
-      scene: '', sheet: [character], description, ...assembled } satisfies Case;
+    return { id: `portrait-${story.scenario}-${order + 1}`, scenario: story.scenario, index: order + 1, scene: '',
+      sheet: [character], description: portraitDescription(character.name), ...portraitPrompt(character.name, character.look) } satisfies Case;
   }));
 }
 

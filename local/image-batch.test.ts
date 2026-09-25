@@ -10,7 +10,7 @@ import { deflateSync, inflateSync, crc32 } from 'node:zlib';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { draw, buildBundles, bundlesOf, applyToWorkflow, defaultWorkflow, drawOne, latentSizeOf, parseSeeds, portraitsFor, referenceSlots, samplerSettingsOf, settled, stripPngMetadata, taskMarkdown, textEncoderOf, REVIEW } from './image-batch.ts';
+import { draw, buildBundles, bundlesOf, applyToWorkflow, defaultWorkflow, drawOne, encoderResolution, latentSizeOf, parseSeeds, phasesOf, pngSize, portraitsFor, referenceGeometry, referenceSlots, samplerSettingsOf, settled, stripPngMetadata, taskMarkdown, textEncoderOf, REVIEW } from './image-batch.ts';
 import type { Graph, Picture, References } from './image-batch.ts';
 import type { Case } from './illustrate-probe.ts';
 
@@ -119,7 +119,9 @@ function fakeComfy(options: { failCase?: string; refuse?: number; refuseUpload?:
 // whole graph in it — only once a job is over, so a delete sent while the card is still drawing removes nothing.
 // `/interrupt` stops the job the card is working through, and one given a `prompt_id` only while that is the job it
 // names (server.py:1163-1191); the interrupted job is recorded as failed, as ComfyUI records an interrupted prompt.
-// `afterQueueRead` runs once, the moment the next read of the queue has been answered.
+// `afterQueueRead` runs once, the moment the next read of the queue has been answered, and `onSubmit` once, the
+// moment the card has taken the next job and before it answers with the job's id. A `stubborn` card takes an
+// interrupt and goes on drawing.
 function serialComfy(jobMs: number) {
   const prompts = new Map<string, string>();
   const finishAt = new Map<string, number>();
@@ -127,7 +129,7 @@ function serialComfy(jobMs: number) {
   const polls = new Map<string, number>();
   const seen = { submitted: 0, interrupts: 0, queueDeletes: 0, interrupted: [] as string[] };
   let busyUntil = 0;
-  let afterQueueRead: (() => void) | undefined;
+  let afterQueueRead: (() => void) | undefined, onSubmit: (() => void) | undefined, stubborn = false;
   const settle = () => { for (const [id, at] of [...finishAt]) if (Date.now() >= at) { finishAt.delete(id); history.set(id, prompts.get(id)!); } };
   const running = () => [...finishAt.entries()].sort((a, b) => a[1] - b[1])[0]?.[0];
   const server = createServer((request, response) => {
@@ -142,6 +144,9 @@ function serialComfy(jobMs: number) {
         prompts.set(id, JSON.stringify(graph));
         busyUntil = Math.max(busyUntil, Date.now()) + jobMs;
         finishAt.set(id, busyUntil);
+        const then = onSubmit;
+        onSubmit = undefined;
+        then?.();
         return json({ prompt_id: id });
       }
       if (request.method === 'POST' && url.pathname === '/interrupt') {
@@ -149,7 +154,7 @@ function serialComfy(jobMs: number) {
         const named = (await body().catch(() => ({})) as { prompt_id?: unknown }).prompt_id;
         const id = running();
         // An interrupted prompt lands in the history too, with the whole graph in it.
-        if (id && (named === undefined || named === id)) {
+        if (id && (named === undefined || named === id) && !stubborn) {
           finishAt.delete(id);
           history.set(id, prompts.get(id)!);
           seen.interrupted.push(id);
@@ -193,6 +198,7 @@ function serialComfy(jobMs: number) {
   // The job `id` is done now, as one that was nearly done would be, and the next one takes the card.
   const end = (id: string) => { finishAt.set(id, Date.now()); settle(); };
   return { server, history, polls, seen, settle, onTheCard, end, set afterQueueRead(then: () => void) { afterQueueRead = then; },
+    set onSubmit(then: () => void) { onSubmit = then; }, set stubborn(value: boolean) { stubborn = value; },
     listen: () => new Promise<string>(done => server.listen(0, '127.0.0.1', () => done(`http://127.0.0.1:${(server.address() as AddressInfo).port}`))) };
 }
 
@@ -508,6 +514,27 @@ test('the edit graph holds as many faces as a character sheet has people, so one
   assert.deepEqual(referenceSlots(filled).map(slot => filled[slot.loader].inputs.image), faces);
   assert.throws(() => applyToWorkflow(edit, { ...values, references: [...faces, 'g.png'] }),
     { code: 'workflow_too_few_reference_slots' });
+  // The canvas is the graph's own latent, never the one the encode node makes of the first reference: a frame drawn
+  // with upright portraits is still 1280x704.
+  const upright = applyToWorkflow(edit, { ...values, references: faces.slice(0, 4) });
+  assert.deepEqual(latentSizeOf(upright), { width: 1280, height: 704 });
+  assert.deepEqual(Object.values(upright).find(node => node.class_type === 'KSampler')!.inputs.latent_image, ['6', 0]);
+  assert.equal(upright['6'].class_type, 'EmptyLatentImage');
+  // A reference reaches the encoder at the size the pinned node computes (comfy_extras/nodes_qwen.py:99-168), in
+  // multiples of 32 and rounding halves as Python does: a 720x1280 portrait at 704x1280.
+  assert.deepEqual(referenceGeometry(720, 1280, 0), [704, 1280]);
+  assert.deepEqual(referenceGeometry(1280, 720, 1024), [1376, 768]);
+  assert.deepEqual(referenceGeometry(2, 2, 0), [32, 32]);
+  assert.equal(encoderResolution(edit), 0);
+  // The text-to-image graph takes no reference, so it has no size to hand one at.
+  assert.equal(encoderResolution(JSON.parse(readFileSync(resolve('gpu/image-workflow-qwen.json'), 'utf8'))), undefined);
+  assert.deepEqual(pngSize(pngWithMetadata('{}')), { width: 2, height: 2 });
+  // A job's time by the kind of node it was spent in: from one node's start to the next one's is the first node's,
+  // and the last runs until the job is over.
+  const ran = [{ node: '11', at: 0 }, { node: '1', at: 100 }, { node: '5', at: 1100 }, { node: '4', at: 1600 },
+    { node: '7', at: 1610 }, { node: '8', at: 9610 }, { node: '9', at: 9900 }];
+  assert.deepEqual(phasesOf(edit, ran, 10000), { loadMs: 1100, encodeMs: 500, otherMs: 110, sampleMs: 8000, decodeMs: 290 });
+  assert.deepEqual(phasesOf(edit, [], 10), {});
 });
 
 // ComfyUI draws one job at a time. A picture abandoned when the wait runs out keeps the card: the next cell queues
@@ -528,29 +555,64 @@ test('a picture that outlives the wait is stopped on the card and leaves no reco
   assert.equal(comfy.onTheCard(), 0, 'a job the harness gave up on is still the card\'s');
   comfy.settle();
   assert.deepEqual([...comfy.history.keys()], [], 'the record of an abandoned job holds the whole prompt');
+
+  // Astra's case against the end of a stage: a job of 10 ms whose picture takes 300 ms to come down, 150 ms before the
+  // end. The download is cut at the end, the cell stays undrawn and is nobody's failure, and the run stops then, not
+  // before the next cell. The job's record is deleted all the same.
+  const slow = pushingComfy({ jobMs: 10, viewMs: 300 });
+  const slowUrl = await slow.listen();
+  t.after(slow.close);
+  const until = Date.now() + 150;
+  const cut = await draw({ ...options(root, slowUrl), out: join(root, 'cut'), checkpoints: ['a.safetensors'], until, pollMs: 10 });
+  const past = Date.now() - until;
+  assert.deepEqual([cut.pictures.length, cut.failures.length, cut.stopped, slow.seen.posted.length, slow.seen.cleared], [0, 0, 'budget', 1, ['p1']]);
+  assert.ok(past < 100, `the run ended ${past} ms past the end`);
+
+  // A card that takes the interrupt and goes on drawing is looked at until the reserve and not past it: the pause
+  // between two looks, five seconds here, ends there too, so the reserve's minute is all a stop can take.
+  comfy.stubborn = true;
+  const reserve = Date.now() + 1000;
+  await assert.rejects(drawOne({ baseUrl: url, timeoutMs: 5000, end: AbortSignal.timeout(500), reserve: AbortSignal.timeout(1000) },
+    defaultWorkflow(), { pollMs: 5000, waitMs: 20000 }), { code: 'out_of_time' });
+  const over = Date.now() - reserve;
+  assert.deepEqual([comfy.seen.submitted, comfy.seen.interrupts, comfy.seen.interrupted.length], [3, 3, 2]);
+  assert.ok(over < 500, `the stop went on ${over} ms past the reserve`);
 });
 
-// Two readers share one card (local/picture.ts). A reader who gives up while their own picture is still waiting in
-// the queue must not interrupt anything: the job on the card belongs to somebody who is still waiting for it.
-test('a picture given up while it waits in the queue leaves the one being drawn alone', async t => {
+// Two readers share one card (local/picture.ts). A reader who gives up before their picture is submitted puts nothing
+// on the card. One who gives up once the card has taken it, while it waits in the queue, must not interrupt anything:
+// the job on the card belongs to somebody who is still waiting for it.
+test('a picture given up before its submit never reaches the card, and one given up in the queue leaves the one being drawn alone', async t => {
   const comfy = serialComfy(400);
   const url = await comfy.listen();
   t.after(() => comfy.server.close());
   const busy = drawOne({ baseUrl: url, timeoutMs: 5000 }, defaultWorkflow(), { pollMs: 5, waitMs: 5000 });
   for (let attempt = 0; attempt < 500 && comfy.seen.submitted < 1; attempt++) await new Promise(next => setTimeout(next, 2));
 
-  // The second reader has already moved on by the time their picture is submitted, which is the order `drawOne`
-  // keeps on purpose: a job with no id is a job nobody can stop.
-  const stop = new AbortController();
-  stop.abort();
-  await assert.rejects(drawOne({ baseUrl: url, timeoutMs: 5000, signal: stop.signal }, defaultWorkflow(), { pollMs: 5, waitMs: 5000 }),
-    (error: { code?: string }) => error.code === 'cancelled');
+  const early = new AbortController();
+  early.abort();
+  await assert.rejects(drawOne({ baseUrl: url, timeoutMs: 5000, signal: early.signal }, defaultWorkflow(), { pollMs: 5, waitMs: 5000 }),
+    { code: 'cancelled' });
+  assert.deepEqual([comfy.seen.submitted, comfy.seen.queueDeletes, comfy.seen.interrupts], [1, 0, 0], 'nothing was sent, and nothing stopped');
+
+  // Given up the moment the card has taken the submit: its answer is still read, which is the order `drawOne` keeps on
+  // purpose, since a job with no id is a job nobody can stop.
+  const late = new AbortController();
+  comfy.onSubmit = () => late.abort();
+  await assert.rejects(drawOne({ baseUrl: url, timeoutMs: 5000, signal: late.signal }, defaultWorkflow(), { pollMs: 5, waitMs: 5000 }),
+    { code: 'cancelled' });
   assert.equal(comfy.seen.submitted, 2);
   assert.deepEqual(comfy.seen.interrupted, [], 'the card was drawing another reader\'s picture');
   assert.equal(comfy.seen.queueDeletes, 1, 'and the abandoned one was taken out of the queue');
   // A job that never ran writes no record, so nothing is waited for: the ten polls used to run out under every
   // cancelled picture, and `idle()` waited them out.
   assert.equal(comfy.polls.get('p2') ?? 0, 0);
+  // The end of an identity stage, come the moment the card took a submit, is answered the same way, within the reserve.
+  const end = new AbortController();
+  comfy.onSubmit = () => end.abort();
+  await assert.rejects(drawOne({ baseUrl: url, timeoutMs: 5000, end: end.signal, reserve: AbortSignal.timeout(60000) }, defaultWorkflow(),
+    { pollMs: 5, waitMs: 5000 }), { code: 'out_of_time' });
+  assert.deepEqual([comfy.seen.submitted, comfy.seen.queueDeletes, comfy.polls.get('p3') ?? 0, comfy.seen.interrupted], [3, 2, 0, []]);
   assert.ok((await busy).bytes.length > 0, 'the picture on the card was drawn and delivered');
 });
 
@@ -680,19 +742,19 @@ function acceptSocket(request: IncomingMessage, socket: Duplex) {
 // ComfyUI with its websocket, as the picture card runs it: a job's messages go to the socket of the client id it was
 // submitted with, in the order execution.py and main.py send them — `execution_start`, `executed` with the node's
 // output, `execution_success` (or `execution_error`, or `execution_interrupted`), then the record is written, then
-// `executing` with no node. `socket` is what the socket does: 'open' hears the whole job, which waits for it as it
-// would behind a socket quicker than the submit; 'late' opened after the job began and missed its start; 'silent' is
-// accepted and never spoken to; 'closing' hears the start and is hung up on; 'refused' is answered 404. `quietEnd`
-// leaves out the last message, and `statsMs` and `deleteMs` hold /system_stats and the delete back that long. Every
-// /history request that is not one `drawOne` may make, a read or a delete of one job by its id, is kept in `bare`.
-function pushingComfy(options: { socket?: 'open' | 'late' | 'silent' | 'closing' | 'refused';
-  outcome?: 'success' | 'error' | 'interrupted'; quietEnd?: boolean; jobMs?: number; statsMs?: number; deleteMs?: number } = {}) {
+// `executing` with no node. `socket` is what the socket does: 'open' hears whatever is sent once it is open; 'late'
+// opened after the job began and missed its start; 'silent' is accepted and never spoken to; 'closing' hears the
+// start and is hung up on; 'refused' is answered 404. `openMs` holds the handshake back that long, and a job submitted
+// meanwhile is told nothing of its start, as by the real server. `quietEnd` leaves out the last message, and `statsMs`,
+// `deleteMs` and `viewMs` hold /system_stats, the delete and the picture back that long. Every /history request that
+// is not one `drawOne` may make, a read or a delete of one job by its id, is kept in `bare`.
+function pushingComfy(options: { socket?: 'open' | 'late' | 'silent' | 'closing' | 'refused'; openMs?: number;
+  outcome?: 'success' | 'error' | 'interrupted'; quietEnd?: boolean; jobMs?: number; statsMs?: number; deleteMs?: number; viewMs?: number } = {}) {
   const mode = options.socket ?? 'open';
   const records = new Map<string, object>();
   const files = new Set<string>();
   const clientOf = new Map<string, string>();
   const speakers = new Map<string, ReturnType<typeof acceptSocket>>();
-  const waiting = new Map<string, () => void>();
   const upgraded = new Set<Duplex>();
   const seen = { posted: [] as string[], connected: [] as string[], reads: [] as string[], cleared: [] as string[],
     bare: [] as string[], said: [] as { type: string; at: number }[], interrupts: 0 };
@@ -739,8 +801,7 @@ function pushingComfy(options: { socket?: 'open' | 'late' | 'silent' | 'closing'
         const id = `p${++count}`;
         seen.posted.push(clientId);
         clientOf.set(id, clientId);
-        if (mode === 'open' && !speakers.has(clientId)) waiting.set(clientId, () => begin(id));
-        else begin(id);
+        begin(id);
         return json({ prompt_id: id, number: count });
       }
       if (url.pathname === '/system_stats') {
@@ -770,6 +831,7 @@ function pushingComfy(options: { socket?: 'open' | 'late' | 'silent' | 'closing'
         return json({});
       }
       if (url.pathname === '/view' && files.has(String(url.searchParams.get('filename')))) {
+        await delay(options.viewMs ?? 0);
         response.setHeader('content-type', 'image/png');
         return response.end(pngWithMetadata('{"prompt":"PRIVATE_SCENE_TEXT"}'));
       }
@@ -781,16 +843,17 @@ function pushingComfy(options: { socket?: 'open' | 'late' | 'silent' | 'closing'
   if (mode !== 'refused') server.on('upgrade', (request: IncomingMessage, socket: Duplex) => {
     upgraded.add(socket);
     socket.on('close', () => upgraded.delete(socket));
-    const speaker = acceptSocket(request, socket);
-    const clientId = new URL(request.url!, 'http://127.0.0.1').searchParams.get('clientId') ?? '';
-    seen.connected.push(clientId);
-    if (mode === 'silent') return;
-    // The greeting ComfyUI sends every socket first (server.py:287); it names no job.
-    speaker.send({ type: 'status', data: { status: { exec_info: { queue_remaining: running ? 1 : 0 } }, sid: clientId } });
-    speakers.set(clientId, speaker);
-    socket.on('close', () => { if (speakers.get(clientId) === speaker) speakers.delete(clientId); });
-    waiting.get(clientId)?.();
-    waiting.delete(clientId);
+    setTimeout(() => {
+      if (socket.destroyed) return;
+      const speaker = acceptSocket(request, socket);
+      const clientId = new URL(request.url!, 'http://127.0.0.1').searchParams.get('clientId') ?? '';
+      seen.connected.push(clientId);
+      if (mode === 'silent') return;
+      // The greeting ComfyUI sends every socket first (server.py:287); it names no job.
+      speaker.send({ type: 'status', data: { status: { exec_info: { queue_remaining: running ? 1 : 0 } }, sid: clientId } });
+      speakers.set(clientId, speaker);
+      socket.on('close', () => { if (speakers.get(clientId) === speaker) speakers.delete(clientId); });
+    }, options.openMs ?? 0);
   });
   const over = () => seen.said.find(one => one.type === 'over');
   return { seen, over,
@@ -818,6 +881,25 @@ test('the socket\'s word that a job is over ends the wait at once, and a socket 
   await settled();
   assert.deepEqual(comfy.seen.cleared, ['p1']);
   assert.deepEqual(comfy.seen.bare, []);
+  // A socket that opens late, as one through a tunnel may: the submit waits for it, so the job is still heard from
+  // its start, and the picture knows where its time went and whether its loaders ran.
+  const slow = pushingComfy({ jobMs: 50, openMs: 300 });
+  const slowUrl = await slow.listen();
+  t.after(slow.close);
+  const heard = await drawOne({ baseUrl: slowUrl, timeoutMs: 5000 }, defaultWorkflow(), { pollMs: 10000, waitMs: 20000 });
+  assert.equal(heard.timing?.loaderCacheMiss, true);
+  assert.deepEqual(slow.seen.reads, ['p1']);
+  // Astra's cases, each well inside the socket's 300 ms: a cancel, the end of a stage, and the caller's whole wait.
+  // Each ends the wait for the socket then, and nothing is submitted.
+  const stop = new AbortController();
+  setTimeout(() => stop.abort(), 20);
+  for (const [comfy, waitMs, code] of [[{ signal: stop.signal }, 20000, 'cancelled'], [{ end: AbortSignal.timeout(80) }, 20000, 'out_of_time'],
+    [{}, 80, 'image_timeout']] as const) {
+    const began = performance.now();
+    await assert.rejects(drawOne({ baseUrl: slowUrl, timeoutMs: 5000, ...comfy }, defaultWorkflow(), { pollMs: 10000, waitMs }), { code });
+    assert.ok(performance.now() - began < 200, `${code}: ${Math.round(performance.now() - began)} ms`);
+  }
+  assert.equal(slow.seen.posted.length, 1, 'nothing reached the card after the first picture');
 });
 
 test('a socket that opened after the job began is not taken at its word for the outputs: the record is read', async t => {
@@ -853,6 +935,12 @@ test('a socket that is refused, says nothing or hangs up leaves the picture to t
     assert.deepEqual(comfy.seen.cleared, ['p1'], socket);
     assert.deepEqual(comfy.seen.bare, [], socket);
   }
+  // A run that measures the card (`requireSocket`) fails the cell instead, before anything reaches the card.
+  const refused = pushingComfy({ socket: 'refused' });
+  const url = await refused.listen();
+  t.after(refused.close);
+  await assert.rejects(drawOne({ baseUrl: url, timeoutMs: 5000 }, defaultWorkflow(), { requireSocket: true }), { code: 'comfy_socket_unavailable' });
+  assert.deepEqual(refused.seen.posted, []);
 });
 
 test('a slow /system_stats holds up nothing, and its answer joins the video memory when it lands', async t => {
@@ -1084,6 +1172,12 @@ test('a review bundle names no checkpoint, and the key that does stays outside i
     const task = readFileSync(join(folder, 'TASK.md'), 'utf8');
     assert.ok(!task.includes('Имена до модели картинок не доходят'));
     assert.match(task, /Если в `prompt_sent` осталось имя/);
+    // Question 5 asks about the style and the people apart, and about a face and a figure apart: an even style
+    // hides changing faces, and a face on a body that lost its build is no person kept.
+    assert.match(task, /а\) Стиль: держится ли один стиль/);
+    assert.match(task, /б\) Люди: .*отдельно по лицу и отдельно по фигуре/);
+    assert.match(task, /Лицо на месте, а телосложение потеряно — это провал фигуры/);
+    assert.ok(!task.includes('checks.json'), 'the sheet of checks belongs to an identity bundle');
     // Each session sees both checkpoints, so no bundle is about one of them.
     const key = JSON.parse(readFileSync(join(root, 'run', 'keys', `${bundle.name}.json`), 'utf8')) as { checkpoint: string }[];
     assert.equal(new Set(key.map(one => one.checkpoint)).size, 2);

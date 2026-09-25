@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { chooseOffers, createBody, describeOffer, emptyReason, offerQuery, redactedBody, rentPlan } from './rent-plan.ts';
+import { BOOT_SECONDS, DESTROY_SECONDS, chooseOffers, createBody, describeOffer, destroyInstance, emptyReason, instanceState, offerQuery, redactedBody, rentPlan } from './rent-plan.ts';
 import type { RawOffer } from './rent-plan.ts';
 
 const RENT = fileURLToPath(new URL('../gpu/rent.mjs', import.meta.url));
@@ -70,6 +70,11 @@ test('the Qwen comparison is pinned beside the rest and is priced only by the se
   assert.equal(plan.sessionBytes, defaultDownloadBytes() + 6000000000, 'the opt-in is priced into every session');
   // And it still fits the disk the plan rents: the pinned files, the opt-in, and about 13 GiB for torch.
   assert.ok((plan.sessionBytes + qwen) / 1e9 + 14 < plan.diskGb, 'the opt-in does not fit the rented disk');
+  // A picture machine that pulls Qwen alone, as the identity runbook's does, is priced by those three files and torch,
+  // on the same disk; any other machine is refused the flag rather than priced for less than it pulls.
+  const alone = rentPlan({ lane: 'pictures', qwenOnly: true });
+  assert.deepEqual([alone.sessionBytes, alone.diskGb], [qwen + 5000000000, rentPlan({ lane: 'pictures' }).diskGb]);
+  assert.throws(() => rentPlan({ qwenOnly: true }), /picture machine/);
 });
 
 test('a session on two machines rents each lane its own disk and prices it by its own downloads', () => {
@@ -153,6 +158,9 @@ test('offers are ordered for a session of hours, not of minutes', () => {
   assert.deepEqual(candidates.map(o => o.id), ['cheap-by-the-hour', 'dear-by-the-hour']);
   assert.ok(candidates[0].hour * 0.75 + candidates[0].download > candidates[1].hour * 0.75 + candidates[1].download,
     'the same pair in the other order for a 45-minute session');
+  // A rental given its hours is billed for them and for what the guard does not count: the quarter of an hour before
+  // its clock starts, and the twenty seconds of "we're done" and the five minutes of a destroy after it ends.
+  assert.equal(Math.round(rentPlan({ lane: 'pictures', hours: 1 }).sessionHours * 60), 80);
 });
 
 test('the image and the host tried first are pinned, because a rental pays for a wrong one', () => {
@@ -260,7 +268,7 @@ test('the create body asks for direct ssh, and --print-body shows it without the
 // machine, with no ssh key either. Both runs below stop before the search; nothing here reaches vast.ai.
 test('--print-body prints the request without a key, and says so in one line when there is no ssh key', () => {
   const home = mkdtempSync(join(tmpdir(), 'simple-chat-rent-'));
-  const run = () => spawnSync(process.execPath, [RENT, '--print-body'],
+  const run = (...extra: string[]) => spawnSync(process.execPath, [RENT, '--print-body', ...extra],
     { env: { PATH: process.env.PATH ?? '', HOME: home }, encoding: 'utf8', timeout: 30000 });
   try {
     const missing = run();
@@ -277,40 +285,114 @@ test('--print-body prints the request without a key, and says so in one line whe
     assert.equal(shown.body.disk, rentPlan().diskGb);
     assert.match(shown.body.onstart, /^\[redacted: \d+ lines, \d+ bytes, ssh key inside\]$/);
     assert.ok(!printed.stdout.includes('AAAAC3NzaC1secret'), 'the key stays out of the terminal');
+    // The guard deletes the machine after three hours unless the session asks for one or two, and never after more.
+    // A session that gives its hours is priced by them, and the identity runbook's by Qwen's download alone.
+    assert.deepEqual([shown.hours, shown.sessionHours], [3, 2.5]);
+    const hour = JSON.parse(run('--lane', 'pictures', '--hours', '1', '--qwen', 'only').stdout.trim());
+    assert.deepEqual([hour.hours, hour.sessionHours, hour.sessionGb], [1, 1.34, 22]);
+    for (const refused of [['--hours', '4'], ['--qwen', 'only'], ['--qwen', 'true']]) {
+      const longer = run(...refused);
+      assert.equal(longer.status, 1);
+      assert.equal(JSON.parse(longer.stdout.trim()).event, 'bad_arguments', refused.join(' '));
+    }
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
 });
 
-// A canned Vast for the attempt loop: it answers the search from STUB_OFFERS and the create request as STUB_PUT
-// asks. `fetch` is replaced before gpu/rent.mjs is loaded, so no request in the test below leaves this machine.
-const STUB = `globalThis.fetch = async (url) => {
-  if (String(url).includes('/bundles/')) return new Response(process.env.STUB_OFFERS, { status: 200 });
+// A canned Vast. It answers the search from STUB_OFFERS, the create request as STUB_PUT asks, a read of an instance
+// with the next state of STUB_READS (the last one repeats) and a delete with STUB_DELETE's status. Its time is
+// virtual: a pause takes none of the real kind and moves both clocks on by its length, and the answer that creates
+// the machine takes fifty seconds. Every request is written to STUB_LOG with the second it was sent at and the bound
+// its signal was given. `fetch` is replaced before gpu/rent.mjs is loaded, so no request in the test below leaves
+// this machine.
+const STUB = `import { appendFileSync } from 'node:fs';
+const reads = (process.env.STUB_READS ?? '').split(',');
+const answers = { present: [200, { instances: { id: 123, actual_status: 'running', intended_status: 'running' } }],
+  gone: [200, { instances: null }], missing: [404, {}], failing: [500, {}], empty: [200, {}], other: [200, { instances: { id: 124 } }] };
+let skew = 0;
+const later = globalThis.setTimeout, wall = Date.now, monotonic = performance.now.bind(performance);
+globalThis.setTimeout = (next, ms = 0, ...rest) => { skew += ms; return later(next, 0, ...rest); };
+Date.now = () => wall() + skew;
+performance.now = () => monotonic() + skew;
+const timeout = AbortSignal.timeout.bind(AbortSignal);
+let bound = 0;
+AbortSignal.timeout = ms => { bound = ms; return timeout(ms); };
+globalThis.fetch = async (url, init = {}) => {
+  const path = new URL(url).pathname, method = init.method ?? 'GET';
+  appendFileSync(process.env.STUB_LOG, method + ' ' + Math.round(skew / 1000) + 's ' + bound + 'ms ' + path + '\\n');
+  if (path.includes('/bundles/')) return new Response(process.env.STUB_OFFERS, { status: 200 });
+  if (method === 'DELETE') return new Response('{"success":true}', { status: Number(process.env.STUB_DELETE ?? 200) });
+  if (method === 'GET') {
+    const [status, body] = answers[reads.length > 1 ? reads.shift() : reads[0]];
+    return new Response(JSON.stringify(body), { status });
+  }
   if (process.env.STUB_PUT === 'reject') throw new TypeError('fetch failed');
-  return new Response('{"success":true}', { status: 200 });
+  if (process.env.STUB_PUT !== 'contract') return new Response('{"success":true}', { status: 200 });
+  skew += 50000;
+  return new Response('{"success":true,"new_contract":123}', { status: 200 });
 };
 `;
 
-test('an answer that names no instance stops the loop instead of renting the next offer too', () => {
+test('an answer that is not certain is never taken for the outcome, of a rental or of its destroy', async () => {
+  // One read of an instance: only a 404, and a 200 whose record is null, say it is gone. Of a record, two status words
+  // are kept, and only while they are plain words.
+  const present = { instances: { id: 123, actual_status: 'exited', intended_status: 'ssh-ed25519 AAAA' } };
+  assert.deepEqual(([[404, {}], [200, { instances: null }], [200, {}], [500, { instances: null }], [0, null], [200, { instances: { id: 124 } }],
+    [200, present]] as const).map(([status, body]) => instanceState('123', status, body).state),
+  ['gone', 'gone', 'unknown', 'unknown', 'unknown', 'unknown', 'present']);
+  assert.deepEqual(instanceState('123', 200, present), { state: 'present', status: 200, actual: 'exited', intended: null });
+
+  // The destroy's own clock, virtual, against a Vast that answers every request after 19 s, one whose reads never
+  // answer, one whose deletes never do, and one that answers in five seconds, which leaves a last pause to be cut. A
+  // request not answered within its bound comes back empty then, as AbortSignal.timeout makes it in gpu/rent.mjs.
+  // Whatever Vast does, the destroy ends five minutes after it began, nothing is sent after them and no request is
+  // bounded past them, and the first delete waits out the guard's minute. Returned: how it ended, its seconds, the
+  // second of the first delete, and the requests sent.
+  const running = instanceState('123', 200, { instances: { id: 123, actual_status: 'running' } });
+  const clocked = async (readMs: number, removeMs: number) => {
+    let clock = 0;
+    const sent: { method: string; at: number; bound: number }[] = [];
+    const answer = async <T>(method: string, bound: number, takes: number, value: T, none: T) => {
+      sent.push({ method, at: clock, bound });
+      clock += Math.min(takes, bound);
+      return takes <= bound ? value : none;
+    };
+    const end = await destroyInstance({ now: () => clock, sleep: async ms => { clock += ms; }, log: () => undefined,
+      read: bound => answer('GET', bound, readMs, running, instanceState('123', 0, null)),
+      remove: bound => answer('DELETE', bound, removeMs, { status: 200, success: true }, { status: 0, success: null }) });
+    const limit = DESTROY_SECONDS * 1000;
+    assert.ok(sent.every(one => one.at < limit && Number.isInteger(one.bound) && one.bound <= Math.min(20000, limit - one.at)));
+    return [end.event, clock / 1000, sent.find(one => one.method === 'DELETE')!.at / 1000, sent.length];
+  };
+  assert.deepEqual(await clocked(19000, 19000), ['destroy_unconfirmed', 300, 77, 13]);
+  assert.deepEqual(await clocked(Infinity, 0), ['destroy_unconfirmed', 300, 80, 18]);
+  assert.deepEqual(await clocked(0, Infinity), ['destroy_unconfirmed', 300, 60, 22]);
+  assert.deepEqual(await clocked(5000, 5000), ['destroy_unconfirmed', 300, 65, 25]);
+
   const home = mkdtempSync(join(tmpdir(), 'simple-chat-rent-'));
   try {
     mkdirSync(join(home, '.ssh'));
     writeFileSync(join(home, '.ssh', 'simple_chat_vast_ed25519.pub'), 'ssh-ed25519 AAAAC3NzaC1secret owner@host\n');
-    const stub = join(home, 'stub.mjs');
+    const stub = join(home, 'stub.mjs'), log = join(home, 'requests.log');
     writeFileSync(stub, STUB);
     const offers = JSON.stringify({ offers: [offer({ id: 'first' }), offer({ id: 'second', dph_total: 0.95 })] });
-    const run = (put: string) => spawnSync(process.execPath,
-      ['--import', pathToFileURL(stub).href, RENT, '--gpus', '2'],
-      { encoding: 'utf8', timeout: 30000, env: { PATH: process.env.PATH ?? '', HOME: home,
-        SIMPLE_CHAT_VAST_API_KEY: 'stub', STUB_OFFERS: offers, STUB_PUT: put } });
+    const run = (env: Record<string, string>, ...args: string[]) => {
+      writeFileSync(log, '');
+      const result = spawnSync(process.execPath, ['--import', pathToFileURL(stub).href, RENT, ...args],
+        { encoding: 'utf8', timeout: 30000, env: { PATH: process.env.PATH ?? '', HOME: home,
+          SIMPLE_CHAT_VAST_API_KEY: 'stub-account-key', STUB_OFFERS: offers, STUB_LOG: log, ...env } });
+      assert.equal(result.stderr, '', 'an answer the script cannot read is an outcome, not a stack trace');
+      assert.ok(!result.stdout.includes('stub-account-key'), 'the account key is never printed');
+      return { status: result.status, events: result.stdout.trim().split('\n').map(line => JSON.parse(line)),
+        requests: readFileSync(log, 'utf8').split('\n').filter(Boolean) };
+    };
     // A 2xx body the script cannot read, and a request that never came back: after either one an instance may be
     // billing, so the money stops there and the owner is told where to look, instead of a second machine being
     // rented on top of the first.
     for (const [put, reason] of [['unrecognised', 'no instance named'], ['reject', 'no answer']]) {
-      const result = run(put);
-      assert.equal(result.status, 1, put);
-      assert.equal(result.stderr, '', 'an answer the script cannot read is an outcome, not a stack trace');
-      const events = result.stdout.trim().split('\n').map(line => JSON.parse(line));
+      const { status, events } = run({ STUB_PUT: put }, '--gpus', '2');
+      assert.equal(status, 1, put);
       // Both offers passed every rule, and the line the owner reads says so rather than leaving it to be computed.
       assert.deepEqual([events[0].event, events[0].offered, events[0].chosen], ['candidates', 2, 2]);
       const attempts = events.filter(event => event.event.startsWith('attempt'));
@@ -318,6 +400,51 @@ test('an answer that names no instance stops the loop instead of renting the nex
         [['attempt_uncertain', 'first', reason]], 'only the first offer was asked for');
       assert.match(attempts[0].check, /vast\.ai/, 'and the owner is sent to check the instance list');
     }
+    // An answer that names its instance ends the loop, with the operator's own deadline: the guard's hour and the
+    // quarter of an hour the box is given to start, counted from before the request that created the machine, never
+    // from its answer, which took fifty seconds here. Before it, the dry run prices each offer for the whole of that
+    // rental: $0.921 and $0.971 an hour over 1 h 20 min 20 s, and $0.16 of traffic.
+    const priced = run({ SIMPLE_CHAT_RENT_DRY_RUN: '1' }, '--gpus', '2', '--hours', '1').events;
+    assert.deepEqual([priced[0].sessionHours, ...priced.slice(1).map(one => [one.id, one.session])], [1.34, ['first', 1.39], ['second', 1.46]]);
+    const before = Math.floor(Date.now() / 1000);
+    const rented = run({ STUB_PUT: 'contract' }, '--gpus', '2', '--hours', '1').events.at(-1);
+    assert.deepEqual([rented.event, rented.offer, rented.instance], ['rented', 'first', 123]);
+    assert.ok(rented.destroyBy >= before + 3600 + BOOT_SECONDS && rented.destroyBy <= Date.now() / 1000 + 3600 + BOOT_SECONDS);
+
+    // The other end of a rental, by its ID and the account's key alone. Nothing is asked without an ID, or of one that
+    // is not a number.
+    for (const args of [['--destroy'], ['--show', '123/']]) {
+      const { status, events, requests } = run({}, ...args);
+      assert.deepEqual([status, events.map(event => event.event), requests], [1, ['bad_arguments'], []], args.join(' '));
+    }
+    const shown = run({ STUB_READS: 'present' }, '--show', '123');
+    assert.deepEqual([shown.status, shown.events, shown.requests],
+      [0, [{ event: 'instance', instance: '123', state: 'present', status: 200, actual: 'running', intended: 'running' }], ['GET 0s 20000ms /api/v0/instances/123/']]);
+    // The rest by the stub's clock: which request went out at which second.
+    const timeline = (requests: string[]) => requests.map(request => request.split(' ').slice(0, 2).join(' ')).join(', ');
+    const reads = (...seconds: number[]) => seconds.map(second => `GET ${second}s`).join(', ');
+    // A destroy's dry run only reads, and an instance the guard deletes within its minute is read as gone and never
+    // deleted with the account's key.
+    for (const [env, event, seconds] of [[{ STUB_READS: 'present', SIMPLE_CHAT_RENT_DRY_RUN: '1' }, 'would_destroy', [0]],
+      [{ STUB_READS: 'present,present,gone' }, 'destroy_confirmed', [0, 10, 20]]] as const) {
+      const { status, events, requests } = run(env, '--destroy', '123');
+      assert.deepEqual([status, events.map(one => one.event), timeline(requests)], [0, [event], reads(...seconds)]);
+    }
+    // One still there after the guard's minute is deleted, and read every ten seconds until a read says it is gone;
+    // the delete's own `success` is no such read, and it is sent again after half a minute.
+    const deleted = run({ STUB_READS: [...Array(10).fill('present'), 'missing'].join(',') }, '--destroy', '123');
+    assert.deepEqual([deleted.status, deleted.events.map(event => event.event), timeline(deleted.requests)],
+      [0, ['destroy_sent', 'destroy_sent', 'destroy_confirmed'], `${reads(0, 10, 20, 30, 40, 50, 60)}, DELETE 60s, ${reads(70, 80, 90)}, DELETE 90s, GET 100s`]);
+    // Reads that say nothing certain end, five minutes after the first, as a deletion not confirmed, and the owner is
+    // to be told; a key that may not delete ends so at once.
+    const unsure = run({ STUB_READS: 'failing,empty,other' }, '--destroy', '123');
+    assert.deepEqual([unsure.status, unsure.events.at(-1).event, unsure.requests.length, timeline(unsure.requests.slice(-3))],
+      [1, 'destroy_unconfirmed', 30 + 8, 'DELETE 270s, GET 280s, GET 290s']);
+    assert.ok(Number(unsure.requests.at(-1)!.split(' ')[2].replace('ms', '')) <= 10000, 'the last read is cut at the time left');
+    assert.match(unsure.events.at(-1).tell, /owner/);
+    const refused = run({ STUB_READS: 'present', STUB_DELETE: '403' }, '--destroy', '123');
+    assert.deepEqual([refused.status, refused.events.map(event => event.event), timeline(refused.requests.slice(-1))],
+      [1, ['destroy_sent', 'destroy_refused'], 'DELETE 60s']);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
