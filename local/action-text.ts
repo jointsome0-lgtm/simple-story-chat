@@ -85,7 +85,7 @@ export function once(text: string, from: string, to: string): string {
   return text.slice(0, at) + to + text.slice(at + from.length);
 }
 
-type Schema = { type?: string | string[]; enum?: unknown[]; properties?: Record<string, Schema>; required?: string[];
+export type Schema = { type?: string | string[]; enum?: unknown[]; properties?: Record<string, Schema>; required?: string[];
   additionalProperties?: boolean; items?: Schema; maxItems?: number; minItems?: number };
 // The bot's frame request with the changes, the people up to six, and `role` and `facing` required right after
 // `who`, so that the model writes them before the look.
@@ -315,7 +315,8 @@ function instrument(inner: Provider, story: string, kind: StepName, log: (row: A
 export const sharpRequest = (theme: string): ModelRequest => ({ system: '', maxOutputTokens: SHARP_TOKENS, outputSchema: SHARP_SCHEMA,
   messages: [{ role: 'user', content: sharpInstruction(theme) }] });
 
-const USER = 'action';
+// The one reader of each story's own store.
+export const USER = 'action';
 type RunContext = { root: string; model: TextModel; pins: string; log: (row: Attempt) => void; say: (event: object) => void };
 
 // One story, step by step, resumed where it stopped: a step with an outcome is never asked again, and a scene already

@@ -2,9 +2,13 @@
 // simple-serving gateway behind the real adapter, with scripted failures, and a judge that writes made-up answers.
 // Pictures come from local/fake-comfy.ts. Nothing here models a card or a model: every word a fake writes is made up
 // here, and in the sharp stories it carries the dry run's marker, so that the boundary test has something to find.
+import { createHash } from 'node:crypto';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { ACTION_STORIES, MARKER_STORY, SHARP_THEMES } from '../examples/action-set.ts';
-import { FACINGS } from './action-text.ts';
-import type { Fetch } from './action-text.ts';
+import { FACINGS, isSharp } from './action-text.ts';
+import type { Fetch, Schema } from './action-text.ts';
+import type { ChecklistInput, Exec, RawChecklist } from './action-judge.ts';
 
 // What the fake gateway does to one kind of call of one story: `unparsed` answers something that is not JSON twice,
 // `retry` once and then a valid reply, `truncated` a valid reply cut at the limit, `duplicate_roles` a variant whose
@@ -108,4 +112,61 @@ export function fakeGateway({ key, model = 'gemma-4-31b-heretic-nvfp4', stories 
     return new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream' } });
   };
   return { fetch, calls, classes };
+}
+
+// ---- The judge ----
+
+// What the fake judge does with one attempt of one session, by `<story>/<session>`, from the first attempt on: valid
+// answers, a block that breaks its schema (`invalid`), no block at all (`missing`), or prose and a malformed block that
+// carry the marker (`marker`). A session the script does not name gets valid answers.
+export type JudgeFault = 'valid' | 'invalid' | 'missing' | 'marker';
+const pick = (seed: string, values: unknown[]) => values[parseInt(createHash('sha256').update(seed).digest('hex').slice(0, 8), 16) % values.length];
+// Answers that fit a schema of the three picture kinds, each value drawn from its enum by the hash of its path.
+function answersFor(schema: Schema, path: string): unknown {
+  if (schema.enum) return pick(path, schema.enum);
+  if (schema.properties) return Object.fromEntries(Object.entries(schema.properties).map(([name, one]) => [name, answersFor(one, `${path}/${name}`)]));
+  return schema.type === 'array' ? [] : schema.type === 'boolean' ? true : 'x';
+}
+// A checklist from the sheet: its first four people, a hold between each two of them, the first two holds essential
+// but in the jellyfish scene, where none is; a gaze, a garment, the scale where the set has giants, and a target the
+// beach scene misses. A sharp scene's quotes carry the marker, as its scene's words would.
+function checklistFor(story: string, input: ChecklistInput, secret: string): RawChecklist {
+  const people = input.sheet.slice(0, 4).map((line, at) => ({ handle: `participant ${at + 1}`, entry: line.entry as string | null }));
+  if (people.length < 2) people.push({ handle: 'a stranger', entry: null });
+  const quote = `цитата${secret}`;
+  return { participants: people,
+    relations: people.slice(1).map((one, at) => ({ subject: people[at].handle, verb: 'holds', object: one.handle, part: 'arm', side: at % 2 ? 'left' : '',
+      essential: story !== 'jellyfish' && at < 2, quote })),
+    gazes: [{ who: people[0].handle, text: 'looks back', quote }], faces: [], clothes: [{ who: people[1].handle, text: 'a cloak', quote }],
+    scale: ['giants', 'gulliver'].includes(story) ? [{ text: 'a giant among small people', quote }] : [],
+    target: { contact: 'yes', participants: 'yes', moment: story === 'beach' ? 'no' : 'yes' }, contradictions: [] };
+}
+// Answers to the bundle in `dir` as a judge or the owner gives them: a checklist from the sheet, or for the other kinds
+// a value from each enum of the bundle's schema. A sharp scene's words carry the marker.
+export function madeUpAnswers(story: string, session: string, dir: string, marker: string): unknown {
+  const input = JSON.parse(readFileSync(join(dir, 'input.json'), 'utf8'));
+  const schema = JSON.parse(readFileSync(join(dir, 'schema.json'), 'utf8')) as Schema;
+  return session === 'checklist' ? checklistFor(story, input as ChecklistInput, isSharp(story) ? ` ${marker}` : '') : answersFor(schema, `${story}/${session}`);
+}
+// A judge in place of `codex exec`: it reads the copy it is started in, as a session does, and writes its events,
+// its stderr and its report where the command says. Its words are made up; a sharp scene's carry the marker.
+export function fakeJudge({ marker, script = {} }: { marker: string; script?: Record<string, JudgeFault[]> }) {
+  const runs: { story: string; session: string; attempt: number; model: string; fault: JudgeFault }[] = [];
+  const exec: Exec = async (command, args, options) => {
+    const dir = args[args.indexOf('-C') + 1], report = args[args.indexOf('-o') + 1], model = args[args.indexOf('-m') + 1];
+    const [story, session, attempt] = basename(dir).split('.');
+    const fault = script[`${story}/${session}`]?.[Number(attempt) - 1] ?? 'valid';
+    runs.push({ story, session, attempt: Number(attempt), model, fault });
+    const secret = isSharp(story) ? ` ${marker}` : '';
+    const answers = madeUpAnswers(story, session, dir, marker);
+    const block = (value: unknown) => '```json\n' + JSON.stringify(value, null, 2) + '\n```\n';
+    writeFileSync(options.stdout, JSON.stringify({ type: 'item.completed', text: `read input.json${secret}` }) + '\n');
+    writeFileSync(options.stderr, '');
+    writeFileSync(report, fault === 'missing' ? `Всё рассмотрено${secret}, но ответа нет.\n`
+      : fault === 'invalid' ? `Ответ${secret}.\n` + block({ ...answers as object, extra: 'field' })
+        : fault === 'marker' ? `Ответ про${secret}.\n` + '```json\n{"answers": "' + marker + '"\n```\n'
+          : `Ответ${secret}.\n` + block(answers));
+    return 0;
+  };
+  return { exec, runs };
 }
