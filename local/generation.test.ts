@@ -150,8 +150,8 @@ test('cancellation or deletion during summarization cannot commit late memory', 
       // The status leaves the queue for the stages in order and counts the characters that came; the rows carry sizes.
       assert.deepEqual(f.events.map(event => event.stage), ['extracting', 'queued', 'extracting', 'extracting', 'validating', 'saving', 'done'], label);
       assert.ok(f.events.some(event => event.outputCharacters === f.summary(extraction).text.length), label);
-      const saved = f.rows.find(row => row.event === 'memory_compacted')!;
-      assert.deepEqual([f.rows.map(row => row.event), saved.automatic, saved.sceneCount, saved.factCount, saved.inputBytesAfter! < saved.inputBytesBefore!],
+      const saved = f.rows.find(row => row.event === 'memory_compacted');
+      assert.deepEqual([f.rows.map(row => row.event), saved?.automatic, saved?.sceneCount, saved?.factCount, saved?.inputBytesAfter! < saved?.inputBytesBefore!],
         [['compaction_request_started', 'compaction_request_completed', 'memory_compacted', 'scene_request_completed'], true, 3, 3, true], label);
     }
     assert.equal(f.calls.length, calls, label);
