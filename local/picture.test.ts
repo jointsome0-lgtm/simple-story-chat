@@ -90,7 +90,14 @@ function fakeComfy(options: { jobMs?: number; failing?: boolean } = {}) {
         if (running !== undefined && (named === undefined || named === running)) { finishAt.delete(running); done.add(running); }
         return json({});
       }
-      if (request.method === 'POST' && url.pathname === '/queue') { seen.queueDeletes++; return json({}); }
+      // As ComfyUI deletes: a job still waiting leaves the queue, and the one it draws stays (the stop's confirmation
+      // reads the queue after it).
+      if (request.method === 'POST' && url.pathname === '/queue') {
+        seen.queueDeletes++;
+        const running = [...finishAt.keys()][0];
+        for (const id of ((await body().catch(() => ({}))) as { delete?: unknown }).delete as string[] ?? []) if (id !== running) finishAt.delete(id);
+        return json({});
+      }
       // The card draws one job and queues the rest, and says which is which (local/image-batch.ts `stopJob`).
       if (url.pathname === '/queue') {
         const waiting = [...finishAt.keys()];
