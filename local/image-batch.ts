@@ -483,49 +483,57 @@ export function withoutLooks(one: Case, bound: string[]): string {
 }
 
 // What the card is drawing now and what waits behind it. A queue entry is an array whose second element is the
-// prompt id; a server that answers with anything else, or does not answer at all, is read as an empty queue, and
-// then `stopJob` below waits for no record.
-const promptIds = (list: unknown): string[] => (Array.isArray(list) ? list : [])
+// prompt id. A server that does not answer, or answers without the two lists, has read nothing (`undefined`), and
+// `stopJob` below takes that for a job that may still be on the card.
+type Queue = { running: string[]; pending: string[] };
+const promptIds = (list: unknown[]): string[] => list
   .flatMap(one => (Array.isArray(one) && typeof one[1] === 'string' ? [one[1]] : []));
-async function readQueue(comfy: Comfy): Promise<{ running: string[]; pending: string[] }> {
+async function readQueue(comfy: Comfy): Promise<Queue | undefined> {
   try {
     const seen = await (await call(comfy, '/queue')).json() as { queue_running?: unknown; queue_pending?: unknown };
+    if (!Array.isArray(seen.queue_running) || !Array.isArray(seen.queue_pending)) return undefined;
     return { running: promptIds(seen.queue_running), pending: promptIds(seen.queue_pending) };
-  } catch { return { running: [], pending: [] }; }
+  } catch { return undefined; }
 }
 
-// A picture that outlives the wait is still the card's. ComfyUI runs one job at a time, so the next cell would
-// queue behind the abandoned one and inherit its seconds — and the seconds are what the rental is decided on — and
-// its history entry, which holds the whole prompt and the workflow, is written when it finishes, which is after the
-// delete in `drawOne`'s `finally` has already run. So: out of the queue if it is still waiting, interrupted if it is
-// drawing, and then waited for, so that there is a record for the delete to remove.
+// A picture that outlives the wait, or whose polls fail, is still the card's. ComfyUI runs one job at a time, so the
+// next cell would queue behind the abandoned one and inherit its seconds — and the seconds are what the rental is
+// decided on — and its history entry, which holds the whole prompt and the workflow, is written when it finishes, so
+// a delete sent while it still draws removes nothing. So: out of the queue if it is still waiting, interrupted if it
+// is drawing, and then waited for, so that there is a record for the delete to remove.
+//
+// The answer is whether the stop is confirmed: its record is there, or a read of the queue has the job in neither
+// list (twice, once it has been seen being drawn). A card that answers neither confirms nothing, and nor does one
+// still drawing the job when the ten looks or the reserve run out; `drawWatched` then deletes nothing and stops the
+// run.
 //
 // With one card and two readers, the job being drawn is somebody else's as often as ours, and an interrupt that
 // reached theirs would give them the failure line under a scene they never touched. So the interrupt names this
 // job: the pinned server stops a job named by `prompt_id` only while it is the one being drawn, and does nothing
 // otherwise (server.py:1163-1191), where an interrupt without an id stops whatever is drawn. The queue is read after
 // the delete, when the job can no longer go from waiting to being drawn: one that did so a moment earlier is being
-// drawn now, and is interrupted and waited for like any other. One that is not was taken out by the delete, or is
-// over and has its record, and there is nothing to wait for. The interrupt goes either way, since it can stop no
+// drawn now, and is interrupted and waited for like any other. One in neither list was taken out by the delete, or
+// is over and has its record, and there is nothing to wait for. The interrupt goes either way, since it can stop no
 // other job, and it is all that can stop this one on a card that did not answer the queue.
-async function stopJob(comfy: Comfy, promptId: string, pollMs: number) {
+async function stopJob(comfy: Comfy, promptId: string, pollMs: number): Promise<boolean> {
   await post(comfy, '/queue', { delete: [promptId] }).catch(() => undefined);
   const queue = await readQueue(comfy);
   await post(comfy, '/interrupt', { prompt_id: promptId }).catch(() => undefined);
-  if (!queue.running.includes(promptId)) return;
+  const holds = (seen: Queue | undefined) => !seen || [...seen.running, ...seen.pending].includes(promptId);
+  if (!holds(queue)) return true;
   let missing = 0;
   for (let poll = 0; poll < 10; poll++) {
     const seen: Record<string, HistoryEntry> = await call(comfy, `/history/${promptId}`)
       .then(response => response.json() as Promise<Record<string, HistoryEntry>>).catch(() => ({}));
-    if (seen[promptId]) return;
+    if (seen[promptId]) return true;
     // An interrupted job leaves the queue a moment before its record appears, so one more poll is given to it; a
     // card that then still has neither is writing no record at all, and the rest of the wait would buy nothing.
-    const gone = await readQueue(comfy);
-    if (![...gone.running, ...gone.pending].includes(promptId) && ++missing > 1) return;
+    if (!holds(await readQueue(comfy)) && ++missing > 1) return true;
     // The reserve (`end` here, `afterAbort`) ends the pause as it ends every request: the stop is over at it.
     await delay(pollMs, undefined, { signal: comfy.end }).catch(() => undefined);
-    if (comfy.end?.aborted) return;
+    if (comfy.end?.aborted) return false;
   }
+  return false;
 }
 
 // One picture: submit, wait until the server has it, download it, forget the job. The elapsed time is measured from
@@ -713,8 +721,10 @@ async function drawWatched(comfy: Comfy, graph: Graph, watch: Watch, options: Dr
     sampling = true;
     leave(readStats(comfy).then(seen => mergeStats(memory, seen, during)).finally(() => { sampling = false; }));
   };
-  // The delete of the job's record: sent once, whichever way this ends, and never waited for (`settled`).
-  let forgotten = false;
+  // The delete of the job's record: sent once and never waited for (`settled`), once the card is off the job — its
+  // record said the job was over (`over`), or `stopJob` confirmed the stop (`stopped`) — since a delete that arrives
+  // while the card still draws removes nothing, and the record written after it holds the whole prompt.
+  let forgotten = false, over = false, stopped = false;
   const forget = () => {
     if (forgotten) return;
     forgotten = true;
@@ -752,6 +762,8 @@ async function drawWatched(comfy: Comfy, graph: Graph, watch: Watch, options: Dr
       // request takes its connection with it, and `/view` would pay for a new one.
       if (watch.heard === heard) await watch.wait(pollMs, stop);
     }
+    // The loop is left only by a throw or by the record's word that the job is over.
+    over = true;
     const copies = options.copies ?? [];
     const image = Object.entries(entry.outputs ?? {}).filter(([node]) => !copies.includes(node)).flatMap(([, output]) => output.images ?? [])[0];
     if (!image || entry.status?.status_str === 'error') {
@@ -778,11 +790,15 @@ async function drawWatched(comfy: Comfy, graph: Graph, watch: Watch, options: Dr
     return { bytes: stripPngMetadata(bytes), totalMs: Math.round(performance.now() - started), viewMs, vram: memory.vram, memory,
       timing: watch.timing(promptId, graph), ...(copies.length ? { copies: copied } : {}) };
   } catch (error) {
-    // The wait ran out, the caller let go or the stage ended, but the card did not stop by itself: see `stopJob`,
-    // which the reserve bounds. A fetch cut by a signal arrives as an AbortError, so what the signals say is what
-    // this failure is called, whatever was thrown: the picture that was on its way down when the end came too.
-    if (stop?.aborted || (error as { code?: string }).code === 'image_timeout') await stopJob(afterAbort(comfy), promptId, pollMs);
+    // Whatever ended the wait before the record said the job was over — the wait ran out, the caller let go, the
+    // stage ended, the card answered a poll with an error status or the tunnel dropped more polls than the retries —
+    // the card did not stop by itself: see `stopJob`, which the reserve bounds. A fetch cut by a signal arrives as an
+    // AbortError, so what the signals say is what this failure is called, whatever was thrown: the picture that was
+    // on its way down when the end came too. A stop nobody could confirm leaves a job that may still be drawing, with
+    // the next cell queued behind it, and says so under a code that stops the run (`stopsTheRun`).
+    if (!over) stopped = await stopJob(afterAbort(comfy), promptId, pollMs);
     halt(comfy);
+    if (!over && !stopped) throw Object.assign(new Error('comfy_stop_unconfirmed'), { code: 'comfy_stop_unconfirmed' });
     throw error;
   } finally {
     // The server keeps the prompt, the workflow and the outputs of every job it has run until history is cleared.
@@ -791,8 +807,9 @@ async function drawWatched(comfy: Comfy, graph: Graph, watch: Watch, options: Dr
     // gpu/image-sweeper.py deletes a preview's file from RAM a few seconds after this record is gone, and the file
     // and the record both after ten minutes should this delete never arrive. A saving node's file stays until the
     // card goes, which is why the harness, whose graphs save, draws only synthetic scenes. The picture on our disk
-    // is stripped. The delete leaves here on every way out, and nothing waits for its answer but `settled`.
-    forget();
+    // is stripped. The delete leaves here on every way out once the card is off the job, and nothing waits for its
+    // answer but `settled`; after a stop that was not confirmed, the record is the sweeper's.
+    if (over || stopped) forget();
   }
 }
 
@@ -844,9 +861,11 @@ const isCell = (one: Cell, other: Cell) => one.caseId === other.caseId && one.ch
   && one.seed === other.seed && one.arm === other.arm;
 
 // Codes that say the graph or the server is wrong rather than this picture: every cell after them fails in the same
-// way, and on a rental each of those failures is paid for.
+// way, and on a rental each of those failures is paid for. `comfy_stop_unconfirmed`: a job may still be drawing, and
+// every cell after it would queue behind it.
 export const stopsTheRun = (code: string) => code === 'comfy_http_error' || code === 'comfy_rejected_prompt'
-  || code === 'comfy_upload_failed' || code === 'comfy_socket_unavailable' || code.startsWith('workflow_');
+  || code === 'comfy_upload_failed' || code === 'comfy_socket_unavailable' || code === 'comfy_stop_unconfirmed'
+  || code.startsWith('workflow_');
 
 // Checkpoint-major order: a switch reloads the whole checkpoint, and an early stop then leaves whole comparable
 // blocks rather than a little of each. The arms of one frame follow each other, so a stop leaves whole triples, and
