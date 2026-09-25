@@ -129,9 +129,9 @@ export function rentPlan({ gpus = 1, lane = 'both', preferredHost = PREFERRED_HO
 // The search is a filter on the host, so everything that can be asked for there is: a query the API does not
 // understand is ignored silently, which is why the rules that matter are checked again over the answer.
 export function offerQuery(plan: RentPlan) {
-  // The small machine's card is any that holds E2B in bf16, which vLLM wants and which begins with Ampere (compute
-  // capability 8.0); every other machine's is a 5090.
-  const card = plan.lane === 'small' ? { gpu_ram: { gte: 16000 }, compute_cap: { gte: 800 } }
+  // The small machine's card is a Blackwell that holds E2B in bf16: compute capability 12.0, the 5090's, so that the
+  // rehearsal runs the kernels the 5090 will. Every other machine's is a 5090.
+  const card = plan.lane === 'small' ? { gpu_ram: { gte: 16000 }, compute_cap: { gte: 1200 } }
     : { gpu_name: { eq: 'RTX 5090' }, gpu_ram: { gte: 32000 } };
   return {
     ...card, num_gpus: { eq: plan.gpus },

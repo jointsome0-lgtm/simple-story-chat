@@ -87,8 +87,8 @@ if (args[0] === '--show' || args[0] === '--start' || args[0] === '--destroy') {
 const printBody = args.includes('--print-body');
 const rest = args.filter(argument => argument !== '--print-body');
 // `--lane text` and `--lane pictures` rent one single-card machine for one lane: a session on two machines runs
-// this script twice. Without it the machine is for both lanes, with one card or two. `--lane small` is any card
-// of 16 GB or more, Ampere or newer, that vLLM runs Gemma 4 E2B on.
+// this script twice. Without it the machine is for both lanes, with one card or two. `--lane small` is any
+// Blackwell card of 16 GB or more, the 5090's architecture, for Gemma 4 E2B on vLLM.
 // `--avoid-host ID[,ID...]` leaves out hosts: the second machine of a two-machine session must not be the first one's
 // twin on the same box, or the "two independent machines" the owner asked for share a link, a disk and a failure.
 // A replacement names two: the host it replaces and the other lane's. On 2026-09-23 the measured text host drew

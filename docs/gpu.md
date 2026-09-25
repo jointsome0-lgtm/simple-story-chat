@@ -26,8 +26,10 @@ SIMPLE_CHAT_RENT_DRY_RUN=1 node --env-file-if-exists=.env.gpu gpu/rent.mjs --lan
 SIMPLE_CHAT_RENT_DRY_RUN=1 node --env-file-if-exists=.env.gpu gpu/rent.mjs --lane pictures
 ```
 
-`--lane small` is simple-serving's rehearsal: the cheapest card of 16 GB or more, Ampere or newer, under $0.25 an hour
-with 60 GB of disk, for Gemma 4 E2B on vLLM. It prints the card's name as `gpu`.
+`--lane small` is simple-serving's rehearsal: the cheapest Blackwell card of 16 GB or more (compute capability 12.0,
+the 5090's), under $0.25 an hour with 60 GB of disk, for Gemma 4 E2B on vLLM. It prints the card's name as `gpu`.
+An RTX A4000, Ampere, did not load E2B on 2026-09-25, and a rehearsal on the 5090's architecture is the one that
+tells about the 5090.
 
 Machines in mainland China are not asked for and are dropped from the answer (`droppedForCountry`): Hugging Face and CivitAI are not reliably reachable from there, and a session is mostly a download.
 
