@@ -15,7 +15,7 @@ import { ModelError, safeErrorDetails } from './model-error.ts';
 import type { Controls, GenerateControls, GenerationResult, ModelRequest, Provider } from './model.ts';
 import type { Illustrator, SampleRequest } from './picture.ts';
 import { personTag } from './picture.ts';
-import { PRESETS } from './picture-style.ts';
+import { OWN_STYLES_MAX, PRESETS } from './picture-style.ts';
 import type { TelegramPayload } from './telegram.ts';
 import { render, scenePrefix, sceneKeyboard } from './ui.ts';
 import { texts } from './text.ts';
@@ -315,10 +315,14 @@ test('SQLite survives reopening, keeps update deduplication, and clears interrup
   // A refusal thrown by the library carries a key and is shown in the reader's language.
   await g.bot.handle(speaking(g.click('start:s999'), 'en'));
   assert.equal(shown(), texts('en').errors.seedGone, 'a refusal from the library');
+  await g.bot.handle(speaking(g.message('/nope'), 'en'));
+  assert.equal(shown(), texts('en').notices.unknownCommand, 'an unknown command');
   await g.start();
   const story = Object.values(g.store.read(1).stories)[0];
   assert.deepEqual([Object.values(story.branches).map(branch => branch.name), Object.values(story.checkpoints).map(cp => cp.label)],
     [['Start'], ['Seed', 'Scene 1']], 'names the bot creates');
+  assert.ok(g.sent.findLast(item => item.method === 'sendRichMessage')!.payload.rich_message.markdown
+    .startsWith(`${scenePrefix(null, { provider: 'claude-code', model: 'test-model' }, 'en').slice(0, -3)} · 📏 Context`), 'the header of a scene');
   assert.match(g.requests[0].messages.at(-1)!.content, /Начни историю из сида\. Покажи первую сцену\./, 'the request');
   assert.doesNotMatch(JSON.stringify(g.requests[0]), /Scene 1|"Start"|Menu/, 'the request');
   for (const stale of ['lang:xx', 'lang:constructor', 'lang:']) {
@@ -335,7 +339,7 @@ test('SQLite survives reopening, keeps update deduplication, and clears interrup
 });
 
 test('a replay or a delivery failure never regenerates a completed scene', async t => {
-  const { deliveryUnconfirmed, truncated, modelUnavailable } = texts('ru').notices;
+  const { deliveryUnconfirmed, truncated, modelUnavailable, modelServiceSeparate, gpuNotConfigured } = texts('ru').notices;
   const cut = async () => ({ text: '2026-08-02 20:00\n\nСинтетический оборванный ответ', finishReason: 'length' as const });
   // Each story is started, its start replayed, and /context and /last asked for: one model call, whatever fails.
   for (const [label, options, delivery, usage, cutShort, notice] of [
@@ -356,10 +360,24 @@ test('a replay or a delivery failure never regenerates a completed scene', async
     if (notice) assert.ok(f.sent.some(item => item.payload.text === notice), label);
   }
 
-  // /model checks the selected server without generating and shows a failure; an archived scene keeps its label.
+  // A scene goes out, as a draft and as its message, under a header with its model and the share of the context, which
+  // is no part of the scene; /context has the numbers of the story.
   const f = fixture(t, { model: 'claude-haiku-4-5-20251001' });
   await f.start();
-  assert.deepEqual(Object.values(Object.values(f.store.read(1).stories)[0].nodes)[0].modelInfo, { provider: 'claude-code', model: 'claude-haiku-4-5-20251001' });
+  const haiku = { provider: 'claude-code', model: 'claude-haiku-4-5-20251001' };
+  const [scene] = Object.values(Object.values(f.store.read(1).stories)[0].nodes);
+  assert.deepEqual([scene.modelInfo, scene.text], [haiku, '2026-08-02 20:00\n\nСинтетическая сцена 1.'], 'a scene');
+  for (const method of ['sendRichMessageDraft', 'sendRichMessage']) {
+    assert.ok(f.sent.find(m => m.method === method)!.payload.rich_message.markdown.startsWith(`${scenePrefix(null, haiku).slice(0, -3)} · 📏`), method);
+  }
+  await f.bot.handle(f.message('/context'));
+  assert.match(f.sent.at(-1)!.payload.text, /≈\d/, '/context');
+  // A provider without a check (a CLI) that has written nothing was never seen to answer.
+  const cli = fixture(t);
+  await cli.bot.handle(cli.click('view:model'));
+  assert.ok(cli.sent.at(-1)!.payload.text.includes(texts('ru').model.configured), 'a provider without a check');
+
+  // /model checks the selected server without generating and shows a failure; an archived scene keeps its label.
   let checks = 0;
   const server = createBot({ store: f.store, api: f.api, provider: { async check({ signal }: Controls) {
     assert.ok(signal instanceof AbortSignal);
@@ -398,6 +416,12 @@ test('a replay or a delivery failure never regenerates a completed scene', async
     const before = down.sent.length;
     await act();
     assert.deepEqual([down.sent.slice(before).some(item => item.payload.text === modelUnavailable), scenes()], [!!error, count], label);
+  }
+  // Without GPU control, simple-serving says its service is started apart from this chat, and another provider that no
+  // GPU is configured.
+  for (const [g, notice] of [[down, modelServiceSeparate], [cli, gpuNotConfigured]] as const) for (const command of ['/gpu_start', '/gpu_pause']) {
+    await g.bot.handle(g.message(command));
+    assert.equal(g.sent.at(-1)!.payload.text, notice, command);
   }
 });
 
@@ -438,6 +462,24 @@ test('a running job refuses another and /cancel keeps its late answer out; no st
     } };
   };
   const text = '2026-08-02 20:00\n\nСинтетическая сцена.';
+  // A scene waiting for the shared model shows its place in the queue in the scene's own draft: each status after the
+  // one before, one superseded before it went out skipped, and nothing about the queue once the model has started.
+  const queue = fixture(t, { generate: async (request, controls) => {
+    const out = () => new Promise(resolve => setImmediate(resolve));
+    controls.onWait?.(2); await out();
+    controls.onWait?.(5); controls.onWait?.(1); await out();
+    controls.onWait?.(0); await out();
+    controls.onStart?.(); await out();
+    controls.onWait?.(3);
+    await controls.onText(text);
+    return { text, finishReason: 'stop', usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 } };
+  } });
+  await queue.start();
+  const { wait } = texts('ru');
+  const drafts = queue.sent.filter(m => m.method === 'sendRichMessageDraft');
+  assert.deepEqual([drafts.map(m => m.payload.rich_message.markdown.endsWith(text) ? 'scene' : m.payload.rich_message.markdown), new Set(drafts.map(m => m.payload.draft_id)).size],
+    [[wait.queued(2), wait.queued(1), wait.next, wait.reading, 'scene'], 1], 'a place in the queue');
+
   const slow = holdFirstStatus();
   const f = fixture(t, { hold: slow.hold, generate: async (request, controls) => {
     controls.onWait?.(2);
@@ -580,6 +622,18 @@ test('/compact is explicit, deduplicated and never creates a scene; an automatic
     assert.equal(f.requests.length, 1, label);
     assert.match(f.sent.at(-1)!.payload.text, /нечего сжимать/, label);
   }
+  // Cut off at its limit, the memory is refused: the story stays as it was, and the status says why, never what the
+  // model wrote.
+  const cut = fixture(t, { generate: async (request, controls) => {
+    await controls.onText('PRIVATE GENERATED MEMORY');
+    return { ...compactResult(request), finishReason: 'length' };
+  } });
+  await battleFixture(cut);
+  const whole = cut.store.read(1).stories;
+  await cut.bot.handle(cut.message('/compact'));
+  await cut.bot.idle();
+  assert.deepEqual([cut.store.read(1).stories, cut.requests.length, cut.sent.at(-1)!.payload.text.includes(texts('ru').compact.reasons.output_limit),
+    JSON.stringify(cut.sent).includes('PRIVATE')], [whole, 1, true, false], 'a memory cut off at its limit');
 
   // A branch past the threshold is compacted before its next scene, which is written from the new memory, saved and
   // sent with no service card.
@@ -611,7 +665,7 @@ test('private state cannot be reached from another user, group or unconfirmed de
   const drawn: SampleRequest[] = [];
   const f = fixture(t, { illustrator: sketchbook(drawn), readSeedFile: async () => { downloads++; return body; } });
   const shown = () => f.sent.at(-1)!.payload.text;
-  const { staleButton, lookTooLong, lookNeedsText, lookGone, sampleOff } = texts('ru').errors;
+  const { staleButton, lookTooLong, lookNeedsText, lookGone, sampleOff, styleTooLong, styleNeedsText, stylesFull } = texts('ru').errors;
   await f.start();
   const { stories, active } = f.store.read(1);
   const story = Object.values(stories)[0];
@@ -735,28 +789,58 @@ test('private state cannot be reached from another user, group or unconfirmed de
   }
   assert.deepEqual(sheet(), rewritten, 'the sheet after the stale buttons');
 
-  // A style of the reader's own: the text after its button is the style, chosen at once and never a move in the story;
-  // it is edited, drawn from the scene the reader is at, and deleted only after a confirmation.
+  // Picture styles. A preset's button chooses the preset, the standard one being the preset it is.
+  const mine = () => f.store.read(1);
+  for (const [key, chosen] of [['film', 'film'], ['standard', undefined]] as const) {
+    await f.bot.handle(f.click(`style:${key}`));
+    assert.equal(mine().pictureStyle, chosen, `the preset ${key}`);
+  }
+  // A style of the reader's own: the text after its button is the style, chosen at once and never a move in the story.
+  // A new version of one line keeps the name, and one of two lines renames it.
   await f.bot.handle(f.click('style-new'));
   await f.bot.handle(f.message('Уголь\nCharcoal sketch on rough paper'));
-  const [styleId] = Object.keys(f.store.read(1).pictureStyles!);
-  assert.deepEqual([f.store.read(1).pictureStyles, f.store.read(1).pictureStyle, f.store.read(1).ui],
+  const [styleId] = Object.keys(mine().pictureStyles!);
+  assert.deepEqual([mine().pictureStyles, mine().pictureStyle, mine().ui],
     [{ [styleId]: { id: styleId, name: 'Уголь', line: 'Charcoal sketch on rough paper' } }, styleId, null], 'a new style');
-  await f.bot.handle(f.click(`style-edit:${styleId}`));
-  await f.bot.handle(f.message('Мел\nWhite chalk on a blackboard'));
-  assert.deepEqual(f.store.read(1).pictureStyles![styleId], { id: styleId, name: 'Мел', line: 'White chalk on a blackboard' }, 'an edited style');
+  for (const [text, name] of [['Charcoal and white chalk', 'Уголь'], ['Мел\nWhite chalk on a blackboard', 'Мел']]) {
+    await f.bot.handle(f.click(`style-edit:${styleId}`));
+    await f.bot.handle(f.message(text));
+    assert.deepEqual(mine().pictureStyles![styleId], { id: styleId, name, line: text.split('\n').at(-1) }, text);
+  }
+  // What does not fit is refused and the bot keeps waiting, and a button leaves; a line at the limit is kept whole,
+  // named by its start.
+  for (const [label, update, reply, ui, count] of [
+    ['a style too long', f.message('y'.repeat(401)), styleTooLong, { input: 'style' }, 1],
+    ['a message without text', f.message(undefined), styleNeedsText, { input: 'style' }, 1],
+    ['a button', f.click('view:style'), undefined, null, 1],
+    ['a style at the limit', f.message(`${'x'.repeat(399)}.`), undefined, null, 2],
+  ] as const) {
+    await f.bot.handle(f.click('style-new'));
+    await f.bot.handle(update);
+    if (reply) assert.equal(shown(), reply, label);
+    assert.deepEqual([mine().ui, Object.keys(mine().pictureStyles!).length], [ui, count], label);
+  }
+  const copy = mine().pictureStyle!;
+  assert.deepEqual(mine().pictureStyles![copy], { id: copy, name: `${'x'.repeat(39)}…`, line: `${'x'.repeat(399)}.` }, 'a style at the limit');
+  // A delete needs its confirmation, and deleting the chosen style gives the pictures back to the standard one.
+  await f.bot.handle(f.click(`remove-style:${copy}`));
+  assert.ok(mine().pictureStyles![copy], 'a delete without its confirmation');
+  await f.bot.handle(f.click(`view:delete-style:${copy}`));
+  await f.bot.handle(f.click(`remove-style:${copy}`));
+  assert.deepEqual([Object.keys(mine().pictureStyles!), mine().pictureStyle], [[styleId], undefined], 'a confirmed delete');
+  await f.bot.handle(f.click(`style:${copy}`));
+  assert.equal(shown(), staleButton, 'the button of a deleted style');
+  // A full library takes no new style.
+  f.store.mutate(1, library => { for (let n = 1; n < OWN_STYLES_MAX; n++) library.pictureStyles![`y${900 + n}`] = { id: `y${900 + n}`, name: `S${n}`, line: 'Ink.' }; });
+  await f.bot.handle(f.click('style-new'));
+  assert.deepEqual([shown(), mine().ui], [stylesFull, null], 'a full library');
+  // A sample is drawn from the scene the reader is at, and chooses nothing.
   await f.bot.handle(f.click(`style-sample:${styleId}`));
   await f.bot.idle();
-  const where = f.store.read(1).active!;
+  const where = mine().active!;
   assert.deepEqual(drawn.map(({ storyId, branchId, nodeId, styles }) => [storyId, branchId, nodeId, styles.map(style => [style.line, style.pictureStyle, style.caption.text])]),
-    [[where.storyId, where.branchId, f.store.read(1).stories[where.storyId].branches[where.branchId].head, [['White chalk on a blackboard', 'custom', 'Пример стиля: ✍️ Мел']]]], 'a sample');
-  await f.bot.handle(f.click(`remove-style:${styleId}`));
-  assert.ok(f.store.read(1).pictureStyles![styleId], 'a delete without its confirmation');
-  await f.bot.handle(f.click(`view:delete-style:${styleId}`));
-  await f.bot.handle(f.click(`remove-style:${styleId}`));
-  assert.deepEqual([f.store.read(1).pictureStyles, f.store.read(1).pictureStyle], [{}, undefined], 'a confirmed delete');
-  await f.bot.handle(f.click(`style:${styleId}`));
-  assert.equal(shown(), staleButton, 'the button of a deleted style');
+    [[where.storyId, where.branchId, mine().stories[where.storyId].branches[where.branchId].head, [['White chalk on a blackboard', 'custom', 'Пример стиля: ✍️ Мел']]]], 'a sample');
+  assert.equal(mine().pictureStyle, undefined, 'a sample chooses nothing');
   // Another reader is not drawn for, and the card never hears of them.
   await f.bot.handle(f.click('style-sample:film', 2));
   assert.deepEqual([shown(), drawn.length], [sampleOff, 1], 'another reader');
