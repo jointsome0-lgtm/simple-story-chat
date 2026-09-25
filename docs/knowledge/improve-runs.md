@@ -11,6 +11,63 @@ line per decision. A new step gets its full entry here, on top, and its line the
 Paths to result directories say where the numbers came from at the time. They do not promise that the files still
 exist or that you may read them.
 
+<a id='route-a-2026-09-25'></a>
+
+## 2026-09-25 · Opus 5.5 · route A against the production Q6_K, on one 5090
+
+Not a step of the loop: nothing that shapes prompts or memory changed. This is step 6 of simple-serving's contract
+(`docs/contract-v2.md` there), route A's quality against the llama.cpp baseline. Both routes ran on one rented RTX 5090
+([the card](gpu-measurements.md#text-card-3-2026-09-25)), one after the other. Route A was `serving:nvfp4`:
+simple-serving 899f36c's gateway in front of vLLM 0.30.0, with llmfan46's NVFP4 conversion of the heretic and an fp8
+KV cache. Then `gpu:q6k`: llama.cpp b29c606 with the production Q6_K, a q8_0 cache and one slot. The public pack, mode
+`plain`, judge `claude:claude-opus-5-5`, and the same sampling on both sides ([eval.md](../eval.md#own-card)). The plan
+was one pass of all five scenarios, two more of `assault` and `hospital`, and two more of `dance` once route A's first
+pass parted on it, the same on both routes. The Q6_K got its first pass only: the owner had to shut their machine down,
+and the card was deleted during its second.
+
+Memory, then scenes, one pair per pass:
+
+| Scenario | Route A, NVFP4 on vLLM | Q6_K on llama.cpp | Q6_K on 2026-09-22 |
+| --- | --- | --- | --- |
+| `assault` | 8/12, 10/12 · 8/12, 10/12 · 8/12, 10/12 | 8/12, 12/12 | 8/12, 11/12 |
+| `hospital` | 2/12, 9/12 · 2/12, 8/12 · 3/12, 8/12 | 4/12, 7/12 | not run |
+| `battle` | 8/8, 15/15 | 8/8, 14/15 | 8/8, 15/15 |
+| `chess` | 6/7, 4/4 | 6/7, 4/4 | 6/7, 4/4 |
+| `dance` | 10/13, 6/6 · 10/13, 6/6 · 10/13, 6/6 | 13/13, 6/6 | 13/13, 6/6 |
+
+- Memory at temperature 0.2 repeats itself. Route A missed the same facts on every pass, but for one `hospital` fact,
+  `bridge_limit`, found once. A memory difference between the routes is therefore not noise between passes, while a
+  scene difference of one question may be.
+- `dance`: route A misses `b_clean`, `all_clean` and `cancelled_tango` on all three passes, and the Q6_K finds all 13,
+  here and on 09-22. All three are numbers in a scenario built with twins: 35 clean repeats of version B and 35 good
+  partial repeats, 40 cancelled tango repeats and 40 partial repeats, and `all_clean` is the sum 44 + 35. For
+  `b_clean` and `cancelled_tango` the number stood in route A's memory and its reading answered something else
+  (`readingMisses`); `all_clean` was not in the memory.
+- `hospital`: route A also loses `current_route` on every pass and `bridge_limit` on two, which the Q6_K kept. Its
+  scenes are one or two questions better, 9, 8 and 8 against 7.
+- `assault`: both routes miss the same four counts in memory, those of 09-22. In the scenes route A misses
+  `one_tunnel_barrier` and `prior_discussion_accepted` on all three passes; the Q6_K answered 12 of 12, and 11 on 09-22.
+- `battle` and `chess` are the same on both routes, but for one `battle` question the Q6_K missed.
+- On the compaction requests route A decoded 67 tokens a second and the Q6_K 47.5
+  ([the card](gpu-measurements.md#text-card-3-2026-09-25)).
+
+The rule, written down before the runs: route A is worse if its mean on `assault` and `hospital` falls below the
+Q6_K's by more than the spread between passes, or if it drops on `battle`, `chess` or `dance`. It drops on `dance` on
+three passes of three, so by that rule route A is worse. The rule's first half cannot be applied: the Q6_K has one pass
+on `assault` and `hospital` here, and its spread is not known.
+
+Limitations:
+- The Q6_K has one pass on this card; 09-22's run on another 5090 is the second on four scenarios.
+- The engine, the weights and the KV cache changed together. Route A's fp8 cache has no calibrated scale (1.0), where
+  q8_0 keeps a scale for every block of 32 values. Which of the three costs `dance` is not known; route A with a bf16
+  cache on the same scenarios would tell the cache apart.
+- Only the failed keys are kept. The memories, the readings and the scenes were in the probes' directories under
+  `/tmp`, and a reboot took them, so no other judge can read them; a new run keeps them elsewhere
+  ([eval.md](../eval.md#own-card)).
+- One judge, Opus 5.5.
+- Results: `~/simple-story-chat-runs/2026-09-25/eval-cmp/`, `nvfp4-p1.json` to `nvfp4-p5.json` and `q6k-p1.json`, with
+  the progress lines beside them.
+
 <a id='gold-v1-2026-09-23'></a>
 
 ## 2026-09-23 · Fable 5.1 · the seed audited, and a gold tree grown by four writers under the agreement of four judges

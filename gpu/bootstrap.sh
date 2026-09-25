@@ -118,7 +118,14 @@ if [[ ! -d "$source_dir/.git" ]]; then
   git -C "$source_dir" remote add origin https://github.com/ggml-org/llama.cpp.git
 fi
 [[ "$(git -C "$source_dir" remote get-url origin)" = https://github.com/ggml-org/llama.cpp.git ]] || { echo 'Unexpected source repository.' >&2; exit 1; }
-git -C "$source_dir" fetch --depth 1 origin "$LLAMA_CPP_REVISION"
+# The fetch shares the link with the download's 16 connections. On the 5090 of 2026-09-25 in Vietnam the link reset
+# it mid-pack, the script stopped there, and the finished weights waited unhashed under their .part name. A failed
+# fetch is tried again, three times in all.
+for attempt in 1 2 3; do
+  git -C "$source_dir" fetch --depth 1 origin "$LLAMA_CPP_REVISION" && break
+  (( attempt < 3 )) || { echo 'Could not fetch llama.cpp.' >&2; exit 1; }
+  sleep 15
+done
 git -C "$source_dir" checkout --detach "$LLAMA_CPP_REVISION"
 [[ "$(git -C "$source_dir" rev-parse HEAD)" = "$LLAMA_CPP_REVISION" ]]
 cmake -S "$source_dir" -B "$source_dir/build" -G Ninja \

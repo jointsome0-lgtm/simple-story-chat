@@ -592,9 +592,11 @@ card, about $3 with the downloads. Each dry-run's `session` replaces it before t
 
 ## Not verified without a card
 
-- that vLLM loads route A on the 5090 and that simple-serving passes its smoke;
-- whether route A's heretic keeps the variant's schema, and keeps `facing` better than stage 1's hosted Gemma kept
-  `view`;
+The text cards of 2026-09-25 answered two of these ([the third](knowledge/gpu-measurements.md#text-card-3-2026-09-25)):
+vLLM loads route A on the 5090 and simple-serving passes its smoke, 10 of 10 on the third card, and route A's heretic
+kept the variant's schema in all 18 stories, each at its first attempt. Still open:
+
+- whether it keeps `facing` better than stage 1's hosted Gemma kept `view`;
 - how long an edit takes with six references of 352x640, and with T's seven;
 - whether the views keep the person and turn the way they are asked;
 - whether references of 352x640 keep a face.

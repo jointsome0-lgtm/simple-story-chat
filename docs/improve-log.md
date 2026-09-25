@@ -8,6 +8,11 @@ and the main result with its limit. A new step gets its full entry there and its
 accepted**: tried and reverted. **Measurement**: numbers without a decision on a change. **Open**: a decision still
 waits. An open line is unfinished work, not an order to finish it.
 
+- 2026-09-25 · **open** · [Route A against the production Q6_K on one 5090](knowledge/improve-runs.md#route-a-2026-09-25).
+  On `dance` route A misses the same three numbers on all three passes, twins the scenario was built with, and the
+  Q6_K finds them here and on 09-22; by the rule written down before the runs, route A is worse. The Q6_K has one pass
+  on this card, engine, weights and KV cache changed together, and the texts are lost. Whether route B follows waits
+  for the owner.
 - 2026-09-23 · **measurement** · [A gold tree, version 1](knowledge/improve-runs.md#gold-v1-2026-09-23). The seed was
   audited once, and four writers grew 63 scenes under the agreement of four judges. They are candidates, none promoted.
   The ledgers, a whole-trunk audit and a fresh recheck are recorded: 61 of 63 nodes were agreed again. The rewritten

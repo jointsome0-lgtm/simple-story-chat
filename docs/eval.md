@@ -52,6 +52,11 @@ holds while `.env.gpu` keeps the context at 65536, the output limit at 4096 and 
 still differ in the engine, in the weights and in the KV cache, q8_0 on llama.cpp and fp8 on vLLM, and eval measures
 the three together without telling one from another.
 
+Each probe keeps its report, the memories and the scenes with it, in a directory of its own under the system's
+temporary directory, and `eval judge --resume` can give those scenes to another judge only while it exists. On a paid
+card, point `TMPDIR` at a directory that outlives a reboot, such as one under `~/simple-story-chat-runs/`. On
+2026-09-25 a reboot took both routes' directories ([the card](knowledge/gpu-measurements.md#text-card-3-2026-09-25)).
+
 ## Diagnostics
 
 A failed sum can be analysed without a model. For a numeric answer of two or more digits the probe writes `stated`: whether the number is present in the memory message (`memory`), in the scenes that remained as text (`scenes`), or nowhere (`none`). `readingMisses` in the result file are the failed questions whose answer was present in memory: memory is right, reading made the error. A failure with `none` means that the sum had to be added up at answer time. This is a diagnostic, not a score: a short number can match by chance.

@@ -2,8 +2,8 @@
 
 Measurements and incidents from the rented cards, 2026-09-17 to 2026-09-24, moved here from [gpu.md](../gpu.md) on
 2026-09-25. The paragraphs are as they were written, apart from headings, anchors and link addresses;
-[simple-serving's rehearsal](#serving-rehearsal-2026-09-25) and [the two text cards](#text-cards-2026-09-25) were
-written here on their day. Each number is what one run on
+[simple-serving's rehearsal](#serving-rehearsal-2026-09-25), [the two text cards](#text-cards-2026-09-25) and
+[the third](#text-card-3-2026-09-25) were written here on their day. Each number is what one run on
 one machine saw, not a speed, a price or a capacity to expect. The instructions that rely on them are in
 [gpu.md](../gpu.md), [llama-cpp.md](../llama-cpp.md) and [llama-measurement.md](../llama-measurement.md).
 
@@ -248,3 +248,40 @@ which request. Three questions stay open. `schemas` has not run with whitespace 
 schema's JSON into whitespace until its limit is not known. Why `abort` got no report after the switch is not known.
 The five stories that lost their sheet are out of the texts by the measurement's rules; whether they are asked again
 is the owner's decision.
+
+<a id='text-card-3-2026-09-25'></a>
+
+## The third text card, and route A against the Q6_K, 2026-09-25
+
+An RTX 5090 in Vietnam, host 675994, driver 595.91.07, $0.56 an hour, 24 cores, 46 GB of RAM and 346 Mbit/s. The
+owner ran the rent command with a gate of their own: the second card's 12 hosts left out, a dry run, and the rental
+only if the dry run's first offer had a 595 driver. Rented at 21:27 Moscow time and `running` 3 minutes later. Deleted
+with `--destroy` read back as gone at 22:55, when the owner had to shut their machine down at once: 87 minutes, about
+$0.81 at the hourly price, traffic fees not counted. The card had work for all of them.
+
+- **Route A with whitespace allowed.** simple-serving 899f36c prepared the card in 12.4 minutes, both locks and the
+  weights over 16 connections included, and `up` was ready 1.7 minutes later. The smoke passed 10 of 10: `schemas`
+  12 of 12, and `abort` freed its slot 264 ms after the cancel. So with whitespace allowed no schema's JSON ran to its
+  limit, and `abort` got its report; why it got none on the Spanish card is still not known. `near_context` read 65515
+  tokens to its first token in 30.4 s. The marker check passed with no hit of the marker.
+- **The five sheets again** ([the exception](../action-experiment.md#again)): 15 steps in 1.4 minutes, each ok at its
+  first attempt. The five sheets took 245 to 367 output tokens and ended on `stop`. The texts are complete: 18
+  stories, 95 of 95 steps, 100 calls over the two cards and no retry.
+- **The eval** ([the entry](improve-runs.md#route-a-2026-09-25)): route A for 39 minutes, then llama.cpp with the
+  production Q6_K for 24, until the deletion cut its second pass short.
+- **llama.cpp prepared beside vLLM.** `gpu/bootstrap.sh` ran at nice 19 with 4 jobs during route A's eval. The Q6_K
+  came over 16 aria2 connections at an average of 41 MiB/s, the host's whole link. The shallow `git fetch` of llama.cpp
+  beside it starved for five minutes until the link reset it (`RPC failed; curl 56 Recv failure: Connection reset by
+  peer`). The script stopped there, before its hash check, and the finished weights waited under their `.part` name.
+  At the owner's word the operator checked the file's size and that aria2's control file was gone, gave the file its
+  name, removed the half-fetched source and ran the script again. The clone passed, the build of 359 steps took about
+  7 minutes, and the hash check passed. `gpu/bootstrap.sh` now tries a failed fetch three times.
+- **The switch** took a minute. `cli up` closed, `card --stop` freed the GPU, and llama-server answered its health
+  check 6 s after `ensure-server.sh`, its weights still in the page cache after the hash check. `model:probe` passed.
+- **Speed on the eval's compaction requests.** Route A decoded 67 tokens a second (65 to 68.5 over 33 requests) and
+  read about 3000 a second by the gateway's first token. The Q6_K decoded 47.5 (46.8 to 48.1 over 15) and read about
+  1600 by llama-server's own timings. A whole request gave 58 output tokens a second against 40. The two engines'
+  reading is measured differently: the gateway's first token includes its wait and the first decoded token.
+- **What the reboot took.** The eval's summaries were copied out of `/tmp` before the reboot. The probes' own
+  directories, with the memories and the scenes, stayed there and went with it, so no judge can read them again
+  ([eval.md](../eval.md#own-card) now says where to keep them).
