@@ -55,6 +55,20 @@ function drawn(): Library {
 // A button names a person by their place on the sheet and the hash of their name (local/picture.ts `personTag`).
 const mira = `h2:0:${personTag('Мира')}`, oleg = `h2:1:${personTag('Олег')}`;
 
+// The story forked twice, with memory compacted on one line and a checkpoint saved on the other, which is played.
+function forked(): Library {
+  const state = fixture();
+  const story = state.stories.h2;
+  Object.assign(story.nodes, { n12: node('n12', 'n9', '2026-08-02 21:00', 'Шаги на лестнице.'), n13: node('n13', 'n12', '2026-08-02 21:20', 'Дверь открыта.'),
+    n15: node('n15', 'n6', '2026-08-02 22:00', 'Туман.'), n16: node('n16', 'n15', '2026-08-02 22:30', 'Колокол.') });
+  story.branches.b8.head = 'n13';
+  story.branches.b3.head = 'n16';
+  story.checkpoints.c14 = { id: 'c14', branchId: 'b8', label: 'Перед дверью', kind: 'manual', head: 'n12', memory: null };
+  story.checkpoints.c17 = { id: 'c17', branchId: 'b3', label: 'После сжатия', kind: 'compaction', head: 'n15', memory: null };
+  state.active = { storyId: 'h2', branchId: 'b8' };
+  return state;
+}
+
 // The UI reads only a job's presence, kind and story; these jobs carry just that, including kinds the bot never writes.
 const partialJob = (fields: { id: string; kind?: string; storyId: string; branchId: string }) => fields as Job;
 
@@ -147,16 +161,26 @@ test('each state offers only the actions it allows: the scene keyboard, compacti
       (screen => [screen.text.includes('🖥'), callbacks(screen).some(data => data.startsWith('gpu:'))])(render(fixture(), 'home', { modelInfo: modelInfo(), gpuInfo: gpuInfo(gpu) })),
       [true, false]]),
     ['the menu for Claude', render(fixture(), 'home', { modelInfo: modelInfo({ provider: 'claude-code' }), gpuInfo: gpuInfo() }).text.includes('🖥'), false],
+    // A new seed: an example to copy in one tap, and a way out of the wait for a seed.
+    ['a new seed', (screen => [screen.entities?.map(e => [e.type, screen.text.slice(e.offset, e.offset + e.length)]), callbacks(screen)])(render(fixture(), 'new-seed')),
+      [[['pre', texts('ru').newSeed.example]], ['cancel']]],
+    // The story tree: a straight run of scenes is one line, which ends where the story forks or a name points at it, the
+    // branch being played marked among them, in a pre block that keeps it monospaced. A branch's log is newest first.
+    ['the story tree', (screen => [screen.entities?.map(e => screen.text.slice(e.offset, e.offset + e.length)), callbacks(screen)])(render(forked(), 'tree:h2')),
+      [[['🌱 начало', '└─ 1 сцена до 02.08 20:00', '  ├─ 2 сцены до 02.08 22:00 · 🗜 сжатие памяти', '  │ └─ 1 сцена до 02.08 22:30 · 🌿 Начало',
+        '  └─ 2 сцены до 02.08 21:00 · 📍 Перед дверью', '    └─ 1 сцена до 02.08 21:20 · 🌿 От Сцена 1 ✅'].join('\n')],
+      ['view:log:h2:b3:0', 'view:log:h2:b8:0', 'view:story:h2', 'view:home']]],
+    ['a branch\'s log', render(forked(), 'log:h2:b8:0').text.match(/^\d+\./gm), ['4.', '3.', '2.', '1.']],
     // A stale or malformed route leads back to the menu or the seeds.
     ...['seed:s99', 'story:h99', 'branch:h2:b99', 'checkpoints:h9:b3:0', 'checkpoint:h2:c99', 'delete-seed:s99', 'delete-branch:h2:b99', 'seed:constructor',
-      'story:__proto__', 'nonsense', '', 'seeds:-1', 'seeds:abc', 'context:h2:c99', 'characters:h99'].map((route): Row =>
+      'story:__proto__', 'nonsense', '', 'seeds:-1', 'seeds:abc', 'context:h2:c99', 'characters:h99', 'tree:h99', 'log:h2:b99:0'].map((route): Row =>
       [`the stale route "${route}"`, callbacks(render(fixture(), route)).some(data => data === 'view:home' || data === 'view:seeds:0'), true]),
     ['no library at all', callbacks(render(null, 'home')).includes('new-seed'), true],
   ];
   for (const [label, got, want] of rows) assert.deepEqual(got, want, label);
 });
 
-test('a deletion names what it takes, and a number a screen does not have is unknown there, never zero or another\'s', () => {
+test('a screen says what it shows: what a deletion takes, a job, the context, the model and the GPU, and a number it lacks as unknown', () => {
   const t = texts('ru');
   const single = fixture();
   delete single.stories.h2.branches.b8;
@@ -215,6 +239,34 @@ test('a deletion names what it takes, and a number a screen does not have is unk
   for (const status of ['unknown', 'error', 'weird', undefined]) assert.ok(!gpu({ status, canPause: false }).includes(t.gpu.paused), `a GPU ${status}`);
   // Only a count of the jobs, nothing about who runs them.
   assert.doesNotMatch(gpu({ activeJobs: 3, users: ['Алиса'], storyTitle: 'Секрет' }), /Алиса|Секрет/);
+
+  // What a screen says of the state it shows: [what, the text and its buttons, what it says, what it must not say].
+  const c = t.context, num = t.format.number;
+  const during = (kind: string, route: string) => (screen => [screen.text, ...(screen.reply_markup?.inline_keyboard.flat() ?? []).map(button => button.text)].join('\n'))(
+    render({ ...fixture(), job: partialJob({ id: 'j12', kind, storyId: 'h2', branchId: 'b3' }) }, route, { contextStats: current() }));
+  const home = (details: RenderDetails) => render(fixture(), 'home', details).text;
+  const says: [string, string, string[], string[]][] = [
+    // A compaction and a scene are told apart wherever a job shows.
+    ...[['the menu', 'home', t.home.compactJobNote, t.home.sceneJobNote], ['the cancel button', 'home', t.buttons.cancelCompaction, t.buttons.cancelScene],
+      ['a seed', 'seed:s1', t.busy.compact.startOrDeleteSeed, t.busy.scene.startOrDeleteSeed], ['the context', 'context', c.duringCompaction, c.duringScene],
+      ['a new seed', 'new-seed', t.newSeed.compactRunning, t.newSeed.sceneRunning]].flatMap(([what, route, compact, scene]): [string, string, string[], string[]][] =>
+      [[`${what} during a compaction`, during('compact', route), [compact], [scene]], [`${what} during a scene`, during('scene', route), [scene], [compact]]]),
+    // The detailed context: a budget used up is a warning, an estimate says how rough it is, a compacted memory has its
+    // parts, and the last request's input comes before its output.
+    ['a budget used up', renderContext(current({ budget: { inputTokens: 62000, limitTokens: 61440, remainingTokens: -560 } })).text, [c.exhausted], [c.remaining(num(-560))]],
+    ['an estimate from bytes', renderContext(current({ request: { bytes: 13000, estimatedTokens: 3250, estimateSource: 'bytes' } })).text, [c.estimateFromBytes], [c.estimateFromUsage]],
+    ['an estimate from usage', renderContext(current()).text, [c.estimateFromUsage, c.lastRequest(num(2700), num(500), num(3200))], [c.estimateFromBytes]],
+    ['a compacted memory', renderContext(current({ memory: { count: 2, bytes: 900, estimatedTokens: 225 } })).text, [t.count.parts(2)], [c.memoryEmpty]],
+    // A model has answered only after a check it passed, and the menu's line about the GPU says what the GPU does.
+    ['a model never checked', render(fixture(), 'model', { modelInfo: modelInfo({ status: 'configured' }) }).text, [t.model.configured], [t.model.readyNote]],
+    ['the menu of a model that failed its check', home({ modelInfo: modelInfo({ status: 'unavailable' }) }), [t.model.short.unavailable], []],
+    ...([['draining', t.gpu.short.draining(2)], ['paused', t.gpu.short.paused], ['weird', t.gpu.short.unknown]] as const).map(([status, short]): [string, string, string[], string[]] =>
+      [`the menu with a GPU ${status}`, home({ modelInfo: modelInfo(), gpuInfo: gpuInfo({ status, activeJobs: 2 }) }), [t.home.gpu(short)], status === 'paused' ? [] : [t.home.gpu(t.gpu.short.paused)]]),
+  ];
+  for (const [label, text, said, unsaid] of says) {
+    for (const part of said) assert.ok(text.includes(part), `${label}: ${part}`);
+    for (const part of unsaid) assert.ok(!text.includes(part), `${label}: ${part}`);
+  }
 });
 
 test('long collections paginate and long texts fit', () => {
