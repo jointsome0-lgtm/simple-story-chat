@@ -257,7 +257,8 @@ export function instanceState(id: string, status: number, body: unknown): Instan
 
 // Where ssh reaches the instance, from the same read, so that the operator needs nothing from the console: the host
 // port Vast maps to the container's 22 on the machine's address, and Vast's proxy, which admits account keys only
-// (docs/gpu.md). Nothing else of the record is kept, and a part that does not look like an address and a port is null.
+// (docs/gpu.md#ssh-access). Nothing else of the record is kept, and a part that does not look like an address and a
+// port is null.
 export type SshRoute = { direct: string | null; proxy: string | null };
 export function sshRoute(id: string, status: number, body: unknown): SshRoute {
   const record = status === 200 && typeof body === 'object' && body !== null && 'instances' in body ? body.instances : undefined;

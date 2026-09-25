@@ -40,7 +40,7 @@ Vast bills every minute whether the cards draw or wait. The owner's rules since 
 
 ## SSH access
 
-After you create the instance, take the address, the SSH port and the user from Vast. Add a local entry to `~/.ssh/config`; the values below are a sample:
+After you create the instance, take the address, the SSH port and the user from Vast. `npm run gpu:rent -- --show ID` prints the first two without the console: `ssh.direct` is the machine's address and the port Vast maps to the container's 22, and `ssh.proxy` is Vast's proxy, which admits only the account's keys. Add a local entry to `~/.ssh/config`; the values below are a sample:
 
 ```sshconfig
 Host simple-chat-vast
