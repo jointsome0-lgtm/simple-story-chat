@@ -16,8 +16,6 @@ const isLink = (value: unknown): value is Link =>
 const workflow: Record<string, Node> = JSON.parse(readFileSync(resolve('gpu/image-workflow.json'), 'utf8'));
 const qwen: Record<string, Node> = JSON.parse(readFileSync(resolve('gpu/image-workflow-qwen.json'), 'utf8'));
 const qwenEdit: Record<string, Node> = JSON.parse(readFileSync(resolve('gpu/image-workflow-qwen-edit.json'), 'utf8'));
-// The action measurement's edit graph (docs/action-experiment.md#drawing): the edit graph and a seventh slot, for T.
-const qwenAction: Record<string, Node> = JSON.parse(readFileSync(resolve('gpu/image-workflow-qwen-action.json'), 'utf8'));
 // The manifest is read the way the scripts read it — `source` under `set -euo pipefail` — and not by splitting on
 // `=`. A value holding an unquoted space parses fine with a splitter and kills both scripts on the rented card.
 const sourced = spawnSync('bash', ['-c', 'set -euo pipefail; set -a; . "$1"; set +a; env -0',
@@ -124,12 +122,12 @@ test('the Qwen manifest pins three public files by revision, exact bytes and SHA
     + Number(manifest.get('IMAGE_QWEN_VAE_BYTES')) < 20e9, 'the opt-in download stays under 20 GB');
 });
 
-test('the Qwen graphs are connected API-format graphs of core ComfyUI nodes', () => {
+test('both Qwen graphs are connected API-format graphs of core ComfyUI nodes', () => {
   // Every name here is in the pinned ComfyUI core: TextEncodeQwenImage21 and QwenImage21Cache in
   // comfy_extras/nodes_qwen.py, the loaders and LoadImage in nodes.py. A name off this list means a custom node.
   const core = ['UNETLoader', 'CLIPLoader', 'VAELoader', 'TextEncodeQwenImage21', 'QwenImage21Cache',
     'EmptyLatentImage', 'KSampler', 'VAEDecode', 'SaveImage', 'LoadImage'];
-  for (const graph of [qwen, qwenEdit, qwenAction]) {
+  for (const graph of [qwen, qwenEdit]) {
     for (const [id, node] of Object.entries(graph)) {
       assert.ok(core.includes(node.class_type), `${id}: unexpected node ${node.class_type}`);
       for (const [name, value] of Object.entries(node.inputs)) {
@@ -152,8 +150,8 @@ test('the Qwen graphs are connected API-format graphs of core ComfyUI nodes', ()
   assert.deepEqual(oneOf(qwen, 'KSampler').inputs['model'], [idIn(qwen, 'UNETLoader'), 0]);
 });
 
-test('the Qwen graphs load the files the manifest pins, through the loader type that reads them', () => {
-  for (const graph of [qwen, qwenEdit, qwenAction]) {
+test('both Qwen graphs load the files the manifest pins, through the loader type that reads them', () => {
+  for (const graph of [qwen, qwenEdit]) {
     assert.equal(oneOf(graph, 'UNETLoader').inputs['unet_name'], manifest.get('IMAGE_QWEN_MODEL_FILE'));
     assert.equal(oneOf(graph, 'CLIPLoader').inputs['clip_name'], manifest.get('IMAGE_QWEN_ENCODER_FILE'));
     assert.equal(oneOf(graph, 'VAELoader').inputs['vae_name'], manifest.get('IMAGE_QWEN_VAE_FILE'));
@@ -163,8 +161,8 @@ test('the Qwen graphs load the files the manifest pins, through the loader type 
   }
 });
 
-test('the Qwen graphs keep the template settings, at the frame each of them samples', () => {
-  for (const graph of [qwen, qwenEdit, qwenAction]) {
+test('both Qwen graphs keep the template settings, at the frame each of them samples', () => {
+  for (const graph of [qwen, qwenEdit]) {
     const sampler = oneOf(graph, 'KSampler').inputs;
     // image_qwen_image_2_1_t2i.json and its edit twin: 25 steps, cfg 1, euler, simple. The upstream card's 40 is
     // one `--steps 40` away, and neither template sets a shift — Qwen Image 2.1 carries shift 0.69 in its own
@@ -227,18 +225,6 @@ test('the Qwen edit graph offers a reference slot per person a character sheet c
   assert.equal(new Set(loaders).size, slots.length);
   // The t2i graph has no slots at all, so a `--references` run cannot be pointed at it by accident.
   assert.equal(Object.keys(oneOf(qwen, 'TextEncodeQwenImage21').inputs).filter(name => name.startsWith('images.')).length, 0);
-});
-
-// The identity run's pins hash the edit graph, so the action run's seventh slot (T: L's picture and six portraits) is a
-// graph of its own, and it differs from the edit graph by that slot and its loader alone.
-test('the action graph is the edit graph and a seventh slot, and nothing else', () => {
-  const seventh = qwenAction['17']!;
-  assert.deepEqual(seventh, { class_type: 'LoadImage', inputs: { image: 'reference-7.png' } });
-  assert.deepEqual(oneOf(qwenAction, 'TextEncodeQwenImage21').inputs['images.image_7'], ['17', 0]);
-  const without: Record<string, Node> = structuredClone(qwenAction);
-  delete without['17'];
-  delete oneOf(without, 'TextEncodeQwenImage21').inputs['images.image_7'];
-  assert.deepEqual(without, qwenEdit);
 });
 
 test('the opt-in is off by default and adds the three Qwen files when it is on', t => {
