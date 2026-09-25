@@ -29,13 +29,13 @@ import { safeErrorDetails } from './model-error.ts';
 import { loadTokenizers, qwenPromptTokens } from './tokenizer.ts';
 import type { QwenTokenizer } from './tokenizer.ts';
 import { startFakeComfy } from './fake-comfy.ts';
-import { capture, madeUpName, markerForms, searchBoundary, searchTree } from './action-boundary.ts';
-import { ARMS, SERVING, SMOKE_PROBES, gpuModel, markerCheck, readClientKey, readGpuEnv, readJson, requestCounts, runTexts, servingModel,
-  storyDir, textStories } from './action-text.ts';
+import { Refusal, capture, madeUpName, markerForms, searchBoundary, searchTree } from './action-boundary.ts';
+import { ARMS, SERVING, SMOKE_PROBES, TEXT_CODES, gpuModel, markerCheck, readClientKey, readGpuEnv, readJson, requestCounts, runTexts,
+  servingModel, storyDir, textStories } from './action-text.ts';
 import type { Fetch, StoryText, TextModel, TextsRecord } from './action-text.ts';
 import { planAll, readPlan, textsHash } from './action-prompts.ts';
 import type { PromptsRecord, Tokens } from './action-prompts.ts';
-import { ACTION_GRAPH, drawStage, planCells } from './action-draw.ts';
+import { ACTION_GRAPH, DRAW_CODES, drawStage, planCells } from './action-draw.ts';
 import type { DrawIndex, DrawStageOptions } from './action-draw.ts';
 import { KINDS, answersFile, bundleDir, checklistBundles, collectAnswers, judgeSessions, judgingCounts, pictureBundles,
   sessionName } from './action-judge.ts';
@@ -52,14 +52,21 @@ const tally = (names: (string | undefined)[]) => names.reduce<Record<string, num
   return all;
 }, {});
 
-// What an error may say here. A refusal of the harness is a plain Error and says what to do in its own words;
-// anything else, a parser's error above all, may quote what it read, and shows its class, its code and the fields
-// that pass safeErrorDetails.
+// What an error may say here (docs/action-experiment.md#sealed): its code when the code is in `CODES`, the fields that
+// pass safeErrorDetails, and its class when that is one of `CLASSES`. A refusal of the harness (`Refusal`) also says
+// what to do, in the harness's own words. No other message is printed, a plain Error's included: whose words those
+// are, nothing about the error says, and a parser's quotes what it read.
+const CODES = new Set<string>([...TEXT_CODES, ...DRAW_CODES, 'variant_anchor',
+  // A system error's and the command line's, which name no file and no value.
+  'ENOENT', 'EACCES', 'EPERM', 'EEXIST', 'EISDIR', 'ENOTDIR', 'ENOTEMPTY', 'ENOSPC', 'EMFILE',
+  'ERR_PARSE_ARGS_UNKNOWN_OPTION', 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE', 'ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL']);
+const CLASSES = new Set(['Error', 'TypeError', 'SyntaxError', 'RangeError', 'ReferenceError', 'AbortError', 'TimeoutError']);
 export function safeError(error: unknown) {
   const code = (error as { code?: unknown } | null)?.code;
-  const own = typeof code === 'string' && /^[A-Za-z_]{1,50}$/.test(code) ? { code } : {};
-  if (error instanceof Error && Object.getPrototypeOf(error) === Error.prototype) return { message: error.message, ...own };
-  return { error: error instanceof Error ? error.name : typeof error, ...own, ...safeErrorDetails(error) };
+  const own = typeof code === 'string' && CODES.has(code) ? { code } : {};
+  if (error instanceof Refusal) return { message: error.message, ...own };
+  const name = error instanceof Error ? (CLASSES.has(error.name) ? error.name : 'other') : typeof error;
+  return { error: name, ...own, ...safeErrorDetails(error) };
 }
 
 // ---- The text card ----
@@ -72,7 +79,7 @@ function textModel(options: TextsOptions, configRoot: string): TextModel {
   const fetch = options.fetch ? { fetch: options.fetch } : {};
   if (options.model !== undefined) {
     const label = /^gpu:([A-Za-z0-9._-]{1,40})$/.exec(options.model)?.[1];
-    if (!label) throw new Error('--model takes gpu:<label>, the llama.cpp card of .env.gpu, as eval does');
+    if (!label) throw new Refusal('--model takes gpu:<label>, the llama.cpp card of .env.gpu, as eval does');
     return gpuModel({ label, env: readGpuEnv(), configRoot, ...fetch });
   }
   return servingModel({ key: readClientKey(options.keyFile), configRoot, ...(options.baseUrl ? { baseUrl: options.baseUrl } : {}), ...fetch });
@@ -102,7 +109,7 @@ export const markerCommand = (root: string, options: TextsOptions) => withTextMo
 // directory, and tokenizers/ at the repository's root is taken when it is there. Without one, no count has tokens.
 export function qwenTokenizer(dir?: string): QwenTokenizer | undefined {
   const tokenizer = loadTokenizers(resolve(dir ?? join(ROOT, 'tokenizers'))).qwen();
-  if (dir !== undefined && !tokenizer) throw new Error(`No Qwen tokenizer in ${dir}: npm run tokenizers writes it (docs/tokenizers.md)`);
+  if (dir !== undefined && !tokenizer) throw new Refusal(`No Qwen tokenizer in ${dir}: npm run tokenizers writes it (docs/tokenizers.md)`);
   return tokenizer;
 }
 function tokensOf(tokenizer: QwenTokenizer | undefined): Tokens | undefined {
@@ -165,7 +172,7 @@ export type DrawOptions = Omit<DrawStageOptions, 'stage' | 'root'>;
 export async function drawCommand(root: string, stage: DrawStageOptions['stage'], options: DrawOptions) {
   const gate = picturesReady(root);
   if (!gate.ready) {
-    throw new Error(`Nothing is drawn before every prompt is assembled and counted and every checklist is stored (texts done ${gate.textsDone}, `
+    throw new Refusal(`Nothing is drawn before every prompt is assembled and counted and every checklist is stored (texts done ${gate.textsDone}, `
       + `prompts of these texts ${gate.promptsCurrent}, checklists ${JSON.stringify(gate.checklists)}); the card is rented only after that`);
   }
   const index = await drawStage({ stage, root, ...options });
@@ -287,6 +294,12 @@ export async function dryRun(out: string, options: { tokenizers?: string } = {})
     const kept = readFileSync(join(root, 'texts.json'));
     await refused('the texts under another address', () => texts({ baseUrl: 'http://127.0.0.1:8090' }));
     expect(readFileSync(join(root, 'texts.json')).equals(kept), 'texts.json unchanged by the refusal');
+    // The error boundary: a plain Error that carries the word, and an error under a code of no list, which is a word
+    // too, print neither (the boundary test below searches the output for the first).
+    const unlisted = `dry${Array.from(randomBytes(8), byte => String.fromCharCode(97 + byte % 26)).join('')}`;
+    const shown = JSON.stringify([safeError(new Error(`a parser quoting ${word}`)), safeError(Object.assign(new Error(unlisted), { code: unlisted }))]);
+    say(`   a plain error and an unlisted code print ${shown}`);
+    expect(!shown.includes(unlisted), 'an unlisted code is not printed');
 
     const tokenizer = qwenTokenizer(options.tokenizers);
     const prompts = promptsCommand(root, tokenizer);
@@ -386,9 +399,9 @@ async function main(args: string[]) {
   const command = positionals[0] ?? '';
   const root = resolve(values.dir ?? RUN_DIR);
   const parallel = Number(values.parallel);
-  if (!Number.isInteger(parallel) || parallel < 1 || parallel > 8) throw new Error('--parallel takes 1 to 8 sessions at a time');
+  if (!Number.isInteger(parallel) || parallel < 1 || parallel > 8) throw new Refusal('--parallel takes 1 to 8 sessions at a time');
   const kinds = values.kind?.split(',').map(kind => kind.trim());
-  if (kinds?.some(kind => !KINDS.includes(kind as SessionKind))) throw new Error(`--kind takes ${KINDS.join(', ')}, comma separated`);
+  if (kinds?.some(kind => !KINDS.includes(kind as SessionKind))) throw new Refusal(`--kind takes ${KINDS.join(', ')}, comma separated`);
   if (command === 'texts') {
     const options = { smokeRecord: values['smoke-record'], model: values.model, baseUrl: values['base-url'], keyFile: values['key-file'], log: print };
     if (values.marker) {
@@ -411,7 +424,7 @@ async function main(args: string[]) {
     const until = Number(values.until) * 1000, wait = Number(values.wait), timeout = Number(values.timeout);
     if (!Number.isInteger(until) || until <= Date.now() || until > Date.now() + 3 * 3600000 || !Number.isInteger(wait) || wait < 10
       || !Number.isInteger(timeout) || timeout < 10) {
-      throw new Error('Use: portraits|draw [--smoke] --until <epoch seconds, five minutes before the card\'s end> [--dir illustrations/action] [--wait 300] [--timeout 60] [--tokenizers tokenizers] [--comfy http://127.0.0.1:8188]');
+      throw new Refusal('Use: portraits|draw [--smoke] --until <epoch seconds, five minutes before the card\'s end> [--dir illustrations/action] [--wait 300] [--timeout 60] [--tokenizers tokenizers] [--comfy http://127.0.0.1:8188]');
     }
     const stage = command === 'portraits' ? 'portraits' : values.smoke ? 'smoke' : 'main';
     const result = await drawCommand(root, stage, { comfy: comfyUrl(values.comfy!), until, tokenizer: qwenTokenizer(values.tokenizers),
@@ -431,7 +444,7 @@ async function main(args: string[]) {
   } else if (command === 'dry-run') {
     const result = await dryRun(values.dir ?? mkdtempSync(join(tmpdir(), 'simple-chat-action-dry-')), { tokenizers: values.tokenizers });
     if (!result.pass) process.exitCode = 1;
-  } else throw new Error('Use: image-action.ts texts|prompts|checklists|draw|portraits|bundles|judge|collect|report|gallery|dry-run (docs/action-experiment.md#runbook)');
+  } else throw new Refusal('Use: image-action.ts texts|prompts|checklists|draw|portraits|bundles|judge|collect|report|gallery|dry-run (docs/action-experiment.md#runbook)');
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

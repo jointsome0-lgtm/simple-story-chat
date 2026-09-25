@@ -22,6 +22,7 @@ import { portraitCanvas } from './image-portraits.ts';
 import { safeErrorDetails } from './model-error.ts';
 import { qwenPromptTokens } from './tokenizer.ts';
 import type { QwenTokenizer } from './tokenizer.ts';
+import { Refusal } from './action-boundary.ts';
 import { ARMS, isSharp, readJson, storyDir, textStories } from './action-text.ts';
 import type { ActionArm } from './action-text.ts';
 import { T_OPENING, VIEW_TURNS, readPlan } from './action-prompts.ts';
@@ -42,6 +43,13 @@ export const SCALED = { width: 352, height: 640 };
 // quarter more, and three seconds for the transfers (docs/action-experiment.md#time).
 export const FREE_MIB = 2048;
 export const MARGIN = 1.25, CELL_MS = 3000;
+// The codes a cell fails under (docs/action-experiment.md#sealed): local/image-batch.ts's for a picture, the graph
+// and the server, and the harness's own. A code is one of them because it is in this list; any other is
+// `image_failed`.
+export const DRAW_CODES: readonly string[] = ['cancelled', 'out_of_time', 'image_timeout', 'image_failed', 'not_a_png', 'truncated_png',
+  'comfy_http_error', 'comfy_rejected_prompt', 'comfy_upload_failed', 'comfy_socket_unavailable', 'comfy_stop_unconfirmed',
+  'workflow_not_api_format', 'workflow_no_sampler_or_loader', 'workflow_no_latent_size', 'workflow_no_positive_prompt',
+  'workflow_too_few_reference_slots', 'workflow_slot_mismatch'];
 
 // ---- The graphs ----
 
@@ -205,7 +213,7 @@ const settings = (graph: Graph) => {
 function pinsFor(root: string, card: ReturnType<typeof cardOf>, base: Graph): Record<string, string | number> {
   const texts = readJson<{ pins: Record<string, string | number> }>(join(root, 'texts.json'));
   const prompts = readJson<PromptsRecord>(join(root, 'prompts.json'));
-  if (!texts || !prompts) throw new Error('The pictures are drawn from the texts and the prompts: run `texts` and `prompts` in this directory first');
+  if (!texts || !prompts) throw new Refusal('The pictures are drawn from the texts and the prompts: run `texts` and `prompts` in this directory first');
   const cache = Object.values(base).find(node => node.class_type === 'QwenImage21Cache');
   const gateway = Object.fromEntries(Object.entries(texts.pins).filter(([key]) => key.startsWith('gateway')).map(([key, value]) => [`text.${key}`, value]));
   return { ...pinsOf(card), actionGraph: sha256(readFileSync(ACTION_GRAPH)), cacheDevice: String(cache?.inputs.device ?? 'none'),
@@ -219,16 +227,24 @@ export async function drawStage(options: DrawStageOptions): Promise<DrawIndex> {
   const log = options.log ?? (() => undefined);
   const at = (ms: number) => AbortSignal.timeout(Math.max(0, Math.round(ms - Date.now())));
   const comfy: Comfy = { baseUrl: options.comfy, timeoutMs: options.timeoutMs ?? 60000, end: at(options.until), reserve: at(options.until + CLEANUP_RESERVE_MS) };
-  // Everything is read and checked before draw.json is written: a refused resume leaves it as it was.
-  const card = cardOf(join(root, 'card.txt'));
+  // Everything is read and checked before draw.json is written: a refused resume leaves it as it was. The card's
+  // record and the server's pins are refused in the harness's own words (`Refusal`).
+  let card: ReturnType<typeof cardOf>;
+  try { card = cardOf(join(root, 'card.txt')); }
+  catch { throw new Refusal(`card.txt in ${root} is missing or differs from gpu/image-manifest.env: copy image-verified.txt off the card as the runbook says before anything is drawn`); }
   const base = readGraph(ACTION_GRAPH), frontGraph = readGraph(FRONT_GRAPH);
   const plans = new Map(textStories().flatMap(story => { const plan = readPlan(root, story.id); return plan ? [[story.id, plan] as const] : []; }));
-  const pins = { ...pinsFor(root, card, base), ...await serverPins(comfy, true) };
+  const own = pinsFor(root, card, base);
+  const server = await serverPins(comfy, true).catch(() => {
+    throw new Refusal(comfy.end?.aborted ? 'The end (--until) came before the server said what it is; nothing is drawn'
+      : 'The server did not say what it is on /system_stats (ComfyUI, PyTorch and the card), and the run is pinned to that too; nothing is drawn');
+  });
+  const pins = { ...own, ...server };
   const file = join(root, 'draw.json');
   const earlier = readJson<DrawIndex>(file);
   if (earlier) {
     const changed = [...new Set([...Object.keys(pins), ...Object.keys(earlier.pins)])].find(key => earlier.pins[key] !== pins[key]);
-    if (changed) throw new Error(`${file} was drawn under another ${changed}; one run directory holds one set of pins`);
+    if (changed) throw new Refusal(`${file} was drawn under another ${changed}; one run directory holds one set of pins`);
   }
   const index: DrawIndex = earlier ?? { pins, startedAt: new Date().toISOString(), cells: {} };
   const front = { graph: frontGraph, canvas: portraitCanvas(frontGraph) };
@@ -258,7 +274,7 @@ export async function drawStage(options: DrawStageOptions): Promise<DrawIndex> {
   }
   const verdict = index.smoke?.verdict;
   if (!verdict?.pass) {
-    throw new Error(`The rest is drawn only after the smoke has passed in this directory (draw --smoke): ${verdict
+    throw new Refusal(`The rest is drawn only after the smoke has passed in this directory (draw --smoke): ${verdict
       ? `drawn ${verdict.drawn}, geometry ${verdict.geometry}, slots ${verdict.slots}, heard ${verdict.heard}, memory ${verdict.memory}` : 'no smoke there'}`);
   }
   const { fronts, views, frames } = planCells(ordered, verdict.tOut);
@@ -394,8 +410,8 @@ async function drawCells(run: Run, cells: ActionCell[], smoke: boolean, price?: 
       run.save();
       log({ event: 'cell_drawn', key: cell.key, totalMs: drawn.totalMs, references: names.length, width: size.width, height: size.height });
     } catch (error) {
-      const raw = String((error as { code?: unknown }).code ?? '');
-      const code = /^[a-z_]{1,50}$/.test(raw) ? raw : 'image_failed';
+      const raw = (error as { code?: unknown }).code;
+      const code = typeof raw === 'string' && DRAW_CODES.includes(raw) ? raw : 'image_failed';
       const { httpStatus } = safeErrorDetails(error);
       const oom = (error as { oom?: unknown }).oom === true;
       // Whatever failed once the end had come was cut by it, and is not this cell's result.

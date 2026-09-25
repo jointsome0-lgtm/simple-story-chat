@@ -13,7 +13,7 @@ import { performance } from 'node:perf_hooks';
 import { addSeed, beginJob, commitTurn, newStory } from '../lib/library.ts';
 import { ACTION_STORIES, MARKER_STORY, SHARP_SCHEMA, SHARP_START_TIME, SHARP_THEMES, SHARP_TOKENS, actionSetHash,
   sharpInstruction } from '../examples/action-set.ts';
-import { capture, madeUpName, markerForms, searchBoundary, searchTree } from './action-boundary.ts';
+import { Refusal, capture, madeUpName, markerForms, searchBoundary, searchTree } from './action-boundary.ts';
 import { loadModelConfig } from './config.ts';
 import type { Env, ModelConfig } from './config.ts';
 import { generateScene } from './generation.ts';
@@ -171,8 +171,8 @@ export const CLIENT_KEY_FILE = join(homedir(), '.config', 'simple-serving', 'con
 export function readClientKey(path = CLIENT_KEY_FILE): string {
   let key: unknown;
   try { key = (JSON.parse(readFileSync(path, 'utf8')) as { client_key?: unknown } | null)?.client_key; }
-  catch { throw new Error(`Cannot read ${path} as a JSON object`); }
-  if (typeof key !== 'string' || !key.trim() || /[\r\n]/.test(key)) throw new Error(`${path} has no client_key`);
+  catch { throw new Refusal(`Cannot read ${path} as a JSON object`); }
+  if (typeof key !== 'string' || !key.trim() || /[\r\n]/.test(key)) throw new Refusal(`${path} has no client_key`);
   return key.trim();
 }
 
@@ -194,11 +194,13 @@ function counted(inner: Fetch) {
   return { requests, fetch };
 }
 // The configuration as `loadModelConfig` builds it from `env` alone, on a directory that holds nothing, so that no
-// `.env` of the repository or the working directory is read.
+// `.env` of the repository or the working directory is read. Its own errors are not the harness's words, and are
+// refused in these.
 function configFrom(env: Env, root: string): ModelConfig {
   mkdirSync(root, { recursive: true, mode: 0o700 });
-  if (readdirSync(root).length) throw new Error(`${root} must be empty: the model's configuration is built on it so that no .env is read`);
-  return loadModelConfig(root, env);
+  if (readdirSync(root).length) throw new Refusal(`${root} must be empty: the model's configuration is built on it so that no .env is read`);
+  try { return loadModelConfig(root, env); }
+  catch { throw new Refusal('The model\'s configuration was refused: --base-url takes a loopback HTTP root or an HTTPS one without credentials, and gpu:<label> the settings of .env.gpu'); }
 }
 export function servingModel({ key, configRoot, baseUrl = SERVING.baseUrl, fetch = globalThis.fetch as Fetch }: {
   key: string; configRoot: string; baseUrl?: string; fetch?: Fetch }): TextModel {
@@ -213,13 +215,13 @@ export function servingModel({ key, configRoot, baseUrl = SERVING.baseUrl, fetch
 export function gpuModel({ label, env, configRoot, fetch = globalThis.fetch as Fetch }: { label: string; env: Env; configRoot: string; fetch?: Fetch }): TextModel {
   const names = ['PROVIDER', 'BASE_URL', 'API_KEY', 'MODEL', 'CONTEXT_TOKENS', 'MAX_OUTPUT_TOKENS', 'MODEL_TIMEOUT_MS', 'TEMPERATURE'];
   const config = configFrom(Object.fromEntries(names.map(name => [`SIMPLE_CHAT_${name}`, env[`SIMPLE_CHAT_${name}`]])), configRoot);
-  if (config.provider !== 'llama-cpp') throw new Error('The fallback is the llama.cpp card: SIMPLE_CHAT_PROVIDER=llama-cpp in .env.gpu');
+  if (config.provider !== 'llama-cpp') throw new Refusal('The fallback is the llama.cpp card: SIMPLE_CHAT_PROVIDER=llama-cpp in .env.gpu');
   const counting = counted(fetch);
   return { provider: createLlama(config, { fetch: counting.fetch }), config, route: 'gpu', weights: `gpu:${label}: ${config.model} on llama.cpp`,
     requests: counting.requests, fetch: counting.fetch };
 }
 export const readGpuEnv = (file = join(ROOT, '.env.gpu')): Env => {
-  try { return parseEnv(readFileSync(file, 'utf8')); } catch { throw new Error('Cannot read .env.gpu'); }
+  try { return parseEnv(readFileSync(file, 'utf8')); } catch { throw new Refusal('Cannot read .env.gpu'); }
 };
 
 // simple-serving's smoke, by its own record: the JSON lines of the one plain `smoke` the text card runs once `up` holds
@@ -236,7 +238,7 @@ export function smokeRecord(file: string) {
   const passed = new Set(lines.filter(line => line.ok === true && typeof line.probe === 'string').map(line => String(line.probe)));
   const missing = SMOKE_PROBES.filter(probe => !passed.has(probe));
   if (missing.length || lines.some(line => line.ok !== true)) {
-    throw new Error(`The gateway's smoke record ${file} has not passed whole (${missing.length ? `missing or failed: ${missing.join(', ')}` : 'a line did not pass'})`);
+    throw new Refusal(`The gateway's smoke record ${file} has not passed whole (${missing.length ? `missing or failed: ${missing.join(', ')}` : 'a line did not pass'})`);
   }
   const versions = lines.find(line => line.probe === 'state')?.versions;
   const safe = Object.entries(versions && typeof versions === 'object' ? versions : {})
@@ -289,9 +291,16 @@ export async function gatewayFacts(model: TextModel): Promise<Record<string, str
 // ---- The run ----
 
 const count = (value: unknown) => (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null);
+// The codes a call or a step is recorded and printed under (docs/action-experiment.md#sealed): those of the two
+// adapters (local/serving.ts, local/llama.ts), of the bot's scene and frame (local/generation.ts, local/illustrate.ts)
+// and the harness's own. A code is one of them because it is in this list; any other is `failed`.
+export const TEXT_CODES: readonly string[] = ['cancelled', 'context_limit', 'empty_response', 'incomplete_stream', 'invalid_response',
+  'invalid_stream', 'memory_not_smaller', 'model_unavailable', 'nothing_to_compact', 'output_limit', 'provider_failed', 'rate_limited',
+  'timeout', 'unauthorized', 'unexpected_context', 'unexpected_model', 'unexpected_slots', 'unexpected_tools', 'unnamed_reader',
+  'unparsed_description', 'unsupported_server', 'usage_unavailable', 'scene_not_committed'];
 export const codeOf = (error: unknown) => {
-  const raw = String((error as { code?: unknown } | null)?.code ?? '');
-  return /^[a-z_]{1,50}$/.test(raw) ? raw : 'failed';
+  const raw = (error as { code?: unknown } | null)?.code;
+  return typeof raw === 'string' && TEXT_CODES.includes(raw) ? raw : 'failed';
 };
 // One attempt at the model, as counts, times and a code: no text of the request or the reply.
 export type Attempt = { story: string; kind: StepName; attempt: number; retry: boolean; inputTokens: number | null;
@@ -342,7 +351,7 @@ export async function runStory(story: TextStory, run: RunContext): Promise<Story
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const file = join(dir, 'text.json');
   const text: StoryText = readJson<StoryText>(file) ?? { id: story.id, pins: run.pins, steps: {} };
-  if (text.pins !== run.pins) throw new Error(`${story.id} was written under other pins; one run directory holds one set of pins`);
+  if (text.pins !== run.pins) throw new Refusal(`${story.id} was written under other pins; one run directory holds one set of pins`);
   const save = () => writeJson(file, text);
   const done = (step: StepName, result: StepResult) => {
     text.steps[step] = result;
@@ -478,7 +487,7 @@ export async function runTexts(options: TextsOptions): Promise<TextsRecord> {
   const root = resolve(options.root);
   const say = options.say ?? (() => undefined);
   const smoke = options.smoke ? smokeRecord(options.smoke) : undefined;
-  if (options.model.route === 'simple-serving' && !smoke) throw new Error('Route A starts only on the gateway\'s passed smoke: name its record with --smoke-record');
+  if (options.model.route === 'simple-serving' && !smoke) throw new Refusal('Route A starts only on the gateway\'s passed smoke: name its record with --smoke-record');
   const gateway = options.gateway ?? await gatewayFacts(options.model);
   const pins = textPins(options.model, { ...gateway, ...Object.fromEntries(Object.entries(smoke?.versions ?? {}).map(([name, value]) => [`gateway.${name}`, value])) });
   mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -486,7 +495,7 @@ export async function runTexts(options: TextsOptions): Promise<TextsRecord> {
   const earlier = readJson<TextsRecord>(file);
   if (earlier && pinsHash(earlier.pins) !== pinsHash(pins)) {
     const changed = [...new Set([...Object.keys(pins), ...Object.keys(earlier.pins)])].find(key => earlier.pins[key] !== pins[key]);
-    throw new Error(`${file} was written under another ${changed}; one run directory holds one set of pins`);
+    throw new Refusal(`${file} was written under another ${changed}; one run directory holds one set of pins`);
   }
   const record: TextsRecord = earlier ?? { pins, startedAt: new Date().toISOString(), stories: {}, attempts: [], requests: {} };
   if (smoke) record.smoke = smoke;
@@ -529,7 +538,7 @@ export async function markerCheck(options: Omit<TextsOptions, 'stories'> & { tem
   const root = resolve(options.root);
   mkdirSync(root, { recursive: true, mode: 0o700 });
   const smoke = options.smoke ? smokeRecord(options.smoke) : undefined;
-  if (options.model.route === 'simple-serving' && !smoke) throw new Error('Route A starts only on the gateway\'s passed smoke: name its record with --smoke-record');
+  if (options.model.route === 'simple-serving' && !smoke) throw new Refusal('Route A starts only on the gateway\'s passed smoke: name its record with --smoke-record');
   const gateway = options.gateway ?? await gatewayFacts(options.model);
   const pins = textPins(options.model, { ...gateway, ...Object.fromEntries(Object.entries(smoke?.versions ?? {}).map(([name, value]) => [`gateway.${name}`, value])) });
   const sealed = join(root, 'sealed');

@@ -7,6 +7,16 @@ import { randomInt } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
+// A refusal of the harness: what the operator must do, in the harness's own words, written where it is thrown. It is
+// the one error whose message is ever printed (image-action.ts `safeError`); the message of any other error, a
+// parser's that quotes what it read or a system error's that names a path, never is.
+export class Refusal extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'Refusal';
+  }
+}
+
 // Every form the word can take in a file or a stream the harness writes: as it is, and each non-ASCII letter as
 // \uXXXX in lower and in upper case hexadecimal.
 export function markerForms(word: string): Buffer[] {
@@ -83,5 +93,5 @@ export function madeUpName(absentFrom: (word: string) => boolean = () => true): 
     const name = syllables[0].toUpperCase() + syllables.slice(1) + CONSONANTS[randomInt(CONSONANTS.length)];
     if (absentFrom(name)) return name;
   }
-  throw new Error('No made-up name was absent from the run directory in a hundred tries');
+  throw new Refusal('No made-up name was absent from the run directory in a hundred tries');
 }

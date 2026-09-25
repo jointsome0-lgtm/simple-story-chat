@@ -12,6 +12,7 @@ import type { ActionArm, TextsRecord } from './action-text.ts';
 import type { PromptsRecord, StoryPlan } from './action-prompts.ts';
 import { readPlan } from './action-prompts.ts';
 import { frameKey } from './action-draw.ts';
+import { Refusal } from './action-boundary.ts';
 import type { CellRecord, DrawIndex } from './action-draw.ts';
 import { JUDGE, MIXUPS, answersFile, escapeHtml, keyFile, sessionKey } from './action-judge.ts';
 import type { BundleKey, JudgingRecord, Projection, Session } from './action-judge.ts';
@@ -485,7 +486,7 @@ export function writeReport(root: string) {
 export function writeGalleries(root: string) {
   root = resolve(root);
   const draw = readJson<DrawIndex>(join(root, 'draw.json'));
-  if (!draw) throw new Error(`${join(root, 'draw.json')} is missing: the galleries show the drawn pictures`);
+  if (!draw) throw new Refusal(`${join(root, 'draw.json')} is missing: the galleries show the drawn pictures`);
   const page = (file: string, sharp: boolean) => {
     const figures = (cells: CellRecord[]) => cells.map(cell => `<figure><img src="${escapeHtml(relative(join(file, '..'), join(root, cell.file!)))}" loading="lazy">`
       + `<figcaption>${escapeHtml(cell.kind === 'frame' ? `${cell.arm}` : cell.id)}</figcaption></figure>`).join('');

@@ -19,6 +19,7 @@ import { ACTION_SEEDS, ACTION_STORIES, SHARP_TARGET, repeatedScenes } from '../e
 import { pngSize } from './image-batch.ts';
 import type { Character } from './illustrate.ts';
 import { Store } from './store.ts';
+import { Refusal } from './action-boundary.ts';
 import { ARMS, USER, fitsSchema, isSharp, readJson, storyDir, textStories } from './action-text.ts';
 import type { ActionArm, Facing, Schema, StoryText } from './action-text.ts';
 import { entryId, readPlan } from './action-prompts.ts';
@@ -290,7 +291,7 @@ function drawnFile(root: string, draw: DrawIndex, key: string, size: string) {
   if (!existsSync(path)) return undefined;
   const bytes = readFileSync(path);
   const own = pngSize(bytes);
-  if (sha256(bytes) !== cell.sha256 || `${own.width}x${own.height}` !== size) throw new Error(`${key} is not the file draw.json recorded; the bundles are not built from it`);
+  if (sha256(bytes) !== cell.sha256 || `${own.width}x${own.height}` !== size) throw new Refusal(`${key} is not the file draw.json recorded; the bundles are not built from it`);
   return { path, sha256: cell.sha256! };
 }
 
@@ -299,7 +300,7 @@ function drawnFile(root: string, draw: DrawIndex, key: string, size: string) {
 // scenes at seed 7; and the identity of each seed, where somebody bound has a front.
 export function pictureBundles(root: string, log: (event: object) => void = () => undefined): BundleCounts {
   const draw = readJson<DrawIndex>(join(root, 'draw.json'));
-  if (!draw) throw new Error(`${join(root, 'draw.json')} is missing: the bundles are built from the drawn pictures`);
+  if (!draw) throw new Refusal(`${join(root, 'draw.json')} is missing: the bundles are built from the drawn pictures`);
   const counts: BundleCounts = { built: 0, kept: 0, skipped: {} };
   const repeated = repeatedScenes();
   for (const story of textStories()) {
@@ -476,7 +477,7 @@ function openRecord(root: string): JudgingRecord {
   const pins = judgePins();
   const record = readJson<JudgingRecord>(recordFile(root)) ?? { pins, sessions: {} };
   const changed = [...new Set([...Object.keys(pins), ...Object.keys(record.pins)])].find(key => record.pins[key] !== pins[key]);
-  if (changed) throw new Error(`${recordFile(root)} was judged under another ${changed}; one run directory holds one set of pins`);
+  if (changed) throw new Refusal(`${recordFile(root)} was judged under another ${changed}; one run directory holds one set of pins`);
   return record;
 }
 
