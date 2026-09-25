@@ -206,10 +206,13 @@ function runs(home: string, rows: Row[]) {
   }
 }
 
-test('the create body asks for direct ssh and a guard of one to three hours, and neither key is ever printed', t => {
+test('the create body asks for the devel image, direct ssh and a guard of one to three hours, and neither key is ever printed', t => {
   const plan = rentPlan({ gpus: 2 });
   const body = createBody({ plan, onstart: "#!/bin/bash\nSIMPLE_CHAT_SSH_PUBLIC_KEY='ssh-ed25519 AAAAC3NzaC1secret owner@host'\nsleep 1\n" });
   assert.deepEqual([body.runtype, body.env, body.use_jupyter_lab], ['ssh_direc ssh_proxy', { '-p 22:22': '1' }, false], 'direct ssh');
+  // The image measured in docs/gpu.md. gpu/bootstrap.sh compiles llama-server on the machine and a runtime image has no
+  // nvcc, so the session would be paid for and build nothing.
+  assert.equal(body.image, 'vastai/base-image:cuda-13.0.3-cudnn-devel-ubuntu24.04-py312-2026-09-07', 'the devel image');
   // What --print-body shows: every field that decides what is rented, and the script's size in place of the script.
   const printed = JSON.stringify(redactedBody(body));
   assert.ok(!printed.includes('AAAAC3NzaC1secret') && !printed.includes('sleep 1'), 'neither the key nor the script');
