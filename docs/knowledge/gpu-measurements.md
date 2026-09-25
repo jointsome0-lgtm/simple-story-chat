@@ -2,7 +2,8 @@
 
 Measurements and incidents from the rented cards, 2026-09-17 to 2026-09-24, moved here from [gpu.md](../gpu.md) on
 2026-09-25. The paragraphs are as they were written, apart from headings, anchors and link addresses;
-[simple-serving's rehearsal](#serving-rehearsal-2026-09-25) was written here on its day. Each number is what one run on
+[simple-serving's rehearsal](#serving-rehearsal-2026-09-25) and [the two text cards](#text-cards-2026-09-25) were
+written here on their day. Each number is what one run on
 one machine saw, not a speed, a price or a capacity to expect. The instructions that rely on them are in
 [gpu.md](../gpu.md), [llama-cpp.md](../llama-cpp.md) and [llama-measurement.md](../llama-measurement.md).
 
@@ -212,3 +213,38 @@ Two questions stay open. Whitespace as the cause of `frame`'s overrun rests on o
 smoke's new counts of whitespace and of characters outside ASCII have not yet seen an answer cut short. Why the A4000
 did not load is not known; simple-serving's contract already says that CUDA 13 on a 580 driver runs only by
 minor-version compatibility.
+
+<a id='text-cards-2026-09-25'></a>
+
+## The action measurement's text cards, 2026-09-25
+
+The heretic's NVFP4 conversion (route A) went on two RTX 5090s through simple-serving, for the texts of the
+[action measurement](../action-experiment.md#runbook). Both cards were deleted with `--destroy` read back as gone, and
+by their minutes at the hourly price they cost about $0.58 together, traffic fees not counted. The rent tool has no
+rule for the driver, so for the second card the hosts without a 595 driver were left out with `--avoid-host`: 12 over
+its dry runs, 11 of them with a 580 driver and one with 610.
+
+- **South Korea, host 403004, driver 595.84, $0.512 an hour.** The preparation fetched the weights over one `curl`
+  connection at about 10 MB/s. At the owner's word the last 9.7 GB came over 16 aria2c connections at about
+  110 MiB/s, started by hand; the preparation then checked the hashes and started the card. It fetches that way since
+  simple-serving ea79c35. SSH dropped three times, and each next attempt worked. The smoke passed 10 of 10. The marker
+  check wrote its two scenes and then got a sheet with nobody on it, in 7 tokens that ended on `stop`, so it did not
+  pass, with no hit of the marker. Deleted as a failed step, after 39 minutes, $0.33.
+- **Spain, host 581612, driver 595.91.07, $0.583.** Claude Code's auto mode refused the rental to the operator, and
+  the owner ran the rent command. The preparation took 7.5 minutes, the weights at about 62 MB/s, the host's
+  577 Mbit/s, and the load under two minutes. With simple-serving ea79c35, whose vLLM allowed no whitespace in a
+  schema's JSON, the smoke passed 10 of 10 and the marker check passed, and the texts took 5.7 minutes: 18 stories,
+  80 of 85 steps.
+  The five others were sheets with nobody on them, each in 7 tokens: `demon`, `lineout`, `cheer`, `twister` and the
+  sealed `sharp-2`; the thirteen other sheets had 68 to 317 tokens. The card then got the checkout with whitespace
+  allowed, by `card --stop`, the other archive and `onstart.sh`. Unpacked in the same SSH command as the stop, the
+  archive was not found on its input, and unpacked alone it was. A script of the operator asked the four clean
+  sheets again from the same excerpts, printing counts alone: 4, 6, 4 and 4 people, twice each, in 246 to 379
+  tokens, all ending on `stop`; `flight`, `giants` and `beach` gave 4, 3 and 6. The smoke then passed 6 of 10 and
+  stopped at `abort` with `no_report`, which said no more. Deleted as a failed step, after 26 minutes, $0.25.
+
+Whitespace is allowed again since simple-serving 899f36c, and a `no_report` line now says how the report failed and on
+which request. Three questions stay open. `schemas` has not run with whitespace allowed, so whether the heretic runs a
+schema's JSON into whitespace until its limit is not known. Why `abort` got no report after the switch is not known.
+The five stories that lost their sheet are out of the texts by the measurement's rules; whether they are asked again
+is the owner's decision.
