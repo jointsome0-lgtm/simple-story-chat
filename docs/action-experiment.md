@@ -979,10 +979,9 @@ tar -cf - -C gpu . | ssh simple-chat-vast 'tar -xf - -C /workspace/simple-chat/g
 ssh simple-chat-vast 'SIMPLE_CHAT_IMAGE_QWEN=only bash /workspace/simple-chat/gpu/image-bootstrap.sh'
 # The server, detached from this session (#dropped-connection): no terminal, a session of its own, one at a time under
 # its lock, and a server already running is left as it is. Its output is the card's log: it goes nowhere.
-# SIMPLE_CHAT_IMAGE_TRITON=1 goes before SIMPLE_CHAT_IMAGE_GPU only if the owner so decides on the pilot's numbers
-# (#pilot), the sampler's speedup and the pixels' differences from the baseline; it adds `triton` to the run's pins,
-# so that a resume cannot switch it.
-ssh -T simple-chat-vast 'SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 setsid -f nohup flock -n /root/.simple-chat-comfy.lock bash /workspace/simple-chat/gpu/image-serve.sh </dev/null >/dev/null 2>&1'
+# With comfy-kitchen's Triton backend, SIMPLE_CHAT_IMAGE_TRITON=1, as the owner decided on 2026-09-26 on the pilot's
+# numbers and pictures (#pilot); it adds `triton` to the run's pins, so that a resume cannot switch it.
+ssh -T simple-chat-vast 'SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 SIMPLE_CHAT_IMAGE_TRITON=1 setsid -f nohup flock -n /root/.simple-chat-comfy.lock bash /workspace/simple-chat/gpu/image-serve.sh </dev/null >/dev/null 2>&1'
 # The tunnel, in a terminal of its own; after a drop it dials again by itself, and is left to (gpu.md#the-tunnel).
 bash gpu/tunnel.sh --pictures-only simple-chat-vast
 # Until the server answers through the tunnel; a timeout is a server that did not start, and the termination.
@@ -1230,6 +1229,11 @@ A command that stops prints `done: false` and the pass it stopped in, and run ag
 `--comfy` keep their defaults. The stop waits for the server's lock rather than its process, since the sweeper beside
 it holds the lock a second longer, and a start while the lock is held does nothing.
 
+**Decided.** The pilot ran on the T probe's card on 2026-09-26: the card drew the same inputs to the same bytes,
+round two's path saved 3.9 s a cell, and Triton's warm cells were 2.3 times faster, with their details changed
+([the numbers](knowledge/gpu-measurements.md#pilot-2026-09-26)). The owner chose Triton on 2026-09-26: round two,
+and every test after the pilot, draws with `SIMPLE_CHAT_IMAGE_TRITON=1` ([the runbook](#runbook)).
+
 <a id='t-probe'></a>
 
 ## The T probe
@@ -1433,7 +1437,8 @@ npm run image:pilot -- dry-run       # the pilot's, then "the pilot's dry run we
 # pilot after it: about 49 card minutes and 11 to 16, some 60 to 65 expected (estimates), billed until the termination.
 SIMPLE_CHAT_RENT_DRY_RUN=1 npm run gpu:rent -- --lane pictures --qwen only --hours 2    # each offer's `session`
 npm run gpu:rent -- --lane pictures --qwen only --hours 2
-# The guard, gpu/ onto the card, image-bootstrap.sh, image-serve.sh and the tunnel as in the runbook above, then:
+# The guard, gpu/ onto the card, image-bootstrap.sh, image-serve.sh and the tunnel as in the runbook above, the
+# server without SIMPLE_CHAT_IMAGE_TRITON, as the probe and the pilot's `draw` ran, then:
 mkdir -p illustrations/t-probe
 ssh simple-chat-vast cat /workspace/simple-chat-gpu/image-verified.txt > illustrations/t-probe/card.txt
 npm run image:t-probe -- draw --until "$end"    # the clothing test, the language test, then scene by scene;

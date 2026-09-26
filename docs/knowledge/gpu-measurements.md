@@ -3,9 +3,10 @@
 Measurements and incidents from the rented cards, 2026-09-17 to 2026-09-24, moved here from [gpu.md](../gpu.md) on
 2026-09-25. The paragraphs are as they were written, apart from headings, anchors and link addresses;
 [simple-serving's rehearsal](#serving-rehearsal-2026-09-25), [the two text cards](#text-cards-2026-09-25),
-[the third](#text-card-3-2026-09-25) and [the fourth](#text-card-4-2026-09-26) were written here on their day. Each
-number is what one run on one machine saw, not a speed, a price or a capacity to expect. The instructions that rely on
-them are in [gpu.md](../gpu.md), [llama-cpp.md](../llama-cpp.md) and [llama-measurement.md](../llama-measurement.md).
+[the third](#text-card-3-2026-09-25), [the fourth](#text-card-4-2026-09-26) and [the pilot](#pilot-2026-09-26) were
+written here on their day. Each number is what one run on one machine saw, not a speed, a price or a capacity to
+expect. The instructions that rely on them are in [gpu.md](../gpu.md), [llama-cpp.md](../llama-cpp.md) and
+[llama-measurement.md](../llama-measurement.md).
 
 <a id='verified-2026-09-17'></a>
 
@@ -321,3 +322,30 @@ about $0.14 for some 54 GB of downloads. The card had work for all of it but the
   drafted tokens, scenes included: 78, 62 and 49 per cent at the three positions.
 - The speeds are not one comparison: llama.cpp served one request at a time and vLLM two, and a drafter's gain
   depends on the text; the compaction's JSON is the easiest to draft.
+
+<a id='pilot-2026-09-26'></a>
+
+## The pilot on the T probe's card, 2026-09-26
+
+[The pilot](../action-experiment.md#pilot) ran on the T probe's card, an RTX 5090, after the probe's `draw`:
+`illustrations/pilot/pilot.json` records its first pass's start at 20:27 and the end of Triton's second pass at 20:36
+Moscow time, 9 minutes of the card with the server's restart, against the 11 to 16 estimated. The card had round
+one's pins, ComfyUI 73c9bad4 and the same model, text encoder and VAE by their sha256 (`card.txt`), and
+`differsFromRoundOne` is empty. The numbers are those of `npm run image:pilot -- report`.
+
+- **Determinism.** C, A and C again, neither C's sampler answered from the cache: the second C had the first's bytes,
+  `same`. Every cell of the baseline, of round two's path and of the baseline again was round one's picture pixel
+  for pixel, on another rental than round one's.
+- **Round two's path.** Against the mean of the two baselines it saved 3.9 s a cell, 3.85 s of it the card's idle
+  time: the mean idle time of a cell fell from 5.0 s in the baseline to 1.4 s. It saved 6.7 s on the view, 3.4 s on
+  A, 6.5 s on V and 6.1 s on T, and lost 3.4 s on the front, the pass's first cell.
+- **Triton.** The server's log said Triton loaded and comfy-kitchen's Triton backend was on. Against round two's path
+  without it, the sampler took from 0.31 (the front) to 0.40 (T) of its time, and a warm cell 0.44 of its time in
+  all, 2.3 times faster: the front 6.4 s, the view 8.0, A 6.1, V 8.1 and T 10.9. The first pass took 37 s longer,
+  24 s of them on the front, the first job after the server's start. Its two passes gave the same pixels, and all
+  five cells differed from the baseline's in their details, the scene and the people the same: from 0.3 per cent of
+  the pixels by more than 3 per cent (the front) to 7.1 (A), a PSNR from 31 to 47 dB, as ImageMagick's `compare`
+  counted them after the card for `illustrations/pilot/triton.html`.
+- **Decided.** The owner looked at the five pairs and chose Triton on 2026-09-26 for round two and the tests after it
+  ([the pilot](../action-experiment.md#pilot)). In the owner's eyes the baseline's V, round one's own, kept one face
+  whole. A pair differs by the kernels' rounding, so one frame shows no effect of Triton on the faces either way.
