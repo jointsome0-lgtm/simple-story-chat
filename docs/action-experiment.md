@@ -18,8 +18,8 @@ for it, and on the bot's own path: the uncensored Gemma writes the scenes and th
 [simple-serving](model-providers.md#simple-serving-our-gateway), and Qwen-Image 2.1 draws them on another.
 [Stage 1](#stage-1) wrote the frames of the clean scenes with a hosted Gemma and drew nothing. The first round wrote
 its texts on 2026-09-25 and 26 and drew seed 7 on the 26th, with up to six people in a moment; the next one has four
-([four](#four)). Its T gave L's picture back and took nothing from the portraits; [the T probe](#t-probe) tries five
-changes to T on one pilot card, from round one's own pictures.
+([four](#four)). Its T gave L's picture back and took nothing from the portraits; [the T probe](#t-probe) tries nine
+variants of T on one pilot card, from round one's own pictures.
 
 <a id='stage-1'></a>
 
@@ -822,9 +822,10 @@ directory holds:
 
 Round one's T gave L's picture back with its edges and colours pushed, and took no face, hair or build from the
 portraits. Round two draws T as it is: `T_OPENING`, `tPrompt` and the action graph do not change.
-[image-t-probe.ts](../local/image-t-probe.ts) draws five variants of T, each one change against it, from round one's
-own L pictures and portraits of six clean scenes at seed 7, on one pilot card with no text card and no new portrait,
-and writes a page from which the owner picks.
+[image-t-probe.ts](../local/image-t-probe.ts) draws nine variants of T from round one's own pictures and portraits of
+six clean scenes at seed 7, on one pilot card with no text card and no new portrait, and writes a page from which the
+owner picks: five are one change against T each, `mask` and `mask-each` redraw only the bound people's boxes on L, and
+`face` and `face-each` only their heads and hair on A+'s picture ([the masked variants](#t-probe-masks)).
 
 **What round one shows** (seed 7, the 13 clean scenes, their files and their judges' answers):
 
@@ -857,11 +858,73 @@ edit path; and how much image 1's 3520 tokens against 880 a portrait weigh in it
 | `half` | Image 1 through a scale node of its own (area) to 640x352: 880 tokens, one portrait's weight, and no longer cell for cell on the canvas's grid, though still centred on it | the portraits may come through, as they do in C, though L stays a reference | high: the scene is drawn again from L's content, and framing, poses and contacts may move |
 | `latent-50` | L as the sampler's start instead of image 1: VAEEncode at denoise 0.50 (σ 0.67, L's latent 0.33); the portraits alone as references from image 1, with C's prompt | faces and hair redrawn toward the portraits inside L's layout; hair colour and length in part | low to medium: hands and small contacts may be redrawn |
 | `latent-70` | the same at denoise 0.70 (σ 0.83, L's latent 0.17) | more of the portraits: hair colour and length, the build | medium to high: poses and contacts may move; the framing mostly holds |
+| `mask` | `latent-70` redrawing only the regions round the bound people's boxes on L, whose decoded picture is pasted into L's own pixels through them, feathered: outside them the picture is L pixel for pixel | as `latent-70`, inside the boxes alone; the place, the light and everything outside them L's | medium: poses and contacts may move inside the boxes, and a region's edge may show a seam; where the boxes fill most of the frame (the giants 98 %, the twister 89 %) it is nearly `latent-70` |
+| `mask-each` | `mask` one bound person a pass, in slot order: that person's region alone, that person's portrait alone as image 1, and round one's L prompt with that person's clause alone begun as C begins it, "The person from image 1, ROLE ..."; each pass starts from the picture of the one before, the first from L | each person from their own portrait, with no mixing between people | as `mask`, and where regions overlap a later pass redraws part of a person already done (the giants' first giant holds the merchant; the flight's father, mother and girls overlap); one job a person |
+| `face` | A+'s picture instead of L's, as image 1 and as the sampler's start through VAEEncode at denoise 1.0 inside a mask of the bound people's heads, pasted into A+'s own pixels; a head-and-shoulders crop of each front in the slots from 2; T's prompt with an opening that changes the faces and hair alone | the portraits' faces and hair on A+'s people; poses, contacts, clothes and builds A+'s, drawn without portraits | low for the action, which is A+'s outside the heads; the model may give image 1's faces back, as T gave L's; a seam at a head's region; hair longer than its box stays A+'s; the build does not change. The flight's A+ drew a fifth, unbound child, whose face lies partly in the father's and a girl's head regions |
+| `face-each` | `face` one head a pass, in slot order: that head's region alone, that person's crop alone as image 2, and that person's clause alone, "ROLE takes them from the person in image 2"; each pass edits the picture of the one before, the first A+ | each face from its own crop | as `face`, and where head regions overlap a later pass redraws the edge of a neighbour's head; one job a person |
 
 The σ are the pinned model's: its flux shift of mu 0.69, about 2, with KSampler at denoise d running the last 25 of
-`int(25 / d)` steps. `wordsPrompt`, `probeGraph`, `startFrom` and `probePrompt` hold the variants; the page says the
-same in Russian. The six scenes bind four portraits at most, as round two does, from four to one: the flight and the
-twister (4), the giants (3), the guard and the tango (2), the monkeys (1).
+`int(25 / d)` steps. `wordsPrompt`, `facePrompt`, `probeGraph`, `startFrom`, `cropFrom`, `maskFrom` and `probePrompt`
+hold the variants; the page says the same in Russian. The six scenes bind four portraits at most, as round two does,
+19 people in all: the flight and the twister (4), the giants (3), the guard and the tango (2), and the demon (4). The
+demon replaced the monkeys of the probe's first plan on 2026-09-26, with the owner's approval: the monkeys bound one of
+five people, more than round two draws, where the demon binds all four of its own.
+
+<a id='t-probe-masks'></a>
+
+**The masked variants**, which the owner approved on 2026-09-26: T should not remake the whole picture, only the
+people's looks. `mask` and `mask-each` redraw only the bound people's regions on L and keep L's pixels everywhere else.
+`face` and `face-each` start from the picture whose action scored best and change only its heads and hair: seed 7 on
+the demon, the flight, the giants and the guard gave A+ 44 contacts, 54 % build matches and 15 % face matches, L and T
+38, 23 % and 0 %, and C 13, 54 % and 31 %. They send a head-and-shoulders crop of each front, since a full-length front
+also carries its standing pose and its clothes into the picture: in the demon's C at seed 7 the demon wears the
+portrait's white tank top. A+'s pictures of seed 7 are on disk, so nothing new is drawn for the base.
+
+- **Boxes and crops**, marked by eye before any card on round one's clean pictures, drawn onto copies, looked at again
+  and adjusted: for each of the 19 bound people a box round the whole person on L and a box round the head and hair on
+  A+, and a crop of the front with the head and its hair fully inside and both shoulders, its sides at the reference
+  slot's 11:20, so that the scale to 352x640 stretches nothing. A crop wide enough for the shoulders at 11:20 reaches
+  the waist or the hips: 352x640 of the 720x1280 front for most people and up to 451x820 for the giant and the demon,
+  and a head comes out 1.6 to 2 times as large in the slot as in the whole front. They lie in
+  `illustrations/t-probe/boxes.json`, `{ "canvas": "1280x704", "L": { scene: { front: box } }, "A+": { ... },
+  "crops": { front: box } }`, each box `[left, top, right, bottom]` with right and bottom exclusive; the file marked on
+  2026-09-26 has sha256 9eea99d5c2dd753d…, and like everything under `illustrations/` it is not in git. `draw` requires
+  the file and `probe.json` pins its hash, so that nothing changes it once
+  drawing starts; before anything is sent, `draw` refuses a masked variant on a scene with a bound person unboxed or a
+  box for someone it does not bind, and `face` or `face-each` for a front without a crop or with a crop off its
+  picture. `page` draws the boxes, their regions and the crops over L, A+ and the fronts before the card, for the owner
+  to check.
+- **Regions.** A box with a margin a side, brought out to the latent's 16-pixel grid (Qwen Image 2.1's VAE takes
+  1280x704 to 80x44) and kept on the canvas: 48 px for a body, for a build that grows, and 32 px for a head, for the
+  hair and the neck. On that grid the pinned `reshape_mask` (comfy/utils.py), a bilinear resize to the latent, gives
+  every latent cell exactly 0 or 1. The regions of the six scenes cover 46 to 98 % of the frame for `mask` (the flight
+  46, the twister 89, the giants 98, the guard 72, the tango 53, the demon 62) and 8 to 31 % for `face` (20, 17, 31, 14,
+  8 and 20).
+- **The masks are made on the card from the numbers**, by core nodes of the pinned revision: a SolidMask 0 of the
+  canvas, and for each region a SolidMask 1 of its size added at its place by MaskComposite `add`, which clamps where
+  two overlap, for the sampler's mask, SetLatentNoiseMask on the start's latent; the same through FeatherMask for the
+  paste's, ImageCompositeMasked of the decoded picture into the start's own upload with `resize_source` false, feathered
+  24 px in for a body and 16 px for a head, and not on a side at the canvas's edge. Not an uploaded mask: the pinned
+  numbers go straight into the nodes, with no PNG writer and no LoadImageMask channel to get right, and
+  [fake-comfy.ts](../local/fake-comfy.ts) computes the same masks as comfy_extras/nodes_mask.py, which the dry run
+  checks against every region of every job. Where the paste's mask is 0 the saved picture is the start's upload pixel
+  for pixel, as long as the server keeps float32 intermediates, as gpu/image-serve.sh runs it.
+- **The crops are cut on the card**: each front is uploaded whole and goes through the pinned ImageCrop
+  (comfy_extras/nodes_images.py, flagged deprecated at 73c9bad4 and still registered) before its scale node.
+- **Denoise**: `mask` and `mask-each` 0.70 inside the regions, `latent-70`'s; `face` and `face-each` 1.0, T's own, so
+  that inside a head the start keeps nothing of A+'s face, and image 1, the crop and the pixels round the region guide
+  what is drawn there.
+- **Prompts.** `mask` sends round one's C, as `latent-70` does. `mask-each` sends round one's L with the pass's clause
+  alone begun "The person from image 1, ", or ": " where C has no words ahead of the action, read back from round one's
+  C, which is its L with one such head a bound person. `face` sends `FACE_OPENING`, "Image 1 is the finished picture.
+  Keep everything in it: the place, the light, the framing, every pose, grip and contact, all clothes, and every body
+  and its build. Change only the faces and hair of these people in image 1:", then T's clauses, "ROLE takes them from
+  the person in image N" joined by "; ", and the style line; `face-each` the same with the pass's clause alone, bound
+  to image 2.
+- **Passes.** `mask-each` and `face-each` take a scene's people in slot order, each pass from the picture the one before
+  saved, uploaded again. A cell begins only if all its passes can end by `--until`. If the end still comes between two
+  passes, `probe.json` records the cell `partial`, and a resume goes on from its last picture, checked byte for byte
+  against the record; a pass that fails ends its cell. Every pass's picture is kept, and the page shows each.
 
 GPT-6 (Astra) read the diagnosis, the pinned sources and eleven clean pictures on 2026-09-26. It found the grid a cue
 to keep image 1, not a switch into another mode, and with the instruction's weight on keeping and its indirect binding
@@ -873,42 +936,56 @@ takes 0.50 and 0.70, since 0.40 leaves 0.43 of L's latent, which we expect to ho
 should bracket the point where they follow the portraits; a later probe can go between.
 
 ```sh
-npm run image:t-probe -- dry-run     # six steps, then "the dry run went as expected"
-npm run image:t-probe -- estimate    # before the card: 30 cells, expectedMinutes 10.1, pricedMinutes 14.8
+npm run image:t-probe -- dry-run     # seven steps, then "the dry run went as expected"
+npm run image:t-probe -- estimate    # before the card: 54 cells, 80 jobs, expectedMinutes 25.6, pricedMinutes 37.1
+# boxes.json into illustrations/t-probe, then the page, where the owner checks the boxes and the crops:
+npm run image:t-probe -- page        # illustrations/t-probe/index.html
 # The pilot card, with the owner's «да» on its price and end, a picture card for one hour:
 SIMPLE_CHAT_RENT_DRY_RUN=1 npm run gpu:rent -- --lane pictures --qwen only --hours 1    # each offer's `session`
 npm run gpu:rent -- --lane pictures --qwen only --hours 1
 # The guard, gpu/ onto the card, image-bootstrap.sh, image-serve.sh and the tunnel as in the runbook above, then:
 mkdir -p illustrations/t-probe
 ssh simple-chat-vast cat /workspace/simple-chat-gpu/image-verified.txt > illustrations/t-probe/card.txt
-npm run image:t-probe -- draw --until "$end"    # scene by scene; `probe` with drawn 30 and exit 0
+npm run image:t-probe -- draw --until "$end"    # scene by scene; `probe` with drawn 54 and exit 0
 # The termination, as in the runbook above; then, with no card:
 npm run image:t-probe -- page    # illustrations/t-probe/index.html, which `draw` also writes after each scene
 ```
 
 `draw` takes `--scenes` and `--variants`, comma separated, and the runbook's `--wait`, `--timeout` and `--comfy`. Of
 `illustrations/action-1` it reads `draw.json` and `clean/` alone, and before anything is sent it refuses a sharp id,
-the marker and a link on the way, which could lead into `sealed/`; an L or a front that is not the file round one
-recorded; a ComfyUI revision, weights, graph, T opening, canvas, reference size, encoder resolution or cache device
-other than round one's; a probe directory drawn under other pins or from other inputs; and a picture `probe.json`
-records whose file is gone. A scene begins only if all its variants can end by `--until`, at round one's slowest time
-of the like cell, a quarter more and three seconds, and a resume draws nothing again. `illustrations/t-probe` holds `card.txt`, `probe.json` (ids, codes, sizes, counts
-and times, no prompt), `<scene>/<variant>.png` and `index.html`: for each scene its portraits, round one's L, T and C,
-and the five variants, each named by its change, the pictures linked where they lie.
+the marker and a link on the way, which could lead into `sealed/`; an L, an A+ or a front that is not the file round
+one recorded; a ComfyUI revision, weights, graph, T opening, canvas, reference size, encoder resolution or cache device
+other than round one's; a `boxes.json` missing, malformed, short of a bound person's box or crop, or changed since the
+first draw; a probe directory drawn under other pins or from other inputs; and a picture `probe.json` records whose
+file is gone. A scene begins only if all its cells can end by `--until`, at round one's slowest time of the like job, a
+quarter more and three seconds, and a resume draws nothing again. `illustrations/t-probe` holds `card.txt`,
+`boxes.json`, `probe.json` (ids, codes, sizes, counts and times, no prompt), `<scene>/<variant>.png`,
+`<scene>/<variant>-<pass>.png` for `mask-each` and `face-each`, and `index.html`: for each scene its portraits with
+their crops, round one's L with the bodies and A+ with the heads, T and C, the nine variants, each named by its change,
+and every pass, the pictures linked where they lie.
 
 The estimate, from round one's own times of the same card:
 
 | | minutes |
 | --- | --- |
 | ssh, Qwen's files, torch, the verification and the tunnel, at 300 Mbit/s (the identity run's table) | 14 |
-| 30 cells at round one's medians, the first of them cold: T's for `words` and `no-style`, C's for the rest | 10 (15 at the admission prices) |
+| 54 cells in 80 jobs at round one's medians, the first of them cold: T's for `words`, `no-style`, `face` and `face-each`, C's for the rest, with one portrait a pass for `mask-each` and two pictures for `face-each` | 26 (37 at the admission prices) |
 | the page, the termination and the margin before the guard | 5 |
 
-About 30 card minutes, 35 at the admission prices, of the guard's hour.
+About 45 card minutes of the guard's hour. `draw` admits a scene at its own prices, at most 15 jobs and 7 minutes (the
+flight, the twister and the demon), so the hour holds the whole probe unless the setup runs long, and a scene not
+admitted waits for a resume on the next card.
 
 **Not verified without the card**: whether `words` moves any face while image 1 lies on the canvas's grid; whether
 `no-style` takes the edges and colours away; where `half` puts the scene, since its 640x352 is centred on the canvas's
 positions at half the scale and may come back smaller or reframed; whether 0.50 changes the faces and 0.70 keeps the
-contacts; the VAEEncode start itself, whose wiring alone the fake checks; the times of `half` and the latent starts,
-priced from C's; and whether the pilot card would draw round one's T again, since the probe draws no T of its own:
-`probe.json`'s `sameServer` says whether ComfyUI, PyTorch and the card said what they said to round one.
+contacts; the VAEEncode start itself, whose wiring alone the fake checks; whether `mask` inside its regions follows the
+portraits as `latent-70` would, whether a region's edge shows a seam, and how much a later pass of `mask-each` spoils a
+person already done where regions overlap; whether `face` gives image 1's faces back, as T gave L's, whether denoise 1.0
+inside a head keeps its angle and expression, whether a crop carries the tank top into the neck, and how hair longer
+than its box meets A+'s; that the server keeps float32 intermediates, on which "pixel for pixel" outside the regions
+rests; that the server takes the deprecated ImageCrop, where a refusal would come back as `comfy_http_error` 400 and
+stop the run at the first `face`, with nothing lost; the times of `half`, the latent starts and the masked variants,
+priced from C's and T's; the boxes and the crops, marked by eye; and whether the pilot card would draw round one's T
+again, since the probe draws no T of its own: `probe.json`'s `sameServer` says whether ComfyUI, PyTorch and the card
+said what they said to round one.
