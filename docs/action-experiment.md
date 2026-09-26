@@ -110,7 +110,7 @@ the only sharp text a Claude session writes, and it names the theme and nothing 
 
 > Придумай завязку для интерактивной истории для взрослых на тему «ТЕМА». Все персонажи взрослые, им больше двадцати
 > лет. Никакого сексуального насилия и ничего сексуального без согласия. Откровенность и жёсткость допустимы, если
-> тема к ним ведёт. Нужны три или четыре персонажа с именами и заметно разной внешностью: пол, возраст словом,
+> тема к ним ведёт. Нужны от двух до четырёх персонажей с именами и заметно разной внешностью: пол, возраст словом,
 > телосложение, волосы, приметы; место и время. Завязка должна подвести к одному моменту, где несколько персонажей
 > тесно касаются друг друга: держат, несут, обнимают, моют, связывают или перевязывают. Ответь в JSON: seed,
 > завязка в 6-12 строк; action, действие читателя, которое ведёт к этому моменту, одна-две фразы.
@@ -132,7 +132,7 @@ clean stories with more, four lost the people their seeds name last: the beach �
 lifters Митя and Гоша, so Фёдор now jumps unlifted, the monkeys Бубу, and Gulliver both guards. The rescue lost its
 last two carriers, Вадим and Ильдар, so two carriers hold the stretcher, and the jellyfish the twins Пим and Пом,
 since one of two twins is no twin. The variant asks for four participants at most, as the bot's frame does, and the
-sharp instruction for three or four named people. The first round's set and protocol are those of commit 7e7de76. The
+sharp instruction for two to four named people. The first round's set and protocol are those of commit 7e7de76. The
 cut is the owner's choice, not a finding of the first round: at its seed 7, C lost to A+ on looks by 3 points in the
 five clean scenes that bound one to three portraits, by 44 in the four that bound four, and by 8 in the four that
 bound six.
