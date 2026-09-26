@@ -281,7 +281,9 @@ not ready), `describeMs` of the description call, `imageMs` on the image server 
 `photoBytes` of the upload to Telegram, and `pictureSeconds`, what the reader waited from the end of the scene.
 `namesStripped`, `withoutLook` and `clothesChanged` count what the prompt assembly did, and `promptCharacters`,
 `pictureTokens` and `styleTokens` give the prompt's size. Samples, variants and portraits write `picture_sample`,
-`picture_variant` and `picture_portrait`. No prompt, description or file name reaches a row.
+`picture_variant` and `picture_portrait`. A look compressed from details a reader wrote writes `look_compressed`, or
+`picture_look_compressed` before a frame, with `detailsCharacters` and `lookWords`
+([telegram-ui.md](telegram-ui.md#characters)). No prompt, description, details, look or file name reaches a row.
 
 A technical error contains a safe code, the HTTP status if one was received,
 the stage and the known transport code; unknown transport codes are marked

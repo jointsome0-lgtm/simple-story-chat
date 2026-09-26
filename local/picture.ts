@@ -34,6 +34,8 @@
 // A portrait of one person of a story's sheet (`portrait`) is drawn on request from their card in the characters'
 // screens (local/ui.ts), from the sheet's text of them alone (`portraitText`), and goes with its story the same way.
 // The one a reader keeps is a file beside the database (local/store.ts), to pick a reference by; no frame uses it.
+// Details the reader writes on that card are compressed into the person's look by the language model: at once
+// (`compressLook`), or before the next frame of the story if that did not happen (`describeFrame`).
 import { createHash, randomInt } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { recordPicture } from '../lib/library.ts';
@@ -43,7 +45,7 @@ import { estimateTokens, requestStamp, sameContext } from './context.ts';
 import { SAMPLER_DEFAULTS, apiGraph, applyToWorkflow, drawOne, latentSizeOf, previewOnly, referenceSlots, samplerSettingsOf, settled,
   textEncoderOf } from './image-batch.ts';
 import type { Comfy, Graph } from './image-batch.ts';
-import { STYLE, askJson, assemblePrompt, frameRequest, matchSheet, sheetOf, sheetRequest, sheetWithoutOutfits } from './illustrate.ts';
+import { STYLE, askJson, assemblePrompt, frameRequest, lookOf, lookRequest, matchSheet, sheetOf, sheetRequest, sheetWithoutOutfits } from './illustrate.ts';
 import type { Character, Description, Excerpt } from './illustrate.ts';
 import { PORTRAIT_CLOTHES, PORTRAIT_STYLE, portraitPrompt, portraitText } from './image-portraits.ts';
 import type { Log } from './model-error.ts';
@@ -141,6 +143,12 @@ export function clothesOf(description: Description, worn: Character[]): { clothe
 // The longest look a reader may write for a person of a sheet (local/bot.ts), in characters: the sheet's own are 15-25
 // words, and the room left is the reader's, as for a style of their own.
 export const LOOK_CHARS = 400;
+// The longest details a reader may write for a person, in characters, in whatever language they write them. The
+// sheet's are 50-80 words; three synthetic ones of 78-82 words written to its rule came to 455-472 characters, so this
+// is twice the top of that range, as LOOK_CHARS is more than twice the look's. A portrait's prompt with them stays well
+// inside what the reader may send as a whole prompt (PROMPT_CHARS in local/picture-style.ts), and the card and the
+// wait for them stay one message.
+export const DETAILS_CHARS = 1000;
 
 // A person of a sheet is their name, apart from spaces and case. One the model renames is somebody new, and what the
 // reader made of the old name stays with it: merging two people by a like name would be worse than keeping both.
@@ -157,20 +165,22 @@ export function personAt(story: Story | undefined, index: string | undefined, ta
     ? { ...person, index: Number(index) } : undefined;
 }
 
-// A sheet written again in place of an older one (`describeFrame`) keeps what the reader made of it: a look they wrote
-// themselves and a portrait they kept, under the same name, or with the person on their own if the new sheet lost the
-// name. The details the new sheet wrote of a person whose look the reader wrote go, as an edit drops them
-// (local/bot.ts): they describe the person the reader's words replaced. The card shows a portrait as drawn from another
-// text if the person's text differs now (local/ui.ts).
+// A sheet written again in place of an older one (`describeFrame`) keeps what the reader made of it, under the same
+// name, or with the person on their own if the new sheet lost the name: details they wrote, with the look as it
+// stands, compressed from them or their own, and still to be compressed if it was; a look of their own beside the new
+// sheet's details; and a portrait they kept. The card shows a portrait as drawn from another text if the person's text
+// differs now (local/ui.ts).
 export function rewrittenSheet(before: SheetEntry[], written: Character[]): SheetEntry[] {
   const old = new Map(before.map(one => [personKey(one.name), one]));
-  const kept = written.map(({ details, ...one }) => {
+  const kept = written.map(one => {
     const mine = old.get(personKey(one.name));
-    return { ...one, ...mine?.edited ? { look: mine.look, edited: true } : details === undefined ? {} : { details },
+    return { ...one, ...mine?.detailsEdited ? { details: mine.details, detailsEdited: true, look: mine.look } : {},
+      ...mine?.edited ? { look: mine.look, edited: true } : {}, ...mine?.lookPending ? { lookPending: true } : {},
       ...mine?.portrait ? { portrait: mine.portrait } : {} };
   });
   const names = new Set(written.map(one => personKey(one.name)));
-  return [...kept, ...before.filter(one => (one.edited || one.portrait) && !names.has(personKey(one.name))).map(one => ({ ...one, outfit: one.outfit ?? '' }))];
+  return [...kept, ...before.filter(one => (one.edited || one.detailsEdited || one.portrait) && !names.has(personKey(one.name)))
+    .map(one => ({ ...one, outfit: one.outfit ?? '' }))];
 }
 
 // The portrait a reader was shown last is held for its keep button this long, and only if Telegram would take it as
@@ -299,6 +309,34 @@ export function createIllustrator(config: ImageConfig, deps: {
     return request;
   };
 
+  // One look compressed from the details the reader wrote (`lookRequest`), and written in the person's place only while
+  // it is still to be: the reader has neither written other details nor a look of their own since (`lookPending`). Its
+  // row gives how it ended and sizes alone, never the details or the look. Nothing is thrown: a look not compressed
+  // stays to be compressed, and a turn that has ended refuses the call after this one all the same.
+  async function compress(model: Provider, request: ModelRequest, person: { userId: string; storyId: string; name: string; details: string },
+    signal: AbortSignal, log: Log, event: string): Promise<boolean> {
+    const started = now();
+    const sizes = () => ({ elapsedMs: Math.max(0, now() - started), detailsCharacters: [...person.details].length });
+    try {
+      const look = lookOf((await askJson(model, request, { signal })).value);
+      if (look === null) throw Object.assign(new Error('look_missing'), { code: 'look_missing' });
+      const written = store.mutate(person.userId, state => {
+        const one = state.stories[person.storyId]?.sheet?.find(other => other.name === person.name);
+        if (!one?.lookPending || one.details !== person.details) return false;
+        one.look = look;
+        delete one.lookPending;
+        return true;
+      });
+      log(event, written ? undefined : 'look_changed', { outcome: written ? 'ready' : 'skipped', ...sizes(), lookWords: look.split(' ').length });
+      return written;
+    } catch (error) {
+      const code = errorCode(error);
+      const outcome = signal.aborted || code === 'cancelled' ? 'cancelled' : GAVE_WAY.includes(String(code)) ? 'skipped' : 'failed';
+      log(event, signal.aborted ? 'cancelled' : safeCode(code), { ...safeErrorDetails(error), outcome, ...sizes() });
+      return false;
+    }
+  }
+
   // The frame of each reader's latest described scene, in memory only and only until the next one: a sample of a
   // style is drawn from it without asking the language model again. Never stored and never logged.
   const frames = new Map<string, { storyId: string; nodeId: string; description: Description; sheet: Character[] }>();
@@ -351,6 +389,14 @@ export function createIllustrator(config: ImageConfig, deps: {
           if (one && (!one.sheet || sheetWithoutOutfits(one.sheet))) one.sheet = rewrittenSheet(one.sheet ?? [], written);
         });
         log('picture_sheet_written', undefined, { sheetCharacters: written.length, sheetRewritten: older });
+      }
+      // A look still to be compressed from the details the reader wrote (`compressLook` did not get to it) is compressed
+      // before the frame that would take the one it replaces, in this turn and as a continuation of the same request, so
+      // that the prefix cached for the sheet and the frame serves it too. One that fails leaves the frame the look as it
+      // stands, and the next frame tries again.
+      for (const person of store.read(userId).stories[storyId]?.sheet ?? []) if (person.lookPending && person.details) {
+        await compress(model, trusted(model, lookRequest(person.details, context), anchor),
+          { userId, storyId, name: person.name, details: person.details }, signal, log, 'picture_look_compressed');
       }
       sheet = wornAt(story, nodeId, store.read(userId).stories[storyId]?.sheet ?? []);
       return (await askJson(model, trusted(model, frameRequest(context, sheet), anchor), { signal })).value as unknown as Description;
@@ -666,6 +712,20 @@ export function createIllustrator(config: ImageConfig, deps: {
     // tokenizer for it (the characters' card, local/ui.ts).
     textTokens(text: string): number | null {
       try { return fieldTokens ? fieldTokens(text) : null; } catch { return null; }
+    },
+
+    // The look of one person compressed from the details the reader has just written for them (local/bot.ts, which
+    // holds the language model's card for it), so that their card shows it at once. It asks on its own, with no story,
+    // as work that yields (local/scheduler.ts): with slots to spare it takes one that keeps nobody's scenes, a call of
+    // anybody else's that it would keep waiting ends it, and the reader's own next scene waits for it. The bot's stop
+    // ends it too (`signal`). What it did not do is done before the next frame of the story (`describeFrame`). Returns
+    // whether the look was written.
+    async compressLook({ userId, storyId, name, signal, log }: { userId: string; storyId: string; name: string; signal: AbortSignal; log: Log }) {
+      const person = store.read(userId).stories[storyId]?.sheet?.find(one => one.name === name);
+      const details = person?.lookPending ? person.details : undefined;
+      if (!details) return false;
+      return inTurn(provider, model => compress(model, lookRequest(details), { userId, storyId, name, details }, signal, log, 'look_compressed'),
+        { holder: userId, yields: true });
     },
 
     // A portrait of one person of a story's sheet (`PortraitRequest`), drawn again with a new seed each time the reader

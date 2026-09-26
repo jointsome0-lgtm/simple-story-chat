@@ -20,7 +20,7 @@ import { renderCompaction } from './compact-view.ts';
 import type { CompactionStatus } from './compact-view.ts';
 import type { GpuController } from './gpu.ts';
 import type { Illustrator, PictureRequest, PortraitRequest, SampleRequest, VariantRequest } from './picture.ts';
-import { LOOK_CHARS, personAt, personTag } from './picture.ts';
+import { DETAILS_CHARS, LOOK_CHARS, personAt, personTag } from './picture.ts';
 import type { Log } from './model-error.ts';
 import { errorCode, member, safeErrorDetails, unavailable } from './model-error.ts';
 import type { GenerationResult, Provider } from './model.ts';
@@ -72,6 +72,9 @@ type Plan = {
   sweep?: boolean;
   // The id of a portrait this write keeps, let go from memory once the write is committed and not before.
   portraitKept?: string;
+  // The person of a story's sheet whose details this write keeps, for their look to be compressed from them and their
+  // card shown (`compressed`).
+  compress?: { storyId: string; name: string };
 };
 // One reader's turn, for as long as it can still be cancelled. What it leaves behind — a picture being stopped on
 // the other card — outlives the entry and is awaited through `inFlight` instead.
@@ -98,6 +101,9 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
   const sampling = new Map<string, AbortController>();
   // One variant of a picture at a time per reader (local/picture.ts `variant`), beside that one and ended the same way.
   const varying = new Map<string, AbortController>();
+  // The looks being compressed from details readers have just written (`compressed`), as many as they wrote: each is
+  // one short call, and only the bot's stop ends one.
+  const compressing = new Set<AbortController>();
   // Every turn's work, whether or not its entry is still the reader's current one: a replaced turn is aborted, and
   // what it is unwinding (the picture it had on the other card) still has to finish before the bot may stop. A sample
   // and the removal of a deletion's pictures are awaited the same way.
@@ -109,6 +115,10 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
   // The GPU snapshot must provide every field the renderer reads.
   const render = (state: Library, route: string, details: RenderDetails = {}) =>
     renderUi(state, route, { ...details, modelInfo: { ...modelInfo }, gpuInfo: gpu?.snapshot() satisfies Required<GpuInfo> | undefined });
+  // Whether this reader's scenes are illustrated, so that their menu offers the picture style, the bot's own style
+  // line, and the counter of a text's tokens for the characters' card (local/ui.ts `RenderDetails`).
+  const pictureInfoOf = (userId: string) => ({ pictures: illustrator?.enabledFor(userId) ?? false,
+    standardStyle: illustrator?.standardStyle, textTokens: illustrator?.textTokens });
   const requireGpu = (t: Messages) => {
     if (!gpu) return;
     try { gpu.assertReady(); }
@@ -153,10 +163,10 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     if (fileInput?.error) throw fileInput.error;
     if (fileInput && (state.ui?.input !== 'seed' || state.ui.draftId !== fileInput.draftId)) throw refuse(t, 'draftChanged');
     const text = fileInput ? fileInput.text : messageText(update.message);
-    // Writing a picture style, a look or the prompt of a variant ends with any button or command, an unknown command
-    // included, so that no later message is kept as one by surprise (/last, /model or /typo would otherwise leave the
-    // next move to be taken for one).
-    if ((action || text?.startsWith('/')) && member(['style', 'look', 'prompt'], state.ui?.input)) state.ui = null;
+    // Writing a picture style, a look, details or the prompt of a variant ends with any button or command, an unknown
+    // command included, so that no later message is kept as one by surprise (/last, /model or /typo would otherwise
+    // leave the next move to be taken for one).
+    if ((action || text?.startsWith('/')) && member(['style', 'look', 'details', 'prompt'], state.ui?.input)) state.ui = null;
     if (!action && !fileInput) {
       const command = text?.split(/[\s@]/)[0];
       const current = state.active;
@@ -313,15 +323,16 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       return { variant: { storyId, nodeId, prompt: text } };
     }
     // The people of a story's sheet (local/ui.ts, the characters' screens), by the story, their place on it and the
-    // hash of their name: a button of somebody whose place another person took since is refused (`personAt`). A look is
-    // written the way a style is, and a portrait is drawn on request only, for a reader who is drawn for.
-    if (action?.startsWith('look-edit:') || action?.startsWith('portrait:')) {
+    // hash of their name: a button of somebody whose place another person took since is refused (`personAt`). A look
+    // and details are written the way a style is, and a portrait is drawn on request only, for a reader who is drawn for.
+    if (action?.startsWith('look-edit:') || action?.startsWith('details-edit:') || action?.startsWith('portrait:')) {
       const [verb, storyId, index, tag] = action.split(':');
       const person = ID.story.test(storyId) ? personAt(state.stories[storyId], index, tag) : undefined;
       if (!person) throw refuse(t, 'staleButton');
-      if (verb === 'look-edit') {
-        state.ui = { input: 'look', storyId, name: person.name };
-        return { screen: render(state, 'look-input', pictureInfo) };
+      if (verb === 'look-edit' || verb === 'details-edit') {
+        const input = verb === 'look-edit' ? 'look' : 'details';
+        state.ui = { input, storyId, name: person.name };
+        return { screen: render(state, `${input}-input`, pictureInfo) };
       }
       if (!pictureInfo.pictures) throw refuse(t, 'portraitOff');
       // Names the portrait for its keep button, so that a button of an earlier one never keeps this one.
@@ -335,22 +346,30 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       if (!kept) throw refuse(t, 'portraitStale');
       return { screen: render(state, `portrait-kept:${kept.storyId}:${kept.index}`), sweep: true, portraitKept: action.slice(14) };
     }
-    // While a look is being written, text is the look: one line, whatever the lines it was sent in. The person is
-    // looked for again by name, since the story may be gone or its sheet written anew in the meantime.
-    if (state.ui?.input === 'look' && !action) {
-      const look = (text ?? '').replace(/\s+/g, ' ').trim();
-      if (!look) throw refuse(t, 'lookNeedsText');
-      if ([...look].length > LOOK_CHARS) throw refuse(t, 'lookTooLong');
-      const { storyId, name } = state.ui;
+    // While a look or details are being written, text is that text: one line, whatever the lines it was sent in. The
+    // person is looked for again by name, since the story may be gone or its sheet written anew in the meantime.
+    if ((state.ui?.input === 'look' || state.ui?.input === 'details') && !action) {
+      const { input, storyId, name } = state.ui;
+      const look = input === 'look';
+      const written = (text ?? '').replace(/\s+/g, ' ').trim();
+      if (!written) throw refuse(t, look ? 'lookNeedsText' : 'detailsNeedsText');
+      if ([...written].length > (look ? LOOK_CHARS : DETAILS_CHARS)) throw refuse(t, look ? 'lookTooLong' : 'detailsTooLong');
       state.ui = null;
       const sheet = state.stories[storyId]?.sheet ?? [];
       const index = sheet.findIndex(one => one.name === name);
-      if (index < 0) throw refuse(t, 'lookGone');
-      // The reader's words replace the person: the details the model wrote of them go with the look they were
-      // compressed into, and portraits are drawn from these words (local/image-portraits.ts `portraitText`).
-      const { details, ...person } = sheet[index];
-      sheet[index] = { ...person, look, edited: true };
-      return { screen: render(state, `character:${storyId}:${index}:${personTag(name)}`, pictureInfo) };
+      if (index < 0) throw refuse(t, look ? 'lookGone' : 'detailsGone');
+      // The owner's design of 2026-09-26 (docs/illustrations-plan.md#portrait-details): the details are the person's
+      // text, portraits are drawn from them as written (local/image-portraits.ts `portraitText`), and the look the
+      // frames take is compressed from them. A look the reader writes overrides that one in the frames alone, until they
+      // write the details again: those clear it, and a look is compressed from them once this write is committed.
+      if (look) {
+        const { lookPending, ...person } = sheet[index];
+        sheet[index] = { ...person, look: written, edited: true };
+        return { screen: render(state, `character:${storyId}:${index}:${personTag(name)}`, pictureInfo) };
+      }
+      const { edited, ...person } = sheet[index];
+      sheet[index] = { ...person, details: written, detailsEdited: true, lookPending: true };
+      return { compress: { storyId, name } };
     }
     if (action === 'last') return { savedText: last(state) };
     if (action === 'new-seed') {
@@ -577,6 +596,41 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     return picture;
   }
 
+  // The look compressed from the details a reader has just written (local/picture.ts `compressLook`), then the person's
+  // card in place of the status line that stood meanwhile: the new look, or the word that it is still to be compressed.
+  // Only for a reader who is drawn for, and only while the language model's GPU is up, which it keeps up as a job does
+  // and never wakes; the look is otherwise compressed before the next picture of the story, and the card says so at once.
+  async function compressed(userId: string, chat: Chat, { storyId, name }: { storyId: string; name: string }, signal: AbortSignal) {
+    const log = logFor(userId);
+    let status: number | undefined;
+    if (!illustrator?.enabledFor(userId)) log('look_compressed', 'pictures_off', { outcome: 'skipped' });
+    else {
+      let release: (() => void) | undefined;
+      let held = true;
+      try { release = gpu?.acquire(); }
+      catch {
+        held = false;
+        log('look_compressed', 'gpu_not_ready', { outcome: 'skipped' });
+      }
+      if (held) {
+        try {
+          try { status = (await chat.send({ text: texts(store.read(userId).language).characters.compressing }) as { message_id?: number }).message_id; }
+          catch (error) { log('telegram_send_failed', errorCode(error)); }
+          await illustrator.compressLook({ userId, storyId, name, signal, log });
+        } finally { release?.(); }
+      }
+    }
+    const state = store.read(userId);
+    const index = state.stories[storyId]?.sheet?.findIndex(one => one.name === name) ?? -1;
+    // A person gone meanwhile opens the story's people, and a story gone says so (local/ui.ts).
+    const card = render(state, `character:${storyId}:${index}:${personTag(name)}`, pictureInfoOf(userId));
+    if (status !== undefined) {
+      try { await chat.edit(status, card); log('screen_sent'); return; }
+      catch { try { await chat.remove(status); } catch { /* a hint, never needed */ } }
+    }
+    await safeSend(chat, card, log);
+  }
+
   return {
     async handle(update: Update) {
       const from = update.callback_query?.from || update.message?.from;
@@ -619,9 +673,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         // already exists keeps what it has; without a stored language it stays Russian (text.ts).
         if (state.language === undefined && !state.seen.length && !state.seq) setLanguage(state, langFromTelegram(from?.language_code));
         state.seen = [...state.seen.slice(-511), update.update_id];
-        const pictureInfo = { pictures: illustrator?.enabledFor(userId) ?? false, standardStyle: illustrator?.standardStyle,
-          textTokens: illustrator?.textTokens };
-        try { return prepare(state, update, fileInput, pictureInfo); }
+        try { return prepare(state, update, fileInput, pictureInfoOf(userId)); }
         catch (error) {
           if (error instanceof UserError) return { screen: { text: errorText(texts(state.language), error) } };
           throw error;
@@ -708,6 +760,19 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
           inFlight.add(task);
         }
       }
+      // Details the reader wrote are kept whatever the model does with them, and the card that follows says what became
+      // of the look. Beside every other request of theirs: it is one short call, and their next scene waits for it.
+      if (plan.compress) {
+        const stop = new AbortController();
+        compressing.add(stop);
+        const task: Promise<unknown> = compressed(userId, chat, plan.compress, stop.signal)
+          .catch(error => log('turn_task_failed', errorCode(error)))
+          .finally(() => {
+            compressing.delete(stop);
+            inFlight.delete(task);
+          });
+        inFlight.add(task);
+      }
       // Beside a sample or a portrait, and with nothing held on the language model's card: a variant never asks it
       // anything.
       if (plan.variant && illustrator) {
@@ -768,6 +833,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       for (const entry of running.values()) entry.controller.abort();
       for (const stop of sampling.values()) stop.abort();
       for (const stop of varying.values()) stop.abort();
+      for (const stop of compressing) stop.abort();
       await this.idle();
     },
   };

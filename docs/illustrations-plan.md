@@ -634,11 +634,24 @@ word of it competes with the action; a portrait holds one person and can take fa
   marks. The frames use it as before.
 - A portrait is drawn from `details` (`portraitText` in `local/image-portraits.ts`), through the same
   `assemblePrompt`, which cuts out names and ages given as numbers. It now cuts out every name of the sheet, since
-  the details of one person may name another. A look the reader wrote wins: the edit drops the details, which describe
-  the person the reader's words replace, and a sheet written anew keeps the reader's look without them. A sheet
-  without details, as every sheet written before this one is, draws its portraits from the look and is not written
-  again for them. A kept portrait records the text it was drawn from in its `look` field, and the card calls it a
-  portrait of the earlier look once the person's text differs.
+  the details of one person may name another. A sheet without details, as every sheet written before this one is,
+  draws its portraits from the look and is not written again for them. A kept portrait records the text it was drawn
+  from in its `look` field, and the card calls it a portrait of the earlier look once the person's text differs.
+- The details are the person's main text, and the reader may write them, up to 1000 characters and in any language.
+  Each time, one call of the language model compresses them into the look again by the sheet's rule for the look
+  (`lookRequest` in `local/illustrate.ts`): English, the age as a word, nothing the details do not say, JSON with one
+  retry and at most 120 tokens. It runs right after the edit, so that the card shows the new look and the reader can
+  write another. If the model is off or the call fails, the reader's details stay, the look is marked `lookPending`
+  and the card says so, and it is compressed before the next frame of the story, in the turn that describes it. A
+  sheet written anew keeps the reader's details and the look beside them.
+- The owner decided two more things on 2026-09-26. First, the portrait is drawn from the details as written, in any
+  language, with no translation and no call added. Whether the image model follows a Russian description as closely
+  as the same one in English is checked at the next rental by the T probe's
+  [language test](action-experiment.md#t-probe-lang); `stripAges` in `local/illustrate.ts` knows only English, so an
+  age given as a number in another language reaches the portrait. Second, a look the reader writes stays as an
+  override (`edited`): the frames take it until the reader writes the details again, whose new look replaces it. It
+  keeps the details, which portraits are still drawn from, and a sheet written anew keeps it over the model's new
+  look.
 - The frame instruction and the portrait's clothes, style and pose stay as they were, but for one rule, changed the
   same day as the owner agreed: the look the frame writes of a person the sheet does not name takes the sheet's age
   words, children's included, and the skin tone, where it allowed an adult's words only. The identity measurement's
@@ -664,10 +677,6 @@ two's pins; the T probe keeps round one's line, to set its variants beside round
 `graphic` and `watercolor` presets asked for adult faces or anatomy for the same reason and now ask for anatomy and
 proportions true to each person's age (`local/picture-style.ts`); `semi` names no age and stays as the owner approved
 it.
-
-The owner decided the same day that a portrait is drawn from the reader's `details` exactly as written, in any
-language, with no translation; whether the image model follows a Russian description as closely as the same one in
-English is checked at the next rental by the T probe's [language test](action-experiment.md#t-probe-lang).
 
 <a id='blind-review'></a>
 

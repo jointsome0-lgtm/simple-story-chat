@@ -41,11 +41,14 @@ export function portraitDescription(name: string): Description {
 export const portraitPrompt = (name: string, text: string, names: string[] = []) =>
   assemblePrompt(portraitDescription(name), [{ name, look: text, outfit: '' }, ...names
     .filter(other => other.trim().toLowerCase() !== name.trim().toLowerCase()).map(other => ({ name: other, look: '', outfit: '' }))], PORTRAIT_STYLE);
-// What a portrait of a person of the sheet is drawn from (docs/illustrations-plan.md#portrait-details): their
-// `details`, since a portrait holds one person and can take all of them, or their `look` where the sheet has none, as
-// no sheet written before 2026-09-26 has, and where the reader wrote the look: the reader's words replace the person.
-export const portraitText = (person: { details?: string; look: string; edited?: boolean }) =>
-  !person.edited && person.details?.trim() ? person.details : person.look;
+// What a portrait of a person of the sheet is drawn from (docs/illustrations-plan.md#portrait-details): their details,
+// the reader's or the model's, as written and in whatever language, since a portrait holds one person and can take all
+// of them; or the look, which is all a sheet written before 2026-09-26 has until the reader writes details. A look the
+// reader wrote changes the frames alone. `portraitFromDetails` says which of the two texts it is, for the card to name
+// it (local/ui.ts).
+type SheetPerson = { details?: string; look: string };
+export const portraitFromDetails = (person: SheetPerson) => !!person.details?.trim();
+export const portraitText = (person: SheetPerson) => portraitFromDetails(person) ? person.details! : person.look;
 
 // The canvas a portrait is drawn on: the text-to-image graph's own latent turned upright, the smaller side across. A
 // standing figure in a wide frame gets a third of the pixels; the bot applies the same rule to its own graph.
