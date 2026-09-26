@@ -141,6 +141,11 @@ export function clothesOf(description: Description, worn: Character[]): { clothe
 // The longest look a reader may write for a person of a sheet (local/bot.ts), in characters: the sheet's own are 15-25
 // words, and the room left is the reader's, as for a style of their own.
 export const LOOK_CHARS = 400;
+// The longest details a reader may write for a person, in characters. The sheet's are 50-80 words; three synthetic
+// ones of 78-82 words written to its rule came to 455-472 characters, so this is twice the top of that range, as
+// LOOK_CHARS is more than twice the look's. A portrait's prompt with them stays well inside what the reader may send
+// as a whole prompt (PROMPT_CHARS in local/picture-style.ts), and the card and the wait for them stay one message.
+export const DETAILS_CHARS = 1000;
 
 // A person of a sheet is their name, apart from spaces and case. One the model renames is somebody new, and what the
 // reader made of the old name stays with it: merging two people by a like name would be worse than keeping both.
@@ -157,20 +162,22 @@ export function personAt(story: Story | undefined, index: string | undefined, ta
     ? { ...person, index: Number(index) } : undefined;
 }
 
-// A sheet written again in place of an older one (`describeFrame`) keeps what the reader made of it: a look they wrote
-// themselves and a portrait they kept, under the same name, or with the person on their own if the new sheet lost the
-// name. The details the new sheet wrote of a person whose look the reader wrote go, as an edit drops them
-// (local/bot.ts): they describe the person the reader's words replaced. The card shows a portrait as drawn from another
-// text if the person's text differs now (local/ui.ts).
+// A sheet written again in place of an older one (`describeFrame`) keeps what the reader made of it: a look and
+// details they wrote themselves and a portrait they kept, under the same name, or with the person on their own if the
+// new sheet lost the name. The details the new sheet wrote of a person whose look or details the reader wrote go, as
+// an edit of the look drops the model's (local/bot.ts): they describe the person the reader's words replaced. The card
+// shows a portrait as drawn from another text if the person's text differs now (local/ui.ts).
 export function rewrittenSheet(before: SheetEntry[], written: Character[]): SheetEntry[] {
   const old = new Map(before.map(one => [personKey(one.name), one]));
   const kept = written.map(({ details, ...one }) => {
     const mine = old.get(personKey(one.name));
-    return { ...one, ...mine?.edited ? { look: mine.look, edited: true } : details === undefined ? {} : { details },
+    return { ...one, ...mine?.edited ? { look: mine.look, edited: true } : {},
+      ...mine?.detailsEdited ? { details: mine.details, detailsEdited: true } : mine?.edited || details === undefined ? {} : { details },
       ...mine?.portrait ? { portrait: mine.portrait } : {} };
   });
   const names = new Set(written.map(one => personKey(one.name)));
-  return [...kept, ...before.filter(one => (one.edited || one.portrait) && !names.has(personKey(one.name))).map(one => ({ ...one, outfit: one.outfit ?? '' }))];
+  return [...kept, ...before.filter(one => (one.edited || one.detailsEdited || one.portrait) && !names.has(personKey(one.name)))
+    .map(one => ({ ...one, outfit: one.outfit ?? '' }))];
 }
 
 // The portrait a reader was shown last is held for its keep button this long, and only if Telegram would take it as

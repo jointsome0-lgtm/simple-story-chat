@@ -20,7 +20,7 @@ import { renderCompaction } from './compact-view.ts';
 import type { CompactionStatus } from './compact-view.ts';
 import type { GpuController } from './gpu.ts';
 import type { Illustrator, PictureRequest, PortraitRequest, SampleRequest, VariantRequest } from './picture.ts';
-import { LOOK_CHARS, personAt, personTag } from './picture.ts';
+import { DETAILS_CHARS, LOOK_CHARS, personAt, personTag } from './picture.ts';
 import type { Log } from './model-error.ts';
 import { errorCode, member, safeErrorDetails, unavailable } from './model-error.ts';
 import type { GenerationResult, Provider } from './model.ts';
@@ -153,10 +153,10 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     if (fileInput?.error) throw fileInput.error;
     if (fileInput && (state.ui?.input !== 'seed' || state.ui.draftId !== fileInput.draftId)) throw refuse(t, 'draftChanged');
     const text = fileInput ? fileInput.text : messageText(update.message);
-    // Writing a picture style, a look or the prompt of a variant ends with any button or command, an unknown command
-    // included, so that no later message is kept as one by surprise (/last, /model or /typo would otherwise leave the
-    // next move to be taken for one).
-    if ((action || text?.startsWith('/')) && member(['style', 'look', 'prompt'], state.ui?.input)) state.ui = null;
+    // Writing a picture style, a look, details or the prompt of a variant ends with any button or command, an unknown
+    // command included, so that no later message is kept as one by surprise (/last, /model or /typo would otherwise
+    // leave the next move to be taken for one).
+    if ((action || text?.startsWith('/')) && member(['style', 'look', 'details', 'prompt'], state.ui?.input)) state.ui = null;
     if (!action && !fileInput) {
       const command = text?.split(/[\s@]/)[0];
       const current = state.active;
@@ -313,15 +313,16 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       return { variant: { storyId, nodeId, prompt: text } };
     }
     // The people of a story's sheet (local/ui.ts, the characters' screens), by the story, their place on it and the
-    // hash of their name: a button of somebody whose place another person took since is refused (`personAt`). A look is
-    // written the way a style is, and a portrait is drawn on request only, for a reader who is drawn for.
-    if (action?.startsWith('look-edit:') || action?.startsWith('portrait:')) {
+    // hash of their name: a button of somebody whose place another person took since is refused (`personAt`). A look
+    // and details are written the way a style is, and a portrait is drawn on request only, for a reader who is drawn for.
+    if (action?.startsWith('look-edit:') || action?.startsWith('details-edit:') || action?.startsWith('portrait:')) {
       const [verb, storyId, index, tag] = action.split(':');
       const person = ID.story.test(storyId) ? personAt(state.stories[storyId], index, tag) : undefined;
       if (!person) throw refuse(t, 'staleButton');
-      if (verb === 'look-edit') {
-        state.ui = { input: 'look', storyId, name: person.name };
-        return { screen: render(state, 'look-input', pictureInfo) };
+      if (verb === 'look-edit' || verb === 'details-edit') {
+        const input = verb === 'look-edit' ? 'look' : 'details';
+        state.ui = { input, storyId, name: person.name };
+        return { screen: render(state, `${input}-input`, pictureInfo) };
       }
       if (!pictureInfo.pictures) throw refuse(t, 'portraitOff');
       // Names the portrait for its keep button, so that a button of an earlier one never keeps this one.
@@ -335,21 +336,24 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       if (!kept) throw refuse(t, 'portraitStale');
       return { screen: render(state, `portrait-kept:${kept.storyId}:${kept.index}`), sweep: true, portraitKept: action.slice(14) };
     }
-    // While a look is being written, text is the look: one line, whatever the lines it was sent in. The person is
-    // looked for again by name, since the story may be gone or its sheet written anew in the meantime.
-    if (state.ui?.input === 'look' && !action) {
-      const look = (text ?? '').replace(/\s+/g, ' ').trim();
-      if (!look) throw refuse(t, 'lookNeedsText');
-      if ([...look].length > LOOK_CHARS) throw refuse(t, 'lookTooLong');
-      const { storyId, name } = state.ui;
+    // While a look or details are being written, text is that text: one line, whatever the lines it was sent in. The
+    // person is looked for again by name, since the story may be gone or its sheet written anew in the meantime.
+    if ((state.ui?.input === 'look' || state.ui?.input === 'details') && !action) {
+      const { input, storyId, name } = state.ui;
+      const look = input === 'look';
+      const written = (text ?? '').replace(/\s+/g, ' ').trim();
+      if (!written) throw refuse(t, look ? 'lookNeedsText' : 'detailsNeedsText');
+      if ([...written].length > (look ? LOOK_CHARS : DETAILS_CHARS)) throw refuse(t, look ? 'lookTooLong' : 'detailsTooLong');
       state.ui = null;
       const sheet = state.stories[storyId]?.sheet ?? [];
       const index = sheet.findIndex(one => one.name === name);
-      if (index < 0) throw refuse(t, 'lookGone');
-      // The reader's words replace the person: the details the model wrote of them go with the look they were
-      // compressed into, and portraits are drawn from these words (local/image-portraits.ts `portraitText`).
+      if (index < 0) throw refuse(t, look ? 'lookGone' : 'detailsGone');
+      // The reader's look replaces the person: the details the model wrote of them go with the look they were
+      // compressed into, and details the reader wrote stay. Portraits are drawn from the reader's details first, then
+      // from the reader's look (local/image-portraits.ts `portraitText`); frames take the look alone.
       const { details, ...person } = sheet[index];
-      sheet[index] = { ...person, look, edited: true };
+      sheet[index] = look ? { ...person, ...person.detailsEdited ? { details } : {}, look: written, edited: true }
+        : { ...sheet[index], details: written, detailsEdited: true };
       return { screen: render(state, `character:${storyId}:${index}:${personTag(name)}`, pictureInfo) };
     }
     if (action === 'last') return { savedText: last(state) };

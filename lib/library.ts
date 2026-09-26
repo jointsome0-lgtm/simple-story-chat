@@ -33,9 +33,9 @@ export type Branch = { id: string; name: string; head: string | null; memory: st
 export type Checkpoint = { id: string; branchId: string; label: string; kind: string; head: string | null; memory: string | null };
 // A portrait of one person of a sheet that the reader kept to pick a reference by (local/picture.ts): the name of its
 // file among the reader's portraits beside the database (local/store.ts), never the picture itself, and how it was
-// drawn — its recipe, on a canvas of its own, the text of the person it was drawn from as `look` (their `details`, or
-// their look where there were none or the reader wrote it), which an edited look no longer matches, and the clothes
-// and the style line of its prompt. Frames never use it.
+// drawn — its recipe, on a canvas of its own, the text of the person it was drawn from as `look` (their `details` or
+// their look, `portraitText` in local/image-portraits.ts), which an edit of that text no longer matches, and the
+// clothes and the style line of its prompt. Frames never use it.
 export type KeptPortrait = PictureRecipe & { file: string; look: string; clothes: string; style: string; at: number };
 export type Story = {
   id: string; seedId: string; title: string; branches: Record<string, Branch>; checkpoints: Record<string, Checkpoint>;
@@ -46,8 +46,10 @@ export type Story = {
   // again. Only the local bot writes it, and only when pictures are switched on; a story without pictures never has it.
   // `edited` marks a look the reader wrote themselves, which that rewrite keeps. `details`, the long description the
   // look is compressed from, which portraits are drawn from, is in a sheet written since 2026-09-26, and goes when the
-  // reader writes the look.
-  sheet?: { name: string; details?: string; look: string; outfit?: string; edited?: boolean; portrait?: KeptPortrait }[];
+  // reader writes the look. `detailsEdited` marks details the reader wrote themselves, into any sheet, since
+  // 2026-09-26: those stay through an edit of the look and that rewrite.
+  sheet?: { name: string; details?: string; look: string; outfit?: string; edited?: boolean; detailsEdited?: boolean;
+    portrait?: KeptPortrait }[];
 };
 export type Job = {
   id: string; storyId: string; branchId: string; head: string | null; memory: string | null; input: string; started: number;
@@ -63,9 +65,10 @@ export type StyleInput = { input: 'style'; styleId?: string; confirm?: undefined
 // A reader writing the whole prompt of a variant of the picture of the scene `nodeId` (local/picture.ts `variant`):
 // their next text message is that prompt, not a move. The prompt itself is not kept here.
 export type PromptInput = { input: 'prompt'; storyId: string; nodeId: string; confirm?: undefined };
-// A reader writing the look of one person of a story's sheet (local/ui.ts, the characters' card): their next text
-// message is the look. The person is the one they opened, by story and name, never whatever is active by then.
-export type LookInput = { input: 'look'; storyId: string; name: string; confirm?: undefined };
+// A reader writing the look of one person of a story's sheet, or their details (local/ui.ts, the characters' card):
+// their next text message is that text. The person is the one they opened, by story and name, never whatever is
+// active by then.
+export type LookInput = { input: 'look' | 'details'; storyId: string; name: string; confirm?: undefined };
 // One of the reader's own picture styles: the name on its button and the line that ends the prompt.
 export type OwnStyle = { id: string; name: string; line: string };
 // How a picture was drawn, all but its prompt (local/picture.ts): its seed, a hash of the graph, the checkpoint's file

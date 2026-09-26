@@ -211,9 +211,10 @@ export const ru = {
   },
 
   // The people the pictures of a story draw (local/picture.ts): the list the story's first picture writes, a card for
-  // each person, the look the reader writes for them, and a portrait drawn from it on request, to pick a reference by.
-  // Looks and clothes stay in English, as the picture model reads them. `person` is a name as the story gives it, not
-  // quoted; `story` is common.storyName.
+  // each person, the look and the detailed look the reader writes for them, and a portrait drawn on request, to pick a
+  // reference by. The detailed look is the long description a portrait is drawn from; the scenes' pictures take the
+  // short look. Looks and clothes stay in English, as the picture model reads them. `person` is a name as the story
+  // gives it, not quoted; `story` is common.storyName.
   characters: {
     title: (story: string) => `👤 Персонажи: ${story}`,
     note: 'Такими их рисуют картинки этой истории. Нажми на персонажа, чтобы увидеть описание целиком, поправить внешность или нарисовать портрет.',
@@ -223,6 +224,9 @@ export const ru = {
     look: 'Внешность (нажми, чтобы скопировать):',
     // The size of the text above, alone: `tokens` as the picture model reads it, null when the bot has no tokenizer.
     lookSize: (tokens: number | null, chars: number) => textSize('Текст внешности', tokens, chars),
+    // Only for a person who has a detailed look; its size as lookSize.
+    details: 'Подробная внешность для портрета (нажми, чтобы скопировать):',
+    detailsSize: (tokens: number | null, chars: number) => textSize('Текст подробной внешности', tokens, chars),
     // `branch` is the quoted name of the branch being played.
     clothesOfBranch: (branch: string) => `Одежда на последней картинке ветки ${branch}:`,
     clothesAtStart: 'Одежда, с которой начались картинки этой истории:',
@@ -231,15 +235,23 @@ export const ru = {
     clothesNote: 'Одежду здесь не правят: её меняет сама история, и картинки берут её из сцен.',
     sizeNote: 'Числа относятся к каждому тексту отдельно. В промпт также входят описание сцены и стиль; точный размер указан под картинкой.',
     scope: 'Правка внешности действует на следующие картинки всех веток этой истории. Текст истории, память и уже нарисованные картинки не меняются, а картинка, которая рисуется сейчас, может выйти по-старому.',
-    portraitNone: '🖼 Портрета пока нет. Портрет рисует лицо и фигуру в полный рост по этой внешности — так проще подобрать референс.',
-    portraitKept: '🖼 Портрет сохранён: лицо и фигура по этой внешности.',
-    portraitStale: '🖼 Сохранённый портрет нарисован по прежней внешности. Новый покажет лицо и фигуру по этой.',
+    // What a portrait is drawn from: `details` is true for the detailed look shown on the card, false for the look.
+    portraitNone: (details: boolean) => `🖼 Портрета пока нет. Портрет рисует лицо и фигуру в полный рост по ${details ? 'подробной внешности' : 'этой внешности'} — так проще подобрать референс.`,
+    portraitKept: (details: boolean) => `🖼 Портрет сохранён: лицо и фигура по ${details ? 'подробной внешности' : 'этой внешности'}.`,
+    portraitStale: (details: boolean) => `🖼 Сохранённый портрет нарисован по прежней внешности. Новый покажет лицо и фигуру по ${details ? 'подробной' : 'этой'}.`,
     edit: '✏️ Изменить внешность',
+    // Opens the wait for a detailed look, also for a person who has none yet.
+    editDetails: '✏️ Подробная внешность',
     portrait: '🖼 Портрет',
     back: '↩️ К персонажам',
     // While the reader writes a look. `max` is a limit in characters.
     editTitle: (person: string, story: string) => `✏️ Внешность: ${person} · ${story}`,
     editNote: (max: number) => `Пришли новую внешность одним сообщением, до ${max} знаков: лицо, волосы, телосложение, рост, приметы. Одежду и имя не пиши: одежду меняет история, а имя остаётся прежним. Модель картинок лучше всего понимает английский.`,
+    // Under editNote, when the person has a detailed look the model wrote: a new look takes it away.
+    editDropsDetails: 'Подробную внешность, которую написала модель, эта правка уберёт, и портрет будет рисоваться по новой внешности.',
+    // While the reader writes a detailed look. `max` is a limit in characters.
+    detailsTitle: (person: string, story: string) => `✏️ Подробная внешность: ${person} · ${story}`,
+    detailsNote: (max: number) => `Пришли подробную внешность одним сообщением, до ${max} знаков: пол, возраст словом, а не числом, цвет кожи, рост и телосложение, волосы, лицо, приметы. Одежду и имя не пиши. По ней рисуется только портрет, картинки к сценам берут короткую внешность. Модель картинок лучше всего понимает английский.`,
     nowText: 'Сейчас:',
     backToCard: '↩️ К персонажу',
     // Under a portrait, which is drawn in plain neutral clothes whatever the story's.
@@ -703,6 +715,10 @@ export const ru = {
     lookNeedsText: 'Пришли внешность текстом, одним сообщением. Выйти без изменений можно кнопкой «↩️» или командой /cancel.',
     lookTooLong: 'Слишком длинно: внешность должна уложиться в 400 знаков. Сократи и пришли снова.',
     lookGone: 'Этого персонажа уже нет в истории, внешность не сохранена. Открой /menu.',
+    // The same for a detailed look. The number is DETAILS_CHARS in local/picture.ts.
+    detailsNeedsText: 'Пришли подробную внешность текстом, одним сообщением. Выйти без изменений можно кнопкой «↩️» или командой /cancel.',
+    detailsTooLong: 'Слишком длинно: подробная внешность должна уложиться в 1000 знаков. Сократи и пришли снова.',
+    detailsGone: 'Этого персонажа уже нет в истории, подробная внешность не сохранена. Открой /menu.',
     portraitOff: 'Картинки к твоим сценам пока не включены, поэтому портрет нарисовать нельзя.',
     portraitStale: 'Этот портрет уже не сохранить: он устарел или внешность с тех пор изменилась. Нарисуй новый.',
     portraitInFlight: 'Уже рисую картинку по твоей просьбе. Портрет можно попросить, когда она придёт.',
