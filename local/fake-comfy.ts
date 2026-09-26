@@ -132,10 +132,12 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
     const cached = options.loadersCached && job.number > 1 ? order.filter(id => /Loader/.test(graph[id].class_type)) : [];
     const references = Object.values(graph).filter(node => node.class_type === 'LoadImage').length;
     const sampler = Object.values(graph).find(node => 'seed' in node.inputs || 'noise_seed' in node.inputs);
-    const link = sampler?.inputs.latent_image;
-    const latent = Array.isArray(link) ? graph[String(link[0])]?.inputs : undefined;
-    const width = Number(latent?.width ?? 1024), height = Number(latent?.height ?? 1024);
     const source = (value: unknown) => (Array.isArray(value) ? graph[String(value[0])] : undefined);
+    const latent = source(sampler?.inputs.latent_image);
+    // A latent the VAE encoded from an uploaded picture has that picture's size (local/image-t-probe.ts's latent starts).
+    const encoded = latent?.class_type === 'VAEEncode' ? source(latent.inputs.pixels) : undefined;
+    const start = encoded?.class_type === 'LoadImage' ? uploaded.get(String(encoded.inputs.image)) : undefined;
+    const { width, height } = start ? pngSize(start) : { width: Number(latent?.inputs.width ?? 1024), height: Number(latent?.inputs.height ?? 1024) };
     // What a node hands on is the size of: a scale node's own, an uploaded file's, and the latent's for the rest.
     const sizeOf = (node: Graph[string] | undefined): { width: number; height: number } => {
       if (node?.class_type === 'ImageScale') return { width: Number(node.inputs.width), height: Number(node.inputs.height) };

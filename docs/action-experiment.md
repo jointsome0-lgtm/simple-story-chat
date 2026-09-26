@@ -18,7 +18,8 @@ for it, and on the bot's own path: the uncensored Gemma writes the scenes and th
 [simple-serving](model-providers.md#simple-serving-our-gateway), and Qwen-Image 2.1 draws them on another.
 [Stage 1](#stage-1) wrote the frames of the clean scenes with a hosted Gemma and drew nothing. The first round wrote
 its texts on 2026-09-25 and 26 and drew seed 7 on the 26th, with up to six people in a moment; the next one has four
-([four](#four)).
+([four](#four)). Its T gave L's picture back and took nothing from the portraits; [the T probe](#t-probe) tries five
+changes to T on one pilot card, from round one's own pictures.
 
 <a id='stage-1'></a>
 
@@ -814,3 +815,100 @@ directory holds:
   and its report; `sealed/tmp/`, their temporary directory; and `sealed/owner/`, the owner's pages;
 - `card.txt` and `draw.json`, the card's record and the pictures';
 - `report.json`, `report.md`, `gallery.html` and `sealed/gallery.html`.
+
+<a id='t-probe'></a>
+
+## The T probe
+
+Round one's T gave L's picture back with its edges and colours pushed, and took no face, hair or build from the
+portraits. Round two draws T as it is: `T_OPENING`, `tPrompt` and the action graph do not change.
+[image-t-probe.ts](../local/image-t-probe.ts) draws five variants of T, each one change against it, from round one's
+own L pictures and portraits of six clean scenes at seed 7, on one pilot card with no text card and no new portrait,
+and writes a page from which the owner picks.
+
+**What round one shows** (seed 7, the 13 clean scenes, their files and their judges' answers):
+
+- The judges scored T as L on every item of every clean scene, contacts, gazes, clothes, looks and identity alike. C
+  took looks where T took none: looks 0.03 for T against 0.60 for C, identity 0.01 against 0.34.
+- T keeps L's layout, people and faces: three pairs seen side by side (the tango, the guard, the demon), and a
+  normalised cross-correlation of T with L of 0.67 to 0.92 on the grey pictures, the sharpening included.
+- T is processed. Its fine detail, the mean absolute high-pass of the grey picture, is 3.1 to 9.3 times L's (median
+  4.3) and sits at 71 to 109 whatever L's is (8 to 35); C against L stays at 0.88 to 1.17. Saturation and contrast
+  rose in all 13, and the lightness moved toward the middle: dark L's came out lighter, bright ones darker. Contrast
+  alone raises that measure, so together they show a restyling, not detail added as such.
+- A view is also an edit of a picture that lies on its canvas's grid, its front's, and against its front it stays at
+  0.99 to 1.16 of fine detail, and in the one pair seen (the twister's second person) it turned the person as asked:
+  the grid alone neither forbids a change nor sharpens.
+- C, with the same portraits at the same 352x640, took looks: the portraits' size does not keep them out.
+- At `resolution` 0 image 1 reaches the encoder at its own 1280x704, the canvas's size: its 80x44 latents take the
+  canvas's own centred positions, and they are 3520 tokens against a portrait's 880. The pinned encode node sizes its
+  latent output on the first reference "to match with sampling as any other size shifts the edit": a first picture of
+  the canvas's size is edited in place.
+
+**What is a guess**: that the grid shared with the canvas, together with an instruction that first says to keep
+everything of image 1 and names the change only as "takes them from", has the model copy image 1 and restore it;
+whether the sharpening and the colours are that restoration's own, the style line's, or a numerical fault of this
+edit path; and how much image 1's 3520 tokens against 880 a portrait weigh in it.
+
+| Variant | The one change against T | Expected on the faces | Risk to the action |
+| --- | --- | --- | --- |
+| `words` | The prompt: the change first, "Replace the face, hair, skin and build of ROLE in image 1 with those of the person in image N", one sentence a person, then T's caveat on the build and its keep list, without "Image 1 is the finished picture" | the portraits' faces in L's places, if the model edits faces by reference on an image 1 of the canvas's grid at all | low: layout, poses and contacts stay L's |
+| `no-style` | T's prompt without the style line | none: it asks whether the style line gives the edges and colours | low, as T |
+| `half` | Image 1 through a scale node of its own (area) to 640x352: 880 tokens, one portrait's weight, and no longer cell for cell on the canvas's grid, though still centred on it | the portraits may come through, as they do in C, though L stays a reference | high: the scene is drawn again from L's content, and framing, poses and contacts may move |
+| `latent-50` | L as the sampler's start instead of image 1: VAEEncode at denoise 0.50 (σ 0.67, L's latent 0.33); the portraits alone as references from image 1, with C's prompt | faces and hair redrawn toward the portraits inside L's layout; hair colour and length in part | low to medium: hands and small contacts may be redrawn |
+| `latent-70` | the same at denoise 0.70 (σ 0.83, L's latent 0.17) | more of the portraits: hair colour and length, the build | medium to high: poses and contacts may move; the framing mostly holds |
+
+The σ are the pinned model's: its flux shift of mu 0.69, about 2, with KSampler at denoise d running the last 25 of
+`int(25 / d)` steps. `wordsPrompt`, `probeGraph`, `startFrom` and `probePrompt` hold the variants; the page says the
+same in Russian. The six scenes bind four portraits at most, as round two does, from four to one: the flight and the
+twister (4), the giants (3), the guard and the tango (2), the monkeys (1).
+
+GPT-6 (Astra) read the diagnosis, the pinned sources and eleven clean pictures on 2026-09-26. It found the grid a cue
+to keep image 1, not a switch into another mode, and with the instruction's weight on keeping and its indirect binding
+a credible cause of the copy; C shows that the portraits can carry looks, not that they still can beside L's 3520
+tokens; and a latent start is VAEEncode into the sampler, never LatentUpscale, whose /8 would double this latent, with
+C's prompt and no reference of L. It does not clear the style line of the sharpening, which is why `no-style` is a
+variant, and it would take the latent starts at 0.40 and 0.60 (σ 0.57 and 0.76) and keep 0.75 for later. The probe
+takes 0.50 and 0.70, since 0.40 leaves 0.43 of L's latent, which we expect to hold the faces as they are, and one card
+should bracket the point where they follow the portraits; a later probe can go between.
+
+```sh
+npm run image:t-probe -- dry-run     # six steps, then "the dry run went as expected"
+npm run image:t-probe -- estimate    # before the card: 30 cells, expectedMinutes 10.1, pricedMinutes 14.8
+# The pilot card, with the owner's «да» on its price and end, a picture card for one hour:
+SIMPLE_CHAT_RENT_DRY_RUN=1 npm run gpu:rent -- --lane pictures --qwen only --hours 1    # each offer's `session`
+npm run gpu:rent -- --lane pictures --qwen only --hours 1
+# The guard, gpu/ onto the card, image-bootstrap.sh, image-serve.sh and the tunnel as in the runbook above, then:
+mkdir -p illustrations/t-probe
+ssh simple-chat-vast cat /workspace/simple-chat-gpu/image-verified.txt > illustrations/t-probe/card.txt
+npm run image:t-probe -- draw --until "$end"    # scene by scene; `probe` with drawn 30 and exit 0
+# The termination, as in the runbook above; then, with no card:
+npm run image:t-probe -- page    # illustrations/t-probe/index.html, which `draw` also writes after each scene
+```
+
+`draw` takes `--scenes` and `--variants`, comma separated, and the runbook's `--wait`, `--timeout` and `--comfy`. Of
+`illustrations/action-1` it reads `draw.json` and `clean/` alone, and before anything is sent it refuses a sharp id,
+the marker and a link on the way, which could lead into `sealed/`; an L or a front that is not the file round one
+recorded; a ComfyUI revision, weights, graph, T opening, canvas, reference size, encoder resolution or cache device
+other than round one's; a probe directory drawn under other pins or from other inputs; and a picture `probe.json`
+records whose file is gone. A scene begins only if all its variants can end by `--until`, at round one's slowest time
+of the like cell, a quarter more and three seconds, and a resume draws nothing again. `illustrations/t-probe` holds `card.txt`, `probe.json` (ids, codes, sizes, counts
+and times, no prompt), `<scene>/<variant>.png` and `index.html`: for each scene its portraits, round one's L, T and C,
+and the five variants, each named by its change, the pictures linked where they lie.
+
+The estimate, from round one's own times of the same card:
+
+| | minutes |
+| --- | --- |
+| ssh, Qwen's files, torch, the verification and the tunnel, at 300 Mbit/s (the identity run's table) | 14 |
+| 30 cells at round one's medians, the first of them cold: T's for `words` and `no-style`, C's for the rest | 10 (15 at the admission prices) |
+| the page, the termination and the margin before the guard | 5 |
+
+About 30 card minutes, 35 at the admission prices, of the guard's hour.
+
+**Not verified without the card**: whether `words` moves any face while image 1 lies on the canvas's grid; whether
+`no-style` takes the edges and colours away; where `half` puts the scene, since its 640x352 is centred on the canvas's
+positions at half the scale and may come back smaller or reframed; whether 0.50 changes the faces and 0.70 keeps the
+contacts; the VAEEncode start itself, whose wiring alone the fake checks; the times of `half` and the latent starts,
+priced from C's; and whether the pilot card would draw round one's T again, since the probe draws no T of its own:
+`probe.json`'s `sameServer` says whether ComfyUI, PyTorch and the card said what they said to round one.
