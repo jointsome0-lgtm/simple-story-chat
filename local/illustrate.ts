@@ -13,7 +13,8 @@ import type { ChatMessage, GenerateControls, ModelRequest, Provider } from './mo
 // writes what its people wear, starting from what they wore in the picture before it (local/picture.ts). `details`
 // is the long description `look` is compressed from: a portrait holds one person and is drawn from it
 // (local/image-portraits.ts `portraitText`), a frame holds up to four and keeps the short line. A sheet written before
-// 2026-09-26 has none.
+// 2026-09-26 has none. The reader may write it, in any language, and the look is then compressed from it by a call of
+// its own (`lookRequest`).
 export type Character = { name: string; details?: string; look: string; outfit?: string };
 // `who` is the only field allowed to carry a name, and it never reaches the image model: it selects the sheet line.
 export type Person = { who: string; look: string; clothes?: string; state: string; action: string };
@@ -193,15 +194,28 @@ export function assemblePrompt(description: Description, sheet: Character[], sty
 // prompt says the people are adults; and `details` before `look` (2026-09-26), so that the model writes a portrait's
 // worth of each person first and compresses it into the look in the same answer, with the age words of children,
 // which the sheet lacked (docs/illustrations-plan.md#portrait-details).
+// The age words of the sheet, children's among them, which a look compressed from the reader's details uses as well.
+const AGE_WORDS = 'small child, child, teenager, young adult, middle-aged, elderly';
 const SHEET = `Не продолжай историю. Составь лист внешности для художника: по одной записи на КАЖДОГО человека, названного в истории по имени или по постоянной роли (командир, лекарь, судья) и появляющегося больше чем в одной сцене. Обычно их от трёх до шести; одна запись на целую историю — почти наверняка ошибка.
 - name: имя так, как оно пишется в истории.
-- details: по-английски, 50-80 слов, без имён и БЕЗ ОДЕЖДЫ, подробная внешность для портрета, по порядку: пол и возраст ТОЛЬКО словом (small child, child, teenager, young adult, middle-aged, elderly) и никогда числом, даже если история называет годы; цвет кожи; рост и телосложение с пропорциями; волосы: цвет, длина, фактура, причёска; лицо: форма, брови, глаза и их цвет, нос, губы, растительность на лице, морщины; постоянные приметы (шрам, татуировка, родинка, очки) с их местом и стороной (left и right здесь стороны самого человека). Всё, что история называет, бери из истории; чего она не называет — придумай один раз, правдоподобно для мира истории, и так, чтобы персонажи заметно отличались друг от друга силуэтом, волосами и лицом.
+- details: по-английски, 50-80 слов, без имён и БЕЗ ОДЕЖДЫ, подробная внешность для портрета, по порядку: пол и возраст ТОЛЬКО словом (${AGE_WORDS}) и никогда числом, даже если история называет годы; цвет кожи; рост и телосложение с пропорциями; волосы: цвет, длина, фактура, причёска; лицо: форма, брови, глаза и их цвет, нос, губы, растительность на лице, морщины; постоянные приметы (шрам, татуировка, родинка, очки) с их местом и стороной (left и right здесь стороны самого человека). Всё, что история называет, бери из истории; чего она не называет — придумай один раз, правдоподобно для мира истории, и так, чтобы персонажи заметно отличались друг от друга силуэтом, волосами и лицом.
 - look: по-английски, 15-25 слов, тоже без имён и без одежды. Это details, сжатые до того, по чему этого человека узнают издали среди других: пол и возраст тем же словом, цвет кожи, телосложение, волосы и одна-две приметы.
 - outfit: по-английски, 8-20 слов, фразой, которая начинается с wearing: во что человек одет в ПОСЛЕДНЕЙ сцене, где история говорит о его одежде. Если по ходу истории он переоделся, это новая одежда, а не та, что в начале истории или в её описании. Если история об одежде молчит, придумай её правдоподобно для мира истории, и так, чтобы персонажи заметно отличались цветом одежды.
 - Не включай травмы, повязки, оружие в руках и предметы, которые появляются или меняются по ходу истории.`;
 const SHEET_SCHEMA = { type: 'object', additionalProperties: false, required: ['characters'], properties: { characters: { type: 'array', maxItems: 6,
   items: { type: 'object', additionalProperties: false, required: ['name', 'details', 'look', 'outfit'],
     properties: { name: { type: 'string' }, details: { type: 'string' }, look: { type: 'string' }, outfit: { type: 'string' } } } } } };
+
+// The sheet's own rule for `look`, for one person on their own: the details the reader wrote, in any language, are
+// compressed into an English look (the owner's design of 2026-09-26, docs/illustrations-plan.md#portrait-details).
+// Only what the reader wrote goes in, since the look stands for their words in every frame.
+const LOOK = `Сожми описание внешности одного человека в конце этого сообщения в look для художника.
+- look: по-английски, 15-25 слов, без имён, без одежды и без чисел. Это описание, сжатое до того, по чему этого человека узнают издали среди других: пол и возраст ТОЛЬКО словом (${AGE_WORDS}) и никогда числом, цвет кожи, телосложение, волосы и одна-две приметы.
+- Описание может быть на любом языке. Бери всё только из него и ничего не придумывай: чего в нём нет, того нет и в look.
+
+Описание:
+`;
+const LOOK_SCHEMA = { type: 'object', additionalProperties: false, required: ['look'], properties: { look: { type: 'string' } } };
 
 // `sheet` is the story's sheet with `outfit` set to what each of its people wore in the picture before this one.
 const instruction = (sheet: Character[]) => `Не продолжай историю. Опиши ПОСЛЕДНЮЮ сцену для художника-иллюстратора: один неподвижный кадр, как в визуальной новелле. Пиши по-английски. Готовый запрос для модели картинок соберёт программа из твоих полей, поэтому всё существенное должно быть в полях; чего в них нет, того не будет на картинке.
@@ -253,11 +267,23 @@ export const DESCRIBE_TOKENS = 900;
 // by Gemma 4's tokenizer (local/tokenizer.ts), came to 1102 tokens as compact JSON and 1225 indented, and with half as
 // many words again to 1693 indented (docs/illustrations-plan.md#portrait-details). A runaway takes twice as long.
 export const SHEET_TOKENS = 1800;
+// A look compressed from details on its own: three synthetic looks of 24-26 words came to 37-40 tokens of Gemma 4's
+// tokenizer as compact JSON and 43-46 indented, and the same with 17 words more to 57-66, so this holds about three
+// times the top of the look's range and a runaway ends there before its one retry.
+export const LOOK_TOKENS = 120;
 
 // The sheet of a whole story, from its history up to the scene named in `context`.
 export function sheetRequest(context: Excerpt): ModelRequest {
   return { system: context.system, maxOutputTokens: SHEET_TOKENS, outputSchema: SHEET_SCHEMA,
     messages: [...context.messages, { role: 'user', content: SHEET }] };
+}
+
+// The look of one person compressed from `details` (local/picture.ts). On its own it is a few hundred tokens with no
+// story in them; with `context` it continues the scene's request as the sheet and the frame do, so that a server with
+// a prefix cache pays for the instruction and the details alone and keeps that prefix for the frame after it.
+export function lookRequest(details: string, context?: Excerpt): ModelRequest {
+  return { system: context?.system ?? '', maxOutputTokens: LOOK_TOKENS, outputSchema: LOOK_SCHEMA,
+    messages: [...(context?.messages ?? []), { role: 'user', content: `${context ? 'Не продолжай историю. ' : ''}${LOOK}${details}` }] };
 }
 
 // One frame of the last scene of `context`. The names of `sheet` are in the instruction only so that the model can
@@ -293,4 +319,9 @@ export function sheetOf(value: Record<string, unknown>): Character[] {
     return typeof name === 'string' && typeof look === 'string' ? [{ name, ...typeof details === 'string' && details.trim() ? { details } : {},
       look, outfit: typeof outfit === 'string' ? outfit : '' }] : [];
   });
+}
+
+// The look as the model answered it, on one line as a look the reader writes is, or null for a reply without one.
+export function lookOf(value: Record<string, unknown>): string | null {
+  return typeof value.look === 'string' && value.look.trim() ? value.look.replace(/\s+/g, ' ').trim() : null;
 }

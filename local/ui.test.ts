@@ -166,8 +166,8 @@ test('each state offers only the actions it allows: the scene keyboard, compacti
     ['characters before the first picture', (state => (screen => [screen.text, callbacks(screen), state.stories.h2.sheet])(render(state, 'characters:h2', on)))(fixture()),
       [`${t.characters.title(STORY)}\n\n${t.characters.none}`, ['view:story:h2', 'view:home'], undefined]],
     ['characters of a sheet', callbacks(render(drawn(), 'characters:h2', on)), [`view:character:${mira}`, `view:character:${oleg}`, 'view:story:h2', 'view:home']],
-    ['a card with pictures', preAndButtons(render(drawn(), `character:${mira}`, on)), [[LOOK, 'a yellow raincoat'], [`look-edit:${mira}`, `portrait:${mira}`, 'view:characters:h2']]],
-    ['a card without pictures', callbacks(render(drawn(), `character:${mira}`)), [`look-edit:${mira}`, 'view:characters:h2']],
+    ['a card with pictures', preAndButtons(render(drawn(), `character:${mira}`, on)), [[LOOK, 'a yellow raincoat'], [`details-edit:${mira}`, `look-edit:${mira}`, `portrait:${mira}`, 'view:characters:h2']]],
+    ['a card without pictures', callbacks(render(drawn(), `character:${mira}`)), [`details-edit:${mira}`, `look-edit:${mira}`, 'view:characters:h2']],
     // Somebody not on the sheet, or a button of one whose place another person took since, is the list, never a card.
     ...['character:h2:7', 'character:h2:x', 'character:h2:0', 'character:h2:0:00000000', `character:h2:1:${personTag('Мира')}`].map((route): Row =>
       [`a stale person: ${route}`, callbacks(render(drawn(), route, on)), callbacks(render(drawn(), 'characters:h2', on))]),
@@ -386,13 +386,13 @@ test('a screen says what it shows: what a deletion takes, a job, the context, th
     ['a seed without a story', render(lone, 'seed:s12').text, [], [ch.none]],
     ['the characters of a sheet', render(drawn(), 'characters:h2', on).text, [`\n1. Мира — ${LOOK}\n2. Олег — A broad-shouldered man with a shaved head.`], []],
     ['the card of a person the branch dressed', words, [ch.cardTitle('Мира', STORY), `\n${ch.clothesOfBranch(t.format.quote('Начало'))}\na yellow raincoat\n`, ch.sizeNote, ch.scope,
-      `\n\n${ch.portraitNone}`], []],
+      `\n\n${ch.portraitNone(false)}`], []],
     ['the card of a person no scene dressed', render(drawn(), `character:${oleg}`, on).text, [`\n${ch.clothesAtStart}\na fisherman sweater\n`], []],
     ['the card of a person in a story not being played', render({ ...drawn(), active: null }, `character:${mira}`, on).text, [`\n${ch.clothesAtStart}\na dark wool coat\n`], []],
     ['the card of a person without clothes', render(unclothed, `character:${oleg}`, on).text, [`\n${ch.noClothes}\n`], []],
     ['a card without pictures', render(drawn(), `character:${mira}`).text, [], ['🖼']],
-    ['the card of a person with a portrait', render(portrayed(LOOK), `character:${mira}`, on).text, [`\n\n${ch.portraitKept}`], []],
-    ['the card of a person with a portrait of an earlier look', render(portrayed('An earlier look.'), `character:${mira}`).text, [`\n\n${ch.portraitStale}`], []],
+    ['the card of a person with a portrait', render(portrayed(LOOK), `character:${mira}`, on).text, [`\n\n${ch.portraitKept(false)}`], []],
+    ['the card of a person with a portrait of an earlier look', render(portrayed('An earlier look.'), `character:${mira}`).text, [`\n\n${ch.portraitStale(false)}`], []],
     ['a look being written', render({ ...drawn(), ui: { input: 'look', storyId: 'h2', name: 'Мира' } }, 'look-input', on).text,
       [`${ch.editTitle('Мира', STORY)}\n\n${ch.editNote(LOOK_CHARS)}`], []],
     // Picture styles: which one pictures are drawn in, that they are not drawn yet, and where they go once the chosen style

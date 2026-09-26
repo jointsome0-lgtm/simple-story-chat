@@ -44,12 +44,13 @@ export type Story = {
   // the story's own history and kept beside its memory (docs/illustrations-plan.md#step-3), and the clothes they
   // wore when it was written. A sheet without `outfit` is older and had clothes in `look`; the next picture writes it
   // again. Only the local bot writes it, and only when pictures are switched on; a story without pictures never has it.
-  // `edited` marks a look the reader wrote themselves, which that rewrite keeps. `details`, the long description the
-  // look is compressed from, which portraits are drawn from, is in a sheet written since 2026-09-26, and goes when the
-  // reader writes the look. `detailsEdited` marks details the reader wrote themselves, into any sheet, since
-  // 2026-09-26: those stay through an edit of the look and that rewrite.
+  // `details`, the long description the look is compressed from and portraits are drawn from, is in a sheet written
+  // since 2026-09-26. `detailsEdited` marks details the reader wrote themselves, into any sheet, since that day; the
+  // look is then compressed from them again, and `lookPending` marks one not compressed yet. `edited` marks a look the
+  // reader wrote themselves, which the frames take until the reader writes the details again. That rewrite keeps all
+  // of these (local/picture.ts `rewrittenSheet`).
   sheet?: { name: string; details?: string; look: string; outfit?: string; edited?: boolean; detailsEdited?: boolean;
-    portrait?: KeptPortrait }[];
+    lookPending?: boolean; portrait?: KeptPortrait }[];
 };
 export type Job = {
   id: string; storyId: string; branchId: string; head: string | null; memory: string | null; input: string; started: number;

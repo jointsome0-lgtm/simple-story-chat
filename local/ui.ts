@@ -473,12 +473,14 @@ function charactersScreen(state: State, storyId: string | undefined) {
   ]);
 }
 
-// One person: the whole look, their details where they have any, and the clothes, tap-to-copy, each with its size as
-// the picture model counts that text alone (never their sum: a prompt takes names and ages out of them, joins them
-// with the scene and adds the style), where an edited look reaches, and the portrait kept to pick a reference by. The
-// look and the details each have a button to write them, the details also for a person who has none yet. The clothes
-// are the story's to change, so they are only shown: those of the active branch's latest picture for the active story
-// (local/picture.ts `wornAt`), the sheet's own otherwise.
+// One person: their details where they have any, the look and the clothes, tap-to-copy, each with its size as the
+// picture model counts that text alone (never their sum: a prompt takes names and ages out of them, joins them with
+// the scene and adds the style), where an edited look reaches, and the portrait kept to pick a reference by. The
+// details are the person's text, which the portraits are drawn from and the look is compressed from (local/bot.ts);
+// the card says when the look is the reader's own instead, or not compressed yet. Both have a button to write them,
+// the details also for a person who has none yet. The clothes are the story's to change, so they are only shown:
+// those of the active branch's latest picture for the active story (local/picture.ts `wornAt`), the sheet's own
+// otherwise.
 function characterScreen(state: State, storyId: string | undefined, rawIndex: string | undefined, tag: string | undefined,
   details: RenderDetails) {
   const t = texts(state.language);
@@ -499,18 +501,19 @@ function characterScreen(state: State, storyId: string | undefined, rawIndex: st
     return [tokens, [...text].length] as const;
   };
   const described = person.details?.trim() ?? '';
-  // A kept portrait records the text it was drawn from, the person's details or look (`portraitText`), and the card
-  // names which of the two a portrait is drawn from now.
+  // A kept portrait records the text it was drawn from, the person's details or, on a sheet without them, the look
+  // (`portraitText`), and the card names which of the two a portrait is drawn from now.
   const fromDetails = portraitFromDetails(person);
   const portrait = person.portrait ? (person.portrait.look === portraitText(person) ? c.portraitKept(fromDetails) : c.portraitStale(fromDetails))
     : details.pictures ? c.portraitNone(fromDetails) : null;
+  const whose = person.edited ? c.lookOwn : person.lookPending ? c.lookPending : null;
   const result = payload([c.cardTitle(line(person.name, 60), storyName(state, story)), '',
-    c.look, person.look, c.lookSize(...size(person.look)), '',
     ...described ? [c.details, described, c.detailsSize(...size(described)), ''] : [],
+    c.look, person.look, c.lookSize(...size(person.look)), whose, '',
     ...clothes ? [clothesTitle, clothes, c.clothesSize(...size(clothes))] : [c.noClothes], c.clothesNote, '',
     c.sizeNote, '', c.scope, portrait === null ? null : '', portrait], [
-    [btn(c.edit, `look-edit:${personRef(story, person)}`)],
     [btn(c.editDetails, `details-edit:${personRef(story, person)}`)],
+    [btn(c.edit, `look-edit:${personRef(story, person)}`)],
     details.pictures ? [btn(c.portrait, `portrait:${personRef(story, person)}`)] : null,
     [btn(c.back, `view:characters:${story.id}`)],
   ]);
@@ -518,14 +521,14 @@ function characterScreen(state: State, storyId: string | undefined, rawIndex: st
     const offset = result.text.indexOf(text, result.text.indexOf(after) + after.length);
     return text && offset >= 0 ? [{ type: 'pre' as const, offset, length: text.length }] : [];
   };
-  result.entities = [...pre(person.look, c.look), ...described ? pre(described, c.details) : [], ...clothes ? pre(clothes, clothesTitle) : []];
+  result.entities = [...described ? pre(described, c.details) : [], ...pre(person.look, c.look), ...clothes ? pre(clothes, clothesTitle) : []];
   return result;
 }
 
 // Waiting for a look or details the reader writes for the person `state.ui` names, with the text as it is now to copy
 // in one tap, where there is one. Without the wait this is the menu: otherwise the reader's next message would be taken
-// for a move in the story. A look the reader writes drops the details the model wrote (local/bot.ts), and the wait for
-// it says so where there are any.
+// for a move in the story. A look the reader writes keeps the details, which the portraits are still drawn from
+// (local/bot.ts), and the wait for it says so where there are any.
 function sheetInputScreen(state: State, input: 'look' | 'details', details: RenderDetails) {
   const t = texts(state.language);
   const c = t.characters;
@@ -535,9 +538,9 @@ function sheetInputScreen(state: State, input: 'look' | 'details', details: Rend
   if (!story || !person) return home(state, null, details.modelInfo, gpuFor(details), details.pictures === true);
   const look = input === 'look';
   const now = look ? person.look : person.details?.trim() ?? '';
-  const drops = look && !!person.details?.trim() && !person.detailsEdited;
+  const keeps = look && !!person.details?.trim();
   const result = payload([(look ? c.editTitle : c.detailsTitle)(line(person.name, 60), storyName(state, story)), '',
-    look ? c.editNote(LOOK_CHARS) : c.detailsNote(DETAILS_CHARS), ...drops ? ['', c.editDropsDetails] : [], ...now ? ['', c.nowText, now] : []],
+    look ? c.editNote(LOOK_CHARS) : c.detailsNote(DETAILS_CHARS), ...keeps ? ['', c.editKeepsDetails] : [], ...now ? ['', c.nowText, now] : []],
     [[btn(c.backToCard, `view:character:${personRef(story, person)}`)]]);
   const offset = now ? result.text.lastIndexOf(now) : -1;
   if (offset >= 0) result.entities = [{ type: 'pre', offset, length: now.length }];

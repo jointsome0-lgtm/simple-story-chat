@@ -147,6 +147,8 @@ const FRAME = {
     action: 'leans her back against the door' }],
 };
 const STYLE_LINE = 'Synthetic test style line, one sentence and no more.';
+// The look the model compresses from details a reader wrote (local/illustrate.ts `lookRequest`).
+const COMPRESSED = 'A tall woman in her fifties, olive skin, lean build, a long grey braid, a thin scar through the left eyebrow';
 const seedText = 'Маяк\n2026-08-02 20:00\nСмотритель встречает лодку. Кодовая фраза: СЕВЕР.';
 // Every word of these stories, looks, prompts and styles, and the card's address and checkpoint: a log row carries
 // counts and words of its own, and none of these.
@@ -157,11 +159,11 @@ type Row = { event: string; code?: string | number } & ErrorDetails;
 type Payload = { chat_id: number; message_id: number; message_ids?: number[]; text: string; rich_message: { markdown?: string; html?: string }; photo: Uint8Array;
   reply_parameters?: { message_id: number }; caption?: string; reply_markup?: { inline_keyboard: { text: string; callback_data: string }[][] } };
 type Sent = { method: string; payload: Payload };
-// Which of the three calls a request is: a scene streams and has no schema, the other two are told apart by the
+// Which of the four calls a request is: a scene streams and has no schema, the other three are told apart by the
 // field their schema asks for.
 const kindOf = (request: ModelRequest) => {
   const properties = (request.outputSchema as { properties?: Record<string, unknown> } | undefined)?.properties;
-  return !properties ? 'scene' : 'characters' in properties ? 'sheet' : 'frame';
+  return !properties ? 'scene' : 'characters' in properties ? 'sheet' : 'look' in properties ? 'look' : 'frame';
 };
 
 // llama-server as the bot's provider meets it (local/llama.ts): the count endpoint, and a stream whose usage repeats
@@ -222,8 +224,9 @@ type Options = {
   holdFinal?: number; holdPhotos?: number; scheduler?: boolean; compactAtTokens?: number; keepScenes?: number;
   // A workflow that ends in SaveImage, as the ones pinned in gpu/ do.
   saveImage?: boolean;
-  // A model that refuses the sheet with this code, and a Telegram that will not delete a message or send a photo's note.
-  sheetError?: string; refuseDelete?: boolean; refuseNote?: boolean;
+  // A model that refuses the sheet or the compression of a look with this code, and a Telegram that will not delete a
+  // message or send a photo's note.
+  sheetError?: string; lookError?: string; refuseDelete?: boolean; refuseNote?: boolean;
   // The picture model's tokenizer, for the note under a photo and for a text of a characters' card.
   promptTokens?: (prompt: string) => number; textTokens?: (text: string) => number;
   // What the model says a scene cost: its own numbers, not the size of these synthetic scenes.
@@ -277,6 +280,8 @@ async function fixture(t: TestContext, options: Options = {}) {
     const kind = kindOf(request);
     if (kind === 'sheet' && options.sheetError) throw Object.assign(new Error(options.sheetError), { code: options.sheetError });
     if (kind === 'sheet') return { text: JSON.stringify(options.sheetReply ?? SHEET), finishReason: 'stop' };
+    if (kind === 'look' && options.lookError) throw Object.assign(new Error(options.lookError), { code: options.lookError });
+    if (kind === 'look') return { text: JSON.stringify({ look: COMPRESSED }), finishReason: 'stop' };
     if (kind === 'frame') {
       const replies = options.frameReplies ?? [FRAME];
       return { text: JSON.stringify(replies[Math.min(frames++, replies.length - 1)]), finishReason: 'stop' };
@@ -569,7 +574,7 @@ test('a sample of a style is the last scene drawn once more: its frame and seed,
   // described again and drawn as it is now, and that frame serves the next sample.
   const storyId = f.store.read('1').active!.storyId;
   await f.bot.handle(f.click(`view:character:${elin(storyId)}`));
-  assert.match(f.sent.at(-1)!.payload.text, /\nТекст внешности: 8 токенов · 59 знаков\n/);
+  assert.match(f.sent.at(-1)!.payload.text, /\nТекст короткой внешности: 8 токенов · 59 знаков\n/);
   assert.match(f.sent.at(-1)!.payload.text, /\nТекст одежды: 5 токенов · 24 знака\n/);
   const drawn = f.comfy.submitted.length;
   await f.bot.handle(f.click(`look-edit:${elin(storyId)}`));
@@ -780,6 +785,43 @@ test('the rewrite of an old sheet keeps the looks the reader wrote and the portr
   assert.notEqual(personTag('Элин Вос'), personTag('Элин'));
 });
 
+// The details are the person's own text (docs/illustrations-plan.md#portrait-details), and what the reader writes there
+// stays whatever becomes of the look: a compression that fails keeps the look as it was, says so on the card and is
+// done before the next frame instead; a look of the reader's own and a sheet written anew leave the details be.
+test('the details a reader writes survive a failed compression, a look of their own and a sheet written anew', async t => {
+  const options: Options = { card: {}, lookError: 'provider_failed', sheetReply: { characters: [{ ...SHEET.characters[0], details: 'Details the model wrote.' }] } };
+  const f = await fixture(t, options);
+  await f.start();
+  await f.bot.idle();
+  const storyId = f.store.read('1').active!.storyId;
+  const person = () => f.store.read('1').stories[storyId].sheet![0];
+  const mine = 'Элин: высокая худая женщина лет пятидесяти, смуглая, длинная седая коса, тонкий шрам через левую бровь.';
+  await f.bot.handle(f.click(`details-edit:${elin(storyId)}`));
+  await f.bot.handle(f.message(mine));
+  await f.bot.idle();
+  const status = f.sent.find(one => one.payload.text === '⏳ Сжимаю подробную внешность в короткую…')!;
+  const card = f.sent.at(-1)!;
+  assert.deepEqual([card.method, card.payload.message_id, person()], ['editMessageText', idOf(f.sent, status),
+    { ...SHEET.characters[0], details: mine, detailsEdited: true, lookPending: true }], 'the card takes the place of the status line');
+  assert.match(card.payload.text, /\n⏳ Подробная внешность сохранена, но короткую из неё ещё не сжали/);
+  delete options.lookError;
+  await f.bot.handle(f.message('Осмотреться'));
+  await f.bot.idle();
+  assert.deepEqual([f.requests.slice(-3).map(kindOf), person()], [['scene', 'look', 'frame'],
+    { ...SHEET.characters[0], details: mine, detailsEdited: true, look: COMPRESSED }], 'compressed before the next frame');
+  assert.ok(promptOf(f.comfy.submitted.at(-1)!).includes(`${COMPRESSED}, wearing a grey wool coat`));
+  await f.bot.handle(f.click(`look-edit:${elin(storyId)}`));
+  await f.bot.handle(f.message('A tall woman with a long braid'));
+  f.store.mutate('1', state => { delete state.stories[storyId].sheet![0].outfit; });
+  await f.bot.handle(f.message('Подождать'));
+  await f.bot.idle();
+  assert.deepEqual([f.requests.slice(-3).map(kindOf), person()], [['scene', 'sheet', 'frame'],
+    { ...SHEET.characters[0], details: mine, detailsEdited: true, look: 'A tall woman with a long braid', edited: true }], 'a sheet written anew');
+  assert.deepEqual(f.rows.filter(row => row.event.endsWith('look_compressed')).map(row => [row.event, row.code, row.outcome, row.detailsCharacters]),
+    [['look_compressed', 'provider_failed', 'failed', [...mine].length], ['picture_look_compressed', undefined, 'ready', [...mine].length]]);
+  assert.doesNotMatch(JSON.stringify(f.rows), PRIVATE);
+});
+
 // The seed dressed a person once; the story changed their clothes later, and a sheet that kept clothes never let the
 // pictures follow (2026-09-24). Each frame starts from what the picture before it in its own line of the story showed.
 test('clothes are carried down one line of the story and never into another', async t => {
@@ -918,11 +960,16 @@ test('keeping a portrait writes the very one shown into a private file beside th
   assert.equal(shown(), STALE);
   assert.deepEqual([await held(second.picture), await held(third.picture)], [false, false], 'a kept portrait is let go');
 
-  // Once the look changes, a portrait shown before cannot be kept, and the kept one is marked as of the earlier look.
+  // A look the reader writes changes the pictures of the scenes alone. Once the details change, a portrait shown before
+  // cannot be kept, and the kept one is marked as of the earlier look.
   const fourth = await draw();
   const drawings = f.comfy.submitted.length;
   await f.bot.handle(f.click(`look-edit:${elin(storyId)}`));
   await f.bot.handle(f.message('A tall woman with a long braid'));
+  assert.match(shown(), /\n\n🖼 Портрет сохранён: лицо и фигура по подробной внешности\.$/);
+  await f.bot.handle(f.click(`details-edit:${elin(storyId)}`));
+  await f.bot.handle(f.message('A tall woman in her fifties, olive skin, a long grey braid, a thin scar through the left eyebrow'));
+  await f.bot.idle();
   assert.match(shown(), /\n\n🖼 Сохранённый портрет нарисован по прежней внешности\./);
   await f.bot.handle(f.click(fourth.keep));
   assert.equal(shown(), STALE);
@@ -945,7 +992,7 @@ test('keeping a portrait writes the very one shown into a private file beside th
   await f.bot.handle(f.click(moved.keep));
   assert.equal(shown(), KEPT);
   const [one, other] = f.store.read('1').stories[storyId].sheet!;
-  assert.deepEqual([one.name, one.portrait, other.name, other.portrait!.look], ['Тарек', undefined, 'Элин', other.look]);
+  assert.deepEqual([one.name, one.portrait, other.name, other.portrait!.look], ['Тарек', undefined, 'Элин', other.details]);
   assert.deepEqual([await held(fourth.picture), await held(moved.picture)], [false, false], 'the third one kept, and the one it replaced, are let go');
   assert.doesNotMatch(JSON.stringify(f.rows), PRIVATE);
 });

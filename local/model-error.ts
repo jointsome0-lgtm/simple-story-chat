@@ -21,7 +21,8 @@ const IMAGE_ROLES = ['primary', 'alternate'] as const;
 export const CLI_RESULTS = ['success', 'error_max_turns', 'error_during_execution', 'error_max_budget_usd',
   'error_max_structured_output_retries', 'no_init', 'missing', 'other'] as const;
 // How one scene's picture ended (local/picture.ts): sent, failed with a code, ended by the reader's next message,
-// or not attempted at all because the card was paused. Four words; the scene and the picture stay out.
+// or not attempted at all because the card was paused. Four words; the scene and the picture stay out. A look
+// compressed from the reader's details ends the same ways: written, failed, stopped, or given up with a code.
 const OUTCOMES = ['ready', 'failed', 'cancelled', 'skipped'] as const;
 // Which style a picture was drawn in (local/picture-style.ts): the bot's own line, a preset, or one of the reader's
 // own, whose words and names stay out of the row as the prompt does.
@@ -78,7 +79,10 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   'photoMs', 'photoBytes',
   // Pictures whose scenes were deleted (local/bot.ts, lib/library.ts `forgetLostPictures`): those taken out of the
   // chat, and those Telegram would not delete or was no longer asked to after a failure (local/telegram.ts `removeAll`).
-  'picturesRemoved', 'picturesNotRemoved'] as const;
+  'picturesRemoved', 'picturesNotRemoved',
+  // A look compressed from details the reader wrote (local/picture.ts `compress`): the characters of those details, and
+  // the words of the look, which the sheet's rule asks 15-25 of.
+  'detailsCharacters', 'lookWords'] as const;
 
 export type ErrorDetails = {
   httpStatus?: number; phase?: typeof PHASES[number]; operation?: typeof OPERATIONS[number];
