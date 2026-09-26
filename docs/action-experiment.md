@@ -113,7 +113,12 @@ one had the first eighteen.
   targets need, the clean scenes now hold one in four of them, two in four (`guard`, `tango`, `armwrestle`,
   `bandage`), three in four (`giants`, `twister`, `crossing`, `fence`) and four in nine. A scene of one person has no
   contact between people, so its checklist counts a touch of one's own body or of a thing ([one](#one)).
-- Five sharp scenes, one per theme: a bathhouse, a harem, captivity, an interrogation, a battle with wounds.
+- Five sharp scenes, one per theme, with exactly the planned number of characters, all active in the target moment.
+  The counts are fixed before the text card: a bathhouse (`sharp-1`, one), a harem (`sharp-2`, four), captivity
+  (`sharp-3`, three), an interrogation (`sharp-4`, two), and a battle with wounds (`sharp-5`, four). The bathhouse
+  gives a natural moment of washing one's own body or touching a bath object; an interrogation needs two people;
+  captivity can put three in one physical action; the harem and the battle can put four in one action. Thus the sharp
+  set itself covers one, two, three and four.
 
 A story is a seed and one reader's action, in Russian, as the bot's stories are. The seed names the place, the time
 and each person with a name and a look. The narrator writes the opening scene from the seed and the action scene from
@@ -125,29 +130,44 @@ should hold and the participants it needs. No moment has more than four particip
 people, the bot's own limit for a frame ([four](#four)). The scenes are not stage 1's: the reader's action says what
 the moment is, and the scene is whatever the heretic writes.
 
-Each sharp story is written by the heretic on the same card, in one call, before its flow starts. Its instruction is
-the only sharp text a Claude session writes, and it names the theme and nothing more. The harness pins this wording:
+Round one reached the target in 5 of 18 action scenes: 1 of 13 clean scenes (`gulliver`) and 4 of 5 sharp scenes.
+No sharp scene went unjudged. Those texts, checklists and answers remain round one's record. In round two the five
+sharp themes and their planned counts are pinned before a card; no session chooses a count after seeing a story.
+
+Each sharp story is written by the heretic on the same card, in one call, before its flow starts. A Claude or GPT
+session writes no sharp story: only this pinned instruction and the theme words. The harness fills `ТЕМА`, `СОСТАВ`
+and `МОМЕНТ` from the theme and its planned count:
 
 > Придумай завязку для интерактивной истории для взрослых на тему «ТЕМА». Все персонажи взрослые, им больше двадцати
 > лет. Никакого сексуального насилия и ничего сексуального без согласия. Откровенность и жёсткость допустимы, если
-> тема к ним ведёт. Нужны от двух до четырёх персонажей с именами и заметно разной внешностью: пол, возраст словом,
-> телосложение, волосы, приметы; место и время. Завязка должна подвести к одному моменту, где несколько персонажей
-> тесно касаются друг друга: держат, несут, обнимают, моют, связывают или перевязывают. Ответь в JSON: seed,
-> завязка в 6-12 строк; action, действие читателя, которое ведёт к этому моменту, одна-две фразы.
+> тема к ним ведёт. Всего в истории ровно СОСТАВ: пол, возраст словом, телосложение, волосы, приметы каждого;
+> место и время. Названные существа входят в это число, других действующих персонажей нет. Завязка должна подвести к
+> одному моменту, где МОМЕНТ. Ответь в JSON: seed, завязка в 6-12 строк; action, действие читателя, которое ведёт к
+> этому моменту, одна-две фразы.
 
-A sharp story's target is that instruction's own: one moment where several of its people touch closely. The sharp
-stories are [sealed](#sealed).
+`СОСТАВ` is `один персонаж с именем и заметной внешностью`, or `два персонажа`, `три персонажа` or `четыре
+персонажа` with `с именами и заметно разной внешностью`. For one, `МОМЕНТ` is
+`единственный персонаж касается собственного тела или предмета сцены`. For two to four, it is `КТО тесно касаются
+друг друга: держат, несут, обнимают, моют, связывают или перевязывают`, where `КТО` is `оба персонажа`,
+`все три персонажа` or `все четыре персонажа`. The checklist target repeats the corresponding
+moment: `Один момент, где МОМЕНТ.` It also gives the judge `count: N`; `participants` is `yes` only
+when exactly N people take part in that physical action. The one-person target uses the checklist's existing self or
+object relation; a mirror is also scored if the scene shows one ([judging](#judging)). The sharp stories are [sealed](#sealed).
 
 <a id='own'></a>
 
 **The owner's own sharp scenes, since 2026-09-26.** Beside the five, the owner may write up to ten sharp scenes into
 `illustrations/action/sealed/own.txt`, which git ignores and the owner's deny covers, so no Claude session reads it.
-An entry opens with `тема:` and a theme on the same line, and the heretic writes its seed from the pinned instruction,
-as it does the five. Or it opens with `сцена:` and a title, then the seed's lines, then `действие:` and the reader's
-action, and the owner's own words are the story. A line that starts with `#` is a note, and a blank line is skipped.
-The rules are the instruction's: two to four named people, every one an adult over twenty, nothing sexual without
-consent and no sexual violence. The entries follow the five as `sharp-6` on, in the file's order, with their start
-time and their target, and are sealed as they are. `npm run image:action -- own` counts the themes and the scenes; a
+An entry opens with `тема:` and a theme on the same line, then `участников: N` on the next nonblank line; the heretic
+writes its seed from the pinned instruction, as it does the five. Or it opens with `сцена:` and a title, then the same
+`участников: N` line, the seed's lines, and `действие:` and the reader's action; the owner's own words are the story.
+N is 1, 2, 3 or 4: exactly N characters in the whole story, named creatures included, all active in the target
+moment, and no other acting characters. A line that starts with `#` is a note, and a blank line is skipped.
+The rules are the instruction's: every character an adult over twenty, nothing sexual without consent and no
+sexual violence.
+For one participant the moment touches their own body or a scene object; for several, all N take part in the contact.
+The entries follow the five as `sharp-6` on, in the file's order, with their start time and their count-specific
+target, and are sealed as they are. `npm run image:action -- own` counts the themes and the scenes; a
 malformed file is refused with a line number and nothing that is on it. The first text run pins the file in
 `sealed/own.pin`, and every command after it refuses a file changed since, so the scenes are written before the text
 card. Each costs about three and a half minutes of the picture card at each seed, as round one's sharp scenes did at
@@ -168,8 +188,9 @@ clean stories with more, four lost the people their seeds name last: the beach �
 lifters Митя and Гоша, so Фёдор now jumps unlifted, the monkeys Бубу, and Gulliver both guards. The rescue lost its
 last two carriers, Вадим and Ильдар, so two carriers hold the stretcher, and the jellyfish the twins Пим and Пом,
 since one of two twins is no twin. The variant asks for four participants at most, as the bot's frame does, and the
-sharp instruction for two to four named people. The first round's set and protocol are those of commit 7e7de76. The
-cut is the owner's choice, not a finding of the first round: at its seed 7, C lost to A+ on looks by 3 points in the
+sharp instruction for exactly the planned number of characters, including named creatures, with no other acting
+characters and all active in the target moment of each sharp story ([the set](#the-set)). The first round's set and
+protocol are those of commit 7e7de76. The cut is the owner's choice, not a finding of the first round: at its seed 7, C lost to A+ on looks by 3 points in the
 five clean scenes that bound one to three portraits, by 44 in the four that bound four, and by 8 in the four that
 bound six.
 

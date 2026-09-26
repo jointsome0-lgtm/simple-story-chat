@@ -288,13 +288,14 @@ export async function dryRun(out: string, options: { tokenizers?: string } = {})
     // must name a line and nothing on it.
     const ownFile = join(root, 'sealed', 'own.txt'), broken = join(root, 'sealed', 'broken');
     mkdirSync(join(broken, 'sealed'), { recursive: true, mode: 0o700 });
-    writeFileSync(ownFile, ['# Проверка: одна тема и одна сцена целиком.', `тема: ночной рынок ${word}`, '', `сцена: Переправа ${word}`,
+    writeFileSync(ownFile, ['# Проверка: одна тема и одна сцена целиком.', `тема: ночной рынок ${word}`, 'участников: 1', '',
+      `сцена: Переправа ${word}`, 'участников: 2',
       'Спокойная история для взрослых. Все персонажи взрослые, им больше двадцати лет.',
       `Брод через холодную реку, поздняя осень, сумерки; на том берегу горит костёр ${word}.`,
       'Ярина — женщина лет тридцати, высокая и худая, короткие чёрные волосы, родинка над губой. Зелёный плащ.',
       'Тарас — мужчина лет сорока, плотный и широкоплечий, рыжая борода, лысина. Кожаная куртка и высокие сапоги.',
       'Ярина подвернула ногу на камнях посреди брода.', `действие: Тарас подхватывает Ярину на руки ${word}`, 'и несёт её через брод к костру.'].join('\n'));
-    writeFileSync(join(broken, 'sealed', 'own.txt'), `сцена: ${word}\n${word} и никакого действия`);
+    writeFileSync(join(broken, 'sealed', 'own.txt'), `сцена: ${word}\nучастников: 2\n${word} и никакого действия`);
     await refused('an owner\'s scene without «действие:»', () => useOwnScenes(broken));
     const own = useOwnScenes(root);
     say(`   the owner's file: ${own.themes} theme, ${own.scenes} scene, pinned ${own.pinned}`);
@@ -320,7 +321,7 @@ export async function dryRun(out: string, options: { tokenizers?: string } = {})
     expect(asked('sharp-6', 'seed') === 1 && asked('sharp-7', 'seed') === 0 && asked('sharp-7', 'scene') === 2,
       'the heretic writes the owner\'s theme, and the owner\'s scene starts from its own seed');
     const ownText = readFileSync(ownFile);
-    writeFileSync(ownFile, `${ownText}\nтема: ещё одна`);
+    writeFileSync(ownFile, `${ownText}\nтема: ещё одна\nучастников: 3`);
     await refused('a command after the owner\'s file changed', () => useOwnScenes(root));
     writeFileSync(ownFile, ownText);
     expect(useOwnScenes(root).pinned, 'the owner\'s file pinned by the first text run');
