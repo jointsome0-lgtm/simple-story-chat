@@ -25,6 +25,9 @@ L's picture back and took nothing from the portraits; [the T probe](#t-probe) tr
 its own, from round one's own pictures, and first on the same card [a clothing test](#t-probe-suit) and
 [a language test](#t-probe-lang) of the portraits.
 
+Round one's results, and what round two changed because of them, are in
+[action-measurements.md](knowledge/action-measurements.md#round-one-2026-09-26).
+
 <a id='stage-1'></a>
 
 ## Stage 1: the frames without a card
