@@ -299,7 +299,10 @@ four looks named no skin tone. On 2026-09-26 the owner changed the bot's sheet
 to 80 words that have the age words of children too, and compresses the look from them. Round two's fronts are drawn
 from the details as the bot's portraits are (`portraitText`), and every frame keeps the look. The judges still read
 each person's look as their line of the sheet. The new instruction and schema change the pins, and whether the
-daughters now come out as children is the judges' check of the fronts to say.
+daughters now come out as children is the judges' check of the fronts to say. The same day the owner changed the
+style line that ends every frame (`STYLE` in `local/illustrate.ts`) from adult faces to faces true to each person's
+age, so that the child a look names is not made an adult at the prompt's end. Round two's L, C and T take the new
+line, and it changes their pins too; the T probe keeps round one's ([the T probe](#t-probe)).
 
 <a id='assembly'></a>
 
@@ -1096,7 +1099,9 @@ it holds the lock a second longer, and a start while the lock is held does nothi
 ## The T probe
 
 Round one's T gave L's picture back with its edges and colours pushed, and took no face, hair or build from the
-portraits. Round two draws T as it is: `T_OPENING`, `tPrompt` and the action graph do not change.
+portraits. Round two draws T as it is: `T_OPENING`, `tPrompt` and the action graph do not change. The probe keeps
+round one's style line, with its adult faces, since it reads T back from round one's prompts and sets its variants
+beside round one's pictures ([the sheet](#the-sheet)).
 [image-t-probe.ts](../local/image-t-probe.ts) draws nine variants of T from round one's own pictures and portraits of
 six clean scenes at seed 7, on one card, with no text card and no new portrait, and writes a page from which the
 owner picks: five are one change against T each, `mask` and `mask-each` redraw only the bound people's boxes on L, and
