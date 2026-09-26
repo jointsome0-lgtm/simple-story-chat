@@ -3,9 +3,10 @@
 // commands, in the runbook's order (docs/action-experiment.md#runbook), all in illustrations/action, whose sealed/ the
 // owner's deny covers; only `dry-run` takes another `--dir`:
 //   texts       on the text card, through simple-serving's gateway: `--marker` first, the marker check of the sealed
-//               path, then the 18 stories. `--smoke-record` names the record of the gateway's smoke, which route A
-//               starts on; `--model gpu:<label>` takes the llama.cpp fallback from .env.gpu instead. `--again id,...`
-//               asks once more the sheets that came back empty (docs/action-experiment.md#again)
+//               path, then the 18 stories and the owner's own. `--smoke-record` names the record of the gateway's
+//               smoke, which route A starts on; `--model gpu:<label>` takes the llama.cpp fallback from .env.gpu
+//               instead. `--again id,...` asks once more the sheets that came back empty (docs/action-experiment.md#again)
+//   own         how many themes and scenes the owner's sealed/own.txt holds, before the text card (#own)
 //   prompts     the manifests, the six arms' prompts, the fronts and the views
 //   checklists  the 18 checklists, from the texts alone, before the picture card; it says whether the card may come
 //   draw        on the picture card: `--smoke` first; `portraits` then draws the rest of the fronts and views, and
@@ -25,7 +26,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
-import { MARKER_STORY, SHARP_THEMES } from '../examples/action-set.ts';
+import { MARKER_STORY } from '../examples/action-set.ts';
 import { apiGraph, comfyUrl, textEncoderOf } from './image-batch.ts';
 import { writeCardRecord } from './image-identity.ts';
 import { safeErrorDetails } from './model-error.ts';
@@ -33,8 +34,8 @@ import { loadTokenizers, qwenPromptTokens } from './tokenizer.ts';
 import type { QwenTokenizer } from './tokenizer.ts';
 import { startFakeComfy } from './fake-comfy.ts';
 import { Refusal, capture, madeUpName, markerForms, searchBoundary, searchTree } from './action-boundary.ts';
-import { ARMS, SERVING, SMOKE_PROBES, TEXT_CODES, gpuModel, markerCheck, readClientKey, readGpuEnv, readJson, requestCounts, runTexts,
-  servingModel, storyDir, textStories } from './action-text.ts';
+import { ARMS, SERVING, SMOKE_PROBES, TEXT_CODES, gpuModel, isSharp, markerCheck, readClientKey, readGpuEnv, readJson, requestCounts,
+  runTexts, servingModel, storyDir, textStories, useOwnScenes } from './action-text.ts';
 import type { Fetch, StoryText, TextModel, TextsRecord } from './action-text.ts';
 import { planAll, readPlan, textsHash } from './action-prompts.ts';
 import type { PromptsRecord, Tokens } from './action-prompts.ts';
@@ -280,7 +281,24 @@ export async function dryRun(out: string, options: { tokenizers?: string } = {})
     writeFileSync(join(dry, 'dev.json'), JSON.stringify({ service: { alias: SERVING.model, context_tokens: SERVING.contextTokens,
       keys: { [keys.client_key]: { label: 'action', classes: ['internal'], default: 'internal', scopes: true, control: false } } } }), { mode: 0o600 });
     writeFileSync(smokeRecord, SMOKE_PROBES.map(probe => JSON.stringify({ probe, ok: true, ...(probe === 'state' ? { versions: { gateway: '0.1.0' } } : {}) })).join('\n') + '\n');
-    const gateway = fakeGateway({ key: keys.client_key, sharp: [...SHARP_THEMES.map(theme => theme.id), MARKER_STORY.id], marker: word, faults: DRY_FAULTS });
+    // The owner's file (#own): a theme and a scene of two people, the word in each part, so that the boundary test below
+    // has their title, theme, seed and action to find; and a scene with no action in a file of its own, whose refusal
+    // must name a line and nothing on it.
+    const ownFile = join(root, 'sealed', 'own.txt'), broken = join(root, 'sealed', 'broken');
+    mkdirSync(join(broken, 'sealed'), { recursive: true, mode: 0o700 });
+    writeFileSync(ownFile, ['# Проверка: одна тема и одна сцена целиком.', `тема: ночной рынок ${word}`, '', `сцена: Переправа ${word}`,
+      'Спокойная история для взрослых. Все персонажи взрослые, им больше двадцати лет.',
+      `Брод через холодную реку, поздняя осень, сумерки; на том берегу горит костёр ${word}.`,
+      'Ярина — женщина лет тридцати, высокая и худая, короткие чёрные волосы, родинка над губой. Зелёный плащ.',
+      'Тарас — мужчина лет сорока, плотный и широкоплечий, рыжая борода, лысина. Кожаная куртка и высокие сапоги.',
+      'Ярина подвернула ногу на камнях посреди брода.', `действие: Тарас подхватывает Ярину на руки ${word}`, 'и несёт её через брод к костру.'].join('\n'));
+    writeFileSync(join(broken, 'sealed', 'own.txt'), `сцена: ${word}\n${word} и никакого действия`);
+    await refused('an owner\'s scene without «действие:»', () => useOwnScenes(broken));
+    const own = useOwnScenes(root);
+    say(`   the owner's file: ${own.themes} theme, ${own.scenes} scene, pinned ${own.pinned}`);
+    expect(own.themes === 1 && own.scenes === 1 && !own.pinned, 'the owner\'s file reads as a theme and a scene');
+    const gateway = fakeGateway({ key: keys.client_key, sharp: [...textStories().filter(story => isSharp(story.id)).map(story => story.id), MARKER_STORY.id],
+      marker: word, faults: DRY_FAULTS });
     const texts = (extra: TextsOptions = {}) => textsCommand(root, { smokeRecord, keyFile, fetch: gateway.fetch, ...extra });
 
     const early = await texts();
@@ -295,6 +313,15 @@ export async function dryRun(out: string, options: { tokenizers?: string } = {})
     await texts();
     say(`   a rerun: ${gateway.calls.length - calls} calls`);
     expect(gateway.calls.length === calls, 'a finished text run asks nothing again');
+    const asked = (id: string, kind: string) => gateway.calls.filter(call => call.story === id && call.kind === kind).length;
+    say(`   the owner's theme: ${asked('sharp-6', 'seed')} seed asked; the owner's scene: ${asked('sharp-7', 'seed')} seeds asked, ${asked('sharp-7', 'scene')} scenes`);
+    expect(asked('sharp-6', 'seed') === 1 && asked('sharp-7', 'seed') === 0 && asked('sharp-7', 'scene') === 2,
+      'the heretic writes the owner\'s theme, and the owner\'s scene starts from its own seed');
+    const ownText = readFileSync(ownFile);
+    writeFileSync(ownFile, `${ownText}\nтема: ещё одна`);
+    await refused('a command after the owner\'s file changed', () => useOwnScenes(root));
+    writeFileSync(ownFile, ownText);
+    expect(useOwnScenes(root).pinned, 'the owner\'s file pinned by the first text run');
     const kept = readFileSync(join(root, 'texts.json'));
     await refused('the texts under another address', () => texts({ baseUrl: 'http://127.0.0.1:8090' }));
     expect(readFileSync(join(root, 'texts.json')).equals(kept), 'texts.json unchanged by the refusal');
@@ -444,6 +471,8 @@ async function main(args: string[]) {
     return;
   }
   const root = liveRoot(values.dir);
+  const own = useOwnScenes(root);
+  if (command === 'own') return print({ event: 'own', ...own });
   const parallel = Number(values.parallel);
   if (!Number.isInteger(parallel) || parallel < 1 || parallel > 8) throw new Refusal('--parallel takes 1 to 8 sessions at a time');
   const kinds = values.kind?.split(',').map(kind => kind.trim());
@@ -493,7 +522,7 @@ async function main(args: string[]) {
     const until = values.until === undefined ? undefined : Number(values.until) * 1000;
     if (until !== undefined && !(Number.isInteger(until) && until > 0)) throw new Refusal('Use: gallery [--until <epoch seconds, the drawing stages\' own>]');
     print({ event: 'gallery', ...writeGalleries(root, { until }) });
-  } else throw new Refusal('Use: image-action.ts texts|prompts|checklists|draw|portraits|bundles|judge|collect|report|gallery|dry-run (docs/action-experiment.md#runbook)');
+  } else throw new Refusal('Use: image-action.ts texts|own|prompts|checklists|draw|portraits|bundles|judge|collect|report|gallery|dry-run (docs/action-experiment.md#runbook)');
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

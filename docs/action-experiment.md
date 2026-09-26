@@ -84,7 +84,8 @@ further, so the mechanisms inside a difference stay open.
 
 ## The set
 
-Eighteen stories: the 13 clean stories of stage 1 and five sharp ones that Gemma writes itself.
+Eighteen stories: the 13 clean stories of stage 1 and five sharp ones that Gemma writes itself. The owner may add up
+to ten sharp scenes of their own ([own](#own)).
 
 - The owner's five: a warrior flees a rockfall with his wife on his back and his daughters in his arms (`flight`);
   three people hold a demon by different parts of his body (`demon`); women close tightly round a young man on a
@@ -117,6 +118,21 @@ the only sharp text a Claude session writes, and it names the theme and nothing 
 
 A sharp story's target is that instruction's own: one moment where several of its people touch closely. The sharp
 stories are [sealed](#sealed).
+
+<a id='own'></a>
+
+**The owner's own sharp scenes, since 2026-09-26.** Beside the five, the owner may write up to ten sharp scenes into
+`illustrations/action/sealed/own.txt`, which git ignores and the owner's deny covers, so no Claude session reads it.
+An entry opens with `тема:` and a theme on the same line, and the heretic writes its seed from the pinned instruction,
+as it does the five. Or it opens with `сцена:` and a title, then the seed's lines, then `действие:` and the reader's
+action, and the owner's own words are the story. A line that starts with `#` is a note, and a blank line is skipped.
+The rules are the instruction's: two to four named people, every one an adult over twenty, nothing sexual without
+consent and no sexual violence. The entries follow the five as `sharp-6` on, in the file's order, with their start
+time and their target, and are sealed as they are. `npm run image:action -- own` counts the themes and the scenes; a
+malformed file is refused with a line number and nothing that is on it. The first text run pins the file in
+`sealed/own.pin`, and every command after it refuses a file changed since, so the scenes are written before the text
+card. Each costs about three and a half minutes of the picture card at each seed, as round one's sharp scenes did at
+seed 7, and four judge sessions: the checklist, the text, the pictures and the identity.
 
 Whether a scene reached its target is the first thing the judges answer, before any picture exists: whether the
 contact happens, whether each participant it needs is in it, and whether the moment can be told apart. A scene that
@@ -558,7 +574,7 @@ Where every piece of a sharp story lives, and what leaves it:
   events, its stderr and its report; the answers; the owner's pages.
 - `codex exec` runs with `--ephemeral`, so it keeps no session file of its own, in a working directory inside the
   sealed bundle and with `TMPDIR` in `sealed/tmp`.
-- For a sharp story the harness prints its id, `sharp-1` to `sharp-5`, codes from a fixed list, counts and times. An
+- For a sharp story the harness prints its id, `sharp-1` on, codes from a fixed list, counts and times. An
   error prints its code and the fields that pass `safeErrorDetails`, never a message or a body. After each picture the
   card's record of the job is deleted, as `local/image-batch.ts` does. The file the graph saved stays on the card,
   with its prompt in its text chunks, until the card is destroyed and read back as gone; nothing reads it there but
@@ -568,14 +584,14 @@ Where every piece of a sharp story lives, and what leaves it:
   A deny covers the file tools and not a subprocess, so no Claude session runs a command that reads there: the harness
   is the only reader.
 
-**The boundary test**, before any card: the dry run puts a made-up word into a sharp seed, into the fake model's
-replies, into the body of a fake provider error, into the metadata of the fake ComfyUI's pictures, into a fake judge's
-prose and into a malformed answers block. Code then searches every file the run wrote outside `sealed/`, the temporary
-directory, and the harness's own stdout and stderr, for that word. One hit fails the test. What `codex exec` keeps in
-its own files is not checked: the owner decided on 2026-09-25 that the judges read and keep what they are given
-without limits, and no Claude session opens `~/.codex`. On the text card, before the five sharp seeds are asked for,
-one synthetic story marked sealed, with a made-up name in its seed, goes through the sealed path, and the same search
-runs; a hit stops the sharp stories.
+**The boundary test**, before any card: the dry run puts a made-up word into a sharp seed, into a theme and a scene of
+the owner's file and a malformed entry, into the fake model's replies, into the body of a fake provider error, into
+the metadata of the fake ComfyUI's pictures, into a fake judge's prose and into a malformed answers block. Code then
+searches every file the run wrote outside `sealed/`, the temporary directory, and the harness's own stdout and stderr,
+for that word. One hit fails the test. What `codex exec` keeps in its own files is not checked: the owner decided on
+2026-09-25 that the judges read and keep what they are given without limits, and no Claude session opens `~/.codex`.
+On the text card, before the five sharp seeds are asked for, one synthetic story marked sealed, with a made-up name in
+its seed, goes through the sealed path, and the same search runs; a hit stops the sharp stories.
 
 ## The rentals
 
@@ -635,6 +651,7 @@ to the denies. The runbook, in its order:
 grep -cF 'illustrations/action-N/sealed' .claude/settings.json    # 1 or more, or it stays where it is
 mv illustrations/action illustrations/action-N
 # Before any card: all of it against fakes, then the texts against simple-serving's dev launcher.
+npm run image:action -- own    # the owner's scenes (#own) as counts; final once the texts run
 dry=$(mktemp -d)
 npm run image:action -- dry-run --dir "$dry"    # eleven steps, then "the dry run went as expected"
 # In simple-serving's checkout, in a terminal of its own. dev.json holds the dry run's made-up client key.

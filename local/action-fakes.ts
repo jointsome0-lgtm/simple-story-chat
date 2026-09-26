@@ -5,8 +5,8 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { ACTION_STORIES, MARKER_STORY, SHARP_THEMES } from '../examples/action-set.ts';
-import { FACINGS, isSharp } from './action-text.ts';
+import { ACTION_STORIES, MARKER_STORY } from '../examples/action-set.ts';
+import { FACINGS, isSharp, textStories } from './action-text.ts';
 import type { Fetch, Schema } from './action-text.ts';
 import type { ChecklistInput, Exec, RawChecklist } from './action-judge.ts';
 
@@ -34,11 +34,12 @@ export const castOf = (text: string) => [...text.matchAll(/^([А-ЯЁA-Z][^—\n
 
 export type FakeStory = { id: string; title: string; theme?: string; cast?: string[] };
 // The set as the fake tells its stories apart: a clean story by its title, with the cast the set gives it; a sharp one
-// by its theme, with the four people the fake's own seed names; the marker check's by its title, its cast read from
-// the seed, since its first name is drawn when the check runs.
+// by its theme, with the four people the fake's own seed names; an owner's scene with a seed of its own, and the
+// marker check's, by the title, the cast read from the seed.
 export function fakeStories(): FakeStory[] {
   return [...ACTION_STORIES.map(story => ({ id: story.id, title: story.title, cast: story.cast })),
-    ...SHARP_THEMES.map(theme => ({ id: theme.id, title: theme.theme, theme: theme.theme, cast: SHARP_CAST })),
+    ...textStories().filter(story => isSharp(story.id)).map(story => ({ id: story.id, title: story.title,
+      ...(story.theme ? { theme: story.theme, cast: SHARP_CAST } : {}) })),
     { id: MARKER_STORY.id, title: MARKER_STORY.title }];
 }
 
@@ -46,8 +47,9 @@ type Body = { model: string; messages: { role: string; content: string }[]; max_
 export type FakeGateway = { fetch: Fetch; calls: { story: string; kind: CallKind; fault?: Fault }[]; classes: Record<string, number> };
 
 // A gateway of contract 2 as local/serving.ts reads it: the state, the models, the count and the stream with its usage,
-// every request with the key. `stories` names each story by its title, which every message after its seed holds, or,
-// for a sharp seed, its theme; `sharp` are the ids whose replies carry `marker`.
+// every request with the key. `stories` names each story by its seed's first line, `СИД: <title>`, which every call
+// after its seed holds, or, for a sharp seed, by its theme; `sharp` are the ids whose replies carry `marker`. The
+// title alone is not enough: the narrator's instruction holds «накопленную», and so the third theme, «плен».
 export function fakeGateway({ key, model = 'gemma-4-31b-heretic-nvfp4', stories = fakeStories(), sharp, marker, faults = {} }: {
   key: string; model?: string; stories?: FakeStory[]; sharp: string[]; marker: string; faults?: Faults;
 }): FakeGateway {
@@ -70,7 +72,7 @@ export function fakeGateway({ key, model = 'gemma-4-31b-heretic-nvfp4', stories 
     const last = body.messages.at(-1)?.content ?? '';
     const kind = kindOf(last);
     const everything = body.messages.map(message => message.content).join('\n');
-    const story = stories.find(one => kind === 'seed' ? one.theme && last.includes(`«${one.theme}»`) : everything.includes(one.title));
+    const story = stories.find(one => kind === 'seed' ? one.theme && last.includes(`«${one.theme}»`) : everything.includes(`СИД: ${one.title}\n`));
     const id = story?.id ?? 'unknown';
     const attempt = (seen.get(`${id}:${kind}`) ?? 0) + 1;
     seen.set(`${id}:${kind}`, attempt);

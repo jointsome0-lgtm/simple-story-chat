@@ -1,11 +1,11 @@
-// The text run of the action measurement (docs/action-experiment.md#text-run): for each of the 18 stories, the
-// sharp seed where there is one, the opening and the action scene by the bot's `generateScene`, the sheet, the bot's
-// frame and the variant frame, every call the bot's own through one provider as class `internal`. Each reply is
-// decided by the rules the doc fixes, every attempt is recorded as counts and times, and nothing is asked again by
-// choice. A story's words stay in its own directory, `sealed/<id>/` for a sharp one; what this file prints and writes
-// at the run's level is ids, codes, counts and times.
+// The text run of the action measurement (docs/action-experiment.md#text-run): for each of the 18 stories and the
+// owner's own sharp scenes (#own), the sharp seed where there is one, the opening and the action scene by the bot's
+// `generateScene`, the sheet, the bot's frame and the variant frame, every call the bot's own through one provider as
+// class `internal`. Each reply is decided by the rules the doc fixes, every attempt is recorded as counts and times,
+// and nothing is asked again by choice. A story's words stay in its own directory, `sealed/<id>/` for a sharp one;
+// what this file prints and writes at the run's level is ids, codes, counts and times.
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseEnv } from 'node:util';
@@ -134,7 +134,62 @@ export const rolesUnique = (frame: { people?: { role?: unknown }[] }) => {
 export type TextStory = { id: string; title: string; startTime: string; sealed: boolean; theme?: string; seed?: string; action?: string };
 export function textStories(): TextStory[] {
   return [...ACTION_STORIES.map(story => ({ id: story.id, title: story.title, startTime: story.startTime, sealed: false, seed: story.seed, action: story.action })),
-    ...SHARP_THEMES.map(theme => ({ id: theme.id, title: theme.theme, startTime: SHARP_START_TIME, sealed: true, theme: theme.theme }))];
+    ...SHARP_THEMES.map(theme => ({ id: theme.id, title: theme.theme, startTime: SHARP_START_TIME, sealed: true, theme: theme.theme })),
+    ...own.stories];
+}
+
+// The owner's own sharp scenes (docs/action-experiment.md#own): `sealed/own.txt` of the run, which the owner writes
+// and no session reads. An entry is `тема:` and a theme, which the heretic writes a seed from as it does the five, or
+// `сцена:` and a title, the seed's lines, and `действие:` and the reader's action. They follow the five as `sharp-6`
+// on, in the file's order, at most `OWN_LIMIT`, each a few minutes of the picture card at each seed. The first text
+// run pins them in `sealed/own.pin`, and every command after it refuses a file changed since. What the harness says of
+// them is counts and line numbers.
+export const OWN_LIMIT = 10;
+const OWN_BYTES = 65536;
+const OWN_LENGTHS = { title: 200, seed: 4000, action: 1000 };
+const ownOf = (stories: TextStory[]) => ({ stories, hash: sha256(JSON.stringify(stories)) });
+const OWN_CHANGED = 'sealed/own.txt changed after the first text run pinned it; one run directory holds one set of pins';
+let own = ownOf([]);
+export function parseOwn(text: string): TextStory[] {
+  const entries: { line: number; theme: boolean; title: string; seed: string[]; action?: string[] }[] = [];
+  text.replace(/^\uFEFF/, '').split(/\r?\n/).forEach((raw, at) => {
+    const line = raw.trim(), number = at + 1;
+    if (!line || line.startsWith('#')) return;
+    const head = /^(тема|сцена|действие)\s*:\s*(.*)$/iu.exec(line);
+    const word = head?.[1].toLowerCase(), rest = head?.[2].trim() ?? '';
+    const last = entries.at(-1);
+    if (word === 'тема' || word === 'сцена') {
+      if (!rest) throw new Refusal(`own.txt, line ${number}: «${word}:» takes its ${word === 'тема' ? 'theme' : 'title'} on the same line`);
+      entries.push({ line: number, theme: word === 'тема', title: rest, seed: [] });
+    } else if (!last) throw new Refusal(`own.txt, line ${number}: text before the first «тема:» or «сцена:»`);
+    else if (last.theme) throw new Refusal(`own.txt, line ${number}: a theme is one line, and the next entry opens with «тема:» or «сцена:»`);
+    else if (word === 'действие') {
+      if (last.action) throw new Refusal(`own.txt, line ${number}: a second «действие:» in the scene of line ${last.line}`);
+      last.action = rest ? [rest] : [];
+    } else (last.action ?? last.seed).push(line);
+  });
+  if (entries.length > OWN_LIMIT) throw new Refusal(`own.txt holds ${entries.length} entries, and a round takes ${OWN_LIMIT} at most`);
+  return entries.map((entry, at) => {
+    const seed = entry.seed.join('\n'), action = (entry.action ?? []).join(' ');
+    const where = `own.txt, the ${entry.theme ? 'theme' : 'scene'} of line ${entry.line}`;
+    if (entry.title.length > OWN_LENGTHS.title) throw new Refusal(`${where}: its first line is longer than ${OWN_LENGTHS.title} characters`);
+    const id = `sharp-${SHARP_THEMES.length + 1 + at}`;
+    if (entry.theme) return { id, title: entry.title, startTime: SHARP_START_TIME, sealed: true, theme: entry.title };
+    if (!seed || seed.length > OWN_LENGTHS.seed) throw new Refusal(`${where}: its seed is empty or longer than ${OWN_LENGTHS.seed} characters`);
+    if (!action || action.length > OWN_LENGTHS.action) throw new Refusal(`${where}: its «действие:» is missing, empty or longer than ${OWN_LENGTHS.action} characters`);
+    return { id, title: entry.title, startTime: SHARP_START_TIME, sealed: true, seed, action };
+  });
+}
+// Reads the owner's scenes of the run in `root` for every `textStories()` after it. The dry run points it at a
+// directory of its own, so the real file is read by the commands in illustrations/action alone.
+export function useOwnScenes(root: string) {
+  const sealed = join(resolve(root), 'sealed'), file = join(sealed, 'own.txt'), pin = join(sealed, 'own.pin');
+  const size = existsSync(file) ? statSync(file).size : 0;
+  if (size > OWN_BYTES) throw new Refusal(`sealed/own.txt is larger than ${OWN_BYTES} bytes`);
+  const read = ownOf(size ? parseOwn(readFileSync(file, 'utf8')) : []);
+  if (existsSync(pin) && readFileSync(pin, 'utf8') !== read.hash) throw new Refusal(OWN_CHANGED);
+  own = read;
+  return { themes: read.stories.filter(story => story.theme).length, scenes: read.stories.filter(story => !story.theme).length, pinned: existsSync(pin) };
 }
 export const isSharp = (id: string) => id.startsWith('sharp-');
 // Each story's own directory: `sealed/<id>/` for a sharp one and the marker check's, `clean/<id>/` for the rest.
@@ -523,6 +578,12 @@ export async function runTexts(options: TextsOptions): Promise<TextsRecord> {
     const changed = [...new Set([...Object.keys(pins), ...Object.keys(earlier.pins)])].find(key => earlier.pins[key] !== pins[key]);
     throw new Refusal(`${file} was written under another ${changed}; one run directory holds one set of pins`);
   }
+  // The owner's scenes, pinned in sealed/ since their hash is theirs (#own).
+  const ownPin = join(root, 'sealed', 'own.pin');
+  if (!existsSync(ownPin)) {
+    mkdirSync(join(root, 'sealed'), { recursive: true, mode: 0o700 });
+    writeFileSync(ownPin, own.hash, { mode: 0o600 });
+  } else if (readFileSync(ownPin, 'utf8') !== own.hash) throw new Refusal(OWN_CHANGED);
   const record: TextsRecord = earlier ?? { pins, startedAt: new Date().toISOString(), stories: {}, attempts: [], requests: {} };
   if (smoke) record.smoke = smoke;
   delete record.completedAt;
