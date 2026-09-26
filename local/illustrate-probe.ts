@@ -2,21 +2,26 @@
 // chosen scenes of the frozen synthetic stories it asks the story model for one character sheet per story and then a
 // structured description of one frame, and assembles the text-to-image prompt here, in code (step 3 of the plan: the
 // model writing the prompt itself dropped fields it had filled). Nothing is drawn here; local/image-batch.ts draws.
-// Synthetic stories only: examples/ is safe to send to a hosted model, a reader's story is not.
+// Synthetic stories only: examples/ is safe to send to a hosted model, a reader's story is not. With `--stories` it is
+// the sheet check of the action measurement instead (`checkSheets` below).
 import { parseArgs, parseEnv } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { loadModelConfig } from './config.ts';
 import type { Env } from './config.ts';
-import { createModel } from './model.ts';
+import { BUDGET_PATH, createModel } from './model.ts';
 import { channelFor } from './budget.ts';
 import { safeErrorDetails } from './model-error.ts';
 import { contextParts, storyNarration } from './prompt.ts';
 import { active, history } from '../lib/library.ts';
 import type { Library } from '../lib/library.ts';
-import { askJson, assemblePrompt, frameRequest, sheetOf, sheetRequest } from './illustrate.ts';
+import { ACTION_STORIES } from '../examples/action-set.ts';
+import { Refusal } from './action-boundary.ts';
+import { hostedModel, readJson, runTexts, storyDir, textStories } from './action-text.ts';
+import type { Attempt, Fetch, StoryText } from './action-text.ts';
+import { askJson, assemblePrompt, frameRequest, matchSheet, sheetOf, sheetRequest, stripNames } from './illustrate.ts';
 import type { Character, Description } from './illustrate.ts';
 
 // What one frame is: written to the output directory and read by local/image-batch.ts and local/image-portraits.ts.
@@ -65,9 +70,75 @@ function modelEnv(spec: string | undefined, keys: Env): Env {
     SIMPLE_CHAT_BUDGET_REQUESTS: keys[`${cap}_DAILY_REQUESTS`], SIMPLE_CHAT_BUDGET_TOKENS: keys[`${cap}_DAILY_TOKENS`] };
 }
 
+// ---- The sheet check (docs/action-experiment.md#the-sheet) ----
+
+// The age words the sheet and the frame allow, and the children's among them; a skin tone, as a tone word just before
+// skin, skinned or complexion; and a short list of clothes, which neither `details` nor `look` may hold.
+const AGE = /\b(?:small[\s-]child|child|teenager|young[\s-]adult|middle[\s-]aged|elderly)\b/i;
+const CHILD = /\b(?:small[\s-]child|child|teenager)\b/i;
+const SKIN = /\b(?:pale|fair|light|olive|tan|tanned|brown|dark|deep|ruddy|golden|bronze|black|white|ivory|porcelain|sallow|swarthy)(?:[\s,-]+[a-z]+)?[\s,-]+(?:skin|skinned|complexion)\b/i;
+const CLOTHES = /\b(?:wear|wears|wearing|dress(?:es)?|gowns?|shirts?|tunics?|coats?|cloaks?|jackets?|trousers|pants|shorts|jeans|skirts?|boots?|shoes?|sneakers|hats?|caps?|helmets?|hoods?|armou?r|robes?|aprons?|uniforms?|vests?|sweaters?|hoodies?|swimsuits?|kimonos?|scarf|scarves|gloves?|belts?|bandanas?|clothes|clothing|outfits?)\b/i;
+function traits(text: string, names: string[]) {
+  const age = AGE.exec(text);
+  return { words: text.split(/\s+/).filter(Boolean).length, digit: /\d/.test(text), name: stripNames(text, names).removed > 0,
+    clothing: CLOTHES.test(text), age: !!age, child: CHILD.test(text), skin: SKIN.test(text),
+    // Opens with it: it starts among the first four words ("A middle-aged man", "Female, small child", "A girl, a child").
+    ageFirst: !!age && text.slice(0, age.index).split(/\s+/).filter(Boolean).length <= 3 };
+}
+// How many of `texts` have each trait, and their words at the fewest and the most.
+function tally(texts: string[], names: string[]) {
+  const all = texts.map(text => traits(text, names)), words = all.map(one => one.words);
+  const count = (trait: Exclude<keyof ReturnType<typeof traits>, 'words'>) => all.filter(one => one[trait]).length;
+  return { people: all.length, words: words.length ? [Math.min(...words), Math.max(...words)] : [], digit: count('digit'),
+    name: count('name'), clothing: count('clothing'), ageFirst: count('ageFirst'), age: count('age'), child: count('child'), skin: count('skin') };
+}
+// A frame's people, those whose `who` names nobody on the sheet, and the age and skin of the looks it wrote them.
+function strangers(frame: { people?: { who?: string; look?: string }[] } | undefined, names: string[]) {
+  if (!frame) return null;
+  const off = (frame.people ?? []).filter(person => matchSheet(String(person.who ?? ''), names) === null);
+  const { ageFirst, age, child, skin } = tally(off.map(person => String(person.look ?? '')), names);
+  return { people: (frame.people ?? []).length, offSheet: off.length, ageFirst, age, child, skin };
+}
+// One story's line: ids, outcomes and counts, never a word of what the model wrote.
+function sheetCounts(root: string, id: string, attempts: Attempt[]) {
+  const text = readJson<StoryText>(join(storyDir(root, id), 'text.json'));
+  const sheet = text?.sheet ?? [], names = sheet.map(one => one.name), mine = attempts.filter(row => row.story === id);
+  const sum = (read: (row: Attempt) => number | null) => mine.reduce((total, row) => total + (read(row) ?? 0), 0);
+  return { event: 'sheet_counts', story: id, steps: Object.fromEntries(Object.entries(text?.steps ?? {}).map(([step, one]) =>
+    [step, { outcome: one.outcome, ...(one.code ? { code: one.code } : {}), attempts: one.attempts }])),
+  length: mine.filter(row => row.finish === 'length').length, tokens: { input: sum(row => row.inputTokens), output: sum(row => row.outputTokens) },
+  people: sheet.length, cast: ACTION_STORIES.find(story => story.id === id)?.cast.length ?? 0,
+  details: tally(sheet.flatMap(one => one.details ? [one.details] : []), names),
+  look: tally(sheet.map(one => one.look), names), frame: strangers(text?.frame, names), variant: strangers(text?.variant, names) };
+}
+
+// Round two's text run (local/action-text.ts `runTexts`) on a hosted model for a few clean stories of the action set:
+// the two scenes, the sheet, the frame and the variant, so that an instruction the model does not follow shows before
+// the text card is paid for. A sharp story, the marker check's and the owner's own never go to a hosted model
+// (docs/improve-loop.md#acceptance-on-gpu), and anything but a clean story is refused before the first request. A rerun
+// into `directory` asks only what is not there yet. True when every step of every story came back ok.
+export async function checkSheets({ ids, env, directory, ledger, fetch, print = report }: {
+  ids: string[]; env: Env; directory: string; ledger: string; fetch?: Fetch; print?: (line: object) => void }): Promise<boolean> {
+  const clean = ACTION_STORIES.map(story => story.id), wanted = [...new Set(ids.map(id => id.trim()).filter(Boolean))];
+  const other = wanted.find(id => !clean.includes(id));
+  if (!wanted.length || other !== undefined) {
+    throw new Refusal(`--stories takes clean stories of the action set alone (${clean.join(', ')}), and a sharp one, the marker check's or the owner's own never goes to a hosted model${other === undefined ? '' : `: ${other} is not clean`}`);
+  }
+  const stories = wanted.map(id => textStories().find(story => story.id === id)!);
+  const configRoot = mkdtempSync(join(tmpdir(), 'simple-chat-sheet-check-'));
+  try {
+    const model = hostedModel({ env, configRoot, ledger, ...(fetch ? { fetch } : {}) });
+    print({ event: 'sheet_check', directory, model: model.config.model, stories: stories.length });
+    const record = await runTexts({ root: directory, model, stories, say: event => { if ((event as { event?: string }).event === 'text_step') print(event); } });
+    const counts = stories.map(story => sheetCounts(directory, story.id, record.attempts));
+    counts.forEach(one => print(one));
+    return counts.every(one => Object.keys(one.steps).length === 5 && Object.values(one.steps).every(step => step.outcome === 'ok'));
+  } finally { rmSync(configRoot, { recursive: true, force: true }); }
+}
+
 async function main(args: string[]) {
   const { values } = parseArgs({ args, options: {
-    out: { type: 'string' }, model: { type: 'string' }, scenes: { type: 'string' },
+    out: { type: 'string' }, model: { type: 'string' }, scenes: { type: 'string' }, stories: { type: 'string' },
   } });
   const wanted = scenesWanted(values.scenes);
   if (!wanted.length || wanted.some(scene => !SCENARIOS.includes(scene.scenario) || !Number.isInteger(scene.index) || scene.index < 0 || scene.index > 63)) {
@@ -77,6 +148,14 @@ async function main(args: string[]) {
   let keys: Env = {};
   try { keys = parseEnv(readFileSync(join(root, '.env.eval'), 'utf8')); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('Cannot read .env.eval'); }
+  if (values.stories !== undefined) {
+    if (!values.model || values.scenes !== undefined) throw new Error('Use --stories flight,mirror,armwrestle --model <host>:<id> [--out directory]');
+    // The texts are story data as the descriptions are, and default under illustrations/ too.
+    const ok = await checkSheets({ ids: values.stories.split(','), env: modelEnv(values.model, keys),
+      directory: values.out ? resolve(values.out) : join(root, 'illustrations', 'sheet-check'), ledger: BUDGET_PATH });
+    if (!ok) process.exitCode = 1;
+    return;
+  }
   // An empty directory as the configuration root: the bot's own .env never reaches this probe.
   const empty = mkdtempSync(join(tmpdir(), 'simple-chat-illustrate-'));
   const config = loadModelConfig(empty, modelEnv(values.model, keys));

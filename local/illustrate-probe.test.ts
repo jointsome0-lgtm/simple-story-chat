@@ -1,9 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { askJson, assemblePrompt, frameRequest, matchSheet, sheetLooks, sheetOf, sheetRequest, stripAges, stripNames, DESCRIBE_TOKENS, SHEET_TOKENS, STYLE } from './illustrate.ts';
 import type { Assembled, Character, Description, Excerpt } from './illustrate.ts';
 import type { GenerationResult, ModelRequest, Provider } from './model.ts';
-import { scenesWanted } from './illustrate-probe.ts';
+import { checkSheets, scenesWanted } from './illustrate-probe.ts';
+import { Refusal } from './action-boundary.ts';
+import { fakeGateway } from './action-fakes.ts';
 
 // A synthetic sheet and frame in the shape the describing model fills. No reader's story is involved.
 const sheet: Character[] = [
@@ -173,4 +178,25 @@ test('a description is asked for in its schema after the scene, once more when i
   assert.deepEqual(scenesWanted('battle-2'), [{ id: 'battle-2', scenario: 'battle', index: 2 }], 'one scene');
   const every = scenesWanted(undefined).map(scene => scene.id);
   assert.deepEqual([every.length, new Set(every).size], [24, 24], 'no scene named');
+});
+
+// A sealed story sent to a hosted model is a leak, and a paid one: the sheet check takes the clean stories of the action
+// set alone and refuses anything else before its first request. Against the fake gateway, behind the real hosted
+// adapter, it prints ids and counts, and not a word of a story, a prompt or a reply.
+test('the sheet check sends a hosted model clean stories alone, and prints counts alone', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'simple-chat-sheet-check-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const gateway = fakeGateway({ key: 'k', sharp: [], marker: '' });
+  const lines: string[] = [];
+  let sent = 0;
+  const check = (ids: string[]) => checkSheets({ ids, directory: join(dir, 'out'), ledger: join(dir, 'usage.sqlite'),
+    env: { SIMPLE_CHAT_PROVIDER: 'openai-compatible', SIMPLE_CHAT_BASE_URL: 'https://openrouter.ai/api/v1', SIMPLE_CHAT_API_KEY: 'k',
+      SIMPLE_CHAT_MODEL: 'google/gemma-4-31b-it', SIMPLE_CHAT_BUDGET_TOKENS: '1000000' },
+    fetch: (url, init) => { sent++; return gateway.fetch(url.replace('/api/v1/', '/v1/'), init); }, print: line => lines.push(JSON.stringify(line)) });
+  for (const ids of [['sharp-1'], ['flight', 'marker'], ['sharp-6']]) await assert.rejects(check(ids), Refusal, ids.join());
+  assert.equal(sent, 0);
+  assert.equal(await check(['flight', 'mirror']), true);
+  const counts = lines.map(line => JSON.parse(line)).filter(line => line.event === 'sheet_counts');
+  assert.deepEqual(counts.map(one => [one.story, one.people, one.details.people, one.variant.people]), [['flight', 4, 4, 4], ['mirror', 1, 1, 1]]);
+  assert.doesNotMatch(lines.join('\n'), /\p{Script=Cyrillic}|tunic|participant/u);
 });
