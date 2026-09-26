@@ -22,7 +22,8 @@ its texts on 2026-09-25 and 26 and drew seed 7 on the 26th, with up to six peopl
 touch of one's own body, of a thing and a reflection ([one](#one)), and fronts drawn from the `details` the bot's
 sheet now writes of each person, whose new instruction changes the pins ([the sheet](#the-sheet)). Round one's T gave
 L's picture back and took nothing from the portraits; [the T probe](#t-probe) tries nine variants of T on a card of
-its own, from round one's own pictures, and first on the same card [a clothing test](#t-probe-suit) of the portraits.
+its own, from round one's own pictures, and first on the same card [a clothing test](#t-probe-suit) and
+[a language test](#t-probe-lang) of the portraits.
 
 <a id='stage-1'></a>
 
@@ -1107,7 +1108,8 @@ six clean scenes at seed 7, on one card, with no text card and no new portrait, 
 owner picks: five are one change against T each, `mask` and `mask-each` redraw only the bound people's boxes on L, and
 `face` and `face-each` only their heads and hair on A+'s picture ([the masked variants](#t-probe-masks)). Before them
 it draws [the clothing test](#t-probe-suit): eight of round one's fronts again in a dark grey suit, and the demon's C
-from them.
+from them. After it comes [the language test](#t-probe-lang): six fronts of three made-up people, each drawn once from
+an English description and once from the same description in Russian.
 
 **What round one shows** (seed 7, the 13 clean scenes, their files and their judges' answers):
 
@@ -1247,8 +1249,9 @@ holds two children, it reads as nudity, and it fixes a skin tone that may be the
   front graph or canvas than today's, where `--scenes` without `suit` draws the scenes alone; and a `probe.json` whose
   test was drawn from other inputs. Its `suit.hash` pins the wording, round one's clothes, the front graph, each front's
   prompt and picture, the C's prompt and fronts, and the seeds.
-- **The page** ends with the test: each of the eight fronts of round one beside its new one, then the demon's C of round
-  one beside the new at seed 7, and at seed 11 the new alone under a line saying that round one has none.
+- **The page** shows the test after the scenes: each of the eight fronts of round one beside its new one, then the
+  demon's C of round one beside the new at seed 7, and at seed 11 the new alone under a line saying that round one has
+  none.
 - **The same seed under another prompt is another picture**: the new fronts may differ from round one's in face, hair
   and pose as well, and the C's comparison carries that beside the clothes.
 
@@ -1256,10 +1259,39 @@ The test is 10 jobs: eight fronts at round one's median of 15.5 s, and two C's a
 with four portraits (with two it took 18.2 s): 2.8 minutes, 4.2 at the admission prices and 4.7 with the cold start,
 which falls on its first front.
 
+<a id='t-probe-lang'></a>
+
+**The language test** comes right after the clothing test on the same card. The owner decided on 2026-09-26 that the
+bot draws a portrait from the reader's `details` exactly as written, in any language, with no translation
+([portrait details](illustrations-plan.md#portrait-details)). Nothing in the project had sent a Russian description
+to the image model before, and the owner agreed to check it at the next rental: does the model draw a portrait from a
+Russian description as faithfully as from the same description in English?
+
+- **Six fronts**: the three made-up people of [portrait-languages.ts](../examples/portrait-languages.ts), a girl, an
+  elderly man and a young woman, each described once in English and once in Russian, sentence for sentence, in the
+  order the sheet writes `details`, with marks on a named side. Each text is drawn as the bot draws a portrait:
+  `portraitPrompt` unchanged, the front graph at 720x1280, seed 7. No text holds its person's name, so a person's two
+  prompts differ only in the language of the text, and the probe refuses a pair that differs in more. The test draws
+  fronts only, no C.
+- **The order**: the clothing test, this test, then the scenes. It is admitted as a whole, only if all six can end by
+  `--until`. `--scenes lang` names it alone, and without `--scenes` it is drawn with the rest. `probe.json`'s
+  `lang.hash` pins the six prompts, the front graph, its canvas and the seed, and `draw` refuses a `probe.json` whose
+  test was drawn from other inputs.
+- **The page** shows it after the clothing test: for each person the English portrait beside the Russian, both texts
+  under them. The owner looks at whether the Russian portrait follows the age, the skin, the build, the hair, the face
+  and the marks, their sides included, as closely as the English one. A side is the person's own, as the sheet writes
+  it: on a front, the person's left is the viewer's right.
+
+The test is 6 jobs, each priced as one of round one's fronts: about 1.6 minutes at their median of 15.5 s, and 2.2 to
+2.5 at the admission prices by the clothing test's figures. The cold start falls on the clothing test, or on this
+test's first front where it is drawn alone. The dry run's estimate, at its made-up round's 18.7 s a front, gives it
+1.9 minutes and 2.6 at the admission prices.
+
 ```sh
 npm run image:t-probe -- dry-run     # seven steps, then "the dry run went as expected"
-npm run image:t-probe -- estimate    # before the card: 64 cells, 90 jobs, expectedMinutes 28.4, pricedMinutes 41.3,
-                                     # the clothing test's 10 of them 2.8 and 4.2 under `suit`
+npm run image:t-probe -- estimate    # before the card: 70 cells, 96 jobs, expectedMinutes about 30, pricedMinutes
+                                     # about 44, the clothing test's 10 of them 2.8 and 4.2 under `suit`, the
+                                     # language test's 6 under `lang`
 # boxes.json into illustrations/t-probe, then the page, where the owner checks the boxes and the crops:
 npm run image:t-probe -- page        # illustrations/t-probe/index.html
 # The probe's card, with the owner's «да» on its price and end, a picture card for one hour:
@@ -1268,26 +1300,28 @@ npm run gpu:rent -- --lane pictures --qwen only --hours 1
 # The guard, gpu/ onto the card, image-bootstrap.sh, image-serve.sh and the tunnel as in the runbook above, then:
 mkdir -p illustrations/t-probe
 ssh simple-chat-vast cat /workspace/simple-chat-gpu/image-verified.txt > illustrations/t-probe/card.txt
-npm run image:t-probe -- draw --until "$end"    # the clothing test, then scene by scene; `probe` with drawn 54,
-                                                # suit.drawn 10 and exit 0
+npm run image:t-probe -- draw --until "$end"    # the clothing test, the language test, then scene by scene;
+                                                # `probe` with drawn 54, suit.drawn 10, lang.drawn 6 and exit 0
 # The termination, as in the runbook above; then, with no card:
-npm run image:t-probe -- page    # illustrations/t-probe/index.html, which `draw` also writes after the test and each scene
+npm run image:t-probe -- page    # illustrations/t-probe/index.html, which `draw` also writes after each test and scene
 ```
 
 `draw` takes `--scenes` and `--variants`, comma separated, and the runbook's `--wait`, `--timeout` and `--comfy`;
-`--scenes` names `suit` for the clothing test, which is drawn without it only when no scene is named, and `--variants`
-leaves the test alone. Of `illustrations/action-1` it reads `draw.json` and `clean/` alone, and before anything is
-sent it refuses a sharp id, the marker and a link on the way, which could lead into `sealed/`; an L, an A+ or a front
-that is not the file round one recorded; a ComfyUI revision, weights, graph, T opening, canvas, reference size, encoder
-resolution or cache device other than round one's; a `boxes.json` missing, malformed, short of a bound person's box or
-crop, or changed since the first draw; a probe directory drawn under other pins or from other inputs; and a picture
-`probe.json` records whose file is gone. A scene begins only if all its cells can end by `--until`, at round one's
-slowest time of the like job, a quarter more and three seconds, and a resume draws nothing again.
+`--scenes` names `suit` for the clothing test and `lang` for the language test; without `--scenes` both are drawn
+with every scene, and `--variants` leaves both alone. Of `illustrations/action-1` it reads `draw.json` and `clean/`
+alone, and before anything is sent it refuses a sharp id, the marker and a link on the way, which could lead into
+`sealed/`; an L, an A+ or a front that is not the file round one recorded; a ComfyUI revision, weights, graph, T
+opening, canvas, reference size, encoder resolution or cache device other than round one's; a `boxes.json` missing,
+malformed, short of a bound person's box or crop, or changed since the first draw; a probe directory drawn under other
+pins or from other inputs; and a picture `probe.json` records whose file is gone. A scene begins only if all its cells
+can end by `--until`, at round one's slowest time of the like job, a quarter more and three seconds, and a resume
+draws nothing again.
 `illustrations/t-probe` holds `card.txt`, `boxes.json`, `probe.json` (ids, codes, sizes, counts and times, no prompt),
 `<scene>/<variant>.png`, `<scene>/<variant>-<pass>.png` for `mask-each` and `face-each`, `suit/<front>.png`,
-`suit/demon-s7-C.png` and `suit/demon-s11-C.png`, and `index.html`: for each scene its portraits with their crops, round
-one's L with the bodies and A+ with the heads, T and C, the nine variants, each named by its change, and every pass,
-then the clothing test old beside new, the pictures linked where they lie.
+`suit/demon-s7-C.png`, `suit/demon-s11-C.png`, `lang/<person>-en.png` and `lang/<person>-ru.png`, and `index.html`: for
+each scene its portraits with their crops, round one's L with the bodies and A+ with the heads, T and C, the nine
+variants, each named by its change, and every pass, then the clothing test old beside new and the language test English
+beside Russian with their texts, the pictures linked where they lie.
 
 The estimate, from round one's own times of the same card:
 
@@ -1295,13 +1329,16 @@ The estimate, from round one's own times of the same card:
 | --- | --- |
 | ssh, Qwen's files, torch, the verification and the tunnel, at 300 Mbit/s (the identity run's table) | 14 |
 | the clothing test at round one's medians, its first front cold: eight fronts and the demon's C with four portraits at seeds 7 and 11 | 3 (5 at the admission prices) |
+| the language test at round one's median front, warm after the clothing test: six fronts | 2 (under 3 at the admission prices) |
 | 54 cells in 80 jobs at round one's medians: T's for `words`, `no-style`, `face` and `face-each`, C's for the rest, with one portrait a pass for `mask-each` and two pictures for `face-each` | 25 (37 at the admission prices) |
 | the page, the termination and the margin before the guard | 5 |
 
-About 47 card minutes of the guard's hour; `estimate` gives the draw's two together, 64 cells in 90 jobs, 28.4 minutes
-and 41.3 at the admission prices. `draw` admits the test as a whole, 10 jobs and 4.7 minutes with the cold start, and a
-scene at its own prices, at most 15 jobs and 7 minutes (the flight, the twister and the demon), so the hour holds the
-whole probe unless the setup runs long, and what is not admitted waits for a resume on the next card.
+About 49 card minutes of the guard's hour. Before the language test, `estimate` gave the clothing test and the scenes
+together as 64 cells in 90 jobs, 28.4 minutes and 41.3 at the admission prices; the language test adds 6 cells in 6
+jobs, about 1.6 minutes and 2.2 to 2.5 at those prices. `draw` admits the clothing test as a whole, 10 jobs and 4.7
+minutes with the cold start, then the language test as a whole, and a scene at its own prices, at most 15 jobs and 7
+minutes (the flight, the twister and the demon), so the hour holds the whole probe unless the setup runs long, and
+what is not admitted waits for a resume on the next card.
 
 **Not verified without the card**: whether `words` moves any face while image 1 lies on the canvas's grid; whether
 `no-style` takes the edges and colours away; where `half` puts the scene, since its 640x352 is centred on the canvas's

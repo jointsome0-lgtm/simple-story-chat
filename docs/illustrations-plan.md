@@ -665,6 +665,10 @@ two's pins; the T probe keeps round one's line, to set its variants beside round
 proportions true to each person's age (`local/picture-style.ts`); `semi` names no age and stays as the owner approved
 it.
 
+The owner decided the same day that a portrait is drawn from the reader's `details` exactly as written, in any
+language, with no translation; whether the image model follows a Russian description as closely as the same one in
+English is checked at the next rental by the T probe's [language test](action-experiment.md#t-probe-lang).
+
 <a id='blind-review'></a>
 
 ## Blind review of pictures
