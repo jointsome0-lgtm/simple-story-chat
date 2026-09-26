@@ -32,7 +32,6 @@ import type { Comfy, Graph, Phases, Vram } from './image-batch.ts';
 import { cardOf, pinsOf, writeCardRecord } from './image-identity.ts';
 import { PORTRAIT_CLOTHES, portraitCanvas, portraitPrompt } from './image-portraits.ts';
 import { safeErrorDetails } from './model-error.ts';
-import { STYLE } from './illustrate.ts';
 import { greyPng, startFakeComfy } from './fake-comfy.ts';
 import { Refusal, capture, madeUpName, markerForms, searchBoundary, searchTree } from './action-boundary.ts';
 import { isSharp, readJson, storyDir } from './action-text.ts';
@@ -63,6 +62,11 @@ const median = (values: number[]) => {
 // round two draws (docs/action-experiment.md#four).
 export const PROBE_SCENES = ['flight', 'twister', 'giants', 'guard', 'tango', 'demon'];
 const MOST_BOUND = 4;
+
+// The style line round one drew with. illustrate.ts `STYLE` has asked for faces true to each person's age, not adult
+// ones, since 2026-09-26; the probe reads T back from round one's prompts and sets its variants beside round one's
+// pictures, so it keeps round one's line.
+const ROUND_ONE_STYLE = 'Hand-painted visual novel illustration with soft opaque brushwork, muted natural colors and restrained shading. Naturalistic adult facial proportions, moderately sized eyes, simplified noses and mouths, and age-appropriate facial lines throughout. Clear silhouettes.';
 
 // ---- The variants ----
 
@@ -149,7 +153,7 @@ const pictureFirst = (variant: Variant) => !latentStart(variant) || variant.face
 // rebuild into itself byte for byte gives nothing.
 export type Clause = { role: string; image: number };
 export function tClauses(prompt: string, bound: number): Clause[] | undefined {
-  const head = `${T_OPENING} `, tail = `. ${STYLE}`;
+  const head = `${T_OPENING} `, tail = `. ${ROUND_ONE_STYLE}`;
   if (bound < 1 || !prompt.startsWith(head) || !prompt.endsWith(tail)) return undefined;
   let rest = prompt.slice(head.length, prompt.length - tail.length);
   const clauses: Clause[] = [];
@@ -167,13 +171,13 @@ export function tClauses(prompt: string, bound: number): Clause[] | undefined {
 const WORDS_KEEP = 'Change a build only as far as every contact stays where it is. Keep everything else in image 1 as it is: '
   + 'the place, the light, the framing, every pose, grip and contact, and all clothes.';
 export const wordsPrompt = (clauses: Clause[]) => `${clauses.map(one =>
-  `Replace the face, hair, skin and build of ${one.role} in image 1 with those of the person in image ${one.image}.`).join(' ')} ${WORDS_KEEP} ${STYLE}`;
+  `Replace the face, hair, skin and build of ${one.role} in image 1 with those of the person in image ${one.image}.`).join(' ')} ${WORDS_KEEP} ${ROUND_ONE_STYLE}`;
 
 // `face` and `face-each`: T's own form, its opening kept to the faces and hair, and every body and build added to what
 // is kept; each person's clause takes them from the crop of that person's front by role, and the style line ends it.
 export const FACE_OPENING = 'Image 1 is the finished picture. Keep everything in it: the place, the light, the framing, every pose, grip and '
   + 'contact, all clothes, and every body and its build. Change only the faces and hair of these people in image 1:';
-export const facePrompt = (clauses: Clause[]) => `${FACE_OPENING} ${clauses.map(one => tClause(one.role, one.image)).join('; ')}. ${STYLE}`;
+export const facePrompt = (clauses: Clause[]) => `${FACE_OPENING} ${clauses.map(one => tClause(one.role, one.image)).join('; ')}. ${ROUND_ONE_STYLE}`;
 
 // `mask-each`'s prompts, one a pass in slot order: round one's L prompt, with only that person's clause begun the C
 // way and bound to image 1, the one portrait the pass sends. Read back from round one's C, which is its L with "The person
@@ -451,7 +455,7 @@ function setupOf(card: ReturnType<typeof cardOf>, base: Graph): Record<string, s
     referenceSize: `${SCALED.width}x${SCALED.height}`, resolution: encoderResolution(base) ?? -1, cacheDevice: String(cache?.inputs.device ?? 'none') };
 }
 const variantsPin = () => sha256(JSON.stringify({ variants: VARIANTS.map(one => [one.id, one.denoise ?? null, one.mask ?? null, one.face ?? null]),
-  half: HALF, words: wordsPrompt([{ role: 'ROLE', image: 2 }]), face: facePrompt([{ role: 'ROLE', image: 2 }]), style: STYLE,
+  half: HALF, words: wordsPrompt([{ role: 'ROLE', image: 2 }]), face: facePrompt([{ role: 'ROLE', image: 2 }]), style: ROUND_ONE_STYLE,
   mask: { margin: MASK_MARGIN, feather: MASK_FEATHER, grid: GRID }, head: { margin: HEAD_MARGIN, feather: HEAD_FEATHER } }));
 const readBase = () => apiGraph(JSON.parse(readFileSync(ACTION_GRAPH, 'utf8')));
 const recipeOf = (graph: Graph) => {
@@ -615,7 +619,7 @@ export function graphRight(graph: Graph, variant: Variant, slots: string[], star
 // all the clauses, for face-each over the pass's person alone, bound to image 2.
 export function probePrompt(scene: Scene, variant: Variant, pass = 1): string {
   if (variant.id === 'words') return wordsPrompt(scene.clauses);
-  if (variant.id === 'no-style') return scene.t.slice(0, scene.t.length - STYLE.length - 1);
+  if (variant.id === 'no-style') return scene.t.slice(0, scene.t.length - ROUND_ONE_STYLE.length - 1);
   if (variant.face) return facePrompt(variant.mask === 'each' ? [{ role: scene.clauses[pass - 1].role, image: 2 }] : scene.clauses);
   if (variant.mask === 'each') {
     const prompt = scene.each?.[pass - 1];
@@ -773,7 +777,7 @@ export async function drawProbe(options: ProbeOptions): Promise<ProbeIndex> {
     throw new Refusal(comfy.end?.aborted ? 'The end (--until) came before the server said what it is; nothing is drawn'
       : 'The server did not say what it is on /system_stats (ComfyUI, PyTorch and the card), and the probe is pinned to that too; nothing is drawn');
   });
-  const pins: Record<string, string | number> = { ...setup, style: sha256(STYLE), variants: variantsPin(), seed: SEED, boxes: boxes.hash, ...server };
+  const pins: Record<string, string | number> = { ...setup, style: sha256(ROUND_ONE_STYLE), variants: variantsPin(), seed: SEED, boxes: boxes.hash, ...server };
   const changed = earlier && [...new Set([...Object.keys(pins), ...Object.keys(earlier.pins)])].find(key => earlier.pins[key] !== pins[key]);
   if (changed) throw new Refusal(`${file} was drawn under another ${changed}; one probe directory holds one set of pins`);
   const index: ProbeIndex = earlier ?? { pins, startedAt: new Date().toISOString(), scenes: {}, cells: {} };
@@ -1135,9 +1139,9 @@ function madeUpRound(root: string, card: ReturnType<typeof cardOf>, word: string
     const fronts = roles.map((_, at) => `${id}-e${at + 1}`);
     const plan = { id, manifest: { order: roles.map((_, at) => at), entries: fronts.map((_, at) => `e${at + 1}`),
       bound: fronts.map((portrait, at) => ({ person: at, entry: `e${at + 1}`, portrait, slot: at + 1, facing: 'viewer', view: null })) },
-    arms: { L: { prompt: `A made-up room. ${roles.map(role => `${role}: holds on. `).join('')}${STYLE}`, references: [] },
-      C: { prompt: `A made-up room. ${roles.map((role, at) => `The person from image ${at + 1}, ${role}: holds on. `).join('')}${STYLE}`, references: fronts },
-      T: { prompt: `${T_OPENING} ${roles.map((role, at) => tClause(role, at + 2)).join('; ')}. ${STYLE}`, references: ['L', ...fronts] } },
+    arms: { L: { prompt: `A made-up room. ${roles.map(role => `${role}: holds on. `).join('')}${ROUND_ONE_STYLE}`, references: [] },
+      C: { prompt: `A made-up room. ${roles.map((role, at) => `The person from image ${at + 1}, ${role}: holds on. `).join('')}${ROUND_ONE_STYLE}`, references: fronts },
+      T: { prompt: `${T_OPENING} ${roles.map((role, at) => tClause(role, at + 2)).join('; ')}. ${ROUND_ONE_STYLE}`, references: ['L', ...fronts] } },
     out: {}, vIsC: true, portraits: fronts.map((portrait, at) => ({ id: portrait, entry: `e${at + 1}`, prompt: portraitPrompt(roles[at], `a made-up look ${at + 1}`).prompt })),
     views: [], counts: {} };
     mkdirSync(storyDir(root, id), { recursive: true, mode: 0o700 });
@@ -1150,7 +1154,7 @@ function madeUpRound(root: string, card: ReturnType<typeof cardOf>, word: string
   }
   const sealed = storyDir(root, 'sharp-1');
   mkdirSync(join(sealed, 'pictures'), { recursive: true, mode: 0o700 });
-  writeJson(join(sealed, 'plan.json'), { id: 'sharp-1', arms: { T: { prompt: `${T_OPENING} ${word} takes them from the person in image 2. ${STYLE}`, references: ['L', 'sharp-1-e1'] } } });
+  writeJson(join(sealed, 'plan.json'), { id: 'sharp-1', arms: { T: { prompt: `${T_OPENING} ${word} takes them from the person in image 2. ${ROUND_ONE_STYLE}`, references: ['L', 'sharp-1-e1'] } } });
   writeFileSync(join(sealed, 'pictures', `s${SEED}-L.png`), greyPng(FRAME_CANVAS.width, FRAME_CANVAS.height, number++, 0, word), { mode: 0o600 });
   writeJson(join(root, 'draw.json'), round);
 }

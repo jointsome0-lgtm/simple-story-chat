@@ -13,7 +13,8 @@ export type StyleChoice = NonNullable<ErrorDetails['pictureStyle']>;
 export type Preset = Exclude<StyleChoice, 'standard' | 'custom'>;
 
 // The presets, in the order of the picker. Every line keeps what the owner judged the pictures by first — adult
-// proportions and natural faces, since the big heads of the first run were the complaint. They used to end by
+// proportions and natural faces, since the big heads of the first run were the complaint; `novel`'s faces are true to
+// each person's age instead since 2026-09-26 (local/illustrate.ts `STYLE`). They used to end by
 // asking for no captions, logos or watermarks too; the owner took that sentence out of every line on 2026-09-24.
 // `semi` is the line the owner approved on 2026-09-23, `novel` the one the six steps were measured with (then with
 // that sentence), `film` the photographic line tried the same evening.

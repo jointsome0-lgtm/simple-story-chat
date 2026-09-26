@@ -471,7 +471,8 @@ A reader chooses the style of their pictures, keeps a library of their own, and 
 screens are in [telegram-ui.md](telegram-ui.md#picture-styles). The style stays what this plan made it in step 1: the
 last sentence of the prompt, never seen by the describing model. `local/picture-style.ts` holds the presets:
 - `semi`, the line the owner approved on 2026-09-23;
-- `novel`, the `STYLE` the six steps were measured with;
+- `novel`, the `STYLE` the six steps were measured with, its faces true to each person's age instead of adult since
+  2026-09-26 ([portrait details](#portrait-details));
 - `film`, `graphic` and `watercolor`.
 
 A style line ends the prompt as written. Until 2026-09-24 the bot followed it with a tail of its own: natural proportions
@@ -638,8 +639,8 @@ word of it competes with the action; a portrait holds one person and can take fa
   without details, as every sheet written before this one is, draws its portraits from the look and is not written
   again for them. A kept portrait records the text it was drawn from in its `look` field, and the card calls it a
   portrait of the earlier look once the person's text differs.
-- The frame instruction, its rule for the looks of strangers included, the style line and the portrait's clothes,
-  style and pose stay as they were. The identity measurement's recipe still draws from the look, as its run pinned it
+- The frame instruction, its rule for the looks of strangers included, and the portrait's clothes, style and pose
+  stay as they were. The identity measurement's recipe still draws from the look, as its run pinned it
   ([portrait recipe](identity-experiment.md#portrait-recipe)). The age words of children in the frame's rule for
   strangers are a later step.
 
@@ -654,6 +655,13 @@ of answer.
 
 Round two of the action measurement draws its fronts from the details, and the new instruction changes its pins
 ([the sheet](action-experiment.md#the-sheet)).
+
+The bot's style line changed the same day, as the owner agreed: `STYLE` in `local/illustrate.ts`, the `novel` preset,
+asks for "Naturalistic facial proportions true to each person's age" where it asked for "Naturalistic adult facial
+proportions". It ends every frame, after the looks, and with a child's age word now in the sheet, "adult" there would
+have given that child an adult's face in every frame. It changes every frame the bot draws in its own style and round
+two's pins; the T probe keeps round one's line, to set its variants beside round one's pictures. The `film`,
+`graphic` and `watercolor` presets still ask for adult faces or anatomy.
 
 <a id='blind-review'></a>
 
