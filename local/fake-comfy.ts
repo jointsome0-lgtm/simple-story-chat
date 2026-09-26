@@ -6,8 +6,9 @@
 // failure, an OOM, a partial load in the log, the numbers on /system_stats — is fixed or set by the knobs below, and
 // says nothing about any card. A picture is a flat grey PNG with a text chunk beside the pixels, as a saving node
 // writes one, of the size of what the node saves: the sampler's latent behind a decode, the size a scale node asks
-// for, a composite's destination's, or an uploaded file's own. Masks it computes as the pinned mask nodes do, and
-// reports them as counts (`MaskedJob`), never pixels. No prompt it is sent is printed or kept past its job.
+// for, a crop's as the pinned ImageCrop cuts it, a composite's destination's, or an uploaded file's own. Masks it
+// computes as the pinned mask nodes do, and reports them as counts (`MaskedJob`), never pixels. No prompt it is sent is
+// printed or kept past its job.
 import { createServer } from 'node:http';
 import type { IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -41,10 +42,11 @@ export type FakeComfyOptions = {
   requireUploads?: boolean;
 };
 // What a job was, for a test to assert on. Never its text. `slots`: each reference slot of the encoder in slot order,
-// the file on the loader behind it, and the size a scale node between them hands on (`null` without one). `images`:
-// each picture a saving node wrote, with its size.
+// the file on the loader behind it, the size a scale node between them hands on (`null` without one), and the
+// rectangle an ImageCrop between the loader and the scale node cuts (`null` without one). `images`: each picture a
+// saving node wrote, with its size.
 export type FakeJob = { references: number; width: number; height: number; cached: number; outcome: 'success' | 'error' | 'interrupted';
-  slots: { slot: number; file: string; scaled: { width: number; height: number } | null }[];
+  slots: { slot: number; file: string; scaled: { width: number; height: number } | null; cropped: { x: number; y: number; width: number; height: number } | null }[];
   images: { node: string; width: number; height: number }[] } & MaskedJob;
 
 // A mask the pinned mask nodes make (comfy_extras/nodes_mask.py at 73c9bad4), computed as they compute it: SolidMask
@@ -193,10 +195,17 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
       noiseMask: noised?.class_type === 'SetLatentNoiseMask' ? summaryOf(maskOf(graph, noised.inputs.mask)) : null,
       composites: Object.entries(graph).filter(([, node]) => node.class_type === 'ImageCompositeMasked')
         .map(([node, one]) => ({ node, destination: fileBehind(one.inputs.destination), mask: summaryOf(maskOf(graph, one.inputs.mask)) })) };
-    // What a node hands on is the size of: a scale node's own, an uploaded file's, a composite's destination's, and the
-    // latent's for the rest.
+    // What a node hands on is the size of: a scale node's own, a crop's, an uploaded file's, a composite's
+    // destination's, and the latent's for the rest. ImageCrop (comfy_extras/nodes_images.py at 73c9bad4) keeps its
+    // corner inside the picture and cuts its rectangle at the picture's edge.
+    const cropOf = (node: Graph[string]) => {
+      const from = sizeOf(source(node.inputs.image));
+      const x = Math.min(Number(node.inputs.x), from.width - 1), y = Math.min(Number(node.inputs.y), from.height - 1);
+      return { x, y, width: Math.min(Number(node.inputs.width), from.width - x), height: Math.min(Number(node.inputs.height), from.height - y) };
+    };
     const sizeOf = (node: Graph[string] | undefined): { width: number; height: number } => {
       if (node?.class_type === 'ImageScale') return { width: Number(node.inputs.width), height: Number(node.inputs.height) };
+      if (node?.class_type === 'ImageCrop') { const { width, height } = cropOf(node); return { width, height }; }
       if (node?.class_type === 'ImageCompositeMasked') return sizeOf(source(node.inputs.destination));
       const file = node?.class_type === 'LoadImage' ? uploaded.get(String(node.inputs.image)) : undefined;
       return file ? pngSize(file) : { width, height };
@@ -204,9 +213,12 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
     const slots = Object.values(graph).flatMap(node => Object.entries(node.inputs).flatMap(([key, value]) => {
       const slot = /^images\.image_(\d+)$/.exec(key);
       const linked = source(value);
-      const loader = linked?.class_type === 'ImageScale' ? source(linked.inputs.image) : linked;
-      return slot && loader ? [{ slot: Number(slot[1]), file: String(loader.inputs.image),
-        scaled: linked?.class_type === 'ImageScale' ? sizeOf(linked) : null }] : [];
+      const scale = linked?.class_type === 'ImageScale' ? linked : undefined;
+      const behind = scale ? source(scale.inputs.image) : linked;
+      const crop = behind?.class_type === 'ImageCrop' ? behind : undefined;
+      const loader = crop ? source(crop.inputs.image) : behind;
+      return slot && loader ? [{ slot: Number(slot[1]), file: String(loader.inputs.image), scaled: scale ? sizeOf(scale) : null,
+        cropped: crop ? cropOf(crop) : null }] : [];
     })).sort((a, b) => a.slot - b.slot);
     const images: FakeJob['images'] = [];
     const messages: [string, object][] = [];
