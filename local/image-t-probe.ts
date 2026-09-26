@@ -1061,7 +1061,9 @@ const countsOf = (index: ProbeIndex) => {
 const COLOURS = ['#ff1744', '#00e676', '#00b0ff', '#ffea00'];
 const LANGUAGE_WORDS: Record<Language, string> = { en: 'по-английски', ru: 'по-русски' };
 // Rectangles over a picture, in its own pixels: each marked box thin, the region a variant redraws round it thick, in
-// the colour of the person's slot and numbered by it.
+// the colour of the person's slot and numbered by it. The page lets them overflow the picture (`.over svg`): a side
+// on the picture's edge otherwise keeps only the inner half of its line, too thin to see, and the box round the whole
+// left giant in `giants` seemed to be its right side alone.
 function overlay(width: number, height: number, marks: { box: Box; region?: Region; at: number }[]) {
   if (!marks.length) return '';
   const rect = (x: number, y: number, w: number, h: number, colour: string, stroke: number) =>
@@ -1175,7 +1177,7 @@ export function writePage(source: string, out: string, read?: { scenes: Scene[];
 figure.wide{width:calc((100% - 16px) / 3)}figure.half{width:calc((100% - 8px) / 2)}figure.tall{width:calc((100% - 40px) / 6)}img{width:100%;display:block}
 .pair{display:flex;gap:4px;width:calc((100% - 24px) / 4)}figure.side{width:calc((100% - 4px) / 2)}
 .lang{display:flex;gap:4px;width:calc((100% - 16px) / 3)}.lang figcaption{font-size:13px}
-.over{position:relative}.over svg{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}
+.over{position:relative}.over svg{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;overflow:visible}
 .box{display:flex;align-items:center;justify-content:center;text-align:center;aspect-ratio:16/9;background:#eee;font-size:14px}
 figure.tall .box,figure.side .box{aspect-ratio:9/16}table{border-collapse:collapse}th,td{padding:4px 6px;border-top:1px solid #ddd;vertical-align:top;text-align:left}
 @media (max-width:640px){figure.wide,figure.half{width:100%}figure.tall{width:calc((100% - 16px) / 3)}.pair{width:calc((100% - 8px) / 2)}.lang{width:100%}}</style>
