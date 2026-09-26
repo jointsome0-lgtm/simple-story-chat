@@ -21,9 +21,9 @@ import type { BatchIndex, Graph, References } from './image-batch.ts';
 // picture (2026-09-24). This is the recipe the bot draws its portraits by (local/picture.ts), fixed before the
 // identity run and pinned by it: the whole figure from the front, in plain close-fitting clothes of the bot's own
 // that hide none of the build and follow the person into no scene, standing, with no expression put on them — a grim
-// face is the look's to say — in a neutral style of its own, never a story's. `look` comes from the sheet through
-// `assemblePrompt`, which strips names and ages here as in every frame, and these clothes stand where a frame would
-// put the sheet's outfit. Two portraits of one look differ by the seed.
+// face is the look's to say — in a neutral style of its own, never a story's. The person's text comes from the sheet
+// (`portraitText`) through `assemblePrompt`, which strips names and ages here as in every frame, and these clothes
+// stand where a frame would put the sheet's outfit. Two portraits of one text differ by the seed.
 export const PORTRAIT_CLOTHES = 'wearing a plain close-fitting white tank top, close-fitting dark grey trousers and plain dark shoes';
 export const PORTRAIT_STYLE = 'Neutral character reference illustration with natural colors, realistic proportions and clean even rendering, the build, silhouette and permanent marks clearly readable.';
 export const PORTRAIT_ACTION = 'stands upright facing the viewer, arms relaxed at the sides';
@@ -36,8 +36,16 @@ export function portraitDescription(name: string): Description {
     people: [{ who: name, look: '', clothes: PORTRAIT_CLOTHES, state: '', action: PORTRAIT_ACTION }],
   };
 }
-export const portraitPrompt = (name: string, look: string) =>
-  assemblePrompt(portraitDescription(name), [{ name, look, outfit: '' }], PORTRAIT_STYLE);
+// `names` are the sheet's, which a portrait strips as a frame does: the details of one person may name another. The
+// person's own comes first, and only once, so that nobody else's empty line stands for them.
+export const portraitPrompt = (name: string, text: string, names: string[] = []) =>
+  assemblePrompt(portraitDescription(name), [{ name, look: text, outfit: '' }, ...names
+    .filter(other => other.trim().toLowerCase() !== name.trim().toLowerCase()).map(other => ({ name: other, look: '', outfit: '' }))], PORTRAIT_STYLE);
+// What a portrait of a person of the sheet is drawn from (docs/illustrations-plan.md#portrait-details): their
+// `details`, since a portrait holds one person and can take all of them, or their `look` where the sheet has none, as
+// no sheet written before 2026-09-26 has, and where the reader wrote the look: the reader's words replace the person.
+export const portraitText = (person: { details?: string; look: string; edited?: boolean }) =>
+  !person.edited && person.details?.trim() ? person.details : person.look;
 
 // The canvas a portrait is drawn on: the text-to-image graph's own latent turned upright, the smaller side across. A
 // standing figure in a wide frame gets a third of the pixels; the bot applies the same rule to its own graph.
@@ -49,7 +57,8 @@ export function portraitCanvas(graph: Graph): { width: number; height: number } 
 
 // One portrait case per person of every story in `cases`. The id carries the story and a number, never the name:
 // it becomes a file name in the run directory and a key in a review bundle. A story is described once, so the
-// first case of each story is the one its sheet is taken from.
+// first case of each story is the one its sheet is taken from. A portrait here is drawn from the look, as the
+// identity run pinned its recipe, whatever else the sheet holds.
 export function portraitCases(cases: Case[]): Case[] {
   const stories = new Map<string, Case>();
   for (const one of cases) if (!stories.has(one.scenario)) stories.set(one.scenario, one);

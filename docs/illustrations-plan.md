@@ -1,7 +1,7 @@
 # How pictures came into the bot
 
 A record of the plan for illustrated scenes, text to image, from its first version on 2026-09-20 to the owner's
-decisions of 2026-09-25. Each section is true of its date, and a proposal in it is not a task for today. The tester
+decisions of 2026-09-26. Each section is true of its date, and a proposal in it is not a task for today. The tester
 asked how text to image fits in at all. The six steps kept running into a second question, whether a person stays
 recognisable from one frame to the next, and no confirmed paid run has answered it yet. What the bot does now is
 described elsewhere: what the reader gets in [telegram-ui.md](telegram-ui.md#picture-delivery), the picture card in
@@ -605,6 +605,55 @@ version answers the request about the picture after a scene.
 The variant's note gives no style share, which nobody knows for a prompt written whole. A variant changes nothing of
 the story, not the sheet, the clothes or the frame kept for samples. What the recipe does not pin, and the rest of
 the variant's contract, are in [telegram-ui.md](telegram-ui.md#picture-variants).
+
+<a id='portrait-details'></a>
+
+## Portraits from a longer description (2026-09-26)
+
+The owner decided on 2026-09-26 that a portrait is drawn from a detailed description, which Gemma compresses into the
+short look the frames use now.
+
+Round one of the action measurement drew its fronts from the look ([the sheet](action-experiment.md#the-sheet)). In
+`flight` both daughters, 8 and 4 in the seed, came out of the sheet as a "young girl", and their fronts drew adult
+women: the sheet's rule allowed only the age words of adults (young adult, middle-aged, elderly). Three of that
+sheet's four looks named no skin tone. A look of 15 to 25 words has to serve a frame of up to four people, where every
+word of it competes with the action; a portrait holds one person and can take far more.
+
+- The sheet (`SHEET` in `local/illustrate.ts`) writes, for each person, `name`, `details`, `look` and `outfit`, in
+  that order. `details` comes before `look` in the schema's properties and in its required list, so that the model
+  writes the long description first and compresses it in the same answer, as the variant frame of the action
+  measurement relies on `role` and `facing` coming right after `who`.
+- `details` is English, 50 to 80 words, without names and without clothes, in this order: sex and age as a word,
+  with the words of children (small child, child, teenager) beside those of adults, and never a number; skin tone;
+  height and build with their proportions; hair, its colour, length, texture and style; the face, its shape, brows,
+  eyes and their colour, nose, lips, facial hair and lines; permanent marks with their place and side. What the story
+  names comes from the story, and the rest is invented once, plausibly for the story's world, so that the characters
+  differ in silhouette, hair and face.
+- `look` stays at 15 to 25 words, compressed from `details`: the same age word, skin tone, build, hair and one or two
+  marks. The frames use it as before.
+- A portrait is drawn from `details` (`portraitText` in `local/image-portraits.ts`), through the same
+  `assemblePrompt`, which cuts out names and ages given as numbers. It now cuts out every name of the sheet, since
+  the details of one person may name another. A look the reader wrote wins: the edit drops the details, which describe
+  the person the reader's words replace, and a sheet written anew keeps the reader's look without them. A sheet
+  without details, as every sheet written before this one is, draws its portraits from the look and is not written
+  again for them. A kept portrait records the text it was drawn from in its `look` field, and the card calls it a
+  portrait of the earlier look once the person's text differs.
+- The frame instruction, its rule for the looks of strangers included, the style line and the portrait's clothes,
+  style and pose stay as they were. The identity measurement's recipe still draws from the look, as its run pinned it
+  ([portrait recipe](identity-experiment.md#portrait-recipe)). The age words of children in the frame's rule for
+  strangers are a later step.
+
+The sheet had the frames' limit of 900 tokens. A synthetic reply of six people at the top of every word range, counted
+by Gemma 4's tokenizer (`local/tokenizer.ts`), takes 1102 tokens as compact JSON and 1225 indented, where the sheet
+before this took 450 and 555 at the top of its own ranges. With a quarter more words than the ranges allow it takes
+1341 and 1464, and with half more, 1570 and 1693. The details cost about 106 tokens a person, 1.32 tokens a word. So the sheet has a limit of
+its own, `SHEET_TOKENS`, 1800 as the variant frame has, and the frame keeps 900. A reply that runs away into newlines
+still gets its one retry, and now runs up to twice as long before it. The estimate that lets a description far from
+the end of the context skip the server's count (`trusted` in `local/picture.ts`) leaves room for those 1800 tokens
+of answer.
+
+Round two of the action measurement draws its fronts from the details, and the new instruction changes its pins
+([the sheet](action-experiment.md#the-sheet)).
 
 <a id='blind-review'></a>
 

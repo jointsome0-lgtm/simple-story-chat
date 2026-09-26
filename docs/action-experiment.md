@@ -18,10 +18,11 @@ for it, and on the bot's own path: the uncensored Gemma writes the scenes and th
 [simple-serving](model-providers.md#simple-serving-our-gateway), and Qwen-Image 2.1 draws them on another.
 [Stage 1](#stage-1) wrote the frames of the clean scenes with a hosted Gemma and drew nothing. The first round wrote
 its texts on 2026-09-25 and 26 and drew seed 7 on the 26th, with up to six people in a moment; the next one has four
-([four](#four)), eight more clean scenes of one to three people ([the set](#the-set)), and checklists that count a
-touch of one's own body, of a thing and a reflection ([one](#one)). Round one's T gave L's picture back and took
-nothing from the portraits; [the T probe](#t-probe) tries nine variants of T on a card of its own, from round one's own
-pictures, and first on the same card [a clothing test](#t-probe-suit) of the portraits.
+([four](#four)), eight more clean scenes of one to three people ([the set](#the-set)), checklists that count a
+touch of one's own body, of a thing and a reflection ([one](#one)), and fronts drawn from the `details` the bot's
+sheet now writes of each person, whose new instruction changes the pins ([the sheet](#the-sheet)). Round one's T gave
+L's picture back and took nothing from the portraits; [the T probe](#t-probe) tries nine variants of T on a card of
+its own, from round one's own pictures, and first on the same card [a clothing test](#t-probe-suit) of the portraits.
 
 <a id='stage-1'></a>
 
@@ -286,12 +287,19 @@ before `role` and `facing` were asked for, and a cut reply is a failure.
 
 ### The sheet
 
-The sheet is the bot's own and does not change, since the bot's portraits are drawn from it. Its defects belong to
-the pipeline and are measured, never repaired. Code compares it with each clean story's frozen cast, one entry per
-person, and with the participants of each sharp story's checklist. The report gives, per scene, the participants of
-the moment, how many of them the sheet has, and how many were bound to a portrait. The sheet asks for age in words
-made for adults (young adult, middle-aged, elderly), so the daughters of 8 and 4 in `flight` are expected to come out
-wrong; the judges' check of the portraits says whether they did.
+The sheet is the bot's own, since the bot's portraits are drawn from it, and the harness never changes it on its own.
+Its defects belong to the pipeline and are measured, never repaired. Code compares it with each clean story's frozen
+cast, one entry per person, and with the participants of each sharp story's checklist. The report gives, per scene,
+the participants of the moment, how many of them the sheet has, and how many were bound to a portrait.
+
+Round one's sheet asked for age in words made for adults (young adult, middle-aged, elderly). Both daughters of
+`flight`, 8 and 4 in the seed, came out as a "young girl", and their fronts drew adult women; three of that sheet's
+four looks named no skin tone. On 2026-09-26 the owner changed the bot's sheet
+([portrait details](illustrations-plan.md#portrait-details)): before each look it writes the person's `details`, 50
+to 80 words that have the age words of children too, and compresses the look from them. Round two's fronts are drawn
+from the details as the bot's portraits are (`portraitText`), and every frame keeps the look. The judges still read
+each person's look as their line of the sheet. The new instruction and schema change the pins, and whether the
+daughters now come out as children is the judges' check of the fronts to say.
 
 <a id='assembly'></a>
 
@@ -335,7 +343,8 @@ letters outside the Latin script, which would have caught stage 1's «рыжая
 
 A front portrait is drawn for each person a manifest binds, by the identity run's recipe
 ([portraits](identity-experiment.md#portrait-recipe)): the whole figure from the front, in the bot's plain clothes,
-before a grey backdrop, on the text-to-image graph at 720x1280, seed 7.
+before a grey backdrop, on the text-to-image graph at 720x1280, seed 7. Since round two its text is the person's
+`details`, as the bot's portraits take it ([the sheet](#the-sheet)), where round one took the look.
 
 A view is drawn only where a frame needs one. For each bound person whose `facing` is `away`, `screen-left` or
 `screen-right`, one view is drawn as an edit of their full-size front, with this prompt and the portraits' style
@@ -878,6 +887,7 @@ fake judge's prose and a malformed answers block. On the way it goes through eve
 - each outcome of [the text run](#text-run) once, `schema` by a shared role and `failed` by a provider error, and a
   retry that parses;
 - a finished text run that asks nothing again, and another address refused with `texts.json` byte for byte unchanged;
+- every planned front drawn from the `details` the fake sheet wrote of its person ([the sheet](#the-sheet));
 - the smoke refused while a sharp checklist waits for the owner's page, and the rest refused before the smoke;
 - a smoke on the largest scene, whose people all face the viewer, so that it also draws another scene's view and that
   view's front, and V stands on C's picture there;

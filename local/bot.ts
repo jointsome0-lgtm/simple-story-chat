@@ -346,7 +346,10 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       const sheet = state.stories[storyId]?.sheet ?? [];
       const index = sheet.findIndex(one => one.name === name);
       if (index < 0) throw refuse(t, 'lookGone');
-      sheet[index] = { ...sheet[index], look, edited: true };
+      // The reader's words replace the person: the details the model wrote of them go with the look they were
+      // compressed into, and portraits are drawn from these words (local/image-portraits.ts `portraitText`).
+      const { details, ...person } = sheet[index];
+      sheet[index] = { ...person, look, edited: true };
       return { screen: render(state, `character:${storyId}:${index}:${personTag(name)}`, pictureInfo) };
     }
     if (action === 'last') return { savedText: last(state) };

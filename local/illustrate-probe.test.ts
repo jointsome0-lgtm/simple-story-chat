@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { askJson, assemblePrompt, frameRequest, matchSheet, sheetLooks, sheetOf, sheetRequest, stripAges, stripNames, DESCRIBE_TOKENS, STYLE } from './illustrate.ts';
+import { askJson, assemblePrompt, frameRequest, matchSheet, sheetLooks, sheetOf, sheetRequest, stripAges, stripNames, DESCRIBE_TOKENS, SHEET_TOKENS, STYLE } from './illustrate.ts';
 import type { Assembled, Character, Description, Excerpt } from './illustrate.ts';
 import type { GenerationResult, ModelRequest, Provider } from './model.ts';
 import { scenesWanted } from './illustrate-probe.ts';
@@ -131,16 +131,16 @@ test('a description is asked for in its schema after the scene, once more when i
   const context: Excerpt = { system: 'система', messages: [{ role: 'user', content: 'Синтетическая сцена.' }] };
   type Schema = { required: string[]; additionalProperties: boolean; properties: Record<string, { maxItems: number; items: Schema }> };
   // Both calls continue the scene's own request, their instruction last, in a schema that asks for every field.
-  const requests: [string, ModelRequest, string[], string, number, string[]][] = [
-    ['the sheet', sheetRequest(context), ['characters'], 'characters', 6, ['name', 'look', 'outfit']],
+  const requests: [string, ModelRequest, string[], string, number, string[], number][] = [
+    ['the sheet', sheetRequest(context), ['characters'], 'characters', 6, ['name', 'details', 'look', 'outfit'], SHEET_TOKENS],
     ['the frame', frameRequest(context, sheet), ['moment', 'shot', 'setting', 'objects', 'props', 'light', 'people'], 'people', 4,
-      ['who', 'look', 'clothes', 'state', 'action']],
+      ['who', 'look', 'clothes', 'state', 'action'], DESCRIBE_TOKENS],
   ];
-  for (const [label, request, required, list, most, fields] of requests) {
+  for (const [label, request, required, list, most, fields, limit] of requests) {
     const { properties, ...schema } = request.outputSchema as Schema;
     assert.deepEqual([schema.required, schema.additionalProperties], [required, false], label);
     assert.deepEqual([properties[list].maxItems, properties[list].items.required, properties[list].items.additionalProperties], [most, fields, false], label);
-    assert.deepEqual([request.system, request.maxOutputTokens, request.messages.slice(0, -1)], [context.system, DESCRIBE_TOKENS, context.messages], label);
+    assert.deepEqual([request.system, request.maxOutputTokens, request.messages.slice(0, -1)], [context.system, limit, context.messages], label);
   }
   // The frame's instruction names the people of the sheet for `who`, and repeats the clothes they wore before.
   const worn = frameRequest(context, [{ ...sheet[0], outfit: 'wearing a grey wool coat' }, sheet[1]]).messages.at(-1)!.content;

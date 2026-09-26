@@ -39,6 +39,7 @@ import { ARMS, SERVING, SMOKE_PROBES, TEXT_CODES, gpuModel, isSharp, markerCheck
 import type { Fetch, StoryText, TextModel, TextsRecord } from './action-text.ts';
 import { planAll, readPlan, textsHash } from './action-prompts.ts';
 import type { PromptsRecord, Tokens } from './action-prompts.ts';
+import { portraitPrompt } from './image-portraits.ts';
 import { ACTION_GRAPH, DRAW_CODES, drawStage, planCells } from './action-draw.ts';
 import type { DrawIndex, DrawStageOptions } from './action-draw.ts';
 import { KINDS, answersFile, bundleDir, checklistBundles, collectAnswers, judgeSessions, judgingCounts, pictureBundles,
@@ -336,6 +337,17 @@ export async function dryRun(out: string, options: { tokenizers?: string } = {})
     const tokenizer = qwenTokenizer(options.tokenizers);
     const prompts = promptsCommand(root, tokenizer);
     say(`4 prompts: ${JSON.stringify({ arms: prompts.arms, vIsC: prompts.vIsC, fronts: prompts.fronts, views: prompts.views, out: prompts.out, nonLatin: prompts.nonLatin, tokens: prompts.tokens })}`);
+    // The fakes write every person's details, as round two's sheets do (#the-sheet): a step that lost them on the way
+    // would draw round two's fronts from the look, and say so nowhere.
+    const fromDetails = textStories().flatMap(story => {
+      const worn = readJson<StoryText>(join(storyDir(root, story.id), 'text.json'))?.worn ?? [];
+      return (readPlan(root, story.id)?.portraits ?? []).map(front => {
+        const person = worn[Number(front.entry.slice(1)) - 1];
+        return Boolean(person?.details) && front.prompt === portraitPrompt(person.name, person.details!, worn.map(other => other.name)).prompt;
+      });
+    });
+    say(`   fronts drawn from their person's details: ${fromDetails.filter(Boolean).length} of ${fromDetails.length}`);
+    expect(fromDetails.length > 0 && fromDetails.every(Boolean), 'every front drawn from its person\'s details');
 
     const judge = fakeJudge({ marker: word, script: DRY_SCRIPT });
     const lists = await checklistsCommand(root, { exec: judge.exec });

@@ -91,9 +91,14 @@ export function fakeGateway({ key, model = 'gemma-4-31b-heretic-nvfp4', stories 
     } else if (kind === 'scene') {
       text = `${people.join(', ')} стоят рядом и держат друг друга за руки, как велит сцена${secret}.`;
     } else if (kind === 'sheet') {
-      text = JSON.stringify({ characters: fault === 'empty_sheet' ? [] : people.slice(0, 6).map((name, at) => ({ name,
-        look: `An adult of ${['slim', 'broad', 'tall', 'short', 'stocky', 'wiry'][at % 6]} build with ${['dark', 'fair', 'red', 'grey', 'black', 'brown'][at % 6]} hair${secret}`,
-        outfit: `wearing a ${['blue', 'green', 'grey', 'brown', 'white', 'black'][at % 6]} tunic` })) });
+      // Every person has details before the look, as the schema orders them, and more than it says: the dry run checks
+      // that the fronts are drawn from them.
+      text = JSON.stringify({ characters: fault === 'empty_sheet' ? [] : people.slice(0, 6).map((name, at) => {
+        const build = ['slim', 'broad', 'tall', 'short', 'stocky', 'wiry'][at % 6], hair = ['dark', 'fair', 'red', 'grey', 'black', 'brown'][at % 6];
+        return { name, details: `An adult of ${build} build with ${['olive', 'pale', 'dark brown', 'freckled', 'tanned', 'ruddy'][at % 6]} skin, `
+          + `long ${hair} hair tied back, a narrow face, grey eyes and a scar on the left cheek${secret}`,
+          look: `An adult of ${build} build with ${hair} hair${secret}`, outfit: `wearing a ${['blue', 'green', 'grey', 'brown', 'white', 'black'][at % 6]} tunic` };
+      }) });
     } else {
       const variant = kind === 'variant';
       text = JSON.stringify({ moment: `The participants hold each other${secret}`, shot: 'Medium wide shot at three quarters', setting: 'A plain room',

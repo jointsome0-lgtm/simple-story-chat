@@ -33,8 +33,9 @@ export type Branch = { id: string; name: string; head: string | null; memory: st
 export type Checkpoint = { id: string; branchId: string; label: string; kind: string; head: string | null; memory: string | null };
 // A portrait of one person of a sheet that the reader kept to pick a reference by (local/picture.ts): the name of its
 // file among the reader's portraits beside the database (local/store.ts), never the picture itself, and how it was
-// drawn — its recipe, on a canvas of its own, the look it shows, which an edited look no longer matches, and the
-// clothes and the style line of its prompt. Frames never use it.
+// drawn — its recipe, on a canvas of its own, the text of the person it was drawn from as `look` (their `details`, or
+// their look where there were none or the reader wrote it), which an edited look no longer matches, and the clothes
+// and the style line of its prompt. Frames never use it.
 export type KeptPortrait = PictureRecipe & { file: string; look: string; clothes: string; style: string; at: number };
 export type Story = {
   id: string; seedId: string; title: string; branches: Record<string, Branch>; checkpoints: Record<string, Checkpoint>;
@@ -43,8 +44,10 @@ export type Story = {
   // the story's own history and kept beside its memory (docs/illustrations-plan.md#step-3), and the clothes they
   // wore when it was written. A sheet without `outfit` is older and had clothes in `look`; the next picture writes it
   // again. Only the local bot writes it, and only when pictures are switched on; a story without pictures never has it.
-  // `edited` marks a look the reader wrote themselves, which that rewrite keeps.
-  sheet?: { name: string; look: string; outfit?: string; edited?: boolean; portrait?: KeptPortrait }[];
+  // `edited` marks a look the reader wrote themselves, which that rewrite keeps. `details`, the long description the
+  // look is compressed from, which portraits are drawn from, is in a sheet written since 2026-09-26, and goes when the
+  // reader writes the look.
+  sheet?: { name: string; details?: string; look: string; outfit?: string; edited?: boolean; portrait?: KeptPortrait }[];
 };
 export type Job = {
   id: string; storyId: string; branchId: string; head: string | null; memory: string | null; input: string; started: number;
