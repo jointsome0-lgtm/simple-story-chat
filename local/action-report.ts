@@ -104,8 +104,9 @@ export function scenesOf(run: Run, seed: number, kind: 'pictures' | 'repeat' = '
 
 // ---- The gates ----
 
+// `count`: the value and the threshold are pictures, not a share or a difference of shares.
 export type Clause = { clause: string; kind: 'gain' | 'safeguard'; scenes: number; value: number | null; threshold: number;
-  pass: boolean | 'not_applicable' | 'inconclusive' };
+  pass: boolean | 'not_applicable' | 'inconclusive'; count?: boolean };
 export type Verdict = 'pass' | 'fail' | 'inconclusive';
 export type Gate = { gate: number; arms: ActionArm[]; scenes: number; clean: number; verdict: Verdict; clauses: Clause[]; floor: Clause; note?: Record<string, unknown> };
 const tolerance = (n: number) => Math.max(1, Math.floor(n / 10));
@@ -122,11 +123,11 @@ function shareClause(scenes: Scene[], name: ScoreName, [x, y]: [ActionArm, Actio
 function countClause(scenes: Scene[], pick: (score: Score) => boolean | undefined, [x, y]: [ActionArm, ActionArm], sense: 'fewer' | 'more',
   slack: boolean, clause: string): Clause {
   const both = scenes.filter(scene => pick(scene.scores[x]!) !== undefined && pick(scene.scores[y]!) !== undefined);
-  if (!both.length) return { clause, kind: 'safeguard', scenes: 0, value: null, threshold: 0, pass: 'not_applicable' };
+  if (!both.length) return { clause, kind: 'safeguard', scenes: 0, value: null, threshold: 0, pass: 'not_applicable', count: true };
   const count = (arm: ActionArm) => both.filter(scene => pick(scene.scores[arm]!) === true).length;
   const allowed = slack ? tolerance(both.length) : 0, value = count(x) - count(y);
   return { clause, kind: 'safeguard', scenes: both.length, value, threshold: sense === 'fewer' ? allowed : -allowed,
-    pass: sense === 'fewer' ? value <= allowed : value >= -allowed };
+    pass: sense === 'fewer' ? value <= allowed : value >= -allowed, count: true };
 }
 // The floor: an arm that passes has contacts of at least 50%, the mean over scenes.
 function floorOf(scenes: Scene[], arm: ActionArm): Clause {
@@ -462,8 +463,11 @@ export type ActionReport = ReturnType<typeof actionReport>;
 
 const VERDICT_RU: Record<Verdict, string> = { pass: 'проходит', fail: 'не проходит', inconclusive: 'не решено' };
 const GATE_RU = ['', 'Текст варианта: A+ против A', 'Идея владельца: C против A+', 'Портреты: C против A+', 'Виды: V против C', 'Два прохода: T против L'];
-const clauseText = (clause: Clause) => `${clause.clause} ${clause.value === null ? '—' : Number.isInteger(clause.value) ? clause.value : points(clause.value)}`
-  + ` (порог ${Number.isInteger(clause.threshold) ? clause.threshold : points(clause.threshold)}, сцен ${clause.scenes}, ${clause.pass === true ? 'да' : clause.pass === false ? 'нет' : clause.pass === 'not_applicable' ? 'неприменимо' : 'не решено'})`;
+// A count of pictures as a number, anything else in points: a share of exactly 1 is 100, not 1. A gain is named as one,
+// so that gate 4's two branches, each a gain and a limit on losses, read apart.
+const shown = (clause: Clause, value: number) => clause.count ? `${value}` : points(value);
+const clauseText = (clause: Clause) => `${clause.clause}${clause.kind === 'gain' ? ' (прирост)' : ''} ${clause.value === null ? '—' : shown(clause, clause.value)}`
+  + ` (порог ${shown(clause, clause.threshold)}, сцен ${clause.scenes}, ${clause.pass === true ? 'да' : clause.pass === false ? 'нет' : clause.pass === 'not_applicable' ? 'неприменимо' : 'не решено'})`;
 
 // The owner's report in Russian. The sharp scenes are counts: no row of theirs by id.
 export function reportMarkdown(report: ActionReport): string {
@@ -475,8 +479,10 @@ export function reportMarkdown(report: ActionReport): string {
     '## Ворота, сид 7', '', 'Пороги — для следующего решения, а не доказательство. Значения в пунктах, счёт картинок — числом.', ''];
   for (const gate of report.gates) {
     lines.push(`**${gate.gate}. ${GATE_RU[gate.gate]}** — ${VERDICT_RU[gate.verdict]}; сцен ${gate.scenes}, чистых ${gate.clean}.`, '');
-    for (const clause of [...gate.clauses, gate.floor]) lines.push(`- ${clauseText(clause)}`);
-    lines.push('');
+    // Gate 4 opens with its two branches, each a gain and its limit on losses (`gatesOf`).
+    const branches = Array.isArray(gate.note?.branches) ? gate.note.branches.length : 0;
+    gate.clauses.forEach((clause, at) => lines.push(`- ${at < 2 * branches ? `ветка ${Math.floor(at / 2) + 1}: ` : ''}${clauseText(clause)}`));
+    lines.push(`- ${clauseText(gate.floor)}`, '');
   }
   lines.push('## Подмножества и повтор', '', '| Ворота | Все | Только чистые | Дошли до цели | Сид 11 |', '| --- | --- | --- | --- | --- |');
   for (const gate of report.gates) {
