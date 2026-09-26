@@ -43,7 +43,8 @@ Open the one for the task at hand.
 - [The identity measurement](docs/identity-experiment.md): its protocol, and the run of 2026-09-25, where neither arm
   with portraits passed
 - [The action measurement](docs/action-experiment.md): its protocol, for scenes where several people touch, with
-  portraits, views and the bot's own text path; not run yet
+  portraits, views and the bot's own text path, and
+  [round one of 2026-09-25/26](docs/knowledge/action-measurements.md#round-one-2026-09-26), where no gate passed
 
 ## Ideas, measurements and decisions
 
@@ -60,6 +61,7 @@ These pages keep the evidence and the reasons behind decisions. They are dated r
 | What helped pictures match scenes, and what still went wrong? | [The six description and image steps](docs/illustrations-plan.md#description-steps) |
 | Why a fixed style, separate clothes and an editable picture prompt? | [Style decisions](docs/illustrations-plan.md#style-decisions), [clothes](docs/illustrations-plan.md#clothes-decisions), [prompt variants](docs/illustrations-plan.md#prompt-variant-decision) |
 | Will a portrait preserve both a face and a figure across scenes? | [The research question](docs/illustrations-plan.md#qwen-choice), [the run of 2026-09-25](docs/identity-experiment.md#result-2026-09-25), [its protocol](docs/identity-experiment.md#identity-runbook) |
+| Does the first picture show an action better with portraits, or with the looks left out of the text? | [Round one's counts and what round two changed](docs/knowledge/action-measurements.md#round-one-2026-09-26), [the protocol](docs/action-experiment.md) |
 | What did GPU measurements establish about cache, pool size and failures? | [GPU measurements and their limits](docs/knowledge/gpu-measurements.md#pool-2026-09-20), [SSH failures](docs/knowledge/gpu-measurements.md#ssh-failures) |
 | Which model connections were actually checked, and which were only tested with fakes? | [Dated checks](docs/knowledge/provider-checks.md), [the current gateway boundary](docs/model-providers.md#simple-serving-our-gateway) |
 
