@@ -7,14 +7,15 @@
 // only their heads and hair on A+'s picture, from a head-and-shoulders crop of each front, the boxes and the crops
 // marked before the card. Round two's T stays as it is: T_OPENING, `tPrompt` and the action graph are read here and
 // never changed, and the variants' prompts and graphs live in this file alone. On the same card, first, the clothing
-// test of the portraits: eight fronts of round one drawn again in a dark grey suit, and the demon's C from them. The
-// commands read illustrations/action-1/clean alone, and write illustrations/t-probe alone, where they also read the
-// boxes; only `dry-run` takes another --dir:
+// test of the portraits: eight fronts of round one drawn again in a dark grey suit, and the demon's C from them; then
+// the language test: three made-up people drawn as the bot draws a portrait, each from one description in English and
+// in Russian. The commands read illustrations/action-1/clean alone, and write illustrations/t-probe alone, where they
+// also read the boxes; only `dry-run` takes another --dir:
 //   estimate  the cells, the jobs and their minutes, from round one's own times, before a card is rented
-//   draw      on the picture card: the clothing test, then the scenes in turn, each begun only if all of it can end by
-//             --until
+//   draw      on the picture card: the clothing test, the language test, then the scenes in turn, each begun only if
+//             all of it can end by --until
 //   page      index.html, the owner's page, with the boxes and the crops over the pictures and the fronts old and new,
-//             before the card as after; `draw` also writes it after the test and after every scene
+//             before the card as after; `draw` also writes it after each test and after every scene
 //   dry-run   all of it against local/fake-comfy.ts, from a made-up round one with a sealed story beside it
 // What it prints is ids, codes, counts and times, one JSON object a line: never a word of a prompt.
 import { parseArgs } from 'node:util';
@@ -25,6 +26,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { ACTION_SEEDS, ACTION_STORIES, MARKER_STORY } from '../examples/action-set.ts';
+import { PORTRAIT_LANGUAGES } from '../examples/portrait-languages.ts';
 import { CLEANUP_RESERVE_MS, SAMPLER_DEFAULTS, apiGraph, applyToWorkflow, comfyUrl, drawOne, encoderResolution, logLines,
   partialLoadsSince, pngSize, referenceSlots, samplerSettingsOf, serverPins, settled, stopsTheRun, stripPngMetadata,
   uploadReference } from './image-batch.ts';
@@ -350,6 +352,46 @@ export function suitRight(graph: Graph, slots: string[], seed: number, canvas: {
     && found.every((one, at) => one.order === at + 1 && one.file === slots[at] && one.size === `${SCALED.width}x${SCALED.height}` && !one.crop);
 }
 
+// ---- The language test ----
+
+// The language test of the portraits (docs/action-experiment.md#t-probe-lang), which the owner agreed on 2026-09-26
+// to run at the next rental: the bot draws a portrait from the reader's `details` exactly as written, in any language,
+// with no translation, and nothing had yet sent the image model a Russian description. The three made-up people of
+// examples/portrait-languages.ts are drawn as the bot draws a portrait, each from its English text and from its
+// Russian one, through `portraitPrompt` with the three names as the sheet's, by the front graph on its canvas at seed
+// 7: six fronts, and no C. A pair whose prompts differ in more than the text, as they would if a name or an age were
+// cut out of one text, is refused, so that the language alone differs. The files go into the probe's lang/.
+export const LANGUAGES = ['en', 'ru'] as const;
+export type Language = typeof LANGUAGES[number];
+export type LangJob = { key: string; person: string; language: Language; prompt: string };
+// The jobs in the order drawn, each person's English, then Russian; and `hash`, what probe.json pins the test's cells
+// to: the six prompts, the front graph, its canvas and the seed.
+export type Lang = { jobs: LangJob[]; hash: string };
+export function langOf(): Lang {
+  const names = PORTRAIT_LANGUAGES.map(one => one.name);
+  const jobs = PORTRAIT_LANGUAGES.flatMap(person => {
+    const pair = LANGUAGES.map((language): LangJob => ({ key: `${person.id}-${language}`, person: person.id, language,
+      prompt: portraitPrompt(person.name, person[language], names).prompt }));
+    // Each text once and whole in its prompt, as the assembly puts a look, without its last full stop, and the rest
+    // of the two prompts alike.
+    const [en, ru] = pair.map(job => job.prompt.split(person[job.language].trim().replace(/\.$/, '')));
+    if (en.length !== 2 || JSON.stringify(en) !== JSON.stringify(ru)) {
+      throw new Refusal(`The two prompts of ${person.id} differ in more than the language of the text: the language test compares the languages alone, and nothing is drawn`);
+    }
+    return pair;
+  });
+  const { pins } = frontSetup();
+  return { jobs, hash: sha256(JSON.stringify([jobs.map(job => [job.key, sha256(job.prompt)]), pins.portraitGraph, pins.portraitCanvas, SEED])) };
+}
+const langFile = (job: LangJob) => join('lang', `${job.key}.png`);
+// A job of the test as it goes out: a front as the clothing test sends one, its own prompt on the sampler's positive
+// input.
+export function langRight(graph: Graph, prompt: string, canvas: { width: number; height: number }): boolean {
+  const sampler = Object.values(graph).find(node => node.class_type === 'KSampler');
+  const positive = Array.isArray(sampler?.inputs.positive) ? graph[String(sampler.inputs.positive[0])] : undefined;
+  return suitRight(graph, [], SEED, canvas) && (positive?.inputs.prompt ?? positive?.inputs.text) === prompt;
+}
+
 // ---- The boxes and the crops ----
 
 // boxes.json in the probe's directory, marked by eye before any card on round one's pictures: for each scene, by the
@@ -636,15 +678,17 @@ export function probePrompt(scene: Scene, variant: Variant, pass = 1): string {
 // binds (image 1 at 640x352 is one portrait's 880 tokens), and a latent start of L as its C with as many portraits. A
 // job's pictures are the scene's bound people, or one a pass for mask-each and face-each, and image 1 in T's form; the
 // VAE's encode of one picture, a crop, the masks and the paste are well inside the margin. A count round one never
-// drew takes the fewest above it, and failing that its arm's whole. The clothing test's fronts are priced as round
-// one's fronts, and its C as its C with as many portraits. `price` is the slowest, a quarter more and three seconds, as
-// the harness prices (action-draw.ts `pricing`); `expected` the median. A cell is one variant on one scene: one job,
-// or one a bound person for mask-each and face-each; each cell of the clothing test is one job.
+// drew takes the fewest above it, and failing that its arm's whole. The fronts of the clothing test and of the
+// language test are priced as round one's fronts, and the clothing test's C as its C with as many portraits. `price`
+// is the slowest, a quarter more and three seconds, as the harness prices (action-draw.ts `pricing`); `expected` the
+// median. A cell is one variant on one scene: one job, or one a bound person for mask-each and face-each; each cell of
+// the two tests is one job.
 export const passesOf = (variant: Variant, bound: number) => (variant.mask === 'each' ? bound : 1);
 const imagesOf = (variant: Variant, bound: number) => (variant.mask === 'each' ? 1 : bound) + (pictureFirst(variant) ? 1 : 0);
 export type JobKind = { arm: 'front' | 'T' | 'C'; images: number };
 export const jobOf = (variant: Variant, bound: number): JobKind => ({ arm: pictureFirst(variant) && variant.id !== 'half' ? 'T' : 'C', images: imagesOf(variant, bound) });
 export const suitKind = (job: SuitJob): JobKind => ({ arm: job.kind === 'front' ? 'front' : 'C', images: job.fronts.length });
+const LANG_KIND: JobKind = { arm: 'front', images: 0 };
 export function timesOf(round: DrawIndex) {
   // A job whose loaders missed the cache was cold, the run's first or the first on a new card, and a cold start is
   // priced apart (COLD_MS): round one's first front took 31 s against 15.5 s warm.
@@ -670,17 +714,19 @@ export function timesOf(round: DrawIndex) {
 // The first job of a run loads the weights onto the card: round one's first frame took 31 s against 16 s warm.
 const COLD_MS = 30000;
 
-// The plan's cells, its jobs and their minutes, the clothing test's included when it is drawn and apart as `suit`:
-// expected from round one's medians, and at the prices a scene or the test is admitted by.
-export function estimateOf(round: DrawIndex, scenes: Scene[], variants: Variant[], suit?: Suit) {
+// The plan's cells, its jobs and their minutes, each test's included when it is drawn and apart, the clothing test's
+// as `suit` and the language test's as `lang`: expected from round one's medians, and at the prices a scene or a test
+// is admitted by.
+export function estimateOf(round: DrawIndex, scenes: Scene[], variants: Variant[], suit?: Suit, lang?: Lang) {
   const times = timesOf(round);
-  const tested = suit ? suitJobs(suit).map(suitKind) : [];
-  const jobs = [...tested, ...scenes.flatMap(scene => variants.flatMap(variant => Array.from({ length: passesOf(variant, scene.bound) }, () => jobOf(variant, scene.bound))))];
+  const tested = suit ? suitJobs(suit).map(suitKind) : [], langKinds = lang ? lang.jobs.map(() => LANG_KIND) : [];
+  const jobs = [...tested, ...langKinds, ...scenes.flatMap(scene => variants.flatMap(variant => Array.from({ length: passesOf(variant, scene.bound) }, () => jobOf(variant, scene.bound))))];
   const sum = (list: JobKind[], read: (job: JobKind) => number) => list.reduce((total, job) => total + read(job), 0);
   const minutes = (ms: number) => Math.round(ms / 6000) / 10;
-  return { scenes: scenes.length, variants: variants.length, cells: scenes.length * variants.length + tested.length, jobs: jobs.length,
+  const apart = (list: JobKind[]) => ({ cells: list.length, expectedMinutes: minutes(sum(list, times.expected)), pricedMinutes: minutes(sum(list, times.price)) });
+  return { scenes: scenes.length, variants: variants.length, cells: scenes.length * variants.length + tested.length + langKinds.length, jobs: jobs.length,
     expectedMinutes: minutes(sum(jobs, times.expected) + COLD_MS / 2), pricedMinutes: minutes(sum(jobs, times.price) + COLD_MS),
-    ...(suit ? { suit: { cells: tested.length, expectedMinutes: minutes(sum(tested, times.expected)), pricedMinutes: minutes(sum(tested, times.price)) } } : {}) };
+    ...(suit ? { suit: apart(tested) } : {}), ...(lang ? { lang: apart(langKinds) } : {}) };
 }
 
 // ---- The drawing ----
@@ -695,21 +741,23 @@ export type ProbeJob = JobRecord & { pass: number };
 // One cell of the clothing test, its one job; `out` where a front its C binds was not drawn, with the code of why.
 export type SuitCell = Omit<JobRecord, 'status'> & { key: string; kind: SuitJob['kind']; story: string; id: string; seed: number;
   status: 'drawn' | 'failed' | 'out' };
+// One cell of the language test, its one job.
+export type LangCell = JobRecord & { key: string; person: string; language: Language };
 // One variant on one scene: its jobs in pass order, one, or one a bound person for mask-each and face-each, each pass
 // after the first starting from the picture of the one before. `drawn` once its last pass is, whose picture is the
 // cell's `file`; `failed` once a pass failed, the passes after it never drawn; `partial` where the end came between two
 // passes, and a resume goes on from the last picture.
 export type ProbeCell = { key: string; story: string; variant: VariantId; passes: number; status: 'drawn' | 'failed' | 'partial'; code?: string;
   file?: string; jobs: ProbeJob[] };
-// probe.json: ids, codes, sizes, counts and times, no prompt. `scenes` pins each scene's inputs, and `suit.hash` the
-// clothing test's; `sameServer` says whether the server said what it said to round one (ComfyUI, PyTorch, the card),
-// which the comparison does not need.
+// probe.json: ids, codes, sizes, counts and times, no prompt. `scenes` pins each scene's inputs, `suit.hash` the
+// clothing test's and `lang.hash` the language test's; `sameServer` says whether the server said what it said to
+// round one (ComfyUI, PyTorch, the card), which the comparison does not need.
 export type ProbeIndex = { pins: Record<string, string | number>; startedAt: string; completedAt?: string; sameServer?: boolean;
-  scenes: Record<string, string>; cells: Record<string, ProbeCell>; suit?: { hash: string; cells: Record<string, SuitCell> }; stopped?: 'until';
-  error?: string };
-// `suit`: whether the clothing test is drawn, by default when no scene is named.
+  scenes: Record<string, string>; cells: Record<string, ProbeCell>; suit?: { hash: string; cells: Record<string, SuitCell> };
+  lang?: { hash: string; cells: Record<string, LangCell> }; stopped?: 'until'; error?: string };
+// `suit` and `lang`: whether the clothing test and the language test are drawn, each by default when no scene is named.
 export type ProbeOptions = { source: string; out: string; comfy: string; until: number; scenes?: string[]; variants?: VariantId[]; suit?: boolean;
-  timeoutMs?: number; waitMs?: number; pollMs?: number; log?: (event: object) => void };
+  lang?: boolean; timeoutMs?: number; waitMs?: number; pollMs?: number; log?: (event: object) => void };
 const open = (cell: ProbeCell | undefined) => !cell || cell.status === 'partial';
 
 // The picture a partial cell's last pass left, as probe.json recorded it: the cell goes on from it and from nothing else.
@@ -722,15 +770,16 @@ function lastPicture(out: string, cell: ProbeCell): Input {
   return { file: last.file!, bytes, sha256: last.sha256! };
 }
 
-// The clothing test first, then every scene in turn, and in it every variant not yet recorded, in the list's order, a
-// cell's passes in slot order: the test and each scene begin only if all they have left can end by `--until`, each
-// cell only if all its passes left can, and each job only if it still can, so that a stop leaves the test and the
-// scenes whole. The test goes first because it is small and draws with the two graphs round one drew with, before the
-// masked variants' nodes, which are new to the card. A cell with an outcome keeps it; nothing is drawn again.
+// The clothing test first, then the language test, then every scene in turn, and in it every variant not yet
+// recorded, in the list's order, a cell's passes in slot order: each test and each scene begin only if all they have
+// left can end by `--until`, each cell only if all its passes left can, and each job only if it still can, so that a
+// stop leaves the tests and the scenes whole. The clothing test goes first because it is small and draws with the two
+// graphs round one drew with, before the masked variants' nodes, which are new to the card; the language test, smaller
+// still, draws with the front graph alone. A cell with an outcome keeps it; nothing is drawn again.
 export async function drawProbe(options: ProbeOptions): Promise<ProbeIndex> {
   const source = resolve(options.source), out = resolve(options.out);
   const log = options.log ?? (() => undefined);
-  const ids = options.scenes ?? PROBE_SCENES, withSuit = options.suit ?? !options.scenes;
+  const ids = options.scenes ?? PROBE_SCENES, withSuit = options.suit ?? !options.scenes, withLang = options.lang ?? !options.scenes;
   // Everything is read and checked before probe.json is written or the server is asked anything, and a sealed id is
   // refused before a byte of round one is read.
   ids.forEach(cleanId);
@@ -744,7 +793,7 @@ export async function drawProbe(options: ProbeOptions): Promise<ProbeIndex> {
   if (withSuit && otherFronts.length) {
     throw new Refusal(`Round one's fronts were drawn under another ${otherFronts.join(', ')}: the clothing test's would differ from them in more than their clothes, and nothing is drawn; --scenes without suit draws the scenes alone`);
   }
-  const scenes = ids.map(id => sceneOf(source, round, id)), suit = suitOf(source, round);
+  const scenes = ids.map(id => sceneOf(source, round, id)), suit = suitOf(source, round), lang = langOf();
   const variants = options.variants ? VARIANTS.filter(one => options.variants!.includes(one.id)) : VARIANTS;
   // The boxes and the crops, pinned with the rest whatever is drawn: a masked variant is drawn only where every bound
   // person has a box, and face and face-each also a crop.
@@ -757,12 +806,16 @@ export async function drawProbe(options: ProbeOptions): Promise<ProbeIndex> {
   // A picture probe.json records as drawn whose file is gone is data lost: nothing more is drawn before someone looks.
   const gone = (one: { status: string; file?: string }) => one.status === 'drawn' && !(one.file && existsSync(join(out, one.file)));
   const lost = [...Object.values(earlier?.cells ?? {}).filter(cell => (cell.jobs ?? []).some(gone)),
-    ...Object.values(earlier?.suit?.cells ?? {}).filter(gone).map(cell => ({ key: `suit:${cell.key}` }))];
+    ...Object.values(earlier?.suit?.cells ?? {}).filter(gone).map(cell => ({ key: `suit:${cell.key}` })),
+    ...Object.values(earlier?.lang?.cells ?? {}).filter(gone).map(cell => ({ key: `lang:${cell.key}` }))];
   if (lost.length) throw new Refusal(`probe.json records pictures of ${lost.length} cells whose files are gone from ${out}, ${lost[0].key} the first: that is data lost, to be looked into; nothing is drawn`);
   const moved = scenes.find(scene => earlier?.scenes[scene.id] !== undefined && earlier.scenes[scene.id] !== scene.hash);
   if (moved) throw new Refusal(`Round one's ${moved.id} is not what ${file} drew from: one probe directory holds one set of inputs`);
   if (withSuit && earlier?.suit && earlier.suit.hash !== suit.hash) {
     throw new Refusal(`The clothing test's inputs are not what ${file} drew from: one probe directory holds one set of inputs`);
+  }
+  if (withLang && earlier?.lang && earlier.lang.hash !== lang.hash) {
+    throw new Refusal(`The language test's inputs are not what ${file} drew from: one probe directory holds one set of inputs`);
   }
   const resumed = new Map<string, Input>();
   for (const scene of scenes) {
@@ -784,20 +837,23 @@ export async function drawProbe(options: ProbeOptions): Promise<ProbeIndex> {
   index.sameServer = ['comfyui', 'pytorch', 'card'].every(key => round.pins[key] === pins[key]);
   for (const scene of scenes) index.scenes[scene.id] = scene.hash;
   if (withSuit) index.suit ??= { hash: suit.hash, cells: {} };
+  if (withLang) index.lang ??= { hash: lang.hash, cells: {} };
   delete index.stopped;
   delete index.error;
   delete index.completedAt;
   mkdirSync(out, { recursive: true, mode: 0o700 });
   const save = () => writeJson(file, index);
   save();
-  const page = () => writePage(source, out, { scenes, suit });
+  const page = () => writePage(source, out, { scenes, suit, lang });
   const times = timesOf(round), recipe = recipeOf(base), frontRecipe = recipeOf(front.graph), uploaded = new Map<string, string>();
   let cold = true;
   const price = (job: JobKind) => times.price(job) + (cold ? COLD_MS : 0);
   const jobsLeft = (scene: Scene, variant: Variant) => passesOf(variant, scene.bound) - (index.cells[cellKey(scene.id, variant.id)]?.jobs.length ?? 0);
   const tests = withSuit ? suitJobs(suit).filter(job => !index.suit!.cells[job.key]) : [];
-  log({ event: 'probe_plan', ...estimateOf(round, scenes, variants, withSuit ? suit : undefined),
-    left: tests.length + scenes.reduce((sum, scene) => sum + variants.filter(one => open(index.cells[cellKey(scene.id, one.id)])).length, 0), sameServer: index.sameServer });
+  const langTests = withLang ? lang.jobs.filter(job => !index.lang!.cells[job.key]) : [];
+  log({ event: 'probe_plan', ...estimateOf(round, scenes, variants, withSuit ? suit : undefined, withLang ? lang : undefined),
+    left: tests.length + langTests.length + scenes.reduce((sum, scene) => sum + variants.filter(one => open(index.cells[cellKey(scene.id, one.id)])).length, 0),
+    sameServer: index.sameServer });
   const name = async (input: Input, spent: { ms: number }) => {
     let named = uploaded.get(input.sha256);
     if (named === undefined) {
@@ -904,6 +960,28 @@ export async function drawProbe(options: ProbeOptions): Promise<ProbeIndex> {
     page();
   }
 
+  // The language test, after the clothing test, begun only if all it has left can end by `--until`: each front by the
+  // front graph on its canvas at seed 7, from its own prompt, as the clothing test draws its fronts.
+  const langCells = index.lang?.cells ?? {};
+  if (ended === 'done' && langTests.length) {
+    const needMs = langTests.length * times.price(LANG_KIND) + (cold ? COLD_MS : 0), leftMs = options.until - Date.now();
+    if (comfy.end?.aborted || needMs > leftMs) {
+      log({ event: 'lang_not_begun', cells: langTests.length, needMinutes: Math.ceil(needMs / 60000), leftMinutes: Math.max(0, Math.floor(leftMs / 60000)) });
+      ended = 'until';
+    }
+    for (const job of ended === 'done' ? langTests : []) {
+      const fits = () => !comfy.end?.aborted && Date.now() + price(LANG_KIND) <= options.until;
+      if (!fits()) { ended = 'until'; break; }
+      const own = { key: job.key, person: job.person, language: job.language, references: 0 };
+      const result = await attempt(own, join(out, langFile(job)), fits, { key: `lang:${job.key}` }, async () => {
+        const filled = applyToWorkflow(front.graph, { checkpoint: card.model, prompt: job.prompt, negative: '', seed: SEED, ...frontRecipe, ...front.canvas });
+        return { graph: filled, right: langRight(filled, job.prompt, front.canvas), promptChars: job.prompt.length };
+      }, record => { langCells[job.key] = record; });
+      if (result === 'until' || result === 'stopped') { ended = result; break; }
+    }
+    page();
+  }
+
   if (ended === 'done') {
     scenes: for (const scene of scenes) {
       const left = variants.filter(variant => open(index.cells[cellKey(scene.id, variant.id)]));
@@ -970,17 +1048,18 @@ export async function drawProbe(options: ProbeOptions): Promise<ProbeIndex> {
   return index;
 }
 const countsOf = (index: ProbeIndex) => {
-  const cells = Object.values(index.cells), tested = Object.values(index.suit?.cells ?? {});
+  const cells = Object.values(index.cells), tested = Object.values(index.suit?.cells ?? {}), langCells = Object.values(index.lang?.cells ?? {});
   const tally = (list: { code?: string }[]) => list.reduce<Record<string, number>>((all, one) => ({ ...all, [one.code ?? 'image_failed']: (all[one.code ?? 'image_failed'] ?? 0) + 1 }), {});
+  const test = (list: { status: string; code?: string }[]) => ({ drawn: list.filter(one => one.status === 'drawn').length, failed: tally(list.filter(one => one.status !== 'drawn')) });
   return { drawn: cells.filter(one => one.status === 'drawn').length, partial: cells.filter(one => one.status === 'partial').length,
     failed: tally(cells.filter(one => one.status === 'failed')), jobs: cells.reduce((sum, one) => sum + one.jobs.filter(job => job.status === 'drawn').length, 0),
-    planned: Object.keys(index.scenes).length * VARIANTS.length,
-    ...(index.suit ? { suit: { drawn: tested.filter(one => one.status === 'drawn').length, failed: tally(tested.filter(one => one.status !== 'drawn')) } } : {}) };
+    planned: Object.keys(index.scenes).length * VARIANTS.length, ...(index.suit ? { suit: test(tested) } : {}), ...(index.lang ? { lang: test(langCells) } : {}) };
 };
 
 // ---- The page ----
 
 const COLOURS = ['#ff1744', '#00e676', '#00b0ff', '#ffea00'];
+const LANGUAGE_WORDS: Record<Language, string> = { en: 'по-английски', ru: 'по-русски' };
 // Rectangles over a picture, in its own pixels: each marked box thin, the region a variant redraws round it thick, in
 // the colour of the person's slot and numbered by it.
 function overlay(width: number, height: number, marks: { box: Box; region?: Region; at: number }[]) {
@@ -997,17 +1076,18 @@ function overlay(width: number, height: number, marks: { box: Box; region?: Regi
 
 // index.html in the probe's directory: what T did in round one and what each variant changes, then each scene's
 // portraits with their crops, round one's L with the bodies and A+ with the heads, T and C, every variant and each
-// pass of mask-each and face-each, and last the clothing test, each front of round one beside its new one and the
-// demon's C of round one beside the new at each seed, each picture linked where it lies and never copied. Before the
-// card, with no probe.json yet, it shows round one's pictures and the boxes and crops over them for the owner to check.
-// While the probe draws, the page reloads every minute.
-export function writePage(source: string, out: string, read?: { scenes: Scene[]; suit: Suit }) {
+// pass of mask-each and face-each, then the clothing test, each front of round one beside its new one and the demon's
+// C of round one beside the new at each seed, and last the language test, each person's English portrait beside the
+// Russian with both texts under them, which are made up; each picture is linked where it lies and never copied.
+// Before the card, with no probe.json yet, it shows round one's pictures and the boxes and crops over them for the
+// owner to check. While the probe draws, the page reloads every minute.
+export function writePage(source: string, out: string, read?: { scenes: Scene[]; suit: Suit; lang: Lang }) {
   source = resolve(source);
   out = resolve(out);
   const index = readJson<ProbeIndex>(join(out, 'probe.json'));
   const round = read ? undefined : roundOf(source);
   const scenes = read?.scenes ?? (index ? Object.keys(index.scenes) : PROBE_SCENES).map(id => sceneOf(source, round!, id));
-  const suit = read?.suit ?? suitOf(source, round!);
+  const suit = read?.suit ?? suitOf(source, round!), lang = read?.lang ?? langOf();
   const boxes = readBoxes(out);
   const drawing = index !== undefined && !index.completedAt;
   const figure = (path: string | undefined, caption: string, shape: 'wide' | 'half' | 'tall' | 'side', missing: string, over = '') => {
@@ -1055,8 +1135,8 @@ export function writePage(source: string, out: string, read?: { scenes: Scene[];
   });
   const tested = index?.suit?.cells ?? {};
   const fresh = (key: string) => (tested[key]?.status === 'drawn' && tested[key].file ? join(out, tested[key].file!) : undefined);
-  const why = (one: SuitCell | undefined) => (one?.status === 'failed' ? `не вышло: ${one.code ?? '—'}` : one?.status === 'out' ? `не рисовался: ${one.code ?? '—'}`
-    : one ? 'нет файла' : notYet);
+  const why = (one: { status: string; code?: string } | undefined) => (one?.status === 'failed' ? `не вышло: ${one.code ?? '—'}`
+    : one?.status === 'out' ? `не рисовался: ${one.code ?? '—'}` : one ? 'нет файла' : notYet);
   const suitFronts = SUIT_SCENES.map(story => `<div class="row">${suit.fronts.filter(one => one.story === story).map(one => `<div class="pair">`
     + figure(join(source, one.old.file), `${one.id} — раунд 1`, 'side', 'нет файла')
     + figure(fresh(`front:${one.id}`), `${one.id} — костюм`, 'side', why(tested[`front:${one.id}`])) + '</div>').join('')}</div>`).join('');
@@ -1067,12 +1147,20 @@ export function writePage(source: string, out: string, read?: { scenes: Scene[];
     return old ? `<div class="row">${figure(join(source, old), `C, сид ${seed} — раунд 1, портреты в майке`, 'half', 'нет файла')}${now}</div>`
       : `<p>В первом раунде C сцены ${escapeHtml(suit.c.story)} на сиде ${seed} нет: новый показан один.</p><div class="row">${now}</div>`;
   }).join('');
+  // Each person's English portrait beside the Russian, the text each was drawn from under it.
+  const langCells = index?.lang?.cells ?? {};
+  const langPeople = PORTRAIT_LANGUAGES.map(person => `<div class="lang">${lang.jobs.filter(job => job.person === person.id).map(job => {
+    const one = langCells[job.key];
+    return figure(one?.status === 'drawn' && one.file ? join(out, one.file) : undefined, `${person.id}, ${LANGUAGE_WORDS[job.language]}: ${person[job.language]}`,
+      'side', why(one));
+  }).join('')}</div>`).join('');
   const counts = index ? countsOf(index) : undefined;
   const state = !index ? 'не начато: пробы рисуются на карте, а рамки и кадры ниже можно проверить до неё'
     : drawing ? 'рисуется; страница обновляется сама раз в минуту'
-      : index.error ? `остановилось с ошибкой ${index.error}` : index.stopped ? 'остановилось: следующая сцена или проба одежды не успевала до срока' : 'закончено';
+      : index.error ? `остановилось с ошибкой ${index.error}` : index.stopped ? 'остановилось: следующая сцена или проба портретов не успевала до срока' : 'закончено';
   const failed = Object.entries(counts?.failed ?? {}).map(([code, n]) => `${code} ${n}`).join(', ');
   const suitFailed = Object.entries(counts?.suit?.failed ?? {}).map(([code, n]) => `${code} ${n}`).join(', ');
+  const langFailed = Object.entries(counts?.lang?.failed ?? {}).map(([code, n]) => `${code} ${n}`).join(', ');
   const legend = boxes
     ? `Рамки и кадры отмечены на глаз до карты и лежат в ${BOXES_FILE} (sha256 ${boxes.hash.slice(0, 12)}…); probe.json закрепляет его при первом `
       + 'рисовании, и дальше его не меняют. Тонкая рамка — отмеченная, толстая — область, которую проба перерисовывает: на L — тела для mask и mask-each, '
@@ -1086,23 +1174,25 @@ export function writePage(source: string, out: string, read?: { scenes: Scene[];
 <style>body{font-family:sans-serif;margin:8px;line-height:1.4}.row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}figure{margin:0}
 figure.wide{width:calc((100% - 16px) / 3)}figure.half{width:calc((100% - 8px) / 2)}figure.tall{width:calc((100% - 40px) / 6)}img{width:100%;display:block}
 .pair{display:flex;gap:4px;width:calc((100% - 24px) / 4)}figure.side{width:calc((100% - 4px) / 2)}
+.lang{display:flex;gap:4px;width:calc((100% - 16px) / 3)}.lang figcaption{font-size:13px}
 .over{position:relative}.over svg{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}
 .box{display:flex;align-items:center;justify-content:center;text-align:center;aspect-ratio:16/9;background:#eee;font-size:14px}
 figure.tall .box,figure.side .box{aspect-ratio:9/16}table{border-collapse:collapse}th,td{padding:4px 6px;border-top:1px solid #ddd;vertical-align:top;text-align:left}
-@media (max-width:640px){figure.wide,figure.half{width:100%}figure.tall{width:calc((100% - 16px) / 3)}.pair{width:calc((100% - 8px) / 2)}}</style>
-<h1>T: девять проб на картинках первого раунда и проба одежды портретов</h1>
+@media (max-width:640px){figure.wide,figure.half{width:100%}figure.tall{width:calc((100% - 16px) / 3)}.pair{width:calc((100% - 8px) / 2)}.lang{width:100%}}</style>
+<h1>T: девять проб на картинках первого раунда, пробы одежды и языка портретов</h1>
 <p>В первом раунде T вернул картинку L: те же люди и лица на тех же местах, только края перерезкие, а цвет и контраст задраны; судьи поставили T то же,
 что L, по всем пунктам всех 13 чистых сцен. Здесь девять проб на тех же картинках и портретах сида ${SEED}: пять — по одному изменению против сегодняшнего T;
 mask и mask-each перерисовывают на L только рамки связанных людей; face и face-each меняют на картинке A+ только лица и волосы, по кадру головы и плеч
 из портрета. Лица, волосы и телосложение сравнивать с портретами; контакты, позы и кадр — с L, у face и face-each — с A+; края и цвета — с ними же.
-Раунд два рисует T как есть, пока владелец не выберет. После сцен — <a href="#suit">проба одежды портретов</a>.</p>
+Раунд два рисует T как есть, пока владелец не выберет. После сцен идут <a href="#suit">проба одежды портретов</a> и <a href="#lang">проба языка портретов</a>.</p>
 <table><tr><th>проба</th><th>что изменено</th><th>чего ждём на лицах</th><th>риск для действия</th></tr>
 ${VARIANTS.map(one => `<tr><td><b>${escapeHtml(one.id)}</b></td><td>${escapeHtml(one.change)}</td><td>${escapeHtml(one.faces)}</td><td>${escapeHtml(one.risk)}</td></tr>`).join('\n')}
 </table>
 <p>${escapeHtml(legend)}</p>
 <p>Состояние: ${escapeHtml(state)}.${counts ? ` Нарисовано ${counts.drawn} из ${counts.planned}${counts.partial ? `, начато и не докончено ${counts.partial}` : ''}`
     + `${failed ? `, не вышло: ${escapeHtml(failed)}` : ''}.` : ''}${counts?.suit ? ` Проба одежды: нарисовано ${counts.suit.drawn} из ${suitJobs(suit).length}`
-    + `${suitFailed ? `, не вышло: ${escapeHtml(suitFailed)}` : ''}.` : ''}
+    + `${suitFailed ? `, не вышло: ${escapeHtml(suitFailed)}` : ''}.` : ''}${counts?.lang ? ` Проба языка: нарисовано ${counts.lang.drawn} из ${lang.jobs.length}`
+    + `${langFailed ? `, не вышло: ${escapeHtml(langFailed)}` : ''}.` : ''}
 ${index?.sameServer === false ? ' Сервер сказал о себе не то, что в первом раунде (ComfyUI, PyTorch или карта).' : ''}</p>
 ${sections.join('\n')}
 <section id="suit"><h2>Проба одежды портретов</h2>
@@ -1113,6 +1203,14 @@ ${suit.fronts.length} фронтальных портретов первого �
 Смотреть: меньше ли костюм протекает в сцену, чем майка; видно ли телосложение так же, как в майке и брюках; читается ли костюм как одежда, особенно у
 детей полёта. Бот рисует портреты в майке и брюках, пока владелец не решит.</p>
 ${suitFronts}${suitCs}</section>
+<section id="lang"><h2>Проба языка портретов</h2>
+<p>Владелец решил 26 сентября 2026 года, что бот рисует портрет по описанию читателя (details) в точности как оно написано: на любом языке и без перевода.
+Русского описания модель картинок ещё не получала. Здесь каждый из выдуманных людей нарисован дважды, по одному и тому же описанию на английском и на русском,
+так, как бот рисует портрет: промпт собирает portraitPrompt, граф и холст те же, что у фронтальных портретов, сид ${SEED}. Два промпта одного человека
+различаются только языком описания. Смотреть: так же ли близко, как английский, русский портрет следует возрасту, коже, телосложению, волосам, лицу и
+приметам, включая стороны. В описаниях левое и правое означают стороны самого человека, как в листе персонажей: на портрете анфас его левая сторона справа
+от зрителя.</p>
+<div class="row">${langPeople}</div></section>
 `, { mode: 0o600 });
 }
 
@@ -1191,14 +1289,17 @@ function cover(regions: Region[]) {
 
 // The whole probe against local/fake-comfy.ts, in `dir`: the made-up round in `round/`, the probe's directory in
 // `probe/`, `tmp/` as the temporary directory. On the way, what the paid run relies on: the page shows the boxes and
-// the crops, and the clothing test's fronts of round one, before the card; a sealed story, the marker, a clean scene
-// whose directory is a link into sealed/, an L that is not round one's, a front's prompt without round one's clothes
-// and a bound person without a box are refused before anything is sent or written; the clothing test or a scene that
-// cannot end by --until is not begun; the clothing test's jobs come first, each front with no slot at 720x1280 and the
-// demon's C with the new fronts at 1280x704, and every variant's job sends its slots, sizes, crops, start and masks and
-// comes back at 1280x704; a resume draws nothing again, and a cell cut between two passes goes on from its last
-// picture; the page shows every picture it names. The fake writes a made-up word into every picture's metadata, and
-// the sealed story holds it: afterwards it is nowhere outside sealed/, in the temporary directory or in what was printed.
+// the crops, the clothing test's fronts of round one and the language test's texts, before the card; a sealed story,
+// the marker, a clean scene whose directory is a link into sealed/, an L that is not round one's, a front's prompt
+// without round one's clothes and a bound person without a box are refused before anything is sent or written; a test
+// or a scene that cannot end by --until is not begun; the clothing test's jobs come first, each front with no slot at
+// 720x1280 and the demon's C with the new fronts at 1280x704, then the language test's, each front with no slot at
+// 720x1280 whose graph carries its own prompt and seed 7, and every variant's job sends its slots, sizes, crops, start
+// and masks and comes back at 1280x704; the estimate counts every job sent; a resume draws nothing again, a cell cut
+// between two passes goes on from its last picture, and a probe.json whose language test was drawn from other inputs
+// is refused; the page shows every picture it names. The fake writes a made-up word into every picture's metadata,
+// and the sealed story holds it: afterwards it is nowhere outside sealed/, in the temporary directory or in what was
+// printed.
 export async function dryRun(dir: string) {
   const dry = resolve(dir), source = join(dry, 'round'), out = join(dry, 'probe'), temp = join(dry, 'tmp');
   for (const path of [source, out, temp]) mkdirSync(path, { recursive: true, mode: 0o700 });
@@ -1213,6 +1314,13 @@ export async function dryRun(dir: string) {
   };
   const word = madeUpName();
   let fake: Awaited<ReturnType<typeof startFakeComfy>> | undefined;
+  // The graphs as they go out, in the order sent, which the fake does not keep: the language test's prompts and seeds
+  // are checked on them here, in memory, and never printed.
+  const sent: Graph[] = [], fetched = globalThis.fetch;
+  globalThis.fetch = (input, init) => {
+    if (init?.method === 'POST' && String(input).endsWith('/prompt') && typeof init.body === 'string') sent.push((JSON.parse(init.body) as { prompt: Graph }).prompt);
+    return fetched(input, init);
+  };
   try {
     say(`dry run in ${dry}: a made-up round one and local/fake-comfy.ts; no card, no model, no network`);
     writeCardRecord(join(out, 'card.txt'));
@@ -1226,14 +1334,18 @@ export async function dryRun(dir: string) {
     const rectangles = (page: string) => page.split('<rect ').length - 1;
     // The clothing test's pictures of round one: its fronts, and the demon's C of seed 7, the one seed round one drew.
     const tested = SUIT_SCENES.reduce((sum, id) => sum + DRY_BOUND[id], 0), noEleven = `на сиде ${ACTION_SEEDS[1]} нет`;
+    // The language test's section, with every text it draws from.
+    const texts = PORTRAIT_LANGUAGES.flatMap(person => LANGUAGES.map(language => escapeHtml(person[language])));
+    const langShown = (page: string) => page.includes('<section id="lang">') && texts.every(text => page.includes(text));
 
     // Each person has a body with its region, a head with its region and a crop drawn over the pictures.
     writePage(source, out);
     const first = readFileSync(join(out, 'index.html'), 'utf8');
     say(`0 the page before the card: ${pictures(first).length} pictures, ${rectangles(first)} rectangles over them`);
     expect(pictures(first).length === people + 4 * PROBE_SCENES.length + tested + 1 && rectangles(first) === 5 * people && first.includes(noEleven)
-      && !existsSync(join(out, 'probe.json')),
-      'the page before the card shows every portrait, L, A+, T and C, each body, head and crop over them, and the clothing test\'s fronts and C of round one');
+      && langShown(first) && !existsSync(join(out, 'probe.json')),
+      'the page before the card shows every portrait, L, A+, T and C, each body, head and crop over them, the clothing test\'s fronts and C of round one, '
+      + 'and the language test\'s texts');
 
     say('1 refusals before anything is sent or written:');
     await refused('a sealed story', () => draw({ scenes: ['tango', 'sharp-1'] }));
@@ -1257,15 +1369,22 @@ export async function dryRun(dir: string) {
     expect(fake.jobs.length === 0 && fake.uploads.length === 0 && !existsSync(join(out, 'probe.json')), 'the refusals send and write nothing');
 
     const short = await draw({ until: Date.now() + 5000 });
-    say(`2 five seconds left: stopped ${short.stopped}, ${fake.jobs.length} jobs sent`);
-    expect(short.stopped === 'until' && fake.jobs.length === 0, 'the clothing test or a scene that cannot end in time is not begun');
+    const alone = await draw({ scenes: [], lang: true, until: Date.now() + 5000 });
+    say(`2 five seconds left: stopped ${short.stopped}, and ${alone.stopped} for the language test alone, ${fake.jobs.length} jobs sent`);
+    expect(short.stopped === 'until' && alone.stopped === 'until' && fake.jobs.length === 0, 'a test or a scene that cannot end in time is not begun');
 
     const whole = await draw();
-    const counts = countsOf(whole), round = roundOf(source), suit = suitOf(source, round), tests = suitJobs(suit);
-    say(`3 the probe: ${counts.drawn} of ${counts.planned} cells drawn and ${counts.suit?.drawn} of the clothing test's ${tests.length}, in ${fake.jobs.length} jobs, `
-      + `failed ${JSON.stringify({ ...counts.failed, ...counts.suit?.failed })}`);
-    expect(counts.drawn === PROBE_SCENES.length * VARIANTS.length && counts.suit?.drawn === tests.length && Object.values(whole.cells).every(one => one.jobs.every(job =>
-      job.status === 'drawn' && job.width === FRAME_CANVAS.width && job.height === FRAME_CANVAS.height)), 'every cell drawn, the clothing test\'s too');
+    const counts = countsOf(whole), round = roundOf(source), suit = suitOf(source, round), tests = suitJobs(suit), lang = langOf();
+    say(`3 the probe: ${counts.drawn} of ${counts.planned} cells drawn, ${counts.suit?.drawn} of the clothing test's ${tests.length} and ${counts.lang?.drawn} of the `
+      + `language test's ${lang.jobs.length}, in ${fake.jobs.length} jobs, failed ${JSON.stringify({ ...counts.failed, ...counts.suit?.failed, ...counts.lang?.failed })}`);
+    expect(counts.drawn === PROBE_SCENES.length * VARIANTS.length && counts.suit?.drawn === tests.length && counts.lang?.drawn === lang.jobs.length
+      && Object.values(whole.cells).every(one => one.jobs.every(job => job.status === 'drawn' && job.width === FRAME_CANVAS.width && job.height === FRAME_CANVAS.height)),
+      'every cell drawn, the two tests\' too');
+    // The estimate at the made-up round's times, which are not round one's: it counts every job the probe sent.
+    const estimate = estimateOf(round, PROBE_SCENES.map(id => sceneOf(source, round, id)), VARIANTS, suit, lang);
+    say(`   the estimate at the made-up round's times: ${estimate.cells} cells in ${estimate.jobs} jobs, ${estimate.expectedMinutes} and ${estimate.pricedMinutes} `
+      + `minutes; the language test's ${estimate.lang?.cells} jobs, ${estimate.lang?.expectedMinutes} and ${estimate.lang?.pricedMinutes}`);
+    expect(estimate.jobs === fake.jobs.length && estimate.lang?.cells === lang.jobs.length, 'the estimate counts every job sent, the language test\'s apart');
     const named = (file: string) => `ref-${sha256(stripPngMetadata(readFileSync(file))).slice(0, 16)}.png`;
     const boxes = readBoxes(out), same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
     const wrong: string[] = [];
@@ -1285,6 +1404,21 @@ export async function dryRun(dir: string) {
         && one.composites.length === 0 && same(one.slots.map(slot => [slot.file, slot.scaled && `${slot.scaled.width}x${slot.scaled.height}`, slot.cropped]), files)
         && prompt && cell?.status === 'drawn' && cell.graphRight === true && cell.promptChars === test.prompt.length;
       if (!right) wrong.push(`suit:${test.key}`);
+    }
+    // The language test's jobs next, in their order: a front with no slot at 720x1280 whose graph went out with seed 7
+    // and, on the sampler's positive input, the prompt `portraitPrompt` builds from its person's text in its language;
+    // each recorded with its prompt's length and its graph right.
+    const names = PORTRAIT_LANGUAGES.map(one => one.name);
+    for (const test of lang.jobs) {
+      const one = fake.jobs[job], graph = sent[job++] ?? {}, cell = whole.lang?.cells[test.key];
+      const person = PORTRAIT_LANGUAGES.find(other => other.id === test.person)!;
+      const sampler = Object.values(graph).find(node => node.class_type === 'KSampler');
+      const positive = Array.isArray(sampler?.inputs.positive) ? graph[String(sampler.inputs.positive[0])] : undefined;
+      const right = one?.outcome === 'success' && one.width === 720 && one.height === 1280 && one.slots.length === 0 && one.start === null
+        && one.noiseMask === null && one.composites.length === 0 && sampler?.inputs.seed === SEED
+        && positive?.inputs.prompt === portraitPrompt(person.name, person[test.language], names).prompt
+        && cell?.status === 'drawn' && cell.graphRight === true && cell.promptChars === test.prompt.length;
+      if (!right) wrong.push(`lang:${test.key}`);
     }
     // Each variant's job against its variant and pass, in the order drawn: the slots with their files, sizes and crops,
     // what the sampler starts from, and the masks, the sampler's and the paste's, against the regions they are made of.
@@ -1311,7 +1445,7 @@ export async function dryRun(dir: string) {
       }
     }
     say(`   jobs against their cells, variants and passes: ${job - wrong.length} of ${job} right${wrong.length ? `, wrong ${wrong.join(', ')}` : ''}`);
-    expect(!wrong.length && fake.jobs.length === job, 'every job sends its own prompt, slots, sizes, crops, start and masks');
+    expect(!wrong.length && fake.jobs.length === job && sent.length === job, 'every job sends its own prompt, slots, sizes, crops, start and masks');
 
     const jobs = fake.jobs.length;
     await draw();
@@ -1326,14 +1460,20 @@ export async function dryRun(dir: string) {
     say(`   a cell cut between two passes: ${goesOn.length} jobs, from its last picture ${goesOn[0]?.start === named(join(out, cut.jobs.at(-1)!.file!))}`);
     expect(goesOn.length === 1 && goesOn[0].start === named(join(out, cut.jobs.at(-1)!.file!)) && again.status === 'drawn' && again.jobs.length === 4
       && again.file === again.jobs[3].file && existsSync(join(out, again.file!)), 'a cell cut between two passes goes on from its last picture and draws what it lacks');
+    // probe.json as if its language test had been drawn from other inputs, and then as it was.
+    const held = readFileSync(join(out, 'probe.json')), other = JSON.parse(held.toString('utf8')) as ProbeIndex;
+    writeJson(join(out, 'probe.json'), { ...other, lang: { ...other.lang!, hash: sha256('other inputs') } });
+    await refused('a probe.json whose language test was drawn from other inputs', () => draw());
+    writeFileSync(join(out, 'probe.json'), held, { mode: 0o600 });
 
     writePage(source, out);
     const page = readFileSync(join(out, 'index.html'), 'utf8'), shown = pictures(page);
-    const planned = people + PROBE_SCENES.length * (4 + VARIANTS.length) + 2 * people + tested + 1 + tests.length;
+    const planned = people + PROBE_SCENES.length * (4 + VARIANTS.length) + 2 * people + tested + 1 + tests.length + lang.jobs.length;
     say(`5 page: ${shown.length} pictures, ${shown.filter(src => existsSync(join(out, src))).length} of them where it links, ${rectangles(page)} rectangles`);
     expect(shown.length === planned && shown.every(src => existsSync(join(out, src))) && rectangles(page) === 5 * people && page.includes(noEleven)
-      && VARIANTS.every(one => page.includes(`<b>${one.id}</b>`)),
-      'the page shows every portrait, L, A+, T, C, variant and pass, the boxes, the clothing test old and new, and names every change');
+      && VARIANTS.every(one => page.includes(`<b>${one.id}</b>`)) && langShown(page),
+      'the page shows every portrait, L, A+, T, C, variant and pass, the boxes, the clothing test old and new, the language test with its texts, and names '
+      + 'every change');
 
     const found = searchBoundary({ root: dry, sealed: join(source, 'sealed'), tempDir: temp, word, output: output.text() });
     const inside = searchTree(join(source, 'sealed'), markerForms(word)).hits.length;
@@ -1344,6 +1484,7 @@ export async function dryRun(dir: string) {
     say(missed.length ? `the dry run did NOT go as expected: ${missed.length} of its checks` : 'the dry run went as expected');
     return { pass: !missed.length, missed };
   } finally {
+    globalThis.fetch = fetched;
     await fake?.close();
     output.stop();
     if (previous === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = previous;
@@ -1374,25 +1515,25 @@ async function main(args: string[]) {
   }
   if (values.dir !== undefined) throw new Refusal('Only dry-run takes --dir: the probe reads illustrations/action-1 and writes illustrations/t-probe');
   liveDirs();
-  // `--scenes` names the scenes and `suit`, the clothing test; without it, all of them. `--variants` narrows the
-  // scenes' variants and leaves the clothing test as it is.
+  // `--scenes` names the scenes, `suit`, the clothing test, and `lang`, the language test; without it, all of them.
+  // `--variants` narrows the scenes' variants and leaves the two tests as they are.
   const named = list(values.scenes), variants = list(values.variants);
-  const suit = !named || named.includes('suit'), scenes = named?.filter(id => id !== 'suit');
+  const suit = !named || named.includes('suit'), lang = !named || named.includes('lang'), scenes = named?.filter(id => id !== 'suit' && id !== 'lang');
   if (variants?.some(id => !VARIANTS.some(one => one.id === id))) throw new Refusal(`--variants takes ${VARIANTS.map(one => one.id).join(', ')}, comma separated`);
   scenes?.forEach(cleanId);
   if (command === 'estimate') {
     const round = roundOf(SOURCE_DIR);
     const read = (scenes ?? PROBE_SCENES).map(id => sceneOf(SOURCE_DIR, round, id));
     print({ event: 'estimate', ...estimateOf(round, read, variants ? VARIANTS.filter(one => variants.includes(one.id)) : VARIANTS,
-      suit ? suitOf(SOURCE_DIR, round) : undefined), bound: Object.fromEntries(read.map(scene => [scene.id, scene.bound])) });
+      suit ? suitOf(SOURCE_DIR, round) : undefined, lang ? langOf() : undefined), bound: Object.fromEntries(read.map(scene => [scene.id, scene.bound])) });
   } else if (command === 'draw') {
     // `--until` is the end of the work in epoch seconds, five minutes before the card's end as the runbook computes it.
     const until = Number(values.until) * 1000, wait = Number(values.wait), timeout = Number(values.timeout);
     if (!Number.isInteger(until) || until <= Date.now() || until > Date.now() + 3 * 3600000 || !Number.isInteger(wait) || wait < 10
       || !Number.isInteger(timeout) || timeout < 10) {
-      throw new Refusal('Use: draw --until <epoch seconds, five minutes before the card\'s end> [--scenes suit,flight,...] [--variants words,...] [--wait 300] [--timeout 60] [--comfy http://127.0.0.1:8188]');
+      throw new Refusal('Use: draw --until <epoch seconds, five minutes before the card\'s end> [--scenes suit,lang,flight,...] [--variants words,...] [--wait 300] [--timeout 60] [--comfy http://127.0.0.1:8188]');
     }
-    const index = await drawProbe({ source: SOURCE_DIR, out: PROBE_DIR, comfy: comfyUrl(values.comfy!), until, scenes, suit, variants: variants as VariantId[] | undefined,
+    const index = await drawProbe({ source: SOURCE_DIR, out: PROBE_DIR, comfy: comfyUrl(values.comfy!), until, scenes, suit, lang, variants: variants as VariantId[] | undefined,
       timeoutMs: timeout * 1000, waitMs: wait * 1000, log: print });
     print({ event: 'probe', ...countsOf(index), sameServer: index.sameServer, ...(index.stopped ? { stopped: index.stopped } : {}), ...(index.error ? { error: index.error } : {}) });
     if (index.error || index.stopped) process.exitCode = 1;
