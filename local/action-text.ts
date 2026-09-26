@@ -14,12 +14,13 @@ import { addSeed, beginJob, commitTurn, newStory } from '../lib/library.ts';
 import { ACTION_STORIES, MARKER_STORY, SHARP_SCHEMA, SHARP_START_TIME, SHARP_THEMES, SHARP_TOKENS, actionSetHash,
   sharpInstruction } from '../examples/action-set.ts';
 import { Refusal, capture, madeUpName, markerForms, searchBoundary, searchTree } from './action-boundary.ts';
+import { capsFor, channelFor, createBudget } from './budget.ts';
 import { loadModelConfig } from './config.ts';
 import type { Env, ModelConfig } from './config.ts';
 import { generateScene } from './generation.ts';
 import { askJson, frameRequest, sheetOf, sheetRequest } from './illustrate.ts';
 import type { Character, Description, Excerpt } from './illustrate.ts';
-import { createLlama } from './llama.ts';
+import { createLlama, createOpenAI } from './llama.ts';
 import { safeErrorDetails } from './model-error.ts';
 import type { ErrorDetails } from './model-error.ts';
 
@@ -244,7 +245,7 @@ export function readClientKey(path = CLIENT_KEY_FILE): string {
 // context of 65536 and the gateway's own wall for `internal`, 900 s, where the bot's default is 300.
 export const SERVING = { baseUrl: 'http://127.0.0.1:8080', model: 'gemma-4-31b-heretic-nvfp4', contextTokens: 65536, timeoutMs: 900000 };
 export type Fetch = (url: string, init: RequestInit) => Promise<Response>;
-export type TextModel = { provider: Provider; config: ModelConfig; route: 'simple-serving' | 'gpu'; weights: string;
+export type TextModel = { provider: Provider; config: ModelConfig; route: 'simple-serving' | 'gpu' | 'hosted'; weights: string;
   requests: Record<string, number>; fetch: Fetch };
 // Every request the adapter sends, counted by its path, which names a route and nothing else: the checks, the counts
 // before a send and the generations are told apart by it.
@@ -284,6 +285,19 @@ export function gpuModel({ label, env, configRoot, fetch = globalThis.fetch as F
   return { provider: createLlama(config, { fetch: counting.fetch }), config, route: 'gpu', weights: `gpu:${label}: ${config.model} on llama.cpp`,
     requests: counting.requests, fetch: counting.fetch };
 }
+// A hosted model, for the sheet check of clean stories before the text card (local/illustrate-probe.ts `--stories`):
+// the bot's OpenAI-compatible adapter under its channel's daily cap, kept in `ledger` (local/budget.ts). A channel with
+// no cap is closed, and every story would fail at its first call and never be asked again in that directory.
+export function hostedModel({ env, configRoot, ledger, fetch = globalThis.fetch as Fetch }: {
+  env: Env; configRoot: string; ledger: string; fetch?: Fetch }): TextModel {
+  const config = configFrom(env, configRoot);
+  if (config.provider !== 'openai-compatible') throw new Refusal('A hosted model is the bot\'s openai-compatible provider, named as <host>:<id>');
+  const channel = channelFor(config.baseUrl!, config.model), caps = capsFor(channel, config.budget);
+  if (caps.requests === 0 || caps.tokens === 0) throw new Refusal(`The ${channel} channel is closed until its daily cap is set (local/budget.ts)`);
+  const counting = counted(fetch);
+  return { provider: createOpenAI(config, { fetch: counting.fetch, budget: createBudget(ledger, channel, caps) }), config, route: 'hosted',
+    weights: `hosted: ${config.model} at ${new URL(config.baseUrl!).hostname}`, requests: counting.requests, fetch: counting.fetch };
+}
 export const readGpuEnv = (file = join(ROOT, '.env.gpu')): Env => {
   try { return parseEnv(readFileSync(file, 'utf8')); } catch { throw new Refusal('Cannot read .env.gpu'); }
 };
@@ -312,10 +326,12 @@ export function smokeRecord(file: string) {
 
 // What the run is pinned to (docs/action-experiment.md#text-run): the route and its weights, the address, the served
 // name, the context and the wall, the bot's sampling for this provider by its adapter's source, the instructions and
-// schemas by their hash, and the set. A rerun under other pins is refused.
+// schemas by their hash, and the set. A rerun under other pins is refused. llama.ts holds the hosted adapter
+// (`createOpenAI`) beside llama.cpp's.
+const ADAPTERS = { 'simple-serving': 'serving.ts', gpu: 'llama.ts', hosted: 'llama.ts' } as const;
 export function textPins(model: TextModel, gateway: Record<string, string | number> = {}): Record<string, string | number> {
   const empty: Excerpt = { system: '', messages: [] };
-  const adapter = model.route === 'simple-serving' ? 'serving.ts' : 'llama.ts';
+  const adapter = ADAPTERS[model.route];
   const instructions = { sheet: sheetRequest(empty), frame: frameRequest(empty, []), variant: variantRequest(empty, []),
     sharp: sharpInstruction('ТЕМА'), sharpSchema: SHARP_SCHEMA, sharpTokens: SHARP_TOKENS };
   return { route: model.route, weights: model.weights, baseUrl: model.config.baseUrl ?? '', model: model.config.model,
@@ -356,9 +372,10 @@ export async function gatewayFacts(model: TextModel): Promise<Record<string, str
 
 const count = (value: unknown) => (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null);
 // The codes a call or a step is recorded and printed under (docs/action-experiment.md#sealed): those of the two
-// adapters (local/serving.ts, local/llama.ts), of the bot's scene and frame (local/generation.ts, local/illustrate.ts)
-// and the harness's own. A code is one of them because it is in this list; any other is `failed`.
-export const TEXT_CODES: readonly string[] = ['cancelled', 'context_limit', 'empty_response', 'incomplete_stream', 'invalid_response',
+// adapters (local/serving.ts, local/llama.ts, and the hosted one's daily cap, local/budget.ts), of the bot's scene and
+// frame (local/generation.ts, local/illustrate.ts) and the harness's own. A code is one of them because it is in this
+// list; any other is `failed`.
+export const TEXT_CODES: readonly string[] = ['budget_exceeded', 'cancelled', 'context_limit', 'empty_response', 'incomplete_stream', 'invalid_response',
   'invalid_stream', 'memory_not_smaller', 'model_unavailable', 'nothing_to_compact', 'output_limit', 'provider_failed', 'rate_limited',
   'timeout', 'unauthorized', 'unexpected_context', 'unexpected_model', 'unexpected_slots', 'unexpected_tools', 'unnamed_reader',
   'unparsed_description', 'unsupported_server', 'usage_unavailable', 'scene_not_committed'];
@@ -411,6 +428,8 @@ type RunContext = { root: string; model: TextModel; pins: string; log: (row: Att
 // One story, step by step, resumed where it stopped: a step with an outcome is never asked again, and a scene already
 // in the store is not written twice.
 export async function runStory(story: TextStory, run: RunContext): Promise<StoryText> {
+  // Whoever asks: a sealed story never goes to a hosted model (docs/improve-loop.md#acceptance-on-gpu).
+  if (story.sealed && run.model.route === 'hosted') throw new Refusal(`${story.id} is sealed, and a hosted model takes clean stories alone`);
   const dir = storyDir(run.root, story.id);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const file = join(dir, 'text.json');

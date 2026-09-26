@@ -307,6 +307,25 @@ age, so that the child a look names is not made an adult at the prompt's end. Ro
 line, and it changes their pins too; the T probe keeps round one's ([the T probe](#t-probe)). The frame's look of a
 person the sheet does not name takes the same age words and the skin tone, which changes the frames' pins as well.
 
+<a id='sheet-check'></a>
+Before the text card, a cheap check the owner approved on 2026-09-26 says whether the new instruction is followed at
+all: round two's text run for a few clean stories on the hosted `google/gemma-4-31b-it`, through the bot's
+OpenAI-compatible adapter as a route of its own, `hosted`, five calls a story.
+
+```sh
+npm run illustrate:probe -- --stories flight,mirror,armwrestle --model openrouter:google/gemma-4-31b-it
+```
+
+The key and the daily cap come from `.env.eval` as for the eval ([daily limits](eval.md#daily-limits)), and the texts
+go to `illustrations/sheet-check` unless `--out` names another directory. A rerun there asks only what is not there
+yet and, as in the text run, never a step that failed. Any id but a clean story's is refused before the first request:
+"Adult content is never sent to hosted APIs: the test-ground scenarios stay clean"
+([acceptance on GPU](improve-loop.md#acceptance-on-gpu)). Each story gets one line of counts and no word of its text:
+the steps' outcomes and attempts, the cut replies, the sheet's people, the words of `details` and `look`, how many hold
+a digit, a name or clothes, how many open with or hold an allowed age word or a child's, how many name a skin tone,
+and the same age and skin counts for the people of the frames who are not on the sheet. The hosted Gemma is not the
+heretic: a pass says that the instruction can be followed, not that the card's model follows it.
+
 <a id='assembly'></a>
 
 ## Assembly
