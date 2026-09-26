@@ -331,11 +331,67 @@ recipe: no arm compares sizes, and none is compared with the identity run.
   picture counts for V.
 - A manifest whose plan stopped takes its scene out of L, C, V and T, a failed front out of C, V and T, and a failed
   view out of V. A failed frame is that cell alone, and a T whose L is missing is never submitted. A cell left undrawn
-  by the deadline or the admission is `not_submitted`, nobody's failure. Nothing is drawn again, and every file is
+  by the deadline or the admission, or kept from the card by the network ([a dropped
+  connection](#dropped-connection)), is `not_submitted`, nobody's failure. Nothing is drawn again, and every file is
   kept.
-- Each frame records what the identity run's frames record ([telemetry](identity-experiment.md#telemetry)). The run is
-  pinned as that one was ([pins](identity-experiment.md#pins)), with the variant's hash, the views' and T's templates,
-  the reference size and the manifests added, and the text run's model and gateway versions beside them.
+- Each frame records what the identity run's frames record ([telemetry](identity-experiment.md#telemetry)), and
+  `outageMs` when it waited for the network. The run is pinned as that one was ([pins](identity-experiment.md#pins)),
+  with the variant's hash, the views' and T's templates, the reference size and the manifests added, the text run's
+  model and gateway versions beside them, and `triton` when the server was started with comfy-kitchen's Triton
+  backend ([the pilot](#pilot)).
+
+<a id='one-socket'></a>
+
+**One socket a stage.** The first round opened a websocket to the card for every picture and read the card's log
+before and after every clean one, and between two jobs the card stood idle about 4.5 s, a fifth of the wall time. A
+drawing stage now opens one socket before its first submit and keeps it to its end. Each job is registered on it
+under a prompt id the harness mints and sends with the job, which the pinned server takes as the job's own, and is
+dropped from it once its picture is down; a socket that closes is replaced, under a new client id, before the next
+submit. A clean cell's log is read once, after its job, and where that read ended stands for the next clean cell's read
+before it. The log is read anew after a failure, after a sealed cell and on a new socket, as after a server that
+started again. No graph a job sends changes, and nothing else the pictures are drawn from; what the socket saves is
+[the pilot](#pilot)'s to measure. The bot keeps a socket a picture.
+
+<a id='dropped-connection'></a>
+
+**A dropped connection.** At 01:29 UTC on 2026-09-26 the first round's picture card closed both ssh sessions at once,
+the tunnel's and the server's. ComfyUI ran in the foreground of its session and died with it. The stage stopped with
+sharp-1's A lost on its way and its A+ failed before its submit, and the rest of seed 7 was drawn on a second card,
+whose setup took 29.6 minutes and after which seed 11 no longer fit. A stage now rides out a short drop:
+
+- the server runs detached from any ssh session ([the runbook](#runbook)), so a session that ends takes nothing with it;
+- [tunnel.sh](../gpu/tunnel.sh) dials again two seconds after its connection ends ([the tunnel](gpu.md#the-tunnel));
+- after the smoke, a cell may lose up to eight minutes to the network, its waits for the server, its requests that
+  failed and its searches for its job together, and while it waits it looks at `/queue` every two seconds. That
+  leaves two of the ten minutes after which the card's sweeper deletes a finished job's record for the request out
+  when the window ran out, a last look of ten seconds at most and the requests that went through, which only a server
+  answering slowly could use up. The window ends at `--until` as everything does. The smoke looks once and waits for
+  nothing: a drop there fails it, as before.
+
+Only the network failing is waited for, as fetch reports it: a connection refused or reset, a dial that timed out, a
+request cut on its way. An HTTP status, a reply that does not parse, the picture's own wait and `--until` end a cell as
+they did. Within the window:
+
+- a reference is uploaded again once the server answers, under the same name, since it is the same file;
+- the socket is opened again;
+- each cell is submitted once. A submit refused at the connect never left, and goes when the server answers. A submit
+  whose answer was lost or did not come in time is never sent again: once the server answers, the harness looks for its
+  id among the jobs queued and recorded, and follows the job if the card has it. One the card does not have is looked
+  for once more after a pause, since its submit may still be on its way through the server;
+- a job whose polls fail is followed again once the server answers, and its picture's wait grows by the time waited;
+- a picture whose download was cut is asked for again by its file's name, since the graphs' saving node keeps it on
+  the card's disk.
+
+A connection that fails again five times over, the server answering between, ends the cell as a window that ran out
+does, its job stopped first if the card has one. The record keeps the time a cell lost as `outageMs`, and the report's
+times and the gallery's leave such a cell out, since its time holds the wait. When the window runs out, a cell that
+never reached the card, before its submit or in an upload, gets no record, and the stage stops with
+`comfy_unreachable`, or with `comfy_socket_unavailable` when the server answers and its socket still does not open; a
+resume draws that cell. A cell lost after its submit, or whose job the card no longer knows once it answers, as after a
+server that started again, fails as `comfy_connection_lost` and stops the run, where the first round's A was
+`image_failed`, the code of a picture the card could not draw. A lost cell is never drawn again: whether the card
+draws the same inputs to the same picture is [the pilot](#pilot)'s question, so a second picture could not stand for
+the first. The bot's own picture path waits for nothing.
 
 <a id='picture-smoke'></a>
 
@@ -528,8 +584,9 @@ Each gate is also shown for the clean scenes alone and for the scenes that reach
 numbers stand beside seed 7's as a repetition: whether each difference points the same way. Neither changes a
 verdict. The times are shown per arm, the median and the slowest of the warm frames against A's. T's time is L's and
 its own together, and the time to a reader's first picture with portraits includes the fronts and views a new story
-needs. No gate reads the times, and an arm with portraits that passes still needs a time the bot can live with before
-it reaches a reader.
+needs. A picture that waited for the network ([a dropped connection](#dropped-connection)) counts for no time. No gate
+reads the times, and an arm with portraits that passes still needs a time the bot can live with before it reaches a
+reader.
 
 <a id='complete-run'></a>
 
@@ -613,7 +670,19 @@ kept the variant's schema in all 18 stories, each at its first attempt. Still op
 - whether it keeps `facing` better than stage 1's hosted Gemma kept `view`;
 - how long an edit takes with six references of 352x640, and with T's seven;
 - whether the views keep the person and turn the way they are asked;
-- whether references of 352x640 keep a face.
+- whether references of 352x640 keep a face;
+- whether a server started detached outlives the ssh session that started it, as it should a hangup of that session's
+  terminal, the first round's case; a drop that ends whole session trees on the card would need the server started by
+  the card's onstart, as the guard is;
+- whether [tunnel.sh](../gpu/tunnel.sh) dials again after a real drop, and whether fetch reports that drop with the
+  codes [a dropped connection](#dropped-connection) waits on, which the fake's refused and cut connections give;
+- whether the pinned server takes the harness's prompt id as the job's, as its code reads (server.py:1093-1099);
+- [the pilot](#pilot)'s questions: what one socket saves a cell, whether the card draws the same inputs to the same
+  picture, and what the Triton backend changes, if the server uses it at all.
+
+The detached server and the tunnel take a minute of the next picture card to check, and draw nothing: start the
+server as the runbook does, but from `ssh -tt simple-chat-vast '…; sleep 600'`, end that ssh here, and see
+`/system_stats` answer through the tunnel; then end the tunnel's ssh child here and see the tunnel dial again.
 
 <a id='runbook'></a>
 
@@ -678,16 +747,21 @@ fi
 ssh simple-chat-vast 'mkdir -p /workspace/simple-chat/gpu'
 tar -cf - -C gpu . | ssh simple-chat-vast 'tar -xf - -C /workspace/simple-chat/gpu'
 ssh simple-chat-vast 'SIMPLE_CHAT_IMAGE_QWEN=only bash /workspace/simple-chat/gpu/image-bootstrap.sh'
-# The server and the tunnel, each in a terminal of its own. The server's output is the card's log: it goes nowhere.
-ssh -t simple-chat-vast \
-  'SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 bash /workspace/simple-chat/gpu/image-serve.sh' >/dev/null 2>&1
+# The server, detached from this session (#dropped-connection): no terminal, a session of its own, one at a time under
+# its lock, and a server already running is left as it is. Its output is the card's log: it goes nowhere.
+ssh -T simple-chat-vast 'SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 setsid -f nohup flock -n /root/.simple-chat-comfy.lock bash /workspace/simple-chat/gpu/image-serve.sh </dev/null >/dev/null 2>&1'
+# The tunnel, in a terminal of its own; after a drop it dials again by itself, and is left to (gpu.md#the-tunnel).
 bash gpu/tunnel.sh --pictures-only simple-chat-vast
+# Until the server answers through the tunnel; a timeout is a server that did not start, and the termination.
+timeout 300 bash -c 'until curl -sf -m 5 -o /dev/null http://127.0.0.1:8188/system_stats; do sleep 2; done'
 ssh simple-chat-vast cat /workspace/simple-chat-gpu/image-verified.txt > illustrations/action/card.txt
 # While the card draws, in a terminal of its own: the owner's pages with what is still to come and when.
 while sleep 60; do npm run image:action -- gallery --until END; done    # END is "$end"
 npm run image:action -- draw --smoke --until "$end"    # the smoke's verdict; pass false is the termination
 npm run image:action -- portraits --until "$end"    # seed 7 priced whole, then the rest of the fronts and views
 npm run image:action -- draw --until "$end"    # seed 7 scene by scene, then seed 11 if it fits whole
+# Here alone, the pilot's runbook (#pilot): when this draw drew seed 11 whole or stopped at its admission, 20 minutes
+# or more before "$end".
 # The termination, here and after every other ending: we're done, then the destroy whatever the ssh did.
 timeout 20 ssh -o ConnectTimeout=10 simple-chat-vast 'date +%s > /root/.simple-chat-trial-deadline'; \
   npm run gpu:rent -- --destroy ID    # destroy_confirmed; anything else goes to the owner at once
@@ -724,7 +798,11 @@ fake judge's prose and a malformed answers block. On the way it goes through eve
   its key file anywhere.
 
 Its made-up answers are drawn from each enum by a hash, so the verdicts it prints mean nothing. The fakes keep the
-contracts the harness talks to, and model no card, no model and no judge.
+contracts the harness talks to, and model no card, no model and no judge. [A dropped
+connection](#dropped-connection) is `npm test`'s, against the same fake ComfyUI
+([action-draw.test.ts](../local/action-draw.test.ts)): a submit answered to nobody, a job's start and a picture's
+download cut, each shorter than the window, then a window that runs out before a submit and one that runs out after
+it, with every job sent once.
 
 The dry run also leaves `config.json`, a key file of three made-up keys as simple-serving's configuration holds them,
 `serving-smoke.jsonl`, a smoke record that passes, and `dev.json`, a service block for simple-serving's dev launcher
@@ -776,15 +854,20 @@ anything is asked of the card when that is not the hash `prompts.json` records.
 `draw --smoke` prints each cell, then `smoke`: `pass`, and whether the cells were drawn, on their geometry, with the
 right slots, heard on the socket and within the memory. `pass: false` is the termination; a smoke where only T failed
 passes with `tOut`, and T leaves the run, also when T's failure is one that stops a run, such as a graph the server
-refused, but not when the card could not confirm T's stop, which may leave its job drawing. `portraits` prices the
-rest of seed 7 from the smoke's times and prints `admission`: the cells, the minutes they need and the minutes left. A
-seed 7 that does not fit stops as `admission` before any job is sent, and the termination follows. `draw` prints each
-cell and the admission of seed 11, then `drawn`: the pictures drawn by kind and seed, and the failed and the out by
-code. `stopped: admission` after seed 7 is seed 11 that did not fit, and the verdict stands on seed 7;
-`stopped: until` is the end that came. Every ending is the termination, and a resume draws nothing again, a cell
-whose failure stopped the run included; a picture `draw.json` records whose file is gone is data lost, refused before
-anything is drawn and never drawn again. The saved pictures stay on the card until its destroy is read back; the
-harness reads no log of the card for a sharp story, and nobody reads the server's output.
+refused, but not when the card could not confirm T's stop, which may leave its job drawing, nor when the network kept
+T from the card or lost it on its way, which says nothing of T. `portraits` prices the rest of seed 7 from the smoke's
+times and prints `admission`: the cells, the minutes they need and the minutes left. A seed 7 that does not fit stops
+as `admission` before any job is sent, and the termination follows. `draw` prints each cell and the admission of seed
+11, then `drawn`: the pictures drawn by kind and seed, and the failed and the out by code. `stopped: admission` after seed 7 is seed 11 that did not fit, and the verdict stands on seed 7;
+`stopped: until` is the end that came. A cell that waited for the network shows its `outageMs`, and one the network
+kept from the card is `cell_unsent`, with its code. A drop shorter than [the window](#dropped-connection) is no
+ending: the tunnel dials again by itself, the stage goes on, and nothing is started again, since a server that starts
+again has lost its jobs. A longer one ends the stage with `comfy_unreachable`, `comfy_socket_unavailable` or
+`comfy_connection_lost`. Every ending is the termination, and a resume draws nothing again, a cell whose failure
+stopped the run included; a cell that never reached the card has no record and is drawn. A picture `draw.json`
+records whose file is gone is data lost, refused before anything is drawn and never drawn again. The saved pictures
+stay on the card until its destroy is read back; the harness reads no log of the card for a sharp story, and nobody
+reads the server's output.
 
 **After the card**, no card is needed. `bundles` prints the bundles built and those skipped, by reason. `judge` runs
 every session that is ready, four at a time (`--parallel`, and `--kind` for some kinds alone), prints each
@@ -814,3 +897,90 @@ directory holds:
   and its report; `sealed/tmp/`, their temporary directory; and `sealed/owner/`, the owner's pages;
 - `card.txt` and `draw.json`, the card's record and the pictures';
 - `report.json`, `report.md`, `gallery.html` and `sealed/gallery.html`.
+
+<a id='pilot'></a>
+
+## The pilot
+
+`npm run image:pilot` ([image-pilot.ts](../local/image-pilot.ts)) asks the picture card three questions before the
+next change to how it draws: what [one socket a stage](#one-socket) saves a cell, whether the card draws the same
+inputs to the same picture, and what comfy-kitchen's Triton backend changes. It draws a fixed handful of the first
+round's clean cells again, from that round's own plans, portraits and views in `illustrations/action-1`, into
+`illustrations/pilot`: flight's at seed 7, since flight binds four people, the most a frame binds now. They are one of
+each kind of picture the run draws: the first front, the first view, A, C with four portraits, V with both views among
+its four, and T with L's picture and four portraits. It draws no sharp story, reads nothing under `sealed/` and writes
+nothing into the first round's directory or into `illustrations/action`. It refuses a first round whose pictures are
+not the files its `draw.json` records, and a plan of flight's that gives a cell a prompt of another length or another
+number of references than the first round's record of it: the first round's own hash of the plans covers the sealed
+ones too, which the pilot does not read.
+
+- `draw`, on the server as the first round ran it:
+  - the determinism check: C, then A, then C again, whose picture is compared with the first C's. It counts only when
+    the socket heard that neither C's sampler was answered from the server's cache, which may keep older jobs on a
+    card with more RAM ([what the card keeps](gpu.md#what-the-card-keeps-of-a-picture)): `same`, `different` or
+    `inconclusive`;
+  - the front, the view, A, V and T three times: the baseline, with a socket a picture and the log read before and
+    after each job, as the first round drew; the same on one socket, as round two draws; and the baseline again, which
+    brackets whatever drifts on the card.
+- `triton`, once the server has been started again with `SIMPLE_CHAT_IMAGE_TRITON=1`: what the server's log says of
+  comfy-kitchen's backends at its start, then the same five cells twice on one socket, the first pass with whatever
+  Triton compiles on its first use.
+- `report`, which needs no card: each pass's times by cell, from one cell's end to the next and the job's own, the
+  card's idle time between them, the peaks of video memory and RAM, what one socket saved a cell against the mean of
+  the two baselines, the determinism verdict, and Triton's sampler time against the one socket's, its first pass
+  against its second, and its pictures against the baseline's.
+
+Each cell keeps what a drawing stage records, its sha256, whether its sampler came from the cache, and its picture
+against the baseline's, the first round's and, in Triton's second pass, the first's: the same bytes, or how many pixels
+differ, by how much at most and on average, and the PSNR. A pass is a measurement: one that did not finish, or in
+which a cell waited for the network, is drawn again whole, into a new directory and three times at most, and a
+finished one is never drawn again. One pilot directory holds one card and one server. `draw` refuses the Triton
+backend; `triton` refuses a server not started with it, one whose log says Triton did not load, and a pilot whose
+baseline has not finished; and a pin that changed is refused as a drawing stage refuses it. `differsFromRoundOne`
+names the pins that differ from the first round's, by name alone. Which kernels comfy-kitchen chose is not visible
+from outside the server, since the pinned build logs its dispatch at debug level alone: `dispatchVisible` is false,
+and the log's lines at the start say which backends the server found and whether Triton loaded. The sampler's seconds
+and the pictures are the evidence of use. Nothing the pilot prints or keeps is a prompt or a word of a story:
+`dry-run` draws a made-up first round against [fake-comfy.ts](../local/fake-comfy.ts), goes through both commands,
+their refusals and the report, and searches the pilot's directory and all it printed for the scene's made-up word.
+
+**When.** On round two's card, after its last `draw`, when that drew seed 11 whole or stopped at its admission
+(`stopped: admission`) with 20 minutes or more left before `--until`, and before the termination. It never runs before
+the smoke or between the stages, where its minutes would come out of round two's. Anywhere else it needs a card of its
+own and the owner's «да».
+
+**The time**, from the first round's medians at seed 7 and the gaps it left between two jobs, 2.3 s and each
+upload:
+
+| | minutes |
+| --- | --- |
+| `draw`, the determinism check: C, A and C | 1.1 |
+| `draw`, the baseline: the front, the view, A, V and T, 88 s of jobs | 1.7 |
+| `draw`, one socket, then the baseline again | 3.3 |
+| the server stopped, and started with Triton | 1 |
+| `triton`, the first pass: the models loaded again, and whatever Triton compiles and tunes | 3 to 7 |
+| `triton`, the second pass | 1.2 to 1.6 |
+
+That is 11 to 16 card-minutes on round two's card, $0.09 to $0.13 at the first round's $0.498 an hour; Triton's first
+pass is the least known. On a card of its own, a setup of 8 to 30 minutes comes on top, as the first round's two cards
+took, and half a minute for the first cold job: 20 to 47 minutes, $0.17 to $0.39.
+
+```sh
+npm run image:pilot -- dry-run    # before the card: "the pilot's dry run went as expected"
+# On the card, after the last draw, with the server and the tunnel the runbook started and its "$end":
+mkdir -p -m 700 illustrations/pilot
+ssh simple-chat-vast cat /workspace/simple-chat-gpu/image-verified.txt > illustrations/pilot/card.txt
+npm run image:pilot -- draw --until "$end"    # each pass as it ends, then done true and the determinism verdict
+# The server again, with comfy-kitchen's Triton backend: stopped as by Ctrl-C, its lock free, then started.
+ssh -T simple-chat-vast 'pkill -INT -f "[C]omfyUI/main.py"; for i in $(seq 90); do flock -n /root/.simple-chat-comfy.lock true && exit 0; sleep 1; done; exit 1'
+ssh -T simple-chat-vast 'SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 SIMPLE_CHAT_IMAGE_TRITON=1 setsid -f nohup flock -n /root/.simple-chat-comfy.lock bash /workspace/simple-chat/gpu/image-serve.sh </dev/null >/dev/null 2>&1'
+timeout 300 bash -c 'until curl -sf -m 5 -o /dev/null http://127.0.0.1:8188/system_stats; do sleep 2; done'
+npm run image:pilot -- triton --until "$end"    # refused if Triton did not load; then done true
+# The termination, as after every ending. After the card:
+npm run image:pilot -- report
+```
+
+A command that stops prints `done: false` and the pass it stopped in, and run again draws that pass anew and goes on.
+`--wait` is ten minutes here, twice a drawing stage's, for Triton's first compile; `--from`, `--dir`, `--timeout` and
+`--comfy` keep their defaults. The stop waits for the server's lock rather than its process, since the sweeper beside
+it holds the lock a second longer, and a start while the lock is held does nothing.

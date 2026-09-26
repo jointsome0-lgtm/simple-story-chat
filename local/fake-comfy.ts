@@ -38,7 +38,19 @@ export type FakeComfyOptions = {
   marker?: string;
   // Whether `/prompt` refuses a graph whose loader names a file nobody uploaded, as the real server's validation does.
   requireUploads?: boolean;
+  // The network to the server going down for `ms`, once each, at a moment of the job numbered `job`: before its submit
+  // is answered (`prompt`), once it has started (`start`), halfway through its picture's download (`view`), or once
+  // the delete of its record is answered (`delete`). Every connection is cut and the port refuses new ones, as a
+  // tunnel whose ssh has died does; the jobs go on, as they do on the card.
+  drops?: { at: 'prompt' | 'start' | 'view' | 'delete'; job: number; ms: number }[];
+  // The server's command line on /system_stats, and lines its log has from its start (the pilot's Triton evidence).
+  argv?: string[]; startupLog?: string[];
+  // Whether a picture's pixels follow from the graph it was drawn from alone, as on a card that draws the same inputs
+  // alike, rather than from the job's number (the pilot's determinism check, local/image-pilot.ts).
+  picturesByGraph?: boolean;
 };
+// A request as the server saw it, for a test to assert on the order of things: the job it concerns, when there is one.
+export type FakeCall = { method: string; path: string; id?: string };
 // What a job was, for a test to assert on. Never its text. `slots`: each reference slot of the encoder in slot order,
 // the file on the loader behind it, and the size a scale node between them hands on (`null` without one). `images`:
 // each picture a saving node wrote, with its size.
@@ -116,6 +128,9 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
   const log: { t: string; m: string }[] = [];
   const uploads: string[] = [];
   const uploaded = new Map<string, Buffer>();
+  const calls: FakeCall[] = [];
+  // Each job's number by its id, and each file's job.
+  const numbers = new Map<string, number>(), owners = new Map<string, string>();
   let running: Job | undefined;
   let count = 0, lines = 0;
   // app/logger.py keeps the last 300 lines, each stamped to the microsecond.
@@ -123,7 +138,24 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
     log.push({ t: new Date().toISOString().replace('Z', String(++lines % 1000).padStart(3, '0')), m: `${m}\n` });
     if (log.length > 300) log.shift();
   };
+  for (const line of options.startupLog ?? []) say(line);
   const tell = (job: Job, type: string, data: object) => speakers.get(job.clientId)?.({ type, data: { ...data, prompt_id: job.id } });
+  // A drop (`FakeComfyOptions.drops`): the port stops listening and every open connection is cut, the sockets' too;
+  // after `ms` the server listens on the same port again.
+  let port = 0, down: Promise<void> = Promise.resolve(), timer: NodeJS.Timeout | undefined;
+  const fired = new Set<object>();
+  const dropAt = (at: string, job: number) => {
+    const drop = options.drops?.find(one => one.at === at && one.job === job && !fired.has(one));
+    if (!drop) return false;
+    fired.add(drop);
+    down = new Promise<void>(back => {
+      server.close();
+      server.closeAllConnections();
+      for (const socket of sockets) socket.destroy();
+      timer = setTimeout(() => { timer = undefined; server.listen(port, '127.0.0.1', () => back()); }, drop.ms);
+    });
+    return true;
+  };
 
   async function run(job: Job) {
     const began = performance.now();
@@ -154,6 +186,7 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
     const record = (type: string, data: object) => { messages.push([type, { ...data, prompt_id: job.id }]); tell(job, type, data); };
     record('execution_start', { timestamp: Date.now() });
     record('execution_cached', { nodes: cached, timestamp: Date.now() });
+    dropAt('start', job.number);
     const outputs: Record<string, { images: { filename: string; subfolder: string; type: string }[] }> = {};
     let outcome: FakeJob['outcome'] = 'success';
     const ran: string[] = [];
@@ -184,7 +217,9 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
       if (type === 'SaveImage' || type === 'PreviewImage') {
         const file = { filename: `fake_${String(job.number).padStart(5, '0')}_${id}_.png`, subfolder: '', type: type === 'SaveImage' ? 'output' : 'temp' };
         const size = sizeOf(source(graph[id].inputs.images));
-        files.set(file.filename, greyPng(size.width, size.height, job.number, Number(id) || 0, options.marker));
+        const drawn = options.picturesByGraph ? createHash('sha256').update(JSON.stringify(graph)).digest().readUInt16BE(0) : job.number;
+        files.set(file.filename, greyPng(size.width, size.height, drawn, Number(id) || 0, options.marker));
+        owners.set(file.filename, job.id);
         images.push({ node: id, ...size });
         outputs[id] = { images: [file] };
         tell(job, 'executed', { node: id, display_node: id, output: outputs[id] });
@@ -209,15 +244,24 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
     const read = async () => { const parts: Buffer[] = []; for await (const part of request) parts.push(part as Buffer); return Buffer.concat(parts); };
     const json = (value: unknown) => { response.setHeader('content-type', 'application/json'); response.end(JSON.stringify(value)); };
     void (async () => {
+      const call: FakeCall = { method: request.method ?? 'GET', path: url.pathname };
+      calls.push(call);
       if (request.method === 'POST' && url.pathname === '/prompt') {
-        const asked = JSON.parse((await read()).toString('utf8')) as { prompt?: Graph; client_id?: unknown };
+        const asked = JSON.parse((await read()).toString('utf8')) as { prompt?: Graph; client_id?: unknown; prompt_id?: unknown };
         if (!asked.prompt || typeof asked.prompt !== 'object') { response.statusCode = 400; return json({ error: 'no prompt' }); }
         const missing = Object.values(asked.prompt).some(node => node.class_type === 'LoadImage' && !uploaded.has(String(node.inputs.image)));
         if (options.requireUploads && missing) { response.statusCode = 400; return json({ error: { type: 'prompt_outputs_failed_validation' }, node_errors: {} }); }
-        const job = { id: `fake-${++count}`, number: count, clientId: String(asked.client_id ?? ''), graph: asked.prompt, stop: new AbortController() };
+        // The id the client sent, as the pinned server takes one (server.py), or one of its own.
+        const number = ++count;
+        const id = typeof asked.prompt_id === 'string' && asked.prompt_id ? asked.prompt_id : `fake-${number}`;
+        const job = { id, number, clientId: String(asked.client_id ?? ''), graph: asked.prompt, stop: new AbortController() };
+        call.id = id;
+        numbers.set(id, number);
         say('got prompt');
         queue.push(job);
         pump();
+        // The job is on the card, and its answer is lost with the connection.
+        if (dropAt('prompt', number)) return;
         return json({ prompt_id: job.id, number: job.number, node_errors: {} });
       }
       if (request.method === 'POST' && url.pathname === '/upload/image') {
@@ -232,20 +276,33 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
         const asked = JSON.parse((await read()).toString('utf8')) as { delete?: string[]; clear?: boolean };
         if (asked.clear) history.clear();
         for (const id of asked.delete ?? []) history.delete(id);
-        return json({});
+        call.id = asked.delete?.[0];
+        const number = call.id === undefined ? undefined : numbers.get(call.id);
+        response.setHeader('content-type', 'application/json');
+        return response.end('{}', () => { if (number !== undefined) dropAt('delete', number); });
       }
       if (url.pathname.startsWith('/history/')) {
         const id = url.pathname.slice('/history/'.length);
+        call.id = id;
         return json(history.has(id) ? { [id]: history.get(id) } : {});
       }
       if (url.pathname === '/view' && files.has(String(url.searchParams.get('filename')))) {
+        const name = String(url.searchParams.get('filename'));
+        const bytes = files.get(name)!;
+        call.id = owners.get(name);
         response.setHeader('content-type', 'image/png');
-        return response.end(files.get(String(url.searchParams.get('filename'))));
+        response.setHeader('content-length', bytes.length);
+        const number = call.id === undefined ? undefined : numbers.get(call.id);
+        // Half the picture, and then the network goes.
+        if (number !== undefined && options.drops?.some(one => one.at === 'view' && one.job === number && !fired.has(one))) {
+          return response.write(bytes.subarray(0, bytes.length >> 1), () => dropAt('view', number));
+        }
+        return response.end(bytes);
       }
       if (url.pathname === '/system_stats') {
         // The shape comfy/model_management.py reports, with fixed numbers.
         return json({ system: { os: 'posix', ram_total: 64 * GIB, ram_free: 50 * GIB, comfyui_version: 'fake', python_version: 'fake',
-          pytorch_version: 'fake', embedded_python: false, argv: [] },
+          pytorch_version: 'fake', embedded_python: false, argv: options.argv ?? [] },
         devices: [{ name: 'fake card', type: 'cuda', index: 0, vram_total: 32 * GIB, vram_free: 10 * GIB,
           torch_vram_total: 23 * GIB, torch_vram_free: 1 * GIB }] });
       }
@@ -263,8 +320,11 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
         return json({});
       }
       if (url.pathname === '/interrupt' && request.method === 'POST') {
-        await read();
-        running?.stop.abort();
+        // Only the job named, and only while it is the one being drawn; without a name, whatever is (server.py).
+        const body = (await read()).toString('utf8');
+        const asked = (body ? JSON.parse(body) : {}) as { prompt_id?: unknown };
+        call.id = typeof asked.prompt_id === 'string' ? asked.prompt_id : undefined;
+        if (call.id === undefined || running?.id === call.id) running?.stop.abort();
         return json({});
       }
       response.statusCode = 404;
@@ -286,8 +346,17 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
     }, options.openDelayMs ?? 0);
   });
   await new Promise<void>(done => server.listen(0, '127.0.0.1', done));
+  port = (server.address() as AddressInfo).port;
   return {
-    url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, jobs, uploads, options,
-    close: () => new Promise<void>(done => { for (const socket of sockets) socket.destroy(); server.close(() => done()); }),
+    url: `http://127.0.0.1:${port}`, jobs, uploads, options, calls,
+    // Once the server listens again after the last drop.
+    whenUp: () => down,
+    close: () => new Promise<void>(done => {
+      if (timer) clearTimeout(timer);
+      for (const socket of sockets) socket.destroy();
+      if (!server.listening) return done();
+      server.closeAllConnections();
+      server.close(() => done());
+    }),
   };
 }

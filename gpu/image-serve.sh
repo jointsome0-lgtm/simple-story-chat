@@ -46,6 +46,14 @@ if [[ "$qwen" != false ]]; then
     [[ -f "$gpu_dir/$graph" ]] || { echo "Missing $gpu_dir/$graph; rerun image-bootstrap.sh with SIMPLE_CHAT_IMAGE_QWEN=$qwen." >&2; exit 1; }
   done
 fi
+# comfy-kitchen's Triton backend, off unless SIMPLE_CHAT_IMAGE_TRITON=1 (docs/action-experiment.md#pilot). On a torch
+# built for CUDA below 13 the pinned server runs every int8 layer on the kitchen's eager path (comfy/quant_ops.py:22-43);
+# the flag lets it use Triton's fused kernels instead, which may round differently. A run records it in its pins
+# (local/image-batch.ts `serverPins`, from the command line /system_stats reports), and a resume across it is refused.
+triton="${SIMPLE_CHAT_IMAGE_TRITON:-0}"
+[[ "$triton" = 0 || "$triton" = 1 ]] || { echo 'Use SIMPLE_CHAT_IMAGE_TRITON=0 or 1.' >&2; exit 1; }
+flags=()
+if [[ "$triton" = 1 ]]; then flags+=(--enable-triton-backend); fi
 # Krea 2 produces garbage under SageAttention, and several rented ComfyUI templates turn it on through their own
 # launcher. This script is the launcher: the flag is absent, and an inherited request for it is refused rather than
 # silently ignored, because a bad picture would otherwise be blamed on the fine-tune.
@@ -83,6 +91,7 @@ if [[ "$qwen" = only ]]; then
 else
   echo "Starting ComfyUI $COMFYUI_VERSION for $IMAGE_MODEL_NAME on GPU $device, loopback port $port, temp in $temp_root; post $workflow."
 fi
+if [[ "$triton" = 1 ]]; then echo "With comfy-kitchen's Triton backend (SIMPLE_CHAT_IMAGE_TRITON=1)."; fi
 # The sweeper starts before the exec, with this shell's PID, which the exec hands to ComfyUI, and it stops by itself
 # once that PID is gone. Its rows are counts and codes, in this script's log beside the server's own lines.
 "$comfy_dir/.venv/bin/python" "$sweeper" --pid "$$" --temp "$temp_root/temp" --port "$port" &
@@ -95,4 +104,4 @@ fi
 # drew — do not copy either home.
 exec "$comfy_dir/.venv/bin/python" "$comfy_dir/main.py" \
   --listen 127.0.0.1 --port "$port" --disable-auto-launch --temp-directory "$temp_root" \
-  --disable-metadata --disable-all-custom-nodes --disable-api-nodes --preview-method none
+  --disable-metadata --disable-all-custom-nodes --disable-api-nodes --preview-method none ${flags[@]+"${flags[@]}"}
