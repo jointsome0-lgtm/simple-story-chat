@@ -111,10 +111,13 @@ the pictures, 4 repeats and 18 of identity, in 81 attempts. Every kind answered 
 whose task gave no valid answers block in 6 of its 23 attempts. `lineout`'s identity session gave none twice, so
 `lineout` has no identity score. The repeats of four clean scenes agreed on 98 of 99 participants, 73 of 86
 relations, 78 of 83 faces and 77 of 99 looks, and would have changed no verdict. The directory also keeps
-`judging.json` as it was before two resets, `judging.before-401-reset.json` (01:52) and
-`judging.before-outage-reset.json` (02:02), and the sessions of the outage in `sessions-outage-2026-09-26` (02:06),
-all three older than `checklists.json` by their times. The stored `judging.json` shows neither: each of its attempts
-is `ok` or without a valid block. This page did not read the two copies.
+`judging.json` as it was before two resets, whose names say why: a 401, then an outage of the service.
+`judging.before-401-reset.json` (01:52) holds 4 checklist sessions of clean scenes with 2 attempts, 139 s in all;
+`judging.before-outage-reset.json` (02:02) holds 5 with 6 attempts, 377 s, and two of its sessions had already
+counted as a judge's failure after two attempts each. Every one of those attempts ended with exit code 1 and no
+report. Each reset cleared them, so the checklists were asked again, and the sessions of the outage are kept in
+`sessions-outage-2026-09-26` (02:06). All three are older than `checklists.json` by their times. The stored
+`judging.json` shows neither reset: each of its attempts is `ok` or without a valid block.
 
 **What round two changed because of it.**
 
