@@ -15,9 +15,10 @@ The identity run of the same day found that portraits of 704x1280 keep a face bu
 viewer as in their portraits, and a frame with four of them took 82 s against 15 s without
 ([the run](identity-experiment.md#result-2026-09-25)). This measurement asks about the action first, on scenes built
 for it, and on the bot's own path: the uncensored Gemma writes the scenes and the frames on a rented card through
-[simple-serving](model-providers.md#simple-serving-our-gateway), and Qwen-Image 2.1 draws them on another. Nothing of
-it has run yet except [stage 1](#stage-1), which wrote the frames of the clean scenes with a hosted Gemma and drew
-nothing.
+[simple-serving](model-providers.md#simple-serving-our-gateway), and Qwen-Image 2.1 draws them on another.
+[Stage 1](#stage-1) wrote the frames of the clean scenes with a hosted Gemma and drew nothing. The first round wrote
+its texts on 2026-09-25 and 26 and drew seed 7 on the 26th, with up to six people in a moment; the next one has four
+([four](#four)).
 
 <a id='stage-1'></a>
 
@@ -101,16 +102,15 @@ the reader's action, through the bot's `generateScene`, and the frames describe 
 than one, because the sheet's instruction asks for the people who appear in more than one. The clean seeds and
 actions are written from stage 1's stories, their `target` and `cast`, and fixed in `examples/action-set.ts` before
 any card, each with its target: the contact the moment should hold and the participants it needs. No moment has more
-than six participants. Gulliver's cast is cut from seven to six before the set is frozen, two guards instead of
-three, each a person of their own. The scenes are not stage 1's: the reader's action says what the moment is, and the
-scene is whatever the heretic writes.
+than four participants, and no cast more than four people, the bot's own limit for a frame ([four](#four)). The
+scenes are not stage 1's: the reader's action says what the moment is, and the scene is whatever the heretic writes.
 
 Each sharp story is written by the heretic on the same card, in one call, before its flow starts. Its instruction is
 the only sharp text a Claude session writes, and it names the theme and nothing more. The harness pins this wording:
 
 > Придумай завязку для интерактивной истории для взрослых на тему «ТЕМА». Все персонажи взрослые, им больше двадцати
 > лет. Никакого сексуального насилия и ничего сексуального без согласия. Откровенность и жёсткость допустимы, если
-> тема к ним ведёт. Нужны от трёх до шести персонажей с именами и заметно разной внешностью: пол, возраст словом,
+> тема к ним ведёт. Нужны три или четыре персонажа с именами и заметно разной внешностью: пол, возраст словом,
 > телосложение, волосы, приметы; место и время. Завязка должна подвести к одному моменту, где несколько персонажей
 > тесно касаются друг друга: держат, несут, обнимают, моют, связывают или перевязывают. Ответь в JSON: seed,
 > завязка в 6-12 строк; action, действие читателя, которое ведёт к этому моменту, одна-две фразы.
@@ -123,6 +123,19 @@ contact happens, whether each participant it needs is in it, and whether the mom
 missed stays in the run as written and is never asked again. The report counts the misses and shows every gate over
 the scenes that reached their target beside the main count. A pass those scenes do not repeat is reported as a pass
 of the main count alone, never as success on the moments the set was built for.
+
+<a id='four'></a>
+
+**Four people, since 2026-09-26.** The first round let a moment hold six participants, where the bot's frame holds
+four, and wrote its texts and drew its seed 7 that way. After seed 7 the owner cut every scene to four. Of the six
+clean stories with more, four lost the people their seeds name last: the beach Оля and Вика, the lineout the Oaks'
+lifters Митя and Гоша, so Фёдор now jumps unlifted, the monkeys Бубу, and Gulliver both guards. The rescue lost its
+last two carriers, Вадим and Ильдар, so two carriers hold the stretcher, and the jellyfish the twins Пим and Пом,
+since one of two twins is no twin. The variant asks for four participants at most, as the bot's frame does, and the
+sharp instruction for three or four named people. The first round's set and protocol are those of commit 7e7de76. The
+cut is the owner's choice, not a finding of the first round: at its seed 7, C lost to A+ on looks by 3 points in the
+five clean scenes that bound one to three portraits, by 44 in the four that bound four, and by 8 in the four that
+bound six.
 
 <a id='text-run'></a>
 
@@ -153,7 +166,7 @@ decided by rules fixed now:
 - `unparsed`: `askJson`'s second try did not parse either;
 - `truncated`: a reply that parsed but finished on `length`;
 - `schema`: a reply that parsed and breaks its schema, checked on the raw reply before `sheetOf` could drop an
-  entry: a required field missing, a value outside an enum, more than six people, or, in the variant, two
+  entry: a required field missing, a value outside an enum, more than four people, or, in the variant, two
   participants with the same role, compared trimmed and without case;
 - `empty_sheet`: a sheet with no entry;
 - `failed`: the call failed, with the adapter's code.
@@ -192,9 +205,10 @@ contact", the props example and the empty hands are replaced, and the rule to hi
 objects, as change 7 says.
 
 1. The moment is the main action the scene ends in, while it happens, not before or after it.
-2. Every participant of the main action is in `people`, up to six: people, animals and creatures alike, each as an
+2. Every participant of the main action is in `people`, up to four: people, animals and creatures alike, each as an
    entry of their own even when they are alike, so two guards are two entries. People who only watch may be left out.
-   Over six, a crop leaves the rest out, and part of a group is never shown as the whole of it.
+   Over four, a crop leaves the rest out, and part of a group is never shown as the whole of it. The first round had
+   six here ([four](#four)).
 3. `role`, new and required: two to eight English words, one phrase for one participant, used for nobody else and
    repeated word for word wherever `moment`, `props`, `state` and `action` name that participant. It names their part
    in the moment and their place, with an explicit owner of anything it mentions ("the running father", "the girl in
@@ -223,9 +237,9 @@ objects, as change 7 says.
    puts it behind that body; the edge may not. The bot's rule to hide precise contacts stays for small objects, a
    blade in a slot or fingers on a button, and does not cover contacts between participants.
 
-In the schema, `people` holds up to six items, and `role` and `facing` are required, `facing` as an enum. The output
-limit is 1800 tokens, twice the bot's: stage 1's longest variant reply took 710 with six people before `role` and
-`facing` were asked for, and a cut reply is a failure.
+In the schema, `people` holds up to four items, the bot's own limit, and `role` and `facing` are required, `facing` as
+an enum. The output limit is 1800 tokens, twice the bot's: stage 1's longest variant reply took 710 with six people
+before `role` and `facing` were asked for, and a cut reply is a failure.
 
 ### The sheet
 
@@ -302,14 +316,14 @@ frame does not use, and counts the geometry after the scale. The graphs as they 
 [the smoke](#picture-smoke), against [fake-comfy.ts](../local/fake-comfy.ts) in the dry run and then on the card: every
 slot sends the file its manifest names, and T's first slot is not scaled. Every picture loses its metadata on the way
 to the card and back, as `local/image-batch.ts` already does. The identity run's 704x1280 took 82 s a frame with four
-portraits, longer than a reader would wait, and a frame here binds up to six. The results hold for this size and this
+portraits, longer than a reader would wait, and a frame here binds up to four. The results hold for this size and this
 recipe: no arm compares sizes, and none is compared with the identity run.
 
 ## Drawing
 
-- Every frame is 1280x704, on one edit graph with seven reference slots: six portraits, and L's picture in T. The
-  slots a frame does not use leave the graph. A, A+ and L use none, and the identity run's control showed that this
-  draws the same file as the bot's text-to-image graph.
+- Every frame is 1280x704, on one edit graph with seven reference slots: six portraits, and L's picture in T. A frame
+  binds four portraits at most, so T sends five at most; the slots a frame does not use leave the graph. A, A+ and L
+  use none, and the identity run's control showed that this draws the same file as the bot's text-to-image graph.
 - Seed 7 decides, and seed 11 repeats it only if [the time](#time) admits it after seed 7. The order on the card is
   [the smoke](#picture-smoke), the rest of the front portraits, the rest of the views, seed 7 in all arms scene by
   scene, then seed 11 the same way. L is drawn before T of the same scene and seed.
@@ -375,7 +389,7 @@ portrait:
 
 That is 115 to 163 minutes of the guard's 180. T's time is the least known: four portraits of 704x1280 took 82 s in
 the identity run and two took about 20 s, and the cause of that jump was not measured. T sends L's picture at
-1280x704 and up to six references at 352x640, between those two in pixels.
+1280x704 and up to four references at 352x640, between those two in pixels.
 
 <a id='judging'></a>
 
@@ -611,9 +625,15 @@ nothing in that file. Everything lives in one directory, `illustrations/action`,
 every command but `dry-run` refuses another `--dir`, and a link on the way to `sealed/`. Each command but `dry-run`
 prints one JSON object a line, of ids, codes, counts and times: a sharp story shows as its id, and an error as the
 harness's own refusal or as a class and a code, never as what a parser read. `SIMPLE_SERVING_CHECKOUT` is
-simple-serving's checkout, as `npm run test:serving` names it. The runbook, in its order:
+simple-serving's checkout, as `npm run test:serving` names it. A new round starts in an empty `illustrations/action`,
+since the harness refuses a directory written under other pins. The round before moves out whole to
+`illustrations/action-N`, N its number, and only once the owner has added `Read(./illustrations/action-N/sealed/**)`
+to the denies. The runbook, in its order:
 
 ```sh
+# A new round, first: the old one moves out whole once the owner's deny covers its new place (N is 1 for the first).
+grep -cF 'illustrations/action-N/sealed' .claude/settings.json    # 1 or more, or it stays where it is
+mv illustrations/action illustrations/action-N
 # Before any card: all of it against fakes, then the texts against simple-serving's dev launcher.
 dry=$(mktemp -d)
 npm run image:action -- dry-run --dir "$dry"    # eleven steps, then "the dry run went as expected"

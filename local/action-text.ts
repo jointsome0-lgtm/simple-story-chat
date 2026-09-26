@@ -45,13 +45,14 @@ export const readJson = <T>(file: string): T | undefined => (existsSync(file) ? 
 
 // The owner's draft of the seven changes as nine replacements in the bot's instruction (local/illustrate.ts
 // `instruction`), with the coordinator's amendments of 2026-09-25: a role of two to eight words, and the facing line
-// with `other`. Each `from` must stand in the bot's text exactly once; `to` replaces it. Items 7 and 8 keep their text
-// and add a sentence, item 9 adds four lines before the shot's.
+// with `other`; and since 2026-09-26 the owner's four participants in place of the first round's six. Each `from` must
+// stand in the bot's text exactly once; `to` replaces it. Items 7 and 8 keep their text and add a sentence, item 9 adds
+// four lines before the shot's.
 export const VARIANT_CHANGES: { from: string; to: string }[] = [
   { from: '- Выбери ОДИН конкретный момент сцены, до или после сложного контакта, и сохрани',
     to: '- Выбери ОДИН конкретный момент сцены: главное действие, к которому она пришла в конце, в тот миг, когда оно происходит, а не до и не после него, и сохрани' },
   { from: '- Не больше четырёх человек. Если в моменте их больше, выбери тесный ракурс, который естественно оставляет остальных за краем кадра; не показывай часть группы как всю группу.',
-    to: '- В кадре все участники главного действия, до шести: люди, животные и существа, каждый отдельной записью в people, даже если они похожи (два стражника — две записи). Тех, кто только смотрит, можно оставить за кадром. Если участников больше шести, выбери ракурс, который естественно оставляет лишних за краем кадра; не показывай часть группы как всю группу.' },
+    to: '- В кадре все участники главного действия, до четырёх: люди, животные и существа, каждый отдельной записью в people, даже если они похожи (два стражника — две записи). Тех, кто только смотрит, можно оставить за кадром. Если участников больше четырёх, выбери ракурс, который естественно оставляет лишних за краем кадра; не показывай часть группы как всю группу.' },
   { from: '- people: каждый человек, который должен быть виден, отдельной записью',
     to: '- people: каждый участник, человек, животное или существо, который должен быть виден, отдельной записью' },
   { from: 'Без имён: the commander, the shield-bearer, the two dancers.', to: 'Без имён: называй участников их role.' },
@@ -87,14 +88,13 @@ export function once(text: string, from: string, to: string): string {
 
 export type Schema = { type?: string | string[]; enum?: unknown[]; properties?: Record<string, Schema>; required?: string[];
   additionalProperties?: boolean; items?: Schema; maxItems?: number; minItems?: number };
-// The bot's frame request with the changes, the people up to six, and `role` and `facing` required right after
-// `who`, so that the model writes them before the look.
+// The bot's frame request with the changes, the people up to the bot's own four, and `role` and `facing` required right
+// after `who`, so that the model writes them before the look.
 export function variantRequest(context: Excerpt, sheet: Character[]): ModelRequest {
   const bot = frameRequest(context, sheet);
   const text = VARIANT_CHANGES.reduce((instruction, change) => once(instruction, change.from, change.to), bot.messages.at(-1)!.content);
   const schema = structuredClone(bot.outputSchema) as { properties: { people: Schema & { items: Schema } } };
   const people = schema.properties.people;
-  people.maxItems = 6;
   const { who, ...rest } = people.items.properties!;
   people.items.properties = { who, role: { type: 'string' }, facing: { type: 'string', enum: [...FACINGS] }, ...rest };
   people.items.required = ['who', 'role', 'facing', 'look', 'clothes', 'state', 'action'];

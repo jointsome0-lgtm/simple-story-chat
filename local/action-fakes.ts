@@ -96,7 +96,7 @@ export function fakeGateway({ key, model = 'gemma-4-31b-heretic-nvfp4', stories 
       const variant = kind === 'variant';
       text = JSON.stringify({ moment: `The participants hold each other${secret}`, shot: 'Medium wide shot at three quarters', setting: 'A plain room',
         objects: '', props: '', light: 'Evening light',
-        people: people.slice(0, variant ? 6 : 4).map((name, at) => ({ who: name,
+        people: people.slice(0, 4).map((name, at) => ({ who: name,
           ...(variant ? { role: fault === 'duplicate_roles' && at === 1 ? 'The Participant 1' : `the participant ${at + 1}`, facing: fault === 'all_viewer' ? 'viewer' : FACINGS[at % FACINGS.length] } : {}),
           look: '', clothes: `wearing a ${['blue', 'green', 'grey', 'brown', 'white', 'black'][at % 6]} tunic`, state: '',
           action: `holds the hand of the participant ${((at + 1) % people.length) + 1}` })) });
