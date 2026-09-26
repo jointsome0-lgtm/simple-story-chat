@@ -190,7 +190,7 @@ export const en: Messages = {
     editNote: max => `Send the new short look in one message, up to ${max} characters: face, hair, build, height, marks. Leave out the clothes and the name: the story changes the clothes, and the name stays. The picture model understands English best.`,
     editKeepsDetails: 'The portrait is still drawn from the detailed look. Your short look takes the place of the one compressed from it until the detailed look is edited again.',
     detailsTitle: (person, story) => `✏️ Detailed look: ${person} · ${story}`,
-    detailsNote: max => `Send the detailed look in one message, up to ${max} characters, in any language: sex, age as a word rather than a number, skin tone, height and build, hair, face, marks. Leave out the clothes: they come from the scenes. The portrait is drawn from this text as written, and the bot compresses it into the short look in English for the pictures of the scenes. The picture model understands English best.`,
+    detailsNote: max => `Send the detailed look in one message, up to ${max} characters, in any language: sex, age as a word rather than a number, skin tone, height and build, hair, face, marks. Leave out the clothes and the name: the clothes come from the scenes. The portrait is drawn from this text as written, and the bot compresses it into the short look in English for the pictures of the scenes. The picture model understands English best.`,
     nowText: 'Now:',
     backToCard: '↩️ Back to the character',
     caption: person => `🖼 Portrait: ${person}. Face and figure, full length, in plain neutral clothes.`,
