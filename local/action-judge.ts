@@ -102,7 +102,7 @@ ${ENDING}`,
 
 В input.json: pictures — имена картинок; portraits — люди с портретами спереди: entry, handle — кто это в сцене, если известно, и front — файл портрета. Всё лежит в этой папке и приложено.
 
-Для каждой картинки и каждого человека из portraits: есть ли он на картинке (present), совпадает ли его лицо с портретом (face), совпадает ли его телосложение (build); yes, no или unsure. Если человека на картинке нет, face и build — no.
+Для каждой картинки и каждого человека из portraits: есть ли он на картинке (present), совпадает ли его силуэт с портретом (silhouette): рост, телосложение и пропорции тела, очертания волос; и совпадает ли его лицо (face); yes, no или unsure. Если человека на картинке нет, silhouette и face — no.
 
 ${ENDING}`,
 };
@@ -147,8 +147,10 @@ export function picturesSchema(input: PicturesInput): Schema {
     items: each(input.checklist.items.map(item => item.id), YNU), mixups: each([...MIXUPS], YNU), anatomy: YNU,
     looks: each(people.filter(one => one.entry).map(one => one.id), YNU) })) });
 }
+// Since 2026-09-26 the identity asks for the silhouette, the height, the build and proportions and the outline of the
+// hair, apart from the face, where round one asked for the face and the build (docs/action-experiment.md#silhouette).
 export function identitySchema(input: IdentityInput): Schema {
-  return strict({ pictures: each(input.pictures, each(input.portraits.map(one => one.entry), each(['present', 'face', 'build'], YNU))) });
+  return strict({ pictures: each(input.pictures, each(input.portraits.map(one => one.entry), each(['present', 'silhouette', 'face'], YNU))) });
 }
 // Each kind's schema as one hash for the pins: the schema built for a made-up bundle of every item kind.
 function schemaTemplates(): Record<string, string> {

@@ -560,8 +560,9 @@ hypothesis or a threshold. Four kinds of session work on each scene.
    - an anatomy error: a limb too many or missing, bodies merged, a joint bent the way it cannot;
    - for each sheet person present, whether they look as their line says.
 4. **The identity**, once session 3's answers are stored: the same pictures and the front portraits of the bound
-   people, the same references for every arm. For each picture and each bound person: present or not, and whether the
-   face and the build each match the front.
+   people, the same references for every arm. For each picture and each bound person: present or not, whether the
+   silhouette matches the front, the height, the build and proportions and the outline of the hair, and whether the
+   face does ([the silhouette](#silhouette)). Round one asked for the face and the build.
 
 <a id='one'></a>
 
@@ -598,6 +599,17 @@ written into it. The participants and the moment are asked as before. The other 
 `jellyfish`, `lineout` and `tango`, missed the moment itself, which the loosening does not touch, and they stay
 misses. Round one's stored checklists and its report are not rewritten.
 
+<a id='silhouette'></a>
+
+**Identity by the silhouette, since 2026-09-26.** Round one's identity session asked whether each bound person's face
+and build matched the front, and the identity score counted a person only where both did. The owner judged on
+2026-09-26 that the face matters less than the silhouette, and that the people must do in the picture what the story
+wrote; the contacts stay the main score. Round two's identity session asks whether each person is present, whether
+their silhouette matches the front, the height, the build and proportions and the outline of the hair, and whether
+their face does. The identity score counts a person present with the silhouette of their front, so gates 3, 4 and 5
+read the silhouette. The face is reported beside it, per arm and in the pairs, and no gate reads it. The task and the
+schema are pinned by their hashes, and round one's stored answers and report are not rewritten.
+
 The narrator's scene decides who takes part and what they do; the sheet decides the looks score, and the front
 portraits the identity score. A judge who cannot tell who is who in a picture answers `unsure` for that participant,
 rather than decide it by the action being scored.
@@ -632,9 +644,13 @@ Each picture gets these scores:
 - **mix-ups** by kind, and **anatomy**;
 - **looks**: the share of the scene's sheet people who are present and look as their line says, counted over all of
   them, so a person missing counts as not;
-- **identity**: the share of the scene's bound people who are present with both the face and the build of their
-  front, counted over all of them the same way. It says that a picture matches its portraits, not that it matches
-  the story's person; the portrait check says how well the portraits match their lines.
+- **identity**: the share of the scene's bound people who are present with the silhouette of their front, the
+  height, the build and proportions and the outline of the hair, counted over all of them the same way
+  ([the silhouette](#silhouette); round one counted the face and the build both). It says that a picture matches its
+  portraits, not that it matches the story's person; the portrait check says how well the portraits match their
+  lines;
+- **face**: the share of them present with the face of their front, counted the same way. The report gives it beside
+  identity, and no gate reads it.
 
 A score with nothing to count in a picture, such as scale in a scene without one, gazes in a scene that names none,
 or identity in a frame that binds nobody, is `not_applicable`: neither a failure nor `unsure`, and the picture is
