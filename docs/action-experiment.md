@@ -21,7 +21,8 @@ its texts on 2026-09-25 and 26 and drew seed 7 on the 26th, with up to six peopl
 ([four](#four)), eight more clean scenes of one to three people ([the set](#the-set)), and checklists that count a
 touch of one's own body, of a thing and a reflection ([one](#one)). Round one's T gave L's picture back and took
 nothing from the portraits; [the T probe](#t-probe) tries nine variants of T on a card of its own, from round one's own
-pictures, and first on the same card [a clothing test](#t-probe-suit) of the portraits.
+pictures, and first on the same card [a clothing test](#t-probe-suit) of the portraits. After it, on that card, [the
+pilot](#pilot) times round two's path and the Triton backend before round two draws.
 
 <a id='stage-1'></a>
 
@@ -485,9 +486,9 @@ owner decided on 2026-09-26: its record counts the jobs of it the network lost (
 no row, and the report says how many cells were drawn again after a loss and how many of them are drawn. This replaces
 the rule that a lost cell is never drawn again, whose reason was that whether the card draws the same inputs to the
 same picture was [the pilot](#pilot)'s open question, so that a second picture could not stand for the first; the
-pilot's determinism check answers that question. A cell that never reached the card still gets no record, and a
-resume draws it as before. `draw --smoke` run again likewise draws a smoke cell the network lost, and judges the smoke
-anew. The bot's own picture path waits for nothing.
+pilot is now to run before round two, and its determinism check answers that question first. A cell that never
+reached the card still gets no record, and a resume draws it as before. `draw --smoke` run again likewise draws a
+smoke cell the network lost, and judges the smoke anew. The bot's own picture path waits for nothing.
 
 <a id='picture-smoke'></a>
 
@@ -901,6 +902,9 @@ tar -cf - -C gpu . | ssh simple-chat-vast 'tar -xf - -C /workspace/simple-chat/g
 ssh simple-chat-vast 'SIMPLE_CHAT_IMAGE_QWEN=only bash /workspace/simple-chat/gpu/image-bootstrap.sh'
 # The server, detached from this session (#dropped-connection): no terminal, a session of its own, one at a time under
 # its lock, and a server already running is left as it is. Its output is the card's log: it goes nowhere.
+# SIMPLE_CHAT_IMAGE_TRITON=1 goes before SIMPLE_CHAT_IMAGE_GPU only if the owner so decides on the pilot's numbers
+# (#pilot), the sampler's speedup and the pixels' differences from the baseline; it adds `triton` to the run's pins,
+# so that a resume cannot switch it.
 ssh -T simple-chat-vast 'SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 setsid -f nohup flock -n /root/.simple-chat-comfy.lock bash /workspace/simple-chat/gpu/image-serve.sh </dev/null >/dev/null 2>&1'
 # The tunnel, in a terminal of its own; after a drop it dials again by itself, and is left to (gpu.md#the-tunnel).
 bash gpu/tunnel.sh --pictures-only simple-chat-vast
@@ -912,8 +916,6 @@ while sleep 60; do npm run image:action -- gallery --until END; done    # END is
 npm run image:action -- draw --smoke --until "$end"    # the smoke's verdict; pass false is the termination
 npm run image:action -- portraits --until "$end"    # seed 7 priced whole, then the rest of the fronts and views
 npm run image:action -- draw --until "$end"    # seed 7 scene by scene, then seed 11 if it fits whole
-# Here alone, the pilot's runbook (#pilot): when this draw drew seed 11 whole or stopped at its admission, 20 minutes
-# or more before "$end".
 # The termination, here and after every other ending: we're done, then the destroy whatever the ssh did.
 timeout 20 ssh -o ConnectTimeout=10 simple-chat-vast 'date +%s > /root/.simple-chat-trial-deadline'; \
   npm run gpu:rent -- --destroy ID    # destroy_confirmed; anything else goes to the owner at once
@@ -1060,17 +1062,17 @@ directory holds:
 
 ## The pilot
 
-`npm run image:pilot` ([image-pilot.ts](../local/image-pilot.ts)) asks the picture card three questions before the next
-change to how it draws: what round two's path, [one socket a stage](#one-socket) and [the next job at the
-over](#pipeline), saves a cell, whether the card draws the same inputs to the same picture, and what comfy-kitchen's
-Triton backend changes. It draws a fixed handful of the first round's clean cells again, from that round's own plans,
-portraits and views in `illustrations/action-1`, into `illustrations/pilot`: flight's at seed 7, since flight binds four
-people, the most a frame binds now. They are one of each kind of picture the run draws: the first front, the first view,
-A, C with four portraits, V with both views among its four, and T with L's picture and four portraits. It draws no sharp
-story, reads nothing under `sealed/` and writes nothing into the first round's directory or into `illustrations/action`.
-It refuses a first round whose pictures are not the files its `draw.json` records, and a plan of flight's that gives a
-cell a prompt of another length or another number of references than the first round's record of it: the first round's
-own hash of the plans covers the sealed ones too, which the pilot does not read.
+`npm run image:pilot` ([image-pilot.ts](../local/image-pilot.ts)) asks the picture card three questions before round
+two: what round two's path, [one socket a stage](#one-socket) and [the next job at the over](#pipeline), saves a
+cell, whether the card draws the same inputs to the same picture, and what comfy-kitchen's Triton backend changes. It
+draws a fixed handful of the first round's clean cells again, from that round's own plans, portraits and views in
+`illustrations/action-1`, into `illustrations/pilot`: flight's at seed 7, since flight binds four people, the most a
+frame binds now. They are one of each kind of picture the run draws: the first front, the first view, A, C with four
+portraits, V with both views among its four, and T with L's picture and four portraits. It draws no sharp story, reads
+nothing under `sealed/` and writes nothing into the first round's directory or into `illustrations/action`. It refuses
+a first round whose pictures are not the files its `draw.json` records, and a plan of flight's that gives a cell a
+prompt of another length or another number of references than the first round's record of it: the first round's own
+hash of the plans covers the sealed ones too, which the pilot does not read.
 
 - `draw`, on the server as the first round ran it:
   - the determinism check: C, then A, then C again, whose picture is compared with the first C's. It counts only when
@@ -1106,10 +1108,13 @@ and the pictures are the evidence of use. Nothing the pilot prints or keeps is a
 `dry-run` draws a made-up first round against [fake-comfy.ts](../local/fake-comfy.ts), goes through both commands,
 their refusals and the report, and searches the pilot's directory and all it printed for the scene's made-up word.
 
-**When.** On round two's card, after its last `draw`, when that drew seed 11 whole or stopped at its admission
-(`stopped: admission`) with 20 minutes or more left before `--until`, and before the termination. It never runs before
-the smoke or between the stages, where its minutes would come out of round two's. Anywhere else it needs a card of its
-own and the owner's «да».
+**When.** Once, on [the T probe](#t-probe)'s card, after the probe's `draw` and before the termination, with 20
+minutes or more left before `--until`, as the owner decided on 2026-09-26: round two then starts its server with the
+Triton backend only if the pilot shows it pays ([the runbook](#runbook)), and draws on a path the pilot has timed. The
+probe's card is rented under a guard of two hours for both, and billed until its termination ([the T probe's
+runbook](#t-probe-suit)). This replaces its place on round two's card, after round two's last `draw` and only when
+seed 11 was drawn whole or stopped at its admission, chosen so that its minutes never came out of round two's.
+Anywhere else it needs a card of its own and the owner's «да».
 
 **The time**, from the first round's medians at seed 7 and the gaps it left between two jobs, 2.3 s and each
 upload:
@@ -1123,13 +1128,13 @@ upload:
 | `triton`, the first pass: the models loaded again, and whatever Triton compiles and tunes | 3 to 7 |
 | `triton`, the second pass | 1.2 to 1.6 |
 
-That is 11 to 16 card-minutes on round two's card, $0.09 to $0.13 at the first round's $0.498 an hour; Triton's first
+That is 11 to 16 card-minutes on the T probe's card, $0.09 to $0.13 at the first round's $0.498 an hour; Triton's first
 pass is the least known. On a card of its own, a setup of 8 to 30 minutes comes on top, as the first round's two cards
 took, and half a minute for the first cold job: 20 to 47 minutes, $0.17 to $0.39.
 
 ```sh
 npm run image:pilot -- dry-run    # before the card: "the pilot's dry run went as expected"
-# On the card, after the last draw, with the server and the tunnel the runbook started and its "$end":
+# On the T probe's card, after the probe's draw, with the server and the tunnel its runbook started and its "$end":
 mkdir -p -m 700 illustrations/pilot
 ssh simple-chat-vast cat /workspace/simple-chat-gpu/image-verified.txt > illustrations/pilot/card.txt
 npm run image:pilot -- draw --until "$end"    # each pass as it ends, then done true and the determinism verdict
@@ -1313,16 +1318,28 @@ npm run image:t-probe -- estimate    # before the card: 64 cells, 90 jobs, expec
                                      # the clothing test's 10 of them 2.8 and 4.2 under `suit`
 # boxes.json into illustrations/t-probe, then the page, where the owner checks the boxes and the crops:
 npm run image:t-probe -- page        # illustrations/t-probe/index.html
-# The probe's card, with the owner's «да» on its price and end, a picture card for one hour:
-SIMPLE_CHAT_RENT_DRY_RUN=1 npm run gpu:rent -- --lane pictures --qwen only --hours 1    # each offer's `session`
-npm run gpu:rent -- --lane pictures --qwen only --hours 1
+npm run image:pilot -- dry-run       # the pilot's, then "the pilot's dry run went as expected"
+# The probe's card, with the owner's «да» on its price and end, a picture card for two hours, the probe and the
+# pilot after it: about 47 card minutes and 11 to 16, some 60 to 65 expected (estimates), billed until the termination.
+SIMPLE_CHAT_RENT_DRY_RUN=1 npm run gpu:rent -- --lane pictures --qwen only --hours 2    # each offer's `session`
+npm run gpu:rent -- --lane pictures --qwen only --hours 2
 # The guard, gpu/ onto the card, image-bootstrap.sh, image-serve.sh and the tunnel as in the runbook above, then:
 mkdir -p illustrations/t-probe
 ssh simple-chat-vast cat /workspace/simple-chat-gpu/image-verified.txt > illustrations/t-probe/card.txt
 npm run image:t-probe -- draw --until "$end"    # the clothing test, then scene by scene; `probe` with drawn 54,
                                                 # suit.drawn 10 and exit 0
+# The pilot (#pilot), only with 20 minutes or more left before "$end": round two's path, then the Triton backend.
+mkdir -p -m 700 illustrations/pilot
+ssh simple-chat-vast cat /workspace/simple-chat-gpu/image-verified.txt > illustrations/pilot/card.txt
+npm run image:pilot -- draw --until "$end"    # each pass as it ends, then done true and the determinism verdict
+# The server again, with comfy-kitchen's Triton backend: stopped as by Ctrl-C, its lock free, then started.
+ssh -T simple-chat-vast 'pkill -INT -f "[C]omfyUI/main.py"; for i in $(seq 90); do flock -n /root/.simple-chat-comfy.lock true && exit 0; sleep 1; done; exit 1'
+ssh -T simple-chat-vast 'SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 SIMPLE_CHAT_IMAGE_TRITON=1 setsid -f nohup flock -n /root/.simple-chat-comfy.lock bash /workspace/simple-chat/gpu/image-serve.sh </dev/null >/dev/null 2>&1'
+timeout 300 bash -c 'until curl -sf -m 5 -o /dev/null http://127.0.0.1:8188/system_stats; do sleep 2; done'
+npm run image:pilot -- triton --until "$end"    # refused if Triton did not load; then done true
 # The termination, as in the runbook above; then, with no card:
 npm run image:t-probe -- page    # illustrations/t-probe/index.html, which `draw` also writes after the test and each scene
+npm run image:pilot -- report    # the pilot's numbers, for the owner's decision on Triton for round two
 ```
 
 `draw` takes `--scenes` and `--variants`, comma separated, and the runbook's `--wait`, `--timeout` and `--comfy`;
@@ -1349,10 +1366,12 @@ The estimate, from round one's own times of the same card:
 | 54 cells in 80 jobs at round one's medians: T's for `words`, `no-style`, `face` and `face-each`, C's for the rest, with one portrait a pass for `mask-each` and two pictures for `face-each` | 25 (37 at the admission prices) |
 | the page, the termination and the margin before the guard | 5 |
 
-About 47 card minutes of the guard's hour; `estimate` gives the draw's two together, 64 cells in 90 jobs, 28.4 minutes
-and 41.3 at the admission prices. `draw` admits the test as a whole, 10 jobs and 4.7 minutes with the cold start, and a
-scene at its own prices, at most 15 jobs and 7 minutes (the flight, the twister and the demon), so the hour holds the
-whole probe unless the setup runs long, and what is not admitted waits for a resume on the next card.
+About 47 card minutes for the probe; `estimate` gives the draw's two together, 64 cells in 90 jobs, 28.4 minutes and
+41.3 at the admission prices. `draw` admits the test as a whole, 10 jobs and 4.7 minutes with the cold start, and a
+scene at its own prices, at most 15 jobs and 7 minutes (the flight, the twister and the demon), and what is not
+admitted waits for a resume on the next card. [The pilot](#pilot) follows on the same card, 11 to 16 minutes more,
+when 20 minutes or more are left: about 60 to 65 card minutes expected in all, estimates both, under the guard's two
+hours. The card is billed until its termination, not for the two hours.
 
 **Not verified without the card**: whether `words` moves any face while image 1 lies on the canvas's grid; whether
 `no-style` takes the edges and colours away; where `half` puts the scene, since its 640x352 is centred on the canvas's
