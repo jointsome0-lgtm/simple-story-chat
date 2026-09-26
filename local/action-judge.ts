@@ -15,7 +15,8 @@ import { spawn } from 'node:child_process';
 import { closeSync, copyFileSync, cpSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { ACTION_SEEDS, ACTION_STORIES, SHARP_TARGET, repeatedScenes } from '../examples/action-set.ts';
+import { ACTION_SEEDS, ACTION_STORIES, sharpTarget, repeatedScenes } from '../examples/action-set.ts';
+import type { SharpPeople } from '../examples/action-set.ts';
 import { pngSize } from './image-batch.ts';
 import type { Character } from './illustrate.ts';
 import { Store } from './store.ts';
@@ -69,7 +70,7 @@ export const TASKS: Record<Exclude<SessionKind, 'repeat'>, string> = {
 1. participants — каждый участник главного действия этого момента: человек, животное или существо. handle — короткое описание по его месту в действии, без имени и без внешности, у каждого своё. entry — запись листа, если это он, иначе null; одна запись — не больше чем у одного участника.
 2. relations — отношения момента между участниками, у каждого один subject, один verb и один object, где subject и object — handle участников. Если участник касается своего тела, subject и object — один и тот же handle, а part называет через точку с запятой обе части тела: чем он касается и чего касается. object_relations — касания предметов сцены: subject — handle участника, verb и thing — сам предмет, как его называет сцена, и никогда не участник. В обоих списках part и side — часть тела и её сторона (left или right), только если сцена их называет; сторону, которой сцена не называет, не выдумывай и оставь пустую строку; в касании своего тела side — сторона той части, которой касаются. Касание в обе стороны — одно отношение. essential: true у касаний, из которых состоит главное действие, будь то касание другого участника, своего тела или предмета; если сцена не показывает ни одного такого касания, не отмечай ни одного и ни одного не выдумывай. quote — короткая цитата из сцены.
 3. gazes и faces — взгляды и выражения лиц, которые сцена называет; clothes — одежда, которую сцена называет для этого момента; mirrors — отражения: если сцена показывает отражение участника (в зеркале, в воде, в стекле), по одному пункту на каждое такое отражение, и пункт значит, что в отражении тот же человек в той же позе. У каждого пункта who (handle), text — что именно (у отражения — где оно), и quote. scale — масштаб, если на нём стоит сцена: text и quote.
-4. target — пришла ли сцена к моменту из target: совпадает ли с target по сути контакт (contact), есть ли в нём каждый нужный участник (participants), можно ли различить сам момент (moment); yes или no. Контакт — физическое взаимодействие участников: кто на кого или на что действует, какой частью тела (рукой, ногой, коленом, плечом, спиной, головой, всем телом) и к какой части своего тела или тела другого участника, или к какому предмету. contact — yes, если это взаимодействие по сути то же, что в target; сторона (левая или правая), какая именно рука, сколько рук и точное положение contact не решают.
+4. target — пришла ли сцена к моменту из target: совпадает ли с target по сути контакт (contact), есть ли в нём каждый нужный участник (participants), можно ли различить сам момент (moment); yes или no. Если target задаёт count, participants — yes только когда ровно столько персонажей участвует в физическом действии момента. Контакт — физическое взаимодействие участников: кто на кого или на что действует, какой частью тела (рукой, ногой, коленом, плечом, спиной, головой, всем телом) и к какой части своего тела или тела другого участника, или к какому предмету. contact — yes, если это взаимодействие по сути то же, что в target; сторона (левая или правая), какая именно рука, сколько рук и точное положение contact не решают.
 5. contradictions — где строка листа о человеке противоречит сцене: entry и quote.
 
 ${ENDING}`,
@@ -243,7 +244,7 @@ const shown = (checklist: Checklist): ShownChecklist => ({ participants: checkli
 // ---- The bundles ----
 
 type SheetLine = { entry: string; name: string; details?: string; look: string; outfit: string };
-export type ChecklistInput = { scene: string; target: { contact: string; participants: string[] }; sheet: SheetLine[] };
+export type ChecklistInput = { scene: string; target: { contact: string; participants: string[]; count?: SharpPeople }; sheet: SheetLine[] };
 export type TextInput = { scene: string; sheet: SheetLine[]; checklist: ShownChecklist; shot: string; prompts: { id: string; text: string }[];
   portraits: { entry: string; facing: Facing; front?: string; view?: string; turn?: Turn }[] };
 export type PicturesInput = { scene: string; sheet: SheetLine[]; checklist: ShownChecklist; pictures: string[] };
@@ -296,8 +297,9 @@ export function checklistBundles(root: string, log: (event: object) => void = ()
     if (!text?.worn?.length || !text.nodeId || text.steps.action?.outcome !== 'ok') { skip(counts, 'no_text'); continue; }
     if (existsSync(bundleDir(root, session))) { counts.kept++; continue; }
     const set = ACTION_STORIES.find(one => one.id === story.id);
+    if (!set && !story.people) throw new Refusal(`${story.id} has no planned participant count`);
     const input: ChecklistInput = { scene: sceneOf(root, story.id, text.nodeId),
-      target: set ? set.target : { contact: SHARP_TARGET, participants: [] }, sheet: sheetLines(text.worn) };
+      target: set ? set.target : { contact: sharpTarget(story.people!), participants: [], count: story.people }, sheet: sheetLines(text.worn) };
     writeBundle(root, session, input, checklistSchema(input.sheet.map(line => line.entry)), [], {});
     counts.built++;
     log({ event: 'bundle_written', story: story.id, session: sessionName(session) });

@@ -13,6 +13,7 @@ import { performance } from 'node:perf_hooks';
 import { addSeed, beginJob, commitTurn, newStory } from '../lib/library.ts';
 import { ACTION_STORIES, MARKER_STORY, SHARP_SCHEMA, SHARP_START_TIME, SHARP_THEMES, SHARP_TOKENS, actionSetHash,
   sharpInstruction } from '../examples/action-set.ts';
+import type { SharpPeople } from '../examples/action-set.ts';
 import { Refusal, capture, madeUpName, markerForms, searchBoundary, searchTree } from './action-boundary.ts';
 import { capsFor, channelFor, createBudget } from './budget.ts';
 import { loadModelConfig } from './config.ts';
@@ -139,19 +140,21 @@ export const rolesUnique = (frame: { people?: { role?: unknown }[] }) => {
 
 // ---- The stories and where they live ----
 
-export type TextStory = { id: string; title: string; startTime: string; sealed: boolean; theme?: string; seed?: string; action?: string };
+export type TextStory = { id: string; title: string; startTime: string; sealed: boolean; people?: SharpPeople;
+  theme?: string; seed?: string; action?: string };
 export function textStories(): TextStory[] {
   return [...ACTION_STORIES.map(story => ({ id: story.id, title: story.title, startTime: story.startTime, sealed: false, seed: story.seed, action: story.action })),
-    ...SHARP_THEMES.map(theme => ({ id: theme.id, title: theme.theme, startTime: SHARP_START_TIME, sealed: true, theme: theme.theme })),
+    ...SHARP_THEMES.map(theme => ({ id: theme.id, title: theme.theme, startTime: SHARP_START_TIME, sealed: true,
+      theme: theme.theme, people: theme.people })),
     ...own.stories];
 }
 
 // The owner's own sharp scenes (docs/action-experiment.md#own): `sealed/own.txt` of the run, which the owner writes
 // and no session reads. An entry is `тема:` and a theme, which the heretic writes a seed from as it does the five, or
-// `сцена:` and a title, the seed's lines, and `действие:` and the reader's action. They follow the five as `sharp-6`
-// on, in the file's order, at most `OWN_LIMIT`, each a few minutes of the picture card at each seed. The first text
-// run pins them in `sealed/own.pin`, and every command after it refuses a file changed since. What the harness says of
-// them is counts and line numbers.
+// `сцена:` and a title, the seed's lines, and `действие:` and the reader's action. Both require `участников: 1..4`
+// after the first line. They follow the five as `sharp-6` on, in the file's order, at most `OWN_LIMIT`, each a few
+// minutes of the picture card at each seed. The first text run pins them in `sealed/own.pin`, and every command
+// after it refuses a file changed since. What the harness says of them is counts and line numbers.
 export const OWN_LIMIT = 10;
 const OWN_BYTES = 65536;
 const OWN_LENGTHS = { title: 200, seed: 4000, action: 1000 };
@@ -159,18 +162,23 @@ const ownOf = (stories: TextStory[]) => ({ stories, hash: sha256(JSON.stringify(
 const OWN_CHANGED = 'sealed/own.txt changed after the first text run pinned it; one run directory holds one set of pins';
 let own = ownOf([]);
 export function parseOwn(text: string): TextStory[] {
-  const entries: { line: number; theme: boolean; title: string; seed: string[]; action?: string[] }[] = [];
+  const entries: { line: number; theme: boolean; title: string; people?: SharpPeople; seed: string[]; action?: string[] }[] = [];
   text.replace(/^\uFEFF/, '').split(/\r?\n/).forEach((raw, at) => {
     const line = raw.trim(), number = at + 1;
     if (!line || line.startsWith('#')) return;
-    const head = /^(тема|сцена|действие)\s*:\s*(.*)$/iu.exec(line);
+    const head = /^(тема|сцена|участников|действие)\s*:\s*(.*)$/iu.exec(line);
     const word = head?.[1].toLowerCase(), rest = head?.[2].trim() ?? '';
     const last = entries.at(-1);
     if (word === 'тема' || word === 'сцена') {
       if (!rest) throw new Refusal(`own.txt, line ${number}: «${word}:» takes its ${word === 'тема' ? 'theme' : 'title'} on the same line`);
       entries.push({ line: number, theme: word === 'тема', title: rest, seed: [] });
     } else if (!last) throw new Refusal(`own.txt, line ${number}: text before the first «тема:» or «сцена:»`);
-    else if (last.theme) throw new Refusal(`own.txt, line ${number}: a theme is one line, and the next entry opens with «тема:» or «сцена:»`);
+    else if (word === 'участников') {
+      if (last.people !== undefined || last.seed.length || last.action !== undefined || !/^[1-4]$/.test(rest))
+        throw new Refusal(`own.txt, line ${number}: «участников:» must give 1, 2, 3 or 4 immediately after the entry's first line`);
+      last.people = Number(rest) as SharpPeople;
+    } else if (last.people === undefined) throw new Refusal(`own.txt, line ${number}: «участников:» must follow the entry's first line`);
+    else if (last.theme) throw new Refusal(`own.txt, line ${number}: a theme ends after «участников:»; the next entry opens with «тема:» or «сцена:»`);
     else if (word === 'действие') {
       if (last.action) throw new Refusal(`own.txt, line ${number}: a second «действие:» in the scene of line ${last.line}`);
       last.action = rest ? [rest] : [];
@@ -181,11 +189,13 @@ export function parseOwn(text: string): TextStory[] {
     const seed = entry.seed.join('\n'), action = (entry.action ?? []).join(' ');
     const where = `own.txt, the ${entry.theme ? 'theme' : 'scene'} of line ${entry.line}`;
     if (entry.title.length > OWN_LENGTHS.title) throw new Refusal(`${where}: its first line is longer than ${OWN_LENGTHS.title} characters`);
+    if (entry.people === undefined) throw new Refusal(`${where}: «участников: 1..4» is missing`);
     const id = `sharp-${SHARP_THEMES.length + 1 + at}`;
-    if (entry.theme) return { id, title: entry.title, startTime: SHARP_START_TIME, sealed: true, theme: entry.title };
+    if (entry.theme) return { id, title: entry.title, startTime: SHARP_START_TIME, sealed: true,
+      theme: entry.title, people: entry.people };
     if (!seed || seed.length > OWN_LENGTHS.seed) throw new Refusal(`${where}: its seed is empty or longer than ${OWN_LENGTHS.seed} characters`);
     if (!action || action.length > OWN_LENGTHS.action) throw new Refusal(`${where}: its «действие:» is missing, empty or longer than ${OWN_LENGTHS.action} characters`);
-    return { id, title: entry.title, startTime: SHARP_START_TIME, sealed: true, seed, action };
+    return { id, title: entry.title, startTime: SHARP_START_TIME, sealed: true, seed, action, people: entry.people };
   });
 }
 // Reads the owner's scenes of the run in `root` for every `textStories()` after it. The dry run points it at a
@@ -333,7 +343,8 @@ export function textPins(model: TextModel, gateway: Record<string, string | numb
   const empty: Excerpt = { system: '', messages: [] };
   const adapter = ADAPTERS[model.route];
   const instructions = { sheet: sheetRequest(empty), frame: frameRequest(empty, []), variant: variantRequest(empty, []),
-    sharp: sharpInstruction('ТЕМА'), sharpSchema: SHARP_SCHEMA, sharpTokens: SHARP_TOKENS };
+    sharp: ([1, 2, 3, 4] as SharpPeople[]).map(people => sharpInstruction('ТЕМА', people)),
+    sharpSchema: SHARP_SCHEMA, sharpTokens: SHARP_TOKENS };
   return { route: model.route, weights: model.weights, baseUrl: model.config.baseUrl ?? '', model: model.config.model,
     contextTokens: model.config.contextTokens, timeoutMs: model.config.timeoutMs, temperature: model.config.temperature,
     maxOutputTokens: model.config.maxOutputTokens, adapter: sha256(readFileSync(join(ROOT, 'local', adapter))),
@@ -418,8 +429,8 @@ function instrument(inner: Provider, story: string, kind: StepName, log: (row: A
 }
 
 // The request a sharp story's seed is asked with: the pinned instruction alone.
-export const sharpRequest = (theme: string): ModelRequest => ({ system: '', maxOutputTokens: SHARP_TOKENS, outputSchema: SHARP_SCHEMA,
-  messages: [{ role: 'user', content: sharpInstruction(theme) }] });
+export const sharpRequest = (theme: string, people: SharpPeople): ModelRequest => ({ system: '', maxOutputTokens: SHARP_TOKENS,
+  outputSchema: SHARP_SCHEMA, messages: [{ role: 'user', content: sharpInstruction(theme, people) }] });
 
 // The one reader of each story's own store.
 export const USER = 'action';
@@ -463,7 +474,8 @@ export async function runStory(story: TextStory, run: RunContext): Promise<Story
   const store = new Store(join(dir, 'story.sqlite'));
   try {
     if (story.theme && !text.steps.seed) {
-      const { result, value } = await ask('seed', sharpRequest(story.theme), reply => String(reply.seed).trim() !== '' && String(reply.action).trim() !== '');
+      if (!story.people) throw new Refusal(`${story.id} has no planned participant count`);
+      const { result, value } = await ask('seed', sharpRequest(story.theme, story.people), reply => String(reply.seed).trim() !== '' && String(reply.action).trim() !== '');
       if (result.outcome === 'ok') text.sharp = { seed: String(value!.seed).trim(), action: String(value!.action).trim() };
       done('seed', result);
     }

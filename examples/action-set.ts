@@ -12,7 +12,8 @@
 // Everyone is an adult except the flight's daughters, whom the owner's scene asks for, and nothing is erotic.
 //
 // The five sharp stories are written by the uncensored Gemma on the text card, one call each, from the pinned
-// instruction below with its theme filled in; a Claude session writes nothing of them but that instruction.
+// instruction below with its theme and planned participant count filled in; a Claude or GPT session writes nothing
+// of them but that instruction.
 import { createHash } from 'node:crypto';
 
 export type ActionStory = {
@@ -316,25 +317,35 @@ export const ACTION_STORIES: ActionStory[] = [
 ];
 
 // The sharp stories: one call each on the text card, before its flow starts. The instruction is pinned word for word
-// (docs/action-experiment.md#the-set), with «ТЕМА» filled in; the reply is `{seed, action}`. A sharp story's target is
-// that instruction's own: one moment where several of its people touch closely.
-export const SHARP_INSTRUCTION = 'Придумай завязку для интерактивной истории для взрослых на тему «ТЕМА». Все персонажи взрослые, им больше двадцати лет. Никакого сексуального насилия и ничего сексуального без согласия. Откровенность и жёсткость допустимы, если тема к ним ведёт. Нужны от двух до четырёх персонажей с именами и заметно разной внешностью: пол, возраст словом, телосложение, волосы, приметы; место и время. Завязка должна подвести к одному моменту, где несколько персонажей тесно касаются друг друга: держат, несут, обнимают, моют, связывают или перевязывают. Ответь в JSON: seed, завязка в 6-12 строк; action, действие читателя, которое ведёт к этому моменту, одна-две фразы.';
-export const sharpInstruction = (theme: string) => SHARP_INSTRUCTION.replace('ТЕМА', theme);
+// (docs/action-experiment.md#the-set), with «ТЕМА», «СОСТАВ» and «МОМЕНТ» filled in; the reply is `{seed, action}`.
+export type SharpPeople = 1 | 2 | 3 | 4;
+const SHARP_CAST: Record<SharpPeople, string> = {
+  1: 'один персонаж с именем и заметной внешностью',
+  2: 'два персонажа с именами и заметно разной внешностью',
+  3: 'три персонажа с именами и заметно разной внешностью',
+  4: 'четыре персонажа с именами и заметно разной внешностью',
+};
+const sharpMoment = (people: SharpPeople) => people === 1
+  ? 'единственный персонаж касается собственного тела или предмета сцены'
+  : `${{ 2: 'оба персонажа', 3: 'все три персонажа', 4: 'все четыре персонажа' }[people]} тесно касаются друг друга: держат, несут, обнимают, моют, связывают или перевязывают`;
+export const SHARP_INSTRUCTION = 'Придумай завязку для интерактивной истории для взрослых на тему «ТЕМА». Все персонажи взрослые, им больше двадцати лет. Никакого сексуального насилия и ничего сексуального без согласия. Откровенность и жёсткость допустимы, если тема к ним ведёт. Всего в истории ровно СОСТАВ: пол, возраст словом, телосложение, волосы, приметы каждого; место и время. Названные существа входят в это число, других действующих персонажей нет. Завязка должна подвести к одному моменту, где МОМЕНТ. Ответь в JSON: seed, завязка в 6-12 строк; action, действие читателя, которое ведёт к этому моменту, одна-две фразы.';
+export const sharpInstruction = (theme: string, people: SharpPeople) => SHARP_INSTRUCTION.replace('ТЕМА', theme)
+  .replace('СОСТАВ', SHARP_CAST[people]).replace('МОМЕНТ', sharpMoment(people));
 export const SHARP_SCHEMA = { type: 'object', additionalProperties: false, required: ['seed', 'action'],
   properties: { seed: { type: 'string' }, action: { type: 'string' } } };
 // The sharp seed's output limit: 6-12 lines of Russian and a sentence or two, well inside it.
 export const SHARP_TOKENS = 2048;
 // One start time for all five; the title of each is its theme word.
 export const SHARP_START_TIME = '2026-10-10 20:00';
-export type SharpTheme = { id: string; theme: string };
+export type SharpTheme = { id: string; theme: string; people: SharpPeople };
 export const SHARP_THEMES: SharpTheme[] = [
-  { id: 'sharp-1', theme: 'общественная баня' },
-  { id: 'sharp-2', theme: 'гарем' },
-  { id: 'sharp-3', theme: 'плен' },
-  { id: 'sharp-4', theme: 'допрос' },
-  { id: 'sharp-5', theme: 'битва и перевязка раненых' },
+  { id: 'sharp-1', theme: 'общественная баня', people: 1 },
+  { id: 'sharp-2', theme: 'гарем', people: 4 },
+  { id: 'sharp-3', theme: 'плен', people: 3 },
+  { id: 'sharp-4', theme: 'допрос', people: 2 },
+  { id: 'sharp-5', theme: 'битва и перевязка раненых', people: 4 },
 ];
-export const SHARP_TARGET = 'Один момент, где несколько персонажей завязки тесно касаются друг друга: держат, несут, обнимают, моют, связывают или перевязывают.';
+export const sharpTarget = (people: SharpPeople) => `Один момент, где ${sharpMoment(people)}.`;
 
 // Seed 7 decides; seed 11 repeats it only if the time admits it (docs/action-experiment.md#time).
 export const ACTION_SEEDS = [7, 11];
@@ -355,11 +366,13 @@ ${name} — кузнец, высокий и плечистый, чёрная б�
 };
 
 const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
-// The set as one hash: every story, the sharp instruction, themes and start time, the seeds and the marker story's
-// template. The four repeated scenes are drawn from it, so they are fixed with the set and before the run.
+// The set as one hash: every story, the four sharp instructions and targets, themes and start time, the seeds and
+// the marker story's template. The four repeated scenes are drawn from it, so they are fixed with the set and before the run.
 export function actionSetHash(): string {
-  return sha256(JSON.stringify({ stories: ACTION_STORIES, sharp: { instruction: SHARP_INSTRUCTION, schema: SHARP_SCHEMA,
-    tokens: SHARP_TOKENS, startTime: SHARP_START_TIME, themes: SHARP_THEMES, target: SHARP_TARGET }, seeds: ACTION_SEEDS,
+  return sha256(JSON.stringify({ stories: ACTION_STORIES, sharp: {
+    instructions: ([1, 2, 3, 4] as SharpPeople[]).map(people => sharpInstruction('ТЕМА', people)), schema: SHARP_SCHEMA,
+    tokens: SHARP_TOKENS, startTime: SHARP_START_TIME, themes: SHARP_THEMES,
+    targets: ([1, 2, 3, 4] as SharpPeople[]).map(sharpTarget) }, seeds: ACTION_SEEDS,
   marker: { ...MARKER_STORY, seed: MARKER_STORY.seed('ИМЯ'), action: MARKER_STORY.action('ИМЯ') } }));
 }
 // The four clean scenes that get a second pictures session at seed 7 (docs/action-experiment.md#judging): the clean
