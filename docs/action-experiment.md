@@ -69,8 +69,8 @@ draw them:
 Each pair compares two workflows, and each difference changes more than one thing. No arm here separates them
 further, so the mechanisms inside a difference stay open.
 
-- A+ against A is the whole variant: seven changes, a new schema and output limit, a frame written anew, and the
-  assembly with role and facing. No single change is measured.
+- A+ against A is the whole variant: eight changes (seven in round one), a new schema and output limit, a frame
+  written anew, and the assembly with role and facing. No single change is measured.
 - L against A+ takes the looks out and shortens the text at once. If L gains, leaving the looks out was enough for the
   gain; whether the brevity or the removed conflicts did it stays open.
 - C against L adds the portraits and the "image N" wording together. C against A+ is the substitution the owner asks
@@ -252,6 +252,12 @@ objects, as change 7 says.
    another participant: no "from the waist up" when knees or legs touch. A body may hide a contact where the scene
    puts it behind that body; the edge may not. The bot's rule to hide precise contacts stays for small objects, a
    blade in a slot or fingers on a button, and does not cover contacts between participants.
+8. `clothes` names what a participant leaves bare: a torso, legs or feet with nothing on them are said in so many
+   words ("wearing only rolled-up linen trousers, bare-chested and barefoot"), and nothing is bared that the scene
+   does not bare. The owner added this on 2026-09-26, for round two. In round one's `demon`, C at seed 7 drew the demon
+   in the white tank top of his portrait: the scene dressed him in "a tattered leather skirt and iron bracers" and
+   said nothing of his chest, so the reference filled what the text left open. The other three people in that
+   picture wore the scene's clothes.
 
 In the schema, `people` holds up to four items, the bot's own limit, and `role` and `facing` are required, `facing` as
 an enum. The output limit is 1800 tokens, twice the bot's: stage 1's longest variant reply took 710 with six people

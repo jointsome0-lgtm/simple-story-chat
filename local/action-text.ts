@@ -45,9 +45,11 @@ export const readJson = <T>(file: string): T | undefined => (existsSync(file) ? 
 
 // The owner's draft of the seven changes as nine replacements in the bot's instruction (local/illustrate.ts
 // `instruction`), with the coordinator's amendments of 2026-09-25: a role of two to eight words, and the facing line
-// with `other`; and since 2026-09-26 the owner's four participants in place of the first round's six. Each `from` must
-// stand in the bot's text exactly once; `to` replaces it. Items 7 and 8 keep their text and add a sentence, item 9 adds
-// four lines before the shot's.
+// with `other`; and since 2026-09-26 the owner's four participants in place of the first round's six, and the owner's
+// tenth replacement of the same day, which names a bare torso, legs or feet in `clothes`: in round one a portrait's white
+// tank top dressed a demon whose scene said nothing of his chest. Each `from` must stand in the bot's text exactly once;
+// `to` replaces it. Items 7 and 8 keep their text and add a sentence, item 9 adds four lines before the shot's, item 10
+// adds two sentences to the clothes rule.
 export const VARIANT_CHANGES: { from: string; to: string }[] = [
   { from: '- Выбери ОДИН конкретный момент сцены, до или после сложного контакта, и сохрани',
     to: '- Выбери ОДИН конкретный момент сцены: главное действие, к которому она пришла в конце, в тот миг, когда оно происходит, а не до и не после него, и сохрани' },
@@ -70,6 +72,8 @@ export const VARIANT_CHANGES: { from: string; to: string }[] = [
 - Внешность только в look: ни волос, ни лица, ни кожи, ни телосложения, ни возраста, ни цвета одежды в moment, shot, setting, objects, props, role, state и action; одежда только в clothes. Можно и нужно: выражение лица, свежие раны и повязки, части тела в касании и часть одежды как место хвата ("grips his collar").
 - Если сцена говорит, куда участник смотрит или что делает его лицо, это часть его action ("looks back over his right shoulder", "snarls"). Если лицо отвёрнуто от зрителя, оставь, куда он смотрит, но не выдумывай выражение, которого не видно.
 - shot: ` },
+  { from: 'clothes — во что он одет В ЭТОТ МОМЕНТ, по-английски, фразой, которая начинается с wearing.',
+    to: 'clothes — во что он одет В ЭТОТ МОМЕНТ, по-английски, фразой, которая начинается с wearing. Открытое тело называй прямо: если торс, ноги или ступни ничем не закрыты, так и напиши ("wearing only rolled-up linen trousers, bare-chested and barefoot"). Не открывай того, что сцена не открывает.' },
 ];
 export const FACINGS = ['viewer', 'away', 'screen-left', 'screen-right', 'other'] as const;
 export type Facing = typeof FACINGS[number];
