@@ -10,8 +10,11 @@ import type { ChatMessage, GenerateControls, ModelRequest, Provider } from './mo
 // wherever a described person is that name, and the clothes they wear unless the frame says otherwise. The sheet is
 // written once per story and reused for all its frames. Clothes are not in `look`: a sheet that froze them kept a
 // reader's characters in the clothes of the seed after the story had changed them (2026-09-24), so each frame
-// writes what its people wear, starting from what they wore in the picture before it (local/picture.ts).
-export type Character = { name: string; look: string; outfit?: string };
+// writes what its people wear, starting from what they wore in the picture before it (local/picture.ts). `details`
+// is the long description `look` is compressed from: a portrait holds one person and is drawn from it
+// (local/image-portraits.ts `portraitText`), a frame holds up to four and keeps the short line. A sheet written before
+// 2026-09-26 has none.
+export type Character = { name: string; details?: string; look: string; outfit?: string };
 // `who` is the only field allowed to carry a name, and it never reaches the image model: it selects the sheet line.
 export type Person = { who: string; look: string; clothes?: string; state: string; action: string };
 export type Description = {
@@ -184,16 +187,19 @@ export function assemblePrompt(description: Description, sheet: Character[], sty
 // The two instruction texts are kept as they were iterated against the readers' reports
 // (docs/illustrations-plan.md#description-steps). The changes since: the name ban, which step 6 found stated in one
 // bullet about `people` while `moment` carried names to the image model; clothes taken out of `look` into `outfit`
-// and `clothes` (2026-09-24); and the age words, which say young adult where they said young, since no line after the
-// prompt says the people are adults.
+// and `clothes` (2026-09-24); the age words, which say young adult where they said young, since no line after the
+// prompt says the people are adults; and `details` before `look` (2026-09-26), so that the model writes a portrait's
+// worth of each person first and compresses it into the look in the same answer, with the age words of children,
+// which the sheet lacked (docs/illustrations-plan.md#portrait-details).
 const SHEET = `Не продолжай историю. Составь лист внешности для художника: по одной записи на КАЖДОГО человека, названного в истории по имени или по постоянной роли (командир, лекарь, судья) и появляющегося больше чем в одной сцене. Обычно их от трёх до шести; одна запись на целую историю — почти наверняка ошибка.
 - name: имя так, как оно пишется в истории.
-- look: по-английски, 15-25 слов, без имени и БЕЗ ОДЕЖДЫ: пол, возраст ТОЛЬКО словом (young adult, middle-aged, elderly) и никогда числом, даже если история называет годы, телосложение, волосы, лицо, постоянные приметы (шрам, татуировка, очки). Всё, что история называет, бери из истории; чего она не называет — придумай один раз, правдоподобно для мира истории, и так, чтобы персонажи заметно отличались друг от друга силуэтом и волосами.
+- details: по-английски, 50-80 слов, без имён и БЕЗ ОДЕЖДЫ, подробная внешность для портрета, по порядку: пол и возраст ТОЛЬКО словом (small child, child, teenager, young adult, middle-aged, elderly) и никогда числом, даже если история называет годы; цвет кожи; рост и телосложение с пропорциями; волосы: цвет, длина, фактура, причёска; лицо: форма, брови, глаза и их цвет, нос, губы, растительность на лице, морщины; постоянные приметы (шрам, татуировка, родинка, очки) с их местом и стороной (left и right здесь стороны самого человека). Всё, что история называет, бери из истории; чего она не называет — придумай один раз, правдоподобно для мира истории, и так, чтобы персонажи заметно отличались друг от друга силуэтом, волосами и лицом.
+- look: по-английски, 15-25 слов, тоже без имён и без одежды. Это details, сжатые до того, по чему этого человека узнают издали среди других: пол и возраст тем же словом, цвет кожи, телосложение, волосы и одна-две приметы.
 - outfit: по-английски, 8-20 слов, фразой, которая начинается с wearing: во что человек одет в ПОСЛЕДНЕЙ сцене, где история говорит о его одежде. Если по ходу истории он переоделся, это новая одежда, а не та, что в начале истории или в её описании. Если история об одежде молчит, придумай её правдоподобно для мира истории, и так, чтобы персонажи заметно отличались цветом одежды.
 - Не включай травмы, повязки, оружие в руках и предметы, которые появляются или меняются по ходу истории.`;
 const SHEET_SCHEMA = { type: 'object', additionalProperties: false, required: ['characters'], properties: { characters: { type: 'array', maxItems: 6,
-  items: { type: 'object', additionalProperties: false, required: ['name', 'look', 'outfit'],
-    properties: { name: { type: 'string' }, look: { type: 'string' }, outfit: { type: 'string' } } } } } };
+  items: { type: 'object', additionalProperties: false, required: ['name', 'details', 'look', 'outfit'],
+    properties: { name: { type: 'string' }, details: { type: 'string' }, look: { type: 'string' }, outfit: { type: 'string' } } } } } };
 
 // `sheet` is the story's sheet with `outfit` set to what each of its people wore in the picture before this one.
 const instruction = (sheet: Character[]) => `Не продолжай историю. Опиши ПОСЛЕДНЮЮ сцену для художника-иллюстратора: один неподвижный кадр, как в визуальной новелле. Пиши по-английски. Готовый запрос для модели картинок соберёт программа из твоих полей, поэтому всё существенное должно быть в полях; чего в них нет, того не будет на картинке.
@@ -241,10 +247,14 @@ export type Excerpt = { system: string; messages: ChatMessage[] };
 // The runaway of JSON mode is answered with a low limit and one retry, not with a longer wait: step 1 measured a
 // reply that filled 700 tokens with newlines, and the same scene parsed on the next attempt.
 export const DESCRIBE_TOKENS = 900;
+// The sheet's own limit since it writes `details`: six people at the top of every word range, a synthetic reply counted
+// by Gemma 4's tokenizer (local/tokenizer.ts), came to 1102 tokens as compact JSON and 1225 indented, and with half as
+// many words again to 1693 indented (docs/illustrations-plan.md#portrait-details). A runaway takes twice as long.
+export const SHEET_TOKENS = 1800;
 
 // The sheet of a whole story, from its history up to the scene named in `context`.
 export function sheetRequest(context: Excerpt): ModelRequest {
-  return { system: context.system, maxOutputTokens: DESCRIBE_TOKENS, outputSchema: SHEET_SCHEMA,
+  return { system: context.system, maxOutputTokens: SHEET_TOKENS, outputSchema: SHEET_SCHEMA,
     messages: [...context.messages, { role: 'user', content: SHEET }] };
 }
 
@@ -273,10 +283,12 @@ Promise<{ value: Record<string, unknown>; retried: boolean }> {
 // The sheet as the model answered it. `characters` is the schema's only field, and a reply that parsed as JSON
 // without it, or with a character whose name or look is not a string, would otherwise reach the assembly as
 // undefined. `outfit` is always a string here, empty when missing, which is what marks a sheet as this kind.
+// `details` is kept only when it says something: a person without it has their portraits drawn from `look`.
 export function sheetOf(value: Record<string, unknown>): Character[] {
   const characters = Array.isArray(value.characters) ? value.characters : [];
   return characters.flatMap(one => {
-    const { name, look, outfit } = (one ?? {}) as { name?: unknown; look?: unknown; outfit?: unknown };
-    return typeof name === 'string' && typeof look === 'string' ? [{ name, look, outfit: typeof outfit === 'string' ? outfit : '' }] : [];
+    const { name, details, look, outfit } = (one ?? {}) as { name?: unknown; details?: unknown; look?: unknown; outfit?: unknown };
+    return typeof name === 'string' && typeof look === 'string' ? [{ name, ...typeof details === 'string' && details.trim() ? { details } : {},
+      look, outfit: typeof outfit === 'string' ? outfit : '' }] : [];
   });
 }

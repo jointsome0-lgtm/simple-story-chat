@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { ACTION_STORIES } from '../examples/action-set.ts';
 import { STYLE, assemblePrompt, matchSheet, sheetLooks, stripAges, stripNames } from './illustrate.ts';
 import type { Character } from './illustrate.ts';
-import { PORTRAIT_STYLE, portraitPrompt } from './image-portraits.ts';
+import { PORTRAIT_STYLE, portraitPrompt, portraitText } from './image-portraits.ts';
 import { armsOut, readJson, storyDir } from './action-text.ts';
 import type { ActionArm, Facing, StoryText, TextStory, VariantFrame, VariantPerson } from './action-text.ts';
 
@@ -174,9 +174,11 @@ export function planStory(story: TextStory, text: StoryText | undefined, tokens?
   plan.arms.L = { prompt: light.prompt, references: [] };
   plan.counts.L = countsOf(light.prompt, people, 0, light.namesStripped, tokens);
   if (!bound) return plan;
+  // A front is drawn as the bot draws a portrait: from the sheet's details of that person where it has them, which
+  // round two's sheets do (docs/action-experiment.md#the-sheet).
   plan.portraits = manifest.bound.map(one => {
     const character = worn[Number(one.entry.slice(1)) - 1];
-    return { id: one.portrait, entry: one.entry, prompt: portraitPrompt(character.name, character.look).prompt };
+    return { id: one.portrait, entry: one.entry, prompt: portraitPrompt(character.name, portraitText(character), worn.map(other => other.name)).prompt };
   });
   plan.views = manifest.bound.flatMap(one => one.view && needsView(one.facing)
     ? [{ id: one.view, portrait: one.portrait, entry: one.entry, turn: one.facing, prompt: viewPrompt(one.facing) }] : []);

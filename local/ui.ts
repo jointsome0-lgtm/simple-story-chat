@@ -6,6 +6,7 @@ import type { ContextStats } from './context.ts';
 import type { GpuStatus } from './gpu.ts';
 import type { InlineButton, InlineKeyboard, Screen } from './telegram.ts';
 import { STYLE } from './illustrate.ts';
+import { portraitText } from './image-portraits.ts';
 import { LOOK_CHARS, personAt, personTag, wornAt } from './picture.ts';
 import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX, PRESETS, PROMPT_CHARS, lineOf, ownStyle, ownStyles, pickerKeys, presetOf, styleKey } from './picture-style.ts';
 import { LANGS, LANGUAGE_BUTTON, REGISTERED, shownLang, texts } from './text.ts';
@@ -495,7 +496,8 @@ function characterScreen(state: State, storyId: string | undefined, rawIndex: st
     try { tokens = details.textTokens?.(text) ?? null; } catch { /* unknown, as without a tokenizer */ }
     return [tokens, [...text].length] as const;
   };
-  const portrait = person.portrait ? (person.portrait.look === person.look ? c.portraitKept : c.portraitStale) : details.pictures ? c.portraitNone : null;
+  // A kept portrait records the text it was drawn from, the person's details or look (`portraitText`).
+  const portrait = person.portrait ? (person.portrait.look === portraitText(person) ? c.portraitKept : c.portraitStale) : details.pictures ? c.portraitNone : null;
   const result = payload([c.cardTitle(line(person.name, 60), storyName(state, story)), '',
     c.look, person.look, c.lookSize(...size(person.look)), '',
     ...clothes ? [clothesTitle, clothes, c.clothesSize(...size(clothes))] : [c.noClothes], c.clothesNote, '',

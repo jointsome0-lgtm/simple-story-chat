@@ -822,13 +822,15 @@ test('clothes are carried down one line of the story and never into another', as
   assert.deepEqual([worn.clothes, worn.changed], [{ Элин: 'wearing a red silk dress', Тарек: 'wearing a blue tunic' }, 1]);
 });
 
-// A portrait to pick a reference by: one person from their look alone, the whole figure from the front, in clothes and a
-// style of the bot's own (local/image-portraits.ts), a new seed each time, and no model asked. The one shown last is held
-// for its keep button alone: one replaced and one kept are let go at once, which is asked of the collector itself.
+// A portrait to pick a reference by: one person from the sheet's details of them alone, the whole figure from the
+// front, in clothes and a style of the bot's own (local/image-portraits.ts), a new seed each time, and no model asked.
+// The one shown last is held for its keep button alone: one replaced and one kept are let go at once, which is asked
+// of the collector itself. The details name her and give her age as a number, which the assembly has to take out.
 test('keeping a portrait writes the very one shown into a private file beside the database, and a newer one replaces it', async t => {
   setFlagsFromString('--expose-gc');
   const gc = runInNewContext('gc') as () => void;
-  const f = await fixture(t, { card: { jobMs: 60000 }, style: STYLE_LINE, users: ['1', '2'] });
+  const details = 'A middle-aged woman, 48-year-old, olive skin, tall and lean, short ash-grey hair cut close, a narrow face, grey eyes, a thin scar through the left eyebrow that Elin never hides';
+  const f = await fixture(t, { card: { jobMs: 60000 }, style: STYLE_LINE, users: ['1', '2'], sheetReply: { characters: [{ ...SHEET.characters[0], details }] } });
   await f.start();
   await drawnOn(f, 1);
   const calls = f.requests.length;
@@ -862,8 +864,9 @@ test('keeping a portrait writes the very one shown into a private file beside th
   const first = await draw();
   const prompt = promptOf(f.comfy.submitted[1]);
   assert.ok(prompt.startsWith('Full-length character reference, the whole body in frame, seen from the front.') && prompt.endsWith(PORTRAIT_STYLE), prompt);
-  assert.ok(prompt.includes(`short ash-grey hair, ${PORTRAIT_CLOTHES}: stands upright facing the viewer, arms relaxed at the sides.`), prompt);
-  assert.doesNotMatch(prompt, /Элин|grey wool coat|Synthetic test style|expression/);
+  assert.ok(prompt.includes('grey eyes, a thin scar through the left eyebrow')
+    && prompt.includes(`never hides, ${PORTRAIT_CLOTHES}: stands upright facing the viewer, arms relaxed at the sides.`), prompt);
+  assert.doesNotMatch(prompt, /Элин|Elin|48|grey wool coat|Synthetic test style|expression/);
   // A standing figure is drawn on the scenes' canvas turned upright.
   assert.deepEqual(f.comfy.submitted.slice(0, 2).map(graph => latentSizeOf(graph)), [{ width: 1344, height: 768 }, { width: 768, height: 1344 }]);
   // Its caption, another version, the keep button with the id it was drawn under, and the way back; no prompt follows
@@ -891,7 +894,7 @@ test('keeping a portrait writes the very one shown into a private file beside th
   const person = f.store.read('1').stories[storyId].sheet![0];
   const portrait = person.portrait!;
   assert.match(`${portrait.file} ${portrait.graph}`, /^[0-9a-f]{32}\.png [0-9a-f]{16}$/);
-  assert.deepEqual({ ...portrait, file: '', graph: '', at: 0 }, { file: '', graph: '', at: 0, seed: second.seed, look: person.look,
+  assert.deepEqual({ ...portrait, file: '', graph: '', at: 0 }, { file: '', graph: '', at: 0, seed: second.seed, look: details,
     clothes: PORTRAIT_CLOTHES, style: PORTRAIT_STYLE, checkpoint: 'synthetic.safetensors', width: 768, height: 1344, steps: 8, cfg: 1,
     sampler: 'er_sde', scheduler: 'simple' });
 
@@ -1419,12 +1422,13 @@ test('on the real queue a description keeps its reader\'s slot ahead of the comp
   assert.equal(photos(g.sent).filter(one => one.payload.chat_id === 1 && one.payload.caption).length, 1);
   assert.ok(promptOf(g.comfy.submitted.at(-1)!).endsWith(PRESETS.graphic));
 
-  // Nine tenths of what a description may take, 65536 less its 900 tokens of answer, is 58172. A scene that cost 57000
-  // leaves room under it for the sheet's short instruction and not for the frame's long one; 58200 leaves none. The
-  // threshold stays above the scene and its answer, so no compaction is prepared on the way.
+  // Nine tenths of what a description may take, 65536 less its answer, is 57362 for the sheet, which may answer 1800
+  // tokens, and 58172 for the frame, which may answer 900. A scene that cost 56300 leaves room under the first for the
+  // sheet's instruction and not under the second for the frame's longer one; 58200 leaves none. The threshold stays
+  // above the scene and its answer, so no compaction is prepared on the way.
   for (const { label, llama, counted, trusted } of [
     { label: 'far from the limit', llama: { inputTokens: 100, outputTokens: 50 }, counted: [], trusted: ['scene', 'sheet', 'frame'] },
-    { label: 'the frame near it', llama: { inputTokens: 52000, outputTokens: 5000 }, counted: ['frame'], trusted: ['scene', 'sheet'] },
+    { label: 'the frame near it', llama: { inputTokens: 51300, outputTokens: 5000 }, counted: ['frame'], trusted: ['scene', 'sheet'] },
     { label: 'both near it', llama: { inputTokens: 53000, outputTokens: 5200 }, counted: ['sheet', 'frame'], trusted: ['scene'] },
     { label: 'another model\'s stamp', llama: { inputTokens: 100, outputTokens: 50, illustratorModel: 'another-model' }, counted: ['sheet', 'frame'], trusted: ['scene'] },
   ]) {

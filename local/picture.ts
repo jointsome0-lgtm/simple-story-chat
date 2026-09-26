@@ -32,8 +32,8 @@
 // and so does a variant of the photo drawn from a prompt the reader wrote (`variant`).
 //
 // A portrait of one person of a story's sheet (`portrait`) is drawn on request from their card in the characters'
-// screens (local/ui.ts), from their look alone, and goes with its story the same way. The one a reader keeps is a
-// file beside the database (local/store.ts), to pick a reference by later; no frame uses it.
+// screens (local/ui.ts), from the sheet's text of them alone (`portraitText`), and goes with its story the same way.
+// The one a reader keeps is a file beside the database (local/store.ts), to pick a reference by; no frame uses it.
 import { createHash, randomInt } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { recordPicture } from '../lib/library.ts';
@@ -45,7 +45,7 @@ import { SAMPLER_DEFAULTS, apiGraph, applyToWorkflow, drawOne, latentSizeOf, pre
 import type { Comfy, Graph } from './image-batch.ts';
 import { STYLE, askJson, assemblePrompt, frameRequest, matchSheet, sheetOf, sheetRequest, sheetWithoutOutfits } from './illustrate.ts';
 import type { Character, Description, Excerpt } from './illustrate.ts';
-import { PORTRAIT_CLOTHES, PORTRAIT_STYLE, portraitPrompt } from './image-portraits.ts';
+import { PORTRAIT_CLOTHES, PORTRAIT_STYLE, portraitPrompt, portraitText } from './image-portraits.ts';
 import type { Log } from './model-error.ts';
 import { errorCode, safeErrorDetails } from './model-error.ts';
 import type { ModelRequest, Provider } from './model.ts';
@@ -159,12 +159,15 @@ export function personAt(story: Story | undefined, index: string | undefined, ta
 
 // A sheet written again in place of an older one (`describeFrame`) keeps what the reader made of it: a look they wrote
 // themselves and a portrait they kept, under the same name, or with the person on their own if the new sheet lost the
-// name. The card shows a portrait as drawn from another look if the new one differs (local/ui.ts).
+// name. The details the new sheet wrote of a person whose look the reader wrote go, as an edit drops them
+// (local/bot.ts): they describe the person the reader's words replaced. The card shows a portrait as drawn from another
+// text if the person's text differs now (local/ui.ts).
 export function rewrittenSheet(before: SheetEntry[], written: Character[]): SheetEntry[] {
   const old = new Map(before.map(one => [personKey(one.name), one]));
-  const kept = written.map(one => {
+  const kept = written.map(({ details, ...one }) => {
     const mine = old.get(personKey(one.name));
-    return { ...one, ...mine?.edited ? { look: mine.look, edited: true } : {}, ...mine?.portrait ? { portrait: mine.portrait } : {} };
+    return { ...one, ...mine?.edited ? { look: mine.look, edited: true } : details === undefined ? {} : { details },
+      ...mine?.portrait ? { portrait: mine.portrait } : {} };
   });
   const names = new Set(written.map(one => personKey(one.name)));
   return [...kept, ...before.filter(one => (one.edited || one.portrait) && !names.has(personKey(one.name))).map(one => ({ ...one, outfit: one.outfit ?? '' }))];
@@ -299,10 +302,11 @@ export function createIllustrator(config: ImageConfig, deps: {
   // The frame of each reader's latest described scene, in memory only and only until the next one: a sample of a
   // style is drawn from it without asking the language model again. Never stored and never logged.
   const frames = new Map<string, { storyId: string; nodeId: string; description: Description; sheet: Character[] }>();
-  // The portrait each reader was shown last, for its keep button (`keepPortrait`), with the look it shows: in memory
-  // only, one per reader, until the next one, the keep, a delivery that failed, or PORTRAIT_HELD_MS. That one timer
-  // is cleared with it, and knows the reader and the id alone, so that the map is the only holder of the picture: a
-  // timer that held it would keep every picture replaced or kept alive for the whole half hour.
+  // The portrait each reader was shown last, for its keep button (`keepPortrait`), with the text it was drawn from as
+  // `look` (`portraitText`): in memory only, one per reader, until the next one, the keep, a delivery that failed, or
+  // PORTRAIT_HELD_MS. That one timer is cleared with it, and knows the reader and the id alone, so that the map is the
+  // only holder of the picture: a timer that held it would keep every picture replaced or kept alive for the whole
+  // half hour.
   type Candidate = { id: string; storyId: string; name: string; look: string; recipe: PictureRecipe; bytes: Uint8Array; at: number };
   const candidates = new Map<string, Candidate & { timer: ReturnType<typeof setTimeout> }>();
   function letGo(userId: string, id?: string) {
@@ -665,23 +669,27 @@ export function createIllustrator(config: ImageConfig, deps: {
     },
 
     // A portrait of one person of a story's sheet (`PortraitRequest`), drawn again with a new seed each time the reader
-    // asks, from their look alone (`portraitPrompt`). It needs no description, so it neither wakes nor holds the
-    // language model's card: it waits for the picture card alone. The one sent last is held for its keep button; one
-    // whose person, story or look is gone by the time it is drawn is not sent. The reader's next move in the story
-    // stops it, as it stops a sample (local/bot.ts), until its photo is on its way; a failure is told, since they wait
-    // for it.
+    // asks, from the sheet's text of them alone (`portraitText`, `portraitPrompt`). It needs no description, so it
+    // neither wakes nor holds the language model's card: it waits for the picture card alone. The one sent last is held
+    // for its keep button; one whose person, story or text is gone by the time it is drawn is not sent. The reader's
+    // next move in the story stops it, as it stops a sample (local/bot.ts), until its photo is on its way; a failure is
+    // told, since they wait for it.
     async portrait(request: PortraitRequest): Promise<void> {
       const { userId, chat, storyId, name, signal, log } = request;
       // The button is offered only to a reader who is drawn for, and that is asked again where the work starts.
       if (signal.aborted || !config.users.has(userId)) return;
       const t = texts(store.read(userId).language);
       const clear = await statusLine(chat, request.status, log);
-      const lookNow = () => store.read(userId).stories[storyId]?.sheet?.find(one => one.name === name)?.look;
+      const sheetNow = () => store.read(userId).stories[storyId]?.sheet;
+      const lookNow = () => {
+        const person = sheetNow()?.find(one => one.name === name);
+        return person && portraitText(person);
+      };
       try {
         const look = lookNow();
         if (look === undefined) throw sceneGone();
         const recipe = { ...recipeOf(storyId), ...upright, seed: randomInt(2 ** 32) };
-        const drawn = await draw(recipe, portraitPrompt(name, look).prompt, signal);
+        const drawn = await draw(recipe, portraitPrompt(name, look, (sheetNow() ?? []).map(one => one.name)).prompt, signal);
         if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
         if (lookNow() !== look) throw sceneGone();
         // Held before it is sent, so that its button finds it however soon it is pressed, and let go if it never
@@ -713,14 +721,14 @@ export function createIllustrator(config: ImageConfig, deps: {
     // Keeps the portrait a reader was shown under `candidateId`, inside the library write that `state` belongs to: the
     // file is written first and the sheet refers to it once that write commits; a rollback deletes the file, and the
     // caller sweeps the one it replaced afterwards (local/store.ts). Only the very portrait that button came with is
-    // kept, only while it is held, and only while its person still has the look it shows. Returns where that person is
-    // on the sheet, or null for a stale button. The portrait stays held until `portraitKept`.
+    // kept, only while it is held, and only while its person still has the text it was drawn from. Returns where that
+    // person is on the sheet, or null for a stale button. The portrait stays held until `portraitKept`.
     keepPortrait(userId: string, candidateId: string, state: Library) {
       const held = candidates.get(userId);
       if (!held || held.id !== candidateId || now() - held.at > PORTRAIT_HELD_MS) return null;
       const sheet = state.stories[held.storyId]?.sheet ?? [];
       const index = sheet.findIndex(one => one.name === held.name);
-      if (index < 0 || sheet[index].look !== held.look) return null;
+      if (index < 0 || portraitText(sheet[index]) !== held.look) return null;
       sheet[index].portrait = { file: store.writePortrait(userId, held.bytes), ...held.recipe, look: held.look,
         clothes: PORTRAIT_CLOTHES, style: PORTRAIT_STYLE, at: now() };
       return { storyId: held.storyId, index };
