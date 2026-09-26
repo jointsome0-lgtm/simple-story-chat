@@ -159,6 +159,8 @@ The shared cases are pinned in `local/serving-contract/`: an exact copy of `cont
 
 `npm run test:serving` runs the adapter against the real gateway, which simple-serving's dev launcher starts on loopback in front of its fake engine, with the service block of the pinned cases. It checks the state and the contract, a count, a stream with its usage, a refusal, a cancelled stream, and the class and scope the gateway logs for each call, and prints the commits of both checkouts. It needs `SIMPLE_SERVING_CHECKOUT`, a git checkout of simple-serving, and `SIMPLE_SERVING_PYTHON`, the python of an environment with its dependencies (`uv sync` there). Without them it fails rather than pass. It is not part of `npm test`.
 
+The pictures move to simple-serving too, as the owner decided on 2026-09-26: after round two of [the action measurement](action-experiment.md), it takes over the picture card with ComfyUI inside and the engine unchanged, so that the bot has one service for both lanes. Until then `npm run gpu:rent` rents the picture card, as above. Why vLLM does not replace ComfyUI there is in simple-serving's README.
+
 <a id='codex-cli'></a>
 
 ## Codex CLI: `codex-cli`
