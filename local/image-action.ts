@@ -352,7 +352,7 @@ export async function dryRun(out: string, options: { tokenizers?: string } = {})
     const judge = fakeJudge({ marker: word, script: DRY_SCRIPT });
     const lists = await checklistsCommand(root, { exec: judge.exec });
     say(`5 checklists: ${lists.bundles.built} bundles; ${JSON.stringify(lists.sessions.checklist)}; the picture card may come: ${lists.pictures.ready}`);
-    fake = await startFakeComfy({ jobMs: 30, referenceMs: 0, requireUploads: true, marker: word });
+    fake = await startFakeComfy({ jobMs: 30, referenceMs: 0, requireUploads: true, untilSampled: true, marker: word });
     writeCardRecord(join(root, 'card.txt'));
     const draw = (stage: DrawStageOptions['stage'], until = Date.now() + 2 * 3600000) =>
       drawCommand(root, stage, { comfy: fake!.url, until, tokenizer, pollMs: 10, waitMs: 60000, timeoutMs: 10000 });
@@ -383,8 +383,9 @@ export async function dryRun(out: string, options: { tokenizers?: string } = {})
     say(`7 frames: drawn ${JSON.stringify(main.drawn)}, failed ${JSON.stringify(main.failed)}, out ${JSON.stringify(main.out)}; seed 11 ${JSON.stringify(main.admission)}`);
     const jobs = fake.jobs.length;
     await draw('main');
-    say(`   a resume: ${fake.jobs.length - jobs} jobs`);
+    say(`   a resume: ${fake.jobs.length - jobs} jobs; the most jobs the card held at once: ${fake.mostHeld}`);
     expect(fake.jobs.length === jobs, 'a resume draws nothing again');
+    expect(fake.mostHeld === 1, 'the card never held two jobs at once, the next one going out while a picture came down');
     // A plan changed after `prompts`: the stage hashes the plan files as it reads them.
     const planFile = join(storyDir(root, textStories()[0].id), 'plan.json'), plan = readFileSync(planFile), drawn = readFileSync(join(root, 'draw.json'));
     writeFileSync(planFile, JSON.stringify({ ...JSON.parse(plan.toString('utf8')), changed: true }));
