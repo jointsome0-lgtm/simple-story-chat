@@ -19,7 +19,8 @@ for it, and on the bot's own path: the uncensored Gemma writes the scenes and th
 [Stage 1](#stage-1) wrote the frames of the clean scenes with a hosted Gemma and drew nothing. The first round wrote
 its texts on 2026-09-25 and 26 and drew seed 7 on the 26th, with up to six people in a moment; the next one has four
 ([four](#four)). Its T gave L's picture back and took nothing from the portraits; [the T probe](#t-probe) tries nine
-variants of T on one pilot card, from round one's own pictures.
+variants of T on one pilot card, from round one's own pictures, and first on the same card [a clothing
+test](#t-probe-suit) of the portraits.
 
 <a id='stage-1'></a>
 
@@ -825,7 +826,9 @@ portraits. Round two draws T as it is: `T_OPENING`, `tPrompt` and the action gra
 [image-t-probe.ts](../local/image-t-probe.ts) draws nine variants of T from round one's own pictures and portraits of
 six clean scenes at seed 7, on one pilot card with no text card and no new portrait, and writes a page from which the
 owner picks: five are one change against T each, `mask` and `mask-each` redraw only the bound people's boxes on L, and
-`face` and `face-each` only their heads and hair on A+'s picture ([the masked variants](#t-probe-masks)).
+`face` and `face-each` only their heads and hair on A+'s picture ([the masked variants](#t-probe-masks)). Before them
+it draws [the clothing test](#t-probe-suit): eight of round one's fronts again in a dark grey suit, and the demon's C
+from them.
 
 **What round one shows** (seed 7, the 13 clean scenes, their files and their judges' answers):
 
@@ -935,9 +938,49 @@ variant, and it would take the latent starts at 0.40 and 0.60 (σ 0.57 and 0.76)
 takes 0.50 and 0.70, since 0.40 leaves 0.43 of L's latent, which we expect to hold the faces as they are, and one card
 should bracket the point where they follow the portraits; a later probe can go between.
 
+<a id='t-probe-suit'></a>
+
+**The clothing test**, which the owner agreed on 2026-09-26, is drawn first on the same card. In round one the demon's
+C at seed 7 drew the demon in his portrait's white tank top, where his scene put him in a tattered leather skirt and
+iron bracers. The test asks whether a plain dark grey sleeveless suit leaks less into a scene and shows the build as
+well as the tank top and trousers do. The owner's first idea, a skin-coloured suit, was turned down: the flight's sheet
+holds two children, it reads as nudity, and it fixes a skin tone that may be the wrong one.
+
+- **Eight fronts**, the demon's e1 to e4 and the flight's e1 to e4, drawn as round one drew its fronts, by the front
+  graph at 720x1280 and seed 7, from round one's own prompts in the two plan.json with the clothes alone changed:
+  `PORTRAIT_CLOTHES`, "wearing a plain close-fitting white tank top, close-fitting dark grey trousers and plain dark
+  shoes", becomes the probe's `SUIT_CLOTHES`, "wearing a plain sleeveless close-fitting dark grey full-length one-piece
+  athletic suit of matte fabric, covering the torso and legs down to the ankles, and plain dark shoes". That is the
+  wording agreed for the test with "full-length" said early and "of matte fabric" added, against a swimsuit's or a
+  latex suit's sheen. The look, the action and the style stay round one's. `PORTRAIT_CLOTHES` in
+  [image-portraits.ts](../local/image-portraits.ts) does not change: the owner decides after seeing the result. Round
+  two's fronts are being moved to a detailed portrait description in the sheet; the test keeps round one's looks, so
+  that only the clothes differ.
+- **The demon's C at seeds 7 and 11**, from round one's C prompt in the demon's plan.json unchanged, with the four new
+  fronts in its slots at 352x640, as round one's C sent its own. Round one drew seed 7 alone, so at 11 the new C has no
+  old one beside it, and the page says so.
+- **The order**: the demon's four fronts, its C at 7 and at 11, then the flight's four, so that a stop leaves the
+  demon's whole where it can. The test is admitted as a whole, before the scenes, since it is small and draws with the
+  two graphs round one drew with, ahead of the masked variants' nodes, which are new to the card. A C whose new fronts
+  are not all drawn is not sent: it is recorded `out` with `front_failed`, `front_missing` or `reference_mismatch`.
+- **Refusals**, before anything is sent: round one's draw.json without its fronts' clothes, style or action; a front
+  whose prompt does not carry those clothes once, the action and the style last; round one's fronts drawn under another
+  front graph or canvas than today's, where `--scenes` without `suit` draws the scenes alone; and a `probe.json` whose
+  test was drawn from other inputs. Its `suit.hash` pins the wording, round one's clothes, the front graph, each front's
+  prompt and picture, the C's prompt and fronts, and the seeds.
+- **The page** ends with the test: each of the eight fronts of round one beside its new one, then the demon's C of round
+  one beside the new at seed 7, and at seed 11 the new alone under a line saying that round one has none.
+- **The same seed under another prompt is another picture**: the new fronts may differ from round one's in face, hair
+  and pose as well, and the C's comparison carries that beside the clothes.
+
+The test is 10 jobs: eight fronts at round one's median of 15.5 s, and two C's at 20.8 s, the median of round one's C
+with four portraits (with two it took 18.2 s): 2.8 minutes, 4.2 at the admission prices and 4.7 with the cold start,
+which falls on its first front.
+
 ```sh
 npm run image:t-probe -- dry-run     # seven steps, then "the dry run went as expected"
-npm run image:t-probe -- estimate    # before the card: 54 cells, 80 jobs, expectedMinutes 25.6, pricedMinutes 37.1
+npm run image:t-probe -- estimate    # before the card: 64 cells, 90 jobs, expectedMinutes 28.4, pricedMinutes 41.3,
+                                     # the clothing test's 10 of them 2.8 and 4.2 under `suit`
 # boxes.json into illustrations/t-probe, then the page, where the owner checks the boxes and the crops:
 npm run image:t-probe -- page        # illustrations/t-probe/index.html
 # The pilot card, with the owner's «да» on its price and end, a picture card for one hour:
@@ -946,35 +989,40 @@ npm run gpu:rent -- --lane pictures --qwen only --hours 1
 # The guard, gpu/ onto the card, image-bootstrap.sh, image-serve.sh and the tunnel as in the runbook above, then:
 mkdir -p illustrations/t-probe
 ssh simple-chat-vast cat /workspace/simple-chat-gpu/image-verified.txt > illustrations/t-probe/card.txt
-npm run image:t-probe -- draw --until "$end"    # scene by scene; `probe` with drawn 54 and exit 0
+npm run image:t-probe -- draw --until "$end"    # the clothing test, then scene by scene; `probe` with drawn 54,
+                                                # suit.drawn 10 and exit 0
 # The termination, as in the runbook above; then, with no card:
-npm run image:t-probe -- page    # illustrations/t-probe/index.html, which `draw` also writes after each scene
+npm run image:t-probe -- page    # illustrations/t-probe/index.html, which `draw` also writes after the test and each scene
 ```
 
-`draw` takes `--scenes` and `--variants`, comma separated, and the runbook's `--wait`, `--timeout` and `--comfy`. Of
-`illustrations/action-1` it reads `draw.json` and `clean/` alone, and before anything is sent it refuses a sharp id,
-the marker and a link on the way, which could lead into `sealed/`; an L, an A+ or a front that is not the file round
-one recorded; a ComfyUI revision, weights, graph, T opening, canvas, reference size, encoder resolution or cache device
-other than round one's; a `boxes.json` missing, malformed, short of a bound person's box or crop, or changed since the
-first draw; a probe directory drawn under other pins or from other inputs; and a picture `probe.json` records whose
-file is gone. A scene begins only if all its cells can end by `--until`, at round one's slowest time of the like job, a
-quarter more and three seconds, and a resume draws nothing again. `illustrations/t-probe` holds `card.txt`,
-`boxes.json`, `probe.json` (ids, codes, sizes, counts and times, no prompt), `<scene>/<variant>.png`,
-`<scene>/<variant>-<pass>.png` for `mask-each` and `face-each`, and `index.html`: for each scene its portraits with
-their crops, round one's L with the bodies and A+ with the heads, T and C, the nine variants, each named by its change,
-and every pass, the pictures linked where they lie.
+`draw` takes `--scenes` and `--variants`, comma separated, and the runbook's `--wait`, `--timeout` and `--comfy`;
+`--scenes` names `suit` for the clothing test, which is drawn without it only when no scene is named, and `--variants`
+leaves the test alone. Of `illustrations/action-1` it reads `draw.json` and `clean/` alone, and before anything is
+sent it refuses a sharp id, the marker and a link on the way, which could lead into `sealed/`; an L, an A+ or a front
+that is not the file round one recorded; a ComfyUI revision, weights, graph, T opening, canvas, reference size, encoder
+resolution or cache device other than round one's; a `boxes.json` missing, malformed, short of a bound person's box or
+crop, or changed since the first draw; a probe directory drawn under other pins or from other inputs; and a picture
+`probe.json` records whose file is gone. A scene begins only if all its cells can end by `--until`, at round one's
+slowest time of the like job, a quarter more and three seconds, and a resume draws nothing again.
+`illustrations/t-probe` holds `card.txt`, `boxes.json`, `probe.json` (ids, codes, sizes, counts and times, no prompt),
+`<scene>/<variant>.png`, `<scene>/<variant>-<pass>.png` for `mask-each` and `face-each`, `suit/<front>.png`,
+`suit/demon-s7-C.png` and `suit/demon-s11-C.png`, and `index.html`: for each scene its portraits with their crops, round
+one's L with the bodies and A+ with the heads, T and C, the nine variants, each named by its change, and every pass,
+then the clothing test old beside new, the pictures linked where they lie.
 
 The estimate, from round one's own times of the same card:
 
 | | minutes |
 | --- | --- |
 | ssh, Qwen's files, torch, the verification and the tunnel, at 300 Mbit/s (the identity run's table) | 14 |
-| 54 cells in 80 jobs at round one's medians, the first of them cold: T's for `words`, `no-style`, `face` and `face-each`, C's for the rest, with one portrait a pass for `mask-each` and two pictures for `face-each` | 26 (37 at the admission prices) |
+| the clothing test at round one's medians, its first front cold: eight fronts and the demon's C with four portraits at seeds 7 and 11 | 3 (5 at the admission prices) |
+| 54 cells in 80 jobs at round one's medians: T's for `words`, `no-style`, `face` and `face-each`, C's for the rest, with one portrait a pass for `mask-each` and two pictures for `face-each` | 25 (37 at the admission prices) |
 | the page, the termination and the margin before the guard | 5 |
 
-About 45 card minutes of the guard's hour. `draw` admits a scene at its own prices, at most 15 jobs and 7 minutes (the
-flight, the twister and the demon), so the hour holds the whole probe unless the setup runs long, and a scene not
-admitted waits for a resume on the next card.
+About 47 card minutes of the guard's hour; `estimate` gives the draw's two together, 64 cells in 90 jobs, 28.4 minutes
+and 41.3 at the admission prices. `draw` admits the test as a whole, 10 jobs and 4.7 minutes with the cold start, and a
+scene at its own prices, at most 15 jobs and 7 minutes (the flight, the twister and the demon), so the hour holds the
+whole probe unless the setup runs long, and what is not admitted waits for a resume on the next card.
 
 **Not verified without the card**: whether `words` moves any face while image 1 lies on the canvas's grid; whether
 `no-style` takes the edges and colours away; where `half` puts the scene, since its 640x352 is centred on the canvas's
@@ -986,6 +1034,9 @@ inside a head keeps its angle and expression, whether a crop carries the tank to
 than its box meets A+'s; that the server keeps float32 intermediates, on which "pixel for pixel" outside the regions
 rests; that the server takes the deprecated ImageCrop, where a refusal would come back as `comfy_http_error` 400 and
 stop the run at the first `face`, with nothing lost; the times of `half`, the latent starts and the masked variants,
-priced from C's and T's; the boxes and the crops, marked by eye; and whether the pilot card would draw round one's T
-again, since the probe draws no T of its own: `probe.json`'s `sameServer` says whether ComfyUI, PyTorch and the card
-said what they said to round one.
+priced from C's and T's; the boxes and the crops, marked by eye; whether the suit comes out sleeveless, full length,
+dark grey and plain, with no zip, logo or sleeve the words do not forbid, whether it reads as clothing on the flight's
+children, whether the build shows through it as through the tank top, and whether the demon's C carries less of it
+into the scene than it carried of the tank top; and whether the pilot card would draw round one's T again, since the
+probe draws no T of its own: `probe.json`'s `sameServer` says whether ComfyUI, PyTorch and the card said what they
+said to round one.
