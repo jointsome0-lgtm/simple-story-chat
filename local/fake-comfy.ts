@@ -57,17 +57,22 @@ export type FakeComfyOptions = {
   // Whether a picture's pixels follow from the graph it was drawn from alone, as on a card that draws the same inputs
   // alike, rather than from the job's number (the pilot's determinism check, local/image-pilot.ts).
   picturesByGraph?: boolean;
+  // What /object_info/<class> says of a class the server has beyond these tests' core, such as Viggle's two nodes on a
+  // server started with them (local/image-pilot.ts `turbo`). Any other class gets `{}`, as one the pinned server does
+  // not have (server.py:816-822).
+  objectInfo?: Record<string, object>;
 };
 // A request as the server saw it, for a test to assert on the order of things: the job it concerns, when there is one.
 export type FakeCall = { method: string; path: string; id?: string };
 // What a job was, for a test to assert on. Never its text. `slots`: each reference slot of the encoder in slot order,
 // the file on the loader behind it, the size a scale node between them hands on (`null` without one), and the
 // rectangle an ImageCrop between the loader and the scale node cuts (`null` without one). `images`: each picture a
-// saving node wrote, with its size. `compiled`: the TorchCompileModel on the sampler's model input, its backend and the
-// type of the node whose model it takes (`null` without one); the fake runs it as it runs every node, as nothing.
+// saving node wrote, with its size. `sampler`: the type of the node the latent is sampled in; `model`: the types of the
+// nodes the model passes on its way there, from the sampler's model input, or its guider's, back to the loader, such as
+// a TorchCompileModel's or a LoRA's. The fake runs each as it runs every node, as nothing.
 export type FakeJob = { references: number; width: number; height: number; cached: number; outcome: 'success' | 'error' | 'interrupted';
   slots: { slot: number; file: string; scaled: { width: number; height: number } | null; cropped: { x: number; y: number; width: number; height: number } | null }[];
-  images: { node: string; width: number; height: number }[]; compiled: { backend: string; over: string | null } | null } & MaskedJob;
+  images: { node: string; width: number; height: number }[]; sampler: string | null; model: string[] } & MaskedJob;
 
 // A mask the pinned mask nodes make (comfy_extras/nodes_mask.py at 73c9bad4), computed as they compute it: SolidMask
 // fills, MaskComposite adds, subtracts or multiplies its source into its destination at x, y and clamps the whole to
@@ -236,11 +241,14 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
     const order = executionOrder(graph);
     const cached = options.loadersCached && job.number > 1 ? order.filter(id => /Loader/.test(graph[id].class_type)) : [];
     const references = Object.values(graph).filter(node => node.class_type === 'LoadImage').length;
-    const sampler = Object.values(graph).find(node => 'seed' in node.inputs || 'noise_seed' in node.inputs);
+    // The node the latent goes into: a KSampler, or a SamplerCustomAdvanced, whose seed is on its noise node instead.
+    const samples = (node: Graph[string]) => 'latent_image' in node.inputs;
+    const sampler = Object.values(graph).find(samples);
     const source = (value: unknown) => (Array.isArray(value) ? graph[String(value[0])] : undefined);
-    const compiler = source(sampler?.inputs.model);
-    const compiled = compiler?.class_type === 'TorchCompileModel'
-      ? { backend: String(compiler.inputs.backend), over: source(compiler.inputs.model)?.class_type ?? null } : null;
+    const model: string[] = [];
+    for (let node = source(sampler?.inputs.model ?? source(sampler?.inputs.guider)?.inputs.model); node && model.length < 20; node = source(node.inputs.model)) {
+      model.push(node.class_type);
+    }
     const noised = source(sampler?.inputs.latent_image);
     const latent = noised?.class_type === 'SetLatentNoiseMask' ? source(noised.inputs.samples) : noised;
     // A latent the VAE encoded from an uploaded picture has that picture's size (local/image-t-probe.ts's latent starts).
@@ -289,7 +297,7 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
     for (const id of order.filter(one => !cached.includes(one))) {
       const type = graph[id].class_type;
       tell(job, 'executing', { node: id, display_node: id });
-      if (/Sampler/.test(type)) {
+      if (samples(graph[id])) {
         const oom = options.oomAtReferences !== undefined && references >= options.oomAtReferences;
         if (oom || options.failJobs?.includes(job.number)) {
           outcome = 'error';
@@ -326,7 +334,7 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
     history.set(job.id, { prompt: [job.number, job.id, {}, {}, []], outputs,
       status: { status_str: outcome === 'success' ? 'success' : 'error', completed: outcome === 'success', messages }, meta: {} });
     say(`Prompt executed in ${((performance.now() - began) / 1000).toFixed(2)} seconds`);
-    jobs.push({ references, width, height, cached: cached.length, outcome, slots, images, compiled, ...masked });
+    jobs.push({ references, width, height, cached: cached.length, outcome, slots, images, sampler: sampler?.class_type ?? null, model, ...masked });
     // The record is written before the socket hears the job is over (main.py), and a delete sent then finds it.
     tell(job, 'executing', { node: null });
   }
@@ -407,6 +415,10 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
           torch_vram_total: 23 * GIB, torch_vram_free: 1 * GIB }] });
       }
       if (url.pathname === '/internal/logs/raw') return json({ entries: log, size: { cols: 120, rows: 40 } });
+      if (url.pathname.startsWith('/object_info/')) {
+        const name = decodeURIComponent(url.pathname.slice('/object_info/'.length)), known = options.objectInfo ?? {};
+        return json(Object.hasOwn(known, name) ? { [name]: known[name] } : {});
+      }
       if (url.pathname === '/queue' && request.method === 'GET') {
         return json({ queue_running: running ? [[running.number, running.id, {}, {}, []]] : [],
           queue_pending: queue.map(job => [job.number, job.id, {}, {}, []]) });

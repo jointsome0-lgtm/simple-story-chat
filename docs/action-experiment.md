@@ -1242,8 +1242,9 @@ asked in a directory of its own.
 
 ## The backend measurement
 
-On 2026-09-26 the owner asked what comfy-kitchen's CUDA backend adds on top of Triton, and then what torch.compile
-adds. On the default torch, cu128, the pinned server turns the kitchen's CUDA backend off and says so at its start
+On 2026-09-26 the owner asked what comfy-kitchen's CUDA backend adds on top of Triton, then what torch.compile adds,
+and then, as a test, what Viggle's few-step LoRA does to the time and the pictures. On the default torch, cu128, the
+pinned server turns the kitchen's CUDA backend off and says so at its start
 (comfy/quant_ops.py:22-28). The backend needs torch built for CUDA 13, which [the picture card](gpu.md#cu130)
 installs beside the default when asked, and a server started again on it. The same `npm run image:pilot` draws the
 pilot's five timed cells: the front, the view, A, V and T of flight at seed 7, from the first round's plans, portraits
@@ -1259,6 +1260,18 @@ on cu130 Triton is what a layer falls back to.
   for no mode and no fullgraph, leaves `dynamic` to torch, and drops the guards on `transformer_options`
   (comfy_extras/nodes_torch_compile.py and comfy_api/torch_helpers/torch_compile.py at the pinned revision). The first
   pass compiles for each size and each number of references it meets; the second draws on what it compiled.
+- `turbo`, a test the owner allowed on 2026-09-26 («в качестве теста можно»), once the server has been started again
+  on the default torch with Triton and [Viggle's node](gpu.md#viggle). The same cells, sampled through Viggle's LoRA in
+  six steps instead of the reference's 25, each graph changed the way the repository's own ComfyUI workflows use it:
+  `ViggleTurboLora` at strength 1.0, which its readme says to keep, takes the loader's model, and in a frame's graph
+  `QwenImage21Cache` takes the LoRA's. The `KSampler` gives way to `SamplerCustomAdvanced` with `KSamplerSelect` on
+  euler, `BasicGuider` on the same positive conditioning, `RandomNoise` on the cell's seed, and `ViggleTurboSigmas`
+  with its six default nodes, fed the cell's latent, whose size shifts them. The reference samples at cfg 1.0, which
+  skips the negative prompt (comfy/samplers.py:610), so a step is one call of the model in both. What differs is the
+  number of steps and the LoRA's own cost: its node adds the LoRA beside the weights on every call rather than merging
+  it, 10 to 25 per cent a step by the readme. A cell that starts from a picture at a denoise below 1 would be left out
+  and named in the record, rather than sampled on a cut schedule the LoRA was not distilled for. Both pinned graphs
+  sample an `EmptyLatentImage` at denoise 1.0, so no cell of the pilot is left out.
 - `cuda`, once the server has been started again on cu130 with Triton. It is refused unless the server's log at its
   start shows the kitchen's CUDA backend available and not disabled, and the refusal gives the kind of reason the log
   gave: an extension missing, one that failed to load a library, no CUDA, or another.
@@ -1270,13 +1283,22 @@ on cu130 Triton is what a layer falls back to.
   cuda-compile is set against cuda's warm pass too. Beside the numbers is the evidence: the torch each pass was drawn
   on, as `/system_stats` reported it, and the log's lines on the kitchen's backends for each command. A command that
   did not finish says how its last attempt ended, with each failed cell's code, and whether it was skipped for time.
+  `turbo` gets the same times, peaks and cold extra, the LoRA it drew with and the cells it left out, and no pixels:
+  its pictures come from another schedule. The owner judges them by eye on `turbo.html`, which `turbo` writes into
+  the directory: each cell's reference picture beside turbo's, with both sampler times, over the portraits and views
+  the cell took into its slots. The owner's measure: faces roughly like the portraits, and the figure and silhouette
+  kept in every cell; exact faces are not required.
 
 One card, and one server for each torch. Each command checks that the server runs the torch
-[image-manifest.env](../gpu/image-manifest.env) pins for it, `TORCH_VERSION` for `reference` and `compile` and
-`TORCH_CU130_VERSION` for `cuda` and `cuda-compile`. A restart that did not happen, or a server on the other torch, is
+[image-manifest.env](../gpu/image-manifest.env) pins for it, `TORCH_VERSION` for `reference`, `compile` and `turbo`
+and `TORCH_CU130_VERSION` for `cuda` and `cuda-compile`. A restart that did not happen, or a server on the other torch, is
 refused before anything is drawn, as is a server without Triton or one whose log says Triton did not load. Every
-other pin, the card and ComfyUI among them, must stay the same across the directory. `compile` and `cuda` come after
-a finished reference, and `cuda-compile` after a finished cuda. The pilot's directory and this one are never mixed:
+other pin, the card and ComfyUI among them, must stay the same across the directory. `compile`, `turbo` and `cuda`
+come after a finished reference, and `cuda-compile` after a finished cuda. No server draws the LoRA's graphs and plain
+ones both, the owner's rule after ComfyUI's PRs 16493 and 15734. Each command asks the server's `/object_info` for
+Viggle's two nodes before it draws: `turbo` is refused unless the server has both and lists the LoRA among its loras,
+every other command is refused on a server that has either. A refused `turbo` leaves the schedule as it was: the
+runbook goes on to the restart on cu130. The pilot's directory and this one are never mixed:
 each refuses a `pilot.json` that holds the other's passes. The log's lines on the backends are read before anything
 is drawn, while the lines of the server's start are still in its log. A later run of the same command that no longer
 finds them stands on the earlier read, and `cuda-compile` on cuda's. Which backend ran a layer is logged at debug
@@ -1286,25 +1308,30 @@ A compile pass never holds up the card's schedule. A job that fails under it, as
 Inductor, is recorded with its code and ends the pass there, and the runbook goes on to the restart. Each of its jobs
 may take ten minutes with the compiles, and no longer: `--wait` is cut to ten minutes under compile. Each pass begins
 only with its time left before `--until`, ten minutes for the cold pass and two for the warm, or is skipped and
-recorded as skipped. `compile` gets an `--until` seven minutes before the card's "$end", which keeps the restart and
-`cuda` whole behind it.
+recorded as skipped. `compile` gets an `--until` nine minutes before the card's "$end", which keeps the two restarts,
+`turbo` and `cuda` whole behind it, and `turbo` one five minutes before it, which keeps the restart on cu130 and
+`cuda`. A job that fails under the LoRA ends `turbo`'s pass the same way, its code kept.
 
 **The time**, from the pilot's Triton cells ([its numbers](knowledge/gpu-measurements.md#pilot-2026-09-26)) and its
 restart:
 
 | | minutes |
 | --- | --- |
-| the cu130 install, in the background beside `reference` and `compile` | 3 to 8 |
+| the cu130 install and Viggle's two files, in the background beside `reference` and `compile` | 3 to 8 |
 | `reference`, cold then warm, on the head test's server | 2 to 2.5 |
 | `compile`, the first pass: Inductor's compiles for each size and number of references | 4 to 10 |
 | `compile`, the second pass | 1 to 1.5 |
+| the server stopped, and started again with Viggle's node | 1 to 1.5 |
+| `turbo`, the first pass with the model and the LoRA loaded again, then the second, six steps a cell | 1.5 to 2 |
 | the server stopped, and started on cu130 | 1 to 1.5 |
 | `cuda`, the first pass with the model loaded again, then the second | 2.5 to 3 |
 | `cuda-compile`, optional | 5 to 12 |
 
-That is 11 to 19 card-minutes after the head test, compile's 5 to 12 of them the least known, and 5 to 12 more with
-cuda-compile: $0.09 to $0.16, and up to $0.26 with it, at the first round's $0.498 an hour. A compile that fails or is
-skipped gives its minutes back.
+That is 13 to 22 card-minutes after the head test, compile's 5 to 12 of them the least known and turbo's 2.5 to 3.5
+with its restart, and 5 to 12 more with cuda-compile: $0.11 to $0.18, and up to $0.28 with it, at the first round's
+$0.498 an hour; turbo's share is $0.02 to $0.03. Turbo's passes are estimated from the pilot's Triton cells at six
+steps of 25 and the readme's 10 to 25 per cent more a step: the text encoder, the references and the decode stay as
+they were. A compile that fails or is skipped gives its minutes back, and so does a refused turbo, its restart aside.
 
 ```sh
 npm run image:pilot -- dry-run    # before the card: "the pilot's dry run went as expected", its steps 5 to 7 this one's
@@ -1312,17 +1339,25 @@ npm run image:pilot -- dry-run    # before the card: "the pilot's dry run went a
 # and gpu/ of this commit on the card. The card's record first: the install below writes it again.
 mkdir -p -m 700 illustrations/pilot-cuda
 ssh simple-chat-vast cat /workspace/simple-chat-gpu/image-verified.txt > illustrations/pilot-cuda/card.txt
-# cu130 beside the server, in the background (gpu.md#cu130). pip's cache of the default install goes first: the box
-# has 60 GB and the install asks for 13 GiB free. The log's first line is when the install began.
-ssh -T simple-chat-vast 'cd /workspace/simple-chat-gpu && { ComfyUI/.venv/bin/python -m pip cache purge >/dev/null 2>&1; df -h . | tail -1; date -u +%FT%TZ > cu130-install.log; SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_TORCH=cu130 setsid -f nohup bash /workspace/simple-chat/gpu/image-bootstrap.sh </dev/null >>cu130-install.log 2>&1; }'
+# cu130 and Viggle's two files beside the server, in the background (gpu.md#cu130, gpu.md#viggle). pip's cache of the
+# default install goes first: the box has 60 GB and the install asks for 13 GiB free. The log's first line is when the
+# install began.
+ssh -T simple-chat-vast 'cd /workspace/simple-chat-gpu && { ComfyUI/.venv/bin/python -m pip cache purge >/dev/null 2>&1; df -h . | tail -1; date -u +%FT%TZ > cu130-install.log; SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_TORCH=cu130 SIMPLE_CHAT_IMAGE_VIGGLE=true setsid -f nohup bash /workspace/simple-chat/gpu/image-bootstrap.sh </dev/null >>cu130-install.log 2>&1; }'
 npm run image:pilot -- reference --until "$end"    # done true, pytorch 2.11.0+cu128
-npm run image:pilot -- compile --until $(( end - 420 ))    # done true, or stopped with a code, or skipped: go on
-# The install's end, five minutes at most, then when it began and ended and the torch it checked. Without its mark
-# there is no cuda: the termination.
+npm run image:pilot -- compile --until $(( end - 540 ))    # done true, or stopped with a code, or skipped: go on
+# The install's end, five minutes at most, then when it began and ended and the torch it checked. Its mark is written
+# once every file is verified, Viggle's two among them: without it there is neither turbo nor cuda, and the termination.
 timeout 300 bash -c 'until ssh -o ConnectTimeout=10 simple-chat-vast "flock -n /workspace/simple-chat-gpu/image-bootstrap.lock true"; do sleep 10; done'
 ssh simple-chat-vast 'cd /workspace/simple-chat-gpu && head -1 cu130-install.log && date -u -r ComfyUI/.venv-cu130/simple-chat-ready +%FT%TZ && cat ComfyUI/.venv-cu130/simple-chat-ready || tail -5 cu130-install.log'
-# The server again, on cu130 with Triton: stopped as by Ctrl-C, killed after a minute since a compile may hold it,
-# its lock free, then started. A timeout is a server that did not start, and the termination.
+# The server again, still on cu128 with Triton, now with Viggle's node: stopped as by Ctrl-C, killed after a minute
+# since a compile may hold it, its lock free, then started. A timeout is a server that did not start: go on to the
+# restart on cu130.
+ssh -T simple-chat-vast 'pkill -INT -f "[C]omfyUI/main.py"; for i in $(seq 60); do flock -n /root/.simple-chat-comfy.lock true && exit 0; sleep 1; done; pkill -KILL -f "[C]omfyUI/main.py"; for i in $(seq 30); do flock -n /root/.simple-chat-comfy.lock true && exit 0; sleep 1; done; exit 1'
+ssh -T simple-chat-vast 'SIMPLE_CHAT_IMAGE_VIGGLE=true SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 SIMPLE_CHAT_IMAGE_TRITON=1 setsid -f nohup flock -n /root/.simple-chat-comfy.lock bash /workspace/simple-chat/gpu/image-serve.sh </dev/null >/dev/null 2>&1'
+timeout 300 bash -c 'until curl -sf -m 5 -o /dev/null http://127.0.0.1:8188/system_stats; do sleep 2; done'
+npm run image:pilot -- turbo --until $(( end - 300 ))    # done true with its page, or refused, or stopped with a code: go on
+# The server again, on cu130 with Triton and without Viggle's node, the same way. A timeout is a server that did not
+# start, and the termination.
 ssh -T simple-chat-vast 'pkill -INT -f "[C]omfyUI/main.py"; for i in $(seq 60); do flock -n /root/.simple-chat-comfy.lock true && exit 0; sleep 1; done; pkill -KILL -f "[C]omfyUI/main.py"; for i in $(seq 30); do flock -n /root/.simple-chat-comfy.lock true && exit 0; sleep 1; done; exit 1'
 ssh -T simple-chat-vast 'SIMPLE_CHAT_IMAGE_TORCH=cu130 SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 SIMPLE_CHAT_IMAGE_TRITON=1 setsid -f nohup flock -n /root/.simple-chat-comfy.lock bash /workspace/simple-chat/gpu/image-serve.sh </dev/null >/dev/null 2>&1'
 timeout 300 bash -c 'until curl -sf -m 5 -o /dev/null http://127.0.0.1:8188/system_stats; do sleep 2; done'
@@ -1333,7 +1368,8 @@ npm run image:pilot -- report --dir illustrations/pilot-cuda
 ```
 
 `--from`, `--dir`, `--wait`, `--timeout` and `--comfy` keep their defaults, as in the pilot: `--dir` is
-`illustrations/pilot-cuda` for these four commands.
+`illustrations/pilot-cuda` for these five commands. `turbo.html` opens from that directory, since its paths are
+relative to it.
 
 **Not known before the card.** The dry run's line for the kitchen's CUDA backend on cu130 is modelled on the pinned
 code (`kitchenLines` in [image-pilot.ts](../local/image-pilot.ts)). No card has shown it yet, nor whether the kitchen's
@@ -1343,6 +1379,14 @@ The install runs beside `reference` and `compile`, and its pip and its SHA256 ch
 compiles need too. The runbook prints when it began and ended, and the reference's warm cells can be read against the
 pilot's Triton warm pass, which no install overlapped. Started before the head test instead, it would overlap none of
 this measurement.
+
+Nor has a card run Viggle's node at the pinned revision. Its graphs match its pinned file: the inputs' names and the
+default six nodes. Only the card says whether its forward hooks fire on the kitchen's int8 layers under Triton,
+where its own comment says a fused MLP kernel bypasses them and it adds that branch to the MLP's output instead, and
+whether `QwenImage21Cache` works on the model it wraps as on the plain one. A node that fails to import leaves
+`/object_info` without it and `turbo` refused; a graph the server rejects fails the first job with its code and ends
+the pass. The LoRA's file is fetched from the repository's root, where its readme puts it; the bootstrap's SHA256
+check is what says it is the pinned one.
 
 <a id='t-probe'></a>
 

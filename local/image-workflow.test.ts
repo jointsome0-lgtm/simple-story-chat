@@ -148,10 +148,11 @@ test('a dry run fetches the files its opt-in asks for and nothing else, and thro
       { fetched: [...qwenFiles, 'IMAGE_MODEL_FILE', 'IMAGE_TURBO_FILE'] }],
     // A value that is not true, false or only is refused rather than read as false.
     ['the opt-in yes', ['--dry-run'], { ...environment, SIMPLE_CHAT_IMAGE_QWEN: 'yes' }, { status: 1 }],
-    // `only`, the identity measurement's box: Qwen's three files, 16 GiB, and nothing of Krea's, so no token either.
+    // `only`, the identity measurement's box: Qwen's three files, 16 GiB, and nothing of Krea's, so no token either,
+    // nor Viggle's LoRA, which the backend measurement asks for on the same box.
     ['the opt-in only', ['--dry-run'], { SIMPLE_CHAT_GPU_DIR: directory, SIMPLE_CHAT_CIVITAI_TOKEN: '', SIMPLE_CHAT_HF_TOKEN: '',
       SIMPLE_CHAT_IMAGE_QWEN: 'only' }, { says: /^Qwen only, 16 GiB to fetch:/, fetched: qwenFiles,
-      skipped: ['IMAGE_MODEL_FILE', 'IMAGE_ENCODER_FILE', 'IMAGE_VAE_FILE', 'IMAGE_TURBO_FILE'] }],
+      skipped: ['IMAGE_MODEL_FILE', 'IMAGE_ENCODER_FILE', 'IMAGE_VAE_FILE', 'IMAGE_TURBO_FILE', 'IMAGE_VIGGLE_LORA_FILE'] }],
     // There is no Krea graph to print on that box.
     ['the Krea graph asked of a Qwen-only box', ['--print-workflow'], { SIMPLE_CHAT_IMAGE_QWEN: 'only' }, { status: 1 }],
     // `printf 'civitai=%s' "$token"` pipes a secret without leaving a newline in a history file; dropping that last

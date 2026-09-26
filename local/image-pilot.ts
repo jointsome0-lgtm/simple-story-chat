@@ -19,6 +19,9 @@
 // round two's path, into a directory of its own, illustrations/pilot-cuda, on one card with Triton on:
 //   reference     on the default torch, cu128: what the others are compared with
 //   compile       on the same server, with ComfyUI's TorchCompileModel before the sampler; a failed cell ends it
+//   turbo         once the server is started again with Viggle's two nodes (SIMPLE_CHAT_IMAGE_VIGGLE=true), which no
+//                 other command draws on: the cells sampled through Viggle's LoRA in six steps, their times against the
+//                 reference's and their pictures beside its on a page (turbo.html), for the owner to judge by eye
 //   cuda          once the server is started again on the cu130 torch, whose log must show comfy-kitchen's CUDA backend on
 //   cuda-compile  on that server, with the compile node
 //   report    what the passes measured, in numbers
@@ -47,6 +50,7 @@ import { planAll } from './action-prompts.ts';
 import type { StoryPlan } from './action-prompts.ts';
 import { ACTION_GRAPH, DRAW_CODES, FRAME_CANVAS, FRONT_GRAPH, SCALED, VIEW_CANVAS, drawPilot, drawStage, frameKey, planCells } from './action-draw.ts';
 import type { ActionCell, CellRecord, DrawIndex } from './action-draw.ts';
+import { escapeHtml } from './action-judge.ts';
 
 const ROOT = resolve(import.meta.dirname, '..');
 export const SOURCE_DIR = join(ROOT, 'illustrations', 'action-1');
@@ -67,21 +71,24 @@ const print = (value: object) => console.log(JSON.stringify(value));
 // ---- The passes ----
 
 export type PassName = 'determinism-x1' | 'determinism-y' | 'determinism-x2' | 'baseline' | 'round-two' | 'baseline-again'
-  | 'triton-cold' | 'triton-warm' | 'reference-cold' | 'reference-warm' | 'compile-cold' | 'compile-warm' | 'cuda-cold' | 'cuda-warm'
-  | 'cuda-compile-cold' | 'cuda-compile-warm';
-export type BackendCommand = 'reference' | 'compile' | 'cuda' | 'cuda-compile';
+  | 'triton-cold' | 'triton-warm' | 'reference-cold' | 'reference-warm' | 'compile-cold' | 'compile-warm' | 'turbo-cold' | 'turbo-warm'
+  | 'cuda-cold' | 'cuda-warm' | 'cuda-compile-cold' | 'cuda-compile-warm';
+export type BackendCommand = 'reference' | 'compile' | 'turbo' | 'cuda' | 'cuda-compile';
 export type Command = 'draw' | 'triton' | BackendCommand;
 // `roundTwo`: drawn on round two's path rather than round one's (local/action-draw.ts `drawPilot`). `cells`: what a
 // pass draws, by the cells' labels; `earlier`: the pass whose pictures its own are compared with, and `against` the
 // backend measurement's reference, whose pictures they are compared with too. `compile`: drawn with the compile node
-// (`withCompile`), and `needsMs` the time before --until without which the pass does not begin.
-type PassPlan = { name: PassName; roundTwo: boolean; cells: string[]; earlier?: PassName; against?: PassName; compile?: true; needsMs?: number };
+// (`withCompile`), and `needsMs` the time before --until without which the pass does not begin. `turbo`: sampled
+// through Viggle's LoRA (`withTurbo`), whose pictures are compared with none.
+type PassPlan = { name: PassName; roundTwo: boolean; cells: string[]; earlier?: PassName; against?: PassName; compile?: true; turbo?: true;
+  needsMs?: number };
 const TIMED = ['front', 'view', 'A', 'V', 'T'];
 // A compile pass's job may take ten minutes, the compiles included, and no longer (the owner, 2026-09-26): the cold pass
 // begins only with ten minutes left before --until, and the warm one with two. A failed cell ends a compile pass.
 const COMPILE_WAIT_MS = 10 * 60000;
 const REFERENCE = { against: 'reference-warm' } as const;
 const COMPILED = { compile: true } as const;
+const TURBO = { turbo: true } as const;
 export const PASSES: Record<Command, PassPlan[]> = {
   draw: [{ name: 'determinism-x1', roundTwo: true, cells: ['C'] }, { name: 'determinism-y', roundTwo: true, cells: ['A'] },
     { name: 'determinism-x2', roundTwo: true, cells: ['C'] }, { name: 'baseline', roundTwo: false, cells: TIMED },
@@ -90,15 +97,18 @@ export const PASSES: Record<Command, PassPlan[]> = {
   reference: [{ name: 'reference-cold', roundTwo: true, cells: TIMED }, { name: 'reference-warm', roundTwo: true, cells: TIMED, earlier: 'reference-cold' }],
   compile: [{ name: 'compile-cold', roundTwo: true, cells: TIMED, ...REFERENCE, ...COMPILED, needsMs: COMPILE_WAIT_MS },
     { name: 'compile-warm', roundTwo: true, cells: TIMED, earlier: 'compile-cold', ...REFERENCE, ...COMPILED, needsMs: 2 * 60000 }],
+  turbo: [{ name: 'turbo-cold', roundTwo: true, cells: TIMED, ...TURBO }, { name: 'turbo-warm', roundTwo: true, cells: TIMED, ...TURBO }],
   cuda: [{ name: 'cuda-cold', roundTwo: true, cells: TIMED, ...REFERENCE }, { name: 'cuda-warm', roundTwo: true, cells: TIMED, earlier: 'cuda-cold', ...REFERENCE }],
   'cuda-compile': [{ name: 'cuda-compile-cold', roundTwo: true, cells: TIMED, ...REFERENCE, ...COMPILED, needsMs: COMPILE_WAIT_MS },
     { name: 'cuda-compile-warm', roundTwo: true, cells: TIMED, earlier: 'cuda-compile-cold', ...REFERENCE, ...COMPILED, needsMs: 2 * 60000 }],
 };
 // The backend measurement's commands: the torch each draws on, as gpu/image-manifest.env pins it, the pass that must
-// have finished before it, and whether the server's log must show comfy-kitchen's CUDA backend on.
+// have finished before it, and whether the server's log must show comfy-kitchen's CUDA backend on. Turbo's server alone
+// has Viggle's nodes (`viggleOn`).
 const BACKEND: Record<BackendCommand, { torch: 'TORCH_VERSION' | 'TORCH_CU130_VERSION'; after?: PassName; cuda: boolean }> = {
   reference: { torch: 'TORCH_VERSION', cuda: false },
   compile: { torch: 'TORCH_VERSION', after: 'reference-warm', cuda: false },
+  turbo: { torch: 'TORCH_VERSION', after: 'reference-warm', cuda: false },
   cuda: { torch: 'TORCH_CU130_VERSION', after: 'reference-warm', cuda: true },
   'cuda-compile': { torch: 'TORCH_CU130_VERSION', after: 'cuda-warm', cuda: true },
 };
@@ -121,8 +131,11 @@ export type PilotCell = { cell: string; key: string; status: CellRecord['status'
   cycleMs?: number; totalMs?: number; viewMs?: number; uploadMs?: number; outageMs?: number; phases?: Phases; loaderCacheMiss?: boolean;
   samplerCached?: boolean; partialModelLoadEvents?: number; file?: string; sha256?: string; vramMiB?: number; vramUsedMiB?: number; ramMiB?: number;
   vsBaseline?: Diff; vsReference?: Diff; vsRoundOne?: Diff; vsEarlier?: Diff };
-// `pytorch`: the torch the server said it runs; `compile`: the compile node's backend, on a pass drawn with it.
+// `pytorch`: the torch the server said it runs; `compile`: the compile node's backend, on a pass drawn with it; `turbo`:
+// the LoRA, its strength and the schedule's nodes, on a pass sampled through it, and `skippedCells` those it left out,
+// which start from a picture (`fromPicture`).
 export type PassRecord = { name: PassName; attempt: number; dir: string; roundTwo: boolean; triton: boolean; pytorch?: string; compile?: string;
+  turbo?: { lora: string; strength: number; nodes: string }; skippedCells?: string[];
   startedAt: string; completedAt: string; ended: 'done' | 'until' | 'stopped'; error?: string; wallMs: number; cells: PilotCell[] };
 // What the server's log said of comfy-kitchen's backends right after its start (comfy/quant_ops.py:22-43 at the pinned
 // revision): the Triton backend asked for on the command line (`argv`), triton imported or not, each backend available
@@ -344,13 +357,26 @@ export async function pilotCommand(command: Command, options: PilotOptions) {
     throw new Refusal('triton needs the server started again with SIMPLE_CHAT_IMAGE_TRITON=1 (docs/action-experiment.md#pilot)');
   }
   if (command === 'triton' && !lastFinished(record, 'baseline')) throw new Refusal('triton is compared with the baseline: run draw to its end first');
+  const manifest = readManifest(MANIFEST);
   if (backend) {
-    const wanted = readManifest(MANIFEST)[backend.torch];
+    const wanted = manifest[backend.torch];
     if (!wanted || pytorch !== wanted) {
       throw new Refusal(`${command} draws on torch ${wanted}, as gpu/image-manifest.env pins it, and the server runs ${pytorch}: start it as docs/action-experiment.md#backend says`);
     }
     if (triton !== 'enabled') throw new Refusal(`${command} needs the server started with SIMPLE_CHAT_IMAGE_TRITON=1 (docs/action-experiment.md#backend)`);
     if (backend.after && !lastFinished(record, backend.after)) throw new Refusal(`${command} comes after ${backend.after}: draw that to its end first`);
+    // Turbo's server has Viggle's two nodes and its LoRA among the loader's files, and every other command's has neither
+    // node: no server draws the LoRA's graphs and plain ones both (the owner, after ComfyUI's PRs 16493 and 15734).
+    const viggle = await viggleOn(comfy, manifest.IMAGE_VIGGLE_LORA_FILE ?? '').catch(() => {
+      throw new Refusal('The server did not answer /object_info, which says whether it has Viggle\'s nodes; nothing is drawn');
+    });
+    if (command === 'turbo' && !(viggle.nodes === VIGGLE_NODES.length && viggle.lora)) {
+      throw new Refusal(`turbo needs the server started with SIMPLE_CHAT_IMAGE_VIGGLE=true, with Viggle's ${VIGGLE_NODES.length} nodes and its LoRA; it has `
+        + `${viggle.nodes} of the nodes, and the LoRA ${viggle.lora ? 'listed' : 'not listed'} (docs/action-experiment.md#backend)`);
+    }
+    if (command !== 'turbo' && viggle.nodes) {
+      throw new Refusal(`${command} draws on a server without Viggle's nodes, and this one has them: start it again without SIMPLE_CHAT_IMAGE_VIGGLE (docs/action-experiment.md#backend)`);
+    }
   }
   record.pins = plain;
   record.differsFromRoundOne = Object.keys(plain).filter(key => key in source.pins && source.pins[key] !== plain[key]);
@@ -376,7 +402,7 @@ export async function pilotCommand(command: Command, options: PilotOptions) {
   }
   const samplers = (graph: Graph) => Object.keys(graph).filter(id => /Sampler/.test(graph[id].class_type));
   const context: PassContext = { dir, source, card, pins, comfy: options.comfy, until: options.until, options, log, record,
-    samplers: { front: samplers(graphOf(FRONT_GRAPH)), frame: samplers(graphOf(ACTION_GRAPH)) } };
+    samplers: { front: samplers(graphOf(FRONT_GRAPH)), frame: samplers(graphOf(ACTION_GRAPH)) }, lora: manifest.IMAGE_VIGGLE_LORA_FILE ?? '' };
   let stopped: PassName | undefined, skipped: PassName | undefined;
   for (const plan of PASSES[command]) {
     if (lastFinished(record, plan.name)) continue;
@@ -403,6 +429,7 @@ export async function pilotCommand(command: Command, options: PilotOptions) {
     if (determinism) record.determinism = determinism;
     save();
   }
+  if (command === 'turbo') writeTurboPage(dir, source, record);
   const seen = record.kitchen?.[command];
   const failed = stopped && record.passes.findLast(pass => pass.name === stopped)!.cells.filter(cell => cell.status === 'failed')
     .map(cell => ({ cell: cell.cell, code: cell.code ?? null }));
@@ -410,18 +437,22 @@ export async function pilotCommand(command: Command, options: PilotOptions) {
     ...(skipped ? { skipped, reason: 'too little time before --until' } : {}),
     passes: Object.fromEntries(PASSES[command].map(plan => [plan.name, lastFinished(record, plan.name) ? 'finished' : 'not finished'])),
     ...(record.determinism ? { determinism: record.determinism.verdict } : {}),
-    ...(backend ? { pytorch } : {}),
+    ...(backend ? { pytorch } : {}), ...(command === 'turbo' ? { page: join(dir, TURBO_PAGE) } : {}),
     kitchen: seen ? { seen: seen.seen, argv: seen.argv, tritonImported: seen.tritonImported, triton: seen.backends.triton ?? null,
       ...(backend ? { cuda: seen.backends.cuda ?? null, cudaNeedsCu130: seen.cudaNeedsCu130 } : {}) } : null,
     differsFromRoundOne: record.differsFromRoundOne };
 }
 
+// `lora`: the file of Viggle's LoRA, as gpu/image-manifest.env names it.
 type PassContext = { dir: string; source: Source; card: ReturnType<typeof cardOf>; pins: Record<string, string | number>; comfy: string; until: number;
-  options: PilotOptions; log: (event: object) => void; record: PilotRecord; samplers: { front: string[]; frame: string[] } };
+  options: PilotOptions; log: (event: object) => void; record: PilotRecord; samplers: { front: string[]; frame: string[] }; lora: string };
 async function drawPass(context: PassContext, plan: PassPlan, attempt: number): Promise<PassRecord> {
   const { dir, source, options, record } = context;
   const root = join(dir, 'passes', `${plan.name}-${attempt}`);
-  const cells = plan.cells.map(label => source.cells.find(cell => labelOf(cell) === label)!);
+  const planned = plan.cells.map(label => source.cells.find(cell => labelOf(cell) === label)!);
+  // Turbo leaves out a cell that starts from a picture, and its record says which.
+  const skipped = plan.turbo ? planned.filter(cell => fromPicture(graphOf(cell.kind === 'front' ? FRONT_GRAPH : ACTION_GRAPH))) : [];
+  const cells = planned.filter(cell => !skipped.includes(cell));
   // Round one's references, each file as the pass's directory sees it.
   const seeded = Object.fromEntries(source.references.map(key => [key, { ...source.roundOne[key],
     file: relative(root, resolve(source.root, source.roundOne[key].file!)) }]));
@@ -429,9 +460,11 @@ async function drawPass(context: PassContext, plan: PassPlan, attempt: number): 
   const startedAt = new Date().toISOString(), began = performance.now();
   let mark = began, last = -1;
   const compiling = plan.compile ? { graph: withCompile, stopAtFailure: true, waitMs: Math.min(options.waitMs ?? COMPILE_WAIT_MS, COMPILE_WAIT_MS) } : {};
+  const lora = context.lora;
+  const turbo = plan.turbo ? { graph: (filled: Graph) => withTurbo(filled, lora), recipe: TURBO_RECIPE, stopAtFailure: true } : {};
   const drawn = await drawPilot({ root, comfy: context.comfy, until: context.until, checkpoint: context.card.model, pins: context.pins,
     plans: [source.plan], cells, seeded, roundTwo: plan.roundTwo, timeoutMs: options.timeoutMs, waitMs: options.waitMs, pollMs: options.pollMs,
-    outage: options.outage, log: context.log, ...compiling, observe: (cell, _record, cached) => {
+    outage: options.outage, log: context.log, ...compiling, ...turbo, observe: (cell, _record, cached) => {
       // A cell's cycle is only its own when the cell before it was drawn too. Cells are heard in their order: on round
       // two's path a cell's record waits for the one before it.
       const now = performance.now(), at = cells.findIndex(one => one.key === cell.key);
@@ -464,11 +497,13 @@ async function drawPass(context: PassContext, plan: PassPlan, attempt: number): 
       file: relative(dir, join(root, one.file)), sha256: one.sha256,
       ...(device ? { vramMiB: device.occupiedMiBMax ?? device.usedMiBMax, vramUsedMiB: device.usedMiBMax } : {}), ...(one.ramMiB ? { ramMiB: one.ramMiB.max } : {}),
       ...(vsBaseline ? { vsBaseline } : {}), ...(vsReference ? { vsReference } : {}),
-      vsRoundOne: pictureDiff(bytes, readFileSync(resolve(source.root, source.roundOne[natural(cell)].file!))), ...(vsEarlier ? { vsEarlier } : {}) };
+      ...(plan.turbo ? {} : { vsRoundOne: pictureDiff(bytes, readFileSync(resolve(source.root, source.roundOne[natural(cell)].file!))) }),
+      ...(vsEarlier ? { vsEarlier } : {}) };
   });
   return { name: plan.name, attempt, dir: relative(dir, root), roundTwo: plan.roundTwo, triton: context.pins.triton === 'enabled',
-    ...(context.pins.pytorch === undefined ? {} : { pytorch: String(context.pins.pytorch) }), ...(plan.compile ? { compile: COMPILE.backend } : {}), startedAt,
-    completedAt: new Date().toISOString(), ended: drawn.ended, ...(drawn.index.error ? { error: drawn.index.error } : {}), wallMs, cells: out };
+    ...(context.pins.pytorch === undefined ? {} : { pytorch: String(context.pins.pytorch) }), ...(plan.compile ? { compile: COMPILE.backend } : {}),
+    ...(plan.turbo ? { turbo: { lora, strength: VIGGLE.strength, nodes: VIGGLE.nodes }, ...(skipped.length ? { skippedCells: skipped.map(labelOf) } : {}) } : {}),
+    startedAt, completedAt: new Date().toISOString(), ended: drawn.ended, ...(drawn.index.error ? { error: drawn.index.error } : {}), wallMs, cells: out };
 }
 
 // ComfyUI's core TorchCompileModel (comfy_extras/nodes_torch_compile.py at the pinned revision), on the model's way
@@ -485,6 +520,61 @@ export function withCompile(graph: Graph): Graph {
   }
   return { ...graph, [COMPILE.node]: { class_type: 'TorchCompileModel', inputs: { model, backend: COMPILE.backend } },
     [sampler[0]]: { ...sampler[1], inputs: { ...sampler[1].inputs, model: [COMPILE.node, 0] } } };
+}
+
+// Viggle's few-step LoRA (docs/action-experiment.md#backend), as its repository's own ComfyUI workflows use it, from
+// its two nodes (comfyui/viggle_turbo.py, pinned in gpu/image-manifest.env): ViggleTurboLora at strength 1.0, which its
+// readme says to keep, on the loader's model, so that in a frame's graph QwenImage21Cache takes the LoRA's; the
+// KSampler replaced, under its own id, by a SamplerCustomAdvanced with euler, no guidance (BasicGuider on the positive
+// conditioning; the plain graphs' cfg 1.0 skips the negative too, comfy/samplers.py:610), RandomNoise on the cell's seed,
+// and ViggleTurboSigmas' six-step schedule, its default, shifted for the size of the cell's latent. The graph is
+// changed once it is filled (local/action-draw.ts `drawPilot`), and the new nodes take ids of their own.
+export const VIGGLE = { strength: 1, nodes: '1.0, 0.9375, 0.875, 0.75, 0.5, 0.25', sampler: 'euler',
+  ids: { lora: '41', noise: '42', guider: '43', select: '44', sigmas: '45' } } as const;
+const VIGGLE_NODES = ['ViggleTurboLora', 'ViggleTurboSigmas'];
+// What a turbo cell's record says it was sampled with: the schedule's six steps, euler, and no guidance.
+const TURBO_RECIPE = { steps: VIGGLE.nodes.split(',').length, sampler: VIGGLE.sampler, scheduler: 'ViggleTurboSigmas', cfg: 1 };
+export function withTurbo(graph: Graph, lora: string): Graph {
+  const sampler = Object.entries(graph).find(([, node]) => node.class_type === 'KSampler');
+  const loader = Object.keys(graph).find(id => graph[id].class_type === 'UNETLoader');
+  const ids = VIGGLE.ids;
+  if (!sampler || !loader || !lora || fromPicture(graph) || Object.values(ids).some(id => graph[id])) {
+    throw new Refusal('The graph has no KSampler sampling noise, no UNETLoader or a node where Viggle\'s go, or no LoRA is named');
+  }
+  const [id, { inputs }] = sampler;
+  const out: Graph = structuredClone(graph);
+  for (const node of Object.values(out)) {
+    if (Array.isArray(node.inputs.model) && String(node.inputs.model[0]) === loader) node.inputs.model = [ids.lora, 0];
+  }
+  out[ids.lora] = { class_type: 'ViggleTurboLora', inputs: { model: [loader, 0], lora_name: lora, strength: VIGGLE.strength } };
+  out[ids.noise] = { class_type: 'RandomNoise', inputs: { noise_seed: inputs.seed } };
+  out[ids.guider] = { class_type: 'BasicGuider', inputs: { model: out[id].inputs.model, conditioning: inputs.positive } };
+  out[ids.select] = { class_type: 'KSamplerSelect', inputs: { sampler_name: VIGGLE.sampler } };
+  out[ids.sigmas] = { class_type: 'ViggleTurboSigmas', inputs: { latent: inputs.latent_image, nodes: VIGGLE.nodes } };
+  out[id] = { class_type: 'SamplerCustomAdvanced', inputs: { noise: [ids.noise, 0], guider: [ids.guider, 0], sampler: [ids.select, 0],
+    sigmas: [ids.sigmas, 0], latent_image: inputs.latent_image } };
+  return out;
+}
+// A graph that starts from a picture rather than from noise: its KSampler at a denoise below 1, or its latent not an
+// EmptyLatentImage. Turbo leaves such a cell out and says so, rather than cut the six-step schedule the way the
+// KSampler's denoise cuts its own: nobody distilled the LoRA for a cut one. Neither pinned graph does, so no cell of the
+// pilot is left out.
+export function fromPicture(graph: Graph) {
+  const sampler = Object.values(graph).find(node => node.class_type === 'KSampler');
+  const link = sampler?.inputs.latent_image, denoise = sampler?.inputs.denoise ?? 1;
+  return !sampler || !Array.isArray(link) || graph[String(link[0])]?.class_type !== 'EmptyLatentImage' || typeof denoise !== 'number' || denoise < 1;
+}
+// Viggle's nodes on the server, by what /object_info/<class> says of each (server.py:816-822 at the pinned revision:
+// `{}` for a class the server does not have), and whether ViggleTurboLora lists `lora` among the files in models/loras.
+async function viggleOn(comfy: Comfy, lora: string) {
+  const signal = AbortSignal.any([AbortSignal.timeout(comfy.timeoutMs), ...(comfy.end ? [comfy.end] : [])]);
+  const infos = await Promise.all(VIGGLE_NODES.map(async name => {
+    const response = await fetch(`${comfy.baseUrl}/object_info/${name}`, { signal });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return ((await response.json()) as Record<string, { input?: { required?: { lora_name?: unknown } } } | undefined>)[name];
+  }));
+  const files = infos[0]?.input?.required?.lora_name;
+  return { nodes: infos.filter(Boolean).length, lora: Array.isArray(files) && Array.isArray(files[0]) && files[0].includes(lora) };
 }
 
 // C against C, with A between them: the same picture, or not; and neither, when the server answered either C's sampler
@@ -536,9 +626,12 @@ export function pilotReport(dir: string) {
       sampleMs: Object.fromEntries(one.cells.map(cell => [cell.cell, whole(cell.phases?.sampleMs)])), meanIdleMs: whole(mean(one.cells.map(idle))),
       samplerCached: one.cells.filter(cell => cell.samplerCached === true).length,
       samplerUnheard: one.cells.filter(cell => cell.samplerCached === undefined).length, vramMiB: peak(one.cells.map(cell => cell.vramMiB)),
-      ramMiB: peak(one.cells.map(cell => cell.ramMiB)), changedVsBaseline: one.cells.filter(cell => cell.vsBaseline && !cell.vsBaseline.pixelsSame).length,
-      ...(backendDir ? { changedVsReference: one.cells.filter(cell => cell.vsReference && !cell.vsReference.pixelsSame).length } : {}),
-      sameAsRoundOne: one.cells.filter(cell => cell.vsRoundOne?.pixelsSame).length } : null];
+      ramMiB: peak(one.cells.map(cell => cell.ramMiB)),
+      // Turbo's pictures are another schedule's, compared with none (`writeTurboPage` puts them beside the reference's).
+      ...(plan.turbo ? {} : { changedVsBaseline: one.cells.filter(cell => cell.vsBaseline && !cell.vsBaseline.pixelsSame).length,
+        ...(plan.against ? { changedVsReference: one.cells.filter(cell => cell.vsReference && !cell.vsReference.pixelsSame).length } : {}),
+        sameAsRoundOne: one.cells.filter(cell => cell.vsRoundOne?.pixelsSame).length }),
+      ...(one.skippedCells ? { skippedCells: one.skippedCells } : {}) } : null];
   }));
   const baseline = pass('baseline'), again = pass('baseline-again'), second = pass('round-two');
   const labels = baseline?.cells.map(cell => cell.cell) ?? [];
@@ -609,16 +702,83 @@ export function pilotReport(dir: string) {
         reference: peak(reference.cells.map(cell => cell.vramMiB)) } };
   };
   const cudaWarm = pass('cuda-warm'), cudaCompileWarm = pass('cuda-compile-warm');
+  // Turbo: its warm sampler and cell times against the reference's warm pass, by cell and in all, what its cold pass took
+  // more, its peaks, the LoRA, the cells it left out, and the page its pictures are on, beside the reference's, for the
+  // owner's eye; no pixels, which are another schedule's.
+  const turboCold = pass('turbo-cold'), turboWarm = pass('turbo-warm');
+  const turbo = turboWarm && reference ? { finished: true as const, viggle: turboWarm.turbo ?? null, skippedCells: turboWarm.skippedCells ?? [],
+    vsReference: times(turboWarm, reference), coldExtraMs: coldExtra(turboCold, turboWarm),
+    vramMiB: { cold: peak(turboCold?.cells.map(cell => cell.vramMiB) ?? []), warm: peak(turboWarm.cells.map(cell => cell.vramMiB)),
+      reference: peak(reference.cells.map(cell => cell.vramMiB)) },
+    page: existsSync(join(resolve(dir), TURBO_PAGE)) ? TURBO_PAGE : null }
+    : { finished: false as const, cold: turboCold ? 'finished' : unfinished('turbo-cold'), warm: unfinished('turbo-warm') };
   const backend = backendDir ? {
     torch: { reference: reference?.pytorch ?? null, cuda: cudaWarm?.pytorch ?? null },
     kitchen: Object.fromEntries((Object.keys(BACKEND) as BackendCommand[]).map(command => [command, record.kitchen?.[command] ?? null])), dispatchVisible: false,
     reference: reference ? { finished: true as const, coldExtraMs: coldExtra(pass('reference-cold'), reference),
       warmSameAsCold: reference.cells.filter(cell => cell.vsEarlier?.pixelsSame).length, vramMiB: peak(reference.cells.map(cell => cell.vramMiB)) }
       : { finished: false as const, cold: pass('reference-cold') ? 'finished' : unfinished('reference-cold'), warm: unfinished('reference-warm') },
-    compile: pair('compile'), cuda: pair('cuda'),
+    compile: pair('compile'), turbo, cuda: pair('cuda'),
     cudaCompile: { ...pair('cuda-compile'), ...(cudaCompileWarm && cudaWarm ? { vsCuda: times(cudaCompileWarm, cudaWarm) } : {}) },
   } : null;
   return { event: 'pilot_report', differsFromRoundOne: record.differsFromRoundOne ?? [], passes, determinism: record.determinism ?? null, roundTwo, triton, backend };
+}
+
+// ---- The turbo page ----
+
+// Each cell's picture from the reference's warm pass beside turbo's, over the pictures the cell took into its slots,
+// with the seconds of both, for the owner to judge by eye (docs/action-experiment.md#backend): faces roughly like the
+// portraits', the figure and the silhouette kept everywhere; the very faces are not asked for. Turbo's warm pass is
+// shown, else its cold one, else what its last attempt drew. The paths are relative, so that the page opens from the
+// directory, and it carries labels, ids and seconds, never a prompt or a word of a story.
+export const TURBO_PAGE = 'turbo.html';
+const CELL_WORDS: Record<string, string> = { front: 'фронтальный портрет, по тексту', view: 'вид: портрет, повёрнутый по слоту',
+  A: 'кадр без портретов', V: 'кадр с видами среди слотов', T: 'кадр по картинке L и портретам' };
+function writeTurboPage(dir: string, source: Source, record: PilotRecord) {
+  const reference = lastFinished(record, 'reference-warm');
+  const shown = lastFinished(record, 'turbo-warm') ?? lastFinished(record, 'turbo-cold') ?? record.passes.findLast(one => one.name.startsWith('turbo-'));
+  const seconds = (ms: number | undefined) => (ms === undefined ? '—' : `${(ms / 1000).toFixed(1)} с`);
+  const total = (one: PassRecord | undefined) => {
+    const list = one?.cells.map(cell => cell.phases?.sampleMs) ?? [];
+    return list.length && list.every(value => value !== undefined) ? list.reduce((sum, value) => sum + value!, 0) : undefined;
+  };
+  const stepsOf = (file: string) => String(Object.values(graphOf(file)).find(node => node.class_type === 'KSampler')?.inputs.steps ?? '—');
+  const figure = (path: string | undefined, caption: string, missing: string, shape: 'half' | 'slot') => {
+    const src = path && existsSync(path) ? escapeHtml(relative(dir, path).split(sep).join('/')) : undefined;
+    return `<figure class="${shape}">${src ? `<a href="${src}"><img src="${src}" loading="lazy" alt=""></a>` : `<div class="box">${escapeHtml(missing)}</div>`}`
+      + `<figcaption>${escapeHtml(caption)}</figcaption></figure>`;
+  };
+  const sections = TIMED.map(label => {
+    const cell = source.cells.find(one => labelOf(one) === label)!;
+    const plain = reference?.cells.find(one => one.cell === label), fast = shown?.cells.find(one => one.cell === label);
+    const missing = shown?.skippedCells?.includes(label) ? 'турбо не рисовал: клетка начинается с картинки'
+      : fast?.status === 'failed' ? `турбо не вышел: ${fast.code ?? '—'}` : 'турбо не нарисован';
+    const slots = cell.refs.map((ref, at) => figure(resolve(source.root, source.roundOne[referenceKey(source.plan, cell, ref)].file!),
+      `слот ${at + 1}: ${ref === 'L' ? 'L' : source.plan.views.some(view => view.id === ref) ? 'вид' : 'портрет'}`, 'нет файла', 'slot'));
+    return `<section><h2>${escapeHtml(label)}: ${escapeHtml(CELL_WORDS[label] ?? '')}</h2><div class="row">`
+      + figure(plain?.file ? join(dir, plain.file) : undefined, `эталон, ${stepsOf(cell.kind === 'front' ? FRONT_GRAPH : ACTION_GRAPH)} шагов: сэмплер `
+        + `${seconds(plain?.phases?.sampleMs)}, клетка ${seconds(plain?.totalMs)}`, 'эталон не нарисован', 'half')
+      + figure(fast?.file ? join(dir, fast.file) : undefined, `турбо, ${TURBO_RECIPE.steps} шагов: сэмплер ${seconds(fast?.phases?.sampleMs)}, `
+        + `клетка ${seconds(fast?.totalMs)}`, missing, 'half')
+      + `</div>${slots.length ? `<div class="row">${slots.join('')}</div>` : '<p>Слотов у клетки нет.</p>'}</section>`;
+  });
+  const which = !shown ? 'турбо не рисовался' : `турбо — ${shown.name === 'turbo-warm' ? 'тёплый' : 'холодный'} проход, попытка ${shown.attempt}`
+    + `${finished(shown) ? '' : `, не докончен (${shown.ended}${shown.error ? `, ${shown.error}` : ''})`}`;
+  writeFileSync(join(dir, TURBO_PAGE), `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Турбо: LoRA Viggle против эталона</title>
+<style>body{font-family:sans-serif;margin:8px;line-height:1.4}.row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}figure{margin:0}
+figure.half{width:calc((100% - 8px) / 2)}figure.slot{width:calc((100% - 48px) / 7)}img{width:100%;max-height:85vh;object-fit:contain;display:block}
+.box{display:flex;align-items:center;justify-content:center;text-align:center;aspect-ratio:16/9;background:#eee;font-size:14px}
+figure.slot .box{aspect-ratio:9/16}@media (max-width:640px){figure.half{width:100%}figure.slot{width:calc((100% - 16px) / 3)}}</style>
+<h1>Турбо: LoRA Viggle в ${TURBO_RECIPE.steps} шагов против эталона</h1>
+<p>Пять клеток пилота на одной карте, torch и Triton те же. Слева эталон: Qwen-Image 2.1 так, как рисует раунд два. Справа та же клетка — тот же
+промпт, те же слоты и тот же шум (тот же сид) — через LoRA Viggle (${escapeHtml(shown?.turbo?.lora ?? 'не записана')}, сила ${VIGGLE.strength}) и её
+расписание в ${TURBO_RECIPE.steps} шагов, euler, без CFG, как и эталон при cfg 1. Под парой — картинки первого раунда, которые клетка получила в слоты.
+Смотреть так, как решил владелец: лица примерно похожи на портреты, фигура и силуэт сохранены везде; точных лиц не нужно.</p>
+<p>Показано: эталон — ${reference ? `тёплый проход, попытка ${reference.attempt}` : 'не нарисован'}; ${escapeHtml(which)}. Сэмплер за пять клеток:
+эталон ${seconds(total(reference))}, турбо ${seconds(total(shown))}.</p>
+${sections.join('\n')}
+`, { mode: 0o600 });
 }
 
 // ---- The dry run ----
@@ -656,9 +816,10 @@ function madeUpRoundOne(root: string, word: string) {
 // server whose pictures follow from their graphs, as a deterministic card's would, then `triton` on one started again
 // with the Triton backend, whose pictures differ from the baseline's, then `report`. Then the backend measurement in a
 // directory of its own: `reference` and `compile` on a server of the default torch with Triton, whose twelfth job
-// fails, and `cuda` and `cuda-compile` on one started again on cu130, whose log line of the CUDA backend is modelled
-// (`kitchenLines`), then its `report`. On the way, the refusals the paid pilot relies on, and at the end the search
-// for the scene's made-up word in everything the pilot wrote and printed.
+// fails, `turbo` on one started again with Viggle's two nodes as /object_info lists them, and `cuda` and `cuda-compile`
+// on one started again on cu130, whose log line of the CUDA backend is modelled (`kitchenLines`), then its `report`. On
+// the way, the refusals the paid pilot relies on, and at the end the search for the scene's made-up word in everything
+// the pilot wrote and printed.
 export async function pilotDryRun(out: string) {
   const dry = resolve(out), source = join(dry, 'round-one'), dir = join(dry, 'pilot');
   mkdirSync(source, { recursive: true, mode: 0o700 });
@@ -740,8 +901,8 @@ export async function pilotDryRun(out: string) {
     await refused('the reference in the pilot\'s directory', () => measure('reference', dir));
     const referenced = await measure('reference');
     say(`5 reference: ${JSON.stringify(referenced)}`);
-    expect(referenced.done && referenced.pytorch === manifest.TORCH_VERSION && fake.jobs.length === 10 && fake.jobs.every(job => job.compiled === null),
-      'the reference draws its ten cells without the compile node');
+    expect(referenced.done && referenced.pytorch === manifest.TORCH_VERSION && fake.jobs.length === 10
+      && fake.jobs.every(job => job.sampler === 'KSampler' && !job.model.includes('TorchCompileModel')), 'the reference draws its ten cells without the compile node');
     const late = await measure('compile', cudaDir, Date.now() + 5 * 60000);
     say(`   compile five minutes before --until: ${JSON.stringify(late)}`);
     expect(!late.done && late.skipped === 'compile-cold' && fake.jobs.length === 10, 'compile with less than its ten minutes left is skipped and draws nothing');
@@ -753,11 +914,40 @@ export async function pilotDryRun(out: string) {
     expect(midway?.finished === false && typeof midway.cold === 'object' && midway.cold.failed?.[0]?.cell === 'view' && midway.cold.skipped !== undefined,
       'the report says how compile ended, and that it was once skipped');
     const compiled = await measure('compile');
-    const overs = fake.jobs.slice(10).map(job => job.compiled);
+    const overs = fake.jobs.slice(10).map(job => job.model.join(' < '));
     say(`   compile again: ${JSON.stringify(compiled)}`);
-    expect(compiled.done && overs.length === 12 && overs.every(one => one?.backend === COMPILE.backend)
-      && overs.filter(one => one?.over === 'UNETLoader').length === 3 && overs.filter(one => one?.over === 'QwenImage21Cache').length === 9,
+    expect(compiled.done && overs.length === 12 && overs.filter(one => one === 'TorchCompileModel < UNETLoader').length === 3
+      && overs.filter(one => one === 'TorchCompileModel < QwenImage21Cache < UNETLoader').length === 9,
       'the compile node sits before every sampler, after QwenImage21Cache in a frame\'s graph');
+
+    // Turbo: refused on the reference's server, and drawn on one started again with Viggle's two nodes, on which no other
+    // command draws.
+    await refused('turbo on a server without Viggle\'s nodes', () => measure('turbo'));
+    await fake.close();
+    const viggleInfo = { ViggleTurboLora: { input: { required: { model: ['MODEL'], lora_name: [[manifest.IMAGE_VIGGLE_LORA_FILE], {}], strength: ['FLOAT', {}] } } },
+      ViggleTurboSigmas: { input: { required: { latent: ['LATENT'], nodes: ['STRING', { default: VIGGLE.nodes }] } } } };
+    fake = await startFakeComfy({ ...started, argv, pytorch: manifest.TORCH_VERSION, startupLog: kitchenLines(true),
+      objectInfo: { ViggleTurboSigmas: viggleInfo.ViggleTurboSigmas } });
+    await refused('turbo on a server with one of Viggle\'s nodes', () => measure('turbo'));
+    await fake.close();
+    fake = await startFakeComfy({ ...started, argv, pytorch: manifest.TORCH_VERSION, startupLog: kitchenLines(true), objectInfo: viggleInfo });
+    say('   the server started again with Viggle\'s nodes, SIMPLE_CHAT_IMAGE_VIGGLE=true');
+    await refused('compile on a server with Viggle\'s nodes', () => measure('compile'));
+    const turbo = await measure('turbo');
+    const paths = fake.jobs.map(job => job.model.join(' < '));
+    say(`   turbo: ${JSON.stringify(turbo)}`);
+    expect(turbo.done && fake.jobs.length === 10 && fake.jobs.every(job => job.sampler === 'SamplerCustomAdvanced')
+      && paths.filter(one => one === 'ViggleTurboLora < UNETLoader').length === 2 && paths.filter(one => one === 'QwenImage21Cache < ViggleTurboLora < UNETLoader').length === 8,
+      'turbo samples every cell through the LoRA, which QwenImage21Cache takes in a frame\'s graph');
+    const turboWarm = lastFinished(readJson<PilotRecord>(join(cudaDir, 'pilot.json'))!, 'turbo-warm');
+    const turboIndex = turboWarm && readJson<DrawIndex>(join(cudaDir, turboWarm.dir, 'draw.json'));
+    const turboCells = Object.values(turboIndex?.cells ?? {}).filter(one => one.key.startsWith(PREFIX));
+    expect(turboCells.length === 5 && turboCells.every(one => one.steps === TURBO_RECIPE.steps && one.scheduler === TURBO_RECIPE.scheduler)
+      && turboWarm?.cells.every(cell => !cell.vsReference && !cell.vsRoundOne) === true, 'turbo\'s records say its six steps, and its pictures are compared with none');
+    const page = existsSync(join(cudaDir, TURBO_PAGE)) ? readFileSync(join(cudaDir, TURBO_PAGE), 'utf8') : '';
+    const reference = lastFinished(readJson<PilotRecord>(join(cudaDir, 'pilot.json'))!, 'reference-warm');
+    expect([...turboWarm?.cells ?? [], ...reference?.cells ?? []].every(cell => cell.file && page.includes(cell.file.split(sep).join('/')))
+      && (page.match(/<section>/g) ?? []).length === 5, 'the page puts each cell\'s turbo picture beside the reference\'s');
 
     await fake.close();
     fake = await startFakeComfy({ ...started, argv, pytorch: manifest.TORCH_CU130_VERSION, startupLog: [] });
@@ -778,8 +968,10 @@ export async function pilotDryRun(out: string) {
     expect(block?.torch.reference === manifest.TORCH_VERSION && block.torch.cuda === manifest.TORCH_CU130_VERSION && block.reference.finished
       && block.compile.finished && block.compile.changedVsReference === 5 && block.compile.warmSameAsCold === 5 && typeof block.compile.coldExtraMs?.all === 'number'
       && block.cuda.finished && block.cuda.changedVsReference === 5 && typeof block.cuda.vsReference.cellRatio.all === 'number'
+      && block.turbo.finished && typeof block.turbo.vsReference.sampleRatio.all === 'number' && block.turbo.page === TURBO_PAGE
+      && block.turbo.skippedCells.length === 0 && block.turbo.viggle?.lora === manifest.IMAGE_VIGGLE_LORA_FILE
       && block.cudaCompile.finished && 'vsCuda' in block.cudaCompile && measured.roundTwo === null && measured.triton === null
-      && Object.keys(measured.passes).every(name => /^(reference|compile|cuda|cuda-compile)-(cold|warm)$/.test(name)), 'the report has the backend block');
+      && Object.keys(measured.passes).every(name => /^(reference|compile|turbo|cuda|cuda-compile)-(cold|warm)$/.test(name)), 'the report has the backend block');
     // The word is in round one's plans, which the pilot read; it must be nowhere the pilot wrote or printed.
     const forms = markerForms(word);
     const searched = [dir, cudaDir].map(one => searchTree(one, forms)), inRoundOne = searchTree(source, forms).hits.length;
@@ -813,8 +1005,8 @@ function safeError(error: unknown) {
   return { error: name, ...own, ...safeErrorDetails(error) };
 }
 
-const USAGE = 'Use: image-pilot.ts draw|triton|reference|compile|cuda|cuda-compile --until <epoch seconds, five minutes before the card\'s end> '
-  + '[--dir illustrations/pilot, or illustrations/pilot-cuda for the last four] [--from illustrations/action-1] [--wait 600, ten minutes at most '
+const USAGE = 'Use: image-pilot.ts draw|triton|reference|compile|turbo|cuda|cuda-compile --until <epoch seconds, five minutes before the card\'s end> '
+  + '[--dir illustrations/pilot, or illustrations/pilot-cuda for the last five] [--from illustrations/action-1] [--wait 600, ten minutes at most '
   + 'under compile] [--timeout 60] [--comfy http://127.0.0.1:8188], report [--dir], or dry-run [--dir] (docs/action-experiment.md#pilot, #backend)';
 async function main(args: string[]) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {

@@ -32,6 +32,10 @@ turbo="${SIMPLE_CHAT_IMAGE_TURBO:-true}"
 # pays for every minute of 48.7 GB.
 qwen="${SIMPLE_CHAT_IMAGE_QWEN:-false}"
 [[ "$qwen" = true || "$qwen" = false || "$qwen" = only ]] || { echo 'Use SIMPLE_CHAT_IMAGE_QWEN=true, false or only.' >&2; exit 1; }
+# Viggle's few-step LoRA for Qwen and its node (docs/gpu.md#viggle), a test: off by default, and only beside Qwen.
+viggle="${SIMPLE_CHAT_IMAGE_VIGGLE:-false}"
+[[ "$viggle" = true || "$viggle" = false ]] || { echo 'Use SIMPLE_CHAT_IMAGE_VIGGLE=true or false.' >&2; exit 1; }
+[[ "$viggle" = false || "$qwen" != false ]] || { echo 'Viggle'\''s LoRA is for Qwen-Image 2.1: set SIMPLE_CHAT_IMAGE_QWEN too.' >&2; exit 1; }
 # Which torch this run installs (docs/gpu.md#cu130): cu128, the default, into ComfyUI/.venv, or cu130 into
 # ComfyUI/.venv-cu130, for comfy-kitchen's CUDA backend. A cu130 run leaves the default environment as it is, so it can
 # run in the background beside a server started from that one, and image-serve.sh switches between them with a restart.
@@ -127,6 +131,14 @@ if [[ "$qwen" != false ]]; then
   add_record "$(hf_url "$IMAGE_QWEN_REPO" "$IMAGE_QWEN_REVISION" "$IMAGE_QWEN_VAE_PATH")" \
     "$models_dir/vae/$IMAGE_QWEN_VAE_FILE" "$IMAGE_QWEN_VAE_SHA256" "$IMAGE_QWEN_VAE_BYTES" none
 fi
+# Viggle's LoRA, and its node, which is code the server runs: each fetched at the pinned revision and verified as the
+# weights are, before it is given its name. image-serve.sh loads the node only when asked to.
+if [[ "$viggle" = true ]]; then
+  add_record "$(hf_url "$IMAGE_VIGGLE_REPO" "$IMAGE_VIGGLE_REVISION" "$IMAGE_VIGGLE_LORA_PATH")" \
+    "$models_dir/loras/$IMAGE_VIGGLE_LORA_FILE" "$IMAGE_VIGGLE_LORA_SHA256" "$IMAGE_VIGGLE_LORA_BYTES" none
+  add_record "$(hf_url "$IMAGE_VIGGLE_REPO" "$IMAGE_VIGGLE_REVISION" "$IMAGE_VIGGLE_NODE_PATH")" \
+    "$comfy_dir/custom_nodes/$IMAGE_VIGGLE_NODE_FILE" "$IMAGE_VIGGLE_NODE_SHA256" "$IMAGE_VIGGLE_NODE_BYTES" none
+fi
 
 # The pinned graph names the `comfy` files; this fills in what this run installs, so `official` is posted with the
 # file names it downloaded. Whether ComfyUI's loaders read the official diffusers layout at all is still unverified.
@@ -196,12 +208,14 @@ if [[ "$dry_run" = true ]]; then
   done
   [[ "$qwen" = only ]] || echo "The graph would load $IMAGE_MODEL_FILE, $encoder_file and $vae_file; --print-workflow prints it."
   [[ "$qwen" = false ]] || echo "Qwen is on: $IMAGE_QWEN_WORKFLOW and $IMAGE_QWEN_EDIT_WORKFLOW would load $IMAGE_QWEN_MODEL_FILE, $IMAGE_QWEN_ENCODER_FILE and $IMAGE_QWEN_VAE_FILE."
+  [[ "$viggle" = false ]] || echo "Viggle is on: its LoRA into models/loras and $IMAGE_VIGGLE_NODE_FILE into custom_nodes, which image-serve.sh loads with SIMPLE_CHAT_IMAGE_VIGGLE=true."
   [[ "$torch_line" = cu128 ]] || echo "Torch is $torch_line: ${torch_pins[*]} into $venv, beside the default environment."
   exit 0
 fi
 
 command -v nvidia-smi >/dev/null && nvidia-smi --query-gpu=index,name,memory.total,driver_version --format=csv,noheader
 mkdir -p "$models_dir/diffusion_models" "$models_dir/text_encoders" "$models_dir/vae"
+[[ "$viggle" = false ]] || mkdir -p "$models_dir/loras" "$comfy_dir/custom_nodes"
 # The weights plus the virtual environment: torch with its CUDA libraries is about 12 GB on disk.
 python3 - "$gpu_dir" "$total_bytes" <<'PY'
 import pathlib,shutil,sys
@@ -363,7 +377,8 @@ if sys.argv[1] not in archs:
 PY
 )"
 echo "$torch_said"
-# Nothing here installs a custom node, and image-serve.sh disables the folder anyway; say so if one appeared.
+# Nothing here installs a custom node but Viggle's one file when asked, and image-serve.sh disables the folder anyway,
+# that file aside when asked to load it; say so if a node's directory appeared.
 if compgen -G "$comfy_dir/custom_nodes/*/" >/dev/null; then
   echo 'Third-party custom nodes are present in ComfyUI/custom_nodes; they stay disabled at run time.' >&2
 fi
@@ -415,3 +430,4 @@ else
   echo "Prepared; post $gpu_dir/$IMAGE_WORKFLOW. Start with: ${torch_env}bash $task_dir/image-serve.sh"
   [[ "$qwen" = false ]] || echo "Qwen is on: $gpu_dir/$IMAGE_QWEN_WORKFLOW draws frames, $gpu_dir/$IMAGE_QWEN_EDIT_WORKFLOW takes reference portraits."
 fi
+[[ "$viggle" = false ]] || echo "Viggle's LoRA and node are verified; a server started with SIMPLE_CHAT_IMAGE_VIGGLE=true loads the node, for its graphs alone."

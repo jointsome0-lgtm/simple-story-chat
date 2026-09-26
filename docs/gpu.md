@@ -186,6 +186,36 @@ rental as before: only [the backend measurement](action-experiment.md#backend) d
 pins the torch the server reports on `/system_stats` (`pytorch`), so a drawing stage refuses a resume on the other line
 as it refuses any pin that changed.
 
+<a id='viggle'></a>
+
+### Viggle's few-step LoRA, opt-in
+
+The owner allowed it on 2026-09-26 as a test («в качестве теста можно»): Viggle's LoRA that makes Qwen-Image 2.1
+draw in six steps, which [the backend measurement](action-experiment.md#backend) draws beside the reference.
+`SIMPLE_CHAT_IMAGE_VIGGLE=true`, beside `SIMPLE_CHAT_IMAGE_QWEN`, fetches two files from
+`Viggle/Qwen-Image-2.1-viggle-turbo` at the revision [image-manifest.env](../gpu/image-manifest.env) pins, each checked
+by its SHA256 like the weights. The LoRA, `Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-lora-r128.safetensors` (0.68 GB),
+goes into `models/loras`. Its two nodes, `ViggleTurboLora` and `ViggleTurboSigmas`, are one Python file,
+`comfyui/viggle_turbo.py`, which goes into `custom_nodes` as `viggle_turbo.py`.
+
+```sh
+SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_VIGGLE=true bash /workspace/simple-chat/gpu/image-bootstrap.sh --dry-run   # names the two files
+SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 SIMPLE_CHAT_IMAGE_TRITON=1 SIMPLE_CHAT_IMAGE_VIGGLE=true bash /workspace/simple-chat/gpu/image-serve.sh   # detached in a long run, as above
+```
+
+The server still starts with `--disable-all-custom-nodes`. With the option `image-serve.sh` adds
+`--whitelist-custom-nodes viggle_turbo.py`, which at the pinned revision loads that file by its name and still skips
+every other entry of `custom_nodes`, its prestartup scripts included (comfy/cli_args.py:215-216, nodes.py:2371-2372,
+main.py:183-184 and 215-216, main.py:513). The node is code the server runs, so `image-serve.sh` checks its SHA256
+again before the start, and the LoRA's size; either one wrong, it does not start. Without the option the file stays in
+`custom_nodes` and is not loaded. A server with the node draws the LoRA's graphs and no others, the owner's rule after
+ComfyUI's PRs 16493 and 15734: [image-pilot.ts](../local/image-pilot.ts) asks `/object_info` which of the two nodes the
+server has (`{}` for a class it has not, server.py:816-822) and refuses the wrong server either way.
+
+The default download is unchanged, and [rent-plan.ts](../local/rent-plan.ts) prices a rental as before: the LoRA adds
+18 s at 300 Mbit/s to a session that asks for it. Its licence was not read here: the owner allowed it as a test, on the
+terms Qwen-Image 2.1 itself is [accepted](#image-licences) for.
+
 ### What the card keeps of a picture
 
 A picture of a reader's scene passes through three places on the card, and each is emptied without a restart:
