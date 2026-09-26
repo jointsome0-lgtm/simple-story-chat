@@ -26,7 +26,7 @@ export const CLI_RESULTS = ['success', 'error_max_turns', 'error_during_executio
 const OUTCOMES = ['ready', 'failed', 'cancelled', 'skipped'] as const;
 // Which style a picture was drawn in (local/picture-style.ts): the bot's own line, a preset, or one of the reader's
 // own, whose words and names stay out of the row as the prompt does.
-const PICTURE_STYLES = ['standard', 'semi', 'novel', 'film', 'graphic', 'watercolor', 'custom'] as const;
+const PICTURE_STYLES = ['standard', 'semi', 'novel', 'film', 'graphic', 'watercolor', 'empty', 'custom'] as const;
 // Why the model's last message ended, as the API names it, for the row of a failed Claude CLI run: `max_tokens` there
 // means the run's output cap was hit, which the CLI reports as an error rather than a truncation.
 export const STOP_REASONS = ['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'refusal', 'other'] as const;

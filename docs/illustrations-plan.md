@@ -473,7 +473,8 @@ last sentence of the prompt, never seen by the describing model. `local/picture-
 - `semi`, the line the owner approved on 2026-09-23;
 - `novel`, the `STYLE` the six steps were measured with, its faces true to each person's age instead of adult since
   2026-09-26 ([portrait details](#portrait-details));
-- `film`, `graphic` and `watercolor`, with the same change of age as `novel`.
+- `film`, `graphic` and `watercolor`, with the same change of age as `novel`;
+- `empty`, which adds nothing, so that the prompt ends with the scene's description (the owner, 2026-09-27).
 
 A style line ends the prompt as written. Until 2026-09-24 the bot followed it with a tail of its own: natural proportions
 and no lettering, which the owner took off because they fought a line that wanted a look of its own, and then that

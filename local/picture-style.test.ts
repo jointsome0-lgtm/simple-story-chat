@@ -31,9 +31,10 @@ test('stored styles are not trusted: entries that are not styles are left out, i
     assert.deepEqual([styleKey(state, standard), styleLine(state, standard)], [key, line], label);
   }
   assert.deepEqual([presetOf(STYLE), presetOf(PRESETS.semi), presetOf(OWNER)], ['novel', 'semi', undefined]);
-  // Every preset asks for natural proportions, says nothing of lettering, and fits the limit of an own style.
+  // Every preset but the empty one asks for natural proportions; none says anything of lettering, and each fits the
+  // limit of an own style.
   for (const key of PRESET_KEYS) {
-    assert.match(PRESETS[key], /proportions/, key);
+    if (key !== 'empty') assert.match(PRESETS[key], /proportions/, key);
     assert.doesNotMatch(PRESETS[key], /captions|logos|watermarks/, key);
     assert.ok([...PRESETS[key]].length <= OWN_STYLE_CHARS, key);
   }

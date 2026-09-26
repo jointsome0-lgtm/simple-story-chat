@@ -184,7 +184,8 @@ export function assemblePrompt(description: Description, sheet: Character[], sty
   }).join('');
   const prompt = sentence(clean(description.shot)) + sentence(clean(description.setting)) + sentence(clean(description.moment))
     + people + sentence(clean(description.objects)) + sentence(clean(description.props)) + sentence(clean(description.light)) + style;
-  return { prompt, namesStripped, fromSheet, withoutLook };
+  // The empty style (local/picture-style.ts) leaves the space after the last sentence at the end.
+  return { prompt: prompt.trimEnd(), namesStripped, fromSheet, withoutLook };
 }
 
 // The two instruction texts are kept as they were iterated against the readers' reports

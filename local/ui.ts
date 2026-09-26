@@ -222,8 +222,9 @@ function styleLabel(t: Messages, state: State, key: string) {
 }
 
 // One style: the whole line it ends a prompt with, tap-to-copy, so that a reader can start a style of their own from
-// any of them. The sample is drawn only when the reader asks for it (local/picture.ts `sample`). A key this library has
-// no style under — a style deleted since, or the standard one where a preset stands for it — is the picker.
+// any of them; the empty one says that it has none, since a block of no characters has nothing to tap. The sample is
+// drawn only when the reader asks for it (local/picture.ts `sample`). A key this library has no style under — a style
+// deleted since, or the standard one where a preset stands for it — is the picker.
 function styleCard(state: State, key: string, details: RenderDetails) {
   const t = texts(state.language);
   const s = t.pictureStyle;
@@ -232,14 +233,14 @@ function styleCard(state: State, key: string, details: RenderDetails) {
   if (full === null || (key === 'standard' && presetOf(standard))) return styleScreen(state, details);
   const own = ownStyle(state, key);
   const chosen = styleKey(state, standard) === key;
-  const result = payload([styleLabel(t, state, key), chosen ? s.chosen : null, '', s.prompt, full,
+  const result = payload([styleLabel(t, state, key), chosen ? s.chosen : null, '', full ? s.prompt : s.promptEmpty, full || null,
     details.pictures ? null : '', details.pictures ? null : s.off], [
     chosen ? null : [btn(s.choose, `style:${key}`)],
     details.pictures ? [btn(s.sample, `style-sample:${key}`)] : null,
     own ? [btn(s.edit, `style-edit:${key}`), btn(s.remove, `view:delete-style:${key}`)] : null,
     [btn(s.back, 'view:style')],
   ]);
-  const offset = result.text.indexOf(full, result.text.indexOf(s.prompt));
+  const offset = full ? result.text.indexOf(full, result.text.indexOf(s.prompt)) : -1;
   if (offset >= 0) result.entities = [{ type: 'pre', offset, length: full.length }];
   return result;
 }

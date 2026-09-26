@@ -549,16 +549,16 @@ test('a sample of a style is the last scene drawn once more: its frame and seed,
   // Every style at once: that frame in every style of the picker, in its order, with the one seed and a caption each,
   // and one status line for all, which goes once the last one is there; no job, the sample's included, stays on the card.
   await sampled('style-samples');
-  const lines = [STYLE_LINE, PRESETS.semi, PRESETS.novel, PRESETS.film, PRESETS.graphic, PRESETS.watercolor];
-  assert.deepEqual(f.comfy.submitted.slice(2).map(promptOf), lines.map(line => described + line));
+  const lines = [STYLE_LINE, PRESETS.semi, PRESETS.novel, PRESETS.film, PRESETS.graphic, PRESETS.watercolor, PRESETS.empty];
+  assert.deepEqual(f.comfy.submitted.slice(2).map(promptOf), lines.map(line => (described + line).trimEnd()));
   assert.ok(f.comfy.submitted.every(graph => seedIn(graph) === seedIn(f.comfy.submitted[0])));
   assert.deepEqual(photos(f.sent).slice(2).map(one => one.payload.caption), ['⚙️ Стандартный', '🖌 Полуреализм', '📖 Визуальная новелла', '🎬 Кинокадр',
-    '🖋 Графический роман', '💧 Акварель'].map(name => `Пример стиля: ${name}`));
+    '🖋 Графический роман', '💧 Акварель', '⬜ Без стиля'].map(name => `Пример стиля: ${name}`));
   assert.deepEqual(photos(f.sent)[3].payload.reply_markup?.inline_keyboard.flat().map(button => button.callback_data), ['style:semi', 'view:style']);
   assert.deepEqual(f.rows.filter(one => one.event === 'picture_sample').slice(1).map(one => [one.pictureStyle, one.stylesAsked, one.frameReused, one.outcome, one.describeMs]),
-    ['standard', 'semi', 'novel', 'film', 'graphic', 'watercolor'].map(style => [style, 6, true, 'ready', 0]));
+    ['standard', 'semi', 'novel', 'film', 'graphic', 'watercolor', 'empty'].map(style => [style, 7, true, 'ready', 0]));
   assert.deepEqual(f.sent.filter(one => one.method === 'sendMessage' && /во всех стилях/.test(one.payload.text ?? ''))
-    .map(one => [/\(6\)/.test(one.payload.text), f.deleted.includes(idOf(f.sent, one))]), [[true, true]], 'one status line for all');
+    .map(one => [/\(7\)/.test(one.payload.text), f.deleted.includes(idOf(f.sent, one))]), [[true, true]], 'one status line for all');
   assert.ok(f.comfy.submitted.every((graph, at) => f.comfy.seen.cleared.includes(`p${at + 1}`)), 'no job is left on the card');
   assert.equal(f.store.read('1').pictureStyle, undefined, 'a sample chooses no style');
 
@@ -631,7 +631,7 @@ test('the reader\'s next message ends the picture of the scene they have read pa
       await until(() => g.comfy.submitted.length === 2, `${label}: to reach the card`);
       await waits(g, label, errors.sampleInFlight, g.click('style-sample:graphic'));
     } },
-    { label: 'every style', jobs: ['p2'], stopped: [['picture_sample', 'cancelled', 'cancelled', 'semi', 5, undefined]], ask: async (g, label) => {
+    { label: 'every style', jobs: ['p2'], stopped: [['picture_sample', 'cancelled', 'cancelled', 'semi', 6, undefined]], ask: async (g, label) => {
       await g.bot.handle(g.click('style-samples'));
       await until(() => g.comfy.submitted.length === 2, `${label}: to reach the card`);
       await waits(g, label, errors.sampleInFlight, g.click('style-sample:film'));
@@ -1005,7 +1005,7 @@ test('a portrait whose story is deleted while it is drawn is not sent, and a del
   // What is on the card when the seed goes ends without a word; the scene's own photo and note go with the seed.
   const phases: { label: string; event: string; ask?: (f: Fixture) => Promise<unknown>; also?: Partial<Row> }[] = [
     { label: 'the scene\'s own picture', event: 'picture' },
-    { label: 'every style', event: 'picture_sample', ask: f => f.bot.handle(f.click('style-samples')), also: { pictureStyle: 'semi', stylesAsked: 5 } },
+    { label: 'every style', event: 'picture_sample', ask: f => f.bot.handle(f.click('style-samples')), also: { pictureStyle: 'semi', stylesAsked: 6 } },
     { label: 'a variant', event: 'picture_variant', ask: async f => {
       await f.bot.handle(f.click(editOf(notes(f.sent)[0])));
       await f.bot.handle(f.message('A synthetic prompt.'));
@@ -1077,12 +1077,12 @@ test('a portrait whose story is deleted while it is drawn is not sent, and a del
   const state = f.store.read('1');
   assert.deepEqual(state.sentPictures!.map(({ at, ...picture }) => picture),
     ids.map(messageId => messageId === idOf(f.sent, portrait) ? { storyId, messageId } : { storyId, nodeId, messageId }));
-  assert.ok(ids.length === 17 && state.sentPictures!.every(picture => Number.isSafeInteger(picture.at) && Math.abs(Date.now() - picture.at) < 60_000));
+  assert.ok(ids.length === 19 && state.sentPictures!.every(picture => Number.isSafeInteger(picture.at) && Math.abs(Date.now() - picture.at) < 60_000));
   await deleteTheSeed(f);
   await f.bot.idle();
   assert.deepEqual([f.sent.filter(one => one.method === 'deleteMessages').map(one => one.payload.message_ids), f.store.read('1').sentPictures, readdirSync(directory)],
     [[ids], [], []], 'every photo and note out of the chat, and the kept portrait off the disk');
-  assert.deepEqual(f.rows.filter(one => one.event === 'pictures_removed'), [{ event: 'pictures_removed', picturesRemoved: 17, picturesNotRemoved: 0, actor: 'owner' }]);
+  assert.deepEqual(f.rows.filter(one => one.event === 'pictures_removed'), [{ event: 'pictures_removed', picturesRemoved: 19, picturesNotRemoved: 0, actor: 'owner' }]);
 
   // A file whose write never came, from a process stopped between the two, goes with the next sweep after a write, and
   // at the next start; the key that names the directory is kept in the database.

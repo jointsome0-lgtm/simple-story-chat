@@ -18,13 +18,15 @@ export type Preset = Exclude<StyleChoice, 'standard' | 'custom'>;
 // gives a child's age as a word, and the style, last in the prompt, would have drawn that child as an adult. They
 // used to end by asking for no captions, logos or watermarks too; the owner took that sentence out of every line on
 // 2026-09-24. `semi` is the line the owner approved on 2026-09-23, `novel` the one the six steps were measured with
-// (then with that sentence), `film` the photographic line tried the same evening.
+// (then with that sentence), `film` the photographic line tried the same evening. `empty` adds nothing, so that the
+// prompt ends with the scene's description, as the owner asked on 2026-09-27.
 export const PRESETS: Record<Preset, string> = {
   semi: 'Semi-realistic digital painting with cinematic lighting: realistic human anatomy and head-to-body proportions, natural faces with age-appropriate lines, painterly brushwork with soft visible strokes, rich but slightly muted colors, subtle painted texture instead of photographic detail. Clear silhouettes.',
   novel: STYLE,
   film: 'Photorealistic cinematic film still shot on 35mm, natural lens perspective. Real human anatomy and proportions true to each person\'s age: normal head-to-body ratio, natural skin texture, faces with age-appropriate lines. Realistic practical lighting, subtle film grain, shallow depth of field.',
   graphic: 'Graphic novel illustration with confident ink outlines, dramatic chiaroscuro shading and a limited muted palette with one accent color. Realistic anatomy and head-to-body proportions true to each person\'s age, natural faces with age-appropriate lines. Clear silhouettes.',
   watercolor: 'Watercolor illustration with soft translucent washes, a loose pencil underdrawing and visible paper grain, gentle muted colors. Realistic anatomy and head-to-body proportions true to each person\'s age, natural faces with age-appropriate lines. Clear silhouettes.',
+  empty: '',
 };
 export const PRESET_KEYS = Object.keys(PRESETS) as Preset[];
 

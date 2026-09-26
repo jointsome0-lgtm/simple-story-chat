@@ -174,6 +174,7 @@ export const ru = {
       film: '🎬 Кинокадр',
       graphic: '🖋 Графический роман',
       watercolor: '💧 Акварель',
+      empty: '⬜ Без стиля',
     },
     // `name` is the name the reader gave a style of their own, already shortened.
     own: (name: string) => `✍️ ${name}`,
@@ -181,6 +182,8 @@ export const ru = {
     // A style's card. The prompt under `prompt` stays in English, as the picture model reads it.
     chosen: '✅ Картинки рисуются в этом стиле.',
     prompt: 'Промпт стиля (нажми, чтобы скопировать):',
+    // The card of the empty style, which has no prompt to copy.
+    promptEmpty: 'Промпт стиля пустой: картинка рисуется по описанию сцены, к нему ничего не добавляется.',
     choose: '✅ Рисовать в этом стиле',
     sample: '🖼 Пример на последней сцене',
     sampleAll: '🖼 Все стили на последней сцене',

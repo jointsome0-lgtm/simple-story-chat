@@ -123,9 +123,10 @@ character's name reaches the image model. Why each part is there is in
 Only a reader whose scenes are drawn (`SIMPLE_CHAT_IMAGE_USERS`) has «🎨 Стиль картинок» ("Picture style") in the menu and `/style` in the command list; both open the picker (`view:style`). A style is the last sentence of every picture's prompt (`local/picture-style.ts`) and changes only the pictures still to come. Nothing is drawn by opening a screen.
 
 - **Picker and card:** the bot's own `SIMPLE_CHAT_IMAGE_STYLE` (a button of its own only when it is none of the
-  presets), the five presets and the reader's own styles, ✅ on the current one. A style's card shows its whole prompt
-  in a `pre` block that Telegram copies in one tap, so any style can start one of the reader's own; a deletion asks
-  first and names the style the pictures go back to.
+  presets), the six presets and the reader's own styles, ✅ on the current one. The sixth, «⬜ Без стиля» ("No style"),
+  adds nothing, so the prompt ends with the scene's description (the owner, 2026-09-27). A style's card shows its whole
+  prompt in a `pre` block that Telegram copies in one tap, so any style can start one of the reader's own, and the
+  empty one's card says its prompt is empty; a deletion asks first and names the style the pictures go back to.
 - **Own styles** live in `pictureStyles` in the library, at most 10; `pictureStyle` holds the chosen key.
   «➕ Новый стиль» ("New style") makes the next text message the style, never a move in the story, and any button or
   command, an unknown one included, leaves without a change. A first line of a longer message is the name, cut to 40
