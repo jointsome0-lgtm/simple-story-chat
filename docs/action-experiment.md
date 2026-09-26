@@ -297,8 +297,9 @@ Round one's sheet asked for age in words made for adults (young adult, middle-ag
 four looks named no skin tone. On 2026-09-26 the owner changed the bot's sheet
 ([portrait details](illustrations-plan.md#portrait-details)): before each look it writes the person's `details`, 50
 to 80 words that have the age words of children too, and compresses the look from them. Round two's fronts are drawn
-from the details as the bot's portraits are (`portraitText`), and every frame keeps the look. The judges still read
-each person's look as their line of the sheet. The new instruction and schema change the pins, and whether the
+from the details as the bot's portraits are (`portraitText`), and every frame keeps the look. The judges read each
+person's look as their line of the sheet, and the check of the fronts reads their details too
+([judging](#judging)). The new instruction and schema change the pins, and whether the
 daughters now come out as children is the judges' check of the fronts to say. The same day the owner changed the
 style line that ends every frame (`STYLE` in `local/illustrate.ts`) from adult faces to faces true to each person's
 age, so that the child a look names is not made an adult at the prompt's end. Round two's L, C and T take the new
@@ -542,7 +543,10 @@ hypothesis or a threshold. Four kinds of session work on each scene.
    portraits, and each view beside its front with the direction it was asked for. It says which relations, gazes,
    clothes and reflections each of the two prompts states; whether each bound person's `facing` fits the moment and
    the shot; whether each front matches its sheet line in face and hair, build and marks; and whether each view is the
-   same person, turned the way it was asked.
+   same person, turned the way it was asked. Since round two its sheet also carries each person's `details`, which
+   the front was drawn from ([the sheet](#the-sheet)), and a front is checked against them, or against the look where
+   there are none, so that the skin, the face and the marks with their sides are checked too. The checklist and the
+   pictures keep the look, which is what the frames were given.
 3. **The pictures**, one session per scene and seed: the action scene, the sheet, the checklist, and that seed's
    pictures, six at most, in an order drawn by code and named by hashes. C's picture, when it stands for V, is shown
    once. For each picture the session first says who is who: each participant present, absent or `unsure`, and

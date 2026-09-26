@@ -75,12 +75,12 @@ export const TASKS: Record<Exclude<SessionKind, 'repeat'>, string> = {
 ${ENDING}`,
   text: `Ты проверяешь описания кадра и портреты к сцене из интерактивной истории.
 
-В input.json: scene — сцена; sheet — лист персонажей (entry, name, look, outfit); ${SHOWN}; shot — план кадра; prompts — описания кадра для художника, у каждого свой id; portraits — люди с портретами: entry, facing — куда в кадре обращён их корпус (viewer — к зрителю, away — спиной к зрителю, screen-left и screen-right — в профиль к левому или правому краю кадра, other — иначе), front — файл портрета спереди, если он есть, и view — файл вида с turn, куда человека просили повернуть, если вид есть. Файлы лежат в этой папке и приложены.
+В input.json: scene — сцена; sheet — лист персонажей (entry, name, details, если они есть, look, outfit); ${SHOWN}; shot — план кадра; prompts — описания кадра для художника, у каждого свой id; portraits — люди с портретами: entry, facing — куда в кадре обращён их корпус (viewer — к зрителю, away — спиной к зрителю, screen-left и screen-right — в профиль к левому или правому краю кадра, other — иначе), front — файл портрета спереди, если он есть, и view — файл вида с turn, куда человека просили повернуть, если вид есть. Файлы лежат в этой папке и приложены.
 
 Ответь:
 1. prompts — для каждого описания и каждого отношения, взгляда, пункта одежды и отражения из checklist: называет ли его это описание, yes или no.
 2. facing — для каждого человека из portraits: подходит ли его facing к моменту и к плану кадра.
-3. fronts — для каждого портрета спереди: совпадает ли он со строкой листа лицом и волосами (face_hair) и телосложением и приметами (build_marks).
+3. fronts — для каждого портрета спереди: совпадает ли он с описанием этого человека в листе, по details, если они есть, иначе по look: лицом и волосами (face_hair) и телосложением и приметами (build_marks).
 4. views — для каждого вида: тот же ли это человек, что на его портрете спереди (same_person), и повёрнут ли он так, как просили (turned).
 В facing, fronts и views отвечай yes, no или unsure.
 
@@ -240,7 +240,7 @@ const shown = (checklist: Checklist): ShownChecklist => ({ participants: checkli
 
 // ---- The bundles ----
 
-type SheetLine = { entry: string; name: string; look: string; outfit: string };
+type SheetLine = { entry: string; name: string; details?: string; look: string; outfit: string };
 export type ChecklistInput = { scene: string; target: { contact: string; participants: string[] }; sheet: SheetLine[] };
 export type TextInput = { scene: string; sheet: SheetLine[]; checklist: ShownChecklist; shot: string; prompts: { id: string; text: string }[];
   portraits: { entry: string; facing: Facing; front?: string; view?: string; turn?: Turn }[] };
@@ -255,7 +255,11 @@ export const bundleDir = (root: string, session: Session) => join(storyDir(root,
 export const keyFile = (root: string, session: Session) => join(storyDir(root, session.story), 'keys', `${sessionName(session)}.json`);
 export const answersFile = (root: string, session: Session, owner = false) =>
   join(storyDir(root, session.story), 'answers', `${sessionName(session)}${owner ? '.owner' : ''}.json`);
-const sheetLines = (sheet: Character[]): SheetLine[] => sheet.map((one, at) => ({ entry: entryId(at), name: one.name, look: one.look, outfit: one.outfit ?? '' }));
+// The text session also gets each person's details, which their front was drawn from (image-portraits.ts
+// `portraitText`), so that it can check the skin, the face and the marks with their sides that a look leaves out; the
+// checklist and the pictures keep the look, which is what the frames were given.
+const sheetLines = (sheet: Character[], details = false): SheetLine[] => sheet.map((one, at) => ({ entry: entryId(at), name: one.name,
+  ...details && one.details?.trim() ? { details: one.details } : {}, look: one.look, outfit: one.outfit ?? '' }));
 
 // The action scene as the narrator wrote it, from the story's own store.
 export function sceneOf(root: string, story: string, nodeId: string): string {
@@ -355,7 +359,7 @@ export function pictureBundles(root: string, log: (event: object) => void = () =
         ...(view ? { view: `view-${one.entry}.png`, turn: view.view.turn } : {}) };
     });
     if (prompts.length || portraits.length) {
-      const input: TextInput = { scene, sheet, checklist: shown(checklist), shot: text.variant?.shot ?? text.frame?.shot ?? '',
+      const input: TextInput = { scene, sheet: sheetLines(text.worn, true), checklist: shown(checklist), shot: text.variant?.shot ?? text.frame?.shot ?? '',
         prompts: prompts.map(({ id, text: prompt }) => ({ id, text: prompt })), portraits };
       build({ story: story.id, kind: 'text' }, input, textSchema(input),
         [...fronts.map(one => ({ name: `front-${one.entry}.png`, from: one.file.path })), ...views.map(one => ({ name: `view-${one.entry}.png`, from: one.file.path }))],
