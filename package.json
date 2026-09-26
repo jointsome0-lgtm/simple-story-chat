@@ -32,6 +32,7 @@
     "image:identity": "node local/image-identity.ts",
     "image:action": "node local/image-action.ts",
     "image:pilot": "node local/image-pilot.ts",
+    "image:t-probe": "node local/image-t-probe.ts",
     "agent": "node local/agent-cli.ts",
     "agent:gpu": "node --env-file=.env.gpu local/agent-cli.ts",
     "mcp": "node local/mcp.ts",

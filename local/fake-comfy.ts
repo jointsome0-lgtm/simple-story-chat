@@ -6,7 +6,9 @@
 // failure, an OOM, a partial load in the log, the numbers on /system_stats — is fixed or set by the knobs below, and
 // says nothing about any card. A picture is a flat grey PNG with a text chunk beside the pixels, as a saving node
 // writes one, of the size of what the node saves: the sampler's latent behind a decode, the size a scale node asks
-// for, or an uploaded file's own. No prompt it is sent is printed or kept past its job.
+// for, a crop's as the pinned ImageCrop cuts it, a composite's destination's, or an uploaded file's own. Masks it
+// computes as the pinned mask nodes do, and reports them as counts (`MaskedJob`), never pixels. No prompt it is sent is
+// printed or kept past its job.
 import { createServer } from 'node:http';
 import type { IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -52,11 +54,60 @@ export type FakeComfyOptions = {
 // A request as the server saw it, for a test to assert on the order of things: the job it concerns, when there is one.
 export type FakeCall = { method: string; path: string; id?: string };
 // What a job was, for a test to assert on. Never its text. `slots`: each reference slot of the encoder in slot order,
-// the file on the loader behind it, and the size a scale node between them hands on (`null` without one). `images`:
-// each picture a saving node wrote, with its size.
+// the file on the loader behind it, the size a scale node between them hands on (`null` without one), and the
+// rectangle an ImageCrop between the loader and the scale node cuts (`null` without one). `images`: each picture a
+// saving node wrote, with its size.
 export type FakeJob = { references: number; width: number; height: number; cached: number; outcome: 'success' | 'error' | 'interrupted';
-  slots: { slot: number; file: string; scaled: { width: number; height: number } | null }[];
-  images: { node: string; width: number; height: number }[] };
+  slots: { slot: number; file: string; scaled: { width: number; height: number } | null; cropped: { x: number; y: number; width: number; height: number } | null }[];
+  images: { node: string; width: number; height: number }[] } & MaskedJob;
+
+// A mask the pinned mask nodes make (comfy_extras/nodes_mask.py at 73c9bad4), computed as they compute it: SolidMask
+// fills, MaskComposite adds, subtracts or multiplies its source into its destination at x, y and clamps the whole to
+// [0, 1], FeatherMask ramps each edge in, the i-th pixel from it by (i + 1) / n. Any other node or operation gives no
+// mask, never a guessed one.
+type Mask = { width: number; height: number; data: Float32Array };
+function maskOf(graph: Graph, link: unknown): Mask | undefined {
+  const node = Array.isArray(link) ? graph[String(link[0])] : undefined;
+  const at = (key: string) => Number(node?.inputs[key]);
+  if (node?.class_type === 'SolidMask') return { width: at('width'), height: at('height'), data: new Float32Array(at('width') * at('height')).fill(at('value')) };
+  const into = maskOf(graph, node?.inputs[node?.class_type === 'FeatherMask' ? 'mask' : 'destination']);
+  const op = String(node?.inputs.operation);
+  if (!into || (node?.class_type !== 'FeatherMask' && !(node?.class_type === 'MaskComposite' && ['add', 'subtract', 'multiply'].includes(op)))) return undefined;
+  const out = { ...into, data: new Float32Array(into.data) }, w = out.width, h = out.height;
+  if (node.class_type === 'FeatherMask') {
+    const [left, right, top, bottom] = [Math.min(at('left'), w), Math.min(at('right'), w), Math.min(at('top'), h), Math.min(at('bottom'), h)];
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      out.data[y * w + x] *= (x < left ? (x + 1) / left : 1) * (w - 1 - x < right ? (w - x) / right : 1)
+        * (y < top ? (y + 1) / top : 1) * (h - 1 - y < bottom ? (h - y) / bottom : 1);
+    }
+    return out;
+  }
+  const from = maskOf(graph, node.inputs.source);
+  if (!from) return undefined;
+  for (let y = at('y'); y < Math.min(at('y') + from.height, h); y++) for (let x = at('x'); x < Math.min(at('x') + from.width, w); x++) {
+    const a = out.data[y * w + x], b = from.data[(y - at('y')) * from.width + x - at('x')];
+    out.data[y * w + x] = Math.min(1, Math.max(0, op === 'add' ? a + b : op === 'subtract' ? a - b : a * b));
+  }
+  return out;
+}
+// What a test reads of a mask: its size, the pixels above 0 and at 1, and the box round those above 0.
+export type MaskSummary = { width: number; height: number; nonzero: number; full: number; bounds: [number, number, number, number] | null };
+function summaryOf(mask: Mask | undefined): MaskSummary | null {
+  if (!mask) return null;
+  let nonzero = 0, full = 0, left = mask.width, top = mask.height, right = 0, bottom = 0;
+  mask.data.forEach((value, i) => {
+    if (value <= 0) return;
+    const x = i % mask.width, y = Math.floor(i / mask.width);
+    nonzero++;
+    if (value >= 1) full++;
+    [left, top, right, bottom] = [Math.min(left, x), Math.min(top, y), Math.max(right, x + 1), Math.max(bottom, y + 1)];
+  });
+  return { width: mask.width, height: mask.height, nonzero, full, bounds: nonzero ? [left, top, right, bottom] : null };
+}
+// `start`: the upload the sampler's latent was encoded from (VAEEncode), `noiseMask` the mask SetLatentNoiseMask put
+// on it, and each ImageCompositeMasked with the upload behind its destination and its mask.
+export type MaskedJob = { start: string | null; noiseMask: MaskSummary | null;
+  composites: { node: string; destination: string | null; mask: MaskSummary | null }[] };
 
 const GIB = 1024 ** 3;
 
@@ -164,22 +215,42 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
     const cached = options.loadersCached && job.number > 1 ? order.filter(id => /Loader/.test(graph[id].class_type)) : [];
     const references = Object.values(graph).filter(node => node.class_type === 'LoadImage').length;
     const sampler = Object.values(graph).find(node => 'seed' in node.inputs || 'noise_seed' in node.inputs);
-    const link = sampler?.inputs.latent_image;
-    const latent = Array.isArray(link) ? graph[String(link[0])]?.inputs : undefined;
-    const width = Number(latent?.width ?? 1024), height = Number(latent?.height ?? 1024);
     const source = (value: unknown) => (Array.isArray(value) ? graph[String(value[0])] : undefined);
-    // What a node hands on is the size of: a scale node's own, an uploaded file's, and the latent's for the rest.
+    const noised = source(sampler?.inputs.latent_image);
+    const latent = noised?.class_type === 'SetLatentNoiseMask' ? source(noised.inputs.samples) : noised;
+    // A latent the VAE encoded from an uploaded picture has that picture's size (local/image-t-probe.ts's latent starts).
+    const encoded = latent?.class_type === 'VAEEncode' ? source(latent.inputs.pixels) : undefined;
+    const start = encoded?.class_type === 'LoadImage' ? uploaded.get(String(encoded.inputs.image)) : undefined;
+    const { width, height } = start ? pngSize(start) : { width: Number(latent?.inputs.width ?? 1024), height: Number(latent?.inputs.height ?? 1024) };
+    const fileBehind = (link: unknown) => { const node = source(link); return node?.class_type === 'LoadImage' ? String(node.inputs.image) : null; };
+    const masked: MaskedJob = { start: latent?.class_type === 'VAEEncode' ? fileBehind(latent.inputs.pixels) : null,
+      noiseMask: noised?.class_type === 'SetLatentNoiseMask' ? summaryOf(maskOf(graph, noised.inputs.mask)) : null,
+      composites: Object.entries(graph).filter(([, node]) => node.class_type === 'ImageCompositeMasked')
+        .map(([node, one]) => ({ node, destination: fileBehind(one.inputs.destination), mask: summaryOf(maskOf(graph, one.inputs.mask)) })) };
+    // What a node hands on is the size of: a scale node's own, a crop's, an uploaded file's, a composite's
+    // destination's, and the latent's for the rest. ImageCrop (comfy_extras/nodes_images.py at 73c9bad4) keeps its
+    // corner inside the picture and cuts its rectangle at the picture's edge.
+    const cropOf = (node: Graph[string]) => {
+      const from = sizeOf(source(node.inputs.image));
+      const x = Math.min(Number(node.inputs.x), from.width - 1), y = Math.min(Number(node.inputs.y), from.height - 1);
+      return { x, y, width: Math.min(Number(node.inputs.width), from.width - x), height: Math.min(Number(node.inputs.height), from.height - y) };
+    };
     const sizeOf = (node: Graph[string] | undefined): { width: number; height: number } => {
       if (node?.class_type === 'ImageScale') return { width: Number(node.inputs.width), height: Number(node.inputs.height) };
+      if (node?.class_type === 'ImageCrop') { const { width, height } = cropOf(node); return { width, height }; }
+      if (node?.class_type === 'ImageCompositeMasked') return sizeOf(source(node.inputs.destination));
       const file = node?.class_type === 'LoadImage' ? uploaded.get(String(node.inputs.image)) : undefined;
       return file ? pngSize(file) : { width, height };
     };
     const slots = Object.values(graph).flatMap(node => Object.entries(node.inputs).flatMap(([key, value]) => {
       const slot = /^images\.image_(\d+)$/.exec(key);
       const linked = source(value);
-      const loader = linked?.class_type === 'ImageScale' ? source(linked.inputs.image) : linked;
-      return slot && loader ? [{ slot: Number(slot[1]), file: String(loader.inputs.image),
-        scaled: linked?.class_type === 'ImageScale' ? sizeOf(linked) : null }] : [];
+      const scale = linked?.class_type === 'ImageScale' ? linked : undefined;
+      const behind = scale ? source(scale.inputs.image) : linked;
+      const crop = behind?.class_type === 'ImageCrop' ? behind : undefined;
+      const loader = crop ? source(crop.inputs.image) : behind;
+      return slot && loader ? [{ slot: Number(slot[1]), file: String(loader.inputs.image), scaled: scale ? sizeOf(scale) : null,
+        cropped: crop ? cropOf(crop) : null }] : [];
     })).sort((a, b) => a.slot - b.slot);
     const images: FakeJob['images'] = [];
     const messages: [string, object][] = [];
@@ -229,7 +300,7 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
     history.set(job.id, { prompt: [job.number, job.id, {}, {}, []], outputs,
       status: { status_str: outcome === 'success' ? 'success' : 'error', completed: outcome === 'success', messages }, meta: {} });
     say(`Prompt executed in ${((performance.now() - began) / 1000).toFixed(2)} seconds`);
-    jobs.push({ references, width, height, cached: cached.length, outcome, slots, images });
+    jobs.push({ references, width, height, cached: cached.length, outcome, slots, images, ...masked });
     // The record is written before the socket hears the job is over (main.py), and a delete sent then finds it.
     tell(job, 'executing', { node: null });
   }
