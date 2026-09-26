@@ -32,6 +32,17 @@ turbo="${SIMPLE_CHAT_IMAGE_TURBO:-true}"
 # pays for every minute of 48.7 GB.
 qwen="${SIMPLE_CHAT_IMAGE_QWEN:-false}"
 [[ "$qwen" = true || "$qwen" = false || "$qwen" = only ]] || { echo 'Use SIMPLE_CHAT_IMAGE_QWEN=true, false or only.' >&2; exit 1; }
+# Which torch this run installs (docs/gpu.md#cu130): cu128, the default, into ComfyUI/.venv, or cu130 into
+# ComfyUI/.venv-cu130, for comfy-kitchen's CUDA backend. A cu130 run leaves the default environment as it is, so it can
+# run in the background beside a server started from that one, and image-serve.sh switches between them with a restart.
+torch_line="${SIMPLE_CHAT_IMAGE_TORCH:-cu128}"
+case "$torch_line" in
+  cu128) venv="$comfy_dir/.venv"; torch_index="$TORCH_INDEX_URL"
+    torch_pins=("torch==$TORCH_VERSION" "torchvision==$TORCHVISION_VERSION" "torchaudio==$TORCHAUDIO_VERSION") ;;
+  cu130) venv="$comfy_dir/.venv-cu130"; torch_index="$TORCH_CU130_INDEX_URL"
+    torch_pins=("torch==$TORCH_CU130_VERSION" "torchvision==$TORCHVISION_CU130_VERSION" "torchaudio==$TORCHAUDIO_CU130_VERSION") ;;
+  *) echo 'Use SIMPLE_CHAT_IMAGE_TORCH=cu128 or cu130.' >&2; exit 1 ;;
+esac
 # An offer that advertises 1171 Mbit/s has delivered 115 (docs/knowledge/gpu-measurements.md#costs-and-downloads).
 # Below the floor the answer is to destroy the machine and take the next candidate, not to wait: 22 GB at 100 Mbit/s
 # is half the session.
@@ -185,6 +196,7 @@ if [[ "$dry_run" = true ]]; then
   done
   [[ "$qwen" = only ]] || echo "The graph would load $IMAGE_MODEL_FILE, $encoder_file and $vae_file; --print-workflow prints it."
   [[ "$qwen" = false ]] || echo "Qwen is on: $IMAGE_QWEN_WORKFLOW and $IMAGE_QWEN_EDIT_WORKFLOW would load $IMAGE_QWEN_MODEL_FILE, $IMAGE_QWEN_ENCODER_FILE and $IMAGE_QWEN_VAE_FILE."
+  [[ "$torch_line" = cu128 ]] || echo "Torch is $torch_line: ${torch_pins[*]} into $venv, beside the default environment."
   exit 0
 fi
 
@@ -326,21 +338,31 @@ fi
 git -C "$comfy_dir" fetch --depth 1 origin "$COMFYUI_REVISION"
 git -C "$comfy_dir" checkout --detach "$COMFYUI_REVISION"
 [[ "$(git -C "$comfy_dir" rev-parse HEAD)" = "$COMFYUI_REVISION" ]]
-[[ -d "$comfy_dir/.venv" ]] || python3 -m venv "$comfy_dir/.venv"
-python="$comfy_dir/.venv/bin/python"
-"$python" -m pip install --quiet --upgrade pip
-# Torch first and pinned, from the CUDA index: ComfyUI's requirements.txt asks for a bare `torch`, and the default
-# index would serve a build without sm_120 kernels.
-"$python" -m pip install --quiet --index-url "$TORCH_INDEX_URL" \
-  "torch==$TORCH_VERSION" "torchvision==$TORCHVISION_VERSION" "torchaudio==$TORCHAUDIO_VERSION"
-"$python" -m pip install --quiet -r "$comfy_dir/requirements.txt"
-"$python" - "$TORCH_ARCH" <<'PY'
+[[ -d "$venv" ]] || python3 -m venv "$venv"
+python="$venv/bin/python"
+# cu130's mark of a whole environment, which image-serve.sh starts it on: gone while this run changes it, and written
+# at the end, once the sm_120 check has passed and the weights are verified. The runbook waits for it.
+ready="$venv/simple-chat-ready"
+[[ "$torch_line" = cu128 ]] || rm -f -- "$ready"
+# cu130 goes beside an environment and the weights already on the box, and a Qwen-only box has 60 GB: pip keeps no
+# second copy of the wheels.
+pip_flags=(--quiet)
+[[ "$torch_line" = cu128 ]] || pip_flags+=(--no-cache-dir)
+"$python" -m pip install "${pip_flags[@]}" --upgrade pip
+# Torch first and pinned, from the CUDA index: ComfyUI's requirements.txt asks for a bare `torch` (and a bare
+# torchvision and torchaudio, which the pinned ones satisfy), and the default index would serve a build without sm_120
+# kernels.
+"$python" -m pip install "${pip_flags[@]}" --index-url "$torch_index" "${torch_pins[@]}"
+"$python" -m pip install "${pip_flags[@]}" -r "$comfy_dir/requirements.txt"
+torch_said="$("$python" - "$TORCH_ARCH" <<'PY'
 import sys,torch
 archs=torch.cuda.get_arch_list()
 print(f'torch {torch.__version__}, CUDA {torch.version.cuda}, architectures: {" ".join(archs)}')
 if sys.argv[1] not in archs:
     raise SystemExit(f'This torch build has no {sys.argv[1]} kernels; the card would fall back or fail.')
 PY
+)"
+echo "$torch_said"
 # Nothing here installs a custom node, and image-serve.sh disables the folder anyway; say so if one appeared.
 if compgen -G "$comfy_dir/custom_nodes/*/" >/dev/null; then
   echo 'Third-party custom nodes are present in ComfyUI/custom_nodes; they stay disabled at run time.' >&2
@@ -382,9 +404,14 @@ mv -- "$verified.part" "$verified"
 # The graph is written only once the weights it names are verified, so its presence means the box can render.
 [[ "$qwen" = only ]] || render_workflow "$IMAGE_WORKFLOW" "$IMAGE_MODEL_FILE" "$encoder_file" "$vae_file" >"$gpu_dir/$IMAGE_WORKFLOW"
 [[ "$qwen" = false ]] || render_qwen
+torch_env=''
+if [[ "$torch_line" != cu128 ]]; then
+  printf '%s\n' "$torch_said" >"$ready"
+  torch_env="SIMPLE_CHAT_IMAGE_TORCH=$torch_line "
+fi
 if [[ "$qwen" = only ]]; then
-  echo "Prepared, Qwen only: $gpu_dir/$IMAGE_QWEN_WORKFLOW draws frames and portraits, $gpu_dir/$IMAGE_QWEN_EDIT_WORKFLOW takes reference portraits; $verified says what was verified. Start with: SIMPLE_CHAT_IMAGE_QWEN=only bash $task_dir/image-serve.sh"
+  echo "Prepared, Qwen only: $gpu_dir/$IMAGE_QWEN_WORKFLOW draws frames and portraits, $gpu_dir/$IMAGE_QWEN_EDIT_WORKFLOW takes reference portraits; $verified says what was verified. Start with: ${torch_env}SIMPLE_CHAT_IMAGE_QWEN=only bash $task_dir/image-serve.sh"
 else
-  echo "Prepared; post $gpu_dir/$IMAGE_WORKFLOW. Start with: bash $task_dir/image-serve.sh"
+  echo "Prepared; post $gpu_dir/$IMAGE_WORKFLOW. Start with: ${torch_env}bash $task_dir/image-serve.sh"
   [[ "$qwen" = false ]] || echo "Qwen is on: $gpu_dir/$IMAGE_QWEN_WORKFLOW draws frames, $gpu_dir/$IMAGE_QWEN_EDIT_WORKFLOW takes reference portraits."
 fi

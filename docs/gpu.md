@@ -122,7 +122,7 @@ sweeper has gone too. `SIMPLE_CHAT_IMAGE_TRITON=1` starts it with comfy-kitchen'
 (`--enable-triton-backend`), off by default: on a torch built for CUDA below 13 the pinned server runs every int8 layer
 on the kitchen's eager path, and Triton's kernels may be faster and may round differently. A run records the flag in
 its pins; whether Triton loaded is in the server's log at its start, which [the pilot](action-experiment.md#pilot)
-reads, and the pilot measures it.
+reads, and the pilot measures it. The kitchen's CUDA backend needs [torch for CUDA 13](#cu130).
 
 The tester pointed at `Kreamania`, a community fine-tune distributed through CivitAI
 and HuggingFace. Any such checkpoint must be pinned the way the language model is pinned in
@@ -152,6 +152,39 @@ licence allows a test, not a product: [image licences](#image-licences).
 The bootstrap writes two graphs beside the Krea one: `image-workflow-qwen.json` draws frames, `image-workflow-qwen-edit.json` takes reference portraits. One run has one workflow, so Qwen is its own `image:batch` run directory, and `npm run image:blind -- build --run a,b --out <directory>` reads several of them.
 
 `SIMPLE_CHAT_IMAGE_QWEN=only` fetches Qwen's three files and nothing of Krea's, Turbo included, so it needs no CivitAI or Hugging Face token: 17.28 GB, 7.7 minutes at the 300 Mbit/s the rent filter asks of an offer. `image-serve.sh` with the same setting starts ComfyUI for Qwen alone. It is the box of the [identity measurement](identity-experiment.md), which draws nothing else; the default and `true` are unchanged. Whatever it fetched, once every file is verified the bootstrap writes `image-verified.txt` beside them: the ComfyUI revision it checked out and each file's SHA256 as computed on the box. The identity harness is pinned to that record, so it is copied off the card before the first job.
+
+<a id='cu130'></a>
+
+### Torch for CUDA 13, opt-in
+
+The pinned server turns comfy-kitchen's CUDA backend off on a torch built for CUDA below 13, and says so at its start
+(`You need pytorch with cu130 or higher`, comfy/quant_ops.py:22-28). On the default torch, cu128, every int8 layer
+therefore runs on Triton's kernels or on the eager path. `SIMPLE_CHAT_IMAGE_TORCH=cu130` asks for the other line,
+which [image-manifest.env](../gpu/image-manifest.env) pins beside the default: torch 2.11.0+cu130, torchvision
+0.26.0+cu130 and torchaudio 2.11.0+cu130, read on the cu130 index on 2026-09-26. That is the same release as cu128's,
+with the same triton, so the CUDA line and the kitchen's backend are what differs. The index's newest torch,
+2.14.0+cu130, asks for triton 3.8 and has no torchaudio of its release. The line needs a driver for CUDA 13, which the
+rent filter asks of every offer.
+
+```sh
+SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_TORCH=cu130 bash /workspace/simple-chat/gpu/image-bootstrap.sh
+SIMPLE_CHAT_IMAGE_TORCH=cu130 SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 SIMPLE_CHAT_IMAGE_TRITON=1 bash /workspace/simple-chat/gpu/image-serve.sh   # detached in a long run, as above
+```
+
+The bootstrap installs it into a second virtual environment, `ComfyUI/.venv-cu130`, and leaves `ComfyUI/.venv` as it
+is. It can therefore run in the background beside a server started from the default environment, and a switch is then
+a restart of the server with nothing installed. It checks what a default run checks: the ComfyUI revision, the sm_120
+kernels of the torch it installed, and every pinned file's SHA256, which on a box that has the files reads the disk for
+a minute and downloads nothing. It asks for 13 GiB free and keeps no copy of the wheels in pip's cache
+(`--no-cache-dir`), since a Qwen-only box has 60 GB. Its last step writes `ComfyUI/.venv-cu130/simple-chat-ready` with
+the torch it checked. `image-serve.sh` refuses to start on cu130 without that mark, so a server never starts on an
+environment that is half built. ComfyUI's requirements name torch, torchvision and torchaudio bare, so they keep the
+pinned ones installed first.
+
+The default stays cu128, which runs on the widest range of drivers. [rent-plan.ts](../local/rent-plan.ts) prices a
+rental as before: only [the backend measurement](action-experiment.md#backend) downloads the second line's wheels. A run
+pins the torch the server reports on `/system_stats` (`pytorch`), so a drawing stage refuses a resume on the other line
+as it refuses any pin that changed.
 
 ### What the card keeps of a picture
 

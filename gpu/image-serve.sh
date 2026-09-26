@@ -15,7 +15,19 @@ port="${SIMPLE_CHAT_IMAGE_PORT:-8188}"
 device="${SIMPLE_CHAT_IMAGE_GPU:-1}"
 [[ "$port" =~ ^[0-9]+$ && "$device" =~ ^[0-9]$ ]] || { echo 'Use a numeric SIMPLE_CHAT_IMAGE_PORT and a single-digit SIMPLE_CHAT_IMAGE_GPU index.' >&2; exit 1; }
 (( port > 0 && port <= 65535 )) || exit 1
-[[ -x "$comfy_dir/.venv/bin/python" ]] || { echo 'Run image-bootstrap.sh first.' >&2; exit 1; }
+# Which torch the server runs on (docs/gpu.md#cu130): cu128 from ComfyUI/.venv, the default, or cu130 from
+# ComfyUI/.venv-cu130, which image-bootstrap.sh builds beside it when asked, so that a switch is a restart and no
+# install. That one is built beside a running server, and it starts only once its install has ended whole, with the
+# mark the bootstrap writes last. A run pins the torch /system_stats reports (local/image-batch.ts `serverPins`).
+torch_line="${SIMPLE_CHAT_IMAGE_TORCH:-cu128}"
+case "$torch_line" in
+  cu128) venv="$comfy_dir/.venv" ;;
+  cu130) venv="$comfy_dir/.venv-cu130"
+    [[ -f "$venv/simple-chat-ready" ]] || { echo 'No whole cu130 environment; run image-bootstrap.sh with SIMPLE_CHAT_IMAGE_TORCH=cu130 first.' >&2; exit 1; } ;;
+  *) echo 'Use SIMPLE_CHAT_IMAGE_TORCH=cu128 or cu130.' >&2; exit 1 ;;
+esac
+python="$venv/bin/python"
+[[ -x "$python" ]] || { echo 'Run image-bootstrap.sh first.' >&2; exit 1; }
 [[ "$(git -C "$comfy_dir" rev-parse HEAD)" = "$COMFYUI_REVISION" ]] || { echo 'Unexpected ComfyUI revision; rerun image-bootstrap.sh.' >&2; exit 1; }
 # The Qwen checkpoint is additive (`true`): the same server serves it, from its own three files and its own two
 # graphs. `only` is a box image-bootstrap.sh gave Qwen's files and nothing of Krea's, and it serves Qwen alone.
@@ -92,9 +104,10 @@ else
   echo "Starting ComfyUI $COMFYUI_VERSION for $IMAGE_MODEL_NAME on GPU $device, loopback port $port, temp in $temp_root; post $workflow."
 fi
 if [[ "$triton" = 1 ]]; then echo "With comfy-kitchen's Triton backend (SIMPLE_CHAT_IMAGE_TRITON=1)."; fi
+if [[ "$torch_line" != cu128 ]]; then echo "On $(<"$venv/simple-chat-ready") (SIMPLE_CHAT_IMAGE_TORCH=$torch_line)."; fi
 # The sweeper starts before the exec, with this shell's PID, which the exec hands to ComfyUI, and it stops by itself
 # once that PID is gone. Its rows are counts and codes, in this script's log beside the server's own lines.
-"$comfy_dir/.venv/bin/python" "$sweeper" --pid "$$" --temp "$temp_root/temp" --port "$port" &
+"$python" "$sweeper" --pid "$$" --temp "$temp_root/temp" --port "$port" &
 # --disable-metadata: ComfyUI writes the whole prompt into the PNG by default, and a picture leaves the card.
 # --disable-all-custom-nodes and --disable-api-nodes: only the pinned core runs, and nothing calls a paid endpoint.
 # --preview-method none: previews cost VRAM on the card the language model does not share.
@@ -102,6 +115,6 @@ if [[ "$triton" = 1 ]]; then echo "With comfy-kitchen's Triton backend (SIMPLE_C
 # ComfyUI prints which one it chose at startup, and that line belongs with the seconds-per-picture number.
 # /history holds a prompt until the bot or the sweeper deletes its record, and output/ holds what the batch harness
 # drew — do not copy either home.
-exec "$comfy_dir/.venv/bin/python" "$comfy_dir/main.py" \
+exec "$python" "$comfy_dir/main.py" \
   --listen 127.0.0.1 --port "$port" --disable-auto-launch --temp-directory "$temp_root" \
   --disable-metadata --disable-all-custom-nodes --disable-api-nodes --preview-method none ${flags[@]+"${flags[@]}"}

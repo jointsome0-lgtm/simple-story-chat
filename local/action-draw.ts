@@ -211,13 +211,15 @@ export type DrawStageOptions = { stage: 'smoke' | 'portraits' | 'main'; root: st
 // `session`: the stage's one socket (image-batch.ts `stageSocket`), and `outage` the window each cell gets on it; with
 // them the cells go in round two's order (`drawAhead`). Without them, as in the pilot's baseline, a cell opens a socket
 // of its own, waits out nothing and is whole before the next, as round one did (`drawInTurn`). `cursor`: where the last
-// clean job's read of the card's log at its over ended, and on which socket. `observe`: the pilot's ear.
+// clean job's read of the card's log at its over ended, and on which socket. `observe`: the pilot's ear, and
+// `stopAtFailure` its compile passes' rule, that any failed cell ends the stage (`failure`).
 type Run = { root: string; index: DrawIndex; save: () => void; comfy: Comfy; plans: Map<string, StoryPlan>; until: number;
   checkpoint: string; front: { graph: Graph; canvas: { width: number; height: number } }; base: Graph; resolution: number;
   sampler: { steps: number; sampler: string; scheduler: string; cfg: number }; frontSampler: { steps: number; sampler: string; scheduler: string; cfg: number };
   uploaded: Map<string, string>; tokens?: (prompt: string, images: number, front: boolean) => { prompt: number; conditioning: number } | undefined;
   options: DrawStageOptions; log: (event: object) => void; session?: StageSocket; outage?: { windowMs: number; pauseMs: number };
-  cursor?: LogCursor & { epoch: number }; observe?: (cell: ActionCell, record: CellRecord, cached: string[] | undefined) => void };
+  cursor?: LogCursor & { epoch: number }; observe?: (cell: ActionCell, record: CellRecord, cached: string[] | undefined) => void;
+  stopAtFailure?: boolean };
 
 // The server a stage talks to, and when it must stop: `end` at `--until`, and the reserve a minute after it for a job
 // already submitted (image-batch.ts `Comfy`).
@@ -516,8 +518,8 @@ function failure(run: Run, cell: ActionCell, base: Base, error: unknown, outage:
   run.save();
   log({ event: 'cell_failed', key: cell.key, code, ...(httpStatus === undefined ? {} : { httpStatus }), ...(oom ? { oom } : {}), ...waited });
   // The graph or the server, not this picture: the run stops, and a resume goes on after this cell, or draws it again
-  // when the network lost it after its submit (`redraws`).
-  if (!stopsTheRun(code)) return undefined;
+  // when the network lost it after its submit (`redraws`). A stage that stops at any failure stops here too.
+  if (!stopsTheRun(code) && !run.stopAtFailure) return undefined;
   index.error ??= code;
   return 'stopped';
 }
@@ -706,12 +708,13 @@ function launch(run: Run, one: { cell: ActionCell; base: Base; prepared: Prepare
 // read from (round one's, each file relative to `root`). `roundTwo` draws as round two will, on the stage's one socket
 // with its window, each job sent as soon as the one before it is over (`drawAhead`); otherwise each cell is whole
 // before the next, on a socket of its own and with no window, as round one did (`drawInTurn`). `observe` hears each
-// cell once it is saved and recorded, in the cells' order, with the nodes the server answered from its cache. The
-// pilot checks the card first.
+// cell once it is saved and recorded, in the cells' order, with the nodes the server answered from its cache. `graph`
+// changes both pinned graphs before anything is drawn, as the pilot's compile passes add their node, and
+// `stopAtFailure` ends the stage at the first failed cell. The pilot checks the card first.
 export type PilotOptions = { root: string; comfy: string; until: number; checkpoint: string; pins: Record<string, string | number>;
   plans: StoryPlan[]; cells: ActionCell[]; seeded: Record<string, CellRecord>; roundTwo: boolean; timeoutMs?: number; waitMs?: number;
   pollMs?: number; outage?: { windowMs?: number; pauseMs?: number }; log?: (event: object) => void;
-  observe?: (cell: ActionCell, record: CellRecord, cached: string[] | undefined) => void };
+  observe?: (cell: ActionCell, record: CellRecord, cached: string[] | undefined) => void; graph?: (graph: Graph) => Graph; stopAtFailure?: boolean };
 export async function drawPilot(options: PilotOptions): Promise<{ index: DrawIndex; ended: 'done' | 'until' | 'stopped' }> {
   const root = resolve(options.root);
   if (options.cells.some(cell => isSharp(cell.story) || storyDir(root, cell.story).split(/[\\/]/).includes('sealed'))) {
@@ -719,10 +722,12 @@ export async function drawPilot(options: PilotOptions): Promise<{ index: DrawInd
   }
   mkdirSync(root, { recursive: true, mode: 0o700 });
   const index: DrawIndex = { pins: options.pins, startedAt: new Date().toISOString(), cells: { ...options.seeded } };
+  const graph = options.graph ?? ((one: Graph) => one);
   const run = makeRun({ stage: 'main', root, comfy: options.comfy, until: options.until, timeoutMs: options.timeoutMs, waitMs: options.waitMs,
     pollMs: options.pollMs, log: options.log }, { root, index, comfy: stageComfy(options), plans: new Map(options.plans.map(plan => [plan.id, plan])),
-    checkpoint: options.checkpoint, base: readGraph(ACTION_GRAPH), frontGraph: readGraph(FRONT_GRAPH) });
+    checkpoint: options.checkpoint, base: graph(readGraph(ACTION_GRAPH)), frontGraph: graph(readGraph(FRONT_GRAPH)) });
   run.observe = options.observe;
+  run.stopAtFailure = options.stopAtFailure;
   if (options.roundTwo) {
     run.session = stageSocket(options.comfy);
     run.outage = windowOf(options.outage, false);

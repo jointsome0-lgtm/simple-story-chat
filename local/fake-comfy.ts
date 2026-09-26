@@ -51,8 +51,9 @@ export type FakeComfyOptions = {
   // the delete of its record is answered (`delete`). Every connection is cut and the port refuses new ones, as a
   // tunnel whose ssh has died does; the jobs go on, as they do on the card.
   drops?: { at: 'prompt' | 'start' | 'view' | 'delete'; job: number; ms: number }[];
-  // The server's command line on /system_stats, and lines its log has from its start (the pilot's Triton evidence).
-  argv?: string[]; startupLog?: string[];
+  // The server's command line and torch on /system_stats, and lines its log has from its start (the pilot's evidence
+  // of Triton and of comfy-kitchen's CUDA backend). The torch is `fake` unless set.
+  argv?: string[]; pytorch?: string; startupLog?: string[];
   // Whether a picture's pixels follow from the graph it was drawn from alone, as on a card that draws the same inputs
   // alike, rather than from the job's number (the pilot's determinism check, local/image-pilot.ts).
   picturesByGraph?: boolean;
@@ -62,10 +63,11 @@ export type FakeCall = { method: string; path: string; id?: string };
 // What a job was, for a test to assert on. Never its text. `slots`: each reference slot of the encoder in slot order,
 // the file on the loader behind it, the size a scale node between them hands on (`null` without one), and the
 // rectangle an ImageCrop between the loader and the scale node cuts (`null` without one). `images`: each picture a
-// saving node wrote, with its size.
+// saving node wrote, with its size. `compiled`: the TorchCompileModel on the sampler's model input, its backend and the
+// type of the node whose model it takes (`null` without one); the fake runs it as it runs every node, as nothing.
 export type FakeJob = { references: number; width: number; height: number; cached: number; outcome: 'success' | 'error' | 'interrupted';
   slots: { slot: number; file: string; scaled: { width: number; height: number } | null; cropped: { x: number; y: number; width: number; height: number } | null }[];
-  images: { node: string; width: number; height: number }[] } & MaskedJob;
+  images: { node: string; width: number; height: number }[]; compiled: { backend: string; over: string | null } | null } & MaskedJob;
 
 // A mask the pinned mask nodes make (comfy_extras/nodes_mask.py at 73c9bad4), computed as they compute it: SolidMask
 // fills, MaskComposite adds, subtracts or multiplies its source into its destination at x, y and clamps the whole to
@@ -236,6 +238,9 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
     const references = Object.values(graph).filter(node => node.class_type === 'LoadImage').length;
     const sampler = Object.values(graph).find(node => 'seed' in node.inputs || 'noise_seed' in node.inputs);
     const source = (value: unknown) => (Array.isArray(value) ? graph[String(value[0])] : undefined);
+    const compiler = source(sampler?.inputs.model);
+    const compiled = compiler?.class_type === 'TorchCompileModel'
+      ? { backend: String(compiler.inputs.backend), over: source(compiler.inputs.model)?.class_type ?? null } : null;
     const noised = source(sampler?.inputs.latent_image);
     const latent = noised?.class_type === 'SetLatentNoiseMask' ? source(noised.inputs.samples) : noised;
     // A latent the VAE encoded from an uploaded picture has that picture's size (local/image-t-probe.ts's latent starts).
@@ -321,7 +326,7 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
     history.set(job.id, { prompt: [job.number, job.id, {}, {}, []], outputs,
       status: { status_str: outcome === 'success' ? 'success' : 'error', completed: outcome === 'success', messages }, meta: {} });
     say(`Prompt executed in ${((performance.now() - began) / 1000).toFixed(2)} seconds`);
-    jobs.push({ references, width, height, cached: cached.length, outcome, slots, images, ...masked });
+    jobs.push({ references, width, height, cached: cached.length, outcome, slots, images, compiled, ...masked });
     // The record is written before the socket hears the job is over (main.py), and a delete sent then finds it.
     tell(job, 'executing', { node: null });
   }
@@ -397,7 +402,7 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
         for (const wake of hearing) wake();
         // The shape comfy/model_management.py reports, with fixed numbers.
         return json({ system: { os: 'posix', ram_total: 64 * GIB, ram_free: 50 * GIB, comfyui_version: 'fake', python_version: 'fake',
-          pytorch_version: 'fake', embedded_python: false, argv: options.argv ?? [] },
+          pytorch_version: options.pytorch ?? 'fake', embedded_python: false, argv: options.argv ?? [] },
         devices: [{ name: 'fake card', type: 'cuda', index: 0, vram_total: 32 * GIB, vram_free: 10 * GIB,
           torch_vram_total: 23 * GIB, torch_vram_free: 1 * GIB }] });
       }
