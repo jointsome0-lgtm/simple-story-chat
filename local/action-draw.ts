@@ -15,8 +15,8 @@ import { performance } from 'node:perf_hooks';
 import { ACTION_SEEDS } from '../examples/action-set.ts';
 import { CLEANUP_RESERVE_MS, RECORD_LIFE_MS, RIDES, SAMPLER_DEFAULTS, apiGraph, applyToWorkflow, charge, drawOne, encoderResolution, logCursor,
   logLines, partialLoadsAfter, pngSize, referenceGeometry, referenceSlots, ride, samplerSettingsOf, serverPins, settled, stageSocket,
-  stopsTheRun, textEncoderOf, transportCode, uploadReference } from './image-batch.ts';
-import type { Comfy, Graph, LogCursor, Outage, Phases, StageSocket, Vram } from './image-batch.ts';
+  stopsTheRun, submitOnStage, textEncoderOf, transportCode, uploadReference } from './image-batch.ts';
+import type { Comfy, Graph, LogCursor, Outage, Phases, StagedJob, StageSocket, Vram } from './image-batch.ts';
 import { cardOf, pinsOf } from './image-identity.ts';
 import { portraitCanvas } from './image-portraits.ts';
 import { safeErrorDetails } from './model-error.ts';
@@ -125,8 +125,10 @@ export function smokeCells(plans: StoryPlan[]): ActionCell[] {
 
 // ---- The record ----
 
+// `lost`: how many of the cell's jobs the network lost after their submit before this record's, each drawn again by a
+// resume (`redraws`).
 export type CellRecord = { key: string; kind: CellKind; story: string; id: string; seed: number; arm?: ActionArm;
-  status: 'drawn' | 'failed' | 'out'; code?: string; httpStatus?: number; oom?: boolean; smoke?: boolean;
+  status: 'drawn' | 'failed' | 'out'; code?: string; httpStatus?: number; oom?: boolean; smoke?: boolean; lost?: number;
   steps?: number; sampler?: string; scheduler?: string; cfg?: number;
   file?: string; sha256?: string; bytes?: number; width?: number; height?: number; references: number; referenceSizes?: [number, number][];
   totalMs?: number; viewMs?: number; uploadMs?: number; outageMs?: number; loaderCacheMiss?: boolean; first?: boolean; phases?: Phases;
@@ -138,6 +140,10 @@ export type SmokeVerdict = { pass: boolean; tOut: boolean; cells: number; drawn:
 export type DrawIndex = { pins: Record<string, string | number>; startedAt: string; completedAt?: string; cells: Record<string, CellRecord>;
   smoke?: { keys: string[]; extraView?: string; verdict?: SmokeVerdict }; admitted?: Record<string, boolean>;
   admission?: { seed: number; cells: number; needMs: number; leftMs: number; admitted: boolean }[]; stopped?: 'until' | 'admission'; error?: string };
+
+// A cell the network lost after its submit (`comfy_connection_lost`), which a resume draws again, as the owner decided
+// on 2026-09-26 (docs/action-experiment.md#dropped-connection); every other outcome is kept.
+export const redraws = (one: CellRecord) => one.status === 'failed' && one.code === 'comfy_connection_lost';
 
 const canvasOf = (kind: CellKind, front: { width: number; height: number }) => kind === 'front' ? front : kind === 'view' ? VIEW_CANVAS : FRAME_CANVAS;
 const heard = (one: CellRecord) => one.phases?.sampleMs !== undefined && one.loaderCacheMiss !== undefined;
@@ -202,9 +208,10 @@ export function pricing(smoke: CellRecord[]): (cell: ActionCell) => number {
 export type DrawStageOptions = { stage: 'smoke' | 'portraits' | 'main'; root: string; comfy: string; until: number;
   tokenizer?: QwenTokenizer; timeoutMs?: number; waitMs?: number; pollMs?: number; outage?: { windowMs?: number; pauseMs?: number };
   log?: (event: object) => void };
-// `session`: the stage's one socket (image-batch.ts `stageSocket`), and `outage` the window each cell gets on it;
-// without one, as in the pilot's baseline, a cell opens a socket of its own and waits out nothing, as round one did.
-// `cursor`: where the last clean cell's read of the card's log ended, and on which socket. `observe`: the pilot's ear.
+// `session`: the stage's one socket (image-batch.ts `stageSocket`), and `outage` the window each cell gets on it; with
+// them the cells go in round two's order (`drawAhead`). Without them, as in the pilot's baseline, a cell opens a socket
+// of its own, waits out nothing and is whole before the next, as round one did (`drawInTurn`). `cursor`: where the last
+// clean job's read of the card's log at its over ended, and on which socket. `observe`: the pilot's ear.
 type Run = { root: string; index: DrawIndex; save: () => void; comfy: Comfy; plans: Map<string, StoryPlan>; until: number;
   checkpoint: string; front: { graph: Graph; canvas: { width: number; height: number } }; base: Graph; resolution: number;
   sampler: { steps: number; sampler: string; scheduler: string; cfg: number }; frontSampler: { steps: number; sampler: string; scheduler: string; cfg: number };
@@ -342,7 +349,7 @@ async function stageCells(run: Run, ordered: StoryPlan[]): Promise<DrawIndex> {
   // waits for its own time.
   const admit = (seed: number, cells: ActionCell[]) => {
     if (index.admitted?.[seed]) return true;
-    const left = cells.filter(cell => !index.cells[cell.key]);
+    const left = cells.filter(cell => !index.cells[cell.key] || redraws(index.cells[cell.key]));
     const needMs = left.reduce((sum, cell) => sum + price(cell), 0), leftMs = options.until - Date.now();
     const admitted = needMs <= leftMs;
     (index.admission ??= []).push({ seed, cells: left.length, needMs: Math.min(needMs, Number.MAX_SAFE_INTEGER), leftMs: Math.max(0, leftMs), admitted });
@@ -373,15 +380,18 @@ async function finish(run: Run, ended: 'done' | 'until' | 'stopped' | 'admission
   return run.index;
 }
 
+// Where a reference of a cell was drawn: the key of its record, its kind, and the name its codes use.
+function referenceOf(run: Run, cell: ActionCell, ref: string): { key: string; kind: CellKind; name: string } {
+  const kind: CellKind = ref === 'L' ? 'frame' : run.plans.get(cell.story)?.views.some(view => view.id === ref) ? 'view' : 'front';
+  return { key: ref === 'L' ? frameKey(cell.story, cell.seed, 'L') : `${kind}:${ref}`, kind, name: ref === 'L' ? 'l' : kind };
+}
+
 // The files a cell's slots send, each checked against the record of the cell that drew it: drawn, and the very file
 // that was drawn, on its canvas. Anything else keeps the cell from the card with the code of what is missing.
 function referencesOf(run: Run, cell: ActionCell): { files: { path: string; bytes: Buffer }[] } | { out: string } {
-  const plan = run.plans.get(cell.story);
   const files: { path: string; bytes: Buffer }[] = [];
   for (const ref of cell.refs) {
-    const kind: CellKind = ref === 'L' ? 'frame' : plan?.views.some(view => view.id === ref) ? 'view' : 'front';
-    const key = ref === 'L' ? frameKey(cell.story, cell.seed, 'L') : `${kind}:${ref}`;
-    const name = ref === 'L' ? 'l' : kind;
+    const { key, kind, name } = referenceOf(run, cell, ref);
     const known = run.index.cells[key];
     if (!known || known.status !== 'drawn') return { out: known?.status === 'out' ? known.code ?? `${name}_missing` : known ? `${name}_failed` : `${name}_missing` };
     const path = join(run.root, known.file ?? '');
@@ -408,94 +418,148 @@ async function upload(comfy: Comfy, bytes: Uint8Array, outage: Outage | undefine
   }
 }
 
+// A cell's record as it begins: which cell, how many references it sends, whether the smoke drew it, and how many of
+// its jobs the network lost after their submit before this one (`lost`, docs/action-experiment.md#dropped-connection).
+function recordBase(cell: ActionCell, smoke: boolean, known: CellRecord | undefined) {
+  const lost = known && redraws(known) ? (known.lost ?? 0) + 1 : 0;
+  return { key: cell.key, kind: cell.kind, story: cell.story, id: cell.id, seed: cell.seed, ...(cell.arm ? { arm: cell.arm } : {}),
+    references: cell.refs.length, ...(smoke ? { smoke } : {}), ...(lost ? { lost } : {}) };
+}
+type Base = ReturnType<typeof recordBase>;
+function markOut(run: Run, base: Base, code: string) {
+  run.index.cells[base.key] = { ...base, status: 'out', code };
+  run.save();
+  run.log({ event: 'cell_out', key: base.key, code });
+}
+
+// A cell made ready for the card: its new references uploaded (`uploadMs`, less what the network took), the graph
+// filled, and the graph as it goes out checked: every slot the file its plan names, in order, scaled where the doc
+// says. `sizes`: the size each reference reaches the encoder at, for the record.
+async function prepare(run: Run, cell: ActionCell, files: { path: string; bytes: Buffer }[], outage: Outage | undefined, smoke: boolean) {
+  let uploadMs = 0;
+  const names: string[] = [];
+  for (const one of files) {
+    const hash = sha256(one.bytes);
+    let name = run.uploaded.get(hash);
+    if (name === undefined) {
+      const began = performance.now(), waited = outage?.spentMs ?? 0;
+      name = await upload(run.comfy, one.bytes, outage);
+      uploadMs += performance.now() - began - ((outage?.spentMs ?? 0) - waited);
+      run.uploaded.set(hash, name);
+    }
+    names.push(name);
+  }
+  const canvas = canvasOf(cell.kind, run.front.canvas);
+  const scaled = cell.kind !== 'frame' || !['C', 'V', 'T'].includes(cell.arm!) ? []
+    : cell.refs.map((ref, at) => at + 1).filter(slot => !(cell.arm === 'T' && slot === 1));
+  const built = cell.kind === 'front' ? { graph: run.front.graph, copies: [] as string[] } : actionGraph(run.base, scaled, smoke);
+  const recipe = cell.kind === 'front' ? run.frontSampler : run.sampler;
+  const filled = applyToWorkflow(built.graph, { checkpoint: run.checkpoint, prompt: cell.prompt, negative: '', seed: cell.seed, ...recipe, ...canvas,
+    ...(cell.kind === 'front' ? {} : { references: names }) });
+  const sent = sentSlots(filled);
+  const slotsRight = sent.length === names.length && sent.every((slot, at) => slot.file === names[at] && slot.scaled === scaled.includes(at + 1));
+  if (!slotsRight) throw Object.assign(new Error('workflow_slot_mismatch'), { code: 'workflow_slot_mismatch' });
+  const sizes = files.map((one, at): [number, number] => {
+    if (scaled.includes(at + 1)) return [SCALED.width, SCALED.height];
+    const own = pngSize(one.bytes);
+    return referenceGeometry(own.width, own.height, run.resolution);
+  });
+  return { names, uploadMs, recipe, filled, copies: built.copies, sizes };
+}
+type Prepared = Awaited<ReturnType<typeof prepare>>;
+type Drawn = Awaited<ReturnType<typeof drawOne>>;
+
+// A picture that is down, saved into its story's directory and recorded: it is kept whatever comes next, the end
+// included, so that nothing drawn is lost or counted as never sent.
+function keep(run: Run, cell: ActionCell, base: Base, prepared: Prepared, drawn: Drawn, outage: Outage | undefined, partialModelLoadEvents?: number) {
+  const { index } = run;
+  const path = fileOf(run.root, cell);
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeFileSync(path, drawn.bytes, { mode: 0o600 });
+  const size = pngSize(drawn.bytes), names = prepared.names;
+  const group = (one: CellRecord) => one.status === 'drawn' && (cell.kind === 'frame' ? one.arm === cell.arm : one.kind === cell.kind);
+  const counted = run.tokens?.(cell.prompt, cell.kind === 'front' ? 0 : names.length, cell.kind === 'front');
+  const record: CellRecord = { ...base, status: 'drawn', ...prepared.recipe, file: relative(run.root, path), sha256: sha256(drawn.bytes), bytes: drawn.bytes.length,
+    width: size.width, height: size.height, ...(names.length ? { referenceSizes: prepared.sizes } : {}), totalMs: drawn.totalMs, viewMs: drawn.viewMs,
+    ...(prepared.uploadMs ? { uploadMs: Math.round(prepared.uploadMs) } : {}), ...(outage?.spentMs ? { outageMs: outage.spentMs } : {}),
+    first: !Object.values(index.cells).some(group), ...drawn.timing,
+    vram: drawn.vram, vramSamples: drawn.memory.samples, ...(drawn.memory.ramMiB ? { ramMiB: drawn.memory.ramMiB } : {}),
+    promptChars: cell.prompt.length, ...(counted ? { promptTokens: counted.prompt, conditioningTokens: counted.conditioning } : {}), slotsRight: true,
+    ...(drawn.copies ? { copies: drawn.copies.map(copy => ({ node: copy.node, ...pngSize(copy.bytes) })) } : {}),
+    ...(partialModelLoadEvents === undefined ? {} : { partialModelLoadEvents }) };
+  index.cells[cell.key] = record;
+  run.save();
+  run.log({ event: 'cell_drawn', key: cell.key, totalMs: drawn.totalMs, references: names.length, width: size.width, height: size.height });
+  return record;
+}
+
+// What a cell's failure leaves. `until`, with no record: whatever failed once the end had come was cut by it, and a job
+// its time no longer covered was never sent. `stopped`, with no record either: a cell that never reached the card, the
+// network or its socket having stayed down for the whole window (docs/action-experiment.md#dropped-connection), for a
+// resume to draw. Otherwise a failed record, and `stopped` when its code says the graph, the server or the network
+// rather than this picture (`stopsTheRun`). `index.error` keeps the first code that stopped the stage.
+function failure(run: Run, cell: ActionCell, base: Base, error: unknown, outage: Outage | undefined): 'until' | 'stopped' | undefined {
+  const { index, comfy, log } = run;
+  const raw = (error as { code?: unknown }).code;
+  const code = typeof raw === 'string' && DRAW_CODES.includes(raw) ? raw : 'image_failed';
+  const { httpStatus } = safeErrorDetails(error);
+  const oom = (error as { oom?: unknown }).oom === true;
+  const waited = outage?.spentMs ? { outageMs: outage.spentMs } : {};
+  if (comfy.end?.aborted || raw === 'not_admitted') return 'until';
+  if (code === 'comfy_unreachable' || code === 'comfy_socket_unavailable') {
+    index.error ??= code;
+    run.save();
+    log({ event: 'cell_unsent', key: cell.key, code, ...waited });
+    return 'stopped';
+  }
+  index.cells[cell.key] = { ...base, status: 'failed', code, ...(httpStatus === undefined ? {} : { httpStatus }), ...(oom ? { oom } : {}), ...waited };
+  run.save();
+  log({ event: 'cell_failed', key: cell.key, code, ...(httpStatus === undefined ? {} : { httpStatus }), ...(oom ? { oom } : {}), ...waited });
+  // The graph or the server, not this picture: the run stops, and a resume goes on after this cell, or draws it again
+  // when the network lost it after its submit (`redraws`).
+  if (!stopsTheRun(code)) return undefined;
+  index.error ??= code;
+  return 'stopped';
+}
+
+// The cells in order, each with its outcome at the end but those the end or a stop left for a resume. On the stage's
+// one socket they go in round two's order (`drawAhead`); without it, as in the pilot's baseline, in round one's
+// (`drawInTurn`).
 async function drawCells(run: Run, cells: ActionCell[], smoke: boolean, price?: (cell: ActionCell) => number): Promise<'done' | 'until' | 'stopped'> {
-  const { index, comfy, log, session } = run;
+  return run.session && run.outage ? drawAhead(run, cells, smoke, price) : drawInTurn(run, cells, smoke, price);
+}
+
+// Round one's order: each cell whole before the next is asked for, on a socket of its own; its picture saved and
+// recorded before anything more is asked of the card, and the card's log read before and after each clean job.
+async function drawInTurn(run: Run, cells: ActionCell[], smoke: boolean, price?: (cell: ActionCell) => number): Promise<'done' | 'until' | 'stopped'> {
+  const { index, comfy } = run;
   for (const cell of cells) {
-    // A cell with an outcome keeps it: drawn, out, or failed, a failure that stopped the run included. Nothing is drawn
-    // again (docs/action-experiment.md#drawing).
-    if (index.cells[cell.key]) continue;
+    // A cell with an outcome keeps it: drawn, out, or failed, a failure that stopped the run included; one the network
+    // lost after its submit is drawn again (docs/action-experiment.md#dropped-connection).
+    const known = index.cells[cell.key];
+    if (known && !redraws(known)) continue;
     const sealed = isSharp(cell.story);
-    const base = { key: cell.key, kind: cell.kind, story: cell.story, id: cell.id, seed: cell.seed, ...(cell.arm ? { arm: cell.arm } : {}),
-      references: cell.refs.length, ...(smoke ? { smoke } : {}) };
+    const base = recordBase(cell, smoke, known);
     const refs = referencesOf(run, cell);
     if ('out' in refs) {
-      index.cells[cell.key] = { ...base, status: 'out', code: refs.out };
-      run.save();
-      log({ event: 'cell_out', key: cell.key, code: refs.out });
+      markOut(run, base, refs.out);
       continue;
     }
     // A cell begins only if it can end by `--until`, and that is asked again right before its job goes out, after the
     // uploads, the log and the socket, which may have taken the time it had (image-batch.ts `drawOne`'s `admit`).
     const fits = () => !comfy.end?.aborted && (!price || Date.now() + price(cell) <= run.until);
     if (!fits()) return 'until';
-    // The cell's own window through a dropped connection, on the stage's socket; `outageMs` in its record.
-    const outage: Outage | undefined = session && run.outage ? { ...run.outage, spentMs: 0 } : undefined;
-    const outageMs = () => (outage?.spentMs ? { outageMs: outage.spentMs } : {});
     try {
-      let uploadMs = 0;
-      const names: string[] = [];
-      for (const one of refs.files) {
-        const hash = sha256(one.bytes);
-        let name = run.uploaded.get(hash);
-        if (name === undefined) {
-          const began = performance.now(), waited = outage?.spentMs ?? 0;
-          name = await upload(comfy, one.bytes, outage);
-          uploadMs += performance.now() - began - ((outage?.spentMs ?? 0) - waited);
-          run.uploaded.set(hash, name);
-        }
-        names.push(name);
-      }
-      const canvas = canvasOf(cell.kind, run.front.canvas);
-      const scaled = cell.kind !== 'frame' || !['C', 'V', 'T'].includes(cell.arm!) ? []
-        : cell.refs.map((ref, at) => at + 1).filter(slot => !(cell.arm === 'T' && slot === 1));
-      const built = cell.kind === 'front' ? { graph: run.front.graph, copies: [] as string[] } : actionGraph(run.base, scaled, smoke);
-      const recipe = cell.kind === 'front' ? run.frontSampler : run.sampler;
-      const filled = applyToWorkflow(built.graph, { checkpoint: run.checkpoint, prompt: cell.prompt, negative: '', seed: cell.seed, ...recipe, ...canvas,
-        ...(cell.kind === 'front' ? {} : { references: names }) });
-      // The graph as it goes out: every slot the file its plan names, in order, scaled where the doc says.
-      const sent = sentSlots(filled);
-      const slotsRight = sent.length === names.length && sent.every((slot, at) => slot.file === names[at] && slot.scaled === scaled.includes(at + 1));
-      if (!slotsRight) throw Object.assign(new Error('workflow_slot_mismatch'), { code: 'workflow_slot_mismatch' });
-      // Where the card's log stood before the job, for a clean story: where the last clean cell's read after its job
-      // ended, while the stage's socket has stayed the one it was then, and otherwise a read now. The cursor holds from
-      // one clean job to the next, and is dropped after a failure, a sealed cell and a socket that closed, as the
-      // server's does when it starts again.
-      const before = sealed ? undefined : run.cursor && session?.open && run.cursor.epoch === session.epoch ? run.cursor
-        : logCursor(await logLines(comfy));
-      const drawn = await drawOne(comfy, filled, { pollMs: run.options.pollMs, waitMs: run.options.waitMs ?? WAIT_MS, sampleEvery: 1, requireSocket: true,
-        admit: fits, ...(built.copies.length ? { copies: built.copies } : {}), ...(session && outage ? { stage: { socket: session, outage } } : {}) });
-      // The picture is down, and it is kept whatever comes next, the end included: saved and recorded before anything
-      // more is asked of the card, so that nothing drawn is lost or counted as never sent.
+      const prepared = await prepare(run, cell, refs.files, undefined, smoke);
+      const before = sealed ? undefined : logCursor(await logLines(comfy));
+      const drawn = await drawOne(comfy, prepared.filled, { pollMs: run.options.pollMs, waitMs: run.options.waitMs ?? WAIT_MS, sampleEvery: 1,
+        requireSocket: true, admit: fits, ...(prepared.copies.length ? { copies: prepared.copies } : {}) });
       await settled();
-      const path = fileOf(run.root, cell);
-      mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-      writeFileSync(path, drawn.bytes, { mode: 0o600 });
-      const size = pngSize(drawn.bytes);
-      const sizes = refs.files.map((one, at): [number, number] => {
-        if (scaled.includes(at + 1)) return [SCALED.width, SCALED.height];
-        const own = pngSize(one.bytes);
-        return referenceGeometry(own.width, own.height, run.resolution);
-      });
-      const group = (one: CellRecord) => one.status === 'drawn' && (cell.kind === 'frame' ? one.arm === cell.arm : one.kind === cell.kind);
-      const counted = run.tokens?.(cell.prompt, cell.kind === 'front' ? 0 : names.length, cell.kind === 'front');
-      const record: CellRecord = { ...base, status: 'drawn', ...recipe, file: relative(run.root, path), sha256: sha256(drawn.bytes), bytes: drawn.bytes.length,
-        width: size.width, height: size.height, ...(names.length ? { referenceSizes: sizes } : {}), totalMs: drawn.totalMs, viewMs: drawn.viewMs,
-        ...(uploadMs ? { uploadMs: Math.round(uploadMs) } : {}), ...outageMs(), first: !Object.values(index.cells).some(group), ...drawn.timing,
-        vram: drawn.vram, vramSamples: drawn.memory.samples, ...(drawn.memory.ramMiB ? { ramMiB: drawn.memory.ramMiB } : {}),
-        promptChars: cell.prompt.length, ...(counted ? { promptTokens: counted.prompt, conditioningTokens: counted.conditioning } : {}), slotsRight,
-        ...(drawn.copies ? { copies: drawn.copies.map(copy => ({ node: copy.node, ...pngSize(copy.bytes) })) } : {}) };
-      index.cells[cell.key] = record;
-      run.save();
-      log({ event: 'cell_drawn', key: cell.key, totalMs: drawn.totalMs, references: names.length, width: size.width, height: size.height });
+      const record = keep(run, cell, base, prepared, drawn, undefined);
       if (comfy.end?.aborted) return 'until';
-      // The card's log after the job, for a clean story alone, once the picture is safe; where it ends is the next
-      // clean job's start.
-      run.cursor = undefined;
+      // The card's log after the job, for a clean story alone, once the picture is safe.
       if (!sealed) {
-        const after = await logLines(comfy);
-        const partialModelLoadEvents = partialLoadsAfter(before, after);
-        const reached = logCursor(after);
-        if (session && reached) run.cursor = { ...reached, epoch: session.epoch };
+        const partialModelLoadEvents = partialLoadsAfter(before, await logLines(comfy));
         if (partialModelLoadEvents !== undefined) {
           record.partialModelLoadEvents = partialModelLoadEvents;
           run.save();
@@ -503,41 +567,149 @@ async function drawCells(run: Run, cells: ActionCell[], smoke: boolean, price?: 
       }
       run.observe?.(cell, record, drawn.cached);
     } catch (error) {
-      run.cursor = undefined;
-      const raw = (error as { code?: unknown }).code;
-      const code = typeof raw === 'string' && DRAW_CODES.includes(raw) ? raw : 'image_failed';
-      const { httpStatus } = safeErrorDetails(error);
-      const oom = (error as { oom?: unknown }).oom === true;
-      // Whatever failed once the end had come was cut by it, and a job its time no longer covered was never sent:
-      // neither is this cell's result.
-      if (comfy.end?.aborted || raw === 'not_admitted') return 'until';
-      // Nor is a cell that never reached the card, the network or its socket having stayed down for the whole window
-      // (docs/action-experiment.md#dropped-connection): nothing is recorded for it, and the stage stops for a resume
-      // to draw it.
-      if (code === 'comfy_unreachable' || code === 'comfy_socket_unavailable') {
-        index.error = code;
-        run.save();
-        log({ event: 'cell_unsent', key: cell.key, code, ...outageMs() });
-        return 'stopped';
-      }
-      index.cells[cell.key] = { ...base, status: 'failed', code, ...(httpStatus === undefined ? {} : { httpStatus }), ...(oom ? { oom } : {}), ...outageMs() };
-      run.save();
-      log({ event: 'cell_failed', key: cell.key, code, ...(httpStatus === undefined ? {} : { httpStatus }), ...(oom ? { oom } : {}), ...outageMs() });
-      // The graph or the server, not this picture: the run stops, and a resume goes on after this cell.
-      if (stopsTheRun(code)) { index.error = code; return 'stopped'; }
+      const ended = failure(run, cell, base, error, undefined);
+      if (ended) return ended;
     }
   }
   return 'done';
 }
 
+// A cell whose job went out, until it has its outcome: `handover` once the job is over, its last sample of video
+// memory and the card's log taken and its picture on its way down, or its failure recorded; `done` once the cell has
+// its outcome.
+type Aloft = { handover: () => Promise<void>; done: () => Promise<void> };
+
+// Round two's order (docs/action-experiment.md#pipeline), on the stage's one socket. While a job draws, the next cell
+// is made ready: its references checked, its new ones uploaded, its graph filled. When the socket says the job is
+// over, its last sample of video memory and, for a clean story, the card's log after it are taken in one wait, and the
+// next job goes out at once; the picture before it comes down, is saved and recorded while the next one draws. Nothing
+// goes out before the job ahead of it is over, so the card never holds two of ours, and a cell one of whose references
+// is still on its way down waits for it. Whatever ends the loop, a job that went out is followed to its end, and each
+// outcome is recorded after those of the cells before it.
+async function drawAhead(run: Run, cells: ActionCell[], smoke: boolean, price?: (cell: ActionCell) => number): Promise<'done' | 'until' | 'stopped'> {
+  const { index, comfy } = run;
+  const socket = run.session!;
+  // What ended the stage, the first to say so: a cell's outcome may be recorded while the next job draws. `fault`: an
+  // outcome that could not be recorded at all, such as a disk that refuses the write, which ends the stage as it
+  // always did, thrown once every job that went out is followed to its end.
+  let ending: 'until' | 'stopped' | undefined, fault: { error: unknown } | undefined;
+  const end = (why: 'until' | 'stopped' | undefined) => { ending ??= why; };
+  const broke = (error: unknown) => {
+    fault ??= { error };
+    end('stopped');
+  };
+  // The cells whose job went out, by key, and the last of them.
+  const aloft = new Map<string, Aloft>();
+  let last: Aloft | undefined;
+  try {
+    for (const cell of cells) {
+      if (ending) break;
+      // A cell with an outcome keeps it, as in `drawInTurn`; one the network lost after its submit is drawn again.
+      const known = index.cells[cell.key];
+      if (known && !redraws(known)) continue;
+      // A reference still on its way down is waited for, its record with it.
+      for (const ref of cell.refs) await aloft.get(referenceOf(run, cell, ref).key)?.done();
+      if (ending) break;
+      const base = recordBase(cell, smoke, known);
+      const refs = referencesOf(run, cell);
+      if ('out' in refs) {
+        markOut(run, base, refs.out);
+        continue;
+      }
+      // As in `drawInTurn`, asked before the cell begins and again right before its job goes out; the job ahead's
+      // outcome comes first, as it did when each cell was whole before the next.
+      const fits = () => !comfy.end?.aborted && (!price || Date.now() + price(cell) <= run.until);
+      if (!fits()) {
+        await last?.done();
+        end('until');
+        break;
+      }
+      // The cell's own window through a dropped connection, its uploads' included; `outageMs` in its record.
+      const outage: Outage = { ...run.outage!, spentMs: 0 };
+      const sealed = isSharp(cell.story);
+      let prepared: Prepared, before: LogCursor | undefined, job: StagedJob;
+      try {
+        prepared = await prepare(run, cell, refs.files, outage, smoke);
+        // The job ahead: over, its last sample and its log taken.
+        await last?.handover();
+        if (ending) break;
+        // Where the card's log stood before the job, for a clean story: where the clean job ahead's read at its over
+        // ended, while the stage's socket has stayed the one it was then, and otherwise a read now, the job ahead being
+        // over. A failure, a sealed cell and a socket that closed drop that place, as the server's does when it starts
+        // again.
+        before = sealed ? undefined : run.cursor && socket.open && run.cursor.epoch === socket.epoch ? run.cursor : logCursor(await logLines(comfy));
+        // The last word before the submit is asked as late as ever: a stage the job ahead's outcome ended meanwhile sends
+        // nothing.
+        job = await submitOnStage(comfy, prepared.filled, { pollMs: run.options.pollMs, waitMs: run.options.waitMs ?? WAIT_MS, sampleEvery: 1,
+          requireSocket: true, admit: () => !ending && fits(), ...(prepared.copies.length ? { copies: prepared.copies } : {}) }, { socket, outage });
+      } catch (error) {
+        await last?.done();
+        run.cursor = undefined;
+        end(failure(run, cell, base, error, outage));
+        continue;
+      }
+      last = launch(run, { cell, base, prepared, job, outage, before, sealed, prior: last, end, broke });
+      aloft.set(cell.key, last);
+    }
+  } finally {
+    await last?.done();
+  }
+  if (fault) throw fault.error;
+  return ending ?? 'done';
+}
+
+// A job that went out, followed from its submit to its cell's outcome (`Aloft`) while the next cell is made ready and
+// drawn. `prior` is the cell whose job went out before it, whose outcome is recorded first; `end` says what ended the
+// stage, and `broke` takes an outcome that could not be recorded, so that neither half ever rejects.
+function launch(run: Run, one: { cell: ActionCell; base: Base; prepared: Prepared; job: StagedJob; outage: Outage; before: LogCursor | undefined;
+  sealed: boolean; prior: Aloft | undefined; end: (why: 'until' | 'stopped' | undefined) => void; broke: (error: unknown) => void }): Aloft {
+  const { cell, base, prepared, job, outage, before, sealed, end, broke } = one;
+  let prior = one.prior;
+  const first = async () => {
+    await prior?.done();
+    prior = undefined;
+  };
+  let flight: Promise<void> = Promise.resolve();
+  const handed = (async () => {
+    try { await job.untilOver(); } catch (error) {
+      run.cursor = undefined;
+      await first();
+      end(failure(run, cell, base, error, outage));
+      return;
+    }
+    // At the over, in one wait: the job's last sample, and for a clean story the card's log, whose end stands for the
+    // next clean job's start. Neither throws: a read that fails reads as nothing.
+    const [, after] = await Promise.all([job.lastSample(), sealed ? undefined : logLines(run.comfy)]);
+    const reached = sealed ? undefined : logCursor(after);
+    run.cursor = reached && { ...reached, epoch: run.session!.epoch };
+    const partialModelLoadEvents = sealed ? undefined : partialLoadsAfter(before, after);
+    // The picture comes down while the next job draws, and is recorded after the cell before it.
+    flight = (async () => {
+      try {
+        const drawn = await job.fetch();
+        await first();
+        const record = keep(run, cell, base, prepared, drawn, outage, partialModelLoadEvents);
+        if (run.comfy.end?.aborted) end('until');
+        run.observe?.(cell, record, drawn.cached);
+      } catch (error) {
+        await first();
+        end(failure(run, cell, base, error, outage));
+      }
+    })().catch(broke);
+  })().catch(broke);
+  return { handover: () => handed, done: async () => { await handed; await flight; } };
+}
+
 // ---- The pilot (local/image-pilot.ts, docs/action-experiment.md#pilot) ----
 
 // Clean cells drawn as a stage draws them, into a directory of their own: `seeded` are the records the references are
-// read from (round one's, each file relative to `root`), `oneSocket` draws on the stage's one socket with its window,
-// as round two will, or on a socket a picture with none, as round one did, and `observe` hears each cell once it is
-// saved and recorded, with the nodes the server answered from its cache. The pilot checks the card first.
+// read from (round one's, each file relative to `root`). `roundTwo` draws as round two will, on the stage's one socket
+// with its window, each job sent as soon as the one before it is over (`drawAhead`); otherwise each cell is whole
+// before the next, on a socket of its own and with no window, as round one did (`drawInTurn`). `observe` hears each
+// cell once it is saved and recorded, in the cells' order, with the nodes the server answered from its cache. The
+// pilot checks the card first.
 export type PilotOptions = { root: string; comfy: string; until: number; checkpoint: string; pins: Record<string, string | number>;
-  plans: StoryPlan[]; cells: ActionCell[]; seeded: Record<string, CellRecord>; oneSocket: boolean; timeoutMs?: number; waitMs?: number;
+  plans: StoryPlan[]; cells: ActionCell[]; seeded: Record<string, CellRecord>; roundTwo: boolean; timeoutMs?: number; waitMs?: number;
   pollMs?: number; outage?: { windowMs?: number; pauseMs?: number }; log?: (event: object) => void;
   observe?: (cell: ActionCell, record: CellRecord, cached: string[] | undefined) => void };
 export async function drawPilot(options: PilotOptions): Promise<{ index: DrawIndex; ended: 'done' | 'until' | 'stopped' }> {
@@ -551,7 +723,7 @@ export async function drawPilot(options: PilotOptions): Promise<{ index: DrawInd
     pollMs: options.pollMs, log: options.log }, { root, index, comfy: stageComfy(options), plans: new Map(options.plans.map(plan => [plan.id, plan])),
     checkpoint: options.checkpoint, base: readGraph(ACTION_GRAPH), frontGraph: readGraph(FRONT_GRAPH) });
   run.observe = options.observe;
-  if (options.oneSocket) {
+  if (options.roundTwo) {
     run.session = stageSocket(options.comfy);
     run.outage = windowOf(options.outage, false);
   }

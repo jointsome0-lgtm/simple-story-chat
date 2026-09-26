@@ -1,18 +1,20 @@
 // The pilot of the picture run's speed (docs/action-experiment.md#pilot): a fixed handful of round one's clean cells,
 // drawn again on the picture card from round one's own plans, portraits and views, into illustrations/pilot, before
-// round two is drawn. It asks what the stage's one socket buys (local/image-batch.ts `stageSocket`), whether the card
-// draws the same inputs to the same picture, and what comfy-kitchen's Triton backend changes. Its cells are flight's at
+// round two is drawn. It asks what round two's path buys: one socket for a stage (local/image-batch.ts `stageSocket`),
+// each job sent as soon as the one before it is over and the next cell's references uploaded while a job draws
+// (local/action-draw.ts `drawAhead`). It asks too whether the card draws the same inputs to the same picture, and what
+// comfy-kitchen's Triton backend changes. Its cells are flight's at
 // seed 7, flight binding four people, the most round two binds: one of each kind of picture the run draws, a front,
 // a view, a frame without references (A), C with four portraits, V with views among them, and T with L's picture and
 // four portraits. Each pass is drawn as a stage draws (local/action-draw.ts `drawPilot`) into a directory of its own,
 // with round one's portraits, views and L as its references.
 //   draw      on the server as round one ran it. The determinism check: C, then A, then C again, whose picture should
 //             be the first's, with neither C's sampler answered from the server's cache; then the timed cells, the
-//             front, the view, A, V and T: the baseline, a socket a picture and a read of the log before each, as
-//             round one drew; the same on one socket, as round two draws; and the baseline again, which brackets
-//             whatever drifts on the card
+//             front, the view, A, V and T: the baseline, each cell whole before the next on a socket of its own with
+//             a read of the log before and after its job, as round one drew; the same on round two's path; and the
+//             baseline again, which brackets whatever drifts on the card
 //   triton    once the server is started again with SIMPLE_CHAT_IMAGE_TRITON=1: what its log says of the backends,
-//             then the timed cells twice on one socket, the first pass with whatever Triton compiles
+//             then the timed cells twice on round two's path, the first pass with whatever Triton compiles
 //   report    what the passes measured, in numbers
 //   dry-run   all of it against local/fake-comfy.ts, from a made-up round one
 // It draws no sharp story and reads nothing under sealed/. What it prints and keeps is ids, codes, counts, times,
@@ -55,16 +57,17 @@ const print = (value: object) => console.log(JSON.stringify(value));
 
 // ---- The passes ----
 
-export type PassName = 'determinism-x1' | 'determinism-y' | 'determinism-x2' | 'baseline' | 'one-socket' | 'baseline-again'
+export type PassName = 'determinism-x1' | 'determinism-y' | 'determinism-x2' | 'baseline' | 'round-two' | 'baseline-again'
   | 'triton-cold' | 'triton-warm';
-// `cells`: what a pass draws, by the cells' labels; `earlier`: the pass whose pictures its own are compared with.
-type PassPlan = { name: PassName; oneSocket: boolean; cells: string[]; earlier?: PassName };
+// `roundTwo`: drawn on round two's path rather than round one's (local/action-draw.ts `drawPilot`). `cells`: what a
+// pass draws, by the cells' labels; `earlier`: the pass whose pictures its own are compared with.
+type PassPlan = { name: PassName; roundTwo: boolean; cells: string[]; earlier?: PassName };
 const TIMED = ['front', 'view', 'A', 'V', 'T'];
 export const PASSES: Record<'draw' | 'triton', PassPlan[]> = {
-  draw: [{ name: 'determinism-x1', oneSocket: true, cells: ['C'] }, { name: 'determinism-y', oneSocket: true, cells: ['A'] },
-    { name: 'determinism-x2', oneSocket: true, cells: ['C'] }, { name: 'baseline', oneSocket: false, cells: TIMED },
-    { name: 'one-socket', oneSocket: true, cells: TIMED }, { name: 'baseline-again', oneSocket: false, cells: TIMED }],
-  triton: [{ name: 'triton-cold', oneSocket: true, cells: TIMED }, { name: 'triton-warm', oneSocket: true, cells: TIMED, earlier: 'triton-cold' }],
+  draw: [{ name: 'determinism-x1', roundTwo: true, cells: ['C'] }, { name: 'determinism-y', roundTwo: true, cells: ['A'] },
+    { name: 'determinism-x2', roundTwo: true, cells: ['C'] }, { name: 'baseline', roundTwo: false, cells: TIMED },
+    { name: 'round-two', roundTwo: true, cells: TIMED }, { name: 'baseline-again', roundTwo: false, cells: TIMED }],
+  triton: [{ name: 'triton-cold', roundTwo: true, cells: TIMED }, { name: 'triton-warm', roundTwo: true, cells: TIMED, earlier: 'triton-cold' }],
 };
 // A pass that has not finished is drawn again whole, into a new directory: a pass is a measurement, and half of one
 // resumed on a later server is not one. After this many attempts somebody looks first.
@@ -75,15 +78,15 @@ const ATTEMPTS = 3;
 // here or differ in size.
 export type Diff = { bytesSame: boolean; pixelsSame?: boolean; comparable?: false; differing?: number; share?: number; maxDelta?: number;
   meanDelta?: number; psnr?: number };
-// A cell of a pass: its times (`cycleMs` from the end of the cell before, or from the pass's start, to the end of this
-// one, the log's reads included; the rest local/action-draw.ts's own), whether the server answered its sampler from
+// A cell of a pass: its times (`cycleMs` from the record of the cell before, or from the pass's start, to this one's,
+// the log's reads included; the rest local/action-draw.ts's own), whether the server answered its sampler from
 // its cache, the peaks of video memory (as nvidia-smi sees it, and in use) and RAM in MiB, and its picture against the
 // baseline's, round one's and the earlier pass's. `unsent`: a cell that never reached the card.
 export type PilotCell = { cell: string; key: string; status: CellRecord['status'] | 'unsent'; code?: string; references: number;
   cycleMs?: number; totalMs?: number; viewMs?: number; uploadMs?: number; outageMs?: number; phases?: Phases; loaderCacheMiss?: boolean;
   samplerCached?: boolean; partialModelLoadEvents?: number; file?: string; sha256?: string; vramMiB?: number; vramUsedMiB?: number; ramMiB?: number;
   vsBaseline?: Diff; vsRoundOne?: Diff; vsEarlier?: Diff };
-export type PassRecord = { name: PassName; attempt: number; dir: string; oneSocket: boolean; triton: boolean; startedAt: string; completedAt: string;
+export type PassRecord = { name: PassName; attempt: number; dir: string; roundTwo: boolean; triton: boolean; startedAt: string; completedAt: string;
   ended: 'done' | 'until' | 'stopped'; error?: string; wallMs: number; cells: PilotCell[] };
 // What the server's log said of comfy-kitchen's backends right after its start (comfy/quant_ops.py:34-45 at the pinned
 // revision): the Triton backend asked for on the command line (`argv`), triton imported or not, each backend available
@@ -98,7 +101,7 @@ export type PilotRecord = { story: string; seed: number; source: string; pins?: 
   kitchen?: Partial<Record<'draw' | 'triton', Kitchen>>; passes: PassRecord[]; determinism?: Determinism };
 
 // A pass is finished when it drew every cell and none of them waited for the network (`outageMs`): its times would
-// hold the wait, and a pass on one socket rides out a drop that fails the baseline's.
+// hold the wait, and a pass on round two's path rides out a drop that fails the baseline's.
 const finished = (pass: PassRecord) => pass.ended === 'done' && pass.cells.length > 0 && pass.cells.every(cell => cell.status === 'drawn' && !cell.outageMs);
 const lastFinished = (record: PilotRecord, name: PassName) => record.passes.findLast(pass => pass.name === name && finished(pass));
 
@@ -344,9 +347,10 @@ async function drawPass(context: PassContext, plan: PassPlan, attempt: number): 
   const startedAt = new Date().toISOString(), began = performance.now();
   let mark = began, last = -1;
   const drawn = await drawPilot({ root, comfy: context.comfy, until: context.until, checkpoint: context.card.model, pins: context.pins,
-    plans: [source.plan], cells, seeded, oneSocket: plan.oneSocket, timeoutMs: options.timeoutMs, waitMs: options.waitMs, pollMs: options.pollMs,
+    plans: [source.plan], cells, seeded, roundTwo: plan.roundTwo, timeoutMs: options.timeoutMs, waitMs: options.waitMs, pollMs: options.pollMs,
     outage: options.outage, log: context.log, observe: (cell, _record, cached) => {
-      // A cell's cycle is only its own when the cell before it was drawn too.
+      // A cell's cycle is only its own when the cell before it was drawn too. Cells are heard in their order: on round
+      // two's path a cell's record waits for the one before it.
       const now = performance.now(), at = cells.findIndex(one => one.key === cell.key);
       heard.set(cell.key, { ...(at === last + 1 ? { cycleMs: Math.round(now - mark) } : {}), ...(cached ? { cached } : {}) });
       mark = now;
@@ -378,7 +382,7 @@ async function drawPass(context: PassContext, plan: PassPlan, attempt: number): 
       ...(vsBaseline ? { vsBaseline } : {}), vsRoundOne: pictureDiff(bytes, readFileSync(resolve(source.root, source.roundOne[natural(cell)].file!))),
       ...(vsEarlier ? { vsEarlier } : {}) };
   });
-  return { name: plan.name, attempt, dir: relative(dir, root), oneSocket: plan.oneSocket, triton: context.pins.triton === 'enabled', startedAt,
+  return { name: plan.name, attempt, dir: relative(dir, root), roundTwo: plan.roundTwo, triton: context.pins.triton === 'enabled', startedAt,
     completedAt: new Date().toISOString(), ended: drawn.ended, ...(drawn.index.error ? { error: drawn.index.error } : {}), wallMs, cells: out };
 }
 
@@ -401,13 +405,17 @@ const mean = (values: (number | undefined)[]) => {
   return list.length ? list.reduce((sum, value) => sum + value, 0) / list.length : undefined;
 };
 const whole = (value: number | undefined) => (value === undefined ? null : Math.round(value));
-// The card's idle time before a cell's job, roughly: its cycle less the job's own time from submit to picture.
-const idle = (cell: PilotCell | undefined) => (cell?.cycleMs === undefined || cell.totalMs === undefined ? undefined : cell.cycleMs - cell.totalMs);
+// The card's idle time in a cell's cycle, roughly: the cycle less the job's own time on the card, from its submit to
+// its over, which is its `totalMs` less the download (`viewMs`). Round one's path downloads with the card idle, and
+// round two's while the next job draws, so that the download counts as idle in the one and not in the other; on
+// round two's path what is left is about the gap between the over of the job before and this one's submit.
+const idle = (cell: PilotCell | undefined) => (cell?.cycleMs === undefined || cell.totalMs === undefined || cell.viewMs === undefined ? undefined
+  : cell.cycleMs - (cell.totalMs - cell.viewMs));
 
-// What the passes measured, in numbers and the cells' labels: each pass's times and peaks; what the one socket saved
-// a cell, against the mean of the two baselines around it; the determinism check; and Triton's sampler against the
-// one socket's, its first pass against its second, and its pictures against the baseline's. A pass with a sampler
-// answered from the cache is not a measurement of time, and says so (`comparable`).
+// What the passes measured, in numbers and the cells' labels: each pass's times and peaks; what round two's path saved
+// a cell, against the mean of the two baselines around it; the determinism check; and Triton's sampler against round
+// two's path without it, its first pass against its second, and its pictures against the baseline's. A pass with a
+// sampler answered from the cache is not a measurement of time, and says so (`comparable`).
 export function pilotReport(dir: string) {
   const record = readJson<PilotRecord>(join(resolve(dir), 'pilot.json'));
   if (!record) throw new Refusal(`No pilot.json in ${dir}: the pilot's draw writes it`);
@@ -424,18 +432,18 @@ export function pilotReport(dir: string) {
       ramMiB: peak(one.cells.map(cell => cell.ramMiB)), changedVsBaseline: one.cells.filter(cell => cell.vsBaseline && !cell.vsBaseline.pixelsSame).length,
       sameAsRoundOne: one.cells.filter(cell => cell.vsRoundOne?.pixelsSame).length } : null];
   }));
-  const baseline = pass('baseline'), again = pass('baseline-again'), socket = pass('one-socket');
+  const baseline = pass('baseline'), again = pass('baseline-again'), second = pass('round-two');
   const labels = baseline?.cells.map(cell => cell.cell) ?? [];
-  const oneSocket = baseline && again && socket ? (() => {
+  const roundTwo = baseline && again && second ? (() => {
     const byCell = Object.fromEntries(labels.map(label => {
-      const before = mean([cellIn(baseline, label)?.cycleMs, cellIn(again, label)?.cycleMs]), after = cellIn(socket, label)?.cycleMs;
-      const idleBefore = mean([idle(cellIn(baseline, label)), idle(cellIn(again, label))]), idleAfter = idle(cellIn(socket, label));
-      return [label, { baselineCycleMs: whole(before), oneSocketCycleMs: whole(after),
-        savedMs: before === undefined || after === undefined ? null : Math.round(before - after), baselineIdleMs: whole(idleBefore), oneSocketIdleMs: whole(idleAfter),
+      const before = mean([cellIn(baseline, label)?.cycleMs, cellIn(again, label)?.cycleMs]), after = cellIn(second, label)?.cycleMs;
+      const idleBefore = mean([idle(cellIn(baseline, label)), idle(cellIn(again, label))]), idleAfter = idle(cellIn(second, label));
+      return [label, { baselineCycleMs: whole(before), roundTwoCycleMs: whole(after),
+        savedMs: before === undefined || after === undefined ? null : Math.round(before - after), baselineIdleMs: whole(idleBefore), roundTwoIdleMs: whole(idleAfter),
         idleSavedMs: idleBefore === undefined || idleAfter === undefined ? null : Math.round(idleBefore - idleAfter) }];
     }));
     const rows = Object.values(byCell);
-    return { comparable: comparable([baseline, again, socket]), savedMsPerCell: whole(mean(rows.map(row => row.savedMs ?? undefined))),
+    return { comparable: comparable([baseline, again, second]), savedMsPerCell: whole(mean(rows.map(row => row.savedMs ?? undefined))),
       idleSavedMsPerCell: whole(mean(rows.map(row => row.idleSavedMs ?? undefined))), byCell };
   })() : null;
   const cold = pass('triton-cold'), warm = pass('triton-warm');
@@ -444,14 +452,14 @@ export function pilotReport(dir: string) {
     const list = one?.cells.map(cell => cell[field]) ?? [];
     return list.length && list.every(value => value !== undefined) ? list.reduce((sum, value) => sum + value!, 0) : undefined;
   };
-  const triton = warm && socket ? {
-    kitchen: record.kitchen?.triton ?? null, dispatchVisible: false, comparable: comparable([socket, warm]),
-    sampleRatio: Object.fromEntries(labels.map(label => [label, ratio(cellIn(warm, label)?.phases?.sampleMs, cellIn(socket, label)?.phases?.sampleMs)])),
-    totalRatio: ratio(total(warm, 'totalMs'), total(socket, 'totalMs')),
+  const triton = warm && second ? {
+    kitchen: record.kitchen?.triton ?? null, dispatchVisible: false, comparable: comparable([second, warm]),
+    sampleRatio: Object.fromEntries(labels.map(label => [label, ratio(cellIn(warm, label)?.phases?.sampleMs, cellIn(second, label)?.phases?.sampleMs)])),
+    totalRatio: ratio(total(warm, 'totalMs'), total(second, 'totalMs')),
     coldExtraMs: whole(cold && total(cold, 'cycleMs') !== undefined && total(warm, 'cycleMs') !== undefined ? total(cold, 'cycleMs')! - total(warm, 'cycleMs')! : undefined),
     changedVsBaseline: warm.cells.filter(cell => cell.vsBaseline && !cell.vsBaseline.pixelsSame).length,
     warmSameAsCold: warm.cells.filter(cell => cell.vsEarlier?.pixelsSame).length, cells: warm.cells.length } : null;
-  return { event: 'pilot_report', differsFromRoundOne: record.differsFromRoundOne ?? [], passes, determinism: record.determinism ?? null, oneSocket, triton };
+  return { event: 'pilot_report', differsFromRoundOne: record.differsFromRoundOne ?? [], passes, determinism: record.determinism ?? null, roundTwo, triton };
 }
 
 // ---- The dry run ----
@@ -496,7 +504,8 @@ export async function pilotDryRun(out: string) {
     try { await work(); expect(false, `${what} refused`); } catch (error) { say(`   ${what}: refused (${JSON.stringify(safeError(error))})`); }
   };
   const word = madeUpName(), until = Date.now() + 2 * 3600000;
-  const started = { jobMs: 15, referenceMs: 0, requireUploads: true, marker: word };
+  // Each job lasts until the memory has been sampled while it ran, as round one's smoke asks (fake-comfy.ts `untilSampled`).
+  const started = { jobMs: 15, referenceMs: 0, requireUploads: true, untilSampled: true, marker: word };
   let fake = await startFakeComfy({ ...started, picturesByGraph: true, startupLog: kitchenLines(false) });
   try {
     say(`the pilot's dry run in ${dry}: a made-up round one and local/fake-comfy.ts; no card, no network`);
@@ -511,7 +520,7 @@ export async function pilotDryRun(out: string) {
     const plan = readJson<StoryPlan>(join(storyDir(source, PILOT_STORY), 'plan.json'))!;
     const sharp = { ...pilotCells(plan)[2], story: 'sharp-1' };
     await refused('a sharp cell', () => drawPilot({ root: join(dry, 'sharp'), comfy: fake.url, until, checkpoint: '', pins: {}, plans: [], cells: [sharp],
-      seeded: {}, oneSocket: true }));
+      seeded: {}, roundTwo: true }));
     expect(!existsSync(join(dry, 'sharp')), 'nothing is written for a sharp cell');
 
     const drawn = await run('draw');
@@ -521,12 +530,13 @@ export async function pilotDryRun(out: string) {
     expect(record().determinism?.verdict === 'same', 'the determinism check finds the same picture');
     const drawCells = PASSES.draw.flatMap(one => lastFinished(record(), one.name)?.cells ?? []);
     expect(drawCells.length === 18 && drawCells.every(cell => cell.samplerCached === false && cell.sha256 && cell.vsRoundOne), 'every cell is heard, hashed and compared with round one');
-    expect((['one-socket', 'baseline-again'] as const).every(name => lastFinished(record(), name)!.cells.every(cell => cell.vsBaseline?.pixelsSame === true)),
+    expect((['round-two', 'baseline-again'] as const).every(name => lastFinished(record(), name)!.cells.every(cell => cell.vsBaseline?.pixelsSame === true)),
       'the same cells come out as the baseline\'s');
     const jobs = fake.jobs.length;
     await run('draw');
-    say(`   draw again: ${fake.jobs.length - jobs} jobs`);
+    say(`   draw again: ${fake.jobs.length - jobs} jobs; the most jobs the card held at once: ${fake.mostHeld}`);
     expect(fake.jobs.length === jobs, 'a finished draw draws nothing again');
+    expect(fake.mostHeld === 1, 'the card never held two jobs at once on either path');
 
     await fake.close();
     const failed = 'Failed to import triton, Error: No module named \'triton\', the comfy-kitchen triton backend will not be available.';
@@ -547,7 +557,7 @@ export async function pilotDryRun(out: string) {
 
     const report = pilotReport(dir);
     say(`4 report: ${JSON.stringify(report)}`);
-    expect(report.determinism?.verdict === 'same' && report.oneSocket?.comparable === true && report.triton !== null, 'the report has every block');
+    expect(report.determinism?.verdict === 'same' && report.roundTwo?.comparable === true && report.triton !== null, 'the report has every block');
     // The word is in round one's plans, which the pilot read; it must be nowhere the pilot wrote or printed.
     const forms = markerForms(word);
     const found = searchTree(dir, forms), inRoundOne = searchTree(source, forms).hits.length;

@@ -24,6 +24,12 @@ import type { Graph } from './image-batch.ts';
 export type FakeComfyOptions = {
   // How long the sampler of a job takes, and how much longer per reference picture.
   jobMs?: number; referenceMs?: number;
+  // Whether the sampler, its time done, goes on until the memory has been asked for (`/system_stats`) since the job
+  // started, for two seconds at most. A job on a card takes tens of seconds and is sampled many times, whatever the
+  // harness does beside it; a fake one takes milliseconds, and in round two's order the harness's own work while it
+  // draws, the picture before it written to disk and draw.json with it, can outlast it (local/action-draw.ts
+  // `drawAhead`).
+  untilSampled?: boolean;
   // How long the websocket's handshake is held back. There is no grace: a job submitted before its socket is open
   // is told nothing of its start, as on the real server.
   openDelayMs?: number;
@@ -183,7 +189,21 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
   // Each job's number by its id, and each file's job.
   const numbers = new Map<string, number>(), owners = new Map<string, string>();
   let running: Job | undefined;
-  let count = 0, lines = 0;
+  // `held`: the most jobs the server has held at once, waiting and drawing, as each submit found them. The harness
+  // sends a job only once the one before it is over (local/action-draw.ts `drawAhead`), so for it this stays at 1.
+  let count = 0, lines = 0, held = 0;
+  // How often /system_stats has been asked, and the jobs waiting for the next time (`untilSampled`): each is woken
+  // with true, or with false when its job is stopped.
+  let sampled = 0;
+  const hearing = new Set<() => void>();
+  const nextSample = (job: Job) => new Promise<boolean>(done => {
+    const end = (took: boolean) => { clearTimeout(timer); hearing.delete(wake); job.stop.signal.removeEventListener('abort', stop); done(took); };
+    const wake = () => end(true), stop = () => end(false);
+    const timer = setTimeout(wake, 2000);
+    timer.unref();
+    hearing.add(wake);
+    job.stop.signal.addEventListener('abort', stop, { once: true });
+  });
   // app/logger.py keeps the last 300 lines, each stamped to the microsecond.
   const say = (m: string) => {
     log.push({ t: new Date().toISOString().replace('Z', String(++lines % 1000).padStart(3, '0')), m: `${m}\n` });
@@ -209,7 +229,7 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
   };
 
   async function run(job: Job) {
-    const began = performance.now();
+    const began = performance.now(), sampledBefore = sampled;
     const graph = job.graph;
     const order = executionOrder(graph);
     const cached = options.loadersCached && job.number > 1 ? order.filter(id => /Loader/.test(graph[id].class_type)) : [];
@@ -277,7 +297,8 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
           say('loaded partially; 21000.00 MB usable, 10000.00 MB loaded, 2000.00 MB offloaded, 1024.00 MB buffer reserved, lowvram patches: 0');
         }
         // `/interrupt` ends the wait, as the real server stops a job between two of its steps.
-        const took = await delay((options.jobMs ?? 0) + (options.referenceMs ?? 0) * references, true, { signal: job.stop.signal }).catch(() => false);
+        let took = await delay((options.jobMs ?? 0) + (options.referenceMs ?? 0) * references, true, { signal: job.stop.signal }).catch(() => false);
+        if (took && options.untilSampled && sampled === sampledBefore) took = await nextSample(job);
         if (!took) {
           outcome = 'interrupted';
           record('execution_interrupted', { node_id: id, node_type: type, executed: ran, timestamp: Date.now() });
@@ -330,6 +351,7 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
         numbers.set(id, number);
         say('got prompt');
         queue.push(job);
+        held = Math.max(held, queue.length + (running ? 1 : 0));
         pump();
         // The job is on the card, and its answer is lost with the connection.
         if (dropAt('prompt', number)) return;
@@ -371,6 +393,8 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
         return response.end(bytes);
       }
       if (url.pathname === '/system_stats') {
+        sampled++;
+        for (const wake of hearing) wake();
         // The shape comfy/model_management.py reports, with fixed numbers.
         return json({ system: { os: 'posix', ram_total: 64 * GIB, ram_free: 50 * GIB, comfyui_version: 'fake', python_version: 'fake',
           pytorch_version: 'fake', embedded_python: false, argv: options.argv ?? [] },
@@ -420,6 +444,7 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
   port = (server.address() as AddressInfo).port;
   return {
     url: `http://127.0.0.1:${port}`, jobs, uploads, options, calls,
+    get mostHeld() { return held; },
     // Once the server listens again after the last drop.
     whenUp: () => down,
     close: () => new Promise<void>(done => {

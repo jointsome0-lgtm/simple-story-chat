@@ -12,7 +12,7 @@ import { ARMS, isSharp, readJson, requestCounts, textStories } from './action-te
 import type { ActionArm, TextsRecord } from './action-text.ts';
 import type { PromptsRecord, StoryPlan } from './action-prompts.ts';
 import { readPlan, readPlans } from './action-prompts.ts';
-import { CELL_MS, WAIT_MS, frameKey, planCells, pricing, smokeCells } from './action-draw.ts';
+import { CELL_MS, WAIT_MS, frameKey, planCells, pricing, redraws, smokeCells } from './action-draw.ts';
 import { CLEANUP_RESERVE_MS } from './image-batch.ts';
 import { Refusal } from './action-boundary.ts';
 import type { ActionCell, CellKind, CellRecord, DrawIndex } from './action-draw.ts';
@@ -336,7 +336,9 @@ function repeatsOf(run: Run, main: Gate[], views: Parameters<typeof gatesOf>[1])
 // drawn and scored, and every other cell with its reason. V where C's picture counts for it is not drawn, has the
 // reason `v_is_c`, and is scored with C's picture. A cell nobody submitted is `not_yet` while the drawing may go on,
 // and `not_submitted` once it is over: a stage stopped on the clock, the admission or an error, the smoke failed, or
-// seed 11 was admitted, which only the end of seed 7 does.
+// seed 11 was admitted, which only the end of seed 7 does. `redrawnAfterLoss`: the cells of every kind a resume drew
+// again after the network lost a job of theirs after its submit, and how many of them are drawn now
+// (docs/action-experiment.md#dropped-connection); the jobs lost were paid for and are in no row.
 function deliveryOf(run: Run) {
   const draw = run.draw;
   const tOut = draw?.smoke?.verdict?.tOut === true;
@@ -378,7 +380,9 @@ function deliveryOf(run: Run) {
     }
   }
   const seven = Object.entries(out).filter(([name]) => name.endsWith(`#${ACTION_SEEDS[0]}`));
-  return { cells: out, sharpUnanswered: unanswered, seedSevenComplete: !!draw && seven.every(([, row]) => !row.reasons.not_yet) };
+  const again = Object.values(draw?.cells ?? {}).filter(cell => (cell.lost ?? 0) > 0);
+  return { cells: out, sharpUnanswered: unanswered, seedSevenComplete: !!draw && seven.every(([, row]) => !row.reasons.not_yet),
+    redrawnAfterLoss: { cells: again.length, drawn: again.filter(cell => cell.status === 'drawn').length } };
 }
 
 // The times: the median and the slowest of each arm's warm frames against A's, T with L's time added, and the time to a
@@ -501,7 +505,9 @@ export function reportMarkdown(report: ActionReport): string {
   for (const [name, row] of Object.entries(report.delivery.cells)) {
     lines.push(`| ${name} | ${row.planned} | ${row.submitted} | ${row.drawn} | ${row.scored} | ${Object.entries(row.reasons).map(([code, n]) => `${code} ${n}`).join(', ') || '—'} |`);
   }
-  lines.push('', `Сид 7 ${report.delivery.seedSevenComplete ? 'полон' : 'не полон'}. Острых сцен без ответа судьи: ${report.delivery.sharpUnanswered}.`, '');
+  const again = report.delivery.redrawnAfterLoss;
+  lines.push('', `Сид 7 ${report.delivery.seedSevenComplete ? 'полон' : 'не полон'}. Острых сцен без ответа судьи: ${report.delivery.sharpUnanswered}.`
+    + ` Перерисовано после потери связи: ${again.cells}, из них нарисовано ${again.drawn}.`, '');
   const ms = (stat: { medianMs: number; slowestMs: number; frames: number } | null) => stat ? `${Math.round(stat.medianMs / 1000)} с / ${Math.round(stat.slowestMs / 1000)} с (${stat.frames})` : '—';
   lines.push('## Время', '', 'Медиана и самый медленный из тёплых кадров; T — вместе с L. Первая картинка с портретами — с портретами и видами сцены.', '',
     '| Рука | Тёплые кадры | Первая с портретами |', '| --- | --- | --- |');
@@ -584,23 +590,30 @@ function progressOf(root: string, draw: DrawIndex, options: GalleryOptions) {
     return Number.isFinite(ms) ? ms : undefined;
   };
   const coming = new Map<string, Coming>();
+  // A cell's outcome: its record, but for a cell the network lost after its submit, which a resume draws again
+  // (action-draw.ts `redraws`) and which is foreseen as any cell still to come.
+  const outcome = (key: string) => {
+    const one = draw.cells[key];
+    return one && !redraws(one) ? one : undefined;
+  };
   // A cell a reference of which did not come is never sent, under the code of what is missing (action-draw.ts
   // `referencesOf`), whether that is recorded or foreseen.
   const outCode = (cell: ActionCell) => {
     for (const ref of cell.refs) {
       const kind = ref === 'L' ? 'frame' : read.plans.get(cell.story)?.views.some(view => view.id === ref) ? 'view' : 'front';
       const key = ref === 'L' ? frameKey(cell.story, cell.seed, 'L') : `${kind}:${ref}`, name = ref === 'L' ? 'l' : kind;
-      const known = draw.cells[key], foreseen = coming.get(key);
+      const known = outcome(key), foreseen = coming.get(key);
       if (known ? known.status === 'drawn' : foreseen && (!foreseen.why || foreseen.why === 'resume')) continue;
       return known?.status === 'out' ? known.code ?? `${name}_missing` : known ? `${name}_failed` : foreseen?.code ?? `${name}_missing`;
     }
     return undefined;
   };
 
-  const all = [...planned.keys()].every(key => draw.cells[key]);
+  const all = [...planned.keys()].every(outcome);
   // A stage stopped on an error of the graph or the server once the smoke had passed, with cells still to go, waits for
-  // a resume on a new card, which goes on after the cell that stopped it (action-draw.ts `drawCells`): the drawing is
-  // not over, whatever the deadline of the card it stopped on, and nothing is timed while nothing draws.
+  // a resume on a new card, which goes on after the cell that stopped it, or draws it again when the network lost it
+  // (action-draw.ts `drawCells`): the drawing is not over, whatever the deadline of the card it stopped on, and nothing
+  // is timed while nothing draws.
   const halted = !!draw.completedAt && !!draw.error && !draw.stopped && verdict?.pass === true && !all;
   const ended = !!draw.completedAt && !halted && (verdict?.pass === false || !!draw.stopped || !!draw.error || !!draw.admitted?.[second] || all);
   // A job begun before `--until` still has the reserve for its stop.
@@ -611,7 +624,7 @@ function progressOf(root: string, draw: DrawIndex, options: GalleryOptions) {
   let current: ActionCell | undefined;
   const admissions: { seed: number; needMs: number; leftMs: number }[] = [];
   for (const stage of stages) {
-    const left = stage.cells.filter(cell => !draw.cells[cell.key] && !coming.has(cell.key));
+    const left = stage.cells.filter(cell => !outcome(cell.key) && !coming.has(cell.key));
     if (!halt && stage.seed !== undefined && left.length && !draw.admitted?.[stage.seed]) {
       // Asked when the seed would begin, of every cell of it without an outcome, at the prices the drawing asks.
       let why: Coming['why'];
@@ -687,11 +700,17 @@ export function writeGalleries(root: string, options: GalleryOptions = {}) {
   // Every cell of the plan in the stages' order, then any recorded outside it.
   const every: { key: string; kind: CellKind; story: string; seed: number }[] = [...planned.values(), ...Object.values(draw.cells).filter(one => !planned.has(one.key))];
   const where = (test: (one: { kind: CellKind; story: string; seed: number }) => boolean) => every.filter(test).map(one => one.key);
-  const count = (keys: string[], status: CellRecord['status']) => keys.filter(key => draw.cells[key]?.status === status).length;
+  // A cell's record as the pages show it: none, while the drawing may go on, for a cell the network lost after its
+  // submit, which a resume draws again; once it is over, the failure it is.
+  const shown = (key: string) => {
+    const one = draw.cells[key];
+    return one && (over || !redraws(one)) ? one : undefined;
+  };
+  const count = (keys: string[], status: CellRecord['status']) => keys.filter(key => shown(key)?.status === status).length;
 
   // When a set of cells is expected to end: its last foreseen time, or why not all of it will be drawn.
   const endOf = (keys: string[]) => {
-    const left = keys.filter(key => !draw.cells[key]).map(key => coming.get(key));
+    const left = keys.filter(key => !shown(key)).map(key => coming.get(key));
     if (!left.length) return 'готово';
     const stop = left.find(one => one?.why !== undefined && one.why !== 'out'), later = left.filter(one => one && !one.why);
     const end = later.length && later.every(one => one!.eta !== undefined) ? Math.max(...later.map(one => one!.eta!)) : undefined;
@@ -708,7 +727,7 @@ export function writeGalleries(root: string, options: GalleryOptions = {}) {
     if (draw.admission?.some(one => one.seed === second && !one.admitted)) return `Сид ${second} не допущен: по ценам харнесса не помещался до срока, вердикт — по сиду ${first}.`;
     if (over) return `Сид ${second} не начинался.`;
     if (halted) {
-      const seven = where(one => one.kind === 'frame' && one.seed === first).some(key => !draw.cells[key]);
+      const seven = where(one => one.kind === 'frame' && one.seed === first).some(key => !shown(key));
       return `Сид ${second} решится${seven ? ` после сида ${first}` : ''}, когда рисование продолжится.`;
     }
     if (foreseen) {
@@ -734,7 +753,7 @@ export function writeGalleries(root: string, options: GalleryOptions = {}) {
     const rows: [string, string[]][] = [['Портреты', where(one => one.kind === 'front')], ['Виды', where(one => one.kind === 'view')],
       ...ACTION_SEEDS.map((seed): [string, string[]] => [`Сид ${seed}`, where(one => one.kind === 'frame' && one.seed === seed)])];
     // After an error, what is left instead of when it ends.
-    const left = (keys: string[]) => keys.filter(key => !draw.cells[key]).length;
+    const left = (keys: string[]) => keys.filter(key => !shown(key)).length;
     lines.push(`<table><tr><th></th><th>нарисовано</th><th>не вышло</th><th>выбыло</th><th>в плане</th><th>${halted ? 'осталось' : 'закончится'}</th></tr>`,
       ...rows.map(([name, keys]) => `<tr><td>${name}</td><td>${count(keys, 'drawn')}</td><td>${count(keys, 'failed')}</td><td>${count(keys, 'out')}</td>`
         + `<td>${keys.length}</td><td>${halted ? left(keys) : escapeHtml(endOf(keys))}</td></tr>`), '</table>', `<p>${escapeHtml(seedLine())}</p>`);
@@ -755,7 +774,7 @@ export function writeGalleries(root: string, options: GalleryOptions = {}) {
   const page = (file: string, sharp: boolean) => {
     const dir = join(file, '..');
     const figure = (key: string) => {
-      const one = draw.cells[key], cell = one ?? planned.get(key)!, foreseen = coming.get(key);
+      const one = shown(key), cell = one ?? draw.cells[key] ?? planned.get(key)!, foreseen = coming.get(key);
       const box = (text: string, style: string) => `<div class="box ${cell.kind === 'frame' ? 'wide' : 'tall'} ${style}">${escapeHtml(text)}</div>`;
       const src = one?.status === 'drawn' && one.file && existsSync(join(root, one.file)) ? escapeHtml(relative(dir, join(root, one.file))) : undefined;
       const body = src ? `<a href="${src}"><img src="${src}" loading="lazy" alt=""></a>`

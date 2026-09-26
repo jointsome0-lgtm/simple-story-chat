@@ -31,10 +31,10 @@ function readyRun(root: string, id: string) {
 // The card bills every minute and a resume must not redraw or lose what is drawn: a seed that cannot end by --until is
 // not begun, a resume draws nothing again, a failure that stopped the run included, a picture whose file is gone is
 // refused as data lost, and plans changed after `prompts` are refused before the record is touched. The fake's jobs
-// take long enough for the memory to be sampled while they run, as the smoke asks.
+// last until the memory has been sampled while they run, as the smoke asks (fake-comfy.ts `untilSampled`).
 test('a seed that cannot end in time is not begun, a resume draws nothing again, and other plans leave the record as it was', async t => {
   const root = mkdtempSync(join(tmpdir(), 'simple-chat-action-draw-'));
-  const fake = await startFakeComfy({ jobMs: 15, referenceMs: 0, requireUploads: true });
+  const fake = await startFakeComfy({ jobMs: 15, referenceMs: 0, requireUploads: true, untilSampled: true });
   t.after(async () => { await fake.close(); rmSync(root, { recursive: true, force: true }); });
   readyRun(root, 'flight');
   const stage = (stage: 'smoke' | 'main', until = Date.now() + 3600000) => drawStage({ stage, root, comfy: fake.url, until, pollMs: 10, waitMs: 20000 });
@@ -72,39 +72,41 @@ test('a seed that cannot end in time is not begun, a resume draws nothing again,
 // (docs/action-experiment.md#dropped-connection). After the smoke a cell waits for the server within its window, and
 // its job goes out once, under the id minted for it; a picture cut on its way down is fetched again whole, and the
 // delete of its record follows it. A cell the window kept from the card has no record, for a resume to draw it; one the
-// window lost after its submit stops the run under a code of its own.
-test('a dropped connection is waited out, no job is sent twice, and a cell that never reached the card has no record', async t => {
+// window lost after its submit stops the run under a code of its own, and a resume draws it again under a new id,
+// its loss counted. The next job goes out while a picture comes down, and the card never holds two of them.
+test('a dropped connection is waited out, no job is sent twice, and a cell lost after its submit is drawn again by a resume', async t => {
   const root = mkdtempSync(join(tmpdir(), 'simple-chat-action-drop-'));
-  const fake = await startFakeComfy({ jobMs: 15, referenceMs: 0, requireUploads: true });
+  const fake = await startFakeComfy({ jobMs: 40, referenceMs: 0, requireUploads: true, untilSampled: true });
   t.after(async () => { await fake.close(); rmSync(root, { recursive: true, force: true }); });
   readyRun(root, 'flight');
   const stage = (stage: 'smoke' | 'main') => drawStage({ stage, root, comfy: fake.url, until: Date.now() + 3600000, pollMs: 10, waitMs: 20000,
     outage: { windowMs: 600, pauseMs: 25 } });
   assert.equal((await stage('smoke')).smoke?.verdict?.pass, true);
-  // Seed 11 is A, A+, L, C and T, the jobs after the smoke's. A's submit is answered to nobody, A+'s start and half of
-  // L's picture are cut, each for less than the window; after L's delete the network stays down longer than C's window.
+  // Seed 11 is A, A+, L, C and T, the jobs after the smoke's. A's submit is answered to nobody and A+'s start is cut,
+  // each for less than the window. C goes out once L is over, and after L's delete the network stays down longer than
+  // the window: C is lost after its submit, and T, which waits for L's picture, never reaches the card.
   const n = fake.jobs.length;
-  fake.options.drops = [{ at: 'prompt', job: n + 1, ms: 150 }, { at: 'start', job: n + 2, ms: 150 }, { at: 'view', job: n + 3, ms: 150 },
-    { at: 'delete', job: n + 3, ms: 1200 }];
+  fake.options.drops = [{ at: 'prompt', job: n + 1, ms: 150 }, { at: 'start', job: n + 2, ms: 150 }, { at: 'delete', job: n + 3, ms: 1200 }];
   const key = (arm: ActionArm) => frameKey('flight', 11, arm);
   const first = await stage('main');
-  assert.deepEqual((['A', 'A+', 'L'] as const).map(arm => [first.cells[key(arm)]?.status, (first.cells[key(arm)]?.outageMs ?? 0) > 0]),
-    [['drawn', true], ['drawn', true], ['drawn', true]]);
-  assert.deepEqual([first.cells[key('C')], first.error], [undefined, 'comfy_unreachable']);
-  const sent = () => fake.calls.filter(call => call.method === 'POST' && call.path === '/prompt').map(call => call.id);
-  const l = sent()[n + 2]!;
-  const saved = readFileSync(fileOf(root, { kind: 'frame', story: 'flight', id: '', seed: 11, arm: 'L' }));
-  assert.ok(saved.equals(stripPngMetadata(greyPng(1280, 704, n + 3, 9))), 'the picture cut halfway is saved whole, stripped');
-  const views = fake.calls.flatMap((call, at) => (call.path === '/view' && call.id === l ? [at] : []));
-  const deleted = fake.calls.findIndex(call => call.method === 'POST' && call.path === '/history' && call.id === l);
-  assert.deepEqual([views.length, deleted > views.at(-1)!], [2, true]);
-  // The resume draws C; T's job is lost after its start, for longer than its window.
+  assert.deepEqual((['A', 'A+'] as const).map(arm => [first.cells[key(arm)]?.status, (first.cells[key(arm)]?.outageMs ?? 0) > 0]),
+    [['drawn', true], ['drawn', true]]);
+  const c = first.cells[key('C')];
+  assert.deepEqual([first.cells[key('L')]?.status, c?.status, c?.code, (c?.outageMs ?? 0) > 0, first.cells[key('T')], first.error],
+    ['drawn', 'failed', 'comfy_connection_lost', true, undefined, 'comfy_connection_lost']);
+  // The resume draws C again, its loss counted, and T, whose picture is cut halfway on its way down.
   await fake.whenUp();
-  fake.options.drops = [{ at: 'start', job: n + 5, ms: 1200 }];
+  fake.options.drops = [{ at: 'view', job: n + 6, ms: 150 }];
   const second = await stage('main');
-  const lost = second.cells[key('T')];
-  assert.deepEqual([second.cells[key('C')]?.status, lost?.status, lost?.code, (lost?.outageMs ?? 0) > 0, second.error],
-    ['drawn', 'failed', 'comfy_connection_lost', true, 'comfy_connection_lost']);
-  // Every job went out once, each under its own id: the smoke's, and A to T.
-  assert.deepEqual([sent().length, new Set(sent()).size], [n + 5, n + 5]);
+  assert.deepEqual([second.cells[key('C')]?.status, second.cells[key('C')]?.lost, second.cells[key('T')]?.status, second.error],
+    ['drawn', 1, 'drawn', undefined]);
+  const sent = () => fake.calls.filter(call => call.method === 'POST' && call.path === '/prompt').map(call => call.id);
+  const tId = sent()[n + 5]!;
+  const saved = readFileSync(fileOf(root, { kind: 'frame', story: 'flight', id: '', seed: 11, arm: 'T' }));
+  assert.ok(saved.equals(stripPngMetadata(greyPng(1280, 704, n + 6, 9))), 'the picture cut halfway is saved whole, stripped');
+  const views = fake.calls.flatMap((call, at) => (call.path === '/view' && call.id === tId ? [at] : []));
+  const deleted = fake.calls.findIndex(call => call.method === 'POST' && call.path === '/history' && call.id === tId);
+  assert.deepEqual([views.length, deleted > views.at(-1)!], [2, true]);
+  // Every job went out once, each under its own id: the smoke's, A to C, then C again and T; never two on the card.
+  assert.deepEqual([sent().length, new Set(sent()).size, fake.mostHeld], [n + 6, n + 6, 1]);
 });

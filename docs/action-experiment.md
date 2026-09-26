@@ -375,13 +375,14 @@ recipe: no arm compares sizes, and none is compared with the identity run.
 - A manifest whose plan stopped takes its scene out of L, C, V and T, a failed front out of C, V and T, and a failed
   view out of V. A failed frame is that cell alone, and a T whose L is missing is never submitted. A cell left undrawn
   by the deadline or the admission, or kept from the card by the network ([a dropped
-  connection](#dropped-connection)), is `not_submitted`, nobody's failure. Nothing is drawn again, and every file is
-  kept.
-- Each frame records what the identity run's frames record ([telemetry](identity-experiment.md#telemetry)), and
-  `outageMs` when it waited for the network. The run is pinned as that one was ([pins](identity-experiment.md#pins)),
-  with the variant's hash, the views' and T's templates, the reference size and the manifests added, the text run's
-  model and gateway versions beside them, and `triton` when the server was started with comfy-kitchen's Triton
-  backend ([the pilot](#pilot)).
+  connection](#dropped-connection)), is `not_submitted`, nobody's failure. Nothing is drawn again but a cell the
+  network lost after its submit, and every file is kept.
+- Each frame records what the identity run's frames record ([telemetry](identity-experiment.md#telemetry)), as round
+  two's path measures it ([the next job at the over](#pipeline)), `outageMs` when it waited for the network, and
+  `lost`, how many of its jobs the network lost before this one. The run is pinned as that one was
+  ([pins](identity-experiment.md#pins)), with the variant's hash, the views' and T's templates, the reference size and
+  the manifests added, the text run's model and gateway versions beside them, and `triton` when the server was started
+  with comfy-kitchen's Triton backend ([the pilot](#pilot)).
 
 <a id='one-socket'></a>
 
@@ -392,8 +393,53 @@ under a prompt id the harness mints and sends with the job, which the pinned ser
 dropped from it once its picture is down; a socket that closes is replaced, under a new client id, before the next
 submit. A clean cell's log is read once, after its job, and where that read ended stands for the next clean cell's read
 before it. The log is read anew after a failure, after a sealed cell and on a new socket, as after a server that
-started again. No graph a job sends changes, and nothing else the pictures are drawn from; what the socket saves is
-[the pilot](#pilot)'s to measure. The bot keeps a socket a picture.
+started again. No graph a job sends changes, and nothing else the pictures are drawn from; what the socket saves,
+with [the next job at the over](#pipeline), is [the pilot](#pilot)'s to measure. The bot keeps a socket a picture.
+
+<a id='pipeline'></a>
+
+**The next job at the over.** With one socket, the card still stood idle from a job's end to the next submit while
+the picture came down, was saved and recorded, and the next cell's new references went up. The owner decided on
+2026-09-26 that round two sends each job as soon as the one before it is over, and uploads the next cell's new
+references while a job draws. Both break the rule round one drew by, that a picture is saved and recorded before
+anything more is asked of the card; the owner approved breaking it for these two and for nothing else. A cell goes:
+
+1. while the job ahead of it draws: its references are checked against their records, after any of them still on its
+   way down has come, its new ones are uploaded, and its graph is filled and checked;
+2. when the socket says the job ahead is over: that job's last sample of video memory and, for a clean cell, the
+   card's log are read in one wait, the cell's price is asked once more, and its job goes out at once;
+3. while it draws: the picture ahead comes down, its record on the card is deleted, and it is saved and recorded,
+   after the cell before it.
+
+Nothing goes out before the job ahead of it is over, so the card never holds two of our jobs. The estimate, from round
+one's gaps: the job at the over saves about a second a cell, some 5 minutes at round one's volume of pictures, and the
+uploads 1.5 to 2.3 minutes more; [the pilot](#pilot) measures what it saves. The estimate in [the time](#time) counts
+the jobs alone and not the gaps between them, so none of its rows changes: what this saves comes off time that table
+never counted. The admission's prices keep each cell's uploads and its three seconds, and so stay on the safe side.
+The bot keeps its own path: a socket a picture, and the picture whole before anything more.
+
+Each job's measures stay its own, and some mean a little else than in round one:
+
+- the last sample of video memory is taken at the over, before the next submit, where round one took it once the
+  picture was down, so that nothing of the next job lands in this one's maxima;
+- `partialModelLoadEvents` counts the partial loads in the log between its read before the job and the one at its
+  over ([one socket](#one-socket)): a job's loads come before its over, and the next job's after its submit;
+- `totalMs` runs from the submit to the picture on our side, less the time from the over to the download, which went
+  to the last sample, the log and the next submit. After the over the pinned server logs the job and, at most once in
+  ten seconds, collects its garbage and empties the card's cache, before it takes the next job (main.py
+  `prompt_worker`); round one's gap hid that time, and now it falls in the next job's `totalMs`, outside its phases;
+- `viewMs` is the download while the next job draws, on the tunnel that job's polls and the next cell's uploads use;
+- `uploadMs` is spent while the job ahead draws, off the card's time;
+- `outageMs`: a drop may charge two cells at once, the one coming down and the one drawing, each against its own
+  window, and the report's times and the gallery's leave both out, as before.
+
+When a picture's download fails once the next job has gone out, that job is followed to its end as any job that went
+out, its picture saved and recorded or its failure. The cell whose download failed is recorded first, under its code,
+and a code that stops the run lets nothing more go out; a cell the network lost is drawn again by a resume ([a dropped
+connection](#dropped-connection)). `--until` and the reserve hold as they did: no job goes out whose price cannot end
+by `--until`, and at `--until` the job on the card is stopped within the reserve, and a picture still on its way down
+is cut and left undrawn. An outcome that cannot be recorded at all, such as a disk that refuses the write, ends the
+stage once every job that went out has its end.
 
 <a id='dropped-connection'></a>
 
@@ -409,7 +455,9 @@ whose setup took 29.6 minutes and after which seed 11 no longer fit. A stage now
   leaves two of the ten minutes after which the card's sweeper deletes a finished job's record for the request out
   when the window ran out, a last look of ten seconds at most and the requests that went through, which only a server
   answering slowly could use up. The window ends at `--until` as everything does. The smoke looks once and waits for
-  nothing: a drop there fails it, as before.
+  nothing: a drop there fails it, as before. The owner kept the eight minutes on 2026-09-26: the sweeper's ten leave
+  the window little room to grow, and waiting costs only while the network is down, where a stop leaves the paid card
+  idle until someone resumes.
 
 Only the network failing is waited for, as fetch reports it: a connection refused or reset, a dial that timed out, a
 request cut on its way. An HTTP status, a reply that does not parse, the picture's own wait and `--until` end a cell as
@@ -432,9 +480,14 @@ never reached the card, before its submit or in an upload, gets no record, and t
 `comfy_unreachable`, or with `comfy_socket_unavailable` when the server answers and its socket still does not open; a
 resume draws that cell. A cell lost after its submit, or whose job the card no longer knows once it answers, as after a
 server that started again, fails as `comfy_connection_lost` and stops the run, where the first round's A was
-`image_failed`, the code of a picture the card could not draw. A lost cell is never drawn again: whether the card
-draws the same inputs to the same picture is [the pilot](#pilot)'s question, so a second picture could not stand for
-the first. The bot's own picture path waits for nothing.
+`image_failed`, the code of a picture the card could not draw. A resume draws such a cell again under a new id, as the
+owner decided on 2026-09-26: its record counts the jobs of it the network lost (`lost`), their time on the card is in
+no row, and the report says how many cells were drawn again after a loss and how many of them are drawn. This replaces
+the rule that a lost cell is never drawn again, whose reason was that whether the card draws the same inputs to the
+same picture was [the pilot](#pilot)'s open question, so that a second picture could not stand for the first; the
+pilot's determinism check answers that question. A cell that never reached the card still gets no record, and a
+resume draws it as before. `draw --smoke` run again likewise draws a smoke cell the network lost, and judges the smoke
+anew. The bot's own picture path waits for nothing.
 
 <a id='picture-smoke'></a>
 
@@ -493,7 +546,8 @@ admission after seed 7 decides it as above. Round one's sharp scenes took about 
 views stay about as many as in round one: the eight new scenes add 14 to the clean casts, and the cut to four took 11
 out of them. T's time is the least known: four portraits of 704x1280 took 82 s in the identity run and two took about
 20 s, and the cause of that jump was not measured. T sends L's picture at 1280x704 and up to four references at
-352x640, between those two in pixels.
+352x640, between those two in pixels. The rows count the jobs alone: the gaps between them, which [the next job at the
+over](#pipeline) shortens, are in none of them, so that change leaves the table as it was.
 
 <a id='judging'></a>
 
@@ -689,7 +743,9 @@ The report gives, for each arm, the cells planned, submitted, drawn and scored, 
 the text's code, the sheet, a front, a view, a failed draw, a timeout, `not_submitted`, or a judge who gave no valid
 answer. The gates read matched scenes, and this count reads every planned cell, so a failure that took a scene out of
 a gate still counts against its arm here. Seed 7 is complete when each of its cells is drawn or has its reason. A
-sharp scene that no judge answered stays out, and the report says how many.
+sharp scene that no judge answered stays out, and the report says how many. It also says how many cells a resume drew
+again after the network lost a job of theirs, and how many of those are drawn ([a dropped
+connection](#dropped-connection)); the jobs lost are in no row.
 
 <a id='sealed'></a>
 
@@ -770,8 +826,10 @@ kept the variant's schema in all 18 stories, each at its first attempt. Still op
 - whether [tunnel.sh](../gpu/tunnel.sh) dials again after a real drop, and whether fetch reports that drop with the
   codes [a dropped connection](#dropped-connection) waits on, which the fake's refused and cut connections give;
 - whether the pinned server takes the harness's prompt id as the job's, as its code reads (server.py:1093-1099);
-- [the pilot](#pilot)'s questions: what one socket saves a cell, whether the card draws the same inputs to the same
-  picture, and what the Triton backend changes, if the server uses it at all.
+- whether a download beside the next job slows that job or itself, and how long the server's own work after a job,
+  now in the next job's time, takes ([the next job at the over](#pipeline));
+- [the pilot](#pilot)'s questions: what round two's path saves a cell, whether the card draws the same inputs to the
+  same picture, and what the Triton backend changes, if the server uses it at all.
 
 The detached server and the tunnel take a minute of the next picture card to check, and draw nothing: start the
 server as the runbook does, but from `ssh -tt simple-chat-vast '…; sleep 600'`, end that ssh here, and see
@@ -884,6 +942,7 @@ fake judge's prose and a malformed answers block. On the way it goes through eve
 - the rest of seed 7 refused with five seconds left, before any job is sent;
 - a failed front and a failed view, and the cells they take out;
 - a resume that draws nothing, and one after a plan changed since `prompts` refused with `draw.json` unchanged;
+- a card that never held two jobs at once, each job sent while the picture before it came down;
 - judges' reports with valid, invalid and missing blocks: a clean scene's fresh session, a clean judge's failure, sharp
   sessions that go to `gpt-6-sol` and to the owner's page, and an identity session that waits for its pictures' page;
 - the report, where the one-person scenes' touches of their own body and of a thing and the mirror scene's
@@ -893,11 +952,14 @@ fake judge's prose and a malformed answers block. On the way it goes through eve
   its key file anywhere.
 
 Its made-up answers are drawn from each enum by a hash, so the verdicts it prints mean nothing. The fakes keep the
-contracts the harness talks to, and model no card, no model and no judge. [A dropped
-connection](#dropped-connection) is `npm test`'s, against the same fake ComfyUI
-([action-draw.test.ts](../local/action-draw.test.ts)): a submit answered to nobody, a job's start and a picture's
-download cut, each shorter than the window, then a window that runs out before a submit and one that runs out after
-it, with every job sent once.
+contracts the harness talks to, and model no card, no model and no judge. A fake job lasts until the card's memory has
+been sampled while it draws (fake-comfy.ts `untilSampled`), as a card's job of tens of seconds always is: in round
+two's order the harness writes the picture before it and `draw.json` while a job draws, which can take longer than a
+fake job of milliseconds, and the smoke asks for a sample of every job. [A dropped connection](#dropped-connection) is
+`npm test`'s, against the same fake ComfyUI ([action-draw.test.ts](../local/action-draw.test.ts)): a submit answered
+to nobody and a job's start cut, each shorter than the window, then a window that runs out after a submit and one that
+runs out before one; a resume that draws the lost cell again, its loss counted, and a picture whose download is cut
+and fetched again whole; every job sent once, and never two on the card.
 
 The dry run also leaves `config.json`, a key file of three made-up keys as simple-serving's configuration holds them,
 `serving-smoke.jsonl`, a smoke record that passes, and `dev.json`, a service block for simple-serving's dev launcher
@@ -959,10 +1021,10 @@ kept from the card is `cell_unsent`, with its code. A drop shorter than [the win
 ending: the tunnel dials again by itself, the stage goes on, and nothing is started again, since a server that starts
 again has lost its jobs. A longer one ends the stage with `comfy_unreachable`, `comfy_socket_unavailable` or
 `comfy_connection_lost`. Every ending is the termination, and a resume draws nothing again, a cell whose failure
-stopped the run included; a cell that never reached the card has no record and is drawn. A picture `draw.json`
-records whose file is gone is data lost, refused before anything is drawn and never drawn again. The saved pictures
-stay on the card until its destroy is read back; the harness reads no log of the card for a sharp story, and nobody
-reads the server's output.
+stopped the run included, but for a cell the network lost after its submit, which it draws again; a cell that never
+reached the card has no record and is drawn. A picture `draw.json` records whose file is gone is data lost, refused
+before anything is drawn and never drawn again. The saved pictures stay on the card until its destroy is read back;
+the harness reads no log of the card for a sharp story, and nobody reads the server's output.
 
 **After the card**, no card is needed. `bundles` prints the bundles built and those skipped, by reason. `judge` runs
 every session that is ready, four at a time (`--parallel`, and `--kind` for some kinds alone), prints each
@@ -978,9 +1040,9 @@ own `--until`. Each cell stands in its place: its picture, the code of a cell th
 to come, the local time it is expected to end, from the median of the drawn pictures of its kind and arm and the pause
 measured between pictures. Above the cells: what is drawing now; the fronts, the views and each seed against the plan,
 each with its expected end; the deadline; and whether seed 11 is admitted, expected to fit, or decided after seed 7.
-After a stage stopped on an error they show what is left for a resume on a new card, and no time. The pages reload
-themselves every minute until the drawing is over. The clean page shows the sharp scenes as counts alone. No Claude
-session opens anything under `sealed/`, the pages among them.
+After a stage stopped on an error they show what is left for a resume on a new card, a cell the network lost among it,
+and no time. The pages reload themselves every minute until the drawing is over. The clean page shows the sharp scenes
+as counts alone. No Claude session opens anything under `sealed/`, the pages among them.
 
 The drawing stages also take `--comfy`, `--wait`, `--timeout` and `--tokenizers`, whose defaults the runbook keeps. The
 directory holds:
@@ -998,33 +1060,37 @@ directory holds:
 
 ## The pilot
 
-`npm run image:pilot` ([image-pilot.ts](../local/image-pilot.ts)) asks the picture card three questions before the
-next change to how it draws: what [one socket a stage](#one-socket) saves a cell, whether the card draws the same
-inputs to the same picture, and what comfy-kitchen's Triton backend changes. It draws a fixed handful of the first
-round's clean cells again, from that round's own plans, portraits and views in `illustrations/action-1`, into
-`illustrations/pilot`: flight's at seed 7, since flight binds four people, the most a frame binds now. They are one of
-each kind of picture the run draws: the first front, the first view, A, C with four portraits, V with both views among
-its four, and T with L's picture and four portraits. It draws no sharp story, reads nothing under `sealed/` and writes
-nothing into the first round's directory or into `illustrations/action`. It refuses a first round whose pictures are
-not the files its `draw.json` records, and a plan of flight's that gives a cell a prompt of another length or another
-number of references than the first round's record of it: the first round's own hash of the plans covers the sealed
-ones too, which the pilot does not read.
+`npm run image:pilot` ([image-pilot.ts](../local/image-pilot.ts)) asks the picture card three questions before the next
+change to how it draws: what round two's path, [one socket a stage](#one-socket) and [the next job at the
+over](#pipeline), saves a cell, whether the card draws the same inputs to the same picture, and what comfy-kitchen's
+Triton backend changes. It draws a fixed handful of the first round's clean cells again, from that round's own plans,
+portraits and views in `illustrations/action-1`, into `illustrations/pilot`: flight's at seed 7, since flight binds four
+people, the most a frame binds now. They are one of each kind of picture the run draws: the first front, the first view,
+A, C with four portraits, V with both views among its four, and T with L's picture and four portraits. It draws no sharp
+story, reads nothing under `sealed/` and writes nothing into the first round's directory or into `illustrations/action`.
+It refuses a first round whose pictures are not the files its `draw.json` records, and a plan of flight's that gives a
+cell a prompt of another length or another number of references than the first round's record of it: the first round's
+own hash of the plans covers the sealed ones too, which the pilot does not read.
 
 - `draw`, on the server as the first round ran it:
   - the determinism check: C, then A, then C again, whose picture is compared with the first C's. It counts only when
     the socket heard that neither C's sampler was answered from the server's cache, which may keep older jobs on a
     card with more RAM ([what the card keeps](gpu.md#what-the-card-keeps-of-a-picture)): `same`, `different` or
     `inconclusive`;
-  - the front, the view, A, V and T three times: the baseline, with a socket a picture and the log read before and
-    after each job, as the first round drew; the same on one socket, as round two draws; and the baseline again, which
-    brackets whatever drifts on the card.
+  - the front, the view, A, V and T three times: the baseline, each cell whole before the next on a socket of its own
+    and the log read before and after each job, as the first round drew; the same on round two's path, one socket,
+    each job sent at the over of the one before and the next cell's references uploaded while a job draws; and the
+    baseline again, which brackets whatever drifts on the card.
 - `triton`, once the server has been started again with `SIMPLE_CHAT_IMAGE_TRITON=1`: what the server's log says of
-  comfy-kitchen's backends at its start, then the same five cells twice on one socket, the first pass with whatever
-  Triton compiles on its first use.
-- `report`, which needs no card: each pass's times by cell, from one cell's end to the next and the job's own, the
-  card's idle time between them, the peaks of video memory and RAM, what one socket saved a cell against the mean of
-  the two baselines, the determinism verdict, and Triton's sampler time against the one socket's, its first pass
-  against its second, and its pictures against the baseline's.
+  comfy-kitchen's backends at its start, then the same five cells twice on round two's path, the first pass with
+  whatever Triton compiles on its first use.
+- `report`, which needs no card: each pass's times by cell, from one cell's record to the next and the job's own, the
+  card's idle time in each, the peaks of video memory and RAM, what round two's path saved a cell against the mean of
+  the two baselines, the determinism verdict, and Triton's sampler time against round two's path without it, its
+  first pass against its second, and its pictures against the baseline's. The idle time is a cell's time less its
+  job's on the card, which is its `totalMs` less its download: the baseline downloads with the card idle, and round
+  two's path while the next job draws, so that on it the idle time is about the gap from the over before to the
+  submit. Before round two's path it was the cell's time less the whole `totalMs`, the download counted as the job's.
 
 Each cell keeps what a drawing stage records, its sha256, whether its sampler came from the cache, and its picture
 against the baseline's, the first round's and, in Triton's second pass, the first's: the same bytes, or how many pixels
@@ -1052,7 +1118,7 @@ upload:
 | --- | --- |
 | `draw`, the determinism check: C, A and C | 1.1 |
 | `draw`, the baseline: the front, the view, A, V and T, 88 s of jobs | 1.7 |
-| `draw`, one socket, then the baseline again | 3.3 |
+| `draw`, round two's path, then the baseline again | 3.3 |
 | the server stopped, and started with Triton | 1 |
 | `triton`, the first pass: the models loaded again, and whatever Triton compiles and tunes | 3 to 7 |
 | `triton`, the second pass | 1.2 to 1.6 |
