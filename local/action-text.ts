@@ -1,4 +1,4 @@
-// The text run of the action measurement (docs/action-experiment.md#text-run): for each of the 18 stories and the
+// The text run of the action measurement (docs/action-experiment.md#text-run): for each of the 26 stories and the
 // owner's own sharp scenes (#own), the sharp seed where there is one, the opening and the action scene by the bot's
 // `generateScene`, the sheet, the bot's frame and the variant frame, every call the bot's own through one provider as
 // class `internal`. Each reply is decided by the rules the doc fixes, every attempt is recorded as counts and times,

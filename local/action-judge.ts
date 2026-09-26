@@ -58,6 +58,8 @@ export const modelsFor = (story: string) => isSharp(story) ? [JUDGE.model, JUDGE
 // The task texts, pinned by their hashes. None names an arm, shows a prompt of a picture it judges, or states a
 // hypothesis or a threshold.
 const ENDING = 'Рассуждай сколько нужно. В конце ответа дай ровно один блок ```json, который в точности подходит под schema.json из этой папки: только id из input.json и значения из перечислений схемы, без лишних полей и без пропусков.';
+// The checklist as sessions 2 and 3 are shown it.
+const SHOWN = 'checklist — список проверки момента: участники (id p…, у каждого handle и entry из листа или null) и пункты: отношения (r…: между двумя участниками; участника со своим телом, где object тот же, что subject; или участника с предметом сцены, где вместо object стоит thing), взгляды (g…), лица (f…), одежда (c…), отражения (m…: в отражении участника тот же человек в той же позе), масштаб (s…)';
 export const TASKS: Record<Exclude<SessionKind, 'repeat'>, string> = {
   checklist: `Ты составляешь список проверки к сцене из интерактивной истории. Картинок ещё нет: работай только с текстом.
 
@@ -65,18 +67,18 @@ export const TASKS: Record<Exclude<SessionKind, 'repeat'>, string> = {
 
 Опиши момент, которым кончается сцена:
 1. participants — каждый участник главного действия этого момента: человек, животное или существо. handle — короткое описание по его месту в действии, без имени и без внешности, у каждого своё. entry — запись листа, если это он, иначе null; одна запись — не больше чем у одного участника.
-2. relations — отношения момента, у каждого один subject, один verb и один object, где subject и object — handle участников. part и side — часть тела и её сторона (left или right), только если сцена их называет; сторону, которой сцена не называет, не выдумывай и оставь пустую строку. Касание в обе стороны — одно отношение. essential: true у касаний, из которых состоит главное действие; если сцена не показывает ни одного такого касания, не отмечай ни одного и ни одного не выдумывай. quote — короткая цитата из сцены.
-3. gazes и faces — взгляды и выражения лиц, которые сцена называет; clothes — одежда, которую сцена называет для этого момента. У каждого пункта who (handle), text — что именно, и quote. scale — масштаб, если на нём стоит сцена: text и quote.
-4. target — пришла ли сцена к моменту из target: происходит ли это касание (contact), есть ли в нём каждый нужный участник (participants), можно ли различить сам момент (moment); yes или no.
+2. relations — отношения момента между участниками, у каждого один subject, один verb и один object, где subject и object — handle участников. Если участник касается своего тела, subject и object — один и тот же handle, а part называет через точку с запятой обе части тела: чем он касается и чего касается. object_relations — касания предметов сцены: subject — handle участника, verb и thing — сам предмет, как его называет сцена, и никогда не участник. В обоих списках part и side — часть тела и её сторона (left или right), только если сцена их называет; сторону, которой сцена не называет, не выдумывай и оставь пустую строку; в касании своего тела side — сторона той части, которой касаются. Касание в обе стороны — одно отношение. essential: true у касаний, из которых состоит главное действие, будь то касание другого участника, своего тела или предмета; если сцена не показывает ни одного такого касания, не отмечай ни одного и ни одного не выдумывай. quote — короткая цитата из сцены.
+3. gazes и faces — взгляды и выражения лиц, которые сцена называет; clothes — одежда, которую сцена называет для этого момента; mirrors — отражения: если сцена показывает отражение участника (в зеркале, в воде, в стекле), по одному пункту на каждое такое отражение, и пункт значит, что в отражении тот же человек в той же позе. У каждого пункта who (handle), text — что именно (у отражения — где оно), и quote. scale — масштаб, если на нём стоит сцена: text и quote.
+4. target — пришла ли сцена к моменту из target: совпадает ли с target по сути контакт (contact), есть ли в нём каждый нужный участник (participants), можно ли различить сам момент (moment); yes или no. Контакт — физическое взаимодействие участников: кто на кого или на что действует, какой частью тела (рукой, ногой, коленом, плечом, спиной, головой, всем телом) и к какой части своего тела или тела другого участника, или к какому предмету. contact — yes, если это взаимодействие по сути то же, что в target; сторона (левая или правая), какая именно рука, сколько рук и точное положение contact не решают.
 5. contradictions — где строка листа о человеке противоречит сцене: entry и quote.
 
 ${ENDING}`,
   text: `Ты проверяешь описания кадра и портреты к сцене из интерактивной истории.
 
-В input.json: scene — сцена; sheet — лист персонажей (entry, name, look, outfit); checklist — список проверки момента: участники (id p…, у каждого handle и entry из листа или null) и пункты: отношения (r…), взгляды (g…), лица (f…), одежда (c…), масштаб (s…); shot — план кадра; prompts — описания кадра для художника, у каждого свой id; portraits — люди с портретами: entry, facing — куда в кадре обращён их корпус (viewer — к зрителю, away — спиной к зрителю, screen-left и screen-right — в профиль к левому или правому краю кадра, other — иначе), front — файл портрета спереди, если он есть, и view — файл вида с turn, куда человека просили повернуть, если вид есть. Файлы лежат в этой папке и приложены.
+В input.json: scene — сцена; sheet — лист персонажей (entry, name, look, outfit); ${SHOWN}; shot — план кадра; prompts — описания кадра для художника, у каждого свой id; portraits — люди с портретами: entry, facing — куда в кадре обращён их корпус (viewer — к зрителю, away — спиной к зрителю, screen-left и screen-right — в профиль к левому или правому краю кадра, other — иначе), front — файл портрета спереди, если он есть, и view — файл вида с turn, куда человека просили повернуть, если вид есть. Файлы лежат в этой папке и приложены.
 
 Ответь:
-1. prompts — для каждого описания и каждого отношения, взгляда и пункта одежды из checklist: называет ли его это описание, yes или no.
+1. prompts — для каждого описания и каждого отношения, взгляда, пункта одежды и отражения из checklist: называет ли его это описание, yes или no.
 2. facing — для каждого человека из portraits: подходит ли его facing к моменту и к плану кадра.
 3. fronts — для каждого портрета спереди: совпадает ли он со строкой листа лицом и волосами (face_hair) и телосложением и приметами (build_marks).
 4. views — для каждого вида: тот же ли это человек, что на его портрете спереди (same_person), и повёрнут ли он так, как просили (turned).
@@ -85,11 +87,11 @@ ${ENDING}`,
 ${ENDING}`,
   pictures: `Ты оцениваешь картинки к сцене из интерактивной истории.
 
-В input.json: scene — сцена; sheet — лист персонажей (entry, name, look, outfit); checklist — список проверки момента: участники (id p…, у каждого handle и entry из листа или null) и пункты: отношения (r…), взгляды (g…), лица (f…), одежда (c…), масштаб (s…); pictures — имена картинок, они лежат в этой папке и приложены.
+В input.json: scene — сцена; sheet — лист персонажей (entry, name, look, outfit); ${SHOWN}; pictures — имена картинок, они лежат в этой папке и приложены.
 
 Для каждой картинки сначала скажи, кто есть кто: каждый участник present, absent или unsure, и где он, по его внешности и месту, прежде чем оценивать действие. Если не можешь понять, кто есть кто, отвечай unsure за этого участника, а не решай по действию.
 Потом для каждой картинки:
-1. items — каждое отношение, взгляд, лицо, пункт одежды и масштаба: yes, no или unsure. Касание, закрытое телом, — unsure, если картинка его не показывает; касание, которое срезает край кадра, — no.
+1. items — каждое отношение, взгляд, лицо, отражение, пункт одежды и масштаба: yes, no или unsure. Касание, закрытое телом, — unsure, если картинка его не показывает; касание, которое срезает край кадра, — no. Отражение — yes, если на картинке видно отражение этого участника и в нём тот же человек в той же позе.
 2. mixups — есть ли путаница каждого вида: действие делает не тот участник (wrong_person), двое поменялись внешностью (swapped_looks), двое слились в одного (merged).
 3. anatomy — есть ли ошибка анатомии: лишняя или недостающая конечность, слившиеся тела, сустав, согнутый так, как он не гнётся.
 4. looks — для каждого участника, у которого есть entry: выглядит ли он так, как говорит его строка листа.
@@ -117,21 +119,24 @@ const each = (keys: string[], value: Schema) => strict(Object.fromEntries(keys.m
 const list = (item: Record<string, Schema>, minItems?: number): Schema => ({ type: 'array', ...(minItems ? { minItems } : {}), items: strict(item) });
 export const MIXUPS = ['wrong_person', 'swapped_looks', 'merged'] as const;
 
-// The checklist's schema describes the items it lists; the entries are the sheet's.
+// The checklist's schema describes the items it lists; the entries are the sheet's. A relation's object is a
+// participant, the subject's own body included, and an object relation's is a thing of the scene: each list has its
+// own field for it and no other, so no relation names both or neither.
 export function checklistSchema(entries: string[]): Schema {
   const said = { who: TEXT, text: TEXT, quote: TEXT };
+  const contact = { part: TEXT, side: { type: 'string', enum: ['left', 'right', ''] }, essential: { type: 'boolean' }, quote: TEXT };
   return strict({
     participants: list({ handle: TEXT, entry: { type: ['string', 'null'], enum: [...entries, null] } }, 1),
-    relations: list({ subject: TEXT, verb: TEXT, object: TEXT, part: TEXT, side: { type: 'string', enum: ['left', 'right', ''] },
-      essential: { type: 'boolean' }, quote: TEXT }),
-    gazes: list(said), faces: list(said), clothes: list(said), scale: list({ text: TEXT, quote: TEXT }),
+    relations: list({ subject: TEXT, verb: TEXT, object: TEXT, ...contact }),
+    object_relations: list({ subject: TEXT, verb: TEXT, thing: TEXT, ...contact }),
+    gazes: list(said), faces: list(said), clothes: list(said), mirrors: list(said), scale: list({ text: TEXT, quote: TEXT }),
     target: each(['contact', 'participants', 'moment'], YN),
     contradictions: list({ entry: { type: 'string', enum: entries }, quote: TEXT }),
   });
 }
 // The other three take the ids of their bundle and values from their enums, and nothing else.
 export function textSchema(input: TextInput): Schema {
-  const asked = input.checklist.items.filter(item => item.kind === 'relation' || item.kind === 'gaze' || item.kind === 'clothes').map(item => item.id);
+  const asked = input.checklist.items.filter(item => ['relation', 'gaze', 'clothes', 'mirror'].includes(item.kind)).map(item => item.id);
   return strict({ prompts: each(input.prompts.map(prompt => prompt.id), each(asked, YN)), facing: each(input.portraits.map(one => one.entry), YNU),
     fronts: each(input.portraits.filter(one => one.front).map(one => one.entry), each(['face_hair', 'build_marks'], YNU)),
     views: each(input.portraits.filter(one => one.view).map(one => one.entry), each(['same_person', 'turned'], YNU)) });
@@ -147,7 +152,7 @@ export function identitySchema(input: IdentityInput): Schema {
 }
 // Each kind's schema as one hash for the pins: the schema built for a made-up bundle of every item kind.
 function schemaTemplates(): Record<string, string> {
-  const checklist: ShownChecklist = { participants: [{ id: 'p1', handle: 'h', entry: 'e1' }], items: (['relation', 'gaze', 'face', 'clothes', 'scale'] as ItemKind[])
+  const checklist: ShownChecklist = { participants: [{ id: 'p1', handle: 'h', entry: 'e1' }], items: (Object.keys(PREFIX) as ItemKind[])
     .map(kind => ({ id: `${PREFIX[kind]}1`, kind, quote: 'q' })) };
   return { checklist: sha256(JSON.stringify(checklistSchema(['e1']))),
     text: sha256(JSON.stringify(textSchema({ scene: '', sheet: [], checklist, shot: '', prompts: [{ id: 'q1', text: '' }],
@@ -167,56 +172,67 @@ export function judgePins(): Record<string, string | number> {
 
 // ---- The checklist ----
 
-export type ItemKind = 'relation' | 'gaze' | 'face' | 'clothes' | 'scale';
-export const PREFIX: Record<ItemKind, string> = { relation: 'r', gaze: 'g', face: 'f', clothes: 'c', scale: 's' };
+export type ItemKind = 'relation' | 'gaze' | 'face' | 'clothes' | 'mirror' | 'scale';
+export const PREFIX: Record<ItemKind, string> = { relation: 'r', gaze: 'g', face: 'f', clothes: 'c', mirror: 'm', scale: 's' };
 type Said = { who: string; text: string; quote: string };
+type Contact = { subject: string; verb: string; part: string; side: 'left' | 'right' | ''; essential: boolean; quote: string };
 // The checklist as the session writes it.
 export type RawChecklist = {
   participants: { handle: string; entry: string | null }[];
-  relations: { subject: string; verb: string; object: string; part: string; side: 'left' | 'right' | ''; essential: boolean; quote: string }[];
-  gazes: Said[]; faces: Said[]; clothes: Said[]; scale: { text: string; quote: string }[];
+  relations: (Contact & { object: string })[];
+  object_relations: (Contact & { thing: string })[];
+  gazes: Said[]; faces: Said[]; clothes: Said[]; mirrors: Said[]; scale: { text: string; quote: string }[];
   target: { contact: 'yes' | 'no'; participants: 'yes' | 'no'; moment: 'yes' | 'no' };
   contradictions: { entry: string; quote: string }[];
 };
-// As code stores it, every item with an id of its own and every participant named by theirs.
-export type ChecklistItem = { id: string; kind: ItemKind; subject?: string; verb?: string; object?: string; part?: string; side?: string;
-  essential?: boolean; who?: string; text?: string; quote: string };
+// As code stores it, every item with an id of its own and every participant named by theirs. A relation has an
+// `object`, the subject's own for a touch of their own body, or a `thing`, never both.
+export type ChecklistItem = { id: string; kind: ItemKind; subject?: string; verb?: string; object?: string; thing?: string; part?: string;
+  side?: string; essential?: boolean; who?: string; text?: string; quote: string };
 export type Checklist = { story: string; participants: { id: string; handle: string; entry: string | null }[]; items: ChecklistItem[];
   target: RawChecklist['target']; contradictions: RawChecklist['contradictions'] };
-// What the scoring reads, and all that leaves a sharp story: ids, kinds, which relations are essential, which
-// participant is which entry and so which portrait, and whether the scene reached its target.
+// What the scoring reads, and all that leaves a sharp story: ids, kinds, which relations are essential and which are
+// with the subject's own body or a thing (`with`; none for two participants), which participant is which entry and so
+// which portrait, and whether the scene reached its target.
 export type Projection = { story: string; reached: boolean; participants: { id: string; entry: string | null; portrait: string | null }[];
-  items: { id: string; kind: ItemKind; essential?: boolean }[]; contradictions: number };
+  items: { id: string; kind: ItemKind; essential?: boolean; with?: 'self' | 'thing' }[]; contradictions: number };
 // What sessions 2 and 3 are shown of it: everything but which relations count as essential.
 export type ShownChecklist = { participants: Checklist['participants']; items: Omit<ChecklistItem, 'essential'>[] };
 
 const handleKey = (handle: string) => handle.trim().toLowerCase();
 // Beyond its schema, a checklist must hold together: handles that are there and apart, each entry at most once, and
-// every relation, gaze, face and clothes item about participants it lists, a relation about two of them.
+// every relation, gaze, face, clothes and mirror item about participants it lists: a relation about two of them or
+// one and their own body, and an object relation about one of them and a thing that is named and is none of them.
 export function checklistHolds(raw: RawChecklist): boolean {
   const handles = raw.participants.map(one => handleKey(one.handle));
   const entries = raw.participants.flatMap(one => one.entry === null ? [] : [one.entry]);
   const known = (handle: string) => handles.includes(handleKey(handle));
   return handles.every(Boolean) && new Set(handles).size === handles.length && new Set(entries).size === entries.length
-    && raw.relations.every(one => known(one.subject) && known(one.object) && handleKey(one.subject) !== handleKey(one.object))
-    && [...raw.gazes, ...raw.faces, ...raw.clothes].every(one => known(one.who));
+    && raw.relations.every(one => known(one.subject) && known(one.object))
+    && raw.object_relations.every(one => known(one.subject) && !!handleKey(one.thing) && !known(one.thing))
+    && [...raw.gazes, ...raw.faces, ...raw.clothes, ...raw.mirrors].every(one => known(one.who));
 }
+// The relations first, then the object relations, one run of `r…` ids, so that an essential one of either counts in
+// the contacts as any other.
 export function withIds(story: string, raw: RawChecklist): Checklist {
   const participants = raw.participants.map((one, at) => ({ id: `p${at + 1}`, handle: one.handle.trim(), entry: one.entry }));
   const id = (handle: string) => participants.find(one => handleKey(one.handle) === handleKey(handle))!.id;
   const said = (kind: ItemKind, list: Said[]) => list.map((one, at) => ({ id: `${PREFIX[kind]}${at + 1}`, kind, who: id(one.who), text: one.text, quote: one.quote }));
+  const rest = (one: Contact) => ({ part: one.part, side: one.side, essential: one.essential, quote: one.quote });
+  const relations = [...raw.relations.map(one => ({ subject: id(one.subject), verb: one.verb, object: id(one.object), ...rest(one) })),
+    ...raw.object_relations.map(one => ({ subject: id(one.subject), verb: one.verb, thing: one.thing.trim(), ...rest(one) }))];
   return { story, participants, items: [
-    ...raw.relations.map((one, at) => ({ id: `r${at + 1}`, kind: 'relation' as const, subject: id(one.subject), verb: one.verb, object: id(one.object),
-      part: one.part, side: one.side, essential: one.essential, quote: one.quote })),
-    ...said('gaze', raw.gazes), ...said('face', raw.faces), ...said('clothes', raw.clothes),
+    ...relations.map((one, at) => ({ id: `r${at + 1}`, kind: 'relation' as const, ...one })),
+    ...said('gaze', raw.gazes), ...said('face', raw.faces), ...said('clothes', raw.clothes), ...said('mirror', raw.mirrors),
     ...raw.scale.map((one, at) => ({ id: `s${at + 1}`, kind: 'scale' as const, text: one.text, quote: one.quote }))],
   target: raw.target, contradictions: raw.contradictions };
 }
 export function projectionOf(checklist: Checklist): Projection {
   const { target } = checklist;
+  const withWhat = (item: ChecklistItem) => item.thing !== undefined ? { with: 'thing' as const } : item.object === item.subject ? { with: 'self' as const } : {};
   return { story: checklist.story, reached: target.contact === 'yes' && target.participants === 'yes' && target.moment === 'yes',
     participants: checklist.participants.map(one => ({ id: one.id, entry: one.entry, portrait: one.entry ? `${checklist.story}-${one.entry}` : null })),
-    items: checklist.items.map(item => ({ id: item.id, kind: item.kind, ...(item.kind === 'relation' ? { essential: item.essential === true } : {}) })),
+    items: checklist.items.map(item => ({ id: item.id, kind: item.kind, ...(item.kind === 'relation' ? { essential: item.essential === true, ...withWhat(item) } : {}) })),
     contradictions: checklist.contradictions.length };
 }
 const shown = (checklist: Checklist): ShownChecklist => ({ participants: checklist.participants,
@@ -264,8 +280,8 @@ function writeBundle(root: string, session: Session, input: object, schema: Sche
 export type BundleCounts = { built: number; kept: number; skipped: Record<string, number> };
 const skip = (counts: BundleCounts, why: string) => { counts.skipped[why] = (counts.skipped[why] ?? 0) + 1; };
 
-// The 18 checklists' bundles, from the texts alone, before the picture card: a story without its action scene or its
-// sheet has none.
+// The checklists' bundles, one a story, from the texts alone, before the picture card: a story without its action
+// scene or its sheet has none.
 export function checklistBundles(root: string, log: (event: object) => void = () => undefined): BundleCounts {
   const counts: BundleCounts = { built: 0, kept: 0, skipped: {} };
   for (const story of textStories()) {

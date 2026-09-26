@@ -131,16 +131,20 @@ function answersFor(schema: Schema, path: string): unknown {
   return schema.type === 'array' ? [] : schema.type === 'boolean' ? true : 'x';
 }
 // A checklist from the sheet: its first four people, a hold between each two of them, the first two holds essential
-// but in the jellyfish scene, where none is; a gaze, a garment, the scale where the set has giants, and a target the
-// beach scene misses. A sharp scene's quotes carry the marker, as its scene's words would.
+// but in the jellyfish scene, where none is; where the sheet has one person, a touch of their own body and a grip on a
+// thing, both essential, and in the mirror scene also their reflection; a gaze, a garment, the scale where the set has
+// giants, and a target the beach scene misses. A sharp scene's quotes carry the marker, as its scene's words would.
 function checklistFor(story: string, input: ChecklistInput, secret: string): RawChecklist {
   const people = input.sheet.slice(0, 4).map((line, at) => ({ handle: `participant ${at + 1}`, entry: line.entry as string | null }));
-  if (people.length < 2) people.push({ handle: 'a stranger', entry: null });
+  const [first] = people, alone = people.length === 1;
   const quote = `цитата${secret}`;
   return { participants: people,
-    relations: people.slice(1).map((one, at) => ({ subject: people[at].handle, verb: 'holds', object: one.handle, part: 'arm', side: at % 2 ? 'left' : '',
-      essential: story !== 'jellyfish' && at < 2, quote })),
-    gazes: [{ who: people[0].handle, text: 'looks back', quote }], faces: [], clothes: [{ who: people[1].handle, text: 'a cloak', quote }],
+    relations: alone ? [{ subject: first.handle, verb: 'traces', object: first.handle, part: 'right fingers; a scar on the left shoulder', side: 'left', essential: true, quote }]
+      : people.slice(1).map((one, at) => ({ subject: people[at].handle, verb: 'holds', object: one.handle, part: 'arm', side: at % 2 ? 'left' : '',
+        essential: story !== 'jellyfish' && at < 2, quote })),
+    object_relations: alone ? [{ subject: first.handle, verb: 'grips', thing: 'the tool', part: 'hand', side: 'right', essential: true, quote }] : [],
+    gazes: [{ who: first.handle, text: 'looks back', quote }], faces: [], clothes: [{ who: (people[1] ?? first).handle, text: 'a cloak', quote }],
+    mirrors: story === 'mirror' ? [{ who: first.handle, text: 'the mirror over the sink', quote }] : [],
     scale: ['giants', 'gulliver'].includes(story) ? [{ text: 'a giant among small people', quote }] : [],
     target: { contact: 'yes', participants: 'yes', moment: story === 'beach' ? 'no' : 'yes' }, contradictions: [] };
 }

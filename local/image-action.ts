@@ -3,12 +3,12 @@
 // commands, in the runbook's order (docs/action-experiment.md#runbook), all in illustrations/action, whose sealed/ the
 // owner's deny covers; only `dry-run` takes another `--dir`:
 //   texts       on the text card, through simple-serving's gateway: `--marker` first, the marker check of the sealed
-//               path, then the 18 stories and the owner's own. `--smoke-record` names the record of the gateway's
+//               path, then the 26 stories and the owner's own. `--smoke-record` names the record of the gateway's
 //               smoke, which route A starts on; `--model gpu:<label>` takes the llama.cpp fallback from .env.gpu
 //               instead. `--again id,...` asks once more the sheets that came back empty (docs/action-experiment.md#again)
 //   own         how many themes and scenes the owner's sealed/own.txt holds, before the text card (#own)
 //   prompts     the manifests, the six arms' prompts, the fronts and the views
-//   checklists  the 18 checklists, from the texts alone, before the picture card; it says whether the card may come
+//   checklists  the checklists, from the texts alone, before the picture card; it says whether the card may come
 //   draw        on the picture card: `--smoke` first; `portraits` then draws the rest of the fronts and views, and
 //   portraits   `draw` whatever is left of them, seed 7, and seed 11 if it fits. Each takes `--until`
 //   bundles     the bundles of the text, pictures, repeat and identity sessions, from the drawn pictures
@@ -203,13 +203,14 @@ export function reportCommand(root: string) {
   const verdicts = (gates: { verdict: string }[]) => gates.map(gate => gate.verdict);
   return { event: 'report', scenes: { ...report.scenes, missed: report.scenes.missed.length }, gates: verdicts(report.gates), cleanOnly: verdicts(report.cleanOnly),
     reachedOnly: verdicts(report.reachedOnly), seed11: verdicts(report.seed11.gates), repeats: { scenes: report.repeats.scenes, changed: report.repeats.changed.length },
+    mirror: Object.fromEntries(Object.entries(report.mirror.seed7).map(([arm, one]) => [arm, [one.shown, one.of]])),
     sharpUnanswered: report.delivery.sharpUnanswered, seedSevenComplete: report.delivery.seedSevenComplete };
 }
 
 // ---- The dry run ----
 
 // The gateway's faults in the dry run: each of the doc's outcomes once, the provider's error on a sharp story, whose
-// body then carries the marker, and two faults in each of two stories so that 15 scenes keep both A and A+. The beach
+// body then carries the marker, and two faults in each of two stories so that 25 scenes keep both A and A+. The beach
 // scene, which binds the most people, has them all face the viewer: the smoke then draws another scene's view and its
 // front, and V is C's picture there.
 const DRY_FAULTS: Faults = {
@@ -393,6 +394,11 @@ export async function dryRun(out: string, options: { tokenizers?: string } = {})
 
     const report = reportCommand(root);
     say(`9 report: ${JSON.stringify(report)}`);
+    // The fakes give the one-person scenes a touch of their own body and a grip on a thing, and the mirror scene its
+    // reflection: a checklist that lost them would score those scenes on nothing and say so nowhere.
+    const items = report.scenes.items;
+    expect(items.self > 0 && items.thing > 0 && items.mirror > 0 && Object.values(report.mirror).some(([, of]) => of > 0),
+      'a touch of one\'s own body, one of a thing and a mirror item reach the report');
     const delivery = readJson<{ delivery: { cells: Record<string, { planned: number; submitted: number; drawn: number; scored: number; reasons: Record<string, number> }> } }>(join(root, 'report.json'))!.delivery;
     for (const [name, row] of Object.entries(delivery.cells)) say(`   ${name}: planned ${row.planned}, submitted ${row.submitted}, drawn ${row.drawn}, scored ${row.scored}; ${JSON.stringify(row.reasons)}`);
     const gallery = writeGalleries(root);

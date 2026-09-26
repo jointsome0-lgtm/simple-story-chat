@@ -18,7 +18,8 @@ for it, and on the bot's own path: the uncensored Gemma writes the scenes and th
 [simple-serving](model-providers.md#simple-serving-our-gateway), and Qwen-Image 2.1 draws them on another.
 [Stage 1](#stage-1) wrote the frames of the clean scenes with a hosted Gemma and drew nothing. The first round wrote
 its texts on 2026-09-25 and 26 and drew seed 7 on the 26th, with up to six people in a moment; the next one has four
-([four](#four)).
+([four](#four)), eight more clean scenes of one to three people ([the set](#the-set)), and checklists that count a
+touch of one's own body, of a thing and a reflection ([one](#one)).
 
 <a id='stage-1'></a>
 
@@ -84,8 +85,9 @@ further, so the mechanisms inside a difference stay open.
 
 ## The set
 
-Eighteen stories: the 13 clean stories of stage 1 and five sharp ones that Gemma writes itself. The owner may add up
-to ten sharp scenes of their own ([own](#own)).
+Twenty-six stories: the 13 clean stories of stage 1, eight clean ones of one to three people added for round two, and
+five sharp ones that Gemma writes itself. The owner may add up to ten sharp scenes of their own ([own](#own)). Round
+one had the first eighteen.
 
 - The owner's five: a warrior flees a rockfall with his wife on his back and his daughters in his arms (`flight`);
   three people hold a demon by different parts of his body (`demon`); women close tightly round a young man on a
@@ -95,16 +97,25 @@ to ten sharp scenes of their own ([own](#own)).
   (`lineout`), a cheerleading lift (`cheer`), a tango dip (`tango`), macaques robbing a tourist (`monkeys`), a
   stretcher carried by rescuers (`rescue`), a giant tied down by tiny people (`gulliver`), a game of twister
   (`twister`).
+- Eight for round two, which the owner approved on 2026-09-26, so that every count of people in a moment from one to
+  four has at least four scenes: a man tracing the scar on his shoulder before a mirror (`mirror`), a climber on a
+  boulder (`climber`), a smith at the anvil with tongs and a raised hammer (`smith`), an archer drawing her bow
+  (`archer`), an arm-wrestling match (`armwrestle`), a forearm being bandaged (`bandage`), two friends carrying a
+  third across a ford on their joined hands (`crossing`), and a boost over a fence (`fence`). By the people their
+  targets need, the clean scenes now hold one in four of them, two in four (`guard`, `tango`, `armwrestle`,
+  `bandage`), three in four (`giants`, `twister`, `crossing`, `fence`) and four in nine. A scene of one person has no
+  contact between people, so its checklist counts a touch of one's own body or of a thing ([one](#one)).
 - Five sharp scenes, one per theme: a bathhouse, a harem, captivity, an interrogation, a battle with wounds.
 
 A story is a seed and one reader's action, in Russian, as the bot's stories are. The seed names the place, the time
 and each person with a name and a look. The narrator writes the opening scene from the seed and the action scene from
 the reader's action, through the bot's `generateScene`, and the frames describe the action scene. Two scenes rather
-than one, because the sheet's instruction asks for the people who appear in more than one. The clean seeds and
-actions are written from stage 1's stories, their `target` and `cast`, and fixed in `examples/action-set.ts` before
-any card, each with its target: the contact the moment should hold and the participants it needs. No moment has more
-than four participants, and no cast more than four people, the bot's own limit for a frame ([four](#four)). The
-scenes are not stage 1's: the reader's action says what the moment is, and the scene is whatever the heretic writes.
+than one, because the sheet's instruction asks for the people who appear in more than one. The first thirteen clean
+seeds and actions are written from stage 1's stories, their `target` and `cast`, and the eight of round two as stories
+of their own. All are fixed in `examples/action-set.ts` before any card, each with its target: the contact the moment
+should hold and the participants it needs. No moment has more than four participants, and no cast more than four
+people, the bot's own limit for a frame ([four](#four)). The scenes are not stage 1's: the reader's action says what
+the moment is, and the scene is whatever the heretic writes.
 
 Each sharp story is written by the heretic on the same card, in one call, before its flow starts. Its instruction is
 the only sharp text a Claude session writes, and it names the theme and nothing more. The harness pins this wording:
@@ -135,10 +146,11 @@ card. Each costs about three and a half minutes of the picture card at each seed
 seed 7, and four judge sessions: the checklist, the text, the pictures and the identity.
 
 Whether a scene reached its target is the first thing the judges answer, before any picture exists: whether the
-contact happens, whether each participant it needs is in it, and whether the moment can be told apart. A scene that
-missed stays in the run as written and is never asked again. The report counts the misses and shows every gate over
-the scenes that reached their target beside the main count. A pass those scenes do not repeat is reported as a pass
-of the main count alone, never as success on the moments the set was built for.
+contact happens in substance, by whatever part of the body ([loosened](#loosened)), whether each participant it needs
+is in it, and whether the moment can be told apart. A scene that missed stays in the run as written and is never asked
+again. The report counts the misses and shows every gate over the scenes that reached their target beside the main
+count. A pass those scenes do not repeat is reported as a pass of the main count alone, never as success on the
+moments the set was built for.
 
 <a id='four'></a>
 
@@ -169,10 +181,11 @@ own ([the rentals](#the-rentals)); the text card is never stopped. Every call is
 4. the bot's frame, by `frameRequest`;
 5. the variant frame.
 
-That is 95 calls before retries, 5 seeds and five calls for each of the 18 stories. The gateway's smoke, the marker
-check, the retries and the counts the adapter may ask for before it sends are requests on top of these, and the
-report gives them apart. Two stories run at once, since the gateway admits two `internal` calls; that is a
-provisional limit of its contract, not a measured throughput.
+That is 135 calls before retries, 5 seeds and five calls for each of the 26 stories, where round one's 18 took 95;
+each of the owner's scenes adds five, and each of their themes six. The gateway's smoke, the marker check, the retries
+and the counts the adapter may ask for before it sends are requests on top of these, and the report gives them apart.
+Two stories run at once, since the gateway admits two `internal` calls; that is a provisional limit of its contract,
+not a measured throughput.
 
 The bot's `askJson` only parses a reply. The harness wraps the provider and records every attempt: its kind, the
 tokens in, out and cached (a count the gateway does not give stays unknown, never 0), the gateway's wait, first token
@@ -409,15 +422,20 @@ portrait:
 | ssh, Qwen's files, torch, the verification and the tunnel, at 300 Mbit/s (the identity run's table) | 14 |
 | about 70 fronts at 15 s | 18 |
 | about 40 views at 18 s | 12 |
-| seed 7: 54 frames without references at 15 s | 14 |
-| seed 7: about 33 frames of C and V at 20 to 30 s | 11 to 17 |
-| seed 7: 18 frames of T at 25 to 85 s | 8 to 26 |
-| seed 11, the same frames again | 33 to 57 |
+| seed 7: 78 frames without references at 15 s | 20 |
+| seed 7: about 48 frames of C and V at 20 to 30 s | 16 to 24 |
+| seed 7: 26 frames of T at 25 to 85 s | 11 to 37 |
+| seed 11, the same frames again | 47 to 81 |
 | the margin before the guard | 5 |
 
-That is 115 to 163 minutes of the guard's 180. T's time is the least known: four portraits of 704x1280 took 82 s in
-the identity run and two took about 20 s, and the cause of that jump was not measured. T sends L's picture at
-1280x704 and up to four references at 352x640, between those two in pixels.
+That is 143 to 211 minutes of the guard's 180 for round two's 26 stories, where round one's 18 came to 115 to 163, and
+the owner's scenes come on top. Without seed 11 it is 96 to 130, so seed 11 fits only toward the fast end, and the
+admission after seed 7 decides it as above. Round one's sharp scenes took about three and a half minutes each at seed
+7 ([own](#own)), where this table allows a scene three at most; at that pace seed 11 would not fit. The fronts and
+views stay about as many as in round one: the eight new scenes add 14 to the clean casts, and the cut to four took 11
+out of them. T's time is the least known: four portraits of 704x1280 took 82 s in the identity run and two took about
+20 s, and the cause of that jump was not measured. T sends L's picture at 1280x704 and up to four references at
+352x640, between those two in pixels.
 
 <a id='judging'></a>
 
@@ -436,27 +454,31 @@ hypothesis or a threshold. Four kinds of session work on each scene.
      and its side only where the scene gives them. A side the scene does not give is never made up, a contact both
      ways is one relation, and each relation is marked essential or not. The essential ones are the contacts the main
      action is made of; a scene whose text shows none lists none, rather than make one up. Each carries a short quote
-     from the scene;
-   - the gazes and faces the scene names, the clothes it names for the moment, and the scale where it is a premise;
-   - whether the scene reached its target (see [the set](#the-set)), and where the sheet's line for a person
-     contradicts the scene.
+     from the scene. Since round two the object may be the subject, a touch of one's own body, and a touch of a thing
+     of the scene is a relation too, in a list of its own ([one](#one));
+   - the gazes and faces the scene names, the clothes it names for the moment, each reflection of a participant it
+     shows, and the scale where it is a premise;
+   - whether the scene reached its target (see [the set](#the-set)), its contact judged in substance
+     ([loosened](#loosened)), and where the sheet's line for a person contradicts the scene.
 
    Code takes the checklist out, gives every item an id of its own, and stores it; no later session changes it. The
    checklist's words, its handles, relations and quotes, stay with its story, under `sealed/` for a sharp one. What
-   the scoring reads is its projection: the ids, the kind of each item, which relations are essential, which
-   participant is which sheet entry and so which portrait, and whether the scene reached its target. Only that
-   projection leaves a sharp story, never the checklist's own answers block.
+   the scoring reads is its projection: the ids, the kind of each item, which relations are essential and which of
+   them are with the subject's own body or a thing, which participant is which sheet entry and so which portrait, and
+   whether the scene reached its target. Only that projection leaves a sharp story, never the checklist's own answers
+   block.
 2. **The text and the portraits**, after the card: the checklist, the sheet, the prompts of A and A+, the front
-   portraits, and each view beside its front with the direction it was asked for. It says which relations, gazes and
-   clothes each of the two prompts states; whether each bound person's `facing` fits the moment and the shot; whether
-   each front matches its sheet line in face and hair, build and marks; and whether each view is the same person,
-   turned the way it was asked.
+   portraits, and each view beside its front with the direction it was asked for. It says which relations, gazes,
+   clothes and reflections each of the two prompts states; whether each bound person's `facing` fits the moment and
+   the shot; whether each front matches its sheet line in face and hair, build and marks; and whether each view is the
+   same person, turned the way it was asked.
 3. **The pictures**, one session per scene and seed: the action scene, the sheet, the checklist, and that seed's
    pictures, six at most, in an order drawn by code and named by hashes. C's picture, when it stands for V, is shown
    once. For each picture the session first says who is who: each participant present, absent or `unsure`, and
    where, told by their looks and place before any action is scored. Then:
-   - each relation, gaze, face, clothes item and scale item: `yes`, `no` or `unsure`. A contact hidden by a body is
-     `unsure` unless the picture shows it; a contact the frame's edge cuts off is `no`;
+   - each relation, gaze, face, reflection, clothes item and scale item: `yes`, `no` or `unsure`. A contact hidden by
+     a body is `unsure` unless the picture shows it; a contact the frame's edge cuts off is `no`; a reflection is
+     `yes` when the picture shows it with the same person in the same pose;
    - a mix-up of each kind: an action done by the wrong person, two people's looks swapped, two people merged into
      one;
    - an anatomy error: a limb too many or missing, bodies merged, a joint bent the way it cannot;
@@ -464,6 +486,41 @@ hypothesis or a threshold. Four kinds of session work on each scene.
 4. **The identity**, once session 3's answers are stored: the same pictures and the front portraits of the bound
    people, the same references for every arm. For each picture and each bound person: present or not, and whether the
    face and the build each match the front.
+
+<a id='one'></a>
+
+**One person's contacts, since 2026-09-26.** Round one's relations joined two participants, and code refused one of a
+participant with themself, so a scene of one person had nothing for the contact scores to count, though its action is
+a touch: in `mirror` Глеб's fingers on the scar on his own shoulder, in `archer` Ярослава's fingers on the bowstring.
+Round two's checklist keeps `relations` for participants, and one whose object is its own subject is a touch of one's
+own body: its `part` names both parts, what touches and what is touched, as "пальцы правой руки; шрам на левом плече"
+would for the scar, and its side is that of the part touched. A touch of a thing goes in `object_relations`, with the
+thing as the scene names it, the bowstring for the bow, in `thing` where a relation has `object`. The task gives no
+example, so that no scene of the set is written into it. Each list's schema has its own field and not the other's, so
+no relation names both a participant and a thing, or neither; code also refuses an empty thing and a thing that is a
+participant's handle. The two lists take their ids in one run of `r…`, the relations first, and an essential one of
+either counts in the contacts exactly as a contact between two people does; the projection marks which are with the
+subject's own body or a thing, so the report counts them. A reflection is an item of its own, `m…`: the same person in
+the same pose in the mirror, the water or the glass. The text session says whether each prompt names it and the
+pictures session whether each picture shows it; the report gives it a line of its own, and it enters neither the
+contacts nor a gate. The task and the schema are pinned by their hashes, so the judging commands refuse round one's
+directory, and its stored checklists, answers and report are not rewritten; it moves out whole before round two begins
+([runbook](#runbook)).
+
+<a id='loosened'></a>
+
+**The target's contact, loosened on 2026-09-26.** Round one's checklists counted 12 of the 13 clean scenes as missing
+their target. In 7 of the 12 the participants and the moment were there and only the contact was `no`. In `guard`, for
+one, Руслан pushes one palm against Артём's chest where the target says both hands, and Артём's legs wrap Руслан's
+hips where it says they cross behind his lower back. For round two the owner loosened that part of the check, and the
+same day widened it to any part of the body, as [the variant](#variant)'s ninth change does for the frame: the contact
+is the physical interaction of the participants, who acts on whom or on what, with which part of the body (a hand, a
+foot, a knee, a shoulder, the back, the head, the whole body), and against which part of their own body or another
+participant's, or which object. It is `yes` when that interaction is in substance the target's; the side, which hand,
+how many hands and the fine placement do not decide it. The task gives no example, so that no scene of the set is
+written into it. The participants and the moment are asked as before. The other five of the twelve, `beach`, `cheer`,
+`jellyfish`, `lineout` and `tango`, missed the moment itself, which the loosening does not touch, and they stay
+misses. Round one's stored checklists and its report are not rewritten.
 
 The narrator's scene decides who takes part and what they do; the sheet decides the looks score, and the front
 portraits the identity score. A judge who cannot tell who is who in a picture answers `unsure` for that participant,
@@ -479,9 +536,10 @@ Each report ends with its answers as one JSON block, and each kind of session ha
 hash. The checklist's schema describes the items it lists. The other three take only the ids code gave and values from
 their enums, and a block with anything more or anything missing is invalid; the report's prose stays with the report.
 A clean scene's report without a valid block gets one fresh session of the same kind, and a second one without counts
-as a judge's failure; a sharp scene's goes as [below](#sealed). With both seeds there are 18 checklists before the
-picture card, and 94 sessions after it: 18 of text and portraits, 36 of pictures, 36 of identity and 4 repeats. With
-seed 7 alone there are 58 after it. The fresh sessions for invalid reports come on top.
+as a judge's failure; a sharp scene's goes as [below](#sealed). With both seeds there are 26 checklists before the
+picture card, and 134 sessions after it: 26 of text and portraits, 52 of pictures, 52 of identity and 4 repeats. With
+seed 7 alone there are 82 after it. Each of the owner's scenes adds a checklist and five sessions after the card,
+three with seed 7 alone. The fresh sessions for invalid reports come on top.
 
 <a id='gates'></a>
 
@@ -489,9 +547,11 @@ seed 7 alone there are 58 after it. The fresh sessions for invalid reports come 
 
 Each picture gets these scores:
 
-- **contacts**, the main one: the share of its scene's essential relations shown, and **all contacts**, whether every
-  one is;
+- **contacts**, the main one: the share of its scene's essential relations shown, a touch of one's own body or of a
+  thing among them ([one](#one)), and **all contacts**, whether every one is;
 - gazes and faces, clothes and scale, each a share of its own;
+- **reflections**, where the scene shows one: how many of its reflection items the picture shows. The report pools
+  them per arm on a line of their own; they are not part of the contacts, and no gate reads them;
 - **complete**: every participant present;
 - **mix-ups** by kind, and **anatomy**;
 - **looks**: the share of the scene's sheet people who are present and look as their line says, counted over all of
@@ -508,18 +568,21 @@ stays in the count of cells; no essential relation is ever made up.
 An arm's score is the mean over scenes, so a scene with many relations weighs no more than one with few. The report
 gives the numerators, the difference between the arms of each pair scene by scene, in how many scenes each arm is
 ahead, level and behind, and a 90% interval for each difference from 10 000 resamples of the scenes with a fixed
-seed. The gates compare exact values; the report rounds to whole points. It also gives the text audit's share of the
-checklists' relations stated in A's and A+'s prompts, and the share of fronts that match their line and of views
-judged right.
+seed. The gates compare exact values; the report rounds to whole points. It also gives how many essential relations
+the scenes' checklists hold, and how many of them are with the subject's own body or a thing; the text audit's share
+of the checklists' relations and reflections stated in A's and A+'s prompts; and the share of fronts that match their
+line and of views judged right.
 
 The gates are fixed before the paid run and counted by code on seed 7, as thresholds for the next decision and not
-as proof. At 18 pictures one picture is 5.6 points, and the two seeds share one text and one set of portraits, so they
+as proof. At 26 pictures one picture is 3.8 points, and the two seeds share one text and one set of portraits, so they
 are not more scenes. A `no` and an `unsure` both count against a picture. "At most n/10 more" means at most
-max(1, ⌊n/10⌋) more of the gate's n matched pictures: one at 18 scenes, and still one at the six scenes gate 4 may
-have, which is 17% of them. "No more mix-ups" counts the pictures with a mix-up of any kind; the kinds are reported.
+max(1, ⌊n/10⌋) more of the gate's n matched pictures: one below 20 scenes, two from 20 to 29, so two at 26, and still
+one at the six scenes gate 4 may have, which is 17% of them. "No more mix-ups" counts the pictures with a mix-up of
+any kind; the kinds are reported.
 
 - Gates 1, 2, 3 and 5 read the seed-7 scenes where every arm they compare is scored. Each is **inconclusive** when
-  fewer than 14 of the 18, or fewer than 10 of the 13 clean ones, are left.
+  fewer than 14 scenes, or fewer than 10 clean ones, are left: minimums fixed when the set had 18 stories and 13
+  clean ones, and kept for round two.
 - Gate 4 reads the matched scenes where V was drawn, and its only minimum is 6 of them.
 - Each clause counts the gate's matched scenes where its score applies. A gain, a clause that asks for more contacts
   or more identity, needs at least 6 of them, or its gate is inconclusive. Gate 4's two gains are alternatives, each
@@ -527,8 +590,8 @@ have, which is 17% of them. "No more mix-ups" counts the pictures with a mix-up 
   fails when a shared clause fails or both branches have 6 scenes and fail, and is inconclusive otherwise. A
   safeguard, a clause that asks for no loss, such as no lower scale, counts whatever scenes it has; with none it is
   `not_applicable` and does not stop a pass, and the report says so.
-- The sharp scenes count in every gate as part of the 18. Their own numbers are descriptive, and nothing is claimed
-  of the sharp scenes alone.
+- The sharp scenes count in every gate beside the clean ones. Their own numbers are descriptive, and nothing is
+  claimed of the sharp scenes alone.
 - An arm that passes must also have a contacts score of at least 50%, the mean over scenes, whatever its gain; with no
   scene to count it in, the gate is inconclusive.
 
@@ -668,7 +731,7 @@ dry=$(mktemp -d)
 npm run image:action -- dry-run --dir "$dry"    # eleven steps, then "the dry run went as expected"
 # In simple-serving's checkout, in a terminal of its own. dev.json holds the dry run's made-up client key.
 uv run python -m simple_serving.dev --config "$dry/dev.json" --engine-port 8200 --public-port 8201 --control-port 8202
-npm run image:action -- dry-run --dir "$dry" --dev http://127.0.0.1:8201    # reached false, then 13 stories
+npm run image:action -- dry-run --dir "$dry" --dev http://127.0.0.1:8201    # reached false, then 21 stories
 grep -cF 'illustrations/action/sealed' .claude/settings.json    # before each card: 1 or more
 # The text card (the rentals, 2), prepared as simple-serving's README says in "The card". In that checkout, once SSH
 # to the card works, `trial` names this card in the configuration, and `up`, in a terminal of its own, holds the tunnel.
@@ -747,7 +810,8 @@ fake judge's prose and a malformed answers block. On the way it goes through eve
 - a resume that draws nothing, and one after a plan changed since `prompts` refused with `draw.json` unchanged;
 - judges' reports with valid, invalid and missing blocks: a clean scene's fresh session, a clean judge's failure, sharp
   sessions that go to `gpt-6-sol` and to the owner's page, and an identity session that waits for its pictures' page;
-- the report and both galleries;
+- the report, where the one-person scenes' touches of their own body and of a thing and the mirror scene's
+  reflection are counted, and both galleries;
 - the boundary test: the word found inside `sealed/`, and nowhere in the files outside it, those beside `run/`
   included, in the temporary directory or in all it printed, with nothing left unread; and none of the three keys of
   its key file anywhere.
@@ -761,7 +825,7 @@ with the served name, the context and that client key. With the launcher up, `dr
 the texts in `dev/` beside `run/`, with that key file and that smoke record, through the real gateway in front of its
 fake engine: the adapter, the client key read alone, class `internal`, the gateway's times in each `text_attempt`, and
 the requests counted apart. The fake engine answers every call with one sentence, so the scenes pass and no sheet
-parses: the marker check prints `reached: false`, and `texts` 13 stories whose sheet is `unparsed`, with the five
+parses: the marker check prints `reached: false`, and `texts` 21 stories whose sheet is `unparsed`, with the five
 sharp ones held as `marker_failed`. A marker check that passes there means that a model answered, and `dry-run --dev`
 stops before the texts, so that no sharp story is asked for outside `illustrations/action`. Anything else, a refusal
 or a failed scene above all, is looked into before any card.
@@ -777,9 +841,9 @@ card's own, so that no earlier record, the rehearsal's among them, can stand for
 searched, what it could not read, and the hits as counts; a directory, a file or a link the search cannot read fails
 it as a hit does. `pass: true` lets `texts` ask for the sharp seeds. A hit keeps them out for the rest of the card:
 the leak is the harness's, its fix is code, and no code is written on a paid card. `texts` then writes the clean
-stories and holds the sharp ones as `marker_failed`, and with 13 scenes at most every gate but the fourth is
-inconclusive, so whether the picture card still comes is the owner's question. `reached: false` with no hit is a
-synthetic story the model did not take through every step, and a check again is a new story with a new name.
+stories and holds the sharp ones as `marker_failed`, and the gates would read the 21 clean scenes alone, so whether
+the picture card still comes is the owner's question. `reached: false` with no hit is a synthetic story the model did
+not take through every step, and a check again is a new story with a new name.
 
 `texts` prints each attempt and each step, then `texts`: the steps by outcome, the stories held back, `requests` (the
 calls, the retries, the gateway's checks, the counts before a send and the generations) and `complete`, which exits 0.
@@ -821,16 +885,17 @@ every session that is ready, four at a time (`--parallel`, and `--kind` for some
 minutes is stopped, killed if it does not stop, and waited for, and its attempt is recorded as `timeout`, an attempt
 without answers. A sharp session both judges leave gets a page, as a checklist does, and an identity session waits for
 its pictures' answers, so `judge` runs again after `collect`. `report` writes `report.json` and the owner's
-`report.md`, and prints the scenes, each gate's verdict on seed 7, over the clean scenes, over the scenes that reached
-their target and at seed 11, the repeats, the sharp scenes no judge answered, and whether seed 7 is complete.
-`gallery` writes the owner's two pages; while the card draws it runs from another terminal as often as wanted, with
-the stages' own `--until`. Each cell stands in its place: its picture, the code of a cell that failed or is out, or,
-for one still to come, the local time it is expected to end, from the median of the drawn pictures of its kind and arm
-and the pause measured between pictures. Above the cells: what is drawing now; the fronts, the views and each seed
-against the plan, each with its expected end; the deadline; and whether seed 11 is admitted, expected to fit, or
-decided after seed 7. After a stage stopped on an error they show what is left for a resume on a new card, and no
-time. The pages reload themselves every minute until the drawing is over. The clean page shows the sharp scenes as
-counts alone. No Claude session opens anything under `sealed/`, the pages among them.
+`report.md`, and prints the scenes, with their essential relations by kind and their reflection items, each gate's
+verdict on seed 7, over the clean scenes, over the scenes that reached their target and at seed 11, the repeats, each
+arm's reflections shown at seed 7, the sharp scenes no judge answered, and whether seed 7 is complete. `gallery`
+writes the owner's two pages; while the card draws it runs from another terminal as often as wanted, with the stages'
+own `--until`. Each cell stands in its place: its picture, the code of a cell that failed or is out, or, for one still
+to come, the local time it is expected to end, from the median of the drawn pictures of its kind and arm and the pause
+measured between pictures. Above the cells: what is drawing now; the fronts, the views and each seed against the plan,
+each with its expected end; the deadline; and whether seed 11 is admitted, expected to fit, or decided after seed 7.
+After a stage stopped on an error they show what is left for a resume on a new card, and no time. The pages reload
+themselves every minute until the drawing is over. The clean page shows the sharp scenes as counts alone. No Claude
+session opens anything under `sealed/`, the pages among them.
 
 The drawing stages also take `--comfy`, `--wait`, `--timeout` and `--tokenizers`, whose defaults the runbook keeps. The
 directory holds:

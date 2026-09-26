@@ -35,9 +35,11 @@ const points = (value: number | null | undefined) => value === null || value ===
 // ---- One picture ----
 
 // A picture's scores (docs/action-experiment.md#gates). `no` and `unsure` both count against it; a score with nothing
-// to count is left undefined, `not_applicable`, and the picture is out of that score's mean.
+// to count is left undefined, `not_applicable`, and the picture is out of that score's mean. The essential relations
+// are those with the subject's own body and with a thing too; the mirror items are counted apart, outside the contacts.
 export type Score = { contacts?: number; allContacts?: boolean; gazesFaces?: number; clothes?: number; scale?: number; complete: boolean;
-  mixups: Record<string, boolean>; mixup: boolean; anatomy: boolean; looks?: number; identity?: number; shown: string[] };
+  mixups: Record<string, boolean>; mixup: boolean; anatomy: boolean; looks?: number; identity?: number; shown: string[];
+  mirror?: { shown: number; of: number } };
 export type ScoreName = 'contacts' | 'gazesFaces' | 'clothes' | 'scale' | 'looks' | 'identity';
 export const SCORES: ScoreName[] = ['contacts', 'gazesFaces', 'clothes', 'scale', 'looks', 'identity'];
 export function scorePicture(projection: Projection, answer: PictureAnswer, identity?: IdentityAnswer): Score {
@@ -48,7 +50,9 @@ export function scorePicture(projection: Projection, answer: PictureAnswer, iden
   const sheetPeople = projection.participants.filter(one => one.entry).map(one => one.id);
   const mixups = Object.fromEntries(MIXUPS.map(name => [name, answer.mixups[name] !== 'no']));
   const bound = identity ? Object.keys(identity) : [];
+  const mirrors = kind('mirror');
   return { contacts: share(essential, yes), ...(essential.length ? { allContacts: essential.every(yes) } : {}),
+    ...(mirrors.length ? { mirror: { shown: mirrors.filter(yes).length, of: mirrors.length } } : {}),
     gazesFaces: share(kind('gaze', 'face'), yes), clothes: share(kind('clothes'), yes), scale: share(kind('scale'), yes),
     complete: projection.participants.every(one => present(one.id)), mixups, mixup: Object.values(mixups).some(Boolean),
     anatomy: answer.anatomy !== 'no', looks: share(sheetPeople, id => present(id) && answer.looks[id] === 'yes'),
@@ -253,19 +257,43 @@ function armsOf(scenes: Scene[]) {
   }));
 }
 
-// The text audit, from the text-and-portraits sessions: how many of the checklists' relations A's and A+'s prompts
-// state, how often a bound person's facing fits, how many fronts match their line and how many views were judged right.
+// What the scores count of the checklists at a seed: the scenes with a scored picture whose checklist has an essential
+// relation, those relations, the ones with the subject's own body and with a thing among them, and the mirror items.
+function itemsOf(run: Run, scenes: Scene[]) {
+  const items = scenes.filter(scene => Object.keys(scene.scores).length).map(scene => run.projections[scene.story].items);
+  const essential = items.map(list => list.filter(item => item.kind === 'relation' && item.essential));
+  const all = essential.flat();
+  return { scenes: essential.filter(list => list.length).length, essential: all.length, self: all.filter(item => item.with === 'self').length,
+    thing: all.filter(item => item.with === 'thing').length, mirror: items.flat().filter(item => item.kind === 'mirror').length };
+}
+
+// The mirror items (docs/action-experiment.md#judging): whether a reflection shows the same person in the same pose,
+// each arm's answers pooled over the scenes that list one. A line of its own, which neither the contacts nor a gate
+// reads.
+function mirrorsOf(scenes: Scene[]) {
+  return Object.fromEntries(ARMS.map(arm => {
+    const scored = scenes.flatMap(scene => (arm !== 'V' || scene.vDrawn) && scene.scores[arm]?.mirror ? [scene.scores[arm]!.mirror!] : []);
+    return [arm, { scenes: scored.length, shown: scored.reduce((sum, one) => sum + one.shown, 0), of: scored.reduce((sum, one) => sum + one.of, 0) }];
+  }));
+}
+
+// The text audit, from the text-and-portraits sessions: how many of the checklists' relations and mirror items A's
+// and A+'s prompts state, how often a bound person's facing fits, how many fronts match their line and how many views
+// were judged right.
 function auditOf(run: Run) {
-  const audit = { relations: { A: 0, 'A+': 0, of: { A: 0, 'A+': 0 } }, facing: [0, 0], fronts: [0, 0], views: [0, 0], viewStories: [] as string[] };
+  const audit = { relations: { A: 0, 'A+': 0, of: { A: 0, 'A+': 0 } }, mirrors: { A: 0, 'A+': 0, of: { A: 0, 'A+': 0 } }, facing: [0, 0], fronts: [0, 0],
+    views: [0, 0], viewStories: [] as string[] };
   for (const story of textStories()) {
     const text = stored<TextAnswers>(run, { story: story.id, kind: 'text' });
     const projection = run.projections[story.id];
     if (!text || !projection) continue;
-    const relations = projection.items.filter(item => item.kind === 'relation').map(item => item.id);
+    const ids = (kind: string) => projection.items.filter(item => item.kind === kind).map(item => item.id);
     for (const prompt of text.key.prompts ?? []) {
       if (prompt.arm !== 'A' && prompt.arm !== 'A+') continue;
-      audit.relations[prompt.arm] += relations.filter(id => text.answers.prompts[prompt.id]?.[id] === 'yes').length;
-      audit.relations.of[prompt.arm] += relations.length;
+      for (const [into, list] of [[audit.relations, ids('relation')], [audit.mirrors, ids('mirror')]] as const) {
+        into[prompt.arm] += list.filter(id => text.answers.prompts[prompt.id]?.[id] === 'yes').length;
+        into.of[prompt.arm] += list.length;
+      }
     }
     const tally = (into: number[], values: boolean[]) => { into[0] += values.filter(Boolean).length; into[1] += values.length; };
     tally(audit.facing, Object.values(text.answers.facing).map(value => value === 'yes'));
@@ -409,11 +437,12 @@ export function actionReport(root: string) {
   return {
     judge: { model: JUDGE.model, fallback: JUDGE.fallback, effort: JUDGE.effort },
     scenes: { seed7: seven.length, clean: seven.filter(scene => scene.clean).length, reached: seven.filter(scene => scene.reached).length,
-      missed: seven.filter(scene => !scene.reached).map(scene => scene.story), sharp: seven.filter(scene => !scene.clean).length },
+      missed: seven.filter(scene => !scene.reached).map(scene => scene.story), sharp: seven.filter(scene => !scene.clean).length, items: itemsOf(run, seven) },
     gates: main, cleanOnly: gatesOf(seven.filter(scene => scene.clean), views, { all: 10, clean: 10 }),
     reachedOnly: gatesOf(seven.filter(scene => scene.reached), views, { all: 14, clean: 10 }),
     seed11: { scenes: eleven.filter(scene => Object.keys(scene.scores).length).length, gates: repeated.map(gate => ({ gate: gate.gate, verdict: gate.verdict })), direction },
-    arms: { seed7: armsOf(seven), seed11: armsOf(eleven) }, pairs: pairsOf(seven), audit, repeats: repeatsOf(run, main, views),
+    arms: { seed7: armsOf(seven), seed11: armsOf(eleven) }, mirror: { seed7: mirrorsOf(seven), seed11: mirrorsOf(eleven) },
+    pairs: pairsOf(seven), audit, repeats: repeatsOf(run, main, views),
     delivery: deliveryOf(run), times: timesOf(run), texts: textsOf(run),
   };
 }
@@ -430,7 +459,9 @@ const clauseText = (clause: Clause) => `${clause.clause} ${clause.value === null
 export function reportMarkdown(report: ActionReport): string {
   const lines = ['# Замер действия: отчёт', '', `Судья ${report.judge.model} (запасной ${report.judge.fallback}), усилие ${report.judge.effort}. Тексты: ${report.texts.route ?? '—'}, веса ${report.texts.weights ?? '—'}.`, '',
     `Сцен с чек-листом: ${report.scenes.seed7}, из них чистых ${report.scenes.clean} и острых ${report.scenes.sharp}; дошли до цели ${report.scenes.reached}.`
-    + ` Не дошли (чистые): ${report.scenes.missed.filter(id => !isSharp(id)).join(', ') || 'нет'}; острых не дошло: ${report.scenes.missed.filter(isSharp).length}.`, '',
+    + ` Не дошли (чистые): ${report.scenes.missed.filter(id => !isSharp(id)).join(', ') || 'нет'}; острых не дошло: ${report.scenes.missed.filter(isSharp).length}.`
+    + ` Существенных касаний в чек-листах сцен с картинками сида 7: ${report.scenes.items.essential} в ${report.scenes.items.scenes} сценах, из них своего тела`
+    + ` ${report.scenes.items.self} и предметов ${report.scenes.items.thing}; пунктов отражения ${report.scenes.items.mirror}.`, '',
     '## Ворота, сид 7', '', 'Пороги — для следующего решения, а не доказательство. Значения в пунктах, счёт картинок — числом.', ''];
   for (const gate of report.gates) {
     lines.push(`**${gate.gate}. ${GATE_RU[gate.gate]}** — ${VERDICT_RU[gate.verdict]}; сцен ${gate.scenes}, чистых ${gate.clean}.`, '');
@@ -449,14 +480,17 @@ export function reportMarkdown(report: ActionReport): string {
     const row = one as unknown as Record<string, number | null>;
     lines.push(`| ${arm} | ${row.scenes} | ${points(row.contacts)} | ${row.allContacts} | ${points(row.gazesFaces)} | ${points(row.clothes)} | ${points(row.scale)} | ${row.complete} | ${row.mixups} | ${row.anatomy} | ${points(row.looks)} | ${points(row.identity)} |`);
   }
+  const ratio = (pair: number[]) => pair[1] ? `${pair[0]} из ${pair[1]}` : '—';
+  lines.push('', 'Отражение (тот же человек в той же позе; в контакты не входит), сид 7: '
+    + Object.entries(report.mirror.seed7).map(([arm, one]) => `${arm} ${ratio([one.shown, one.of])}`).join(', ') + '.');
   lines.push('', '## Пары, сид 7', '', 'Разница средних в пунктах, 90% интервал по 10 000 пересэмплам сцен, впереди / вровень / позади; по чистым сценам — разница сцены.', '');
   for (const pair of report.pairs.filter(one => one.scenes)) {
     const clean = Object.entries(pair.byScene).filter(([story]) => !isSharp(story)).map(([story, diff]) => `${story} ${points(diff)}`).join(', ');
     lines.push(`- ${pair.pair} ${pair.score}: ${points(pair.difference)} [${pair.interval ? pair.interval.map(points).join('; ') : '—'}], ${pair.ahead}/${pair.level}/${pair.behind}, сцен ${pair.scenes}${clean ? `; ${clean}` : ''}`);
   }
-  const ratio = (pair: number[]) => pair[1] ? `${pair[0]} из ${pair[1]}` : '—';
   const audit = report.audit;
-  lines.push('', '## Аудит текста', '', `Отношения чек-листов в промпте A: ${ratio([audit.relations.A, audit.relations.of.A])}, в промпте A+: ${ratio([audit.relations['A+'], audit.relations.of['A+']])}.`
+  lines.push('', '## Аудит текста', '', `Отношения чек-листов в промпте A: ${ratio([audit.relations.A, audit.relations.of.A])}, в промпте A+: ${ratio([audit.relations['A+'], audit.relations.of['A+']])};`
+    + ` отражения в промпте A: ${ratio([audit.mirrors.A, audit.mirrors.of.A])}, в промпте A+: ${ratio([audit.mirrors['A+'], audit.mirrors.of['A+']])}.`
     + ` facing подходит: ${ratio(audit.facing)}. Портреты совпадают со строкой: ${ratio(audit.fronts)}. Виды верны: ${ratio(audit.views)}.`, '');
   lines.push('## Повторные сессии', '', `Сцен сравнено: ${report.repeats.scenes}. Согласие: ${Object.entries(report.repeats.agree).map(([kind, one]) => `${kind} ${one.same}/${one.of}`).join(', ') || '—'}.`
     + ` Изменили бы вердикт: ${report.repeats.changed.map(one => `${one.gate} (${VERDICT_RU[one.from]} → ${VERDICT_RU[one.to]})`).join(', ') || 'ничего'}.`, '');
