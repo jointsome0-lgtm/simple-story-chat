@@ -382,9 +382,11 @@ function deliveryOf(run: Run) {
 }
 
 // The times: the median and the slowest of each arm's warm frames against A's, T with L's time added, and the time to a
-// reader's first picture with portraits, the fronts and views the scene needs included.
+// reader's first picture with portraits, the fronts and views the scene needs included. A picture that waited for the
+// network (`outageMs`, docs/action-experiment.md#dropped-connection) has that wait in its time, and counts for none.
 function timesOf(run: Run) {
-  const cells = Object.values(run.draw?.cells ?? {}).filter(cell => cell.status === 'drawn' && cell.totalMs !== undefined);
+  const timed = (cell: CellRecord | undefined): cell is CellRecord => cell?.status === 'drawn' && cell.totalMs !== undefined && !cell.outageMs;
+  const cells = Object.values(run.draw?.cells ?? {}).filter(timed);
   const stat = (values: number[]) => {
     if (!values.length) return null;
     const sorted = [...values].sort((a, b) => a - b);
@@ -394,13 +396,14 @@ function timesOf(run: Run) {
   const cellOf = (story: string, seed: number, arm: ActionArm) => run.draw?.cells[frameKey(story, seed, arm)];
   const warm = (cell: CellRecord) => cell.loaderCacheMiss === false && !cell.first;
   const frames = cells.filter(cell => cell.kind === 'frame' && warm(cell));
-  const time = (cell: CellRecord) => cell.arm === 'T' ? cell.totalMs! + (cellOf(cell.story, cell.seed, 'L')?.totalMs ?? NaN) : cell.totalMs!;
+  const ms = (cell: CellRecord | undefined) => (timed(cell) ? cell.totalMs! : NaN);
+  const time = (cell: CellRecord) => cell.arm === 'T' ? cell.totalMs! + ms(cellOf(cell.story, cell.seed, 'L')) : cell.totalMs!;
   const perArm = Object.fromEntries(ARMS.map(arm => [arm, stat(frames.filter(cell => cell.arm === arm).map(time).filter(Number.isFinite))]));
   const first = Object.fromEntries((['C', 'V', 'T'] as ActionArm[]).map(arm => [arm, stat(textStories().flatMap(story => {
     const cell = cellOf(story.id, ACTION_SEEDS[0], arm), plan = run.plans[story.id];
-    if (cell?.status !== 'drawn' || !plan) return [];
+    if (!timed(cell) || !plan) return [];
     const needed = [...plan.portraits.map(one => `front:${one.id}`), ...(arm === 'V' ? plan.views.map(one => `view:${one.id}`) : [])];
-    const before = needed.map(key => run.draw!.cells[key]?.totalMs ?? NaN);
+    const before = needed.map(key => ms(run.draw!.cells[key]));
     const total = time(cell) + before.reduce((sum, ms) => sum + ms, 0);
     return Number.isFinite(total) ? [total] : [];
   }))]));
@@ -550,14 +553,15 @@ function progressOf(root: string, draw: DrawIndex, options: GalleryOptions) {
 
   const own = (one: CellRecord) => one.totalMs! + (one.uploadMs ?? 0);
   // The pause between two pictures beyond the second's own time (the card's log, the socket, the record), from the
-  // times the clean pictures' files were written one after another: the median. No sharp file is looked at.
+  // times the clean pictures' files were written one after another: the median. No sharp file is looked at. A picture
+  // that waited for the network (`outageMs`) counts for no time here, its pause included, as in the report.
   const gaps: number[] = [];
   let before: number | undefined;
   for (const key of history.keys()) {
     const one = draw.cells[key];
     if (!one || one.status === 'out') continue;
     const at = one.status === 'drawn' && one.file && !isSharp(one.story) ? statSync(join(root, one.file), { throwIfNoEntry: false })?.mtimeMs : undefined;
-    if (at !== undefined && before !== undefined && one.totalMs !== undefined) gaps.push(at - before - own(one));
+    if (at !== undefined && before !== undefined && one.totalMs !== undefined && !one.outageMs) gaps.push(at - before - own(one));
     before = at;
   }
   const pause = gaps.length ? Math.max(0, median(gaps)) : 0;
@@ -567,7 +571,7 @@ function progressOf(root: string, draw: DrawIndex, options: GalleryOptions) {
   // A cell's own time: the median of the drawn cells of its kind, of its arm for a frame, the warm ones where there are
   // any, among those whose count of references is nearest its own. A kind none of which is drawn takes its price. A
   // time without a warm cell behind it is rough, and the pages say so.
-  const drawn = Object.values(draw.cells).filter(one => one.status === 'drawn' && one.totalMs !== undefined);
+  const drawn = Object.values(draw.cells).filter(one => one.status === 'drawn' && one.totalMs !== undefined && !one.outageMs);
   let rough = false;
   const timeOf = (cell: ActionCell): number | undefined => {
     const like = drawn.filter(one => one.kind === cell.kind && one.arm === cell.arm);

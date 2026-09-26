@@ -559,8 +559,9 @@ const POLL_RETRIES = 3;
 // later has missed messages, and the `outputs` it heard may not be all of the job's. `cached` is the nodes the server
 // answered from its cache (execution.py:770), `ran` each other node with the moment it began (execution.py:496),
 // `overAt` the moment the job ended, all on our clock; `oom` says an error was the card running out of memory.
+// `broken`: the socket closed before the job was over, and what the card said of it after that is lost (`stageSocket`).
 type Told = { started: boolean; succeeded: boolean; over: boolean; outputs: NonNullable<HistoryEntry['outputs']>;
-  cached?: string[]; ran: { node: string; at: number }[]; overAt?: number; oom?: boolean };
+  cached?: string[]; ran: { node: string; at: number }[]; overAt?: number; oom?: boolean; broken?: boolean };
 
 // Where a job's time went, by the kind of node it was spent in: the time from one node's start to the next one's is
 // the first node's. The sampler's share includes moving the model onto the card, which ComfyUI does inside it.
@@ -578,24 +579,87 @@ export function phasesOf(graph: Graph, ran: { node: string; at: number }[], over
 const outOfMemory = (data: { exception_type?: unknown; exception_message?: unknown }) =>
   /OutOfMemory|out of memory/i.test(`${data.exception_type} ${data.exception_message}`);
 
-// ComfyUI's websocket (`/ws?clientId=`, server.py:269), for one picture: it says when the job is over, so that the
-// wait ends then rather than at the next poll. For the bot everything about it is optional: a socket that cannot open,
-// closes early or says nothing useful leaves the wait to the polls in `drawOne`, which end it exactly as they did
-// before there was a socket. What it carries names the job's file, so none of it is logged, and none of it outlives
-// the job. The line numbers here are those of the revision gpu/image-manifest.env pins.
-function watchJob(comfy: Comfy) {
-  const clientId = randomUUID();
+// What ComfyUI's websocket (`/ws?clientId=`, server.py:269) has said of each job, and the wait for its news: it says
+// when a job is over, so that the wait ends then rather than at the next poll. What it carries names the job's file,
+// so none of it is logged. `strict`: only a job already in `jobs` is heard, as on the harness's socket, which carries
+// a whole stage's jobs (`stageSocket`); otherwise every job a message names is, as on the bot's, which carries one.
+// The line numbers here are those of the revision gpu/image-manifest.env pins.
+function hearing(strict: boolean) {
   const jobs = new Map<string, Told>();
   let heard = 0;
   let wake: () => void = () => undefined;
-  // Whether the socket opened, or `false` once it failed or closed first.
-  let opened = Promise.resolve(false);
   // `executing` with no node is the one message that means "over": the server sends it once it has written the job's
   // record, whether the job succeeded, failed or was interrupted (main.py:367-374). `execution_success` comes a moment
   // before the record (execution.py:824), so it is noted and the wait goes on until the record is there: a delete
   // sent on it could reach the card first and leave the record behind. An error or an interrupt sends the wait to the
   // record at once, which says what became of the job; an error there need not be the end of it (execution.py:538).
   const notice = () => { heard++; wake(); };
+  const hear = (event: { data: unknown }) => {
+    let message: { type?: unknown; data?: { prompt_id?: unknown; node?: unknown; output?: unknown; nodes?: unknown;
+      exception_type?: unknown; exception_message?: unknown } } | null;
+    try { message = typeof event.data === 'string' ? JSON.parse(event.data) : null; } catch { return; }
+    const data = message?.data;
+    if (!message || !data || typeof data.prompt_id !== 'string') return;
+    let job = jobs.get(data.prompt_id);
+    if (!job) {
+      if (strict) return;
+      jobs.set(data.prompt_id, job = { started: false, succeeded: false, over: false, outputs: {}, ran: [] });
+    }
+    if (message.type === 'execution_start') job.started = true;
+    else if (message.type === 'execution_cached' && Array.isArray(data.nodes)) job.cached = data.nodes.map(String);
+    else if (message.type === 'executing' && typeof data.node === 'string') job.ran.push({ node: data.node, at: performance.now() });
+    else if (message.type === 'executed' && typeof data.node === 'string' && data.output && typeof data.output === 'object') {
+      job.outputs[data.node] = data.output as Told['outputs'][string];
+    } else if (message.type === 'execution_success') job.succeeded = true;
+    else if (message.type === 'execution_error' || message.type === 'execution_interrupted') {
+      if (outOfMemory(data)) job.oom = true;
+      notice();
+    } else if (message.type === 'executing' && data.node === null) { job.over = true; job.overAt = performance.now(); notice(); }
+  };
+  // The job's record without a read of it, once the socket has heard the whole job succeed. The record's outputs are
+  // the very objects the `executed` messages carried (execution.py:826-834), from a node that ran (execution.py:574-577)
+  // and from one the cache answered alike (comfy_execution/asset_enrichment.py:102-115), and a job that succeeded is
+  // recorded as completed with `success`. Nothing, whenever the socket cannot vouch for it.
+  const record = (promptId: string): HistoryEntry | undefined => {
+    const job = jobs.get(promptId);
+    return job?.started && job.succeeded && job.over && !job.broken ? { status: { completed: true, status_str: 'success' }, outputs: job.outputs } : undefined;
+  };
+  // What the socket saw of a whole job: where its time went, and whether any loader node ran rather than being
+  // answered from the server's node cache (`loaderCacheMiss` on a Picture). Nothing, when the socket did not hear the
+  // job from start to end.
+  const timing = (promptId: string, graph: Graph): { phases: Phases; loaderCacheMiss?: boolean } | undefined => {
+    const job = jobs.get(promptId);
+    if (!job?.started || job.overAt === undefined || job.broken) return undefined;
+    const loaders = Object.keys(graph).filter(id => /Loader/.test(graph[id].class_type));
+    return { phases: phasesOf(graph, job.ran, job.overAt),
+      ...(job.cached ? { loaderCacheMiss: loaders.some(id => !job.cached!.includes(id)) } : {}) };
+  };
+  // Until the socket has news, `ms` pass or `signal` fires, whichever comes first.
+  const wait = (ms: number, signal?: AbortSignal) => new Promise<void>(done => {
+    const finish = () => { clearTimeout(timer); signal?.removeEventListener('abort', finish); wake = () => undefined; done(); };
+    const timer = setTimeout(finish, ms);
+    wake = finish;
+    signal?.addEventListener('abort', finish, { once: true });
+    if (signal?.aborted) finish();
+  });
+  return {
+    jobs, hear, notice, record, timing, wait,
+    // How often the socket has had news: `drawOne` compares it across a poll to know whether to wait again.
+    get heard() { return heard; },
+    oom: (promptId: string) => jobs.get(promptId)?.oom === true,
+    // The nodes the server answered from its cache, as the socket heard them at the job's start.
+    cached: (promptId: string) => jobs.get(promptId)?.cached,
+  };
+}
+
+// The socket for one picture, the bot's: for it everything about the socket is optional. One that cannot open, closes
+// early or says nothing useful leaves the wait to the polls in `drawOne`, which end it exactly as they did before there
+// was a socket. None of what it heard outlives the job.
+function watchJob(comfy: Comfy) {
+  const clientId = randomUUID();
+  const told = hearing(false);
+  // Whether the socket opened, or `false` once it failed or closed first.
+  let opened = Promise.resolve(false);
   let socket: WebSocket | undefined;
   try {
     const url = new URL('/ws', comfy.baseUrl);
@@ -607,63 +671,160 @@ function watchJob(comfy: Comfy) {
       opening.addEventListener('open', () => done(true), { once: true });
       for (const end of ['error', 'close']) opening.addEventListener(end, () => done(false), { once: true });
     });
-    socket.addEventListener('message', event => {
-      let message: { type?: unknown; data?: { prompt_id?: unknown; node?: unknown; output?: unknown; nodes?: unknown;
-        exception_type?: unknown; exception_message?: unknown } } | null;
-      try { message = typeof event.data === 'string' ? JSON.parse(event.data) : null; } catch { return; }
-      const data = message?.data;
-      if (!message || !data || typeof data.prompt_id !== 'string') return;
-      let job = jobs.get(data.prompt_id);
-      if (!job) jobs.set(data.prompt_id, job = { started: false, succeeded: false, over: false, outputs: {}, ran: [] });
-      if (message.type === 'execution_start') job.started = true;
-      else if (message.type === 'execution_cached' && Array.isArray(data.nodes)) job.cached = data.nodes.map(String);
-      else if (message.type === 'executing' && typeof data.node === 'string') job.ran.push({ node: data.node, at: performance.now() });
-      else if (message.type === 'executed' && typeof data.node === 'string' && data.output && typeof data.output === 'object') {
-        job.outputs[data.node] = data.output as Told['outputs'][string];
-      } else if (message.type === 'execution_success') job.succeeded = true;
-      else if (message.type === 'execution_error' || message.type === 'execution_interrupted') {
-        if (outOfMemory(data)) job.oom = true;
-        notice();
-      } else if (message.type === 'executing' && data.node === null) { job.over = true; job.overAt = performance.now(); notice(); }
-    });
+    socket.addEventListener('message', told.hear);
   } catch { socket = undefined; }
   return {
-    clientId, opened,
-    // How often the socket has had news: `drawOne` compares it across a poll to know whether to wait again.
-    get heard() { return heard; },
-    // The job's record without a read of it, once the socket has heard the whole job succeed. The record's outputs
-    // are the very objects the `executed` messages carried (execution.py:826-834), from a node that ran
-    // (execution.py:574-577) and from one the cache answered alike (comfy_execution/asset_enrichment.py:102-115), and
-    // a job that succeeded is recorded as completed with `success`. Nothing, whenever the socket cannot vouch for it.
-    record(promptId: string): HistoryEntry | undefined {
-      const job = jobs.get(promptId);
-      return job?.started && job.succeeded && job.over ? { status: { completed: true, status_str: 'success' }, outputs: job.outputs } : undefined;
-    },
-    // What the socket saw of a whole job: where its time went, and whether any loader node ran rather than being
-    // answered from the server's node cache (`loaderCacheMiss` on a Picture). Nothing, when the socket did not hear
-    // the job from start to end.
-    timing(promptId: string, graph: Graph): { phases: Phases; loaderCacheMiss?: boolean } | undefined {
-      const job = jobs.get(promptId);
-      if (!job?.started || job.overAt === undefined) return undefined;
-      const loaders = Object.keys(graph).filter(id => /Loader/.test(graph[id].class_type));
-      return { phases: phasesOf(graph, job.ran, job.overAt),
-        ...(job.cached ? { loaderCacheMiss: loaders.some(id => !job.cached!.includes(id)) } : {}) };
-    },
-    oom: (promptId: string) => jobs.get(promptId)?.oom === true,
-    // Until the socket has news, `ms` pass or `signal` fires, whichever comes first.
-    wait(ms: number, signal?: AbortSignal) {
-      return new Promise<void>(done => {
-        const finish = () => { clearTimeout(timer); signal?.removeEventListener('abort', finish); wake = () => undefined; done(); };
-        const timer = setTimeout(finish, ms);
-        wake = finish;
-        signal?.addEventListener('abort', finish, { once: true });
-        if (signal?.aborted) finish();
-      });
-    },
-    close() { socket?.close(); },
+    clientId, opened, get heard() { return told.heard; }, record: told.record, timing: told.timing, oom: told.oom, cached: told.cached,
+    wait: told.wait, close() { socket?.close(); },
   };
 }
-type Watch = ReturnType<typeof watchJob>;
+type Watch = { readonly clientId: string; readonly heard: number; record: (promptId: string) => HistoryEntry | undefined;
+  timing: (promptId: string, graph: Graph) => { phases: Phases; loaderCacheMiss?: boolean } | undefined;
+  oom: (promptId: string) => boolean; cached: (promptId: string) => string[] | undefined; wait: (ms: number, signal?: AbortSignal) => Promise<void> };
+
+// One socket for a whole stage of the harness (docs/action-experiment.md#one-socket), in place of one a picture:
+// every open cost the tunnel a channel of its own, 0.7-1.1 s in which the card had nothing to draw. It is open before
+// each submit (`ensureOpen`), since the card tells a job's news only to a socket connected when it tells it and a
+// socket opened later cannot get back what it missed, and it hears only the jobs registered on it, each under the id
+// minted for it before its submit, so that no job's news is taken for another's; the harness drops a job once it is
+// done with it. A socket that closes breaks every job it had not heard to its end: those keep their record, from the
+// polls, and lose their phases, as they would have with a socket of their own. The next open is a new socket under a
+// new client id: the pinned server files a socket under that id alone, and the handler of the old one, whenever it
+// notices its end, takes the id's socket with it (server.py:274-276, 324-326), which would be the new one.
+export function stageSocket(baseUrl: string) {
+  const told = hearing(true);
+  let socket: WebSocket | undefined;
+  let opened = Promise.resolve(false);
+  let clientId = '', epoch = 0, ended = false;
+  const drop = () => {
+    const old = socket;
+    if (!old) return;
+    socket = undefined;
+    for (const job of told.jobs.values()) if (!job.over) job.broken = true;
+    told.notice();
+    try { old.close(); } catch { /* gone either way */ }
+  };
+  const connect = () => {
+    epoch++;
+    clientId = randomUUID();
+    try {
+      const url = new URL('/ws', baseUrl);
+      url.protocol = 'ws:';
+      url.searchParams.set('clientId', clientId);
+      const one = new WebSocket(url);
+      socket = one;
+      opened = new Promise(done => {
+        one.addEventListener('open', () => done(true), { once: true });
+        for (const end of ['error', 'close']) one.addEventListener(end, () => done(false), { once: true });
+      });
+      one.addEventListener('message', event => { if (socket === one) told.hear(event); });
+      one.addEventListener('close', () => { if (socket === one) drop(); });
+    } catch { socket = undefined; opened = Promise.resolve(false); }
+  };
+  return {
+    get clientId() { return clientId; },
+    // How many sockets the stage has opened: a cursor into the card's log holds only while this stays the same.
+    get epoch() { return epoch; },
+    get open() { return socket?.readyState === WebSocket.OPEN; },
+    get heard() { return told.heard; },
+    // Open now, or within `ms`; one that is not by then is given up, and the next call starts another.
+    async ensureOpen(ms: number, signal?: AbortSignal): Promise<boolean> {
+      if (ended) return false;
+      if (socket?.readyState === WebSocket.OPEN) return true;
+      if (socket?.readyState !== WebSocket.CONNECTING) { drop(); connect(); }
+      const open = await Promise.race([opened, delay(ms, false, { ref: false, signal }).catch(() => false)]);
+      if (open && socket?.readyState === WebSocket.OPEN) return true;
+      drop();
+      return false;
+    },
+    register(promptId: string) { told.jobs.set(promptId, { started: false, succeeded: false, over: false, outputs: {}, ran: [] }); },
+    forget(promptId: string) { told.jobs.delete(promptId); },
+    record: told.record, timing: told.timing, oom: told.oom, cached: told.cached, wait: told.wait,
+    close() { ended = true; drop(); },
+  };
+}
+export type StageSocket = ReturnType<typeof stageSocket>;
+
+// ---- A dropped connection, in the harness (docs/action-experiment.md#dropped-connection) ----
+
+// The network between here and the card failing, as fetch reports it (undici): a TypeError whose cause, or an error of
+// an AggregateError among its causes, carries one of these codes. Nothing else is: not a request's own timeout, a
+// signal, an HTTP status or a reply that does not parse. Only the code is read, never a message.
+const TRANSPORT_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'ECONNABORTED', 'EPIPE', 'ETIMEDOUT', 'EHOSTUNREACH', 'EHOSTDOWN',
+  'ENETUNREACH', 'ENETDOWN', 'ENETRESET', 'EAI_AGAIN', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_CLOSED']);
+export function transportCode(error: unknown): string | undefined {
+  if (!(error instanceof TypeError)) return undefined;
+  const seen = new Set<unknown>();
+  const queue: unknown[] = [error];
+  while (queue.length) {
+    const one = queue.shift();
+    if (!one || typeof one !== 'object' || seen.has(one)) continue;
+    seen.add(one);
+    const code = (one as { code?: unknown }).code;
+    if (typeof code === 'string' && TRANSPORT_CODES.has(code)) return code;
+    queue.push((one as { cause?: unknown }).cause);
+    if (one instanceof AggregateError) queue.push(...one.errors);
+  }
+  return undefined;
+}
+// A request refused at the connect never left: nothing of it reached the server. Through the tunnel that is a port
+// with no ssh listening on it.
+const NEVER_SENT = new Set(['ECONNREFUSED', 'UND_ERR_CONNECT_TIMEOUT']);
+
+// How long one cell may lose to the network, its waits, the requests that failed on the way and the searches for its
+// job together (`windowMs`), the pause between two looks (`pauseMs`), and what it has lost so far (`spentMs`), which
+// its record keeps as `outageMs`. The window is the harness's to set (local/action-draw.ts `OUTAGE_MS`), and stays
+// under the ten minutes after which gpu/image-sweeper.py deletes a finished job's record (`RECORD_LIFE_MS`), so that a
+// job that ended as the network went is still recorded when the window runs out. What is left of the ten minutes is
+// for the request that was out when the window ran out, a last look of `PROBE_MS` at most and the requests that went
+// through, which a server answering slowly could still use up.
+export type Outage = { windowMs: number; pauseMs: number; spentMs: number };
+export const RECORD_LIFE_MS = 600000;
+const PROBE_MS = 10000;
+// A request that failed on the network, from `since`: its time is lost to the drop, as a wait is.
+export const charge = (outage: Outage | undefined, since: number) => {
+  if (outage) outage.spentMs += Math.round(performance.now() - since);
+};
+// The wait itself: a read of /queue at once and then after each pause, until one is answered. `true` once the server
+// answers, an error status included, since an answer means the network is back; `false` when the window, the stage's
+// end or the caller's signal comes first. A window of 0 looks once and does not wait; a window already spent does not
+// look.
+export async function ride(comfy: Comfy, outage: Outage): Promise<boolean> {
+  const began = performance.now();
+  const stop = any(comfy.signal, comfy.end);
+  try {
+    if (outage.windowMs > 0 && outage.spentMs >= outage.windowMs) return false;
+    for (;;) {
+      if (stop?.aborted) return false;
+      try {
+        await (await call({ ...comfy, timeoutMs: Math.min(PROBE_MS, comfy.timeoutMs) }, '/queue')).arrayBuffer();
+        return true;
+      } catch (error) {
+        if ((error as { code?: unknown }).code === 'comfy_http_error') return true;
+      }
+      const left = outage.windowMs - outage.spentMs - (performance.now() - began);
+      if (left <= 0 || stop?.aborted) return false;
+      await delay(Math.min(outage.pauseMs, left), undefined, { signal: stop }).catch(() => undefined);
+    }
+  } finally { outage.spentMs += Math.round(performance.now() - began); }
+}
+// Where a job is once the server answers again: waiting or drawing, recorded, or neither; `undefined` when the server
+// did not answer both reads. The queue is read first: the pinned server moves a job from the queue to its record under
+// one lock (execution.py:1321-1341, 1352-1356), so no job goes between the two reads unseen, and one in neither was
+// never taken, or has lost its record, as it does when the server starts again.
+async function locate(comfy: Comfy, promptId: string): Promise<'queued' | 'recorded' | 'absent' | undefined> {
+  const queue = await readQueue(comfy);
+  if (!queue) return undefined;
+  if ([...queue.running, ...queue.pending].includes(promptId)) return 'queued';
+  try {
+    const seen = await (await call(comfy, `/history/${promptId}`)).json() as Record<string, HistoryEntry>;
+    return seen[promptId] ? 'recorded' : 'absent';
+  } catch { return undefined; }
+}
+// How many times an upload, a submit that never left, a poll, a view or the search for a job may meet the network
+// failing again once the server has answered again: a connection that keeps dropping ends the cell rather than the
+// window.
+export const RIDES = 5;
 
 // `sampleEvery` is how many polls pass between two samples of memory: the bot keeps the tunnel quiet, and the harness,
 // which measures the card, samples at every poll. `requireSocket`: see `SOCKET_OPEN_MS`. `copies`: saving nodes whose
@@ -671,9 +832,10 @@ type Watch = ReturnType<typeof watchJob>;
 // (docs/action-experiment.md#drawing); the frame is the one picture of the other nodes, and each copy is read
 // back after it, stripped, in `copies`. `admit`: the caller's last word before the submit, asked once the socket is
 // open, such as whether the job can still end by the harness's `--until`; a job it refuses is not sent, and fails
-// as `not_admitted`.
+// as `not_admitted`. `stage`: the harness's (local/action-draw.ts), the stage's one socket in place of one for this
+// picture and the cell's way through a dropped connection (`drawOnStage`); the bot passes none, and draws as it did.
 type DrawOneOptions = { pollMs?: number; waitMs?: number; sampleEvery?: number; requireSocket?: boolean; copies?: string[];
-  admit?: () => boolean };
+  admit?: () => boolean; stage?: { socket: StageSocket; outage: Outage } };
 // The card tells a job's news only to a socket that is connected when it is sent, and the first of it, the job's start
 // and the nodes its cache answered, comes at the very start of the job (execution.py:683-720). So the submit waits
 // for the socket to open, this long at most. One that does not open in time leaves the bot's picture to the polls,
@@ -685,6 +847,7 @@ export async function drawOne(comfy: Comfy, graph: Graph, options: DrawOneOption
   // opens and again once it has, and either ends the wait for it at once. Nothing is awaited between the second
   // asking, the caller's `admit` and the submit.
   halt(comfy);
+  if (options.stage) return drawOnStage(comfy, graph, options, options.stage);
   const watch = watchJob(comfy);
   const began = performance.now(), waitMs = options.waitMs ?? 600000;
   try {
@@ -700,22 +863,101 @@ export async function drawOne(comfy: Comfy, graph: Graph, options: DrawOneOption
   } finally { watch.close(); }
 }
 
-async function drawWatched(comfy: Comfy, graph: Graph, watch: Watch, options: DrawOneOptions) {
+// The harness's picture: as the bot's, on the stage's socket, and under a prompt id minted here and sent with the job
+// (the pinned server takes a canonical UUID, server.py:1093-1099, and mints a random one itself otherwise), so that a
+// submit whose answer was lost can be looked for on the card rather than sent again. Before anything reaches the card
+// a dropped connection is waited out within the cell's window (`ride`): a socket that does not open, and a submit
+// refused at the connect, which never left. When the window runs out the cell fails as `comfy_unreachable`, or as
+// `comfy_socket_unavailable` when the server answers and its socket still does not open; either leaves it never sent,
+// and the harness records nothing for it (docs/action-experiment.md#dropped-connection). A submit that may have left
+// is sent once and never again: whether the card has it is for the card to say once it answers (`drawWatched`).
+async function drawOnStage(comfy: Comfy, graph: Graph, options: DrawOneOptions, stage: { socket: StageSocket; outage: Outage }) {
+  const { socket, outage } = stage;
+  const began = performance.now(), spent = outage.spentMs, waitMs = options.waitMs ?? 600000;
+  const minted: string = randomUUID(), prompt = freshPreviews(graph);
+  const unsent = (code: string) => Object.assign(new Error(code), { code });
+  // A socket that did not open lost its time to the drop, as a request that failed does.
+  const opening = async () => {
+    const since = performance.now();
+    const open = await socket.ensureOpen(Math.min(SOCKET_OPEN_MS, waitMs), any(comfy.signal, comfy.end));
+    if (!open) charge(outage, since);
+    return open;
+  };
+  let promptId = minted, uncertain = false, submittedAt = 0, spentAtSubmit = 0;
+  for (let refused = 0; ; refused++) {
+    if (!(await opening())) {
+      halt(comfy);
+      if (!(await ride(comfy, outage))) { halt(comfy); throw unsent('comfy_unreachable'); }
+      if (!(await opening())) { halt(comfy); throw unsent('comfy_socket_unavailable'); }
+    }
+    halt(comfy);
+    if (options.admit && !options.admit()) throw unsent('not_admitted');
+    socket.register(minted);
+    submittedAt = performance.now();
+    spentAtSubmit = outage.spentMs;
+    let answer: { prompt_id?: unknown };
+    try {
+      answer = await (await call(afterAbort(comfy), '/prompt', { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ prompt, client_id: socket.clientId, prompt_id: minted }) })).json() as { prompt_id?: unknown };
+    } catch (error) {
+      const code = transportCode(error);
+      const timedOut = !code && (error as Error | undefined)?.name === 'TimeoutError' && !comfy.reserve?.aborted;
+      // The time the submit spent failing is lost to the network, or to a server that did not answer in time.
+      if (code || timedOut) charge(outage, submittedAt);
+      // Sent, or maybe: the network failed on the way, or the answer did not come in time. The job may be on the card.
+      if (timedOut || (code && !NEVER_SENT.has(code))) {
+        uncertain = true;
+        break;
+      }
+      socket.forget(minted);
+      if (!code) throw error;
+      if (refused >= RIDES || !(await ride(comfy, outage))) { halt(comfy); throw unsent('comfy_unreachable'); }
+      continue;
+    }
+    if (typeof answer.prompt_id !== 'string' || !answer.prompt_id) {
+      socket.forget(minted);
+      throw Object.assign(new Error('comfy_rejected_prompt'), { code: 'comfy_rejected_prompt' });
+    }
+    // A server that went its own way with the id is followed under its own; the socket may have missed the job's start.
+    if (answer.prompt_id !== minted) {
+      socket.forget(minted);
+      socket.register(promptId = answer.prompt_id);
+    }
+    break;
+  }
+  try {
+    return await drawWatched(comfy, graph, socket, { ...options, waitMs: waitMs - Math.round(submittedAt - began - (spentAtSubmit - spent)) },
+      { promptId, outage, uncertain, submittedAt, spentAtSubmit });
+  } finally { socket.forget(promptId); }
+}
+
+// A job the harness submitted in `drawOnStage`: its id, the cell's window, whether its submit's answer was lost, the
+// moment the submit left, from which its time is measured, and what of the window the cell had lost by then.
+type Staged = { promptId: string; outage: Outage; uncertain: boolean; submittedAt: number; spentAtSubmit: number };
+// A submit once sent is never cut short, however early the caller lets go or the stage ends: a job the card has taken
+// and we have no id for is a job nobody can stop, and it would draw a whole picture for a reader who has already left.
+// It is one request to loopback, bounded by the reserve alone, and the abort or the end is answered at the top of the
+// loop in `drawWatched`, with an id in hand. It is not repeated either: a submit that failed may still have reached the
+// card.
+async function submitOnce(comfy: Comfy, graph: Graph, clientId: string): Promise<string> {
+  const submitted = await (await call(afterAbort(comfy), '/prompt', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ prompt: freshPreviews(graph), client_id: clientId }) })).json() as { prompt_id?: string; error?: unknown };
+  if (!submitted.prompt_id) throw Object.assign(new Error('comfy_rejected_prompt'), { code: 'comfy_rejected_prompt' });
+  return submitted.prompt_id;
+}
+
+async function drawWatched(comfy: Comfy, graph: Graph, watch: Watch, options: DrawOneOptions, staged?: Staged) {
   // The socket says when the job is over. The polls are what the picture falls back on when it says nothing, and
   // meanwhile they keep the tunnel's connection open for `/view`, where a new one would cost another ssh channel, about
   // 0.3-0.6 s. Half a second does both, and the retries below still span the seconds they always did.
   const pollMs = options.pollMs ?? 500;
-  const started = performance.now();
+  const started = staged?.submittedAt ?? performance.now();
   const stop = any(comfy.signal, comfy.end);
-  // A submit once sent is never cut short, however early the caller lets go or the stage ends: a job the card has
-  // taken and we have no id for is a job nobody can stop, and it would draw a whole picture for a reader who has
-  // already left. It is one request to loopback, bounded by the reserve alone, and the abort or the end is answered
-  // at the top of the loop below, with an id in hand. It is not repeated either: a submit that failed may still have
-  // reached the card.
-  const submitted = await (await call(afterAbort(comfy), '/prompt', { method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ prompt: freshPreviews(graph), client_id: watch.clientId }) })).json() as { prompt_id?: string; error?: unknown };
-  const promptId = submitted.prompt_id;
-  if (!promptId) throw Object.assign(new Error('comfy_rejected_prompt'), { code: 'comfy_rejected_prompt' });
+  const promptId = staged ? staged.promptId : await submitOnce(comfy, graph, watch.clientId);
+  // The harness's window through a dropped connection, and what of it the cell had spent before its submit: the time
+  // after that is added to the picture's own wait, which would otherwise run out first.
+  const outage = staged?.outage, spent = staged?.spentAtSubmit ?? 0;
+  const lost = () => Object.assign(new Error('comfy_connection_lost'), { code: 'comfy_connection_lost' });
   const memory: Memory = { vram: [], samples: 0 };
   // Video memory is sampled without waiting for the answer, and one request at a time: a card that stops answering
   // would otherwise gather another hanging request every few polls.
@@ -728,16 +970,38 @@ async function drawWatched(comfy: Comfy, graph: Graph, watch: Watch, options: Dr
   // The delete of the job's record: sent once and never waited for (`settled`), once the card is off the job — its
   // record said the job was over (`over`), or `stopJob` confirmed the stop (`stopped`) — since a delete that arrives
   // while the card still draws removes nothing, and the record written after it holds the whole prompt.
-  let forgotten = false, over = false, stopped = false;
+  // `gone`: the harness's job that the card no longer answers for, the window having run out or the job being nowhere
+  // once it answered, as after a restart of the server; nothing is asked of the card for it, its stop included.
+  let forgotten = false, over = false, stopped = false, gone = false;
   const forget = () => {
     if (forgotten) return;
     forgotten = true;
     leave(post(afterAbort(comfy), '/history', { delete: [promptId] }));
   };
+  // After the network failed, once the server answers again: the job is on the card or recorded, and the wait goes on,
+  // or it is nowhere, and the cell is lost. A submit whose answer was lost starts here (`sent`): the card says whether
+  // it has it, and one it does not have yet, whose submit may still be on its way through the server, is looked for
+  // once more after a pause before it counts as nowhere. The looks count against the window as its waits do. A job
+  // whose looks kept failing, the server answering between them, is stopped as any other.
+  const rideOut = () => ride(comfy, outage!);
+  const settle = async (sent = false) => {
+    let nowhere = sent ? 0 : 1;
+    for (let attempt = 0; attempt < RIDES; attempt++) {
+      if (!(await rideOut())) { halt(comfy); gone = true; throw lost(); }
+      const since = performance.now();
+      const where = await locate(comfy, promptId);
+      if (where === 'absent' && ++nowhere > 1) { gone = true; throw lost(); }
+      if (where === 'absent') await delay(outage!.pauseMs, undefined, { signal: stop }).catch(() => undefined);
+      charge(outage, since);
+      if (where === 'queued' || where === 'recorded') return;
+    }
+    throw lost();
+  };
   try {
-    const deadline = started + (options.waitMs ?? 600000);
+    if (staged?.uncertain) await settle(true);
+    const deadline = () => started + (options.waitMs ?? 600000) + (outage ? outage.spentMs - spent : 0);
     let entry: HistoryEntry | undefined;
-    let failures = 0;
+    let failures = 0, dropped = 0;
     for (let poll = 0; ; poll++) {
       // Asked before the poll rather than after it: a caller who has let go, or a stage that has ended, is answered
       // without another request, and `stopJob` below takes the card off the job it is drawing.
@@ -747,19 +1011,29 @@ async function drawWatched(comfy: Comfy, graph: Graph, watch: Watch, options: Dr
       entry = watch.record(promptId);
       if (entry) break;
       let seen: Record<string, HistoryEntry>;
+      const asked = performance.now();
       try {
         seen = await (await call(comfy, `/history/${promptId}`)).json() as Record<string, HistoryEntry>;
         failures = 0;
+        dropped = 0;
       } catch (error) {
+        // The harness waits out the network within the cell's window, and such a poll is not counted as failed; polls
+        // that keep dropping, the server answering between them, lose the job, which is stopped as any other.
+        if (outage && outage.windowMs > 0 && !stop?.aborted && transportCode(error)) {
+          charge(outage, asked);
+          if (++dropped > RIDES) throw lost();
+          await settle();
+          continue;
+        }
         // A poll that did not arrive is asked again; one the server answered with an error status is its answer.
         if (stop?.aborted || (error as { code?: unknown }).code === 'comfy_http_error' || ++failures > POLL_RETRIES
-          || performance.now() > deadline) throw error;
+          || performance.now() > deadline()) throw error;
         if (watch.heard === heard) await watch.wait(pollMs, stop);
         continue;
       }
       entry = seen[promptId];
       if (entry?.status?.completed || entry?.status?.status_str === 'error') break;
-      if (performance.now() > deadline) throw Object.assign(new Error('image_timeout'), { code: 'image_timeout' });
+      if (performance.now() > deadline()) throw Object.assign(new Error('image_timeout'), { code: 'image_timeout' });
       // Video memory is sampled while the card works, not after it has freed the weights.
       if (poll % (options.sampleEvery ?? 4) === 0) sampleVram();
       // News that came while the poll was out is acted on at once. A poll is never cut short for it: an aborted
@@ -776,9 +1050,20 @@ async function drawWatched(comfy: Comfy, graph: Graph, watch: Watch, options: Dr
       throw Object.assign(new Error('image_failed'), { code: 'image_failed', ...(oom ? { oom } : {}) });
     }
     const viewStarted = performance.now();
+    // In the harness a picture whose download the network cut is asked for again by its name, once the server answers:
+    // a saving node's file stays on the card's disk (gpu/image-workflow-qwen-action.json), whatever became of the record.
     const view = async (one: { filename: string; subfolder: string; type: string }) => {
       const query = new URLSearchParams({ filename: one.filename, subfolder: one.subfolder ?? '', type: one.type ?? 'output' });
-      return new Uint8Array(await (await call(comfy, `/view?${query}`)).arrayBuffer());
+      for (let attempt = 0; ; attempt++) {
+        const since = performance.now();
+        try {
+          return new Uint8Array(await (await call(comfy, `/view?${query}`)).arrayBuffer());
+        } catch (error) {
+          if (!outage || stop?.aborted || !transportCode(error)) throw error;
+          charge(outage, since);
+          if (attempt >= RIDES || !(await rideOut())) { halt(comfy); throw lost(); }
+        }
+      }
     };
     const bytes = await view(image);
     const viewMs = Math.round(performance.now() - viewStarted);
@@ -790,20 +1075,22 @@ async function drawWatched(comfy: Comfy, graph: Graph, watch: Watch, options: Dr
     // The record goes first, on the connection `/view` has just left open, and the last sample after it.
     forget();
     sampleVram(false);
-    // `memory` fills in like `vram` did, the last sample after the picture; `timing` is the socket's account of the job.
+    // `memory` fills in like `vram` did, the last sample after the picture; `timing` is the socket's account of the job,
+    // and `cached` the nodes it heard the server answer from its cache.
     return { bytes: stripPngMetadata(bytes), totalMs: Math.round(performance.now() - started), viewMs, vram: memory.vram, memory,
-      timing: watch.timing(promptId, graph), ...(copies.length ? { copies: copied } : {}) };
+      timing: watch.timing(promptId, graph), cached: watch.cached(promptId), ...(copies.length ? { copies: copied } : {}) };
   } catch (error) {
     // Whatever ended the wait before the record said the job was over — the wait ran out, the caller let go, the
     // stage ended, the card answered a poll with an error status or the tunnel dropped more polls than the retries —
     // the card did not stop by itself: see `stopJob`, which the reserve bounds. A fetch cut by a signal arrives as an
     // AbortError, so what the signals say is what this failure is called, whatever was thrown: the picture that was
     // on its way down when the end came too. A stop nobody could confirm leaves a job that may still be drawing, with
-    // the next cell queued behind it, and says so under a code that stops the run (`stopsTheRun`).
-    if (!over) stopped = await stopJob(afterAbort(comfy), promptId, pollMs);
+    // the next cell queued behind it, and says so under a code that stops the run (`stopsTheRun`). In the harness,
+    // what the network took after the submit is `comfy_connection_lost`, which stops the run too.
+    if (!over && !gone) stopped = await stopJob(afterAbort(comfy), promptId, pollMs);
     halt(comfy);
-    if (!over && !stopped) throw Object.assign(new Error('comfy_stop_unconfirmed'), { code: 'comfy_stop_unconfirmed' });
-    throw error;
+    if (!over && !stopped && !gone) throw Object.assign(new Error('comfy_stop_unconfirmed'), { code: 'comfy_stop_unconfirmed' });
+    throw staged && transportCode(error) ? lost() : error;
   } finally {
     // The server keeps the prompt, the workflow and the outputs of every job it has run until history is cleared.
     // This clears the job record, and that is all the API can clear: the file the node wrote stays in ComfyUI's own
@@ -866,10 +1153,11 @@ const isCell = (one: Cell, other: Cell) => one.caseId === other.caseId && one.ch
 
 // Codes that say the graph or the server is wrong rather than this picture: every cell after them fails in the same
 // way, and on a rental each of those failures is paid for. `comfy_stop_unconfirmed`: a job may still be drawing, and
-// every cell after it would queue behind it.
+// every cell after it would queue behind it. `comfy_unreachable` and `comfy_connection_lost`: the network to the card
+// stayed down longer than the harness waits for it (`drawOnStage`).
 export const stopsTheRun = (code: string) => code === 'comfy_http_error' || code === 'comfy_rejected_prompt'
   || code === 'comfy_upload_failed' || code === 'comfy_socket_unavailable' || code === 'comfy_stop_unconfirmed'
-  || code.startsWith('workflow_');
+  || code === 'comfy_unreachable' || code === 'comfy_connection_lost' || code.startsWith('workflow_');
 
 // Checkpoint-major order: a switch reloads the whole checkpoint, and an early stop then leaves whole comparable
 // blocks rather than a little of each. The arms of one frame follow each other, so a stop leaves whole triples, and
@@ -897,20 +1185,45 @@ export function partialLoadsSince(before: string[] | undefined, after: string[] 
   return after.slice(last === undefined ? 0 : after.lastIndexOf(last) + 1)
     .filter(line => /loaded partially|Unloaded partially/.test(line)).length;
 }
+// Where a read of the log ended, kept without a word of it: the last line's time and the hash of the whole line, or
+// neither when the ring was empty. The harness keeps one from a job's read after it for the next job, in place of a
+// read before that one (docs/action-experiment.md#one-socket). `partialLoadsAfter` counts as `partialLoadsSince`
+// does.
+export type LogCursor = { t?: string; hash?: string };
+const lineHash = (line: string) => createHash('sha256').update(line).digest('hex');
+export function logCursor(lines: string[] | undefined): LogCursor | undefined {
+  if (!lines) return undefined;
+  const last = lines.at(-1);
+  return last === undefined ? {} : { t: last.slice(0, Math.max(0, last.indexOf('\u0000'))), hash: lineHash(last) };
+}
+export function partialLoadsAfter(cursor: LogCursor | undefined, after: string[] | undefined): number | undefined {
+  if (!cursor || !after) return undefined;
+  let from = 0;
+  if (cursor.hash !== undefined) {
+    for (let at = after.length - 1; at >= 0; at--) if (lineHash(after[at]) === cursor.hash) { from = at + 1; break; }
+  }
+  return after.slice(from).filter(line => /loaded partially|Unloaded partially/.test(line)).length;
+}
 
 // What the server says it is, read at the start of a run: its version, torch's, and the card's name. A run with pins
 // of its own is held to these as well, so for it a server that does not say all three is refused rather than read as
-// saying nothing: a resume on another card would otherwise pass as the same one.
+// saying nothing: a resume on another card would otherwise pass as the same one. `triton` joins them only when the
+// server was started with comfy-kitchen's Triton backend (gpu/image-serve.sh SIMPLE_CHAT_IMAGE_TRITON), which may round
+// the int8 layers differently: a run without it keeps the pins it always had, and a resume across the switch is refused.
 const SERVER_PINS = ['comfyui', 'pytorch', 'card'];
+// Whether the server's command line (/system_stats `argv`) has comfy-kitchen's Triton backend on, as the pinned server
+// reads its flags (comfy/quant_ops.py:33): asked for and not overridden.
+export const tritonOn = (argv: unknown) => Array.isArray(argv) && argv.includes('--enable-triton-backend') && !argv.includes('--disable-triton-backend');
 export async function serverPins(comfy: Comfy, strict: boolean): Promise<Record<string, string>> {
   const pins: Record<string, string> = {};
   try {
     const stats = await (await call(comfy, '/system_stats')).json() as {
-      system?: { comfyui_version?: unknown; pytorch_version?: unknown }; devices?: { name?: unknown }[] };
+      system?: { comfyui_version?: unknown; pytorch_version?: unknown; argv?: unknown }; devices?: { name?: unknown }[] };
     const keep = (key: string, value: unknown) => { if (typeof value === 'string' && value) pins[key] = value.slice(0, 120); };
     keep('comfyui', stats.system?.comfyui_version);
     keep('pytorch', stats.system?.pytorch_version);
     keep('card', stats.devices?.[0]?.name);
+    if (tritonOn(stats.system?.argv)) pins.triton = 'enabled';
   } catch { /* judged below */ }
   if (strict && !SERVER_PINS.every(key => pins[key])) {
     throw new Error(comfy.end?.aborted ? 'The end (--until) came before the server said what it is; nothing is drawn'

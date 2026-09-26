@@ -19,7 +19,7 @@ node --env-file-if-exists=.env.gpu gpu/rent.mjs
 
 A session that runs both lanes may be one machine (`--gpus 2`, or one card with the lanes in turn) or two machines
 with one card each, which the owner chose on 2026-09-22 ([why](knowledge/gpu-measurements.md#costs-and-downloads)).
-Rent each lane with its own call; the language machine asks for 60 GB of disk and is priced by Gemma's download, the picture machine for 100 GB and by the image files. The two tunnels are `bash gpu/tunnel.sh ALIAS` for the language machine and `bash gpu/tunnel.sh --pictures-only ALIAS` for the other. Each machine arms its own three-hour guard. Rent the second machine with `--avoid-host` and the first machine's host id: the same box often lists both of its cards, and two rentals on it would share one link, one disk and one failure, which is not the two machines the owner asked for.
+Rent each lane with its own call; the language machine asks for 60 GB of disk and is priced by Gemma's download, the picture machine for 100 GB and by the image files. The two tunnels are `bash gpu/tunnel.sh ALIAS` for the language machine and `bash gpu/tunnel.sh --pictures-only ALIAS` for the other, and each dials again by itself after a drop ([the tunnel](#the-tunnel)). Each machine arms its own three-hour guard. Rent the second machine with `--avoid-host` and the first machine's host id: the same box often lists both of its cards, and two rentals on it would share one link, one disk and one failure, which is not the two machines the owner asked for.
 
 ```sh
 SIMPLE_CHAT_RENT_DRY_RUN=1 node --env-file-if-exists=.env.gpu gpu/rent.mjs --lane text
@@ -79,6 +79,21 @@ ssh simple-chat-vast
 Copy with `tar` over SSH as above: `scp` hung through the proxy. What comes next depends on the lane:
 [the language card](llama-cpp.md#prepare-server) or [the picture card](#picture-card).
 
+<a id='the-tunnel'></a>
+
+### The tunnel
+
+[tunnel.sh](../gpu/tunnel.sh) forwards the lane's ports to loopback here, and dials again two seconds after its
+connection ends, for as long as it runs: on 2026-09-26 the picture card closed its ssh sessions at once, and the
+drawing ended with them ([a dropped connection](action-experiment.md#dropped-connection)). It never asks for a
+password (`BatchMode`), gives a dial ten seconds, notices a connection gone quiet after 15 s x 3, and accepts only the
+host key already known. It stops, and says why, only on what dialling cannot mend: a port here that another listener
+holds, which it names and never kills, an old tunnel most likely, and three refusals in a row of the key or of the
+host's key. Ctrl-C or a TERM to it ends its ssh too. A server on the card has to outlive the drops the tunnel rides
+out: [ensure-server.sh](../gpu/ensure-server.sh) starts the language server in the background under `nohup`, with no
+terminal and its output nowhere, and [the picture card](#picture-card) starts ComfyUI with `setsid` besides, in a
+session of its own.
+
 <a id='picture-card'></a>
 
 ## The picture card
@@ -90,6 +105,24 @@ default, the second card beside a language server; a picture machine of its own 
 The tunnel to such a machine is `bash gpu/tunnel.sh --pictures-only ALIAS`. The bot's settings for pictures are in
 [setup.md](setup.md#pictures) and what the reader gets in [telegram-ui.md](telegram-ui.md#picture-delivery); why any
 of this exists is in [illustrations-plan.md](illustrations-plan.md).
+
+`image-serve.sh` runs the server in the foreground of the shell that starts it, and a server in the foreground of an
+ssh session dies with the session, as the action measurement's did on 2026-09-26. A run that lasts starts it detached
+and waits for it through the tunnel, here as the action measurement's [runbook](action-experiment.md#runbook) does:
+
+```sh
+ssh -T simple-chat-vast 'SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 setsid -f nohup flock -n /root/.simple-chat-comfy.lock bash /workspace/simple-chat/gpu/image-serve.sh </dev/null >/dev/null 2>&1'
+timeout 300 bash -c 'until curl -sf -m 5 -o /dev/null http://127.0.0.1:8188/system_stats; do sleep 2; done'
+```
+
+`setsid` gives it a session of its own and no terminal, `nohup` ignores a hangup, and the lock lets one run at a
+time: a start while one runs, or while its sweeper is still stopping, does nothing. Its output goes nowhere, as it
+did before. `pkill -INT -f "[C]omfyUI/main.py"` on the card stops it as Ctrl-C would, and the lock is free once its
+sweeper has gone too. `SIMPLE_CHAT_IMAGE_TRITON=1` starts it with comfy-kitchen's Triton backend
+(`--enable-triton-backend`), off by default: on a torch built for CUDA below 13 the pinned server runs every int8 layer
+on the kitchen's eager path, and Triton's kernels may be faster and may round differently. A run records the flag in
+its pins; whether Triton loaded is in the server's log at its start, which [the pilot](action-experiment.md#pilot)
+reads, and the pilot measures it.
 
 The tester pointed at `Kreamania`, a community fine-tune distributed through CivitAI
 and HuggingFace. Any such checkpoint must be pinned the way the language model is pinned in
@@ -110,7 +143,7 @@ run actually selects; the sizes and minutes of each set are in
 ```sh
 SIMPLE_CHAT_IMAGE_QWEN=true bash /workspace/simple-chat/gpu/image-bootstrap.sh --dry-run   # names the files, downloads nothing
 SIMPLE_CHAT_IMAGE_QWEN=true bash /workspace/simple-chat/gpu/image-bootstrap.sh
-SIMPLE_CHAT_IMAGE_QWEN=true bash /workspace/simple-chat/gpu/image-serve.sh
+SIMPLE_CHAT_IMAGE_QWEN=true bash /workspace/simple-chat/gpu/image-serve.sh   # in the foreground; a long run starts it detached, as above
 ```
 
 It adds 17.28 GB of int8 files ([sizes, and why not bf16](knowledge/gpu-measurements.md#picture-downloads)). Its

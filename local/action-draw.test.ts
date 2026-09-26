@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { startFakeComfy } from './fake-comfy.ts';
+import { greyPng, startFakeComfy } from './fake-comfy.ts';
+import { stripPngMetadata } from './image-batch.ts';
 import { writeCardRecord } from './image-identity.ts';
 import { planAll } from './action-prompts.ts';
 import { storyDir, textStories } from './action-text.ts';
-import type { StoryText } from './action-text.ts';
+import type { ActionArm, StoryText } from './action-text.ts';
 import { drawStage, fileOf, frameKey, pricing } from './action-draw.ts';
 import type { DrawIndex } from './action-draw.ts';
 
@@ -65,4 +66,45 @@ test('a seed that cannot end in time is not begun, a resume draws nothing again,
   // A kind of cell the smoke did not draw is never priced at nothing, and a sharp story's pictures are sealed.
   assert.equal(pricing([])({ key: '', kind: 'frame', story: 'flight', id: '', seed: 7, arm: 'T', refs: ['L'], prompt: '' }), Infinity);
   assert.ok(fileOf(root, { kind: 'frame', story: 'sharp-1', id: '', seed: 7, arm: 'A' }).startsWith(join(root, 'sealed', 'sharp-1')));
+});
+
+// A dropped connection must neither pay for a picture twice nor lose one unnoticed
+// (docs/action-experiment.md#dropped-connection). After the smoke a cell waits for the server within its window, and
+// its job goes out once, under the id minted for it; a picture cut on its way down is fetched again whole, and the
+// delete of its record follows it. A cell the window kept from the card has no record, for a resume to draw it; one the
+// window lost after its submit stops the run under a code of its own.
+test('a dropped connection is waited out, no job is sent twice, and a cell that never reached the card has no record', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'simple-chat-action-drop-'));
+  const fake = await startFakeComfy({ jobMs: 15, referenceMs: 0, requireUploads: true });
+  t.after(async () => { await fake.close(); rmSync(root, { recursive: true, force: true }); });
+  readyRun(root, 'flight');
+  const stage = (stage: 'smoke' | 'main') => drawStage({ stage, root, comfy: fake.url, until: Date.now() + 3600000, pollMs: 10, waitMs: 20000,
+    outage: { windowMs: 600, pauseMs: 25 } });
+  assert.equal((await stage('smoke')).smoke?.verdict?.pass, true);
+  // Seed 11 is A, A+, L, C and T, the jobs after the smoke's. A's submit is answered to nobody, A+'s start and half of
+  // L's picture are cut, each for less than the window; after L's delete the network stays down longer than C's window.
+  const n = fake.jobs.length;
+  fake.options.drops = [{ at: 'prompt', job: n + 1, ms: 150 }, { at: 'start', job: n + 2, ms: 150 }, { at: 'view', job: n + 3, ms: 150 },
+    { at: 'delete', job: n + 3, ms: 1200 }];
+  const key = (arm: ActionArm) => frameKey('flight', 11, arm);
+  const first = await stage('main');
+  assert.deepEqual((['A', 'A+', 'L'] as const).map(arm => [first.cells[key(arm)]?.status, (first.cells[key(arm)]?.outageMs ?? 0) > 0]),
+    [['drawn', true], ['drawn', true], ['drawn', true]]);
+  assert.deepEqual([first.cells[key('C')], first.error], [undefined, 'comfy_unreachable']);
+  const sent = () => fake.calls.filter(call => call.method === 'POST' && call.path === '/prompt').map(call => call.id);
+  const l = sent()[n + 2]!;
+  const saved = readFileSync(fileOf(root, { kind: 'frame', story: 'flight', id: '', seed: 11, arm: 'L' }));
+  assert.ok(saved.equals(stripPngMetadata(greyPng(1280, 704, n + 3, 9))), 'the picture cut halfway is saved whole, stripped');
+  const views = fake.calls.flatMap((call, at) => (call.path === '/view' && call.id === l ? [at] : []));
+  const deleted = fake.calls.findIndex(call => call.method === 'POST' && call.path === '/history' && call.id === l);
+  assert.deepEqual([views.length, deleted > views.at(-1)!], [2, true]);
+  // The resume draws C; T's job is lost after its start, for longer than its window.
+  await fake.whenUp();
+  fake.options.drops = [{ at: 'start', job: n + 5, ms: 1200 }];
+  const second = await stage('main');
+  const lost = second.cells[key('T')];
+  assert.deepEqual([second.cells[key('C')]?.status, lost?.status, lost?.code, (lost?.outageMs ?? 0) > 0, second.error],
+    ['drawn', 'failed', 'comfy_connection_lost', true, 'comfy_connection_lost']);
+  // Every job went out once, each under its own id: the smoke's, and A to T.
+  assert.deepEqual([sent().length, new Set(sent()).size], [n + 5, n + 5]);
 });
