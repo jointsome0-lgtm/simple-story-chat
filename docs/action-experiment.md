@@ -69,7 +69,7 @@ draw them:
 Each pair compares two workflows, and each difference changes more than one thing. No arm here separates them
 further, so the mechanisms inside a difference stay open.
 
-- A+ against A is the whole variant: eight changes (seven in round one), a new schema and output limit, a frame
+- A+ against A is the whole variant: nine changes (seven in round one), a new schema and output limit, a frame
   written anew, and the assembly with role and facing. No single change is measured.
 - L against A+ takes the looks out and shortens the text at once. If L gains, leaving the looks out was enough for the
   gain; whether the brevity or the removed conflicts did it stays open.
@@ -258,6 +258,12 @@ objects, as change 7 says.
    in the white tank top of his portrait: the scene dressed him in "a tattered leather skirt and iron bracers" and
    said nothing of his chest, so the reference filled what the text left open. The other three people in that
    picture wore the scene's clothes.
+9. The bot's rule to keep who does what, with which hand, and where people and objects touch asks instead for the
+   physical interaction of the participants: who acts on whom or on what, with which part of the body (a hand, a
+   foot, a knee, a shoulder, the back, the head, the whole body), and against which part of another participant's
+   body or which object. The owner asked for it on 2026-09-26, for round two: a rule about hands does not ask for a
+   contact made with a foot, a knee or the whole body. The rule gives no example, so that no scene of the set is
+   written into it.
 
 In the schema, `people` holds up to four items, the bot's own limit, and `role` and `facing` are required, `facing` as
 an enum. The output limit is 1800 tokens, twice the bot's: stage 1's longest variant reply took 710 with six people
