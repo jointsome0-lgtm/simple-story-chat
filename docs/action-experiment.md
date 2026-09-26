@@ -1287,16 +1287,15 @@ Russian description as faithfully as from the same description in English?
   and the marks, their sides included, as closely as the English one. A side is the person's own, as the sheet writes
   it: on a front, the person's left is the viewer's right.
 
-The test is 6 jobs, each priced as one of round one's fronts: about 1.6 minutes at their median of 15.5 s, and 2.2 to
-2.5 at the admission prices by the clothing test's figures. The cold start falls on the clothing test, or on this
-test's first front where it is drawn alone. The dry run's estimate, at its made-up round's 18.7 s a front, gives it
+The test is 6 jobs, each priced as one of round one's fronts: `estimate` gives it 1.5 minutes, and 2.4 at the
+admission prices. The cold start falls on the clothing test, or on this test's first front where it is drawn alone. The dry run's estimate, at its made-up round's 18.7 s a front, gives it
 1.9 minutes and 2.6 at the admission prices.
 
 ```sh
 npm run image:t-probe -- dry-run     # seven steps, then "the dry run went as expected"
-npm run image:t-probe -- estimate    # before the card: 70 cells, 96 jobs, expectedMinutes about 30, pricedMinutes
-                                     # about 44, the clothing test's 10 of them 2.8 and 4.2 under `suit`, the
-                                     # language test's 6 under `lang`
+npm run image:t-probe -- estimate    # before the card: 70 cells, 96 jobs, expectedMinutes 29.9, pricedMinutes
+                                     # 43.7, the clothing test's 10 of them 2.8 and 4.2 under `suit`, the
+                                     # language test's 6 1.5 and 2.4 under `lang`
 # boxes.json into illustrations/t-probe, then the page, where the owner checks the boxes and the crops:
 npm run image:t-probe -- page        # illustrations/t-probe/index.html
 # The probe's card, with the owner's «да» on its price and end, a picture card for one hour:
@@ -1338,12 +1337,11 @@ The estimate, from round one's own times of the same card:
 | 54 cells in 80 jobs at round one's medians: T's for `words`, `no-style`, `face` and `face-each`, C's for the rest, with one portrait a pass for `mask-each` and two pictures for `face-each` | 25 (37 at the admission prices) |
 | the page, the termination and the margin before the guard | 5 |
 
-About 49 card minutes of the guard's hour. Before the language test, `estimate` gave the clothing test and the scenes
-together as 64 cells in 90 jobs, 28.4 minutes and 41.3 at the admission prices; the language test adds 6 cells in 6
-jobs, about 1.6 minutes and 2.2 to 2.5 at those prices. `draw` admits the clothing test as a whole, 10 jobs and 4.7
-minutes with the cold start, then the language test as a whole, and a scene at its own prices, at most 15 jobs and 7
-minutes (the flight, the twister and the demon), so the hour holds the whole probe unless the setup runs long, and
-what is not admitted waits for a resume on the next card.
+About 49 card minutes of the guard's hour; `estimate` gives the draw's three parts together, 70 cells in 96 jobs,
+29.9 minutes and 43.7 at the admission prices, of which the language test's 6 are 1.5 and 2.4. `draw` admits the
+clothing test as a whole, 10 jobs and 4.7 minutes with the cold start, then the language test as a whole, and a scene
+at its own prices, at most 15 jobs and 7 minutes (the flight, the twister and the demon), so the hour holds the whole
+probe unless the setup runs long, and what is not admitted waits for a resume on the next card.
 
 **Not verified without the card**: whether `words` moves any face while image 1 lies on the canvas's grid; whether
 `no-style` takes the edges and colours away; where `half` puts the scene, since its 640x352 is centred on the canvas's
