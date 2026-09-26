@@ -473,7 +473,7 @@ last sentence of the prompt, never seen by the describing model. `local/picture-
 - `semi`, the line the owner approved on 2026-09-23;
 - `novel`, the `STYLE` the six steps were measured with, its faces true to each person's age instead of adult since
   2026-09-26 ([portrait details](#portrait-details));
-- `film`, `graphic` and `watercolor`.
+- `film`, `graphic` and `watercolor`, with the same change of age as `novel`.
 
 A style line ends the prompt as written. Until 2026-09-24 the bot followed it with a tail of its own: natural proportions
 and no lettering, which the owner took off because they fought a line that wanted a look of its own, and then that
@@ -661,7 +661,9 @@ asks for "Naturalistic facial proportions true to each person's age" where it as
 proportions". It ends every frame, after the looks, and with a child's age word now in the sheet, "adult" there would
 have given that child an adult's face in every frame. It changes every frame the bot draws in its own style and round
 two's pins; the T probe keeps round one's line, to set its variants beside round one's pictures. The `film`,
-`graphic` and `watercolor` presets still ask for adult faces or anatomy.
+`graphic` and `watercolor` presets asked for adult faces or anatomy for the same reason and now ask for anatomy and
+proportions true to each person's age (`local/picture-style.ts`); `semi` names no age and stays as the owner approved
+it.
 
 <a id='blind-review'></a>
 
