@@ -639,10 +639,10 @@ word of it competes with the action; a portrait holds one person and can take fa
   without details, as every sheet written before this one is, draws its portraits from the look and is not written
   again for them. A kept portrait records the text it was drawn from in its `look` field, and the card calls it a
   portrait of the earlier look once the person's text differs.
-- The frame instruction, its rule for the looks of strangers included, and the portrait's clothes, style and pose
-  stay as they were. The identity measurement's recipe still draws from the look, as its run pinned it
-  ([portrait recipe](identity-experiment.md#portrait-recipe)). The age words of children in the frame's rule for
-  strangers are a later step.
+- The frame instruction and the portrait's clothes, style and pose stay as they were, but for one rule, changed the
+  same day as the owner agreed: the look the frame writes of a person the sheet does not name takes the sheet's age
+  words, children's included, and the skin tone, where it allowed an adult's words only. The identity measurement's
+  recipe still draws from the look, as its run pinned it ([portrait recipe](identity-experiment.md#portrait-recipe)).
 
 The sheet had the frames' limit of 900 tokens. A synthetic reply of six people at the top of every word range, counted
 by Gemma 4's tokenizer (`local/tokenizer.ts`), takes 1102 tokens as compact JSON and 1225 indented, where the sheet

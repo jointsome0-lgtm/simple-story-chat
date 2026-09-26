@@ -302,7 +302,8 @@ each person's look as their line of the sheet. The new instruction and schema ch
 daughters now come out as children is the judges' check of the fronts to say. The same day the owner changed the
 style line that ends every frame (`STYLE` in `local/illustrate.ts`) from adult faces to faces true to each person's
 age, so that the child a look names is not made an adult at the prompt's end. Round two's L, C and T take the new
-line, and it changes their pins too; the T probe keeps round one's ([the T probe](#t-probe)).
+line, and it changes their pins too; the T probe keeps round one's ([the T probe](#t-probe)). The frame's look of a
+person the sheet does not name takes the same age words and the skin tone, which changes the frames' pins as well.
 
 <a id='assembly'></a>
 
