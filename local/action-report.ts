@@ -3,17 +3,19 @@
 // the same gates over the clean scenes and over the scenes that reached their target, seed 11 as a repetition, the
 // repeats' agreement, the text audit, what the run delivered cell by cell, and the times. `report.json` holds ids and
 // numbers; `report.md` is the owner's, in Russian, where the sharp scenes appear only as counts. The galleries are the
-// owner's too: the clean pictures on one page, the sharp ones on a page inside `sealed/`.
-import { existsSync, writeFileSync } from 'node:fs';
+// owner's too: the clean pictures on one page, the sharp ones on a page inside `sealed/`, and while the card draws,
+// what is still to come and when.
+import { existsSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { ACTION_SEEDS, ACTION_STORIES, repeatedScenes } from '../examples/action-set.ts';
 import { ARMS, isSharp, readJson, requestCounts, textStories } from './action-text.ts';
 import type { ActionArm, TextsRecord } from './action-text.ts';
 import type { PromptsRecord, StoryPlan } from './action-prompts.ts';
-import { readPlan } from './action-prompts.ts';
-import { frameKey } from './action-draw.ts';
+import { readPlan, readPlans } from './action-prompts.ts';
+import { CELL_MS, WAIT_MS, frameKey, planCells, pricing, smokeCells } from './action-draw.ts';
+import { CLEANUP_RESERVE_MS } from './image-batch.ts';
 import { Refusal } from './action-boundary.ts';
-import type { CellRecord, DrawIndex } from './action-draw.ts';
+import type { ActionCell, CellKind, CellRecord, DrawIndex } from './action-draw.ts';
 import { JUDGE, MIXUPS, answersFile, escapeHtml, keyFile, sessionKey } from './action-judge.ts';
 import type { BundleKey, JudgingRecord, Projection, Session } from './action-judge.ts';
 
@@ -481,31 +483,271 @@ export function writeReport(root: string) {
   return report;
 }
 
-// The galleries: every story's fronts, views and pictures by seed and arm, the clean ones on `gallery.html` and the
-// sharp ones on `sealed/gallery.html`. Pictures are linked where they lie, never copied.
-export function writeGalleries(root: string) {
+// ---- The galleries ----
+
+// A cell without an outcome as the galleries foresee it: when it is expected to end (`eta`, epoch milliseconds, unknown
+// until something like it has been drawn), `now` for the one drawing; or why it will not be drawn: a reference that
+// did not come (`out`, under the code the drawing will give it), the deadline, its seed's admission (`seed`) refused or
+// not yet decided, the smoke's verdict still to come, a resume after an error, or the drawing over.
+type Coming = { eta?: number; now?: boolean; why?: 'out' | 'deadline' | 'admission' | 'undecided' | 'smoke' | 'resume' | 'over'; code?: string; seed?: number };
+export type GalleryOptions = { until?: number; now?: number };
+const median = (values: number[]) => {
+  const sorted = [...values].sort((a, b) => a - b), middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+};
+
+// Where the drawing is: every cell in the stages' order with its record or what is foreseen for it, the cell drawing
+// now, whether the drawing is over or stopped on an error, and the admissions foreseen. `until` is the stages' own `--until`; without it
+// nothing is foreseen of the deadline or of an admission.
+function progressOf(root: string, draw: DrawIndex, options: GalleryOptions) {
+  const now = options.now ?? Date.now(), until = options.until, [first, second] = ACTION_SEEDS;
+  const read = readPlans(root, textStories());
+  const plans = textStories().flatMap(story => read.plans.has(story.id) ? [read.plans.get(story.id)!] : []);
+  const verdict = draw.smoke?.verdict;
+  const { fronts, views, frames } = planCells(plans, verdict?.tOut === true);
+  // The stages' order (action-draw.ts `drawStage`): the smoke until its verdict, then seed 7's admission over the
+  // fronts, the views and its frames, and seed 11's over its own frames. A cell with an outcome is passed over.
+  const stages: { seed?: number; cells: ActionCell[] }[] = [{ cells: verdict ? [] : smokeCells(plans) },
+    { seed: first, cells: [...fronts, ...views, ...frames(first)] }, { seed: second, cells: frames(second) }];
+  const byKey = (cells: ActionCell[]) => new Map(cells.map(cell => [cell.key, cell]));
+  // The plan's cells in its own order, and in the order they were drawn in, the smoke's first.
+  const planned = byKey([...fronts, ...views, ...frames(first), ...frames(second), ...smokeCells(plans)]);
+  const history = byKey([...smokeCells(plans), ...planned.values()]);
+
+  const own = (one: CellRecord) => one.totalMs! + (one.uploadMs ?? 0);
+  // The pause between two pictures beyond the second's own time (the card's log, the socket, the record), from the
+  // times the clean pictures' files were written one after another: the median. No sharp file is looked at.
+  const gaps: number[] = [];
+  let before: number | undefined;
+  for (const key of history.keys()) {
+    const one = draw.cells[key];
+    if (!one || one.status === 'out') continue;
+    const at = one.status === 'drawn' && one.file && !isSharp(one.story) ? statSync(join(root, one.file), { throwIfNoEntry: false })?.mtimeMs : undefined;
+    if (at !== undefined && before !== undefined && one.totalMs !== undefined) gaps.push(at - before - own(one));
+    before = at;
+  }
+  const pause = gaps.length ? Math.max(0, median(gaps)) : 0;
+  // A cell's price as the drawing asks it: a smoke cell's is its whole wait, the rest come from the smoke's times.
+  const priced = pricing((draw.smoke?.keys ?? []).map(key => draw.cells[key]).filter(Boolean));
+  const price = (cell: ActionCell) => verdict ? priced(cell) : WAIT_MS + CELL_MS;
+  // A cell's own time: the median of the drawn cells of its kind, of its arm for a frame, the warm ones where there are
+  // any, among those whose count of references is nearest its own. A kind none of which is drawn takes its price. A
+  // time without a warm cell behind it is rough, and the pages say so.
+  const drawn = Object.values(draw.cells).filter(one => one.status === 'drawn' && one.totalMs !== undefined);
+  let rough = false;
+  const timeOf = (cell: ActionCell): number | undefined => {
+    const like = drawn.filter(one => one.kind === cell.kind && one.arm === cell.arm);
+    const warm = like.filter(one => !one.first && one.loaderCacheMiss !== true);
+    const pool = warm.length ? warm : like;
+    const distance = (one: CellRecord) => Math.abs(one.references - cell.refs.length);
+    const nearest = Math.min(...pool.map(distance));
+    const ms = pool.length ? median(pool.filter(one => distance(one) === nearest).map(own)) : verdict ? priced(cell) : Infinity;
+    if (!warm.length) rough = true;
+    return Number.isFinite(ms) ? ms : undefined;
+  };
+  const coming = new Map<string, Coming>();
+  // A cell a reference of which did not come is never sent, under the code of what is missing (action-draw.ts
+  // `referencesOf`), whether that is recorded or foreseen.
+  const outCode = (cell: ActionCell) => {
+    for (const ref of cell.refs) {
+      const kind = ref === 'L' ? 'frame' : read.plans.get(cell.story)?.views.some(view => view.id === ref) ? 'view' : 'front';
+      const key = ref === 'L' ? frameKey(cell.story, cell.seed, 'L') : `${kind}:${ref}`, name = ref === 'L' ? 'l' : kind;
+      const known = draw.cells[key], foreseen = coming.get(key);
+      if (known ? known.status === 'drawn' : foreseen && (!foreseen.why || foreseen.why === 'resume')) continue;
+      return known?.status === 'out' ? known.code ?? `${name}_missing` : known ? `${name}_failed` : foreseen?.code ?? `${name}_missing`;
+    }
+    return undefined;
+  };
+
+  const all = [...planned.keys()].every(key => draw.cells[key]);
+  // A stage stopped on an error of the graph or the server once the smoke had passed, with cells still to go, waits for
+  // a resume on a new card, which goes on after the cell that stopped it (action-draw.ts `drawCells`): the drawing is
+  // not over, whatever the deadline of the card it stopped on, and nothing is timed while nothing draws.
+  const halted = !!draw.completedAt && !!draw.error && !draw.stopped && verdict?.pass === true && !all;
+  const ended = !!draw.completedAt && !halted && (verdict?.pass === false || !!draw.stopped || !!draw.error || !!draw.admitted?.[second] || all);
+  // A job begun before `--until` still has the reserve for its stop.
+  const over = ended || (!halted && until !== undefined && now >= until + CLEANUP_RESERVE_MS);
+  const running = !over && !draw.completedAt;
+  const saved = statSync(join(root, 'draw.json')).mtimeMs;
+  let t: number | undefined = halted ? undefined : running ? saved : now, halt: Coming['why'] = over ? 'over' : undefined, haltSeed: number | undefined;
+  let current: ActionCell | undefined;
+  const admissions: { seed: number; needMs: number; leftMs: number }[] = [];
+  for (const stage of stages) {
+    const left = stage.cells.filter(cell => !draw.cells[cell.key] && !coming.has(cell.key));
+    if (!halt && stage.seed !== undefined && left.length && !draw.admitted?.[stage.seed]) {
+      // Asked when the seed would begin, of every cell of it without an outcome, at the prices the drawing asks.
+      let why: Coming['why'];
+      if (!verdict?.pass) why = 'smoke';
+      else if (until === undefined || t === undefined) why = 'undecided';
+      else {
+        t = Math.max(t, now);
+        const needMs = left.reduce((sum, cell) => sum + price(cell), 0);
+        admissions.push({ seed: stage.seed, needMs, leftMs: until - t });
+        if (needMs > until - t) why = 'admission';
+      }
+      if (why) { halt = why; haltSeed = stage.seed; }
+    }
+    for (const cell of left) {
+      const code = halt ? undefined : outCode(cell);
+      if (halt || code) {
+        coming.set(cell.key, halt ? { why: halt, ...(haltSeed === undefined ? {} : { seed: haltSeed }) } : { why: 'out', code });
+        continue;
+      }
+      if (halted) {
+        coming.set(cell.key, { why: 'resume' });
+        continue;
+      }
+      const ms = timeOf(cell);
+      if (running && !current) {
+        // Drawing since the last record: it ends when its time says, and not before now.
+        current = cell;
+        t = ms === undefined ? undefined : Math.max(now, saved + pause + ms);
+      } else if (t !== undefined && until !== undefined && t + price(cell) > until) {
+        // A cell begins only if its price ends by `--until`, and nothing begins after the first that does not.
+        halt = 'deadline';
+        haltSeed = undefined;
+        coming.set(cell.key, { why: halt });
+        continue;
+      } else t = t === undefined || ms === undefined ? undefined : t + pause + ms;
+      coming.set(cell.key, { eta: t, ...(cell === current ? { now: true } : {}) });
+    }
+  }
+  const last = draw.admission?.at(-1);
+  const reason = verdict?.pass === false ? 'дымовой прогон не прошёл' : draw.stopped === 'until' ? 'пришёл срок'
+    : draw.stopped === 'admission' ? `сид ${last?.seed ?? '?'} не поместился до срока${last?.seed === second ? `, вердикт — по сиду ${first}` : ''}`
+      : draw.error ? `стадия остановилась с ошибкой ${draw.error}` : ended ? 'всё из плана пройдено' : 'срок прошёл';
+  return { now, until, over, halted, running, saved, pause, rough, planned, coming, current, admissions, reason };
+}
+
+const clock = (ms: number) => {
+  const at = new Date(ms);
+  return `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
+};
+const about = (ms: number) => `≈ ${clock(Math.round(ms / 60000) * 60000)}`;
+const minutes = (ms: number) => `${Math.max(0, Math.round(ms / 60000))} мин`;
+const comingText = (one: Coming | undefined) => !one ? '—' : one.why === 'out' ? `не будет: ${one.code}` : one.why === 'deadline' ? 'не успеет до срока'
+  : one.why === 'admission' ? `сид ${one.seed} не поместится`
+    : one.why === 'undecided' ? (one.seed === ACTION_SEEDS[1] ? `решится после сида ${ACTION_SEEDS[0]}` : `ждёт допуска сида ${one.seed}`)
+      : one.why === 'smoke' ? 'после дымового прогона' : one.why === 'resume' ? 'ждёт продолжения' : one.why === 'over' ? 'не отправлено'
+        : `${one.now ? 'рисуется, ' : ''}${one.eta === undefined ? 'время неизвестно' : about(one.eta)}`;
+const titleOf = (id: string) => ACTION_STORIES.find(one => one.id === id)?.label ?? textStories().find(story => story.id === id)?.title ?? id;
+
+// The galleries: every story's fronts, views and frames by seed and arm, the clean ones on `gallery.html` and the
+// sharp ones on `sealed/gallery.html`. Each cell stands in its place: its picture, linked where it lies and never
+// copied, the code of a cell that failed or is out, or, for one still to come, when it is expected to end. Above
+// them, what is drawing now, how far the fronts, the views and each seed have come and when each is expected to end,
+// the deadline and seed 11's admission; after a stage stopped on an error, what is left for a resume, and no time.
+// Until the drawing is over the pages reload themselves every minute. The clean page shows the sharp stories as counts
+// alone.
+export function writeGalleries(root: string, options: GalleryOptions = {}) {
   root = resolve(root);
   const draw = readJson<DrawIndex>(join(root, 'draw.json'));
   if (!draw) throw new Refusal(`${join(root, 'draw.json')} is missing: the galleries show the drawn pictures`);
+  const progress = progressOf(root, draw, options);
+  const { now, until, over, halted, planned, coming, current } = progress;
+  const [first, second] = ACTION_SEEDS;
+  // Every cell of the plan in the stages' order, then any recorded outside it.
+  const every: { key: string; kind: CellKind; story: string; seed: number }[] = [...planned.values(), ...Object.values(draw.cells).filter(one => !planned.has(one.key))];
+  const where = (test: (one: { kind: CellKind; story: string; seed: number }) => boolean) => every.filter(test).map(one => one.key);
+  const count = (keys: string[], status: CellRecord['status']) => keys.filter(key => draw.cells[key]?.status === status).length;
+
+  // When a set of cells is expected to end: its last foreseen time, or why not all of it will be drawn.
+  const endOf = (keys: string[]) => {
+    const left = keys.filter(key => !draw.cells[key]).map(key => coming.get(key));
+    if (!left.length) return 'готово';
+    const stop = left.find(one => one?.why !== undefined && one.why !== 'out'), later = left.filter(one => one && !one.why);
+    const end = later.length && later.every(one => one!.eta !== undefined) ? Math.max(...later.map(one => one!.eta!)) : undefined;
+    if (stop?.why === 'deadline') return !later.length ? comingText(stop) : `до срока ${later.length} из ${left.length}${end === undefined ? '' : `, ${about(end)}`}`;
+    if (stop) return `${comingText(stop)}${stop.why === 'over' ? ` ${left.length}` : ''}`;
+    return !later.length ? 'не будет' : end === undefined ? 'время неизвестно' : about(end);
+  };
+  const whatOf = (cell: ActionCell, sharp: boolean) => isSharp(cell.story) && !sharp
+    ? `острая сцена, ${cell.kind === 'frame' ? `кадр сида ${cell.seed}` : cell.kind === 'front' ? 'портрет' : 'вид'}`
+    : `${titleOf(cell.story)} — ${cell.kind === 'front' ? `портрет ${cell.id}` : cell.kind === 'view' ? `вид ${cell.id}` : `сид ${cell.seed}, рука ${cell.arm}`}`;
+  const seedLine = () => {
+    const foreseen = progress.admissions.find(one => one.seed === second);
+    if (draw.admitted?.[second]) return `Сид ${second} допущен.`;
+    if (draw.admission?.some(one => one.seed === second && !one.admitted)) return `Сид ${second} не допущен: по ценам харнесса не помещался до срока, вердикт — по сиду ${first}.`;
+    if (over) return `Сид ${second} не начинался.`;
+    if (halted) {
+      const seven = where(one => one.kind === 'frame' && one.seed === first).some(key => !draw.cells[key]);
+      return `Сид ${second} решится${seven ? ` после сида ${first}` : ''}, когда рисование продолжится.`;
+    }
+    if (foreseen) {
+      return `Сид ${second} решится после сида ${first}: по оценке ${foreseen.needMs <= foreseen.leftMs ? 'поместится' : 'не поместится'} — по ценам харнесса ему нужно `
+        + `${minutes(foreseen.needMs)}, а после сида ${first} останется ≈ ${minutes(foreseen.leftMs)}.`;
+    }
+    if (where(one => one.kind === 'frame' && one.seed === second).some(key => coming.get(key)?.why === 'deadline')) return `Сид ${second} не начнётся: сид ${first} не успевает до срока.`;
+    return `Сид ${second} решится после сида ${first}${until === undefined ? '; без срока (gallery --until) оценки нет' : ''}.`;
+  };
+
+  const status = (sharp: boolean) => {
+    const deadline = until === undefined ? 'Срок рисования не задан (gallery --until).' : `Срок рисования — ${clock(until)}.`;
+    const lines = over
+      ? [`<p><b>Рисование закончено</b>: ${escapeHtml(progress.reason)}. ${deadline} Страница собрана в ${clock(now)} и больше не обновляется.</p>`,
+        '<p>Дальше — уже без карты: пакеты для судей, судьи (свежие сессии codex), отчёт и эта страница заново. Сколько это займёт, здесь не оценивается.</p>']
+      : halted ? [`<p><b>Рисование остановилось</b> в ${clock(Date.parse(draw.completedAt!))} с ошибкой ${escapeHtml(draw.error!)}. Остальное ждёт `
+        + `продолжения на новой карте: время здесь появится, когда рисование снова пойдёт. Страница собрана в ${clock(now)} и обновляется сама раз в минуту.</p>`]
+      : [`<p>Собрана в ${clock(now)} и обновляется сама раз в минуту. ${deadline}</p>`,
+        current ? `<p>Сейчас рисуется: ${escapeHtml(whatOf(current, sharp))}${coming.get(current.key)?.eta === undefined ? '' : `; закончит ${about(coming.get(current.key)!.eta!)}`}.</p>`
+          : progress.running ? `<p>${[...coming.values()].some(one => one.why === 'deadline') ? 'До срока больше ничего не начнётся.' : 'Стадия заканчивается.'}</p>`
+            : `<p>Сейчас ничего не рисуется: стадия закончилась в ${clock(Date.parse(draw.completedAt!))}. Время ниже — если следующая начнётся сейчас.</p>`,
+        ...(progress.running && now - progress.saved > WAIT_MS + CELL_MS ? [`<p class="warn">draw.json не менялся с ${clock(progress.saved)}: рисование, похоже, стоит.</p>`] : [])];
+    const rows: [string, string[]][] = [['Портреты', where(one => one.kind === 'front')], ['Виды', where(one => one.kind === 'view')],
+      ...ACTION_SEEDS.map((seed): [string, string[]] => [`Сид ${seed}`, where(one => one.kind === 'frame' && one.seed === seed)])];
+    // After an error, what is left instead of when it ends.
+    const left = (keys: string[]) => keys.filter(key => !draw.cells[key]).length;
+    lines.push(`<table><tr><th></th><th>нарисовано</th><th>не вышло</th><th>выбыло</th><th>в плане</th><th>${halted ? 'осталось' : 'закончится'}</th></tr>`,
+      ...rows.map(([name, keys]) => `<tr><td>${name}</td><td>${count(keys, 'drawn')}</td><td>${count(keys, 'failed')}</td><td>${count(keys, 'out')}</td>`
+        + `<td>${keys.length}</td><td>${halted ? left(keys) : escapeHtml(endOf(keys))}</td></tr>`), '</table>', `<p>${escapeHtml(seedLine())}</p>`);
+    if (!sharp) {
+      const keys = where(one => isSharp(one.story));
+      lines.push(`<p>Острые сцены (${textStories().filter(story => isSharp(story.id)).length}) здесь только числами: нарисовано ${count(keys, 'drawn')}, `
+        + `не вышло ${count(keys, 'failed')}, выбыло ${count(keys, 'out')}, ${over ? 'не отправлено' : halted ? 'осталось' : 'впереди'} ${left(keys)}. `
+        + 'По картинкам — на их отдельной странице.</p>');
+    }
+    if (!over && !halted) {
+      lines.push(`<p class="note">Время — медиана уже нарисованных картинок того же вида (у кадров — той же руки, с ближайшим числом ссылок) `
+        + `и пауза между картинками ≈ ${(progress.pause / 1000).toFixed(1).replace('.', ',')} с; точность — минуты.`
+        + `${progress.rough ? ' Для части картинок тёплых замеров ещё нет, и их время пока грубое.' : ''}</p>`);
+    }
+    return lines.join('\n');
+  };
+
   const page = (file: string, sharp: boolean) => {
-    const figures = (cells: CellRecord[]) => cells.map(cell => `<figure><img src="${escapeHtml(relative(join(file, '..'), join(root, cell.file!)))}" loading="lazy">`
-      + `<figcaption>${escapeHtml(cell.kind === 'frame' ? `${cell.arm}` : cell.id)}</figcaption></figure>`).join('');
+    const dir = join(file, '..');
+    const figure = (key: string) => {
+      const one = draw.cells[key], cell = one ?? planned.get(key)!, foreseen = coming.get(key);
+      const box = (text: string, style: string) => `<div class="box ${cell.kind === 'frame' ? 'wide' : 'tall'} ${style}">${escapeHtml(text)}</div>`;
+      const src = one?.status === 'drawn' && one.file && existsSync(join(root, one.file)) ? escapeHtml(relative(dir, join(root, one.file))) : undefined;
+      const body = src ? `<a href="${src}"><img src="${src}" loading="lazy" alt=""></a>`
+        : one ? box(one.status === 'drawn' ? 'файла нет' : `${one.status === 'failed' ? 'не вышло' : 'выбыло'}: ${one.code ?? '—'}`, 'bad')
+          : box(comingText(foreseen), foreseen?.now ? 'now' : foreseen?.why ? 'off' : '');
+      return `<figure>${body}<figcaption>${escapeHtml(cell.kind === 'frame' ? `${cell.arm}` : cell.id)}</figcaption></figure>`;
+    };
     const stories = textStories().filter(story => isSharp(story.id) === sharp);
     const sections = stories.map(story => {
-      const cells = Object.values(draw.cells).filter(cell => cell.story === story.id && cell.status === 'drawn' && cell.file && existsSync(join(root, cell.file)));
-      const title = ACTION_STORIES.find(one => one.id === story.id)?.label ?? story.title;
-      const seeds = ACTION_SEEDS.map(seed => `<h3>seed ${seed}</h3><div class="row">${figures(ARMS.flatMap(arm => cells.filter(cell => cell.kind === 'frame' && cell.seed === seed && cell.arm === arm)))}</div>`);
-      return `<section><h2>${escapeHtml(story.id)}: ${escapeHtml(title)}</h2><div class="row">${figures(cells.filter(cell => cell.kind !== 'frame'))}</div>${seeds.join('')}</section>`;
+      const fronts = where(one => one.story === story.id && one.kind === 'front'), views = where(one => one.story === story.id && one.kind === 'view');
+      const seeds = ACTION_SEEDS.map(seed => `<h3>сид ${seed}</h3><div class="row">${ARMS.map(arm => frameKey(story.id, seed, arm))
+        .filter(key => planned.has(key) || draw.cells[key]).map(figure).join('')}</div>`);
+      return `<section><h2>${escapeHtml(story.id)}: ${escapeHtml(titleOf(story.id))}</h2><div class="row">${[...fronts, ...views].map(figure).join('')}</div>${seeds.join('')}</section>`;
     });
-    writeFileSync(file, `<!doctype html><meta charset="utf-8"><title>${sharp ? 'Острые сцены' : 'Чистые сцены'}</title>
-<style>body{font-family:sans-serif}.row{display:flex;flex-wrap:wrap;gap:8px}figure{margin:0;max-width:32%}img{max-width:100%}</style>
-<h1>${sharp ? 'Острые сцены' : 'Чистые сцены'}</h1>${sections.join('\n')}
+    writeFileSync(file, `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${over ? '' : '<meta http-equiv="refresh" content="60">'}
+<title>${sharp ? 'Острые сцены' : 'Чистые сцены'}</title>
+<style>body{font-family:sans-serif;margin:8px;line-height:1.4}.row{display:flex;flex-wrap:wrap;gap:8px}figure{margin:0;width:calc((100% - 16px) / 3)}
+img{width:100%;display:block}.box{display:flex;align-items:center;justify-content:center;text-align:center;box-sizing:border-box;padding:4px;background:#eee;font-size:14px}
+.tall{aspect-ratio:9/16}.wide{aspect-ratio:16/9}.now{background:#d6e8ff}.bad{background:#fbdcdc}.off{color:#777}.warn{color:#a00}.note{color:#666;font-size:13px}
+table{border-collapse:collapse}th,td{padding:2px 6px;text-align:right}td:first-child{text-align:left}
+@media (max-width:640px){figure{width:calc((100% - 8px) / 2)}}</style>
+<h1>${sharp ? 'Острые сцены' : 'Чистые сцены'}</h1>
+${status(sharp)}
+${sections.join('\n')}
 `, { mode: 0o600 });
     return stories.length;
   };
   const clean = page(join(root, 'gallery.html'), false);
   const sharpDir = join(root, 'sealed');
   const sharp = existsSync(sharpDir) ? page(join(sharpDir, 'gallery.html'), true) : 0;
-  return { clean, sharp };
+  return { clean, sharp, finished: over };
 }
 

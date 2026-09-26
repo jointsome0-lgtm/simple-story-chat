@@ -14,7 +14,8 @@
 //   judge       every session that is ready, `--parallel` (4) at a time
 //   collect     the owner's answers to the sessions both judges left, and the counts
 //   report      report.json, and the owner's report.md
-//   gallery     the owner's pages: gallery.html, and sealed/gallery.html for the sharp scenes
+//   gallery     the owner's pages: gallery.html, and sealed/gallery.html for the sharp scenes; while the card draws,
+//               also what is still to come and when, and with the stages' `--until`, the deadline and seed 11
 //   dry-run     all of it against fakes, with the boundary test; `--dev` then takes the texts through simple-serving's
 //               dev launcher
 // What it prints is ids, codes, counts and times, one JSON object a line: never a word of a story, a prompt or a key.
@@ -487,7 +488,11 @@ async function main(args: string[]) {
   } else if (command === 'report') {
     print(reportCommand(root));
   } else if (command === 'gallery') {
-    print({ event: 'gallery', ...writeGalleries(root) });
+    // `--until` as the drawing stages took it; once it is past the drawing is over, unless a stage that stopped on an
+    // error waits for a resume.
+    const until = values.until === undefined ? undefined : Number(values.until) * 1000;
+    if (until !== undefined && !(Number.isInteger(until) && until > 0)) throw new Refusal('Use: gallery [--until <epoch seconds, the drawing stages\' own>]');
+    print({ event: 'gallery', ...writeGalleries(root, { until }) });
   } else throw new Refusal('Use: image-action.ts texts|prompts|checklists|draw|portraits|bundles|judge|collect|report|gallery|dry-run (docs/action-experiment.md#runbook)');
 }
 

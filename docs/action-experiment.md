@@ -663,6 +663,8 @@ ssh -t simple-chat-vast \
   'SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 bash /workspace/simple-chat/gpu/image-serve.sh' >/dev/null 2>&1
 bash gpu/tunnel.sh --pictures-only simple-chat-vast
 ssh simple-chat-vast cat /workspace/simple-chat-gpu/image-verified.txt > illustrations/action/card.txt
+# While the card draws, in a terminal of its own: the owner's pages with what is still to come and when.
+while sleep 60; do npm run image:action -- gallery --until END; done    # END is "$end"
 npm run image:action -- draw --smoke --until "$end"    # the smoke's verdict; pass false is the termination
 npm run image:action -- portraits --until "$end"    # seed 7 priced whole, then the rest of the fronts and views
 npm run image:action -- draw --until "$end"    # seed 7 scene by scene, then seed 11 if it fits whole
@@ -772,7 +774,14 @@ without answers. A sharp session both judges leave gets a page, as a checklist d
 its pictures' answers, so `judge` runs again after `collect`. `report` writes `report.json` and the owner's
 `report.md`, and prints the scenes, each gate's verdict on seed 7, over the clean scenes, over the scenes that reached
 their target and at seed 11, the repeats, the sharp scenes no judge answered, and whether seed 7 is complete.
-`gallery` writes the owner's two pages. No Claude session opens anything under `sealed/`, the pages among them.
+`gallery` writes the owner's two pages; while the card draws it runs from another terminal as often as wanted, with
+the stages' own `--until`. Each cell stands in its place: its picture, the code of a cell that failed or is out, or,
+for one still to come, the local time it is expected to end, from the median of the drawn pictures of its kind and arm
+and the pause measured between pictures. Above the cells: what is drawing now; the fronts, the views and each seed
+against the plan, each with its expected end; the deadline; and whether seed 11 is admitted, expected to fit, or
+decided after seed 7. After a stage stopped on an error they show what is left for a resume on a new card, and no
+time. The pages reload themselves every minute until the drawing is over. The clean page shows the sharp scenes as
+counts alone. No Claude session opens anything under `sealed/`, the pages among them.
 
 The drawing stages also take `--comfy`, `--wait`, `--timeout` and `--tokenizers`, whose defaults the runbook keeps. The
 directory holds:
