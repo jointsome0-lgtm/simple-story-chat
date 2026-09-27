@@ -577,30 +577,29 @@ export function createIllustrator(config: ImageConfig, deps: {
       throw pictureAttention && error instanceof Error ? Object.assign(error, { pictureAttention }) : error;
     } finally {
       await temporary.clear();
-      log('picture_references', undefined, { pictureReferences, referenceCount, referenceAttempted });
+      if (config.references) log('picture_references', undefined, { pictureReferences, referenceCount, referenceAttempted });
     }
   }
 
-  // One frame on the picture card with the story's seed. A sample reuses the scene's recipe, including the original
-  // portrait inputs, and changes the style at the end and, for references, at the opening too.
+  // One frame on the picture card with the story's seed. A sample reuses a compatible scene recipe, including the
+  // original portrait inputs, and changes the style at the end and, for references, at the opening too.
   async function drawFrame(userId: string, storyId: string, frame: { description: Description; sheet: Character[] },
     line: string, signal: AbortSignal, log: Log, savedRecipe?: PictureRecipe) {
     const plain = assemblePrompt(frame.description, frame.sheet, line);
     let assembled = plain;
-    if (savedRecipe && (savedRecipe.graph !== graphId || savedRecipe.checkpoint !== config.checkpoint)) {
-      throw Object.assign(new Error('recipe_changed'), { code: 'recipe_changed' });
-    }
-    const recipe = savedRecipe ?? recipeOf(storyId);
-    let reason: ReferenceReason = referenceGate(userId) ?? (savedRecipe ? 'legacy' : 'no_portrait');
+    // After a graph or checkpoint change, a sample uses today's recipe and portraits, as a new frame does.
+    const saved = savedRecipe && savedRecipe.graph === graphId && savedRecipe.checkpoint === config.checkpoint ? savedRecipe : undefined;
+    const recipe = saved ?? recipeOf(storyId);
+    let reason: ReferenceReason = referenceGate(userId) ?? (saved ? 'legacy' : 'no_portrait');
     if (!referenceGate(userId)) {
       const story = store.read(userId).stories[storyId];
       if (!story) throw sceneGone();
-      const bound = savedRecipe ? savedRecipe.references?.portraits ?? [] : frameReferences(story, frame.description);
+      const bound = saved ? saved.references?.portraits ?? [] : frameReferences(story, frame.description);
       if (bound.length) {
         reason = 'unsupported_graph';
         if (referenceGraph(graph, bound.length)) {
           try {
-            if (!savedRecipe) recipe.references = pinReferences(store, userId, bound);
+            if (!saved) recipe.references = pinReferences(store, userId, bound);
             assembled = referencePrompt(frame, bound, line);
           } catch { reason = 'unavailable'; }
         }
@@ -982,7 +981,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       if (index < 0 || portraitText(sheet[index]) !== held.look) return null;
       sheet[index].portrait = { file: store.writePortrait(userId, held.bytes), ...held.recipe, look: held.look,
         clothes: PORTRAIT_CLOTHES, style: PORTRAIT_STYLE, at: now() };
-      return { storyId: held.storyId, index };
+      return { storyId: held.storyId, index, retainsPortraits: !referenceGate(userId) };
     },
 
     // Lets a kept portrait go, once the write that refers to its file is committed (local/bot.ts). One whose write was

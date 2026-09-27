@@ -211,6 +211,7 @@ export const zh: Messages = {
     again: '🔄 再画一张',
     keep: '✅ 保留这张',
     kept: person => `✅ 肖像已保存：${person}。`,
+    retention: '替换后的旧肖像仍会保存在磁盘上，直到不再需要它来为已绘制的画面生成变体。',
     drawing: '🎨 正在绘制肖像…',
     retelling: '⏳ 正在为插图改写外貌描述…',
     portraitFailed: '肖像没有画成。请稍后再试。',

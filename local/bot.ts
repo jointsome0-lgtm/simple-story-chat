@@ -348,7 +348,8 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       if (!pictureInfo.pictures || !illustrator) throw refuse(t, 'portraitOff');
       const kept = illustrator.keepPortrait(String(update.callback_query?.from?.id), action.slice(14), state);
       if (!kept) throw refuse(t, 'portraitStale');
-      return { screen: render(state, `portrait-kept:${kept.storyId}:${kept.index}`), sweep: true, portraitKept: action.slice(14) };
+      return { screen: render(state, `portrait-kept:${kept.storyId}:${kept.index}`, { retainsPortraits: kept.retainsPortraits }),
+        sweep: true, portraitKept: action.slice(14) };
     }
     // While a look or a description is being written, text is that text. A look is one line, whatever the lines it was
     // sent in; a description keeps its lines, since a table of measurements is lines (the owner, 2026-09-27), with the

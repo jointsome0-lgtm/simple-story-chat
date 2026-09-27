@@ -275,8 +275,9 @@ export const ru = {
     drawnFrom: (tokens: number | null, chars: number) => textSize('🖼 Внешность, по которой нарисован портрет', tokens, chars),
     again: '🔄 Ещё вариант',
     keep: '✅ Оставить',
-    // Once the reader kept a portrait. The scenes' pictures do not use it yet.
+    // Once the reader kept a portrait. Experiment readers also get the retention notice.
     kept: (person: string) => `✅ Портрет сохранён: ${person}.`,
+    retention: 'При замене прежний портрет остаётся на диске, пока нужен для вариантов нарисованных по нему кадров.',
     drawing: '🎨 Рисую портрет…',
     // While the description the reader has just written is retold; the card replaces it.
     retelling: '⏳ Пересказываю описание для картинок…',

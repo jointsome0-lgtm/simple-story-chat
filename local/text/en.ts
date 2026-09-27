@@ -201,6 +201,7 @@ export const en: Messages = {
     again: '🔄 Another version',
     keep: '✅ Keep this one',
     kept: person => `✅ Portrait kept: ${person}.`,
+    retention: 'A replaced portrait stays on disk while pictures drawn from it still need it for variants.',
     drawing: '🎨 Drawing a portrait…',
     retelling: '⏳ Retelling the description for the pictures…',
     portraitFailed: 'The portrait did not work out. Try again a little later.',

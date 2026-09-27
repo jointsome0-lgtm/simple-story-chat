@@ -22,9 +22,11 @@ export type GpuInfo = {
 // `pictures`: this reader's scenes are illustrated (local/picture.ts), so the menu offers the picture style.
 // `standardStyle`: the bot's own style line, when it draws for anybody.
 // `textTokens`: the tokens of one field of a sheet as the picture model reads that text alone, null when unknown.
+// `retainsPortraits`: the keep confirmation explains retention for a reader in the reference experiment.
 export type RenderDetails = {
   modelInfo?: ModelInfo | null; gpuInfo?: GpuInfo | null; contextStats?: ContextStats | null; pictures?: boolean; standardStyle?: string;
   textTokens?: (text: string) => number | null;
+  retainsPortraits?: boolean;
 };
 // State is read defensively (docs/telegram-ui.md#renderer), so any library field may be missing.
 type State = Partial<Library>;
@@ -122,7 +124,7 @@ function screen(state: State, route: string, details: RenderDetails) {
     case 'look-input': return sheetInputScreen(state, 'look', details);
     case 'details-input': return sheetInputScreen(state, 'details', details);
     case 'portrait': return portraitCaption(state, args[0], args[1], args[2], args[3]);
-    case 'portrait-kept': return portraitKept(state, args[0], args[1]);
+    case 'portrait-kept': return portraitKept(state, args[0], args[1], details.retainsPortraits === true);
     case 'seeds': return seedList(state, args[0]);
     case 'seed': return seedScreen(state, args[0], args[1], details.pictures === true);
     case 'story': return storyScreen(state, args[0], args[1], details.pictures === true);
@@ -568,13 +570,14 @@ function portraitCaption(state: State, storyId: string | undefined, rawIndex: st
   ]);
 }
 
-function portraitKept(state: State, storyId: string | undefined, rawIndex: string | undefined) {
+function portraitKept(state: State, storyId: string | undefined, rawIndex: string | undefined, retainsPortraits: boolean) {
   const t = texts(state.language);
   const c = t.characters;
   const story = own(state.stories, storyId);
   const person = story && people(story).find(one => String(one.index) === rawIndex);
   if (!story || !person) return stale(t, t.story.notFound);
-  return payload([c.kept(line(person.name, 60))], [[btn(c.backToCard, `view:character:${personRef(story, person)}`)]]);
+  return payload([c.kept(line(person.name, 60)), ...retainsPortraits ? ['', c.retention] : []],
+    [[btn(c.backToCard, `view:character:${personRef(story, person)}`)]]);
 }
 
 // The story as a tree: scenes point at their parents, a branch or a checkpoint marks a scene. A straight run of scenes

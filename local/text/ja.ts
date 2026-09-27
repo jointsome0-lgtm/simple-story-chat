@@ -210,6 +210,7 @@ export const ja: Messages = {
     again: '🔄 別の案',
     keep: '✅ これを残す',
     kept: person => `✅ 肖像を保存しました：${person}。`,
+    retention: '差し替え前の肖像は、それを使って描いた挿絵のバリエーションに必要な間、ディスクに保存されます。',
     drawing: '🎨 肖像を描いています…',
     retelling: '⏳ 外見の説明を挿絵用に書き直しています…',
     portraitFailed: '肖像は描けませんでした。少し時間をおいてもう一度お試しください。',

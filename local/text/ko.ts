@@ -220,6 +220,7 @@ export const ko: Messages = {
     again: '🔄 다시 그리기',
     keep: '✅ 이걸로 저장',
     kept: person => `✅ 초상화를 저장했어요: ${person}.`,
+    retention: '교체한 이전 초상화는 그 초상화로 그린 장면의 변형 그림에 필요한 동안 디스크에 남아 있어요.',
     drawing: '🎨 초상화를 그리는 중…',
     retelling: '⏳ 외모 설명을 삽화용으로 다시 쓰는 중…',
     portraitFailed: '초상화를 그리지 못했어요. 조금 뒤에 다시 시도해 주세요.',

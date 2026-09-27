@@ -86,8 +86,8 @@ job. Variants still draw the whole prompt the reader supplied, including any ima
 
 Before enabling this on a card, install this branch's `gpu/image-sweeper.py` and launch through `gpu/image-serve.sh`.
 Portraits use the RAM temp directory and are blanked after the job; the disk-backed input upload used by experiments
-is never used here. See [the retention rules](gpu.md#what-the-card-keeps-of-a-picture). The `picture_references`
-row gives `referenceCount`, `referenceAttempted` and `pictureReferences`: `used`, `disabled`, `not_allowed`,
+is never used here. See [the retention rules](gpu.md#what-the-card-keeps-of-a-picture). With the experiment enabled, the
+`picture_references` row gives `referenceCount`, `referenceAttempted` and `pictureReferences`: `used`, `not_allowed`,
 `no_portrait`, `legacy`, `unsupported_graph`, `unavailable`, `upload_failed` or `graph_rejected`.
 `picture_reference_cleanup` gives the number of uploaded files and `referenceCleanup`, whether every blank overwrite
 was acknowledged. Neither row contains a name, path, hash, portrait or prompt. A failed cleanup leaves the sweeper's
