@@ -31,8 +31,9 @@ them as `sceneO2` and the summary as `sceneScoreO2`, by the same worst-model rul
 the older traps alone, so the log's earlier numbers stay comparable. The judge's `judged` event counts the older traps
 in `passed` and `total` and the new ones in `o2Passed` and `o2Total`.
 
-The traps marked `set: 'open'` test a compatible claim about a past no scene shows, in a story whose seed does not
-rule it out: by the owner's word of 2026-09-27 the narrator confirms it, and the story keeps to it. They are scored
+The traps marked `set: 'open'` (one so far, `open_unrecorded_request` in the pack's `assault`, frozen on 2026-09-27)
+test a compatible claim about a past no scene shows, in a story whose seed does not rule it out: by the owner's word of
+2026-09-27 the narrator confirms it, and the story keeps to it. They are scored
 the same way apart, as `sceneOpen` and `sceneScoreOpen`, counted in `openPassed` and `openTotal`. Such a trap may have
 `then`: the probe commits the trap's scene in a copy of the story, as the bot would, writes one more scene over it from
 the `then` input, and the judge answers its questions from that scene with the trap's scene before it. The replayed
