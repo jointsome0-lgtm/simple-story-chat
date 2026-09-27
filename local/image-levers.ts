@@ -89,13 +89,14 @@ const KITCHEN_ATTENTION = 'comfy kitchen attention';
 const OWN_FLAGS = new Set(['--listen', '--port', '--disable-auto-launch', '--temp-directory', '--disable-metadata', '--disable-all-custom-nodes',
   '--disable-api-nodes', '--preview-method', '--enable-triton-backend', '--whitelist-custom-nodes']);
 // Triton's switches of tuning (python/triton/knobs.py:374-376 in Triton 3.6.0) and of its cache's place (342-353), counted
-// in the server's environment: each row's servers have each switch once and set to 1, or not at all, and no other place
-// for the cache than /root/.triton/cache. The base row keeps its tunings there, so that closing can read them back; the
-// turbo row tunes every length afresh, as a turbo server just started would, and neither reads nor writes the files
-// (autotuner.py:237-240).
+// in the server's environment: each row's servers have each switch once and set to 1, or not at all, and the place of
+// the cache as the row's reference had it, which the rented image does not set. The base row keeps its tunings there,
+// so that closing can read them back; the turbo row tunes every length afresh, as a turbo server just started would,
+// and neither reads nor writes the files (autotuner.py:237-240).
 export const VARIABLES = ['TRITON_PRINT_AUTOTUNING', 'TRITON_CACHE_AUTOTUNING', 'TRITON_CACHE_DIR', 'TRITON_HOME'] as const;
 type Variable = typeof VARIABLES[number];
 export type EnvCounts = Record<Variable, { set: number; on: number }>;
+const SWITCHES = ['TRITON_PRINT_AUTOTUNING', 'TRITON_CACHE_AUTOTUNING'] as const;
 const ENVIRONMENT: Record<Row, Record<Variable, number>> = {
   base: { TRITON_PRINT_AUTOTUNING: 1, TRITON_CACHE_AUTOTUNING: 1, TRITON_CACHE_DIR: 0, TRITON_HOME: 0 },
   turbo: { TRITON_PRINT_AUTOTUNING: 1, TRITON_CACHE_AUTOTUNING: 0, TRITON_CACHE_DIR: 0, TRITON_HOME: 0 },
@@ -106,14 +107,16 @@ export const RESTART_VARIABLES: Record<Row, string> = { base: 'TRITON_PRINT_AUTO
 
 // What the card says of its server, over ssh (`simple-chat-vast`, as the runbook reaches it): how many servers run, the
 // process id of the one there is, each variable's count in its environment (/proc/<pid>/environ), set and set to 1, and
-// the tuning files under Triton's cache. The script prints those numbers and nothing else; a value of the environment
-// is read on the card to find the cache and never leaves it.
+// the tuning files under Triton's cache, found as Triton finds it: TRITON_CACHE_DIR, or .triton/cache under TRITON_HOME
+// or else HOME. The script prints those numbers and nothing else; a value of the environment is read on the card to
+// find the cache and never leaves it.
 export type Probe = { servers: number; pid: number; env: EnvCounts; files: number };
 export type Prober = () => Promise<Probe>;
 export const PROBE_SCRIPT = String.raw`pid=$(pgrep -f '[C]omfyUI/main.py' | head -n 1); echo "servers $(pgrep -fc '[C]omfyUI/main.py')"; echo "pid ${'${pid:-0}'}"; `
   + String.raw`[ -n "$pid" ] || exit 0; for name in ${VARIABLES.join(' ')}; do echo "env $name $(tr '\0' '\n' < /proc/$pid/environ | grep -c "^$name=") `
-  + String.raw`$(tr '\0' '\n' < /proc/$pid/environ | grep -cx "$name=1")"; done; home=$(tr '\0' '\n' < /proc/$pid/environ | sed -n 's/^HOME=//p' | head -n 1); `
-  + String.raw`echo "files $(find "${'${home:-/root}'}/.triton/cache" -name '*.autotune.json' 2>/dev/null | wc -l)"`;
+  + String.raw`$(tr '\0' '\n' < /proc/$pid/environ | grep -cx "$name=1")"; done; value() { tr '\0' '\n' < /proc/$pid/environ | sed -n "s/^$1=//p" | head -n 1; }; `
+  + String.raw`dir=$(value TRITON_CACHE_DIR); if [ -z "$dir" ]; then home=$(value TRITON_HOME); [ -n "$home" ] || home=$(value HOME); `
+  + String.raw`dir="${'${home:-/root}'}/.triton/cache"; fi; echo "files $(find "$dir" -name '*.autotune.json' 2>/dev/null | wc -l)"`;
 export function parseProbe(text: string): Probe | undefined {
   const number = (pattern: RegExp) => { const found = pattern.exec(text); return found ? Number(found[1]) : undefined; };
   const servers = number(/^servers (\d+)$/m), pid = number(/^pid (\d+)$/m), files = number(/^files (\d+)$/m);
@@ -197,11 +200,13 @@ function unproven(step: Step, row: Row, e: Evidence, torch: string): string | un
   }
   if (e.allocator !== 'cudaMallocAsync') return `/system_stats names the allocator ${e.allocator}, and round two runs on cudaMallocAsync`;
   if (e.servers !== 1 || !e.pid) return `the card runs ${e.servers} servers`;
-  const wrong = VARIABLES.find(name => e.env[name].set !== ENVIRONMENT[row][name] || e.env[name].on !== (name.endsWith('AUTOTUNING') ? ENVIRONMENT[row][name] : 0));
+  const wrong = SWITCHES.find(name => e.env[name].set !== ENVIRONMENT[row][name] || e.env[name].on !== ENVIRONMENT[row][name]);
   if (wrong) {
     return `its environment holds ${wrong} ${e.env[wrong].set} times (${e.env[wrong].on} set to 1), and the ${row} row's servers are started with `
-      + `${RESTART_VARIABLES[row]} and no other of ${VARIABLES.join(', ')}`;
+      + `${RESTART_VARIABLES[row]} and no other of ${SWITCHES.join(', ')}`;
   }
+  const place = VARIABLES.find(name => e.env[name].set > 1);
+  if (place) return `its environment holds ${place} ${e.env[place].set} times`;
   if (!e.seen) return 'its log no longer holds the lines of its start, which prove the step';
   const triton = e.kitchen.backends.triton;
   if (e.kitchen.tritonImportFailed || !triton?.available || triton.disabled) return 'its log says comfy-kitchen\'s Triton backend did not load';
@@ -218,6 +223,7 @@ function unproven(step: Step, row: Row, e: Evidence, torch: string): string | un
 // same row: one change at a time.
 function otherThanReference(e: Evidence, reference: Evidence): string | undefined {
   const facts: [string, unknown, unknown, boolean][] = [['vram state', e.vramState, reference.vramState, false],
+    ['TRITON_CACHE_DIR', e.env.TRITON_CACHE_DIR.set, reference.env.TRITON_CACHE_DIR.set, false], ['TRITON_HOME', e.env.TRITON_HOME.set, reference.env.TRITON_HOME.set, false],
     ['dynamic VRAM', e.dynamicVram, reference.dynamicVram, false], ['attention', e.attention, reference.attention, false],
     ['comfy-kitchen\'s CUDA backend', cudaOn(e.kitchen), cudaOn(reference.kitchen), e.pytorch !== reference.pytorch]];
   return facts.find(([, mine, theirs, own]) => !own && mine !== theirs)?.[0];
@@ -1011,6 +1017,8 @@ export async function leversDryRun(out: string) {
     expect(fake.jobs.length === jobs, 'a finished step draws nothing again');
     await refused('closing on the reference\'s server, without a restart', () => measure('closing'));
 
+    await serve('cu130', 'base', { variables: { ...ENVIRONMENT.base, TRITON_CACHE_DIR: 1 } });
+    await refused('cu130 with Triton\'s cache elsewhere than the reference\'s', () => measure('cu130'));
     await serve('cu130', 'base', { startupLog: startLines('cu128') });
     await refused('cu130 on a server whose log shows the CUDA backend off', () => measure('cu130'));
     await serve('cu130', 'base', { shift: { every: 50, delta: 9 }, jobMs: 30 });

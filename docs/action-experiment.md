@@ -1531,10 +1531,12 @@ counted with this measurement's metric:
 - Over ssh (`--ssh`, `simple-chat-vast` by default), counts alone: one server on the card, and each of
   `TRITON_PRINT_AUTOTUNING`, `TRITON_CACHE_AUTOTUNING`, `TRITON_CACHE_DIR` and `TRITON_HOME` in its environment
   (`/proc/<pid>/environ`) as the row wants it: the first two once and set to 1 on the base row, the first alone on the
-  turbo row, the other two never. A card that does not answer is refused.
-- One change at a time: the vram state, dynamic VRAM, the attention and the kitchen's CUDA backend as the reference's
-  server of the row said them, the step's own torch aside. `closing` needs another process than the reference's, and
-  `attention` the process of the step it rides on, once that step has drawn.
+  turbo row, the other two at most once and as on the row's reference server. A card that does not answer is
+  refused. The tuning files are counted where Triton keeps them: `TRITON_CACHE_DIR`, or `.triton/cache` under
+  `TRITON_HOME` or else `HOME` (knobs.py:342-353).
+- One change at a time: the vram state, dynamic VRAM, the attention, the place of Triton's cache and the kitchen's
+  CUDA backend as the reference's server of the row said them, the step's own torch aside. `closing` needs another
+  process than the reference's, and `attention` the process of the step it rides on, once that step has drawn.
 
 **Rows and passes.** A command draws one row, the one its server was started for: the base row on a server without
 Viggle's nodes, the turbo row on one started with `SIMPLE_CHAT_IMAGE_VIGGLE=true`, whose cells go through the LoRA in
@@ -1764,7 +1766,7 @@ a warm pass against 40.3 s, and on cu130 it failed its first cell); batches of m
 than the pinned one); two servers on one card (the weights twice in 32 GB).
 
 **The harness**, as [the throughput measurement](#levers) describes it, and as its dry run on the fake server checks
-it (25 checks and 13 refusals):
+it (25 checks and 14 refusals):
 
 - The stream in place of `queue`, on round two's path, one job on the card at a time; `npm run image:levers -- stream`
   chose tango L, giants L, guard A, giants A+, flight A+, monkeys A+, lineout L and lineout A+ on 2026-09-27, 204 to
