@@ -275,25 +275,35 @@ in is drawn as usual. The code is `local/picture-pov.ts`.
   marks them with 👁 in place of 👤. The name is compared as the sheet compares names, apart from spaces and case. A
   press draws nothing: the next frame takes it, and a sample describes its scene again if the mode or its person
   changed since the frame it would reuse. A library without `pov` loads and draws as before.
-- **Request:** `povRequest` adds the rule after the frame's instruction and three fields to its schema, at the call in
+- **Request:** `povRequest` adds the rule after the frame's instruction and four fields to its schema, at the call in
   `local/picture.ts` rather than in `local/illustrate.ts`, whose request builders the action experiment pins by hash
   (`textPins` in `local/action-text.ts`). `viewer_in_scene` comes first, so that the shot and the people are written
-  knowing it; `viewer_clothes` and `viewer`, what of the viewer's own body is in view with its place in the frame,
-  come after `people`. The rule names the person once, names the last scene by its first ten words, keeps the person
-  out of `people`, calls them `the viewer` in the moment, the props and the objects, and asks for a first-person shot
-  from their eye height and where they look. The answer's limit grows by 200 tokens. A person with no look on the
-  sheet yet is not seen through, and their frames are described and drawn as usual.
+  knowing it; `viewer_clothes`, `viewer` and `reflection` come after `people`. The rule names the person once and
+  names the last scene by its first ten words. It makes the person the camera rather than a person of the answer:
+  never in `people`, never named or called the viewer, a woman, he or she, their actions told through the parts of
+  them in view ("hands at the bottom of the frame hold the lantern"), and whoever faces them does it toward the
+  camera. `viewer` holds only the parts of their own body they see themselves, cut by the frame's edge and
+  foreshortened, with the clothes on those parts and their skin, and no face, hair, figure or age; `reflection` holds
+  their reflection when a mirror, water or glass is before their eyes. The shot is first-person from their eye height
+  and where they look. The answer's limit grows by 250 tokens. A person with no look on the sheet yet is not seen
+  through, and their frames are described and drawn as usual.
 - **Prompt:** when the answer says the viewer is in the scene, or lists them among its people anyway, `seenBy` takes
-  them out of `people`, under their name or as "the viewer", and puts a first-person clause ahead of the shot: «First-
-  person point of view: the picture shows what the viewer sees with their own eyes, and the viewer is never shown
-  whole. In view of the viewer's own body: … The viewer's own body and clothes: …», with the look from the sheet and
-  what they wear now, so that an arm or a belly matches their figure. With nothing of their body in view the clause
-  says so and gives no look. Being part of the shot, it passes the nets for names and ages, opens the prompt, and in a
-  prompt of the reference experiment follows the reference instruction. What the viewer wears is kept for the next
-  picture, as a person's clothes are.
+  them out of `people`, under their name or as "the viewer", and puts a first-person clause in place of the shot, the
+  camera first and in positive words: «First-person POV shot through the eyes, the camera at eye height: <shot>. <what
+  of their body is in view>. <their reflection>». Their look from the sheet is never in it, not even with a
+  reflection: with it the pier drew the viewer whole beside the water in two pictures of two (below). Every field
+  loses the words "the viewer", should the model write them anyway: their hands become the hands, and they themselves
+  the camera. Being part of the shot, the
+  clause passes the nets for names and ages, opens the prompt, and in a prompt of the reference experiment follows the
+  reference instruction. What the viewer wears is kept for the next picture, as a person's clothes are.
+- **The first version** (1d5bd2f, live as 27739b9 from 20:05 UTC on 2026-09-27) put the whole look and the clothes in
+  the clause («The viewer's own body and clothes: …»), said the viewer "is never shown whole", and had the model call
+  them the viewer in the moment and the props. The tester's first frame with it, which had the references of the two
+  other people, was the usual scene from outside with one more person in it («при пове может ничего не меняться просто
+  как будто добавляется еще один человек с руками»).
 - **References:** the viewer is not among the frame's people, so their kept portrait is never sent as a reference: it
-  would pull their whole figure into the frame. The others keep theirs. In this first version a reflection in a mirror
-  is therefore drawn from the words of their look alone.
+  would pull their whole figure into the frame. The others keep theirs. A reflection is therefore drawn from the
+  answer's words alone, without their look, and need not look like them.
 - **Row:** `picture` and `picture_sample` rows carry `pov`, true for a frame drawn through the person's eyes and false
   for one drawn as usual because they were not in the scene. A story without such a person leaves it out.
 - With the mode off every request, prompt, graph and recipe is byte for byte what it was before the mode came
@@ -305,8 +315,19 @@ in is drawn as usual. The code is `local/picture-pov.ts`.
   asked before the rule named the last scene, it wrote the reflection with the face and the raised hands. A cutaway
   without the viewer («Тем временем Ефим…») came back as the scene before it, with the viewer, in two answers of two
   until the rule named the last scene by its first words, and then as the cutaway, `viewer_in_scene: false`, drawn as
-  usual. Not checked yet: the Gemma on the card, and whether Qwen-Image keeps the whole viewer out of the frame when the
-  clause carries the face and hair words of their look.
+  usual. These answers were to the first version's rule.
+- Checked on the card on 2026-09-27, after the first version failed there, with four synthetic scenes after
+  `examples/seed.txt` (the pier with the lantern and the water, the mirror, the workbench, and a second person, Лида,
+  whose kept portrait was the synthetic L front of the refs stand and went as a reference), each drawn through the bot's
+  Qwen graph at seeds 7 and 11. The frame answers were written to each version's rule, the same content in both, since
+  the card's text server had no calls to spare, and two more came from its Gemma under the new rule: the mirror and the
+  second person. One fresh gpt-6-astra session at high effort judged the 26 pictures blind. The first version: seen
+  from someone's eyes 7 of 8, the viewer seen from outside 6 of 8 (on the pier, the mirror and the workbench, never
+  with the second person), the other people as described 2 of 8. This version: 7 of 8, 1 of 8 (the mirror at one seed)
+  and 8 of 8. With the card's own answers: 4 of 4, 0 of 4 and 3 of 4. Hands were right in every picture. The look in
+  the reflection, tried in between, drew the viewer whole beside the water on the pier in two of two. Not checked: a
+  frame with two references, as the tester's was, whether the card's Gemma follows the rule on the pier and the
+  workbench, and a reflection that looks like the viewer.
 
 ## Interface language
 
