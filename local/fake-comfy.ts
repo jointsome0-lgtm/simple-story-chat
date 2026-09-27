@@ -61,6 +61,12 @@ export type FakeComfyOptions = {
   // server started with them (local/image-pilot.ts `turbo`). Any other class gets `{}`, as one the pinned server does
   // not have (server.py:816-822).
   objectInfo?: Record<string, object>;
+  // The card's name on /system_stats, `fake card` unless set: the pinned server's ends with the allocator torch runs,
+  // such as `cuda:0 NVIDIA GeForce RTX 5090 : cudaMallocAsync` (comfy/model_management.py:604-611, server.py:713).
+  card?: string;
+  // A server of another build drawing the same graph a little otherwise: every `every`-th byte of a picture's pixels
+  // moved by `delta` (local/image-levers.ts's dry run, whose changes round, or show).
+  shift?: { every: number; delta: number };
 };
 // A request as the server saw it, for a test to assert on the order of things: the job it concerns, when there is one.
 export type FakeCall = { method: string; path: string; id?: string };
@@ -146,14 +152,20 @@ const pngChunk = (type: string, data: Buffer) => {
   return out;
 };
 // A flat grey picture; the first pixels carry the job's number and the node's, so that no two pictures have the same
-// bytes. `marker` goes into the metadata, as `FakeComfyOptions.marker` says.
-export function greyPng(width: number, height: number, number: number, node = 0, marker?: string): Buffer {
+// bytes. `marker` goes into the metadata, as `FakeComfyOptions.marker` says, and `shift` moves its pixels as it says.
+export function greyPng(width: number, height: number, number: number, node = 0, marker?: string, shift?: FakeComfyOptions['shift']): Buffer {
   const row = Buffer.alloc(1 + width * 3, 60 + (number * 37) % 160);
   row[0] = 0;
   const rows = Buffer.concat(Array.from({ length: height }, () => row));
   rows[1] = (number >> 8) & 255;
   rows[2] = number & 255;
   rows[3] = node & 255;
+  if (shift && shift.every > 0) {
+    for (let at = 0; at < width * 3 * height; at += shift.every) {
+      const byte = Math.floor(at / (width * 3)) * (1 + width * 3) + 1 + (at % (width * 3));
+      rows[byte] = (rows[byte] + shift.delta) & 255;
+    }
+  }
   const header = Buffer.alloc(13);
   header.writeUInt32BE(width, 0);
   header.writeUInt32BE(height, 4);
@@ -323,7 +335,7 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
         const file = { filename: `fake_${String(job.number).padStart(5, '0')}_${id}_.png`, subfolder: '', type: type === 'SaveImage' ? 'output' : 'temp' };
         const size = sizeOf(source(graph[id].inputs.images));
         const drawn = options.picturesByGraph ? createHash('sha256').update(JSON.stringify(graph)).digest().readUInt16BE(0) : job.number;
-        files.set(file.filename, greyPng(size.width, size.height, drawn, Number(id) || 0, options.marker));
+        files.set(file.filename, greyPng(size.width, size.height, drawn, Number(id) || 0, options.marker, options.shift));
         owners.set(file.filename, job.id);
         images.push({ node: id, ...size });
         outputs[id] = { images: [file] };
@@ -411,7 +423,7 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
         // The shape comfy/model_management.py reports, with fixed numbers.
         return json({ system: { os: 'posix', ram_total: 64 * GIB, ram_free: 50 * GIB, comfyui_version: 'fake', python_version: 'fake',
           pytorch_version: options.pytorch ?? 'fake', embedded_python: false, argv: options.argv ?? [] },
-        devices: [{ name: 'fake card', type: 'cuda', index: 0, vram_total: 32 * GIB, vram_free: 10 * GIB,
+        devices: [{ name: options.card ?? 'fake card', type: 'cuda', index: 0, vram_total: 32 * GIB, vram_free: 10 * GIB,
           torch_vram_total: 23 * GIB, torch_vram_free: 1 * GIB }] });
       }
       if (url.pathname === '/internal/logs/raw') return json({ entries: log, size: { cols: 120, rows: 40 } });

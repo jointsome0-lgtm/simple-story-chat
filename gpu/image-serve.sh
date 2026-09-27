@@ -79,6 +79,19 @@ if [[ "$viggle" = true ]]; then
   [[ -f "$node" && "$(sha256sum -- "$node" | cut -d ' ' -f 1)" = "$IMAGE_VIGGLE_NODE_SHA256" ]] || { echo "custom_nodes/$IMAGE_VIGGLE_NODE_FILE is missing or not the pinned file; rerun image-bootstrap.sh with SIMPLE_CHAT_IMAGE_VIGGLE=true." >&2; exit 1; }
   flags+=(--whitelist-custom-nodes "$IMAGE_VIGGLE_NODE_FILE")
 fi
+# One change of the server at a time, for the throughput measurement (docs/gpu.md#levers): none unless
+# SIMPLE_CHAT_IMAGE_LEVER names one of image-manifest.env's IMAGE_LEVERS, and then that change's flag, one of the pinned
+# server's own as the manifest names it, and nothing else. local/image-levers.ts reads the command line /system_stats
+# reports, and holds each change to its flag and to what the server's log says of it.
+lever="${SIMPLE_CHAT_IMAGE_LEVER:-none}"
+if [[ "$lever" != none ]]; then
+  [[ "$lever" =~ ^[a-z][a-z0-9-]*$ && " ${IMAGE_LEVERS:-} " = *" $lever "* ]] || { echo "Use SIMPLE_CHAT_IMAGE_LEVER=none or one of: ${IMAGE_LEVERS:-none}." >&2; exit 1; }
+  lever_name="IMAGE_LEVER_${lever//-/_}"
+  lever_name="${lever_name^^}"
+  lever_flag="${!lever_name:-}"
+  [[ "$lever_flag" =~ ^--[a-z][a-z-]*$ ]] || { echo "image-manifest.env names no flag for $lever." >&2; exit 1; }
+  flags+=("$lever_flag")
+fi
 # Krea 2 produces garbage under SageAttention, and several rented ComfyUI templates turn it on through their own
 # launcher. This script is the launcher: the flag is absent, and an inherited request for it is refused rather than
 # silently ignored, because a bad picture would otherwise be blamed on the fine-tune.
@@ -119,6 +132,7 @@ fi
 if [[ "$triton" = 1 ]]; then echo "With comfy-kitchen's Triton backend (SIMPLE_CHAT_IMAGE_TRITON=1)."; fi
 if [[ "$viggle" = true ]]; then echo "With Viggle's node, $IMAGE_VIGGLE_NODE_FILE, for the LoRA's graphs alone (SIMPLE_CHAT_IMAGE_VIGGLE=true)."; fi
 if [[ "$torch_line" != cu128 ]]; then echo "On $(<"$venv/simple-chat-ready") (SIMPLE_CHAT_IMAGE_TORCH=$torch_line)."; fi
+if [[ "$lever" != none ]]; then echo "With one change, $lever_flag (SIMPLE_CHAT_IMAGE_LEVER=$lever)."; fi
 # The sweeper starts before the exec, with this shell's PID, which the exec hands to ComfyUI, and it stops by itself
 # once that PID is gone. Its rows are counts and codes, in this script's log beside the server's own lines.
 "$python" "$sweeper" --pid "$$" --temp "$temp_root/temp" --port "$port" &
@@ -126,8 +140,9 @@ if [[ "$torch_line" != cu128 ]]; then echo "On $(<"$venv/simple-chat-ready") (SI
 # --disable-all-custom-nodes and --disable-api-nodes: only the pinned core runs, Viggle's one file aside when asked,
 # and nothing calls a paid endpoint.
 # --preview-method none: previews cost VRAM on the card the language model does not share.
-# The attention implementation is left at the pinned build's default, which is the same on every run of this commit;
-# ComfyUI prints which one it chose at startup, and that line belongs with the seconds-per-picture number.
+# The attention implementation is left at the pinned build's default, which is the same on every run of this commit,
+# unless SIMPLE_CHAT_IMAGE_LEVER=ck-attention asks for comfy-kitchen's; ComfyUI prints which one it chose at startup,
+# and that line belongs with the seconds-per-picture number.
 # /history holds a prompt until the bot or the sweeper deletes its record, and output/ holds what the batch harness
 # drew — do not copy either home.
 exec "$python" "$comfy_dir/main.py" \

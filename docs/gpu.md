@@ -216,6 +216,30 @@ The default download is unchanged, and [rent-plan.ts](../local/rent-plan.ts) pri
 18 s at 300 Mbit/s to a session that asks for it. Its licence was not read here: the owner allowed it as a test, on the
 terms Qwen-Image 2.1 itself is [accepted](#image-licences) for.
 
+<a id='levers'></a>
+
+### One change of the server at a time, opt-in
+
+For [the throughput measurement](action-experiment.md#levers), which the owner asked for on 2026-09-27,
+`SIMPLE_CHAT_IMAGE_LEVER` starts the server with one more flag of the pinned ComfyUI's own: `highvram` adds
+`--highvram`, `gpu-only` `--gpu-only`, `native-malloc` `--disable-cuda-malloc` and `ck-attention` `--use-ck-attention`
+(comfy/cli_args.py:81, 152, 168-169). [image-manifest.env](../gpu/image-manifest.env) lists the names in
+`IMAGE_LEVERS` and each one's flag in `IMAGE_LEVER_<NAME>`. `image-serve.sh` takes one name and says which flag it
+added; it refuses any other value, two names at once, and a manifest without the list. Unset, or `none`, the server
+starts as before: round two's. The fifth change, cu130's torch, is [its own setting](#cu130).
+
+```sh
+SIMPLE_CHAT_IMAGE_LEVER=highvram SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 SIMPLE_CHAT_IMAGE_TRITON=1 bash /workspace/simple-chat/gpu/image-serve.sh   # detached in a long run, as above
+```
+
+Nothing is fetched for any of them. The flags are the pinned revision's, and the kitchen's attention comes from the
+comfy-kitchen that ComfyUI's requirements.txt pins (lines 25-26), which every server has.
+[image-levers.ts](../local/image-levers.ts) reads the command line `/system_stats` reports, and holds each change to its
+flag and to what the server's log says of it at its start. The bot's server starts with none: a change is kept only
+once the owner has chosen it on the measurement's numbers and pictures. Whatever would bring a new file onto the card
+needs its pin first and is not here: flash-attn, SageAttention (which `image-serve.sh` refuses, since Krea 2 breaks
+under it), cublas_ops or a custom node.
+
 ### What the card keeps of a picture
 
 A picture of a reader's scene passes through three places on the card, and each is emptied without a restart:

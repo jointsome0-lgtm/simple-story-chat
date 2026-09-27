@@ -32,6 +32,7 @@
     "image:identity": "node local/image-identity.ts",
     "image:action": "node local/image-action.ts",
     "image:pilot": "node local/image-pilot.ts",
+    "image:levers": "node local/image-levers.ts",
     "image:t-probe": "node local/image-t-probe.ts",
     "image:body-test": "node local/image-body-test.ts",
     "image:figure-test": "node local/image-figure-test.ts",

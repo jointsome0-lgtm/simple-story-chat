@@ -936,12 +936,15 @@ export async function submitOnStage(comfy: Comfy, graph: Graph, options: DrawOne
     { ...options, waitMs: waitMs - Math.round(submittedAt - began - (spentAtSubmit - spent)) }, { outage, uncertain, spentAtSubmit });
   const release = () => socket.forget(promptId);
   return {
+    promptId,
     untilOver: () => job.untilOver().catch((error: unknown) => { release(); throw error; }),
     lastSample: job.lastSample,
     fetch: () => job.fetch().finally(release),
   };
 }
-export type StagedJob = Pick<ReturnType<typeof follow>, 'untilOver' | 'lastSample' | 'fetch'>;
+// `promptId`: the job's id on the card, for a harness that reads the job's record itself before `fetch` deletes it, or
+// takes the job out of the queue (local/image-levers.ts).
+export type StagedJob = Pick<ReturnType<typeof follow>, 'untilOver' | 'lastSample' | 'fetch'> & { promptId: string };
 
 // A job the harness submitted in `submitOnStage`: the cell's window, whether its submit's answer was lost, and what of
 // the window the cell had lost by the moment its submit left, from which its time is measured.

@@ -1467,6 +1467,511 @@ whether `QwenImage21Cache` works on the model it wraps as on the plain one. A no
 the pass. The LoRA's file is fetched from the repository's root, where its readme puts it; the bootstrap's SHA256
 check is what says it is the pinned one.
 
+<a id='levers'></a>
+
+## The throughput measurement
+
+On 2026-09-27 the owner set the picture card's next question: more pictures per card-hour from the base pipeline,
+Qwen-Image 2.1 at the pinned graphs' 25 steps, with the pictures almost unchanged («основную наверное ускорять»).
+Viggle's six steps are not the lever, since the bot does not draw with them, but every change is drawn at their
+schedule too, as a second row: one picture more a cell. Round two's defaults do not move: each change is a setting
+that is off by default ([the picture card](gpu.md#levers)). `npm run image:levers`
+([image-levers.ts](../local/image-levers.ts)) draws the pilot's five timed cells, flight's front, view, A, V and T at
+seed 7 from round one's plans, portraits and views, into `illustrations/levers`: first on round two's server as it is,
+then on that server started again with one change at a time. Each change is proven by what the server says of itself
+before any of its cells is drawn. It draws no sharp story, reads nothing under `sealed/`, and keeps and prints what the
+pilot does: labels, codes, times, hashes and pixel counts. Pictures move to simple-serving after round two; until then
+the work is here.
+
+The order on a card is [the card plan](#card-plan)'s, after this section: it keeps the reference and cu130, tries the
+kitchen's attention through a node in place of `--use-ck-attention`, leaves out the ten-job queue, highvram, gpu-only
+and native-malloc, and its runbook replaces the one at this section's end.
+
+**What the records already say**, read on 2026-09-27 from `illustrations/pilot/pilot.json` and
+`illustrations/pilot-cuda/pilot.json` ([the backend measurement](#backend), both cards of 2026-09-26), the pictures
+counted with this measurement's metric:
+
+- Round two's server, cu128 with Triton, drew the five warm cells in 36.7 s of jobs and 40.0 s from one cell's record to
+  the next: about 450 pictures an hour on round two's path.
+- It draws the same bytes after another start of the server. The pilot's Triton passes, on the T probe's card, and the
+  backend measurement's reference passes, on the head test's card hours later, are the same files, cold and warm.
+  A change whose pictures differ from the reference's therefore differs by the change.
+- A cell the server had not drawn before took 2.4 to 2.8 s more in the sampler than the same cell drawn again: the view,
+  A, V and T of the reference's cold pass, on a server whose models were loaded. On cu130, where the kitchen's CUDA
+  backend runs the int8 layers, the same cells took −0.3 to +0.3 s more. The kitchen's Triton matmuls are autotuned by
+  their exact m, n and k, six configurations tried on each shape the first time it is met
+  (comfy_kitchen/backends/triton/quantization.py:861-870 and 943-952 in comfy-kitchen 0.2.35). That this is the
+  cause is read from the code, not measured. Whether a prompt one token longer is such a shape is what the queue's
+  second round measures: the scene a reader sends has a prompt of its own length.
+- cu130's warm cells took 0.89 of the reference's time and 0.87 of its sampler's, and differed from its pictures by
+  0.37 to 5.95 per cent of the pixels by more than 3 per cent, 32.7 to 43.9 dB: within what the Triton switch showed.
+  The pilot's report counts the alpha channel beside the three colours, which lifts its PSNR by 1.25 dB on these RGBA
+  pictures; its 33.9 to 45.1 dB are these.
+- torch.compile took 1.89 times the reference's time a warm cell, and is left out.
+
+**The changes.** Each is started by [image-serve.sh](../gpu/image-serve.sh), and each stands on round two's server:
+Triton on and its backend loaded, the flags `image-serve.sh` always adds, the change's own flag and no other
+(`/system_stats` `argv`, server.py:736), the torch [image-manifest.env](../gpu/image-manifest.env) pins for it, and the
+allocator torch runs, which ends the card's name on `/system_stats` (comfy/model_management.py:604-611, server.py:713):
+`cudaMallocAsync` for every change but one. The lines of the server's start, from its log's last 300 (app/logger.py),
+prove the rest:
+
+- `reference`: round two's server, `SIMPLE_CHAT_IMAGE_TRITON=1` and nothing more. Its log gives the vram state, not
+  HIGH_VRAM ("Set vram state to:", comfy/model_management.py:597), the attention, not the kitchen's ("Using pytorch
+  attention" by the pinned default, comfy/ldm/modules/attention.py:869), and whether dynamic VRAM is on ("DynamicVRAM
+  support detected and enabled", main.py:302). What the others are compared with, row by row.
+- `highvram`, `SIMPLE_CHAT_IMAGE_LEVER=highvram`, `--highvram` (comfy/cli_args.py:169): the model stays on the card
+  between jobs (comfy/model_management.py:1106-1110). The log says HIGH_VRAM (578-579), and nothing of dynamic VRAM,
+  which the flag turns off (comfy/cli_args.py:318-321).
+- `gpu-only`, `--gpu-only` (comfy/cli_args.py:168): that, and the text encoder, the VAE and what passes between the
+  nodes on the card too. The same two lines prove it.
+- `native-malloc`, `--disable-cuda-malloc` (comfy/cli_args.py:81, cuda_malloc.py:90-112): torch's own allocator in place
+  of cudaMallocAsync. `/system_stats` names it `native`.
+- `ck-attention`, `--use-ck-attention` (comfy/cli_args.py:152): comfy-kitchen's attention, which rotates q and k and
+  quantizes q, k and v to int8 (comfy/ldm/modules/attention.py:604-620, comfy_kitchen/sage_attention.py:538-575), in
+  place of PyTorch's, in Qwen-Image 2.1's attention among others (comfy/ldm/qwen_image21/model.py:14, 170, 179). The
+  log says "Using Comfy Kitchen attention" after PyTorch's line (attention.py:879-881). It changes the arithmetic, not
+  only the kernel, so its pictures may move more than rounding.
+- `cu130`, `SIMPLE_CHAT_IMAGE_TORCH=cu130` ([torch for CUDA 13](gpu.md#cu130)): the manifest's `TORCH_CU130_VERSION`
+  on `/system_stats`, and the kitchen's CUDA backend available and not disabled in the log (comfy/quant_ops.py:22-43),
+  as [the backend measurement](#backend)'s `cuda` reads it.
+
+And one change at a time: what a change's server says of its vram state, dynamic VRAM, attention and the kitchen's
+CUDA backend must be what the reference's server of its row said, the change's own fact aside. The flags come from
+the manifest, which names them in `IMAGE_LEVERS` and refuses a list the script does not know. Left out, each for what
+it does to this graph: `--fast` with autotune, which turns cudaMallocAsync off, as native-malloc does alone, and sets
+cuDNN's benchmark, which reaches the VAE's convolutions alone (cuda_malloc.py:93, comfy/model_management.py:563-565);
+dynamic VRAM off alone (`--disable-dynamic-vram`, comfy/cli_args.py:180), which highvram and gpu-only include; and
+torch.compile. fp16 accumulation (`--fast fp16_accumulation`, comfy/model_management.py:555-558) reaches a plain linear
+whose input is fp16 alone (comfy/ops.py:968-972). The model draws in bf16 (comfy/supported_models.py:2071), and the
+text encoder in the dtype its file stores its norms in (comfy/text_encoders/hunyuan_video.py:11-17,
+comfy/text_encoders/qwen_image21.py:80-84), which was not read here. If that is fp16, it is a candidate for the plan,
+and a flag with a value, which `image-serve.sh` does not take today.
+
+Nothing is fetched for any change: each flag is the pinned ComfyUI's own, comfy-kitchen 0.2.35 and comfy-aimdo 0.5.5
+come with its requirements.txt (lines 25-26) as always, and cu130's torch is pinned. flash-attn, SageAttention and
+cublas_ops would each bring a wheel onto the card, and need a pin first: that is the plan's to decide, not this
+measurement's.
+
+**Rows and passes.** A command draws one row, the one its server was started for: the base row on a server without
+Viggle's nodes, the turbo row on one started with `SIMPLE_CHAT_IMAGE_VIGGLE=true`, whose cells go through the LoRA in
+six steps as the backend measurement's `turbo` drew them (`withTurbo` in [image-pilot.ts](../local/image-pilot.ts)).
+No server draws both, the owner's rule after ComfyUI's PRs 16493 and 15734. Each row has its own reference, drawn
+first, so a change is two server starts. A row is three passes, each drawn whole into a directory of its own under
+`passes/`, three attempts at most, and a finished pass is never drawn again:
+
+- `cold`: the five cells on round two's path as the first work of a server just started, which the log shows by
+  neither "got prompt" (server.py:1077) nor "Prompt executed in" (main.py:382-384) since its start. What a start costs:
+  the models' load, and every shape's first tuning.
+- `warm`: the same five again: a cell's seconds by phase, and pictures an hour on round two's path, from one cell's
+  record to the next.
+- `queue`: the five cells, then the same five with each prompt one token longer (" ." at its end, twice on a second
+  attempt). All ten are made ready and their references uploaded first, then sent at once on one socket, so that the
+  card goes from one job to the next without waiting for the harness. This gives pictures an hour of the card itself,
+  from the server's own stamps of each job's start and end in its record (execution.py:677-684, 742, 824). Each job
+  costs its time and the gap before it. The first round is prompts the server has drawn; the second is new ones, as
+  every scene is. The warm pass cannot show the second, since its prompts are the cold pass's.
+
+Whatever ends a queue early, the jobs still on the card are deleted from its queue at once, the one being drawn is
+stopped, and every job's record is deleted: nothing is left drawing on a card billed by the minute. A pass begins only
+with its time left before `--until`, or is skipped and recorded as skipped: four minutes for the cold pass, two for the
+warm, and three times the warm pass's jobs and a minute more for the queue. A sampler answered from the server's cache
+([what the card keeps](gpu.md#what-the-card-keeps-of-a-picture)) makes a pass's times not comparable, and the report
+says so.
+
+**The pictures.** Each change's warm cells are compared with the reference's of the same row as ImageMagick's
+`compare -fuzz 3%` and `-metric PSNR` counted the pilot's Triton pairs for `triton.html`. Every colour is premultiplied
+by its pixel's alpha; a pixel is off when one of its three colours differs by more than 3 per cent of the scale; the
+PSNR is over the three colours. On the pilot's five Triton pairs it gives compare's counts exactly, 2,717 to 63,875
+pixels and 31.31 to 47.21 dB (checked on 2026-09-27). A change is one of:
+
+- `identical`: the reference's pixels in every cell;
+- `rounding`: every cell within what the Triton switch showed, 7.1 per cent of the pixels off by more than 3 per cent
+  at most and 31 dB at least;
+- `visible`: anything more. It is kept only once the owner has looked, as is an `unknown` one, a cell not compared
+  (`needsEye`).
+
+The numbers do not say that the scene and the people are the same; the page puts them in front of the owner.
+`levers.html`, which each command writes again as it ends, sets each cell's reference picture beside the change's and
+their difference eight times as bright, black where they agree, row by row, with the verdict and the ratios. It opens
+from the directory, since its paths are relative to it.
+
+`report`, which needs no card, gives by row the reference's numbers and each change's:
+
+- whether each pass finished, and how the last attempt of one that did not ended, and what proved the change;
+- its warm cells by phase, and pictures an hour on round two's path and in the queue, for known prompts and for new
+  ones;
+- what a new prompt costs a cell, what its cold pass took more than its warm one, and its peaks of video memory;
+- against the reference, the verdict, the ratios of the times and of pictures an hour, and the pixels by cell.
+
+The number nearest the owner's question is `picturesPerHourRatio.queueFresh` on the base row: pictures an hour for new
+prompts, against the reference's.
+
+**The time**, as estimates from the backend measurement's record: a restart held 43 s between two passes there (the end
+of `compile` to the start of `turbo`); its reference's cold pass took 57.6 s and its warm pass 40.3 s; `turbo`'s took
+59.6 and 24.4 s; and a cell new to the server took 2.4 to 2.8 s more in the sampler on cu128.
+
+| estimate | base row, minutes | turbo row, minutes |
+| --- | --- | --- |
+| the server stopped and started with the change | 0.7 to 1.5 | 0.7 to 1.5 |
+| `cold`, the models loaded and every shape tuned | 1 to 1.3 | 1 to 1.3 |
+| `warm` | 0.7 | 0.4 |
+| `queue`, ten jobs, five of them new prompts | 1.3 to 1.7 | 0.9 to 1.3 |
+| a change's row | 3.7 to 5.2 | 3 to 4.5 |
+
+Six configurations, the reference and five changes, on two rows: 40 to 58 card-minutes, the base rows 22 to 31 of
+them. cu130's torch and Viggle's two files are installed first, 3 to 8 minutes by [the backend
+measurement](#backend)'s estimate, and not beside the passes as there: pip and the SHA256 checks take CPU and disk,
+and would slow the passes they overlap and not the others. That is 43 to 66 card-minutes, $0.36 to $0.55 at the first
+round's $0.498 an hour. On a card of its own a setup of 8 to 30 minutes comes on top, as the first round's two cards
+took. Where it runs is the plan's to decide: this section rents nothing.
+
+```sh
+npm run image:levers -- dry-run    # before the card: "the throughput measurement's dry run went as expected"
+# On a Qwen picture card (SIMPLE_CHAT_IMAGE_QWEN=only), with the tunnel and "$end" as the runbook sets them, and gpu/
+# of this commit on the card. The card's record first: the install below writes it again.
+mkdir -p -m 700 illustrations/levers
+ssh simple-chat-vast cat /workspace/simple-chat-gpu/image-verified.txt > illustrations/levers/card.txt
+# cu130 and Viggle's two files, as for the backend measurement (gpu.md#cu130, gpu.md#viggle), detached from this
+# session; then its end, ten minutes at most, and its mark. Without the mark there is neither cu130 nor the turbo row:
+# the base row's first five commands go on, and those are left out.
+ssh -T simple-chat-vast 'cd /workspace/simple-chat-gpu && { ComfyUI/.venv/bin/python -m pip cache purge >/dev/null 2>&1; df -h . | tail -1; date -u +%FT%TZ > cu130-install.log; SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_TORCH=cu130 SIMPLE_CHAT_IMAGE_VIGGLE=true setsid -f nohup bash /workspace/simple-chat/gpu/image-bootstrap.sh </dev/null >>cu130-install.log 2>&1; }'
+sleep 15; timeout 600 bash -c 'until ssh -o ConnectTimeout=10 simple-chat-vast "flock -n /workspace/simple-chat-gpu/image-bootstrap.lock true"; do sleep 10; done'
+ssh simple-chat-vast 'cd /workspace/simple-chat-gpu && head -1 cu130-install.log && date -u -r ComfyUI/.venv-cu130/simple-chat-ready +%FT%TZ && cat ComfyUI/.venv-cu130/simple-chat-ready || tail -5 cu130-install.log'
+# A server of its own for each command: stopped as by Ctrl-C, killed after a minute, its lock free, then started
+# detached with round two's settings and the ones given, and waited for through the tunnel, five minutes at most. A
+# server that exits at its start, as one refused the kitchen's attention would, frees its lock, and the wait ends there:
+# that command is left out and the next one goes on.
+restart() {
+  ssh -T simple-chat-vast 'pkill -INT -f "[C]omfyUI/main.py"; for i in $(seq 60); do flock -n /root/.simple-chat-comfy.lock true && exit 0; sleep 1; done; pkill -KILL -f "[C]omfyUI/main.py"; for i in $(seq 30); do flock -n /root/.simple-chat-comfy.lock true && exit 0; sleep 1; done; exit 1' &&
+  ssh -T simple-chat-vast "$* SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 SIMPLE_CHAT_IMAGE_TRITON=1 setsid -f nohup flock -n /root/.simple-chat-comfy.lock bash /workspace/simple-chat/gpu/image-serve.sh </dev/null >/dev/null 2>&1" &&
+  timeout 300 bash -c 'until curl -sf -m 5 -o /dev/null http://127.0.0.1:8188/system_stats; do sleep 5; ! ssh -o ConnectTimeout=10 simple-chat-vast "flock -n /root/.simple-chat-comfy.lock true" || exit 1; done'
+}
+# The base row first: the owner's question.
+restart && npm run image:levers -- reference --until "$end"
+restart SIMPLE_CHAT_IMAGE_LEVER=highvram && npm run image:levers -- highvram --until "$end"
+restart SIMPLE_CHAT_IMAGE_LEVER=gpu-only && npm run image:levers -- gpu-only --until "$end"
+restart SIMPLE_CHAT_IMAGE_LEVER=native-malloc && npm run image:levers -- native-malloc --until "$end"
+restart SIMPLE_CHAT_IMAGE_LEVER=ck-attention && npm run image:levers -- ck-attention --until "$end"
+restart SIMPLE_CHAT_IMAGE_TORCH=cu130 && npm run image:levers -- cu130 --until "$end"
+# The turbo row, each server with Viggle's node.
+restart SIMPLE_CHAT_IMAGE_VIGGLE=true && npm run image:levers -- reference --until "$end"
+restart SIMPLE_CHAT_IMAGE_VIGGLE=true SIMPLE_CHAT_IMAGE_LEVER=highvram && npm run image:levers -- highvram --until "$end"
+restart SIMPLE_CHAT_IMAGE_VIGGLE=true SIMPLE_CHAT_IMAGE_LEVER=gpu-only && npm run image:levers -- gpu-only --until "$end"
+restart SIMPLE_CHAT_IMAGE_VIGGLE=true SIMPLE_CHAT_IMAGE_LEVER=native-malloc && npm run image:levers -- native-malloc --until "$end"
+restart SIMPLE_CHAT_IMAGE_VIGGLE=true SIMPLE_CHAT_IMAGE_LEVER=ck-attention && npm run image:levers -- ck-attention --until "$end"
+restart SIMPLE_CHAT_IMAGE_VIGGLE=true SIMPLE_CHAT_IMAGE_TORCH=cu130 && npm run image:levers -- cu130 --until "$end"
+# The termination, as after every ending. After the card:
+npm run image:levers -- report
+```
+
+A command that stops prints `done: false` and the pass it stopped in; run again on the same server, it draws that pass
+anew and goes on, but a cold pass needs a server just started. A failed job ends its pass with its code, and a pass
+left without time is skipped: either way the runbook goes on to the next restart. `--from`, `--dir`, `--wait`,
+`--timeout` and `--comfy` keep their defaults, as in the pilot.
+
+**Not known before the card.**
+
+- Whether `--use-ck-attention` starts on cu128. The kitchen's attention is a custom op of its CUDA extension, called
+  directly (comfy_kitchen/sage_attention.py:538-575), and available where the device is of capability 7.5 or more and
+  the extension loaded (65-76). The card's log of 2026-09-26 showed that extension available on cu128, where ComfyUI
+  turns the backend's dispatch off (comfy/quant_ops.py:22-28). Where it is unavailable the server exits at its start
+  (comfy/ldm/modules/attention.py:883-885), and `restart` fails.
+- Whether gpu-only fits: its three files are 17.3 GB by the manifest's sizes, and round two's server peaked at 21,991
+  MiB of the card's 32 GB in the backend measurement's warm pass. An out-of-memory fails its cell with a code and ends
+  the pass.
+- How much of highvram's or gpu-only's time is their vram state and how much dynamic VRAM off: not separated.
+- Whether Viggle's node works on cu130, where the kitchen's CUDA backend, not Triton, runs the int8 layers its hooks
+  wrap. A graph that fails ends the pass with its code.
+
+The seconds and the pictures an hour are the RTX 5090's, round two's card, and only it gives them. The first question
+above is one of kernels, not seconds: every GeForce RTX 50 card is of the 5090's architecture, sm_120, and a smaller
+one answers it the same way, at a lower price, if the plan wants the answer before the 5090's run. Its seconds and
+memory do not stand for the 5090's, nor, until a card shows it, its pixels.
+
+<a id='card-plan'></a>
+
+## The card plan
+
+The order in which [the throughput measurement](#levers) goes on a card, written on 2026-09-27 from four reports on
+the pinned sources and the records, the measurement's harness, and a review by gpt-6-astra with a second opinion on
+it. None of it has run on a card. It keeps the harness's servers, proofs, pixel metric and page, and cuts three
+things. The ten-job `queue` goes: ten jobs sent at once break [the one-job rule](#pipeline) however the server takes
+them. highvram, gpu-only and native-malloc go: no record gives them a cost to remove, and each moves the memory paths
+the pictures depend on. `--use-ck-attention` gives way to a node of the graph, so that one server draws the kitchen's
+attention and its plain pictures. What comes in their place is below, with what the harness needs before the card.
+Nothing here rents a card: that needs the owner's «да» on the price and the deadline.
+
+The owner's answers of 2026-09-27:
+
+- «выбераем второе»: the measure is pictures per card-hour from the base, Qwen-Image 2.1 at the pinned graphs' 25
+  steps, with the pictures almost unchanged, and not one reader's wait.
+- «хз, я думаю основную наверное ускорять, а с турбо это как будто распыляет нас... типо ускорили вещи на основе и
+  потом сразу на турбо? Или наоборот?» ("Not sure, I think speed up the base; turbo seems to spread us thin. Speed
+  things up on the base and then right away on turbo? Or the other way round?"): the base first, then turbo right
+  after on the same card, for the changes that came through the base alone. The bot draws the base, and a turbo copy
+  of a change the base turns down buys nothing.
+- «Можно, но вопрос для ядер, ты же можешь использовать слабые карты blackwell тебе же не обязательно 5090?» ("Fine,
+  but for kernel questions you can use weak Blackwell cards, you don't need a 5090, do you?"): whether a kernel loads
+  and runs, any sm_120 card can say, though not its seconds nor, until a card shows it, its pixels; this queue has no
+  such question left that is worth a card of its own ([the cards](#card-plan-cards)).
+
+**The stream** takes the queue's place: eight of round one's clean text-only frames (A, A+ or L at 1280x704), drawn at
+seed 7, then the same eight at seed 11, one job at a time on round two's path ([the next job at the over](#pipeline)).
+They are the nearest the round has to a bot's scene, which has a prompt of its own and no reference
+([picture.ts](../local/picture.ts)). Round one's `illustrations/action-1/draw.json` holds 39 of them with 38 distinct
+conditioning lengths, 204 to 555 tokens. The eight are chosen before the card by round one's key (width, height,
+conditioning tokens, reference sizes), distinct from each other and from the five cells', so that each brings a
+sequence length new to a server just started. The first eight give what a new prompt costs; the second eight the same
+lengths known, the sampler run again since the seed differs. Every picture of the stream is compared with the
+reference's of the same prompt and seed, so a change is judged on 21 pairs, not 5. Each job keeps the server's own
+stamps of its start and end (execution.py:677-684, 742, 824) beside the harness's cycle, so that the card's busy time
+and the handover between jobs show apart.
+
+**The queue**, in the order the card runs it. Each server is round two's (`SIMPLE_CHAT_IMAGE_QWEN=only`,
+`SIMPLE_CHAT_IMAGE_TRITON=1`) with what its step names on its restart line and nothing more, so round two's pins do not
+move: every setting below is off unless that line sets it. The gains are pictures an hour; [E] is read from a record,
+[G] is an estimate.
+
+1. `reference`: round two's server, with Triton's tuning counted and kept.
+   - Setting: `TRITON_PRINT_AUTOTUNING=1 TRITON_CACHE_AUTOTUNING=1`, Triton 3.6.0's own switches
+     (python/triton/knobs.py:374-376), which image-serve.sh hands to ComfyUI with the rest of its environment. The
+     first prints every tuning Triton finishes, with its key (m, n, k) and its seconds
+     (python/triton/runtime/autotuner.py:246-248). The second writes the winner to a `*.autotune.json` under Triton's
+     cache, `/root/.triton/cache`, and reads it there before it tunes again (autotuner.py:39, 170-210, 237-238).
+     Nothing comes onto the card.
+   - Proof: `/system_stats` gives the manifest's cu128 torch and `--enable-triton-backend`, and the log the kitchen's
+     Triton backend, as the harness checks today; the server's environment holds each variable once, counted over ssh
+     and never printed; each of the stream's first eight jobs adds tuning lines and cache files, and its second eight
+     none. The lines are Triton's `print`, which ComfyUI's log keeps as it keeps its own (app/logger.py:51-70, 107).
+   - Class: identical. The kitchen's int8 matmuls accumulate in int32 (comfy_kitchen/backends/triton/quantization.py:
+     912, 994), so whichever tile the tuning picks, the sums are the same. Check: the five cells' sha256 against the
+     backend measurement's reference pictures in `illustrations/pilot-cuda/pilot.json`, which were already the same
+     bytes on two cards.
+   - Gain: none. It is what the others are read against, and the first count of the tunings a new length pays, on
+     which the case for cu130 rests: 2.4 to 2.8 s more in the sampler for a cell new to the server, read from the code
+     as tuning and not yet counted ([what the records say](#levers)).
+2. `cu130`: the kitchen's CUDA backend runs the int8 layers.
+   - Setting: `SIMPLE_CHAT_IMAGE_TORCH=cu130` ([torch for CUDA 13](gpu.md#cu130)), Triton and the two variables as
+     in 1. The kitchen tries its backends in the order cuda, triton, eager (comfy_kitchen/registry.py:25, 217-231).
+   - Proof: `/system_stats` gives `2.11.0+cu130`; the log gives the kitchen's CUDA backend available and on
+     (comfy/quant_ops.py:22-43), as the backend measurement's `cuda` read it; and the stream's eight new lengths add
+     no tuning line and no cache file, so the int8 matmuls did not go to Triton. Which backend ran a layer is logged
+     at debug level alone (registry.py:230).
+   - Class: rounding, provisionally. The five pairs of 2026-09-26 had 0.37 to 5.95 per cent of the pixels off by more
+     than 3 per cent, 32.7 to 43.9 dB over the three colours, as this measurement's metric counted them on 2026-09-27;
+     no page has shown them to the owner. Check: every one of the 21 pairs within 7.1 per cent and 31 dB, then the
+     owner's eye on `levers.html` for the scene and the people.
+   - Gain: [E] +12.7 per cent on the five warm cells (40.3 s a pass to 35.7 s) and +17 per cent on A (5.60 s a cycle
+     to 4.78 s), `illustrations/pilot-cuda/pilot.json`. [G] On text-only frames, +17 per cent where the server knows
+     the length and up to +57 per cent where every length is new, the bot's case, from A's cycles and its sampler's
+     extra for a new length, 2.43 s on cu128 and 0.33 s on cu130, before the bot's own handover and the readers'
+     pauses. [G] +24 to +40 per cent a drawing-hour for a session like round two's (+28 to +38 by the second opinion's
+     count), the pilot's cycles weighted by round two's cells. A card's setup, the same for either torch since a card
+     for the bot installs one, dilutes that a little per paid hour.
+3. `attention`: the kitchen's INT8 attention, on 2's server without a restart.
+   - Setting: `ModelAttentionBackend` at `comfy kitchen attention` in every graph, on the model before the sampler: a
+     core node of the pinned ComfyUI (comfy_extras/nodes_model_advanced.py:374-411). Qwen-Image 2.1's attention then
+     rotates q and k and runs on signed int8 q, k and v and unsigned int8 probabilities (comfy/ldm/modules/attention.py:
+     604-620, comfy_kitchen/sage_attention.py:538-577; comfy/ldm/qwen_image21/model.py:170, 179). The text encoder
+     keeps its attention, and the prefix cache stays on: the override is none of the hooks that turn it off
+     (qwen_image21/model.py:321-325). Nothing comes onto the card: the kernel is comfy-kitchen 0.2.35's.
+   - Proof: `/object_info` lists `comfy kitchen attention` among the node's options, which it does only where the
+     kernel is available (nodes_model_advanced.py:377-379); no job's log has "Attention backend ... is unavailable;
+     using PyTorch attention." (406-408); each picture differs from the same server's plain one of the same prompt and
+     seed, as int8 attention must; and one plain cell drawn after the pass is the same server's plain bytes again, so
+     the node left nothing behind on the server. A kernel that fails fails its job with a code: the wrapper falls back
+     to PyTorch's attention only for float32 with low precision off (attention.py:606-607).
+   - Class: visible: it changes the arithmetic, not only its rounding. Check: the owner's eye on every pair against
+     cu130's plain pictures, whatever the numbers say.
+   - Gain: [G] +9 to +14 per cent a session and +8 to +12 per cent on text-only frames on top of cu130, from an
+     attention share of the step fitted on two cells and a kernel speed borrowed from another INT8 attention. No
+     record times this kernel: it may gain nothing, or lose.
+   - If 2 was refused or its server did not start, 3 runs on 4's server instead, on cu128, after 4's passes.
+4. `closing`: the reference again after a restart, with the Triton cache 1 wrote.
+   - Setting: as 1.
+   - Proof: as 1, and the five cells and the stream's first eight, all lengths 1 tuned, add no tuning line and no
+     cache file: Triton read them back. The key of a file holds Triton's own hash, the target's and the environment
+     variables that change a build (autotuner.py:182-190), all as in 1.
+   - Class: identical. Check: 1's sha256 for every picture of the same prompt and seed. Anything else means the card
+     moved during the run, and every ratio above it says so.
+   - Gain: [G] nothing within one server's life and nothing for a length never met; after a restart, 2.3 to 2.9 s for
+     each length met before, +41 to +52 per cent on such a text-only frame (A's 5.6 s a cycle), on cu128 alone, since
+     cu130 does not tune. The bot's server lives a whole rental without a restart, and the files stay on its card, so
+     the bot gains next to nothing. Its minutes buy two more things: the run's drift, its known-length times against
+     1's, and the one identical way to cut the tuning if the owner turns cu130's pictures down.
+5. `reference` on the turbo row: a server with Viggle's node (`SIMPLE_CHAT_IMAGE_VIGGLE=true`), six steps a cell.
+   - Setting: `TRITON_PRINT_AUTOTUNING=1` alone, so that it tunes every length afresh, as a turbo server just started
+     would. Without the cache variable Triton neither reads nor writes the files (autotuner.py:237-240).
+   - Proof: the harness's turbo checks of today (both of Viggle's nodes and the LoRA on `/object_info`), the cu128
+     torch, the one variable, and tuning lines for every new length.
+   - Class: identical to the backend measurement's turbo pictures if turbo too draws the same bytes on another
+     server, which no card has shown yet.
+   - Gain: none: turbo's base. The five warm cells took 24.4 s there.
+6. `cu130` on the turbo row, then `attention` on it only if 3 finished with the sampler faster than 2's.
+   - Setting, proof and check: as 2 and 3 with Viggle's node, against 5's pictures.
+   - Class: as 2 and 3.
+   - Gain: [G] +5 per cent where the length is known to +60 per cent where it is new, from turbo's A (3.37 s a cycle,
+     1.25 s of it sampling, 2.30 s more in the sampler for a new length), with sampling 13.4 per cent shorter and 0.33
+     s for a new length, as the base's on cu130. Whether Viggle's node works on cu130 is not known.
+
+**Not on this card.**
+
+- `--cache-lru` (comfy/cli_args.py:142): it would keep seed 7's conditioning for seed 11, identical, about 85 s of a
+  two-seed session, 1 to 3 per cent [G], and nothing for the bot, whose prompts differ. It takes a number, and
+  image-serve.sh passes no flag with a value. Its hits and its RAM are for the next opted-in two-seed session to show.
+  The bot's server would keep more of the readers' prompts with it, which needs the owner's consent. The default
+  cache already keeps older jobs on a container with more than 128 GiB of RAM (main.py:323-325), which the rent plan
+  does not exclude, and image-serve.sh does not pass `--cache-classic`, which would bound them to the last job
+  ([what the card keeps](gpu.md#what-the-card-keeps-of-a-picture)): a question for the owner apart from this plan.
+- The next job sent before the telemetry is read: still one job on the card, identical, about 0.8 to 0.9 s a cell
+  [G] from a residual the harness computes, not a measured idle. The steps the owner approved read the telemetry
+  first ([the next job at the over](#pipeline)), so it is the owner's question; the server's stamps measure it in any
+  run.
+- Triton's cache carried from one card to the next, or one tile fixed for every length: a file we generate, or code
+  of our own, has no official pin.
+
+Dropped, each for its reason: QwenImage21Cache on `gpu`, and on `cpu`, which the owner named as its fallback for T6
+and T7 (round two binds four portraits at most and so stops at T5, where the cache already holds, and the bot's frames
+have no reference); cuDNN attention (1 to 2 per cent [G], through a node of our own); the per-step copy of the prefix's
+k and v, or q, k and v fused (0.9 to 1.8 and 3 to 5 per cent [G], patches to the model outside the pin); NVFP4, FP8
+and INT4 weights (visible; no record has FP8 faster than the int8 here, comfy-kitchen 0.2.35 runs INT4 on sm_120
+through its int8 path, `comfy_kitchen/backends/cuda/__init__.py:317-324`, and NVFP4 has no official file, only a
+converter of our own); EasyCache and the other step caches (they skip the model's evaluations, which is visible, and
+Flux's hooks turn Qwen's prefix cache off); a positive-only encode at CFG 1 (a node of our own); torch.compile (69.9 s
+a warm pass against 40.3 s, and on cu130 it failed its first cell); batches of more than one picture (another workload
+than the pinned one); two servers on one card (the weights twice in 32 GB).
+
+**Before the card**, in the harness and its pins, with the dry run passing on the fake server:
+
+- `queue` out, the stream in, on round two's path, one job on the card at a time.
+- Per job, the tuning lines between its log reads, as a count and their keys' m, n and k, which are numbers. The log
+  keeps its last 300 entries (app/logger.py:97-103), so a read that no longer reaches back to the one before makes
+  its job's count a floor. Per pass, the count of `*.autotune.json` under Triton's cache, and at the start each
+  variable's count in the server's environment (`/proc/<pid>/environ`), both over ssh, since the harness reaches the
+  server only through the tunnel today. Counts only: the environment and the log are never copied.
+- `attention` and `closing`, as above: `attention` refused without the node's option, ended by the fallback's line or
+  by pictures identical to the plain ones, drawn once, on 2's server or on 4's, and on the turbo row only after 3
+  finished faster. The one-change rule holds the variables' counts to the row reference's.
+- highvram, gpu-only, native-malloc and ck-attention out of the runbook, and with them `SIMPLE_CHAT_IMAGE_LEVER` out
+  of image-serve.sh, image-manifest.env and gpu.md, since it would name nothing: every server of the queue is round
+  two's gpu/ with environment variables.
+- cu130's wheels locked by sha256 and installed with pip's `--require-hashes`: torch 2.11.0+cu130
+  (96911323dcfcd42028c7e8edde7bdf25bb187753234e8775f0f3f112e86a22db), torchvision 0.26.0+cu130
+  (0f030a9bd8ada1a31b7111ea1589c1ecb5fa0884fee700a203e731b4cf378a98) and torchaudio 2.11.0+cu130
+  (3fba988f4301fe13547fe5e99c76d9ae36a27e19ded82eeffed9d2456e12edef), as the manifest's cu130 index listed them on
+  2026-09-27, and every wheel they pull at one version each: triton 3.6.0 from the same index
+  (6f5928e6d44c34a97bbe164cceddc0ef2007121c89ebcfba5415cf452de7ee9f, a build other than PyPI's of the same version),
+  the eleven NVIDIA libraries of cuda-toolkit 13.0.2, whose pins end in `.*`, cuDNN 9.19.0.56, cuSPARSELt 0.8.0, NCCL
+  2.28.9, NVSHMEM 3.4.5, cuda-bindings, which may be anything from 13.0.3 to below 14, and ComfyUI's requirements.
+  Today both torches go on by version alone (gpu/image-bootstrap.sh:369-370), cu128's too.
+
+<a id='card-plan-cards'></a>
+
+**The cards.** The seconds, the memory and the pictures an hour are the RTX 5090's, and only a 5090 gives them:
+
+- **Round two's picture card**, after round two's draw, the figure-age card test and the body test, on the same
+  server, tunnel and `"$end"`, as the pilot ran on the T probe's card. cu130 and Viggle's two files install in the
+  background beside the body test, whose pictures are judged and not timed, so their 3 to 8 minutes add next to
+  nothing. Each command begins only with its time left before `"$end"`, the base row first. Whether there is room is
+  known only there: round two's table gives its jobs 143 to 211 of the guard's 180 minutes with seed 11 and 96 to 130
+  without it ([the time](#time)), but at the identity run's 15 s a frame, before Triton made warm cells 2.3 times
+  faster ([the pilot](#pilot)).
+- **A card of its own**, from `npm run gpu:rent -- --lane pictures --qwen only --hours 2`: the setup of round two's
+  card, 8 to 30 minutes as round one's cards took, with Viggle's two files in the same bootstrap, then the cu130
+  install alone, 3 to 8, then the queue. That is 29 to 68 minutes, more at the slow end than the 55 an hour's guard
+  leaves before `"$end"`, so the guard is two hours, as the T probe's card had. The bill runs to the termination, not
+  to the guard, so the longer guard costs nothing unless the termination fails.
+
+A cheap sm_120 card first, an RTX 5060 Ti (`--lane small` takes a card of compute capability 12.0 with 16 GB or more,
+at most $0.25 an hour, so not the 12 GB 5070; the 5060 Tis of 2026-09-25 cost $0.146 to $0.189): no. Every GeForce RTX
+50 is sm_120, so such a card would say whether the kitchen's attention and Viggle's node launch on cu130 and draw sane
+pictures there. The 5090 says it in the first job of each, since a kernel that fails fails its job and ends its pass:
+seconds, and at worst an attention pass of bad pictures, 2.5 minutes, about 3 cents. cu130 itself has drawn on a 5090
+already. For that answer the small card would pay 20 to 50 minutes of its own with its setup [G], $0.05 to $0.16, and
+about 26 GB of downloads, $0.07 to $1.37 at the traffic prices below; its lane refuses `--qwen only`
+([rent-plan.ts](../local/rent-plan.ts)), so its price would be counted by hand. Its 16 GB hold Qwen's 17.3 GB only in
+part, so its prefix cache takes other paths, and its seconds, its tiles and its pixels do not stand for the 5090's;
+`--lane small` also asks for 16 GB of RAM, not the picture lane's 30. It pays where a kernel comes in a new wheel or
+needs a build, and this queue has none.
+
+**The time and the price**, estimated from `illustrations/pilot-cuda/pilot.json`: a restart 0.7 to 1.5 minutes (42.7
+s between compile's end and turbo's start there); the five cells 57.6 s cold and 40.3 s warm on cu128, 51.4 and 35.7 s
+on cu130, 59.6 and 24.4 s under turbo; a text-only frame 5.6 s a cycle on cu128 and 8.0 to 8.4 s when its length is
+new, 4.8 to 6.5 s on cu130, 3.4 s under turbo and 5.4 to 5.7 s new.
+
+| step | minutes |
+| --- | --- |
+| cu130 and Viggle's two files installed, beside the body test on round two's card | 3 to 8, hidden there |
+| 1 `reference`: the restart, cold, warm, the stream | 4.3 to 5.4 |
+| 2 `cu130`: the first start on cu130, cold, warm, the stream | 3.5 to 9 |
+| 3 `attention`: warm and the stream with the node, then one plain cell | 1.7 to 2.5 |
+| 4 `closing`: the restart, cold, the stream's first eight | 2.3 to 3.6 |
+| 5 turbo `reference`: the restart, cold, warm, the stream | 3.3 to 4.1 |
+| 6 turbo `cu130`, and `attention` on it if 3 was faster | 2.7 to 4.9 |
+| the queue | 18 to 30 |
+
+The first start on cu130 is the least known: 6.1 minutes passed between turbo's end and cuda's start on 2026-09-26,
+and nothing recorded why. The base row, 1 to 4, is 12 to 21 of the minutes and the turbo row 6 to 9. At $0.50 to
+$0.65 an hour:
+
+- on round two's card, the queue's 18 to 30 minutes, $0.15 to $0.33, and about 4 GB of downloads, $0.01 to $0.21:
+  cu130's torch and its CUDA wheels, 2.7 GB as the index and PyPI listed them on 2026-09-27, ComfyUI's requirements
+  again, and Viggle's LoRA, 0.68 GB;
+- on a card of its own, 30 to 70 minutes with the setup, the install and the end, $0.25 to $0.76, about $0.02 of
+  disk at the $0.017 an hour a 60 GB disk was billed, and about 26 GB of downloads (Qwen's 17.3 GB, the rent plan's
+  5 GB for torch and the 4 GB above), $0.07 to $1.37 at the $2.6 to $52 a TB that hosts charge
+  ([prices](knowledge/gpu-measurements.md#costs-and-downloads)).
+
+That is $0.16 to $0.54 on round two's card and $0.34 to $2.15 on a card of its own, where the traffic price decides
+most of the spread. The rent dry run's `session` replaces the second before the «да».
+
+```sh
+npm run image:levers -- dry-run    # before the card, with the harness's changes: "... dry run went as expected"
+# On round two's picture card, after the figure-age card test, with the server, the tunnel and "$end" as they are,
+# and gpu/ of this commit on the card. The card's record first, the body test's and this one's: the install below
+# takes it away while it verifies, then writes it again.
+ssh simple-chat-vast cat /workspace/simple-chat-gpu/image-verified.txt > illustrations/t-probe-bodies/card.txt
+mkdir -p -m 700 illustrations/levers
+ssh simple-chat-vast cat /workspace/simple-chat-gpu/image-verified.txt > illustrations/levers/card.txt
+# cu130 and Viggle's two files, detached (gpu.md#cu130, gpu.md#viggle); pip's cache of the default install goes
+# first, since the box has 60 GB and the install asks for 13.6 GiB free with Viggle's LoRA (image-bootstrap.sh:220-226).
+# Then the body test's draw, as its runbook has it.
+ssh -T simple-chat-vast 'cd /workspace/simple-chat-gpu && { ComfyUI/.venv/bin/python -m pip cache purge >/dev/null 2>&1; df -h . | tail -1; date -u +%FT%TZ > cu130-install.log; SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_TORCH=cu130 SIMPLE_CHAT_IMAGE_VIGGLE=true setsid -f nohup bash /workspace/simple-chat/gpu/image-bootstrap.sh </dev/null >>cu130-install.log 2>&1; }'
+npm run image:body-test -- draw --until "$end"
+# On a card of its own instead: rented, guarded and set up as round two's picture card (#runbook) with --hours 2,
+# SIMPLE_CHAT_IMAGE_VIGGLE=true beside SIMPLE_CHAT_IMAGE_QWEN=only in its bootstrap, and no server started; then this
+# measurement's record alone, the same install, and the tunnel.
+# Either way: the install's end, ten minutes at most, and its mark. Without the mark there is neither cu130 nor the
+# turbo row: 1, 4 and 3 on cu128 go on, and the rest is left out.
+sleep 15; timeout 600 bash -c 'until ssh -o ConnectTimeout=10 simple-chat-vast "flock -n /workspace/simple-chat-gpu/image-bootstrap.lock true"; do sleep 10; done'
+ssh simple-chat-vast 'cd /workspace/simple-chat-gpu && head -1 cu130-install.log && date -u -r ComfyUI/.venv-cu130/simple-chat-ready +%FT%TZ && cat ComfyUI/.venv-cu130/simple-chat-ready || tail -5 cu130-install.log'
+# The queue, each server through restart() of the throughput measurement's runbook above. The base row first.
+tune='TRITON_PRINT_AUTOTUNING=1 TRITON_CACHE_AUTOTUNING=1'
+restart $tune && npm run image:levers -- reference --until "$end"                            # 1
+restart $tune SIMPLE_CHAT_IMAGE_TORCH=cu130 && npm run image:levers -- cu130 --until "$end"   # 2
+npm run image:levers -- attention --until "$end"    # 3, on 2's server; refused where 2 did not draw
+restart $tune && npm run image:levers -- closing --until "$end"                              # 4
+npm run image:levers -- attention --until "$end"    # 3 on cu128, only if it did not draw on 2's server
+# The turbo row, each server with Viggle's node.
+restart TRITON_PRINT_AUTOTUNING=1 SIMPLE_CHAT_IMAGE_VIGGLE=true && npm run image:levers -- reference --until "$end"  # 5
+restart TRITON_PRINT_AUTOTUNING=1 SIMPLE_CHAT_IMAGE_VIGGLE=true SIMPLE_CHAT_IMAGE_TORCH=cu130 && npm run image:levers -- cu130 --until "$end"  # 6
+npm run image:levers -- attention --until "$end"    # 6's attention, only if 3 finished faster than 2
+# The termination, as after every ending. After the card:
+npm run image:levers -- report
+```
+
+**Not known before the card.**
+
+- Whether the kitchen's attention runs Qwen-Image 2.1's shapes and masks, how fast, and whether its pictures keep the
+  scene and the people; on cu128 too, where 3 falls back.
+- Whether Viggle's node works on cu130, where the CUDA backend, not Triton, runs the int8 layers its hooks wrap.
+- Whether Triton reads its files back after the restart: the cache is under `/root/.triton/cache` unless
+  `TRITON_CACHE_DIR` or `TRITON_HOME` says otherwise (knobs.py:342-353), and 1 and 4 run the same Triton and
+  variables.
+- How long the first start on cu130 takes, and whether turbo draws the same bytes on another server.
+- Whether round two's card has the room, which its admission after seed 7 decides.
+
 <a id='t-probe'></a>
 
 ## The T probe

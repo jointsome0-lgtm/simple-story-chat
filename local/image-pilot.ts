@@ -82,7 +82,7 @@ export type Command = 'draw' | 'triton' | BackendCommand;
 // through Viggle's LoRA (`withTurbo`), whose pictures are compared with none.
 type PassPlan = { name: PassName; roundTwo: boolean; cells: string[]; earlier?: PassName; against?: PassName; compile?: true; turbo?: true;
   needsMs?: number };
-const TIMED = ['front', 'view', 'A', 'V', 'T'];
+export const TIMED = ['front', 'view', 'A', 'V', 'T'];
 // A compile pass's job may take ten minutes, the compiles included, and no longer (the owner, 2026-09-26): the cold pass
 // begins only with ten minutes left before --until, and the warm one with two. A failed cell ends a compile pass.
 const COMPILE_WAIT_MS = 10 * 60000;
@@ -169,19 +169,19 @@ export function pilotCells(plan: StoryPlan): ActionCell[] {
   if (cells.length !== picked.length) throw new Refusal(`${plan.id}'s plan has no front, no view, or not each of A, C, V and T: the pilot draws one of each`);
   return cells.map(cell => ({ ...cell, key: PREFIX + cell.key }));
 }
-const natural = (cell: ActionCell) => cell.key.slice(PREFIX.length);
-const labelOf = (cell: ActionCell) => (cell.kind === 'frame' ? cell.arm! : cell.kind);
+export const natural = (cell: ActionCell) => cell.key.slice(PREFIX.length);
+export const labelOf = (cell: ActionCell) => (cell.kind === 'frame' ? cell.arm! : cell.kind);
 // A reference's key in round one's index, found as local/action-draw.ts `referencesOf` finds it.
-const referenceKey = (plan: StoryPlan, cell: ActionCell, ref: string) => ref === 'L' ? frameKey(cell.story, cell.seed, 'L')
+export const referenceKey = (plan: StoryPlan, cell: ActionCell, ref: string) => ref === 'L' ? frameKey(cell.story, cell.seed, 'L')
   : plan.views.some(view => view.id === ref) ? `view:${ref}` : `front:${ref}`;
 
-type Source = { root: string; plan: StoryPlan; planHash: string; cells: ActionCell[]; roundOne: Record<string, CellRecord>; references: string[];
+export type Source = { root: string; plan: StoryPlan; planHash: string; cells: ActionCell[]; roundOne: Record<string, CellRecord>; references: string[];
   pins: Record<string, string | number> };
 // Round one as the pilot draws from it: flight's plan, and round one's record of each of the pilot's cells and of each
 // reference, drawn, under clean/, and the very file it drew. The plan must be the one round one drew from: each
 // prompt as long as round one's and as many references, since the hash round one pinned covers every plan, sealed
 // ones too, which the pilot does not read.
-function readSource(root: string): Source {
+export function readSource(root: string): Source {
   if (isSharp(PILOT_STORY) || PILOT_STORY === MARKER_STORY.id) throw new Refusal('The pilot draws clean cells alone');
   const index = readJson<DrawIndex>(join(root, 'draw.json'));
   const planFile = join(storyDir(root, PILOT_STORY), 'plan.json');
@@ -207,7 +207,7 @@ function readSource(root: string): Source {
 
 // The pins round one's draw.json has that the pilot's cells depend on, as local/action-draw.ts computes them, and the
 // hash of flight's plan; the server's own join them (image-batch.ts `serverPins`), Triton's included when it is on.
-function ownPins(card: ReturnType<typeof cardOf>, source: Source): Record<string, string | number> {
+export function ownPins(card: ReturnType<typeof cardOf>, source: Source): Record<string, string | number> {
   const base = graphOf(ACTION_GRAPH);
   const cache = Object.values(base).find(node => node.class_type === 'QwenImage21Cache');
   return { ...pinsOf(card), actionGraph: sha256(readFileSync(ACTION_GRAPH)), cacheDevice: String(cache?.inputs.device ?? 'none'),
@@ -531,9 +531,9 @@ export function withCompile(graph: Graph): Graph {
 // changed once it is filled (local/action-draw.ts `drawPilot`), and the new nodes take ids of their own.
 export const VIGGLE = { strength: 1, nodes: '1.0, 0.9375, 0.875, 0.75, 0.5, 0.25', sampler: 'euler',
   ids: { lora: '41', noise: '42', guider: '43', select: '44', sigmas: '45' } } as const;
-const VIGGLE_NODES = ['ViggleTurboLora', 'ViggleTurboSigmas'];
+export const VIGGLE_NODES = ['ViggleTurboLora', 'ViggleTurboSigmas'];
 // What a turbo cell's record says it was sampled with: the schedule's six steps, euler, and no guidance.
-const TURBO_RECIPE = { steps: VIGGLE.nodes.split(',').length, sampler: VIGGLE.sampler, scheduler: 'ViggleTurboSigmas', cfg: 1 };
+export const TURBO_RECIPE = { steps: VIGGLE.nodes.split(',').length, sampler: VIGGLE.sampler, scheduler: 'ViggleTurboSigmas', cfg: 1 };
 export function withTurbo(graph: Graph, lora: string): Graph {
   const sampler = Object.entries(graph).find(([, node]) => node.class_type === 'KSampler');
   const loader = Object.keys(graph).find(id => graph[id].class_type === 'UNETLoader');
@@ -566,7 +566,7 @@ export function fromPicture(graph: Graph) {
 }
 // Viggle's nodes on the server, by what /object_info/<class> says of each (server.py:816-822 at the pinned revision:
 // `{}` for a class the server does not have), and whether ViggleTurboLora lists `lora` among the files in models/loras.
-async function viggleOn(comfy: Comfy, lora: string) {
+export async function viggleOn(comfy: Comfy, lora: string) {
   const signal = AbortSignal.any([AbortSignal.timeout(comfy.timeoutMs), ...(comfy.end ? [comfy.end] : [])]);
   const infos = await Promise.all(VIGGLE_NODES.map(async name => {
     const response = await fetch(`${comfy.baseUrl}/object_info/${name}`, { signal });
@@ -732,7 +732,7 @@ export function pilotReport(dir: string) {
 // shown, else its cold one, else what its last attempt drew. The paths are relative, so that the page opens from the
 // directory, and it carries labels, ids and seconds, never a prompt or a word of a story.
 export const TURBO_PAGE = 'turbo.html';
-const CELL_WORDS: Record<string, string> = { front: 'фронтальный портрет, по тексту', view: 'вид: портрет, повёрнутый по слоту',
+export const CELL_WORDS: Record<string, string> = { front: 'фронтальный портрет, по тексту', view: 'вид: портрет, повёрнутый по слоту',
   A: 'кадр без портретов', V: 'кадр с видами среди слотов', T: 'кадр по картинке L и портретам' };
 function writeTurboPage(dir: string, source: Source, record: PilotRecord) {
   const reference = lastFinished(record, 'reference-warm');
@@ -787,7 +787,7 @@ ${sections.join('\n')}
 // it. On the default torch, cu128, the CUDA backend is available and disabled, with the warning, as the card logged it
 // on 2026-09-26. On cu130 (`torch`) the lines are modelled on the same code and no card has shown them yet: the CUDA
 // backend available and on, and no warning; or, `unloaded`, its extension failing to load a library it needs.
-const kitchenLines = (triton: boolean, torch: 'cu128' | 'cu130' | 'unloaded' = 'cu128') => [
+export const kitchenLines = (triton: boolean, torch: 'cu128' | 'cu130' | 'unloaded' = 'cu128') => [
   ...(torch === 'cu128' ? ['WARNING: You need pytorch with cu130 or higher to use optimized CUDA operations.'] : []),
   ...(triton ? ['Found triton 3.4.0. Enabling comfy-kitchen triton backend.'] : []),
   `Found comfy_kitchen backend cuda: {'available': ${torch === 'unloaded' ? 'False' : 'True'}, 'disabled': ${torch === 'cu128' ? 'True' : 'False'}, `
@@ -797,7 +797,7 @@ const kitchenLines = (triton: boolean, torch: 'cu128' | 'cu130' | 'unloaded' = '
 
 // A made-up round one of flight alone: four people, the first turned to the right so that it has a view, and `word`
 // in the setting, so that every frame's prompt carries it.
-function madeUpRoundOne(root: string, word: string) {
+export function madeUpRoundOne(root: string, word: string) {
   const ok = { outcome: 'ok' as const, attempts: 1, ms: 1 };
   const sheet = ['Бранд', 'Лиэль', 'Орм', 'Ивла'].map((name, at) => ({ name, look: `An adult with hair ${at}`, outfit: `a tunic ${at}` }));
   const scene = { moment: 'They hold on', shot: 'Medium wide shot', setting: `A hangar at ${word}`, objects: '', props: '', light: 'Evening' };
@@ -997,7 +997,7 @@ export async function pilotDryRun(out: string) {
 const CODES = new Set<string>([...DRAW_CODES, 'ENOENT', 'EACCES', 'EPERM', 'EEXIST', 'EISDIR', 'ENOTDIR', 'ENOTEMPTY', 'ENOSPC', 'EMFILE',
   'ERR_PARSE_ARGS_UNKNOWN_OPTION', 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE', 'ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL']);
 const CLASSES = new Set(['Error', 'TypeError', 'SyntaxError', 'RangeError', 'ReferenceError', 'AbortError', 'TimeoutError']);
-function safeError(error: unknown) {
+export function safeError(error: unknown) {
   const code = (error as { code?: unknown } | null)?.code;
   const own = typeof code === 'string' && CODES.has(code) ? { code } : {};
   if (error instanceof Refusal) return { message: error.message, ...own };

@@ -746,3 +746,25 @@ export async function drawPilot(options: PilotOptions): Promise<{ index: DrawInd
     return { index, ended };
   } finally { run.session?.close(); }
 }
+
+// The pilot's cells made ready and not sent, for a harness that sends them itself (local/image-levers.ts's queue):
+// each one's references checked against `seeded` and uploaded, and its graph filled and checked as a stage fills it
+// (`prepare`), then changed by `graph`. Nothing is written; a cell whose references are not all there is refused.
+export async function pilotGraphs(options: Omit<PilotOptions, 'roundTwo'>): Promise<{ cell: ActionCell; graph: Graph }[]> {
+  const root = resolve(options.root);
+  if (options.cells.some(cell => isSharp(cell.story) || storyDir(root, cell.story).split(/[\\/]/).includes('sealed'))) {
+    throw new Refusal('The pilot draws clean cells alone');
+  }
+  const index: DrawIndex = { pins: options.pins, startedAt: new Date().toISOString(), cells: { ...options.seeded } };
+  const run = makeRun({ stage: 'main', root, comfy: options.comfy, until: options.until, timeoutMs: options.timeoutMs, log: options.log },
+    { root, index, comfy: stageComfy(options), plans: new Map(options.plans.map(plan => [plan.id, plan])), checkpoint: options.checkpoint,
+      base: readGraph(ACTION_GRAPH), frontGraph: readGraph(FRONT_GRAPH) });
+  run.change = options.graph;
+  const ready: { cell: ActionCell; graph: Graph }[] = [];
+  for (const cell of options.cells) {
+    const refs = referencesOf(run, cell);
+    if ('out' in refs) throw new Refusal(`${cell.key} cannot be made ready: ${refs.out}`);
+    ready.push({ cell, graph: (await prepare(run, cell, refs.files, undefined, false)).filled });
+  }
+  return ready;
+}
