@@ -737,12 +737,12 @@ const CELL_WORDS: Record<string, string> = { front: 'фронтальный по
 function writeTurboPage(dir: string, source: Source, record: PilotRecord) {
   const reference = lastFinished(record, 'reference-warm');
   const shown = lastFinished(record, 'turbo-warm') ?? lastFinished(record, 'turbo-cold') ?? record.passes.findLast(one => one.name.startsWith('turbo-'));
-  const seconds = (ms: number | undefined) => (ms === undefined ? '—' : `${(ms / 1000).toFixed(1)} с`);
+  const seconds = (ms: number | undefined) => (ms === undefined ? 'нет' : `${(ms / 1000).toFixed(1)} с`);
   const total = (one: PassRecord | undefined) => {
     const list = one?.cells.map(cell => cell.phases?.sampleMs) ?? [];
     return list.length && list.every(value => value !== undefined) ? list.reduce((sum, value) => sum + value!, 0) : undefined;
   };
-  const stepsOf = (file: string) => String(Object.values(graphOf(file)).find(node => node.class_type === 'KSampler')?.inputs.steps ?? '—');
+  const stepsOf = (file: string) => String(Object.values(graphOf(file)).find(node => node.class_type === 'KSampler')?.inputs.steps ?? '?');
   const figure = (path: string | undefined, caption: string, missing: string, shape: 'half' | 'slot') => {
     const src = path && existsSync(path) ? escapeHtml(relative(dir, path).split(sep).join('/')) : undefined;
     return `<figure class="${shape}">${src ? `<a href="${src}"><img src="${src}" loading="lazy" alt=""></a>` : `<div class="box">${escapeHtml(missing)}</div>`}`
@@ -752,7 +752,7 @@ function writeTurboPage(dir: string, source: Source, record: PilotRecord) {
     const cell = source.cells.find(one => labelOf(one) === label)!;
     const plain = reference?.cells.find(one => one.cell === label), fast = shown?.cells.find(one => one.cell === label);
     const missing = shown?.skippedCells?.includes(label) ? 'турбо не рисовал: клетка начинается с картинки'
-      : fast?.status === 'failed' ? `турбо не вышел: ${fast.code ?? '—'}` : 'турбо не нарисован';
+      : fast?.status === 'failed' ? `турбо не вышел: ${fast.code ?? 'без кода'}` : 'турбо не нарисован';
     const slots = cell.refs.map((ref, at) => figure(resolve(source.root, source.roundOne[referenceKey(source.plan, cell, ref)].file!),
       `слот ${at + 1}: ${ref === 'L' ? 'L' : source.plan.views.some(view => view.id === ref) ? 'вид' : 'портрет'}`, 'нет файла', 'slot'));
     return `<section><h2>${escapeHtml(label)}: ${escapeHtml(CELL_WORDS[label] ?? '')}</h2><div class="row">`
@@ -762,7 +762,7 @@ function writeTurboPage(dir: string, source: Source, record: PilotRecord) {
         + `клетка ${seconds(fast?.totalMs)}`, missing, 'half')
       + `</div>${slots.length ? `<div class="row">${slots.join('')}</div>` : '<p>Слотов у клетки нет.</p>'}</section>`;
   });
-  const which = !shown ? 'турбо не рисовался' : `турбо — ${shown.name === 'turbo-warm' ? 'тёплый' : 'холодный'} проход, попытка ${shown.attempt}`
+  const which = !shown ? 'Турбо не рисовался' : `Турбо: ${shown.name === 'turbo-warm' ? 'тёплый' : 'холодный'} проход, попытка ${shown.attempt}`
     + `${finished(shown) ? '' : `, не докончен (${shown.ended}${shown.error ? `, ${shown.error}` : ''})`}`;
   writeFileSync(join(dir, TURBO_PAGE), `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Турбо: LoRA Viggle против эталона</title>
@@ -771,11 +771,11 @@ figure.half{width:calc((100% - 8px) / 2)}figure.slot{width:calc((100% - 48px) / 
 .box{display:flex;align-items:center;justify-content:center;text-align:center;aspect-ratio:16/9;background:#eee;font-size:14px}
 figure.slot .box{aspect-ratio:9/16}@media (max-width:640px){figure.half{width:100%}figure.slot{width:calc((100% - 16px) / 3)}}</style>
 <h1>Турбо: LoRA Viggle в ${TURBO_RECIPE.steps} шагов против эталона</h1>
-<p>Пять клеток пилота на одной карте, torch и Triton те же. Слева эталон: Qwen-Image 2.1 так, как рисует раунд два. Справа та же клетка — тот же
-промпт, те же слоты и тот же шум (тот же сид) — через LoRA Viggle (${escapeHtml(shown?.turbo?.lora ?? 'не записана')}, сила ${VIGGLE.strength}) и её
-расписание в ${TURBO_RECIPE.steps} шагов, euler, без CFG, как и эталон при cfg 1. Под парой — картинки первого раунда, которые клетка получила в слоты.
+<p>Пять клеток пилота на одной карте, torch и Triton те же. Слева эталон: Qwen-Image 2.1 так, как рисует раунд два. Справа та же клетка с тем же
+промптом, теми же слотами и тем же шумом (тот же сид), но через LoRA Viggle (${escapeHtml(shown?.turbo?.lora ?? 'не записана')}, сила ${VIGGLE.strength}) и её
+расписание в ${TURBO_RECIPE.steps} шагов, euler, без CFG, как и эталон при cfg 1. Под парой картинки первого раунда, которые клетка получила в слоты.
 Смотреть так, как решил владелец: лица примерно похожи на портреты, фигура и силуэт сохранены везде; точных лиц не нужно.</p>
-<p>Показано: эталон — ${reference ? `тёплый проход, попытка ${reference.attempt}` : 'не нарисован'}; ${escapeHtml(which)}. Сэмплер за пять клеток:
+<p>Эталон: ${reference ? `тёплый проход, попытка ${reference.attempt}` : 'не нарисован'}. ${escapeHtml(which)}. Сэмплер за пять клеток:
 эталон ${seconds(total(reference))}, турбо ${seconds(total(shown))}.</p>
 ${sections.join('\n')}
 `, { mode: 0o600 });
