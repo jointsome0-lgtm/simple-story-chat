@@ -92,12 +92,14 @@ export type Ref = { from: string; how: How };
 export type Negative = 'none' | 'shared' | 'rf' | 'neg';
 // `core` is drawn while it fits; `cfg1` only if every core cell after it fits too; `D` is last, the first cut.
 export type Tier = 'core' | 'cfg1' | 'D';
-export type Scene = 'K-solo' | 'K-pair' | 'P';
-// What a cell is priced and timed with: its graph, canvas, CFG and references.
-const GROUPS = ['front', 'front2', 'view', 'words', 'ref1', 'ref2', 'ref4', 'crop', 'own1', 'own2', 'sheet', 'sheet1', 'sheetref', 'sheetview',
-  'wordsCfg2', 'ref1Cfg2'] as const;
-type Group = typeof GROUPS[number];
-const FRONT_CANVAS: Size = { width: 720, height: 1280 };
+export type Scene = 'K-solo' | 'K-pair' | 'P' | 'K-trio';
+// What a cell is priced and timed with: its graph, canvas, CFG and references. The later stands' (local/image-refs-backlog.ts):
+// three and six references at 352x640, two and three face crops, an edit of a picture with two or three references
+// (`edit2`, `edit3`), and a pass over a picture with none (`clean`).
+export const GROUPS = ['front', 'front2', 'view', 'words', 'ref1', 'ref2', 'ref4', 'crop', 'own1', 'own2', 'sheet', 'sheet1', 'sheetref', 'sheetview',
+  'wordsCfg2', 'ref1Cfg2', 'ref3', 'ref6', 'crop2', 'crop3', 'edit2', 'edit3', 'clean'] as const;
+export type Group = typeof GROUPS[number];
+export const FRONT_CANVAS: Size = { width: 720, height: 1280 };
 const SHEET_CANVAS: Size = { width: 2048, height: 1152 };
 // The face crop: the top 720x400 of H's VN front at seed 7, which the encoder takes at 704x384 (next-card-texts.txt, FC).
 export const CROP = { x: 0, y: 0, width: 720, height: 400 };
@@ -108,14 +110,18 @@ export const SEEDS = [7, 11];
 // the bot on the day's card (6 and 7 s). The rest are estimates from their tokens (qwen-refs' final report §4.3 and
 // §4.5): CFG 2 runs the sampler twice, a reference is computed once into the prefix cache, and a 2048x1152 sheet has
 // 9,216 tokens to a frame's 3,520. Once the card has drawn a group, its measured time prices it (`drawStand`). The
-// second stand's frames at CFG 2 from the card's own times: a front took 5.0 s at CFG 1 and 8.2 s at CFG 2.
-const SEED_MS: Record<Group, number> = { front: 6500, front2: 12000, view: 9000, words: 6500, ref1: 7500, ref2: 8000, ref4: 9500, crop: 7500,
-  own1: 9000, own2: 10500, sheet: 55000, sheet1: 29000, sheetref: 10500, sheetview: 10500, wordsCfg2: 10000, ref1Cfg2: 11000 };
+// second stand's frames at CFG 2 from the card's own times: a front took 5.0 s at CFG 1 and 8.2 s at CFG 2. The later
+// stands' groups from the times of 2026-09-27 (docs/action-experiment.md#refs-backlog), a second or two over them.
+export const SEED_MS: Record<Group, number> = { front: 6500, front2: 12000, view: 9000, words: 6500, ref1: 7500, ref2: 8000, ref4: 9500, crop: 7500,
+  own1: 9000, own2: 10500, sheet: 55000, sheet1: 29000, sheetref: 10500, sheetview: 10500, wordsCfg2: 10000, ref1Cfg2: 11000,
+  ref3: 8000, ref6: 8500, crop2: 8000, crop3: 8000, edit2: 9000, edit3: 9500, clean: 7000 };
 // The price a cell is admitted by: its time, a quarter more, and three seconds, as round two prices.
 const priceOf = (ms: number) => Math.round(ms * MARGIN + CELL_MS);
 
+// `start` and `denoise`: a frame the sampler begins from another picture of the run rather than from an empty latent,
+// that picture through VAEEncode at `denoise` below 1 (the later stands' arm S).
 export type Planned = { key: string; id: string; arm: string; kind: Kind; scene?: Scene; seed: number; group: Group; tier: Tier;
-  graph: 'front' | 'action'; canvas: Size; cfg: number; negative: Negative; refs: Ref[]; file: string };
+  graph: 'front' | 'action'; canvas: Size; cfg: number; negative: Negative; refs: Ref[]; file: string; start?: string; denoise?: number };
 export const frontKey = (id: string, seed = 7) => `front:${id}:s${seed}`;
 export const viewKey = (id: string) => `view:${id}:s7`;
 export const sheetKey = (id: string, seed: number) => `sheet:${id}:s${seed}`;
@@ -131,20 +137,27 @@ export const VIEWS = [{ id: 'H-34R', front: frontKey('H-PORTRAIT') }, { id: 'H-P
 export const SHEET_PEOPLE = ['H', '1', '2', '3', '4'];
 const ALL: Scene[] = ['K-solo', 'P', 'K-pair'], SOLO: Scene[] = ['K-solo', 'P'], KS: Scene[] = ['K-solo', 'K-pair'];
 
-function groupOf(one: { kind: Kind; cfg: number; refs: Ref[]; canvas: Size }): Group {
+function groupOf(one: { kind: Kind; cfg: number; refs: Ref[]; canvas: Size; start?: string }): Group {
   if (one.kind === 'front') return one.cfg === 1 ? 'front' : 'front2';
   if (one.kind === 'sheet') return one.cfg === 1 ? 'sheet1' : 'sheet';
   if (one.kind === 'view') return 'view';
-  const how = one.refs[0]?.how;
+  const how = one.refs[0]?.how, count = one.refs.length;
+  if (one.start !== undefined) {
+    // The edit: the picture it starts from at its own size in slot 1, and the people's fronts at 352x640 after it.
+    if (one.cfg !== 1 || (count && (how !== 'own' || count < 3 || count > 4 || one.refs.slice(1).some(ref => ref.how !== 's352')))) {
+      throw new Error('A frame from a picture is at CFG 1, with no reference or with that picture and two or three fronts at 352x640');
+    }
+    return !count ? 'clean' : count === 3 ? 'edit2' : 'edit3';
+  }
   if (one.cfg !== 1) {
-    if (how && (how !== 's352' || one.refs.length !== 1)) throw new Error('A frame at CFG 2 takes one reference at 352x640 or none');
+    if (how && (how !== 's352' || count !== 1)) throw new Error('A frame at CFG 2 takes one reference at 352x640 or none');
     return how ? 'ref1Cfg2' : 'wordsCfg2';
   }
   if (!how) return 'words';
   if (how === 'r1024') return one.canvas.height > one.canvas.width ? 'sheetview' : 'sheetref';
-  if (how === 'crop') return 'crop';
-  if (how === 'own') return one.refs.length === 1 ? 'own1' : 'own2';
-  return one.refs.length === 1 ? 'ref1' : one.refs.length === 2 ? 'ref2' : 'ref4';
+  if (how === 'crop') return count === 1 ? 'crop' : count === 2 ? 'crop2' : 'crop3';
+  if (how === 'own') return count === 1 ? 'own1' : 'own2';
+  return count === 1 ? 'ref1' : count === 2 ? 'ref2' : count === 3 ? 'ref3' : count === 4 ? 'ref4' : 'ref6';
 }
 // A cell with its group and its file in the run's directory, under fronts, views, sheets or frames by its kind.
 export const cellOf = (one: Omit<Planned, 'group' | 'file' | 'tier'> & { tier?: Tier }): Planned => {
@@ -217,12 +230,12 @@ const tokensOf = (size: Size) => (size.width / 16) * (size.height / 16);
 // ---- The texts ----
 
 export type TextCell = { key: string; kind: Kind; seed: number; graph: 'front' | 'action'; canvas: string; cfg: number; refs: Ref[]; prompt: string;
-  negative: string };
+  negative: string; start?: string; denoise?: number };
 type Texts = { hash: string; cells: Map<string, TextCell> };
 // texts.json, read as the figure test reads its texts: a link, a missing file and a file other than the one pinned are
 // refused, and so is one whose cells are not the plan's, key by key in its order, each on its graph, canvas and CFG with
-// its references, a prompt, no negative where CFG 1 skips it, and one negative a kind: all the sheets', RF's, the NEG
-// cells' of the second stand.
+// its references and the picture it starts from, a prompt, no negative where CFG 1 skips it, and one negative a kind:
+// all the sheets', RF's, the NEG cells' of the second stand.
 function readTexts(file: string, pinned: string, plan: Planned[]): Texts {
   noLink(file);
   if (!existsSync(file)) throw new Refusal(`${file} is missing: the texts are fixed before the card, and nothing is drawn`);
@@ -237,9 +250,10 @@ function readTexts(file: string, pinned: string, plan: Planned[]): Texts {
     const cell = cells[at] as Partial<TextCell> | null;
     const right = typeof cell === 'object' && cell !== null && cell.key === one.key && cell.kind === one.kind && cell.seed === one.seed
       && cell.graph === one.graph && cell.canvas === sizeText(one.canvas) && cell.cfg === one.cfg && same(cell.refs, one.refs)
+      && cell.start === one.start && cell.denoise === one.denoise
       && typeof cell.prompt === 'string' && cell.prompt.trim() !== '' && typeof cell.negative === 'string'
       && (one.negative === 'none') === (cell.negative === '');
-    if (!right) throw bad(`has as its cell ${at + 1} no ${one.key} on its graph, canvas and CFG, with its references, a prompt and its negative`);
+    if (!right) throw bad(`has as its cell ${at + 1} no ${one.key} on its graph, canvas and CFG, with its references and start, a prompt and its negative`);
     negatives.set(one.negative, (negatives.get(one.negative) ?? new Set()).add(cell.negative!));
     found.set(one.key, cell as TextCell);
   });
@@ -258,10 +272,10 @@ export type Inputs = { texts: Texts; frontGraph: Graph; base: Graph; recipe: Rec
 // The graphs as pinned, the canvases they pin, and one recipe for both; then the texts.
 export function inputsOf(textsFile: string, pinned: string, plan = PLANNED): Inputs {
   const frontGraph = apiGraph(JSON.parse(readFileSync(FRONT_GRAPH, 'utf8'))), base = apiGraph(JSON.parse(readFileSync(ACTION_GRAPH, 'utf8')));
-  const recipe = recipeOf(frontGraph);
+  const recipe = recipeOf(frontGraph), slots = Math.max(4, ...plan.map(one => one.refs.length));
   if (!same(portraitCanvas(frontGraph), FRONT_CANVAS) || !same(latentSizeOf(base), FRAME_CANVAS) || !same(recipeOf(base), recipe)
-    || referenceSlots(base).length < 4) {
-    throw new Refusal('The pinned graphs no longer give the fronts 720x1280, the frames 1280x704, one recipe and four reference slots; nothing is drawn');
+    || referenceSlots(base).length < slots) {
+    throw new Refusal(`The pinned graphs no longer give the fronts 720x1280, the frames 1280x704, one recipe and ${slots} reference slots; nothing is drawn`);
   }
   return { texts: readTexts(textsFile, pinned, plan), frontGraph, base, recipe };
 }
@@ -320,11 +334,16 @@ export function estimateOf(rate = RATE, bootstrap = BOOTSTRAP_MINUTES, budget = 
 // ---- The graphs ----
 
 const cropNode = (slot: number) => String(40 + slot);
+// The loader of the picture a frame starts from, and its VAEEncode.
+const START_LOADER = '50', START_ENCODE = '51';
 // A cell's graph: a front or a sheet on the front graph at its canvas; a view or a frame on the action graph with a
 // scale node to 352x640 on each slot that asks for one and an ImageCrop on the slot of the face crop, the slots it
-// leaves empty gone with their chains, and the encoder at `resolution` 1024 for a sheet, 0 otherwise. Each with the
-// graphs' recipe, the cell's CFG and seed, its prompt and negative, and the kitchen's attention on the sampler's model.
-export function buildJob(setup: Inputs & { card: { model: string } }, one: Planned, text: TextCell, names: string[]): Graph {
+// leaves empty gone with their chains, and the encoder at `resolution` 1024 for a sheet, 0 otherwise. A frame with a
+// `start` begins from that picture (`startName`, uploaded) through its own loader and a VAEEncode on the graph's VAE, in
+// place of the empty latent, at its `denoise`: the pinned KSampler then runs the last 25 of int(25 / denoise) steps of
+// the schedule (comfy/samplers.py:1431-1441), and the encoder's references stay as they are. Each with the graphs'
+// recipe, the cell's CFG and seed, its prompt and negative, and the kitchen's attention on the sampler's model.
+export function buildJob(setup: Inputs & { card: { model: string } }, one: Planned, text: TextCell, names: string[], startName?: string): Graph {
   const values = { checkpoint: setup.card.model, prompt: text.prompt, negative: text.negative, seed: one.seed, ...setup.recipe, cfg: one.cfg, ...one.canvas };
   let graph: Graph;
   if (one.graph === 'front') graph = applyToWorkflow(setup.frontGraph, values);
@@ -340,6 +359,20 @@ export function buildJob(setup: Inputs & { card: { model: string } }, one: Plann
     const encoder = Object.values(graph).find(node => node.class_type === 'TextEncodeQwenImage21');
     if (!encoder) throw workflowError();
     encoder.inputs.resolution = one.refs.some(ref => ref.how === 'r1024') ? SHEET_RESOLUTION : 0;
+  }
+  if ((one.start === undefined) !== (startName === undefined) || (one.start !== undefined && one.graph !== 'action')) throw workflowError();
+  if (startName !== undefined) {
+    const sampler = Object.values(graph).find(node => node.class_type === 'KSampler');
+    const empty = sampler && Array.isArray(sampler.inputs.latent_image) ? String(sampler.inputs.latent_image[0]) : undefined;
+    const vae = Object.entries(graph).find(([, node]) => node.class_type === 'VAELoader')?.[0];
+    if (!sampler || empty === undefined || graph[empty]?.class_type !== 'EmptyLatentImage' || vae === undefined || graph[START_LOADER] || graph[START_ENCODE]) {
+      throw workflowError();
+    }
+    delete graph[empty];
+    graph[START_LOADER] = { class_type: 'LoadImage', inputs: { image: startName } };
+    graph[START_ENCODE] = { class_type: 'VAEEncode', inputs: { pixels: [START_LOADER, 0], vae: [vae, 0] } };
+    sampler.inputs.latent_image = [START_ENCODE, 0];
+    sampler.inputs.denoise = one.denoise;
   }
   const attended = withAttention(graph);
   if (!attended) throw workflowError();
@@ -369,20 +402,26 @@ export function slotChains(graph: Graph) {
 const wantedChain = (ref: Ref, name: string) => (ref.how === 's352' ? ['ImageScale', 'area', SCALED.width, SCALED.height, 'disabled', 'LoadImage', name]
   : ref.how === 'crop' ? ['ImageCrop', CROP.width, CROP.height, CROP.x, CROP.y, 'LoadImage', name] : ['LoadImage', name]);
 // A cell's graph as it goes out, read from the sampler and the save rather than by the ids the graphs give: the recipe,
-// the cell's CFG and seed at full denoise from an empty latent of its canvas; the prompt and the negative on Qwen's
-// encoder, both conditionings from it; on a view or a frame the VAE wired to the encoder and its `resolution`; the
-// model from the loader of the card's transformer through the kitchen's attention, and the action graph's cache on a
-// view or a frame; each slot the chain its reference asks for, and no other loader, scale or crop; one save, of the
-// sampler's decode.
-export function cellRight(graph: Graph, one: Planned, text: TextCell, names: string[], setup: Inputs & { card: { model: string } }): boolean {
+// the cell's CFG and seed at full denoise from an empty latent of its canvas, or at its `denoise` from its start
+// picture through VAEEncode on the graph's VAE; the prompt and the negative on Qwen's encoder, both conditionings from
+// it; on a view or a frame the VAE wired to the encoder and its `resolution`; the model from the loader of the card's
+// transformer through the kitchen's attention, and the action graph's cache on a view or a frame; each slot the chain
+// its reference asks for, and no other loader, scale or crop; one save, of the sampler's decode.
+export function cellRight(graph: Graph, one: Planned, text: TextCell, names: string[], setup: Inputs & { card: { model: string } }, startName?: string): boolean {
   const from = (value: unknown) => (Array.isArray(value) ? graph[String(value[0])] : undefined);
   const nodes = Object.values(graph), recipe = setup.recipe;
   const samplers = nodes.filter(node => node.class_type === 'KSampler'), saves = nodes.filter(node => node.class_type === 'SaveImage');
   if (samplers.length !== 1 || saves.length !== 1) return false;
   const sampler = samplers[0].inputs, positive = from(sampler.positive), latent = from(sampler.latent_image);
+  const pixels = from(latent?.inputs.pixels);
+  const started = one.start === undefined
+    ? startName === undefined && sampler.denoise === 1 && latent?.class_type === 'EmptyLatentImage' && latent.inputs.width === one.canvas.width
+      && latent.inputs.height === one.canvas.height && latent.inputs.batch_size === 1
+    : startName !== undefined && typeof one.denoise === 'number' && one.denoise > 0 && one.denoise < 1 && sampler.denoise === one.denoise
+      && latent?.class_type === 'VAEEncode' && from(latent.inputs.vae)?.class_type === 'VAELoader' && pixels?.class_type === 'LoadImage'
+      && pixels.inputs.image === startName && !nodes.some(node => node.class_type === 'EmptyLatentImage');
   const sampled = sampler.seed === one.seed && sampler.steps === recipe.steps && sampler.sampler_name === recipe.sampler
-    && sampler.scheduler === recipe.scheduler && sampler.cfg === one.cfg && sampler.denoise === 1 && latent?.class_type === 'EmptyLatentImage'
-    && latent.inputs.width === one.canvas.width && latent.inputs.height === one.canvas.height && latent.inputs.batch_size === 1;
+    && sampler.scheduler === recipe.scheduler && sampler.cfg === one.cfg && started;
   const worded = positive?.class_type === 'TextEncodeQwenImage21' && from(sampler.negative) === positive && same(sampler.positive, [(sampler.positive as unknown[])[0], 0])
     && same(sampler.negative, [(sampler.positive as unknown[])[0], 1]) && positive.inputs.prompt === text.prompt && positive.inputs.negative_prompt === text.negative
     && (one.graph === 'front' || (from(positive.inputs.vae)?.class_type === 'VAELoader'
@@ -392,7 +431,8 @@ export function cellRight(graph: Graph, one: Planned, text: TextCell, names: str
   const modelled = same(model.map(node => node.class_type), one.graph === 'front' ? ['ModelAttentionBackend', 'UNETLoader']
     : ['ModelAttentionBackend', 'QwenImage21Cache', 'UNETLoader']) && model[0].inputs.attention === KITCHEN_ATTENTION
     && model.at(-1)?.inputs.unet_name === setup.card.model && nodes.filter(node => node.class_type === 'ModelAttentionBackend').length === 1;
-  const slotted = names.length === one.refs.length && nodes.filter(node => node.class_type === 'LoadImage').length === names.length
+  const slotted = names.length === one.refs.length
+    && nodes.filter(node => node.class_type === 'LoadImage').length === names.length + (startName === undefined ? 0 : 1)
     && nodes.filter(node => node.class_type === 'ImageScale').length === one.refs.filter(ref => ref.how === 's352').length
     && nodes.filter(node => node.class_type === 'ImageCrop').length === one.refs.filter(ref => ref.how === 'crop').length
     && same(slotChains(graph), one.refs.map((ref, at) => ({ order: at + 1, chain: wantedChain(ref, names[at]) })));
@@ -402,54 +442,85 @@ export function cellRight(graph: Graph, one: Planned, text: TextCell, names: str
 
 // ---- The drawing ----
 
-// `references`: the sha256 of each picture a cell took, in slot order.
-type Cell = { key: string; id: string; arm: string; kind: Kind; seed: number; group: Group; refs: number; status: 'drawn' | 'failed' | 'out'; code?: string;
+// `references`: the sha256 of each picture a cell took, in slot order; `start`: of the picture it began from.
+// `session`: the run of a stand that may go on on another card (`Stand.cards`) it was drawn in.
+export type Cell = { key: string; id: string; arm: string; kind: Kind; seed: number; group: Group; refs: number; status: 'drawn' | 'failed' | 'out'; code?: string;
   httpStatus?: number; oom?: boolean; retried?: boolean; file?: string; sha256?: string; bytes?: number; width?: number; height?: number;
-  references?: string[]; cold?: boolean; firstOfGroup?: boolean; totalMs?: number; viewMs?: number; queueMs?: number; sampleMs?: number; phases?: Phases;
-  loaderCacheMiss?: boolean; uploadMs?: number; vramSamples?: number; partialModelLoadEvents?: number; fallback?: number; promptChars?: number };
+  references?: string[]; start?: string; session?: number; cold?: boolean; firstOfGroup?: boolean; totalMs?: number; viewMs?: number; queueMs?: number;
+  sampleMs?: number; phases?: Phases; loaderCacheMiss?: boolean; uploadMs?: number; vramSamples?: number; partialModelLoadEvents?: number; fallback?: number;
+  promptChars?: number };
 type KitchenRecord = { seen: boolean; argv: boolean; tritonImported: boolean; tritonImportFailed: boolean; backends: Record<string, { available: boolean; disabled: boolean }> };
 // cells.json: keys, codes, sizes, counts and times, no prompt. `server`: what the server said it is, triton among it;
-// `kitchen`: what its log said of comfy-kitchen's backends at its start.
+// `kitchen`: what its log said of comfy-kitchen's backends at its start. A stand that may go on on another card keeps
+// each run as a session, with what its server said, and each picture it takes from another stand's run by its sha256
+// as it was first seen drawn (`lent`).
 export type StandIndex = { startedAt: string; completedAt?: string; pins: Record<string, string>; server: Record<string, string>; kitchen?: KitchenRecord;
-  cells: Record<string, Cell>; stopped?: 'until'; error?: string };
-// `keys`: the dry run's, the cells a run draws, in the plan's order; every one otherwise. `stand`: a stand beside
-// PLANNED's; `from`: the directory of the run whose pictures its cells take.
-type Options = { out: string; comfy: string; until: number; pinned: string; stand?: Stand; from?: string; keys?: string[]; timeoutMs?: number;
-  waitMs?: number; pollMs?: number; log: (event: object) => void };
+  cells: Record<string, Cell>; stopped?: 'until'; error?: string; sessions?: { startedAt: string; server: Record<string, string> }[];
+  lent?: Record<string, string> };
+// What the card has compiled: whether a job has reached it, and the groups the jobs had. A caller that draws several
+// stands in turn on one card hands the same one to each.
+export type Warmth = { reached: boolean; groups: Set<Group> };
+// `keys`: the cells a run draws, in the plan's order; every one otherwise. `stand`: a stand beside PLANNED's; `from`:
+// the directories of the runs whose pictures its cells take.
+type Options = { out: string; comfy: string; until: number; pinned: string; stand?: Stand; from?: string | string[]; keys?: string[]; timeoutMs?: number;
+  waitMs?: number; pollMs?: number; warm?: Warmth; log: (event: object) => void };
 export const countsOf = (index: StandIndex) => {
   const cells = Object.values(index.cells), tally = (status: Cell['status']) => cells.filter(one => one.status === status)
     .reduce<Record<string, number>>((all, one) => ({ ...all, [one.code ?? 'image_failed']: (all[one.code ?? 'image_failed'] ?? 0) + 1 }), {});
   return { drawn: cells.filter(one => one.status === 'drawn').length, failed: tally('failed'), out: tally('out') };
 };
 
-// The pictures a stand's cells take and do not draw: each drawn by the run in `from`, as that run's cells.json records
-// it, on the same graphs, weights and attention. Which pictures they are is pinned with the run's own pins.
-function lentOf(plan: Planned[], pins: Record<string, string>, from: string | undefined) {
-  const keys = [...new Set(plan.flatMap(one => one.refs.map(ref => ref.from)))].filter(key => !plan.some(one => one.key === key));
+// The pictures a stand's cells take and do not draw: each drawn by one of the runs in `from`, as that run's cells.json
+// records it, on the same graphs, weights and attention, and a picture two of them hold is refused. Which pictures
+// they are is pinned with the run's own pins (`pin`), or, for a stand that pins each (`Stand.pinEach`), each as it is
+// first seen drawn (drawStand); there a run in `from` that has not begun, whose directory has no cells.json yet, lends
+// nothing for now.
+function lentOf(plan: Planned[], pins: Record<string, string>, from: string[], each: boolean) {
+  const keys = [...new Set(plan.flatMap(one => [...one.refs.map(ref => ref.from), ...(one.start === undefined ? [] : [one.start])]))]
+    .filter(key => !plan.some(one => one.key === key));
   if (!keys.length) return undefined;
-  if (from === undefined) throw new Refusal(`The cells take ${keys.length} pictures another run drew: --from names its directory; nothing is drawn`);
-  const dir = resolve(from), file = join(dir, INDEX_FILE);
-  noLink(file);
-  const index = readJson<StandIndex>(file);
-  if (!index || ['frontGraph', 'actionGraph', 'attention', 'comfyuiRevision', 'transformer', 'encoder', 'vae'].some(name => index.pins[name] !== pins[name])) {
-    throw new Refusal(`${file} is missing, or its run was drawn from other graphs, weights or attention; nothing is drawn`);
+  if (!from.length) throw new Refusal(`The cells take ${keys.length} pictures another run drew: --from names its directory; nothing is drawn`);
+  const runs = from.map(dir => {
+    const at = resolve(dir), file = join(at, INDEX_FILE);
+    noLink(file);
+    if (each && statSync(at, { throwIfNoEntry: false })?.isDirectory() && !existsSync(file)) return { dir: at, cells: {} as Record<string, Cell> };
+    const index = readJson<StandIndex>(file);
+    if (!index || ['frontGraph', 'actionGraph', 'attention', 'comfyuiRevision', 'transformer', 'encoder', 'vae'].some(name => index.pins[name] !== pins[name])) {
+      throw new Refusal(`${file} is missing, or its run was drawn from other graphs, weights or attention; nothing is drawn`);
+    }
+    return { dir: at, cells: index.cells };
+  });
+  const found = new Map<string, { dir: string; cell: Cell }>();
+  for (const key of keys) {
+    const holding = runs.filter(run => run.cells[key] !== undefined);
+    if (holding.length > 1) throw new Refusal(`${key} is in ${holding.length} of the runs in --from, and a cell would not know which it takes; nothing is drawn`);
+    if (holding.length) found.set(key, { dir: holding[0].dir, cell: holding[0].cells[key] });
   }
-  const cells: Record<string, Cell | undefined> = Object.fromEntries(keys.map(key => [key, index.cells[key]]));
-  return { dir, cells, pin: sha256(JSON.stringify(keys.map(key => [key, cells[key]?.sha256 ?? null]))) };
+  return { keys, found, pin: sha256(JSON.stringify(keys.map(key => [key, found.get(key)?.cell.sha256 ?? null]))) };
 }
 
 // Every cell not yet drawn, one at a time through the harness's drawOne, in the plan's order. A cell whose references
-// are not all drawn is `out` until a resume. Each is begun only if it can end by `until` at its group's price, the
-// compile of the run's first cell and a shape of each other group's first priced in, and none after the first that
-// cannot; an SH-cfg1 sheet only if the core cells after it fit too, or it is `cut`. A group is priced from the seeded
-// time until the card has drawn it: then from the slowest of its warm cells, or its first cell's until one is warm.
-// A socket that does not open is waited out once; a failed cell is recorded and the run goes on, unless its code says
-// the graph or the server is wrong (stopsTheRun), or the kitchen's attention fell back, which stop the run.
+// or start are not all drawn is `out` until a resume. Each is begun only if it can end by `until` at its group's price,
+// the compile of the card's first cell and a shape of each other group's first priced in, and none after the first
+// that cannot; an SH-cfg1 sheet only if the core cells after it fit too, or it is `cut`. A group is priced from the
+// seeded time until the card has drawn it: then from the slowest of its warm cells, or its first cell's until one is
+// warm. A socket that does not open is waited out once; a failed cell is recorded and the run goes on, unless its code
+// says the graph or the server is wrong (stopsTheRun), or the kitchen's attention fell back, which stop the run. Each
+// run uploads every picture it takes afresh, so that a run on a new card has them. It sends no `front`: a job of the
+// bot's that the server puts in front of the queue waits at most for the one cell being drawn.
 export async function drawStand(options: Options): Promise<StandIndex> {
   const stand = options.stand ?? FIRST, byKey = new Map(stand.plan.map(one => [one.key, one]));
+  const others = new Map((stand.others ?? []).map(one => [one.key, one]));
   const out = resolve(options.out), file = join(out, INDEX_FILE);
   const setup = setupOf(out, options.pinned, stand.plan), earlier = readJson<StandIndex>(file);
-  const lent = lentOf(stand.plan, setup.pins, options.from), pins = lent ? { ...setup.pins, lent: lent.pin } : setup.pins;
+  const from = options.from === undefined ? [] : [options.from].flat();
+  const lent = lentOf(stand.plan, setup.pins, from, stand.pinEach === true), pins = lent && !stand.pinEach ? { ...setup.pins, lent: lent.pin } : setup.pins;
+  // A picture taken from another stand's run, pinned as first seen drawn: one that has changed since is refused.
+  const changed = !stand.pinEach || !lent ? [] : [...lent.found].filter(([key, { cell }]) => cell.status === 'drawn' && earlier?.lent?.[key] !== undefined
+    && earlier.lent[key] !== cell.sha256).map(([key]) => key);
+  if (changed.length) {
+    throw new Refusal(`${changed.length} of the pictures this run took from another stand's (${changed.join(', ')}) are not the ones it took: move ${file} aside; nothing is drawn`);
+  }
   const at = (ms: number) => AbortSignal.timeout(Math.max(0, Math.round(ms - Date.now())));
   const comfy: Comfy = { baseUrl: options.comfy, timeoutMs: options.timeoutMs ?? 60000, end: at(options.until), reserve: at(options.until + CLEANUP_RESERVE_MS) };
   const server = await serverPins(comfy, true).catch(() => {
@@ -463,7 +534,9 @@ export async function drawStand(options: Options): Promise<StandIndex> {
     throw new Refusal('The stand draws on the bot\'s picture path: a server on cu130 with SIMPLE_CHAT_IMAGE_TRITON=1 whose ModelAttentionBackend offers '
       + `the kitchen's attention (docs/gpu.md#bot-card); this one has cu${cuda || '?'}, Triton ${server.triton ?? 'off'}, the attention ${offered ? 'offered' : 'not offered'}; nothing is drawn`);
   }
-  if (earlier && (!same(earlier.pins, pins) || !same(earlier.server, server))) {
+  // A stand that may go on on another card is held to the same ComfyUI, torch and Triton, the card's name aside.
+  const held = (said: Record<string, string>) => (stand.cards ? Object.fromEntries(Object.entries(said).filter(([name]) => name !== 'card')) : said);
+  if (earlier && (!same(earlier.pins, pins) || !same(held(earlier.server), held(server)))) {
     throw new Refusal(`${file} was drawn from other texts, graphs, weights or pictures, or on a server that said another thing of itself: move it aside; nothing is drawn`);
   }
   const kitchen = kitchenOf(await logLines(comfy), server.triton === 'enabled');
@@ -471,6 +544,14 @@ export async function drawStand(options: Options): Promise<StandIndex> {
   if (kitchen.seen || !index.kitchen) {
     index.kitchen = { seen: kitchen.seen, argv: kitchen.argv, tritonImported: kitchen.tritonImported, tritonImportFailed: kitchen.tritonImportFailed,
       backends: Object.fromEntries(Object.entries(kitchen.backends).map(([name, one]) => [name, { available: one.available, disabled: one.disabled }])) };
+  }
+  let session: number | undefined;
+  if (stand.cards) {
+    index.sessions = [...(index.sessions ?? []), { startedAt: new Date().toISOString(), server }];
+    session = index.sessions.length - 1;
+  }
+  if (stand.pinEach && lent) {
+    for (const [key, { cell }] of lent.found) if (cell.status === 'drawn' && cell.sha256) index.lent = { ...index.lent, [key]: cell.sha256 };
   }
   delete index.completedAt;
   delete index.stopped;
@@ -484,13 +565,15 @@ export async function drawStand(options: Options): Promise<StandIndex> {
     const cell = index.cells[key], path = cell?.file === undefined ? undefined : join(out, cell.file);
     return cell?.status === 'drawn' && path !== undefined && existsSync(path) && sha256(readFileSync(path)) === cell.sha256;
   };
-  // A reference as a cell takes it: drawn, where its record says, the very bytes, at its cell's canvas; by this run, or
-  // by the run it borrows from.
+  // A picture as a cell takes it: drawn, where its record says, the very bytes, at its cell's canvas; by this run, or by
+  // the run it borrows from, and then the one pinned where the stand pins each.
   const pictureOf = (key: string) => {
-    const [dir, cell]: [string | undefined, Cell | undefined] = byKey.has(key) ? [out, done(key) ? index.cells[key] : undefined] : [lent?.dir, lent?.cells[key]];
+    const lends = lent?.found.get(key);
+    const [dir, cell]: [string | undefined, Cell | undefined] = byKey.has(key) ? [out, done(key) ? index.cells[key] : undefined] : [lends?.dir, lends?.cell];
     const path = dir !== undefined && cell?.status === 'drawn' && cell.file !== undefined ? join(dir, cell.file) : undefined;
     const bytes = path !== undefined && existsSync(path) ? readFileSync(path) : undefined;
-    return bytes && sha256(bytes) === cell?.sha256 && same(pngSize(bytes), (byKey.get(key) ?? BY_KEY.get(key))?.canvas) ? bytes : undefined;
+    const pinned = byKey.has(key) || !stand.pinEach || index.lent?.[key] === cell?.sha256;
+    return bytes && sha256(bytes) === cell?.sha256 && pinned && same(pngSize(bytes), (byKey.get(key) ?? others.get(key) ?? BY_KEY.get(key))?.canvas) ? bytes : undefined;
   };
   // The prices: seeded until the card has drawn a group, then measured, from this run's cells and a resumed one's.
   const warm = new Map<Group, number>(), firsts = new Map<Group, number>();
@@ -505,19 +588,18 @@ export async function drawStand(options: Options): Promise<StandIndex> {
   const left = plan.filter(one => !done(one.key));
   options.log({ event: 'stand_plan', cells: plan.length, left: left.length, pricedMinutes: minutes(needOf(left, price)) });
   const uploaded = new Map<string, string>();
-  // Whether a job of the run has reached the card, and the groups those jobs had: what the card has compiled.
-  let reached = false, sentJobs = 0;
-  const groupsReached = new Set<Group>();
-  const extraMs = (group: Group) => (!reached ? COLD_MS : groupsReached.has(group) ? 0 : SHAPE_MS);
+  let sentJobs = 0;
+  const warmth: Warmth = options.warm ?? { reached: false, groups: new Set() };
+  const extraMs = (group: Group) => (!warmth.reached ? COLD_MS : warmth.groups.has(group) ? 0 : SHAPE_MS);
   const own = (one: Planned, retried: boolean) => ({ key: one.key, id: one.id, arm: one.arm, kind: one.kind, seed: one.seed, group: one.group,
-    refs: one.refs.length, ...(retried ? { retried } : {}) });
-  const attempt = async (one: Planned, pictures: Buffer[], fits: () => boolean, retried: boolean): Promise<'drawn' | 'failed' | 'socket' | 'until' | 'stopped'> => {
+    refs: one.refs.length, ...(retried ? { retried } : {}), ...(session === undefined ? {} : { session }) });
+  const attempt = async (one: Planned, pictures: Buffer[], begin: Buffer | undefined, fits: () => boolean,
+    retried: boolean): Promise<'drawn' | 'failed' | 'socket' | 'until' | 'stopped'> => {
     const path = join(out, one.file), text = setup.texts.cells.get(one.key)!;
     let sent = false;
     try {
-      const names: string[] = [];
       let uploadMs = 0;
-      for (const bytes of pictures) {
+      const send = async (bytes: Buffer) => {
         let named = uploaded.get(sha256(bytes));
         if (named === undefined) {
           const began = performance.now();
@@ -525,16 +607,19 @@ export async function drawStand(options: Options): Promise<StandIndex> {
           uploaded.set(sha256(bytes), named);
           uploadMs += performance.now() - began;
         }
-        names.push(named);
-      }
-      const graph = buildJob(setup, one, text, names);
-      if (!cellRight(graph, one, text, names, setup)) throw workflowError();
+        return named;
+      };
+      const names: string[] = [];
+      for (const bytes of pictures) names.push(await send(bytes));
+      const startName = begin === undefined ? undefined : await send(begin);
+      const graph = buildJob(setup, one, text, names, startName);
+      if (!cellRight(graph, one, text, names, setup, startName)) throw workflowError();
       const before = await logLines(comfy);
-      const cold = !reached, firstOfGroup = !groupsReached.has(one.group);
+      const cold = !warmth.reached, firstOfGroup = !warmth.groups.has(one.group);
       sent = true;
       const drawn = await drawOne(comfy, graph, { pollMs: options.pollMs, waitMs: options.waitMs ?? WAIT_MS, sampleEvery: 1, requireSocket: true, admit: fits });
-      reached = true;
-      groupsReached.add(one.group);
+      warmth.reached = true;
+      warmth.groups.add(one.group);
       sentJobs++;
       // The picture is down, and it is kept whatever comes next: saved and recorded before anything more is asked.
       await settled();
@@ -543,7 +628,8 @@ export async function drawStand(options: Options): Promise<StandIndex> {
       const size = pngSize(drawn.bytes), phases = drawn.timing?.phases;
       const ran = phases ? Object.values(phases).reduce<number>((sum, ms) => sum + (ms ?? 0), 0) : undefined;
       const cell: Cell = { ...own(one, retried), status: 'drawn', file: relative(out, path), sha256: sha256(drawn.bytes), bytes: drawn.bytes.length, ...size,
-        ...(pictures.length ? { references: pictures.map(bytes => sha256(bytes)) } : {}), ...(cold ? { cold } : {}), ...(firstOfGroup ? { firstOfGroup } : {}),
+        ...(pictures.length ? { references: pictures.map(bytes => sha256(bytes)) } : {}), ...(begin ? { start: sha256(begin) } : {}),
+        ...(cold ? { cold } : {}), ...(firstOfGroup ? { firstOfGroup } : {}),
         totalMs: drawn.totalMs, viewMs: drawn.viewMs, ...(ran === undefined ? {} : { queueMs: Math.max(0, drawn.totalMs - drawn.viewMs - ran), sampleMs: phases?.sampleMs }),
         ...drawn.timing, ...(uploadMs ? { uploadMs: Math.round(uploadMs) } : {}), vramSamples: drawn.memory.samples, promptChars: text.prompt.length };
       index.cells[one.key] = cell;
@@ -564,11 +650,15 @@ export async function drawStand(options: Options): Promise<StandIndex> {
       }
       return 'drawn';
     } catch (error) {
-      const raw = (error as { code?: unknown }).code;
+      // A request that failed on the network before the job went, such as an upload to a card that is gone, is the
+      // card's failure and not the cell's: it stops the run as an unreachable server does, where it would fail every
+      // cell after it.
+      const lost = !sent && ((error instanceof TypeError && error.message === 'fetch failed') || (error as { name?: unknown }).name === 'TimeoutError');
+      const raw = (error as { code?: unknown }).code ?? (lost ? 'comfy_unreachable' : undefined);
       // A socket that did not open, and a job its time no longer covered, never reached the card.
       if (sent && raw !== 'comfy_socket_unavailable' && raw !== 'not_admitted') {
-        reached = true;
-        groupsReached.add(one.group);
+        warmth.reached = true;
+        warmth.groups.add(one.group);
       }
       if (comfy.end?.aborted || raw === 'not_admitted') return 'until';
       if (raw === 'comfy_socket_unavailable' && !retried) return 'socket';
@@ -586,8 +676,8 @@ export async function drawStand(options: Options): Promise<StandIndex> {
   let ended: 'done' | 'until' | 'stopped' = 'done';
   for (const [position, one] of plan.entries()) {
     if (done(one.key)) continue;
-    const pictures = one.refs.map(ref => pictureOf(ref.from));
-    if (pictures.some(bytes => bytes === undefined)) {
+    const pictures = one.refs.map(ref => pictureOf(ref.from)), begin = one.start === undefined ? undefined : pictureOf(one.start);
+    if (pictures.some(bytes => bytes === undefined) || (one.start !== undefined && begin === undefined)) {
       index.cells[one.key] = { ...own(one, false), status: 'out', code: 'reference_missing' };
       save();
       options.log({ event: 'cell_out', key: one.key, code: 'reference_missing' });
@@ -595,7 +685,7 @@ export async function drawStand(options: Options): Promise<StandIndex> {
     }
     if (one.tier === 'cfg1') {
       const after = plan.slice(position + 1).filter(other => other.tier === 'core' && !done(other.key));
-      const need = needOf([one, ...after], price, reached, groupsReached);
+      const need = needOf([one, ...after], price, warmth.reached, warmth.groups);
       if (Date.now() + need > options.until) {
         index.cells[one.key] = { ...own(one, false), status: 'out', code: 'cut' };
         save();
@@ -610,12 +700,12 @@ export async function drawStand(options: Options): Promise<StandIndex> {
       ended = 'until';
       break;
     }
-    let result = await attempt(one, pictures as Buffer[], fits, false);
+    let result = await attempt(one, pictures as Buffer[], begin, fits, false);
     if (result === 'socket') {
       options.log({ event: 'socket_retry', key: one.key });
       await delay(RETRY_PAUSE_MS, undefined, { signal: comfy.end }).catch(() => undefined);
       if (!fits()) { ended = 'until'; break; }
-      result = await attempt(one, pictures as Buffer[], fits, true);
+      result = await attempt(one, pictures as Buffer[], begin, fits, true);
     }
     if (result === 'until' || result === 'stopped') { ended = result; break; }
     page();
@@ -633,7 +723,7 @@ export async function drawStand(options: Options): Promise<StandIndex> {
 
 // ---- The page ----
 
-export const SCENE_WORDS: Record<Scene, string> = { 'K-solo': 'двор, одна', 'K-pair': 'двор, двое', P: 'окно, профиль' };
+export const SCENE_WORDS: Record<Scene, string> = { 'K-solo': 'двор, одна', 'K-pair': 'двор, двое', P: 'окно, профиль', 'K-trio': 'двор, трое' };
 const HOW_WORDS: Record<How, string> = { s352: '352x640', own: 'свой размер', crop: 'верх 720x400', r1024: 'лист, resolution 1024' };
 export type Section = { title: string; note: string; columns: string[]; rows: { label: string; keys: (string | undefined)[] }[] };
 const known = (key: string) => (BY_KEY.has(key) ? key : undefined);
@@ -661,8 +751,14 @@ const SECTIONS: Section[] = [
     + 'в обратном порядке; Rough с грубыми словами внешности; L-now без картинок и без внешностей.', columns: ['Q', 'X', 'Naming', 'Order', 'Rough', 'L-now'],
     rows: sceneRows(KS, ['Q', 'X', 'Naming', 'Order', 'Rough', 'L-now']) },
 ];
-// What a run draws, and its page: PLANNED's here, the second stand's in local/image-refs-stand-2.ts.
-export type Stand = { plan: Planned[]; title: string; intro: string; sections: Section[] };
+// What a run draws, and its page: PLANNED's here, the second stand's in local/image-refs-stand-2.ts, the third's and
+// the fourth's in local/image-refs-backlog.ts. `date`: the night the page names, 2026-09-27 unless said. `others`: the
+// cells of the other stands whose pictures it takes, beside the first stand's. `pinEach`: those pictures pinned one by
+// one as each is first seen drawn (`StandIndex.lent`), so that one another stand draws later comes in on a resume,
+// where the second stand pins them all at once with its run's pins. `cards`: a run that may go on on another card,
+// held to the same ComfyUI, torch and Triton, with each of its runs a session.
+export type Stand = { plan: Planned[]; title: string; intro: string; sections: Section[]; date?: string; others?: Planned[]; pinEach?: boolean;
+  cards?: boolean };
 const FIRST: Stand = { plan: PLANNED, title: 'Стенд референсов', sections: SECTIONS,
   intro: 'Синтетические тексты qwen-refs (next-card-texts.txt и запросы листов GPT), путь бота: cu130, Triton, внимание кухни. Сиды 7 и 11, 25 шагов euler.' };
 
@@ -681,9 +777,10 @@ export function writePage(out: string, inputs: Inputs | undefined, index: StandI
     const picture = path && existsSync(path) ? `<a href="${href(path)}"><img src="${href(path)}" alt="${escapeHtml(key)}" style="${shape}"></a>`
       : `<div class="none" style="${shape}">${escapeHtml(why)}</div>`;
     const refs = one.refs.map(ref => `${ref.from} (${HOW_WORDS[ref.how]})`).join(', ');
+    const begun = one.start === undefined ? '' : `<br>из ${escapeHtml(one.start)}, denoise ${String(one.denoise).replace('.', ',')}`;
     const time = cell?.totalMs === undefined ? '' : `, ${seconds(cell.totalMs)} с${cell.cold ? ', первое задание' : cell.firstOfGroup ? ', первое в группе' : ''}`;
     const words = text ? `<details><summary>промпт</summary><pre>${escapeHtml(text.prompt)}</pre>${text.negative ? `<p>негатив, CFG ${one.cfg}:</p><pre>${escapeHtml(text.negative)}</pre>` : ''}</details>` : '';
-    return `<td><figure>${picture}<figcaption>${escapeHtml(key)}${refs ? `<br>по ${escapeHtml(refs)}` : ''}${escapeHtml(time)}</figcaption>${words}</figure></td>`;
+    return `<td><figure>${picture}<figcaption>${escapeHtml(key)}${refs ? `<br>по ${escapeHtml(refs)}` : ''}${begun}${escapeHtml(time)}</figcaption>${words}</figure></td>`;
   };
   const sections = stand.sections.map(section => `<section><h2>${escapeHtml(section.title)}</h2><p>${escapeHtml(section.note)}</p>
 <table><tr><th></th>${section.columns.map(column => `<th>${escapeHtml(column)}</th>`).join('')}</tr>
@@ -697,9 +794,11 @@ ${section.rows.map(row => `<tr><th>${escapeHtml(row.label)}</th>${row.keys.map(f
   const counts = index ? countsOf(index) : { drawn: 0, failed: {}, out: {} };
   const tally = (by: Record<string, number>) => Object.entries(by).map(([code, n]) => `${code} ${n}`).join(', ');
   const state = !index ? 'карта ещё не рисовала' : drawing ? 'рисуется' : index.error ? `остановлено: ${index.error}` : index.stopped ? 'остановлено концом времени' : 'закончено';
-  const server = index ? `Сервер: ComfyUI ${index.server.comfyui ?? '?'}, torch ${index.server.pytorch ?? '?'}, Triton ${index.server.triton === 'enabled' ? 'включён' : 'выключен'}, внимание кухни.` : '';
+  const cards = [...new Set((index?.sessions ?? []).map(one => one.server.card ?? '?'))];
+  const server = index ? `Сервер: ComfyUI ${index.server.comfyui ?? '?'}, torch ${index.server.pytorch ?? '?'}, Triton ${index.server.triton === 'enabled' ? 'включён' : 'выключен'}, внимание кухни.`
+    + (index.sessions?.length ? ` Запусков ${index.sessions.length}, карты: ${cards.join('; ')}.` : '') : '';
   writeFileSync(join(out, 'index.html'), `<!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><title>${escapeHtml(stand.title)}, 2026-09-27</title>
+<html lang="ru"><head><meta charset="utf-8"><title>${escapeHtml(stand.title)}, ${escapeHtml(stand.date ?? '2026-09-27')}</title>
 <style>body{font:15px/1.4 system-ui,sans-serif;margin:1em}table{border-collapse:collapse}td,th{vertical-align:top;padding:4px}
 img,.none{height:300px;max-width:none;display:block;background:#8883}.none{display:flex;align-items:center;justify-content:center;color:#888}
 figure{margin:0}figcaption{font-size:12px;color:#666;max-width:360px}pre{white-space:pre-wrap;max-width:520px;font-size:12px}</style></head><body>
@@ -717,14 +816,16 @@ ${sections.join('\n')}
 // ---- The dry run ----
 
 // The real texts' tokens: each prompt and negative as the encoder takes it (local/tokenizer.ts), with its references,
-// and the tokens of each canvas and of each reference at the size it reaches the encoder.
-export function tokenReport(texts: Texts, tokenizers: string, plan = PLANNED) {
+// and the tokens of each canvas and of each reference at the size it reaches the encoder. `others`: the cells of the
+// other stands whose pictures the plan takes, beside the first stand's.
+export function tokenReport(texts: Texts, tokenizers: string, plan = PLANNED, others: Planned[] = []) {
   const qwen = loadTokenizers(tokenizers).qwen();
   if (!qwen) throw new Refusal(`No Qwen tokenizer in ${tokenizers}: pass --tokenizers with the directory that holds qwen-2.5.json.gz`);
+  const known = new Map([...BY_KEY, ...others.map(one => [one.key, one] as const), ...plan.map(one => [one.key, one] as const)]);
   const groups = GROUPS.filter(group => plan.some(one => one.group === group)).map(group => {
     const cells = plan.filter(one => one.group === group);
     const counted = cells.map(one => qwenPromptTokens(qwen, texts.cells.get(one.key)!.prompt, 'qwen_image', { images: one.refs.length }));
-    const refs = cells[0]?.refs.map(ref => tokensOf(atEncoder(ref.how, BY_KEY.get(ref.from)!.canvas))) ?? [];
+    const refs = cells[0]?.refs.map(ref => tokensOf(atEncoder(ref.how, known.get(ref.from)!.canvas))) ?? [];
     return { group, cells: cells.length, promptTokens: [Math.min(...counted.map(one => one.prompt)), Math.max(...counted.map(one => one.prompt))],
       conditioningMax: Math.max(...counted.map(one => one.conditioning)), canvasTokens: cells[0] ? tokensOf(cells[0].canvas) : 0, referenceTokens: refs };
   });

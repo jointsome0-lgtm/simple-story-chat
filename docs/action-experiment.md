@@ -2414,3 +2414,138 @@ bash ~/simple-story-chat-runs/2026-09-27/refs-stand-2/run.sh "$end"    # the ser
 
 **Not verified without the card**: a frame's time at CFG 2 with a reference; whether the anchors thin the figure
 without taking the bust and hips the look asks for; whether the negative keeps a reference's suit out of the scene.
+
+<a id='refs-backlog'></a>
+
+## The refs backlog: the third and fourth stands
+
+On 2026-09-27 the owner destroyed the night's cards at 21:18 UTC. From the next rental on, a picture card rented for
+the live tester also draws prepared stands in its gaps, so that it never idles. The bot sends each reader's picture
+with ComfyUI's `front` (a739fe3), which the pinned server puts ahead of every waiting job. The stands send one job at a
+time without it, so a tester's frame waits at most for the one cell being drawn, about 7.5 s at the longest (S's edit
+of three people). [image-refs-backlog.ts](../local/image-refs-backlog.ts) holds both plans beside the pinned ones and
+draws them through [image-refs-test.ts](../local/image-refs-test.ts), which prices, draws, records and pages every
+cell as it does for the first two stands.
+
+**The third stand: two and three people with references**, the owner's next priority. H and L are the first stand's,
+with its fronts of seed 7. Two new synthetic people have clearly different builds: B, a tall heavyset middle-aged man
+with a large round belly, and T, a short slim young woman with a narrow waist and round glasses. The stand draws their
+fronts first, on the card, with the bot's portrait prompt and its grey suit (`portraitPrompt` in
+[image-portraits.ts](../local/image-portraits.ts)) at 720x1280 and seed 7, so that what it finds applies to the bot as
+it is. Two scenes at seeds 43, 47, 53, 59, 61 and 67: the first stand's K-pair, and K-trio, where H stands on the left
+hanging a paper lantern, B sits on a stone bench and looks up, and T stands behind the bench with a hand on his
+shoulder. The arms:
+
+- **W**: no picture, each person's look in words. The floor.
+- **R**: each person's front at 352x640 and the bot's wording of 47f7f80 with the look (`referencePrompt` in
+  [picture-references.ts](../local/picture-references.ts)). The live bot's `referenceScale` sends a 720x1280 front at
+  352x640 too, so R is the bot's frame.
+- **S**, scene first, the owner's three steps («сгенерить фото, юзануть референсы, а уже потом привести к состоянию
+  сцены»). The draft is W's picture of the same seed, drawn anyway. The edit (S2) takes the draft as image 1 at its own
+  size and the fronts at 352x640 after it, and samples from VAEEncode of the draft at denoise 0.55 (S2-55) or 0.8
+  (S2-80). Its words keep image 1's composition, place, light, number of people, poses, gestures and clothes, and give
+  each person, named by image number, the face, hair, skin, age and build of their reference and nothing else from it.
+  The cleanup (S3) takes the edit at denoise 0.3 with W's words and no picture, to bring back the clothes and light the
+  edit took from the portraits. Both are kept, so the judges compare the edit alone with the edit and the cleanup.
+- **FC**: the top 720x400 of each front as the face, the figure from the words.
+- **FV**: each person's front and the fourth stand's view of them turned as the scene turns them, all at 352x640: H
+  three-quarters to the right, L three-quarters to the left, B sitting three-quarters to the right, T three-quarters to
+  the left. The trio's FV takes six pictures.
+
+98 cells in this order: B's and T's fronts; W and R, seed by seed and scene by scene, so that a short gap still leaves
+whole comparisons of R against W; S's 48, which W's pictures start; FC; FV.
+
+**Arm S on the pinned ComfyUI.** The pinned revision (73c9bad) can start a frame from an encoded picture with
+references attached. `TextEncodeQwenImage21` puts the references' latents in the conditioning, apart from the
+sampler's `latent_image`, so the stand replaces the frame's `EmptyLatentImage` with `LoadImage` and `VAEEncode` on the
+graph's VAE (nodes.py:380-392) and sets the KSampler's denoise. The pinned KSampler then builds a schedule of
+int(25 / denoise) steps and runs its last 25 (comfy/samplers.py:1431-1441), so every step of S samples 25 steps. At CFG
+1 the unconditioned pass is skipped, so the negative, which the encoder conditions from the same references, plays no
+part. At Qwen Image 2.1's shift of 0.69 the levels begin at:
+
+| denoise | first sigma | where a frame drawn from noise is at that sigma |
+| --- | --- | --- |
+| 0.8 | 0.893 | after about 5 of its 25 steps: the layout, not yet the figures |
+| 0.55 | 0.714 | after about 11: the outlines set |
+| 0.3, the cleanup | 0.462 | after about 17: detail, colour and light |
+
+So 0.8 keeps the draft's layout and leaves the figures free to take their reference's build, and 0.55 keeps the
+draft's outlines. Between them they answer the stand's question: whether the edit reshapes a figure toward its
+reference, or keeps the draft's outline, so that the figure only ever comes from the look words. Two things weigh on
+the answer. The edit is sampled at the draft's own seed, and the pinned `prepare_noise` gives the same noise for the
+same seed and shape (comfy/sample.py:9-38), so the edit starts close to the draft's own path and may hold its outline
+more than a new seed would. And the draft goes in at its own 1280x704, where the bot's `referenceScale` would bring a
+picture of that shape to 640x352.
+
+**The fourth stand: views drawn from the front**, which FV and pose picking need. Each of H, L, B and T
+three-quarters (TQ), in profile (P), from behind (BACK) and sitting (SIT), turned to the side of the picture the
+scenes turn them to (H and B right, L and T left). Qwen draws each from the person's front of seed 7 at its own size as
+the only picture, on the action graph at 720x1280, with the portrait's backdrop and clothes, at seeds 7, 11, 13 and 17.
+P and BACK are the bot's own view prompt (`viewPrompt` in [action-prompts.ts](../local/action-prompts.ts)); TQ is that
+prompt turned three-quarters, as the first stand's H-34R, and SIT the same sitting on a plain grey block with the hands
+on the knees. 64 cells: FV's four views of seed 7 first, then the other twelve of seed 7, then each later seed.
+
+**Drawing in the gaps.** `drawBacklog` runs four steps in turn with one `--until` and one warmth, so that no step pays
+the card's compile again: the third stand up to FV, the four views FV takes, FV, then the rest of the views. A cell
+begins only if it can end by `--until` at its group's price, and an `--until` that comes during a job stops that job
+and records nothing. A start on the next card goes on where the last stopped. Every picture a cell takes is uploaded
+again from the run directories, the first stand's H and L fronts among them. A picture one stand takes from the other
+must still have the sha256 it had when first seen drawn, and the run is held to the same ComfyUI, torch and Triton, the
+card's name aside. `cells.json` keeps each card's run as a session, with what its server said, and each cell's
+session. A submit carries the graph, the client and the job's id and nothing else, so no `front`; a stop or a delete
+names the job's own id, so no job of the bot's is touched. A card that goes away ends the run with
+`comfy_unreachable`, as does an upload that meets a closed port, which image-refs-test.ts used to record as a failed
+cell. The stands need no text model: every word is fixed in `texts.json`, so the text card is not used.
+
+**The judges' questions.** build-texts.ts writes `judge-questions.json` beside each stand's `texts.json`: each
+person's words and their build part by part (overall, height, shoulders, chest, waist, belly, hips, arms, legs), the
+portrait's clothes, each scene's count, poses, heights and touches, and each cell with its arm, scene or person, seed,
+file and pictures by key, run and slot, the draft marked. A frame is asked how many people it shows, and for each
+person identity against their front, build part by part, clothes taken from the reference, the scene's clothes, the
+pose, anatomy (a torso twisted at the waist among it) and who touches whom. S is also asked whether the frame kept the
+draft's composition and poses, and whether each figure moved toward its front, stayed as in the draft or moved away. A
+front is asked the count, build, face, hair and skin, the suit, the whole body and anatomy; a view the count, identity
+and build against its front, the turn asked, the clothes and backdrop kept, the whole body and anatomy.
+image-refs-judge.ts (78ea265) judges the first two stands. For these it needs: the runs recognized by their texts'
+sha256 and the question files pinned in place of `judge-texts.json`; four people, one of them a man, where its words
+say "her" and "each woman", with belly among the parts; a comparison per scene and seed of the eight cells W, R,
+S2-55, S3-55, S2-80, S3-80, FC and FV side by side, as the second stand's eight, with the draft shown beside S's; B's
+and T's fronts as a `fronts` session and the views as `turns` against their front; FC's crops cut from each person's
+front; and each picture read from its run and checked against the sha256 in the cell's `references` and `start`.
+
+**The price**, at the times of 2026-09-27 on the RTX 5090, a cell at CFG 1 in 5.5 to 6.1 s:
+
+| | cells | minutes at 5.5 to 6.1 s | at each group's time | at the admission prices |
+| --- | --- | --- | --- | --- |
+| third stand | 98 | 9.0 to 10.0 | 11.1 | 24.4 |
+| fourth stand | 64 | 5.9 to 6.5 | 7.2 | 16.0 |
+| both | 162 | 14.9 to 16.5 | 18.0 | 39.9 |
+
+Each group's time adds the uploads of S's pictures, one compile and a first job a group. The admission prices, a
+cell's seeded time with a quarter more and 3 s, decide only whether the last cells before `--until` begin. At $0.605
+an hour this is $0.15 to $0.18 of a card that bills anyway. Arm S by step: the draft costs nothing; the edit takes
+8.1 s a pair frame and 8.3 s a trio frame with the draft's upload, 3.3 minutes for its 24; the cleanup 6.1 s, 2.4
+minutes for its 24. A frame in three steps takes 17.6 s where R's takes 5.7 in the pair (11.9 s more, 3.1 times), and
+17.8 where R's takes 5.9 in the trio; without the cleanup 12.3 and 12.5 s, 6.6 s more. In the bot the three steps
+could be one graph with no upload between them.
+
+```sh
+npm run image:refs-backlog -- estimate
+npm run image:refs-backlog -- dry-run --stand3 ~/simple-story-chat-runs/2026-09-28/refs-stand-3 --stand4 ~/simple-story-chat-runs/2026-09-28/refs-stand-4 --from ~/simple-story-chat-runs/2026-09-27/refs-stand    # steps 0 to 16
+bash ~/simple-story-chat-runs/2026-09-28/refs-backlog/run.sh "$end"    # on each card; exit 0 once all 162 are drawn, 3 at "$end", 1 on an error
+npm run image:refs-backlog -- page --stand3 ~/simple-story-chat-runs/2026-09-28/refs-stand-3 --stand4 ~/simple-story-chat-runs/2026-09-28/refs-stand-4
+```
+
+`run.sh` checks the server as the bot's card (cu130, the Triton backend, the kitchen's attention), reads the card's
+record over ssh on every start, since each card has its own, copies it into both stands' directories, and draws. Each
+stand's directory has the first stand's layout, and the drawing writes its `index.html` after each cell. The dry run
+checks the real texts' pins and tokens and reads back all 162 graphs, each view and frame the same on
+gpu/image-workflow-qwen-edit.json and R's and FV's the bot's `referenceGraph` for one to six pictures. Then it draws
+marked copies against local/fake-comfy.ts: its refusals, an `--until` during a job, a card that goes away after 30
+cells, another card that takes over and draws the other 132 with every picture uploaded again, a start after that
+draws nothing, no `front` in any submit, one job at a time, and no prompt outside the texts and the pages.
+
+**Not verified without the card**: the times of S's edit, of a cleanup and of FV with six pictures, and whether six
+fit the card's memory beside a frame; how much of the draft the edit keeps at each level; whether a view drawn at
+720x1280 on the action graph turns as asked, above all in profile; and how long a stand's job waits behind the
+tester's.
