@@ -992,13 +992,15 @@ test('keeping a portrait writes the very one shown into a private file beside th
   assert.doesNotMatch(prompt, /Элин|Elin|48|grey wool coat|Synthetic test style|expression/);
   // A standing figure is drawn on the scenes' canvas turned upright.
   assert.deepEqual(f.comfy.submitted.slice(0, 2).map(graph => latentSizeOf(graph)), [{ width: 1344, height: 768 }, { width: 768, height: 1344 }]);
-  // Its caption, another version, the keep button with the id it was drawn under, and the way back; the text it was
-  // drawn from follows it, folded, with its size and no button; its status line goes, and its job is off the card.
+  // Its caption, another version, the keep button with the id it was drawn under, and the way back; the whole prompt it
+  // was drawn from follows it, folded, with its size and the button for a variant of it by its seed; its status line
+  // goes, and its job is off the card.
   const note = notes(f.sent).at(-1)!;
   assert.deepEqual([first.photo.payload.caption, first.again, first.back, f.requests.length, note.payload.reply_parameters?.message_id,
-    note.payload.reply_markup, htmlOf(note)],
+    note.payload.reply_markup!.inline_keyboard.flat().map(button => [button.text, button.callback_data.split(':').slice(0, 5).join(':')]), htmlOf(note)],
   ['🖼 Портрет: Элин. Лицо и фигура в полный рост, в простой нейтральной одежде.', `portrait:${elin(storyId)}`, `view:character:${elin(storyId)}`, calls,
-    idOf(f.sent, first.photo), undefined, foldedPrompt(texts('ru').characters.drawnFrom(null, [...details].length), details)]);
+    idOf(f.sent, first.photo), [[texts('ru').variant.button, `portrait-edit:${elin(storyId)}:${first.seed}`]],
+    foldedPrompt(texts('ru').notices.promptSummary([...prompt].length, null, null), prompt)]);
   assert.match(first.keep, /^portrait-keep:[0-9a-f]{8}$/);
   assert.ok(f.deleted.includes(idOf(f.sent, f.sent.find(one => one.payload.text === '🎨 Рисую портрет…')!)) && f.comfy.seen.cleared.includes('p2'));
   const row = f.rows.find(one => one.event === 'picture_portrait')!;
@@ -1021,7 +1023,7 @@ test('keeping a portrait writes the very one shown into a private file beside th
   const portrait = person.portrait!;
   assert.match(`${portrait.file} ${portrait.graph}`, /^[0-9a-f]{32}\.png [0-9a-f]{16}$/);
   assert.deepEqual({ ...portrait, file: '', graph: '', at: 0 }, { source: 'drawn', file: '', graph: '', at: 0, seed: second.seed, look: details,
-    clothes: PORTRAIT_CLOTHES, style: PORTRAIT_STYLE, checkpoint: 'synthetic.safetensors', width: 768, height: 1344, steps: 8, cfg: 1,
+    clothes: PORTRAIT_CLOTHES, style: PORTRAIT_STYLE, prompt, checkpoint: 'synthetic.safetensors', width: 768, height: 1344, steps: 8, cfg: 1,
     sampler: 'er_sde', scheduler: 'simple' });
 
   // The very photo shown, without the prompt the card wrote into it, in a directory of this reader's beside the database

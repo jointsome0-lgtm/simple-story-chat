@@ -17,7 +17,7 @@ import { LIMIT, render, renderContext, scenePrefix, sceneKeyboard } from './ui.t
 const CYRILLIC = /[Ѐ-ӿ]/;
 
 // Every callback the bot acts on (local/bot.ts); it answers any other as a stale button.
-const ACTION = /^(view:.+|new-seed|save-seed:[^:]+|start:[^:]+|use:[^:]+:[^:]+|fork:[^:]+:[^:]+|remove-seed:[^:]+|remove-branch:[^:]+:[^:]+|continue|cancel|last|compact|gpu:start|gpu:pause|lang:[a-z]{2}|style:[a-z0-9]+|style-new|style-edit:y\d+|remove-style:y\d+|style-sample:[a-z0-9]+|style-samples|look-edit:[^:]+:\d+:[0-9a-f]{8}|details-edit:[^:]+:\d+:[0-9a-f]{8}|portrait:[^:]+:\d+:[0-9a-f]{8}|pov(?:-off)?:[^:]+:\d+:[0-9a-f]{8}|portrait-keep:[0-9a-f]+)$/;
+const ACTION = /^(view:.+|new-seed|save-seed:[^:]+|start:[^:]+|use:[^:]+:[^:]+|fork:[^:]+:[^:]+|remove-seed:[^:]+|remove-branch:[^:]+:[^:]+|continue|cancel|last|compact|gpu:start|gpu:pause|lang:[a-z]{2}|style:[a-z0-9]+|style-new|style-edit:y\d+|remove-style:y\d+|style-sample:[a-z0-9]+|style-samples|look-edit:[^:]+:\d+:[0-9a-f]{8}|details-edit:[^:]+:\d+:[0-9a-f]{8}|portrait:[^:]+:\d+:[0-9a-f]{8}|pov(?:-off)?:[^:]+:\d+:[0-9a-f]{8}|portrait-default:[^:]+:\d+:[0-9a-f]{8}|portrait-keep:[0-9a-f]+)$/;
 const config = { model: 'synthetic-model', provider: 'llama-cpp', maxOutputTokens: 4096, contextTokens: 65536, compactAtTokens: 54000, keepScenes: 4 };
 
 function node(id: string, parent: string | null, time: string, body: string, input = 'Look around'): SceneNode {
@@ -83,12 +83,14 @@ function drawn(lang: Lang | undefined): Library {
   state.stories.h2.nodes.n5.clothes = { Mira: 'wearing a yellow raincoat' };
   return state;
 }
-// The same, with a portrait kept of the look as it is and one of an earlier look.
+// The same, with a portrait kept of the look as it is and one of an earlier look, whose person has a prompt of the
+// reader's own for their portraits.
 function portraits(lang: Lang | undefined): Library {
   const state = drawn(lang);
   const kept = { file: '0123456789abcdef0123456789abcdef.png', seed: 7, clothes: 'plain', style: 'neutral', graph: '0123456789abcdef',
     checkpoint: 'synthetic.safetensors', width: 720, height: 1280, steps: 8, cfg: 1, sampler: 'euler', scheduler: 'simple', at: 1 };
-  state.stories.h2.sheet = [{ ...SHEET[0], portrait: { ...kept, look: SHEET[0].look } }, { ...SHEET[1], portrait: { ...kept, look: 'Earlier.' } }, SHEET[2]];
+  state.stories.h2.sheet = [{ ...SHEET[0], portrait: { ...kept, look: SHEET[0].look } },
+    { ...SHEET[1], portrait: { ...kept, look: 'Earlier.' }, portraitPrompt: 'A synthetic portrait prompt.' }, SHEET[2]];
   return state;
 }
 
@@ -118,6 +120,7 @@ function screens(lang: Lang | undefined) {
     ['look edit of a lost person', { ...drawn(lang), ui: { input: 'look', storyId: 'h2', name: 'Nobody' } }],
     ['details edit', { ...drawn(lang), ui: { input: 'details', storyId: 'h2', name: 'Oleg' } }],
     ['portraits', portraits(lang)],
+    ['portrait prompt', { ...portraits(lang), ui: { input: 'portrait-prompt', storyId: 'h2', name: 'Oleg', seed: 7, recipe: '0123abcd' } }],
   ];
   for (const [name, state] of states) {
     const details = (route: string): RenderDetails => {
@@ -149,7 +152,7 @@ function screens(lang: Lang | undefined) {
     const fromMenu = new Set(actions);
     walk('model', 'language', 'nonsense', 'seed:s404', 'story:h404', 'tree:h404', 'log:h2:b404:0', 'branch:h2:b404',
       'checkpoints:h2:b404:0', 'checkpoint:h2:c404', 'context:h2:c404', 'delete-seed:s404', 'delete-branch:h2:b404', 'delete-seed:s12', 'delete-branch:h2:b8',
-      'style-input', 'style:y404', 'delete-style:y404', 'delete-style:y20', 'sample:film', 'sample:standard', 'sample:y20', 'prompt-input',
+      'style-input', 'style:y404', 'delete-style:y404', 'delete-style:y20', 'sample:film', 'sample:standard', 'sample:y20', 'prompt-input', 'portrait-prompt-input',
       'characters:h404', 'character:h404:0', 'character:h2:9', 'look-input', 'details-input',
       `portrait:h2:0:${personTag('Mira')}:0a1b2c3d`, `portrait:h2:1:${personTag('Oleg')}:`, `portrait:h2:1:${personTag('Mira')}:0a1b2c3d`,
       `portrait:h404:0:${personTag('Mira')}:0a1b2c3d`, 'portrait-kept:h2:1', 'portrait-kept:h2:9');
@@ -260,7 +263,8 @@ for (const lang of [undefined, ...REGISTERED]) {
     // The texts name the limits the code keeps, and an example works once copied.
     for (const [text, limits] of [[t.errors.styleTooLong, [OWN_STYLE_CHARS]], [t.errors.stylesFull, [OWN_STYLES_MAX]],
       [t.pictureStyle.inputNote(OWN_STYLE_CHARS, OWN_NAME_CHARS), [OWN_STYLE_CHARS, OWN_NAME_CHARS]], [t.pictureStyle.editNote(OWN_STYLE_CHARS), [OWN_STYLE_CHARS]],
-      [t.errors.promptTooLong, [PROMPT_CHARS]], [t.variant.note(PROMPT_CHARS), [PROMPT_CHARS]], [t.errors.lookTooLong, [LOOK_CHARS]],
+      [t.errors.promptTooLong, [PROMPT_CHARS]], [t.variant.note(PROMPT_CHARS), [PROMPT_CHARS]], [t.characters.promptNote(PROMPT_CHARS), [PROMPT_CHARS]],
+      [t.errors.lookTooLong, [LOOK_CHARS]],
       [t.characters.editNote(LOOK_CHARS), [LOOK_CHARS]], [t.errors.detailsTooLong, [DESCRIPTION_CHARS]], [t.characters.detailsNote(DESCRIPTION_CHARS), [DESCRIPTION_CHARS]]] as const) for (const limit of limits) assert.match(text, new RegExp(`\\b${limit}\\b`), text);
     const [name, line, ...rest] = t.pictureStyle.exampleText.split('\n');
     assert.ok(name && [...name].length <= OWN_NAME_CHARS && line && [...line].length <= OWN_STYLE_CHARS && !rest.length && !/[^\x20-\x7e]/.test(line), 'the example style');

@@ -36,8 +36,12 @@ export type Checkpoint = { id: string; branchId: string; label: string; kind: st
 // drawn — its recipe, on a canvas of its own, the text of the person it was drawn from as `look` (their `details` or
 // their look, `portraitText` in local/image-portraits.ts), which a new text of theirs no longer matches, and the
 // clothes and the style line of its prompt. Only the reference experiment's frames use it (local/picture-references.ts).
-// One kept before a reader could send pictures of their own, on 2026-09-27, has no `source`.
-export type KeptPortrait = PictureRecipe & { source?: 'drawn'; file: string; look: string; clothes: string; style: string; at: number };
+// One kept before a reader could send pictures of their own, on 2026-09-27, has no `source`, and one kept before a
+// portrait showed its whole prompt, which the reader may edit, has no `prompt`: the whole prompt it was drawn from, the
+// bot's own or, with `ownPrompt`, the one the reader wrote (the sheet's `portraitPrompt`), which is drawn from nothing
+// else, so its `look`, `clothes` and `style` are empty and whatever it says of them is in `prompt`.
+export type KeptPortrait = PictureRecipe & { source?: 'drawn'; file: string; look: string; clothes: string; style: string; at: number;
+  prompt?: string; ownPrompt?: boolean };
 // The standard poses of a person's references (the owner, 2026-09-27: «по дефолту генерация стандартных поз, а далее с
 // возможностью поменять на свое закрепить»). `front` is the kept portrait, standing and facing the viewer, or the
 // reader's own picture in its place, and the only pose so far: the others are to be drawn from it by editing, which is
@@ -70,9 +74,12 @@ export type Story = {
   // (local/picture.ts `rewrittenSheet`), and their references with it.
   // A reader in the reference experiment may send a picture of a person of their own (docs/telegram-ui.md#references),
   // which is kept in a pose (`poses`); the front's stands over the portrait.
+  // `portraitPrompt` is the whole prompt the reader wrote for this person's portraits, from the one folded under a
+  // portrait (docs/telegram-ui.md#portrait-prompt): every portrait of them is drawn from it word for word until they
+  // drop it, and without it from the bot's own (local/image-portraits.ts `portraitPrompt`).
   sheet?: { name: string; description?: string; changes?: string; details?: string; look: string; outfit?: string;
     descriptionEdited?: boolean; edited?: boolean; lookPending?: boolean; detailsEdited?: boolean; portrait?: KeptPortrait;
-    poses?: Partial<Record<Pose, OwnReference>> }[];
+    poses?: Partial<Record<Pose, OwnReference>>; portraitPrompt?: string }[];
   // The person of the sheet, by name, whose eyes the frames of this story are seen through (the owner, 2026-09-27;
   // local/picture-pov.ts). At most one; without it, or while that person is not in the scene or not on the sheet, a
   // frame is drawn as usual. Only the local bot writes it, from the characters' card.
@@ -100,6 +107,11 @@ export type LookInput = { input: 'look' | 'details'; storyId: string; name: stri
 // their next photo or file is that, if it comes within half an hour of `at`, when the wait began. The person is the one
 // whose card they opened, by story and name.
 export type ReferenceInput = { input: 'reference'; storyId: string; name: string; pose: Pose; at: number; confirm?: undefined };
+// A reader writing the whole prompt of a portrait of one person of a story's sheet (local/picture.ts `portrait`): their
+// next text message is that prompt, which the person keeps as theirs, and a variant of the portrait whose note they
+// pressed is drawn from it with that portrait's `seed`, while the graph and the checkpoint are still the ones its
+// `recipe` tag names. The person is the one the note was under, by story and name.
+export type PortraitPromptInput = { input: 'portrait-prompt'; storyId: string; name: string; seed: number; recipe: string; confirm?: undefined };
 // One of the reader's own picture styles: the name on its button and the line that ends the prompt.
 export type OwnStyle = { id: string; name: string; line: string };
 // How a picture was drawn, all but its prompt (local/picture.ts): its seed, a hash of the graph, the checkpoint's file
@@ -121,7 +133,7 @@ export type Language = 'ru' | 'en' | 'zh' | 'ko' | 'ja';
 export type Library = {
   version: 1; seq: number; seeds: Record<string, Seed>; stories: Record<string, Story>;
   active: { storyId: string; branchId: string } | null; job: Job | null;
-  ui: SeedDraft | DeleteConfirmation | StyleInput | PromptInput | LookInput | ReferenceInput | null; seen: number[];
+  ui: SeedDraft | DeleteConfirmation | StyleInput | PromptInput | LookInput | ReferenceInput | PortraitPromptInput | null; seen: number[];
   interrupted?: boolean; language?: Language;
   // The look of this reader's pictures: a preset's key or the id of one of their own styles, and those styles. Only
   // the local bot reads them (local/picture-style.ts), and only for a reader it draws for; without a choice the bot's

@@ -234,8 +234,8 @@ export const ru = {
     // was off, or its answer failed.
     lookPending: '⏳ Описание сохранено, но бот ещё не пересказал его для картинок, и картинки к сценам и портрет пока берут прежнюю внешность. Бот перескажет его перед следующей картинкой этой истории.',
     // The person's description, the main text of the card, above the look: `own` is true for one the reader wrote,
-    // false for the one the sheet took from the story. Its size in characters alone: the picture model reads the text
-    // a portrait is drawn from, which is under the portrait with its tokens (drawnFrom).
+    // false for the one the sheet took from the story. Its size in characters alone: the picture model reads the
+    // retelling of it in a portrait's prompt, which is under the portrait with its tokens (notices.promptSummary).
     description: (own: boolean): string => own ? 'Описание внешности, твоё (нажми, чтобы скопировать):' : 'Описание внешности из истории (нажми, чтобы скопировать):',
     descriptionSize: (chars: number) => `Текст описания: ${grouped(chars, ' ')} ${form(chars, 'знак', 'знака', 'знаков')}`,
     // Above the lasting changes the story made to the person's look, a scar or a haircut, in the story's language.
@@ -246,17 +246,32 @@ export const ru = {
     clothesSize: (tokens: number | null, chars: number) => textSize('Текст одежды', tokens, chars),
     noClothes: 'Одежда пока не записана.',
     clothesNote: 'Одежду здесь не правят: её меняет сама история, и картинки берут её из сцен.',
-    sizeNote: 'Числа относятся к каждому тексту отдельно. В промпт также входят описание сцены и стиль; точный размер указан под картинкой. Само описание модель картинок не читает: портрет рисуется по его пересказу по-английски, и тот с числом токенов свёрнут под портретом.',
+    sizeNote: 'Числа относятся к каждому тексту отдельно. В промпт также входят описание сцены и стиль; точный размер указан под картинкой. Само описание модель картинок не читает: портрет по обычному промпту рисуется по его пересказу по-английски. Весь промпт портрета, с одеждой, фоном и позой, свёрнут под ним с числом токенов, и его можно поправить.',
     scope: 'Правка внешности действует на следующие картинки всех веток этой истории. Текст истории, память и уже нарисованные картинки не меняются, а картинка, которая рисуется сейчас, может выйти по-старому.',
     // What a portrait is drawn from: `details` is true for the English retelling of the description, false for the short
     // look of a person not retold yet.
     portraitNone: (details: boolean) => `🖼 Портрета пока нет. Портрет рисует лицо и фигуру в полный рост по ${details ? 'пересказу описания' : 'короткой внешности'}, так проще подобрать референс.`,
     portraitKept: (details: boolean) => `🖼 Портрет сохранён: лицо и фигура по ${details ? 'пересказу описания' : 'короткой внешности'}.`,
     portraitStale: (details: boolean) => `🖼 Сохранённый портрет нарисован по прежней внешности. Новый покажет лицо и фигуру по ${details ? 'пересказу описания' : 'короткой внешности'}.`,
+    // The kept portrait was drawn from a prompt the reader wrote, which the person no longer has: a new one is drawn
+    // from the bot's own prompt again.
+    portraitOfOwnPrompt: (details: boolean) => `🖼 Сохранённый портрет нарисован по твоему прежнему промпту. Новый покажет лицо и фигуру по ${details ? 'пересказу описания' : 'короткой внешности'}.`,
+    // The same while the person has a prompt the reader wrote for their portraits (ownPrompt below): none kept yet, one
+    // kept that was drawn from that very prompt, and one drawn from another, the bot's own or an earlier one.
+    promptPortraitNone: '🖼 Портрета пока нет.',
+    promptPortraitKept: '🖼 Портрет сохранён: нарисован по твоему нынешнему промпту.',
+    promptPortraitStale: '🖼 Сохранённый портрет нарисован не по нынешнему промпту.',
+    // Under the line above while the person has a prompt the reader wrote; the button it names is defaultPrompt.
+    ownPrompt: '✍️ Портреты рисуются по твоему промпту слово в слово, с новым начальным шумом каждый раз; описание и короткая внешность в него не входят. «↩️ Обычный промпт» вернёт промпт бота.',
+    // For a reader in the reference experiment, whose frames take the kept portrait (local/picture-references.ts
+    // `referencePrompt`, which tells them to copy nothing of it but the person), while it is a drawn one or none.
+    portraitFrames: 'Кадрам велено брать с сохранённого портрета только лицо и фигуру и не копировать одежду; она всё же может проступить, и её можно поправить в промпте под портретом.',
     edit: '✏️ Изменить короткую внешность',
     // Opens the wait for a description, also for a person who has none yet.
     editDetails: '✏️ Изменить описание',
     portrait: '🖼 Портрет',
+    // Drops the prompt the reader wrote for the person's portraits, for the bot's own.
+    defaultPrompt: '↩️ Обычный промпт',
     // The frames of the story seen through this person's eyes (local/picture-pov.ts): the button that turns it on, the
     // one back to the usual frames, the last line of that person's card, and the last line of another person's card
     // while the frames are seen through the eyes of `person`, where the first button switches them to this one.
@@ -270,16 +285,21 @@ export const ru = {
     editNote: (max: number) => `Пришли новую короткую внешность одним сообщением, до ${max} знаков: лицо, волосы, телосложение, рост, приметы. Одежду и имя не пиши: одежду меняет история, а имя остаётся прежним. Модель картинок лучше всего понимает английский.`,
     // Under editNote, when the portrait is drawn from the retold description: it stays so.
     editKeepsDetails: 'Портрет по-прежнему рисуется по пересказу описания. Твоя короткая внешность заменит пересказанную до следующей правки описания.',
+    // Under editNote and detailsNote, when the person's portraits are drawn from a prompt the reader wrote.
+    ownPromptKeeps: 'Портреты этого персонажа рисуются по твоему промпту, и эта правка их не изменит.',
     // While the reader writes a description. `max` is a limit in characters.
     detailsTitle: (person: string, story: string) => `✏️ Описание внешности: ${person} · ${story}`,
     detailsNote: (max: number) => `Пришли описание внешности одним сообщением, до ${max} знаков, на любом языке и в любом виде, с переносами строк и таблицей мерок тоже: пол, возраст и на сколько человек выглядит, цвет кожи, рост и телосложение, мерки, волосы и обычная причёска, лицо, приметы. Одежду и имя не пиши: одежду берут из сцен. Бот перескажет его по-английски для портрета и сожмёт в короткую внешность для картинок к сценам, ничего не добавляя от себя. Постоянные перемены по ходу истории (шрам, стрижку) он прибавит к описанию, а где они с ним расходятся, поверит описанию. Короткая внешность, написанная тобой, заменится пересказанной.`,
     nowText: 'Сейчас:',
     backToCard: '↩️ К персонажу',
-    // Under a portrait, which is drawn in plain neutral clothes whatever the story's.
+    // Under a portrait of the bot's own prompt, which is drawn in plain neutral clothes whatever the story's, and under
+    // one drawn from a prompt the reader wrote. The whole prompt follows it, folded as under every picture.
     caption: (person: string) => `🖼 Портрет: ${person}. Лицо и фигура в полный рост, в простой нейтральной одежде.`,
-    // The one line of the folded block under a portrait that holds the text of the person it was drawn from: the English
-    // retelling of the description, or the short look (local/picture.ts `portrait`). Its size as lookSize.
-    drawnFrom: (tokens: number | null, chars: number) => textSize('🖼 Внешность, по которой нарисован портрет', tokens, chars),
+    ownCaption: (person: string) => `🖼 Портрет: ${person}. Нарисован по твоему промпту.`,
+    // While the reader writes the whole prompt of the person's portraits, from the button under a portrait's prompt
+    // (variant.button). `max` is PROMPT_CHARS in local/picture-style.ts.
+    promptTitle: (person: string, story: string) => `✏️ Промпт портрета: ${person} · ${story}`,
+    promptNote: (max: number) => `Скопируй промпт из заметки под портретом, поправь и пришли одним сообщением, до ${max} знаков. Это весь промпт, я ничего не добавлю и не уберу. Нарисую вариант с теми же настройками и тем же начальным шумом, что и тот портрет, так что отличаться будет только промпт. Промпт останется у персонажа: следующие портреты будут рисоваться по нему с новым шумом, пока на карточке персонажа не нажмёшь «↩️ Обычный промпт».`,
     again: '🔄 Ещё вариант',
     keep: '✅ Оставить',
     // Once the reader kept a portrait. Experiment readers also get the retention notice.
@@ -766,6 +786,7 @@ export const ru = {
     portraitPending: 'Внешность этого персонажа ещё не пересказана для картинок, поэтому портрет пока нарисовать нельзя. Попробуй после следующей картинки этой истории.',
     portraitStale: 'Этот портрет уже не сохранить: он устарел или внешность с тех пор изменилась. Нарисуй новый.',
     portraitInFlight: 'Уже рисую картинку по твоей просьбе. Портрет можно попросить, когда она придёт.',
+    portraitPromptGone: 'Этого персонажа уже нет в истории, промпт не сохранён. Открой /menu.',
     // A picture of the reader's own (local/reference.ts). The numbers are REFERENCE_SIDES and REFERENCE_BYTES there, and
     // the half hour is REFERENCE_WAIT_MS.
     referencesOff: 'Свои картинки персонажей тебе сейчас недоступны. Открой /menu.',
