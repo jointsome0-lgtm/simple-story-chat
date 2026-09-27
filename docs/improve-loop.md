@@ -131,8 +131,10 @@ The main group, decisions are made on it:
 openrouter:google/gemma-4-31b-it,mistral:ministral-14b-2512,openai:gpt-5.4-mini,claude:claude-haiku-4-5-20251001
 ```
 
-Gemma here is paid (`openrouter-paid`, limit 600 000 tokens per day, about $0.20); why the free one was not taken is
-in [provider-checks.md](knowledge/provider-checks.md#free-gemma-2026-09-19). We do not take a model without an enforced schema into the main group: its format is random, and the noise covers any edit.
+Gemma here is paid (`openrouter-paid`). The owner raised its limit from 600 000 to 4 000 000 tokens a day on the night
+of 2026-09-27, about $1.3 a day at most at the old rate. Why the free one was not taken is in
+[provider-checks.md](knowledge/provider-checks.md#free-gemma-2026-09-19). We do not take a model without an enforced
+schema into the main group: its format is random, and the noise covers any edit.
 
 Control, for the rare full run: `openrouter:deepseek/deepseek-v4-flash-0731:free`. A weak model for checking the clarity of wording: `openrouter:liquid/lfm-2.5-2.6b:free`.
 

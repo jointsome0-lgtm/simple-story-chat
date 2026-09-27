@@ -4,7 +4,7 @@ import { ModelError, member } from './model-error.ts';
 import type { ModelConfig } from './config.ts';
 import { modelBaseUrl } from './config.ts';
 import type { Controls, GenerateControls, GenerationResult, ModelRequest, Timings } from './model.ts';
-import { MAX_BODY, events, messagesFor } from './llama.ts';
+import { MAX_BODY, events, messagesFor, streamLimit } from './llama.ts';
 
 // simple-serving: our own gateway in front of vLLM on a rented card, built to contract v2 (docs/contract-v2.md in
 // jointsome0-lgtm/simple-serving; the cases both sides test are pinned in local/serving-contract/). Unlike llama-server
@@ -81,7 +81,7 @@ export function createServing(config: ServingConfig, { fetch: fetcher = globalTh
     max_tokens: request.maxOutputTokens, stream: true, stream_options: { include_usage: true },
     temperature: request.purpose === 'memory' ? 0.2 : config.temperature ?? 0.8,
     top_p: 0.95, top_k: 64, min_p: 0, repetition_penalty: 1,
-    chat_template_kwargs: { enable_thinking: false },
+    chat_template_kwargs: { enable_thinking: request.thinking === true },
     ...(request.outputSchema ? { response_format: { type: 'json_schema',
       json_schema: { name: 'reply', strict: true, schema: request.outputSchema } } } : {}),
   });
@@ -227,7 +227,7 @@ export function createServing(config: ServingConfig, { fetch: fetcher = globalTh
         // holds one choice or none; a choice has index 0 and a delta of text, reasoning or neither, never a tool; one
         // finish, `stop` or `length`; after it only the usage chunk, and after that only `[DONE]`. An error event, or
         // any of these broken, fails the stream, and so does a stream that ends before `[DONE]`.
-        for await (const data of events(response.body)) {
+        for await (const data of events(response.body, streamLimit(request))) {
           if (data === '[DONE]') { done = true; break; }
           let event: unknown;
           try { event = JSON.parse(data); } catch { throw new ModelError('invalid_stream'); }

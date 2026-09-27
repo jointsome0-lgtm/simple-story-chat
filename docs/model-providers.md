@@ -108,6 +108,22 @@ saved with the memory. Compare it with `plain` on your own
 model with the [background probe](llama-cpp.md#background-memory-comparison) before turning it on for users; what the
 eval found so far is in [improve-runs.md](knowledge/improve-runs.md#schema-2026-09-18).
 
+<a id='memory-thinking'></a>
+
+`MEMORY_THINKING=true` lets the model think before it answers a compaction, for measuring
+([improve-runs.md](knowledge/improve-runs.md#memory-thinking-2026-09-27)). It is off by default. The scenes never think,
+as a scene streams to the reader and thinking would delay its first word, and neither does the eval's recall. A
+compaction's request then carries `thinking` (`local/memory.ts`): OpenRouter gets `reasoning: { enabled: true }`,
+llama.cpp `enable_thinking: true` without `reasoning_effort: 'none'`, and simple-serving `enable_thinking: true`; the
+other adapters send what they always send. The reasoning counts against the output limit, so the limit grows by 12288:
+16384 for `plain` and its repair, 20480 for `sgr`, and the context must leave that much room. Each reasoning token
+comes as an event of its own, so llama.cpp, simple-serving and OpenRouter let such a stream grow to 2,000,000 bytes for
+every 4096 tokens of the limit rather than 2,000,000 in all (`streamLimit`, `local/llama.ts`). The name has no
+`SIMPLE_CHAT_` prefix because the eval passes none of those to its probes. The probes, the eval and the agent
+interface read it, the bot's own turns do not, and the bot's model socket refuses a limit above 8192, so a thinking
+compaction needs a direct connection (`memory:probe --direct`). On 2026-09-27 only hosted Gemma 4 31B had run with it,
+and its memory scored no better; llama.cpp and simple-serving had not.
+
 ### Compaction prepared while the person reads
 
 The extraction depends only on the branch, not on the person's next action. So when a scene's input and output

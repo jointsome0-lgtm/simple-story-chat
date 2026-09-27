@@ -13,7 +13,7 @@ import type { Store } from './store.ts';
 import type { Prepared } from './prepare.ts';
 
 // Only the configuration fields generation reads; the bot and probes pass their full configuration.
-export type GenerationConfig = ContextConfig & { memoryMode?: 'plain' | 'sgr'; repairCoverage?: boolean };
+export type GenerationConfig = ContextConfig & { memoryMode?: 'plain' | 'sgr'; repairCoverage?: boolean; memoryThinking?: boolean };
 // Compaction does not read the model or provider name.
 type CompactionConfig = Omit<GenerationConfig, 'model' | 'provider'>;
 // `prepared`: extraction results computed ahead (local/prepare.ts), taken for an identical request.
@@ -92,7 +92,7 @@ async function extractAndSave({ store, userId, jobId, provider, config, signal, 
     let ahead: number | undefined;
     const progress = (stage: CompactionStatus['stage']) => report({ stage, scenes: nodes.length, keptScenes: config.keepScenes ?? 4,
       outputCharacters: numbers.outputCharacters, repairScenes: numbers.repairSceneCount, ahead: stage === 'queued' ? ahead : undefined });
-    const extract = async (subset: SceneNode[], request = summaryRequest(target, subset, config.memoryMode)) => {
+    const extract = async (subset: SceneNode[], request = summaryRequest(target, subset, config.memoryMode, config.memoryThinking)) => {
       Object.assign(numbers, { requestBytes: requestBudget(request, config.contextTokens).inputBytes, outputCharacters: 0 });
       // One row before each model request and one after it. A request that fails has its row written by the caller.
       record('compaction_request_started');
@@ -134,7 +134,7 @@ async function extractAndSave({ store, userId, jobId, provider, config, signal, 
         numbers.repairSceneCount = subset.length;
         // One supplement, solely for omitted scenes. Never invent coverage or
         // save partial memory; validate the supplement and combined result.
-        const repair = await extract(subset, supplementRequest(target, nodes, draft));
+        const repair = await extract(subset, supplementRequest(target, nodes, draft, config.memoryThinking));
         load();
         progress('validating');
         const extra = parseMemory(repair, subset, 'plain', lang);

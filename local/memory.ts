@@ -15,12 +15,19 @@ type Output = { text?: unknown; finishReason?: unknown };
 type MemoryReason = NonNullable<ErrorDetails['memoryReason']>;
 
 const SUMMARY_TOKENS = 4096;
+// Under the thinking switch (local/config.ts `memoryThinking`) the reasoning counts against the answer's limit, so
+// either mode gets this much more. Hosted Gemma 4 31B's finished compactions of `hospital` took up to 5903 tokens,
+// reasoning included (improve-runs, 2026-09-27).
+const THINKING_TOKENS = 12288;
+// A memory request's output limit: a maximum, not a length. config.ts keeps the context's room for it.
+export const memoryOutputTokens = (mode: string, thinking = false) =>
+  (mode === 'sgr' ? 8192 : SUMMARY_TOKENS) + (thinking ? THINKING_TOKENS : 0);
 const FACT_KINDS = ['event', 'state', 'knowledge', 'relationship', 'promise', 'directive', 'uncertainty'] as const;
 const invalid: (memoryReason?: MemoryReason, details?: ErrorDetails) => never =
   (memoryReason = 'shape', details) => { throw new ModelError('invalid_memory', { ...details, operation: 'compact', memoryReason }); };
 
 // Extraction reads the scenes of the story, so its rules are written in the language of the seed (story-text.ts).
-function plainRequest(target: Target, nodes: Scene[], repair?: { draftFacts: Fact[]; precedingScenes: Scene[] }): ModelRequest {
+function plainRequest(target: Target, nodes: Scene[], thinking: boolean, repair?: { draftFacts: Fact[]; precedingScenes: Scene[] }): ModelRequest {
   const maxFacts = repair ? 200 - repair.draftFacts.length : 200;
   if (maxFacts < 1) invalid('coverage');
   const n = seedNarration(target.seed);
@@ -31,8 +38,9 @@ function plainRequest(target: Target, nodes: Scene[], repair?: { draftFacts: Fac
       ...(repair ?? {}),
       newScenes: nodes.map(({ id, input, text }) => ({ id, input, text })),
     }) }],
-    maxOutputTokens: SUMMARY_TOKENS,
+    maxOutputTokens: memoryOutputTokens('plain', thinking),
     purpose: 'memory',
+    ...(thinking ? { thinking: true } : {}),
     outputSchema: {
       type: 'object', required: ['facts'], additionalProperties: false,
       properties: { facts: { type: 'array', minItems: 1, maxItems: maxFacts, items: {
@@ -91,9 +99,9 @@ const object = (properties: Record<string, object>) => ({ type: 'object', proper
 const string = (maxLength: number) => ({ type: 'string', minLength: 1, maxLength });
 const list = (items: object, maxItems: number, minItems = 0) => ({ type: 'array', items, minItems, maxItems });
 const evidenceId = { type: 'string', pattern: '^e[1-9][0-9]{0,3}$' };
-function sgrRequest(target: Target, nodes: Scene[]): ModelRequest {
-  const base = plainRequest(target, nodes);
-  return { ...base, system: seedNarration(target.seed).sgrRules, maxOutputTokens: 8192, outputSchema: object({
+function sgrRequest(target: Target, nodes: Scene[], thinking: boolean): ModelRequest {
+  const base = plainRequest(target, nodes, thinking);
+  return { ...base, system: seedNarration(target.seed).sgrRules, maxOutputTokens: memoryOutputTokens('sgr', thinking), outputSchema: object({
     evidence: list(object({ id: evidenceId, scene: { type: 'string', enum: nodes.map(n => n.id) },
       part: { type: 'string', enum: ['input', 'text'] }, quote: string(1000) }), 400, 1),
     conflicts: list(object({ input: evidenceId, text: evidenceId,
@@ -158,17 +166,17 @@ function parseSgr(result: Output, nodes: Scene[], n: Narration): Delta {
   return { facts, sgr: data as { evidence: unknown[]; conflicts: unknown[]; facts: unknown[] } };
 }
 
-export function summaryRequest(target: Target, nodes: Scene[], mode = 'plain'): ModelRequest {
-  if (mode === 'plain') return plainRequest(target, nodes);
-  if (mode === 'sgr') return sgrRequest(target, nodes);
+export function summaryRequest(target: Target, nodes: Scene[], mode = 'plain', thinking = false): ModelRequest {
+  if (mode === 'plain') return plainRequest(target, nodes, thinking);
+  if (mode === 'sgr') return sgrRequest(target, nodes, thinking);
   throw new ModelError('invalid_memory_mode');
 }
 
-export function supplementRequest(target: Target, nodes: Scene[], draft: ReturnType<typeof inspectMemory>) {
+export function supplementRequest(target: Target, nodes: Scene[], draft: ReturnType<typeof inspectMemory>, thinking = false) {
   const missing = new Set(draft.missingSceneIds);
   const preceding = new Set(nodes.flatMap((node, index) =>
     missing.has(node.id) && index > 0 && !missing.has(nodes[index - 1].id) ? [nodes[index - 1]] : []));
-  return plainRequest(target, nodes.filter(node => missing.has(node.id)), {
+  return plainRequest(target, nodes.filter(node => missing.has(node.id)), thinking, {
     draftFacts: draft.delta.facts,
     precedingScenes: [...preceding].map(({ id, input, text }) => ({ id, input, text })),
   });

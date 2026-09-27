@@ -11,6 +11,126 @@ line per decision. A new step gets its full entry here, on top, and its line the
 Paths to result directories say where the numbers came from at the time. They do not promise that the files still
 exist or that you may read them.
 
+<a id='memory-thinking-2026-09-27'></a>
+
+## 2026-09-27 · Opus 5.5 · thinking while compacting, on hosted Gemma 4 31B
+
+Not a step of the loop: a measurement the owner approved on 2026-09-27, and it accepts no change. The question: does
+letting the model think while it compacts raise Gemma 4 31B's memory `score` on the scenarios built to separate
+models? On [09-22](#scenarios-2026-09-22) the compactors that reason kept all of `hospital` through the same
+increments, and every Gemma so far has compacted with thinking off. The scenes stay without it: a scene streams to the
+reader, and thinking would delay its first word.
+
+The switch. `MEMORY_THINKING=true`, off by default ([model-providers.md](../model-providers.md#memory-thinking)),
+gives a compaction's request `thinking` and 12288 more output tokens, 16384 in `plain`. OpenRouter then gets
+`reasoning: { enabled: true }`, llama.cpp `enable_thinking: true` without `reasoning_effort: 'none'`, and
+simple-serving `enable_thinking: true`. The recall and the scenes never think. With the switch off every request is
+what it was: the bodies of a `plain`, an `sgr`, a repair and a scene request through OpenRouter, OpenAI, Mistral,
+llama.cpp and simple-serving, and the configuration under four settings, were compared byte for byte with c53a566's,
+28 of 28 equal, and no test changed.
+
+The smoke. One `chess` run with the switch on and, at first, a limit of 8192: OpenRouter took reasoning together with
+the enforced schema, and the three compactions wrote 2062, 4249 and 2086 tokens with 3758, 9580 and 3296 characters of
+reasoning, in 60, 84 and 44 s. The recall answered 6/7. One compaction used over half of that limit, and `hospital`
+holds about twice the facts, so the limit was raised once, to 16384, before the measured runs.
+
+Commands, from the repository, with `R=~/simple-story-chat-runs/2026-09-27/thinking` and N = 1, 2, 3. The three runs
+of a side ran at once, and `npm run eval -- usage` ran before, between and after:
+
+```
+MEMORY_THINKING=true TMPDIR=$R/tmp npm run eval -- --pack ~/simple-story-chat-eval --scenarios chess --mode plain --models openrouter:google/gemma-4-31b-it --out $R/smoke-chess-on.json
+TMPDIR=$R/tmp npm run eval -- --pack ~/simple-story-chat-eval --scenarios assault,hospital --mode plain --models openrouter:google/gemma-4-31b-it --out $R/off-N.json
+MEMORY_THINKING=true TMPDIR=$R/tmp npm run eval -- --pack ~/simple-story-chat-eval --scenarios assault,hospital --mode plain --models openrouter:google/gemma-4-31b-it --out $R/on3-N.json
+```
+
+The switch-off side ran at 23:32 UTC on 09-26. The switch-on command ran three times on 09-27: as `on-N` at 00:00 UTC,
+`on2-N` at 02:31 and `on3-N` at 02:35. The first two measured nothing (below), and the third is the switch-on side.
+Between the sides the code differs only in the stream guard of a thinking request, which no switch-off request
+reaches.
+
+Memory, mode `plain`, no judge:
+
+| Scenario | Off, runs 1 · 2 · 3 | On, runs 1 · 2 · 3 |
+| --- | --- | --- |
+| `assault` | 8/12 · 8/12 · 8/12 | 8/12 · 9/12 · 8/12 |
+| `hospital` | 4/12 · 4/12 · 5/12 | 3/12 · 5/12 · 4/12 |
+
+- `assault`: off lost the same four counts in every run, `river_barriers`, `road_barriers`, `tunnel_barriers` and
+  `river_stock`. On lost the same four in runs 1 and 3, and kept `road_barriers` in run 2. `river_barriers` stood in
+  every memory of both sides, and the recall misread it.
+- `hospital`: both sides lost `garden_cells`, `river_stretchers`, `boat_spare`, `next_departure`, `origin_evacuated`
+  and `boris_learned` in every run. Off also lost `river_left` and `polina_learned` in two runs and `bridge_limit` in
+  one; on lost `polina_learned` in all three, `river_left` in two and `bridge_limit` in one. Whenever `river_left`,
+  `garden_cells` or `origin_evacuated` was lost, on either side, the number stood in the memory and the recall
+  misread it.
+- These are the production Q6_K's 8/12 and 4/12 on the same scenarios ([09-26](#route-a-2026-09-26)).
+
+Per compaction, and per scenario:
+
+| | Off, 18 compactions | On, 18 compactions |
+| --- | --- | --- |
+| Output tokens, mean (range) | 1198 (674–1642) | 4295 (2631–5581) |
+| Reasoning characters, mean (range) | 0 | 7409 (4288–10295) |
+| Seconds, mean (range) | 34 (8–60) | 110 (62–196) |
+| Facts, mean | 17.7 | 24.3 |
+| `assault`, `hospital`, seconds a run | 80, 137 | 301, 375 |
+
+The first two switch-on attempts. On the first, the adapter cut four of the six cells: the compaction after scene 11
+of `assault` in runs 1 and 3 and of `hospital` in run 2, and after scene 7 of `hospital` in run 3, each after 135 to
+149 s. The code was `output_limit` from `events()` in `local/llama.ts`: the whole stream passed the adapter's guard of
+2,000,000 bytes. It was not a `length` finish, which the probe gets as `invalid_memory` with
+`memoryReason: output_limit` and retries. The finished thinking compactions wrote up to 5903 tokens in up to 127 s,
+about 46 tokens a second, so each cut came at about 6000 to 7000 tokens, far below the limit of 16384: OpenRouter
+streams a reasoning token as an event of its own, some 300 bytes. Those four 0/12 cells say nothing about memory; the
+two cells that finished were `assault` 9/12 and `hospital` 4/12. The guard now grows for a thinking request only:
+`streamLimit` in `local/llama.ts` gives its stream 2,000,000 bytes for every 4096 tokens of its limit, 8,000,000 at
+16384, and every other request keeps 2,000,000. A synthetic stream of 3 MB passes with thinking and fails
+`output_limit` without it, and the switch-off bodies stay equal to c53a566's. The second attempt was stopped by hand
+70 s in, under the rule that any failed run ends it: run 3's `assault` had failed in 11 s with `provider_failed` in
+phase `health`, the adapter's look-up of the model in OpenRouter's `/models` before anything is generated, which reads
+as a passing failure. One thinking compaction had finished, 2344 tokens in 56 s. The third attempt ran whole, with no
+failure and no retry.
+
+The cost, as this measurement's own requests, since the ledger's days were shared:
+
+| | Requests | Tokens by usage | Reserved, never settled |
+| --- | --- | --- | --- |
+| Smoke | 4 | 24,790 | |
+| Off | 24 | 158,516 | |
+| On, first attempt | 15 | 98,218 | 91,110 for the four cut requests |
+| On, second attempt | 4 | 5,532 | 65,414 for the three stopped requests |
+| On, third attempt | 24 | 222,367 | |
+
+A request that fails keeps its reservation in the ledger, its input and 16,384. What the provider billed for the cut
+and stopped ones is not known, and it is well below that. At the prices of the endpoints that take reasoning with a
+schema and that OpenRouter prefers, $0.08 to $0.15 a million in and $0.30 to $0.40 out, a switch-off run cost $0.006
+to $0.010 and a switch-on run $0.012 to $0.018, and the whole measurement about $0.09 to $0.13. In the ledger
+2026-09-26 ended at 165 requests and 355,311 tokens, 28 and 183,306 of them this measurement's, and 2026-09-27 stood at
+88 requests and 615,782 tokens at 03:35 UTC, 43 and 482,641 of them this measurement's. The rest of both days was
+another agent's hosted checks with this tree's code.
+
+Conclusion: thinking does not raise the memory score here. `assault` went from 8, 8, 8 to 8, 9, 8 and `hospital` from
+4, 4, 5 to 3, 5, 4: one question once, inside the spread the rule asks a change to beat, with the same keys lost on
+both sides. What stays lost is the accumulated counts, and several of them stood in the memory and were misread by the
+recall, which thinking at compaction does not reach. The price is 3.6 times the output tokens and 3.3 times the
+compaction time, for 37% more facts. The switch stays off.
+
+Limitations:
+- Hosted Gemma 4 31B is an optimistic stand-in for the bot's heretic Q6_K
+  ([acceptance](../improve-loop.md#acceptance-on-gpu)). Here, with thinking off, it scored what the Q6_K scored, but
+  after refusal removal and quantization the model follows the format worse, and nobody has seen the Q6_K think under
+  the Gemma 4 grammar of the pinned llama.cpp. Only a card run, on the owner's word, can accept anything.
+  `npm run eval -- --models gpu:<label>` with `MEMORY_THINKING=true` needs no code. The bot's own compactions do not
+  read the switch, and its model socket refuses a limit above 8192, so `memory:probe` through the running bot's queue,
+  the acceptance path, needs code first.
+- OpenRouter picks a provider for each request, and the log does not say which. Endpoints capped at 8192 output
+  tokens may drop out at 16384, so the two sides may have run on different mixes of providers and quantizations.
+- Three runs a side, two scenarios, one pack. The switch-off side ran on 2026-09-26 UTC and the switch-on side on
+  2026-09-27 UTC, both on the owner's 09-27. `sgr` was not run: its six runs did not fit the 600,000 tokens a day
+  planned beside `plain`'s. `carnival` is in the holdout, which this session does not open.
+- Results: `$R/off-N.json`, `$R/on-N.json`, `$R/on2-N.json` and `$R/on3-N.json` with their `.log` files, the smoke's,
+  and the probes' directories under `$R/tmp/`.
+
 <a id='route-a-2026-09-26'></a>
 
 ## 2026-09-26 · Opus 5.5 · route A against the Q6_K again, with the texts kept and three judges

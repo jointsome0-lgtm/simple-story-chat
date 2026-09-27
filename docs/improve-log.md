@@ -8,6 +8,12 @@ and the main result with its limit. A new step gets its full entry there and its
 accepted**: tried and reverted. **Measurement**: numbers without a decision on a change. **Open**: a decision still
 waits. An open line is unfinished work, not an order to finish it.
 
+- 2026-09-27 · **measurement** · [Thinking while compacting, on hosted Gemma 4 31B](knowledge/improve-runs.md#memory-thinking-2026-09-27).
+  No gain. With thinking the memory scored 8, 9 and 8/12 on `assault` and 3, 5 and 4/12 on `hospital`; without it
+  8/12 three times and 4, 4 and 5/12. Both sides lost the same keys, and thinking cost 3.6 times the output tokens
+  and 3.3 times the compaction time. The first switch-on runs were cut by our own 2 MB stream guard, not by the
+  model; the guard now grows for thinking requests. The switch stays off. Hosted Gemma stands in for the heretic
+  Q6_K, and the bot would need a card run on the owner's word.
 - 2026-09-26 · **accepted** · [Route A against the Q6_K again, with the texts kept and three judges](knowledge/improve-runs.md#route-a-2026-09-26).
   Both routes hold the same facts in memory, and both lose the `dance` twins in the reading, so the first card's three
   passes were one sample. By three judges and two readers route A loses in counting ampoules within a scene and in

@@ -1,11 +1,12 @@
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { parseEnv } from 'node:util';
 import { basename, dirname, join, resolve } from 'node:path';
+import { memoryOutputTokens } from './memory.ts';
 
 export type Env = NodeJS.Dict<string>;
 export type ModelConfig = {
   provider: 'claude-code' | 'codex-cli' | 'llama-cpp' | 'openai-compatible' | 'simple-serving'; model: string; baseUrl: string | undefined; apiKey: string; temperature: number;
-  memoryMode: 'plain' | 'sgr'; repairCoverage: boolean; timeoutMs: number; contextTokens: number; maxOutputTokens: number;
+  memoryMode: 'plain' | 'sgr'; repairCoverage: boolean; memoryThinking: boolean; timeoutMs: number; contextTokens: number; maxOutputTokens: number;
   compactAtTokens: number; keepScenes: number;
   // The scheduler's lanes: llama.cpp's slots, or the calls simple-serving takes from the bot at once. For llama.cpp
   // also whether the slots share one KV cache (`--kv-unified`) and how many cells that is. With isolated slots, and
@@ -87,8 +88,12 @@ function modelConfig(env: Env): ModelConfig {
   if (memoryMode !== 'plain' && memoryMode !== 'sgr') throw new Error('Invalid SIMPLE_CHAT_MEMORY_MODE');
   const repairCoverage = env.SIMPLE_CHAT_MEMORY_REPAIR_COVERAGE || 'false';
   if (!['true', 'false'].includes(repairCoverage)) throw new Error('Invalid SIMPLE_CHAT_MEMORY_REPAIR_COVERAGE');
+  // Lets a compaction think (docs/model-providers.md#memory-thinking), for measuring: the bot's own turns never pass it
+  // on (local/main.ts). No SIMPLE_CHAT_ prefix, because the eval gives its probes none of those (local/eval.ts `probe`).
+  const memoryThinking = env.MEMORY_THINKING || 'false';
+  if (!['true', 'false'].includes(memoryThinking)) throw new Error('Invalid MEMORY_THINKING');
   const maxOutputTokens = integer('SIMPLE_CHAT_MAX_OUTPUT_TOKENS', 4096, 256, 8192);
-  const maxInput = contextTokens - Math.max(maxOutputTokens, memoryMode === 'sgr' ? 8192 : 4096);
+  const maxInput = contextTokens - Math.max(maxOutputTokens, memoryOutputTokens(memoryMode, memoryThinking === 'true'));
   if (maxInput < 2048) throw new Error('Output reserve leaves too little input context');
   // A pool (scheduler.ts) needs a server started with the same slots (gpu/serve.sh). By default each slot holds its own
   // request of `contextTokens` and nothing is divided. `SIMPLE_CHAT_GPU_KV_UNIFIED=true` is llama.cpp's `--kv-unified`:
@@ -104,7 +109,7 @@ function modelConfig(env: Env): ModelConfig {
   const poolTokens = slots > 1 && sharedCache ? integer('SIMPLE_CHAT_POOL_TOKENS', contextTokens, contextTokens, 131072) : contextTokens;
   return {
     slots, poolTokens, sharedCache,
-    provider, model, baseUrl, apiKey, temperature, memoryMode, repairCoverage: repairCoverage === 'true',
+    provider, model, baseUrl, apiKey, temperature, memoryMode, repairCoverage: repairCoverage === 'true', memoryThinking: memoryThinking === 'true',
     timeoutMs: integer('SIMPLE_CHAT_MODEL_TIMEOUT_MS', 300000, 1000, 1800000),
     contextTokens, maxOutputTokens,
     compactAtTokens: integer('SIMPLE_CHAT_COMPACT_AT_TOKENS', Math.min(provider === 'claude-code' || provider === 'codex-cli' ? 54000 : 44000, maxInput), 2048, maxInput),

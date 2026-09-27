@@ -14,9 +14,11 @@ export type ChatMessage = { role: 'user' | 'assistant'; content: string };
 // `trustEstimate`: the caller's estimate is far enough below its limit that a provider which counts input exactly
 // may send the request without counting it first (local/llama.ts); the count the server reports while generating
 // still decides whether the result stands.
+// `thinking`: the model may reason before it answers. Only a compaction under the thinking switch asks for it
+// (local/memory.ts); llama.cpp, simple-serving and OpenRouter send thinking off without it, and other adapters ignore it.
 export type ModelRequest = {
   system: string; messages: ChatMessage[]; maxOutputTokens: number;
-  purpose?: 'memory'; outputSchema?: object; estimatedInputTokens?: number; trustEstimate?: boolean;
+  purpose?: 'memory'; outputSchema?: object; estimatedInputTokens?: number; trustEstimate?: boolean; thinking?: boolean;
 };
 // Whose call a shared model's queue (local/scheduler.ts) runs. `foreground`: a person in Telegram. `agent`: a turn of
 // the agent interface (local/agent-api.ts), real work that fills the GPU while people read and, once started, is not

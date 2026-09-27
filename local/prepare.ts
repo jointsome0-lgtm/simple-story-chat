@@ -10,7 +10,7 @@ import { seedLanguage } from './story-text.ts';
 // only on the branch, not on the person's next action. Only the model calls run ahead; checking and saving the memory
 // stay with the turn, which takes a result only for an identical request, so a changed branch simply misses. Results
 // stay in memory and are never stored.
-type Config = { keepScenes?: number; memoryMode?: 'plain' | 'sgr'; repairCoverage?: boolean };
+type Config = { keepScenes?: number; memoryMode?: 'plain' | 'sgr'; repairCoverage?: boolean; memoryThinking?: boolean };
 // The branch state a run reads: a turn from any other point cannot use it.
 type Point = { storyId: string; branchId: string; head: string | null; memory: string | null };
 const POINT = ['storyId', 'branchId', 'head', 'memory'] as const;
@@ -92,7 +92,7 @@ export function createPrepared() {
         return checked;
       };
       try {
-        const result = await ask(summaryRequest(target, nodes, mode), result => {
+        const result = await ask(summaryRequest(target, nodes, mode, config.memoryThinking), result => {
           if (repairs) inspectMemory(result, nodes, 'plain', lang); else parseMemory(result, nodes, mode, lang);
         });
         if (!result || !repairs) return;
@@ -100,7 +100,7 @@ export function createPrepared() {
         if (!draft.missingSceneIds.length) return;
         const missing = new Set(draft.missingSceneIds);
         const subset = nodes.filter(node => missing.has(node.id));
-        await ask(supplementRequest(target, nodes, draft), extra => { parseMemory(extra, subset, 'plain', lang); });
+        await ask(supplementRequest(target, nodes, draft, config.memoryThinking), extra => { parseMemory(extra, subset, 'plain', lang); });
       } finally {
         turn?.end();
       }

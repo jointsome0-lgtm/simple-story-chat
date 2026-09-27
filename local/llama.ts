@@ -36,6 +36,11 @@ const count = (value: unknown) => typeof value === 'number' && Number.isSafeInte
 const isObject = (value: unknown): value is { readonly [field: string]: unknown } => !!value && typeof value === 'object';
 // A response body's limit, here and in local/serving.ts.
 export const MAX_BODY = 2_000_000;
+// A thinking request streams each reasoning token as an event of its own, some 300 bytes from OpenRouter: 2 MB cut
+// four compactions short at about 6000 tokens on 2026-09-27 (improve-runs). Such a stream gets MAX_BODY for every 4096
+// tokens of its limit.
+export const streamLimit = (request: ModelRequest) =>
+  request.thinking === true ? MAX_BODY * Math.max(1, request.maxOutputTokens / 4096) : MAX_BODY;
 // OpenAI's current models reject `max_tokens` and a non-default temperature; OpenRouter lists `max_tokens`.
 const OPENAI_HOST = 'api.openai.com';
 // OpenAI's strict mode rejects string length limits; memory.ts checks the lengths of the parsed reply itself.
@@ -56,14 +61,14 @@ export function messagesFor(request: ModelRequest) {
 }
 
 // Decode complete SSE events, including UTF-8 characters split across chunks.
-export async function* events(body: Response['body']) {
+export async function* events(body: Response['body'], limit = MAX_BODY) {
   if (!body) throw new ModelError('invalid_stream');
   const decoder = new TextDecoder('utf-8', { fatal: true });
   let buffer = '';
   let bytes = 0;
   for await (const chunk of body) {
     bytes += chunk.byteLength;
-    if (bytes > MAX_BODY) throw new ModelError('output_limit');
+    if (bytes > limit) throw new ModelError('output_limit');
     buffer += decoder.decode(chunk, { stream: true });
     let end: RegExpExecArray | null;
     while ((end = /\r?\n\r?\n/.exec(buffer))) {
@@ -103,6 +108,7 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
   const mistral = hosted && new URL(baseUrl).hostname === 'api.mistral.ai';
   // The bot's own server runs without thinking. Left on, a free reasoning model spends the whole output limit
   // of a memory request on reasoning and answers nothing. This is OpenRouter's switch for every model it hosts.
+  // A compaction under the thinking switch asks for it, with a limit that has room for it (local/memory.ts).
   const openrouter = hosted && new URL(baseUrl).hostname === 'openrouter.ai';
   const headers = { 'Content-Type': 'application/json',
     ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}) };
@@ -114,7 +120,7 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
     messages: messagesFor(request),
     [openai ? 'max_completion_tokens' : 'max_tokens']: request.maxOutputTokens, stream: true,
     ...(mistral ? {} : { stream_options: { include_usage: true } }),
-    ...(openrouter ? { reasoning: { enabled: false } } : {}),
+    ...(openrouter ? { reasoning: { enabled: request.thinking === true } } : {}),
     ...(openai ? {} : { temperature: request.purpose === 'memory' ? 0.2 : config.temperature ?? 0.8 }),
     ...(request.outputSchema ? { response_format: { type: 'json_schema', json_schema: { name: 'reply', strict: true,
       schema: openai ? withoutLengths(request.outputSchema) : request.outputSchema } },
@@ -124,8 +130,9 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
     max_tokens: request.maxOutputTokens, stream: true, stream_options: { include_usage: true },
     temperature: request.purpose === 'memory' ? 0.2 : config.temperature ?? 0.8,
     top_p: 0.95, top_k: 64, min_p: 0, repeat_penalty: 1,
-    reasoning_effort: 'none', reasoning_format: 'deepseek',
-    chat_template_kwargs: { enable_thinking: false }, cache_prompt: true,
+    // The pinned server lets `reasoning_effort: 'none'` turn thinking off over the template's switch.
+    ...(request.thinking === true ? {} : { reasoning_effort: 'none' }), reasoning_format: 'deepseek',
+    chat_template_kwargs: { enable_thinking: request.thinking === true }, cache_prompt: true,
     ...(request.outputSchema ? { response_format: { type: 'json_object', schema: request.outputSchema } } : {}),
   });
 
@@ -251,7 +258,7 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
         let reasoningCharacters = 0;
         let timings: Timings | undefined;
         let measured = counted;
-        for await (const data of events(response.body)) {
+        for await (const data of events(response.body, streamLimit(request))) {
           if (data === '[DONE]') { done = true; break; }
           let event: StreamEvent;
           try { event = JSON.parse(data); } catch { throw new ModelError('invalid_stream'); }

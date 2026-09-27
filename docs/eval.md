@@ -16,7 +16,8 @@ The replay runs the frozen scenes of `examples/frozen/<scenario>.json` through t
 (`memory:probe --direct`, modes `plain` and `sgr`) and compares the answers with `examples/memory-checks.ts`. Models
 go in parallel, scenarios one after another. `npm run eval -- write --model <model>` recorded those scenes once
 through `story:probe`, continuing from the last saved scene on `rate_limited`; the accepted fixtures change only as
-[improve-loop.md](improve-loop.md#frozen-boundaries) allows.
+[improve-loop.md](improve-loop.md#frozen-boundaries) allows. `MEMORY_THINKING=true` in the command's environment lets
+the replay's compactions think, and nothing else ([model-providers.md](model-providers.md#memory-thinking)).
 
 With `--judge openai:gpt-5.4`, after the memory questions each model writes one scene for each trap move of
 `examples/scene-traps.ts`, and the judge answers fixed yes/no questions (`local/scene-judge.ts`). The result is
