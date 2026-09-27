@@ -1552,6 +1552,23 @@ The test is 10 jobs: eight fronts at round one's median of 15.5 s, and two C's a
 with four portraits (with two it took 18.2 s): 2.8 minutes, 4.2 at the admission prices and 4.7 with the cold start,
 which falls on its first front.
 
+**The result**, drawn on 2026-09-26 (`illustrations/t-probe/suit/`, the `suit` of `probe.json`) and looked at by eye,
+with no judge:
+
+- The suit came out as worded on all eight fronts: sleeveless, down to the ankles, dark grey, matte and plain, with no
+  zip, logo or sleeve. Faces, hair and poses stayed close to round one's.
+- The build shows better than in the tank top and trousers: the legs, the hips and the waist, and the old man's belly.
+  The trousers hid the men's legs.
+- On the flight's two daughters it reads as a gymnast's suit, not as bare skin.
+- It still leaks. The demon's C at seed 7 put him in a dark grey sleeveless top under his leather skirt, where round
+  one's C put the white tank top; at seed 11 his chest is bare, as his scene says, with no C of round one to compare.
+  One scene at two seeds does not show that the suit leaks less, only that its grey stands out less than the white.
+- On the men the close fit outlines the groin.
+
+The owner chose the suit on 2026-09-27. `PORTRAIT_CLOTHES` has been this test's wording since, so round two's fronts and
+every portrait the bot draws wear it; a portrait kept before keeps the clothes it records. The probe keeps round one's
+clothes as `ROUND_ONE_CLOTHES` for its dry run's made-up round.
+
 <a id='t-probe-lang'></a>
 
 **The language test** comes right after the clothing test on the same card. The owner decided on 2026-09-26 that the

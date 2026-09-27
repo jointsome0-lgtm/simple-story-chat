@@ -135,8 +135,9 @@ report. Each reset cleared them, so the checklists were asked again, and the ses
   each person's age ([the sheet](../action-experiment.md#the-sheet)). The text session checks each front against the
   details ([judging](../action-experiment.md#judging)).
 - The demon's C wore his portrait's tank top: the variant names what a participant leaves bare
-  ([the variant](../action-experiment.md#variant), change 8), and the T probe's card tries a dark grey suit for the
-  portraits ([the clothing test](../action-experiment.md#t-probe-suit)).
+  ([the variant](../action-experiment.md#variant), change 8), and the T probe's card tried a dark grey suit for the
+  portraits ([the clothing test](../action-experiment.md#t-probe-suit)), which they wear since the owner chose it on
+  2026-09-27.
 - T gave L's picture back: T is drawn as it was, and [the T probe](../action-experiment.md#t-probe) draws nine
   variants of it on a card of its own.
 - Identity asked for the face and the build together: it is counted by the silhouette, as the owner decided, with the

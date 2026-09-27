@@ -24,7 +24,11 @@ import type { BatchIndex, Graph, References } from './image-batch.ts';
 // face is the look's to say — in a neutral style of its own, never a story's. The person's text comes from the sheet
 // (`portraitText`) through `assemblePrompt`, which strips names and ages here as in every frame, and these clothes
 // stand where a frame would put the sheet's outfit. Two portraits of one text differ by the seed.
-export const PORTRAIT_CLOTHES = 'wearing a plain close-fitting white tank top, close-fitting dark grey trousers and plain dark shoes';
+// The clothes are the T probe's dark grey suit since 2026-09-27, the owner's choice after seeing its clothing test
+// (docs/action-experiment.md#t-probe-suit): the identity run's white tank top and dark grey trousers hid the legs. A
+// portrait kept before keeps the clothes it records.
+export const PORTRAIT_CLOTHES = 'wearing a plain sleeveless close-fitting dark grey full-length one-piece athletic suit of matte fabric, '
+  + 'covering the torso and legs down to the ankles, and plain dark shoes';
 export const PORTRAIT_STYLE = 'Neutral character reference illustration with natural colors, realistic proportions and clean even rendering, the build, silhouette and permanent marks clearly readable.';
 export const PORTRAIT_ACTION = 'stands upright facing the viewer, arms relaxed at the sides';
 export function portraitDescription(name: string): Description {

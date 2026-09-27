@@ -152,7 +152,7 @@ const COMPRESSED = 'A tall woman in her fifties, olive skin, lean build, a long 
 const seedText = 'Маяк\n2026-08-02 20:00\nСмотритель встречает лодку. Кодовая фраза: СЕВЕР.';
 // Every word of these stories, looks, prompts and styles, and the card's address and checkpoint: a log row carries
 // counts and words of its own, and none of these.
-const PRIVATE = /Элин|Тарек|Мира|Маяк|Смотритель|Кодовая|СЕВЕР|Синтетическ|Уголь|hair|braid|coat|door|lighthouse|Charcoal|[Ss]ynthetic|Photorealistic|Semi-realistic|Watercolor|Hand-painted|tank top|reference|127\.0\.0\.1|safetensors/;
+const PRIVATE = /Элин|Тарек|Мира|Маяк|Смотритель|Кодовая|СЕВЕР|Синтетическ|Уголь|hair|braid|coat|door|lighthouse|Charcoal|[Ss]ynthetic|Photorealistic|Semi-realistic|Watercolor|Hand-painted|athletic suit|reference|127\.0\.0\.1|safetensors/;
 // A tokenizer of whole words, so that what a note or a card says can be counted by hand.
 const words = (text: string) => text.split(/\s+/).filter(Boolean).length;
 type Row = { event: string; code?: string | number } & ErrorDetails;
@@ -947,7 +947,7 @@ test('keeping a portrait writes the very one shown into a private file beside th
   assert.match(basename(directory), /^[0-9a-f]{32}$/);
   const bytes = readFileSync(join(directory, portrait.file));
   assert.deepEqual(new Uint8Array(bytes), new Uint8Array(second.bytes));
-  assert.doesNotMatch(bytes.toString('latin1'), /tank top|reference/);
+  assert.doesNotMatch(bytes.toString('latin1'), /athletic suit|reference/);
   assert.deepEqual([dirname(directory), directory, join(directory, portrait.file)].map(path => statSync(path).mode & 0o777), [0o700, 0o700, 0o600]);
   assert.ok(JSON.stringify(f.store.read('1')).length < 10_000);
 

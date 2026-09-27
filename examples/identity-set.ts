@@ -13,8 +13,8 @@
 //   - one, two and four portraits in a frame, and in frame 7 a ferryman nobody drew a portrait of, standing between
 //     the two women: the binding stops at him, so Лада after him keeps her look in every arm;
 //   - clothes the story changes (frames 1, 4 and 6), a new pose and a new place in every frame. No frame dresses anybody
-//     as the portraits are dressed (local/image-portraits.ts, a white tank top and dark grey trousers), so a change that
-//     shows is the text's and not the portrait's.
+//     as the portraits are dressed (local/image-portraits.ts: a white tank top and dark grey trousers in the identity
+//     run, a dark grey sleeveless suit since 2026-09-27), so a change that shows is the text's and not the portrait's.
 // Everything is synthetic and safe to send to a hosted model; nothing here is adult.
 import type { Character, Description } from '../local/illustrate.ts';
 

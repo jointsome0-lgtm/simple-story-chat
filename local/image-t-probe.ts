@@ -69,6 +69,9 @@ const MOST_BOUND = 4;
 // ones, since 2026-09-26; the probe reads T back from round one's prompts and sets its variants beside round one's
 // pictures, so it keeps round one's line.
 const ROUND_ONE_STYLE = 'Hand-painted visual novel illustration with soft opaque brushwork, muted natural colors and restrained shading. Naturalistic adult facial proportions, moderately sized eyes, simplified noses and mouths, and age-appropriate facial lines throughout. Clear silhouettes.';
+// The clothes round one's fronts wore. image-portraits.ts `PORTRAIT_CLOTHES` has been the clothing test's suit since
+// 2026-09-27; the dry run's made-up round dresses its fronts as round one's were, so that the test has clothes to change.
+const ROUND_ONE_CLOTHES = 'wearing a plain close-fitting white tank top, close-fitting dark grey trousers and plain dark shoes';
 
 // ---- The variants ----
 
@@ -289,9 +292,9 @@ export function sceneOf(source: string, round: DrawIndex, id: string): Scene {
 // drawn again as round one drew them, by its front graph at seed 7 from its own prompts with the clothes alone changed,
 // and the demon's C at both seeds from its own prompt with the new fronts in its slots: does a plain dark grey suit
 // leak less, and show the build as well as the tank top and trousers? The looks stay round one's, so that the clothes
-// alone differ; the bot's portraits keep PORTRAIT_CLOTHES (image-portraits.ts) until the owner has seen these. A
-// skin-coloured suit was turned down: the flight's sheet holds two children, it reads as nudity, and it fixes a skin
-// tone that may be the wrong one.
+// alone differ; the bot's portraits wore the tank top until the owner, having seen these, chose the suit on 2026-09-27
+// (`PORTRAIT_CLOTHES`, image-portraits.ts). A skin-coloured suit was turned down: the flight's sheet holds two
+// children, it reads as nudity, and it fixes a skin tone that may be the wrong one.
 export const SUIT_SCENES = ['demon', 'flight'];
 const SUIT_C = 'demon';
 export const SUIT_CLOTHES = 'wearing a plain sleeveless close-fitting dark grey full-length one-piece athletic suit of matte fabric, '
@@ -1203,7 +1206,7 @@ ${suit.fronts.length} фронтальных портретов первого �
 сиде ${SEED}, по тем же промптам, в которых заменена только одежда: «${escapeHtml(suit.was)}» → «${escapeHtml(SUIT_CLOTHES)}». Внешность, поза и стиль —
 как в первом раунде. C сцены ${escapeHtml(suit.c.story)} нарисован на сидах ${ACTION_SEEDS.join(' и ')} с промптом первого раунда и новыми портретами в слотах.
 Смотреть: меньше ли костюм протекает в сцену, чем майка; видно ли телосложение так же, как в майке и брюках; читается ли костюм как одежда, особенно у
-детей полёта. Бот рисует портреты в майке и брюках, пока владелец не решит.</p>
+детей полёта. Бот рисовал портреты в майке и брюках, пока 27 сентября владелец не выбрал этот костюм.</p>
 ${suitFronts}${suitCs}</section>
 <section id="lang"><h2>Проба языка портретов</h2>
 <p>Владелец решил 26 сентября 2026 года, что бот рисует портрет по описанию читателя (details) в точности как оно написано: на любом языке и без перевода.
@@ -1224,7 +1227,7 @@ ${suitFronts}${suitCs}</section>
 // beside them a sealed story whose plan and picture hold `word`.
 const DRY_BOUND: Record<string, number> = { flight: 4, twister: 4, giants: 3, guard: 2, tango: 2, demon: 4 };
 function madeUpRound(root: string, card: ReturnType<typeof cardOf>, word: string) {
-  const round: DrawIndex = { pins: { ...pinsOf(card), ...setupOf(card, readBase()), comfyui: 'fake', pytorch: 'fake', card: 'fake card' },
+  const round: DrawIndex = { pins: { ...pinsOf(card), ...setupOf(card, readBase()), portraitClothes: ROUND_ONE_CLOTHES, comfyui: 'fake', pytorch: 'fake', card: 'fake card' },
     startedAt: new Date().toISOString(), cells: {} };
   let number = 1000;
   const put = (cell: { key: string; kind: 'frame' | 'front'; story: string; id: string; arm?: ActionArm; references: number }, bytes: Buffer) => {
@@ -1242,7 +1245,8 @@ function madeUpRound(root: string, card: ReturnType<typeof cardOf>, word: string
     arms: { L: { prompt: `A made-up room. ${roles.map(role => `${role}: holds on. `).join('')}${ROUND_ONE_STYLE}`, references: [] },
       C: { prompt: `A made-up room. ${roles.map((role, at) => `The person from image ${at + 1}, ${role}: holds on. `).join('')}${ROUND_ONE_STYLE}`, references: fronts },
       T: { prompt: `${T_OPENING} ${roles.map((role, at) => tClause(role, at + 2)).join('; ')}. ${ROUND_ONE_STYLE}`, references: ['L', ...fronts] } },
-    out: {}, vIsC: true, portraits: fronts.map((portrait, at) => ({ id: portrait, entry: `e${at + 1}`, prompt: portraitPrompt(roles[at], `a made-up look ${at + 1}`).prompt })),
+    out: {}, vIsC: true, portraits: fronts.map((portrait, at) => ({ id: portrait, entry: `e${at + 1}`,
+      prompt: portraitPrompt(roles[at], `a made-up look ${at + 1}`).prompt.split(PORTRAIT_CLOTHES).join(ROUND_ONE_CLOTHES) })),
     views: [], counts: {} };
     mkdirSync(storyDir(root, id), { recursive: true, mode: 0o700 });
     writeJson(join(storyDir(root, id), 'plan.json'), plan);
@@ -1361,7 +1365,7 @@ export async function dryRun(dir: string) {
     writeFileSync(lFile, kept);
     const planFile = join(storyDir(source, 'flight'), 'plan.json'), plan = readFileSync(planFile);
     const unworn = JSON.parse(plan.toString('utf8')) as StoryPlan;
-    unworn.portraits[1].prompt = unworn.portraits[1].prompt.split(PORTRAIT_CLOTHES).join('wearing made-up clothes');
+    unworn.portraits[1].prompt = unworn.portraits[1].prompt.split(ROUND_ONE_CLOTHES).join('wearing made-up clothes');
     writeJson(planFile, unworn);
     await refused('a front whose prompt does not carry round one\'s clothes', () => draw());
     writeFileSync(planFile, plan);
@@ -1400,8 +1404,8 @@ export async function dryRun(dir: string) {
       const one = fake.jobs[job++], cell = whole.suit?.cells[test.key], canvas = test.kind === 'front' ? { width: 720, height: 1280 } : FRAME_CANVAS;
       const files = test.fronts.map(id => [named(join(out, whole.suit?.cells[`front:${id}`]?.file ?? '')), '352x640', null]);
       const prompt = test.kind === 'C' ? test.prompt === read.find(scene => scene.id === test.story)?.c
-        : test.prompt.split(SUIT_CLOTHES).length === 2 && !test.prompt.includes(PORTRAIT_CLOTHES)
-          && test.prompt.split(SUIT_CLOTHES).join(PORTRAIT_CLOTHES) === worn.get(test.id);
+        : test.prompt.split(SUIT_CLOTHES).length === 2 && !test.prompt.includes(ROUND_ONE_CLOTHES)
+          && test.prompt.split(SUIT_CLOTHES).join(ROUND_ONE_CLOTHES) === worn.get(test.id);
       const right = one?.outcome === 'success' && one.width === canvas.width && one.height === canvas.height && one.start === null && one.noiseMask === null
         && one.composites.length === 0 && same(one.slots.map(slot => [slot.file, slot.scaled && `${slot.scaled.width}x${slot.scaled.height}`, slot.cropped]), files)
         && prompt && cell?.status === 'drawn' && cell.graphRight === true && cell.promptChars === test.prompt.length;
