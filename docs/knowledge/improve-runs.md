@@ -11,6 +11,93 @@ line per decision. A new step gets its full entry here, on top, and its line the
 Paths to result directories say where the numbers came from at the time. They do not promise that the files still
 exist or that you may read them.
 
+<a id='o2-2026-09-27'></a>
+
+## 2026-09-27 · Opus 5.5 · O2: traps for time across the scene boundary and for an unshown past (measurement)
+
+Eval-building under the owner's lift of 2026-09-21 ([the lift](../improve-loop.md#frozen-boundaries)), step 3 of the
+plan for story consistency that GPT-6 Astra ranked that morning. New narrator traps, frozen before any wording is
+tested, so that L2 and L1 get a measure on the weakest rows. No prompt and no story changed.
+
+What was built.
+- The scoring (f7129fc). A trap may carry `set: 'o2'`. `eval.ts` scores those apart: `sceneO2` in every cell and
+  `sceneScoreO2` in the summary, by the same worst-model rule, while `scene` and `sceneScore` keep the older traps
+  alone, as the lift asks, so the log's earlier numbers stay comparable. The judge's `judged` event adds `o2Passed` and
+  `o2Total`, and `eval-stats` leaves set o2 out of its scene instrument, so its cells of past runs do not change.
+  cfa2704 holds the extraction probe's key tests to the older traps.
+- The traps (e482457), 15 with 18 questions, 7 expecting `yes` and 11 `no`. `battle`'s four are in
+  `examples/scene-traps.ts`; `assault`'s five and `hospital`'s six are in the local pack, whose README says what the
+  set is and what it does not test. The pack is not pushed.
+
+| Kind | Questions (scenario, placement, expected) |
+| --- | --- |
+| Time across the scene boundary, 9 | `o2_seal_early` (battle, end, no), `o2_lock_before_seal_time` (battle, end, yes), `o2_author_minute_kept` (battle, end, yes), `o2_wagons_early` (assault, end, no), `o2_farid_early` (assault, after 10, no), `o2_ampoules_early` and `o2_ampoules_used_early` (assault, after 12, no), `o2_author_minute_kept_h` (hospital, end, yes), `o2_opening_before_completed_bell` (hospital, after 15, no) |
+| An unshown past and knowledge where the seed rules them out, 3 | `o2_order_confirmed`, `o2_handover_confirmed` (hospital, end, no), `o2_boris_knows_confirmation` (hospital, after 11, no) |
+| Controls, 6 | `o2_rope_taken` (battle, end, yes), `o2_backstory_told` (assault, end, yes), `o2_backstory_rejected` (assault, end, no), `o2_recall_confirmed` (assault, end, yes), `o2_backstory_told_h` (hospital, end, yes), `o2_backstory_rejected_h` (hospital, end, no) |
+
+How they were made. An Opus 5.5 agent drafted 15 traps and checked every premise against the frozen scenes' text.
+GPT-6 Astra reviewed the draft (`codex exec` at `high`, read-only, a bundle holding only the files it needed), from
+10:57 to 11:04 UTC. It replaced the wording of eleven traps, kept two, dropped `o2_unrecorded_promise` (battle) and
+`o2_unrecorded_request` (assault), added `o2_after_completed_bell` and `o2_sealed_report_knowledge` (hospital), and
+ended «Do not freeze». Its reason: «the current rules do not unambiguously distinguish acceptable new backstory from
+confirmable unrecorded agreements, so the repaired set still lacks a defensible scored test of the open-world
+unsupported past that O2 was meant to establish». The review was applied word for word. The author proposed two
+deviations on the bell trap: an input without a raised hand, which scene 15 does not show, and a cutoff at 03:31, the
+reading of the lagging clock the bell was set by, instead of the civil 03:35, which needs the four-minute lag from
+compacted memory. The author asked to freeze the set as scoped. The second review, from 11:07 to 11:08, accepted both
+deviations, found no other difference from its text, and answered «Freeze this scoped set with both deviations
+accepted; leave L2 unrun pending the owner's policy decision, and proceed with L1 only if calibration demonstrates
+usable failures on the boundary traps.»
+
+The gap, recorded in Astra's words: «The open-world unsupported past has no scored test because the current rule
+treats past references as character claims while also instructing the narrator to accept compatible new information.
+It does not unambiguously determine whether an unrecorded but compatible shared agreement may be confirmed. The
+closed-world cases and autobiographical speech controls do not resolve that ambiguity. The owner must choose the
+intended behavior before such a test can be scored defensibly.»
+
+The calibration, one run a model, from e482457 on 2026-09-27, 11:23 to 11:54 UTC, with `R=~/simple-story-chat-runs/2026-09-27/o2`:
+
+```
+TMPDIR=$R/tmp npm run eval -- --pack ~/simple-story-chat-eval --scenarios assault,hospital,battle --mode plain --models openrouter:google/gemma-4-31b-it,openai:gpt-5.4-mini,claude:claude-haiku-4-5-20251001 --judge claude:claude-opus-5-5 --out $R/calib-1.json
+```
+
+mini's `hospital` failed at the health check (`UND_ERR_CONNECT_TIMEOUT`) and was run again once, alone, from 11:31
+to 11:35 (`$R/calib-1-mini-hospital.json`); the table shows the second run. Memory · older scene traps · set o2:
+
+| Model | `assault` | `hospital` | `battle` |
+| --- | --- | --- | --- |
+| Gemma 4 31B | 10/12 · 11/12 · 7/7 | 3/12 · 8/12 · 6/7 | 8/8 · 15/15 · 4/4 |
+| `gpt-5.4-mini` | 8/12 · 11/12 · 7/7 | 2/12 · 8/12 · 6/7 | 8/8 · 12/15 · 4/4 |
+| Haiku 4.5 | 11/12 · 10/12 · 7/7 | 4/12 · 10/12 · 6/7 | 8/8 · 15/15 · 4/4 |
+
+Each model passed 17 of the 18 o2 questions. All three missed the same one, `o2_opening_before_completed_bell`: after
+the scene in which the second bell rang at the washbasin clock's 03:31, each opened the next scene before 03:31. Every
+other time question passed, and so did the three on an unshown past or knowledge and all six controls. The run's own
+`sceneScoreO2` reads 0.61 because it counts mini's failed first `hospital` cell as zero; with the second run the worst
+model's share is 17/18 for each. The older traps' misses: Gemma and mini `prior_discussion_accepted` on `assault`
+and `key_fetched`, `order_explained`, `key_in_klim_pocket` and `nazar_knows_in_advance` on `hospital`; mini also
+`seal_allowed_charges`, `dagger_source` and `ally_corrected` on `battle`; Haiku `two_tunnel_barriers` and
+`one_tunnel_barrier` on `assault` and `order_explained` and `garden_lamp_lit` on `hospital`.
+
+Cost, from `npm run eval -- usage` before and after: openrouter-paid 465,837 tokens for Gemma's three cells, and
+openai-small 517,279 for mini's four, the failed one included. Haiku and the judge ran on the Claude subscription.
+
+Conclusion: a measurement. The set was frozen before any wording was tested, and it is scored apart, so the older
+numbers stay comparable. On the main group it separates on one question only, which all three models miss: a scene
+that opens before an event the last scene completed. That is the gate Astra set for L1, met by one key in one run a
+model. L2's gate is not met: every model left the unshown order and handover unconfirmed and kept the sealed report
+unread. Its clause targets the open-world past, which has no scored test, and the owner is choosing that policy. The
+owner answered the pack's push on 2026-09-27: not now, after L1.
+
+Limitations:
+- One run a model. The set's noise is unknown.
+- The shared miss is one key. Whether it is a model's error or a reading of the lagging clock is not
+  settled by the question: it fails any opening before 03:31.
+- The judge is Opus 5.5, one judge, and the trap scenes' stamps are the model's own first line.
+- `o2_opening_before_completed_bell` fails only an opening before 03:31: an opening from 03:31 to 03:34 passes though
+  the civil time was 03:35.
+- Russian, `plain` only, one pack.
+
 <a id='l3-2026-09-27'></a>
 
 ## 2026-09-27 · Opus 5.5 · L3: the value after the last change, with its basis, in plain extraction (not accepted)

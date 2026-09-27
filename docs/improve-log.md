@@ -8,6 +8,11 @@ and the main result with its limit. A new step gets its full entry there and its
 accepted**: tried and reverted. **Measurement**: numbers without a decision on a change. **Open**: a decision still
 waits. An open line is unfinished work, not an order to finish it.
 
+- 2026-09-27 · **measurement** · [O2: traps for time across the scene boundary and for an unshown past](knowledge/improve-runs.md#o2-2026-09-27).
+  15 traps with 18 questions, frozen before any wording was tested and scored apart as `sceneScoreO2`; GPT-6 Astra
+  reviewed them twice. One run a model on the main group: each passed 17 of 18, and all three missed the same one, a
+  scene that opens before an event the last scene completed. So L1 has its target, thin, and L2's gate is not met;
+  the open-world past has no scored test until the owner sets the policy.
 - 2026-09-27 · **not accepted** · [L3: the value after the last change, with its basis, in plain extraction](knowledge/improve-runs.md#l3-2026-09-27).
   Stage A, a screen on hosted Gemma 4 31B that can only reject, failed. With the rule the pooled `assault` and
   `hospital` scored 12, 12 and 11 of 24, without it 11, 13 and 11, and every candidate run had to beat 13. Gemma did
