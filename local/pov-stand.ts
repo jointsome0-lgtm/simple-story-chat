@@ -1,8 +1,8 @@
 // The POV stand (docs/telegram-ui.md#seen-through-their-eyes): the twenty synthetic scenes of examples/pov-stand.ts,
 // seen through one person's eyes, each described twice on the text card and drawn once from each description, at seed 7
 // and at seed 11, on the picture card, and judged blind by GPT-6 Astra.
-//   node local/pov-stand.ts run --out <dir> --until <epoch seconds or ISO time> [--socket <the bot's model socket>]
-//        [--comfy http://127.0.0.1:8188]
+//   node local/pov-stand.ts run --out <dir> --until <epoch seconds or ISO time> [--via socket --socket <the bot's model
+//        socket> | --via direct] [--comfy http://127.0.0.1:8188]
 //   node local/pov-stand.ts check --out <dir>
 //   node local/pov-stand.ts bundles --out <dir>
 //   node local/pov-stand.ts judge --out <dir> [--partial]
@@ -11,13 +11,19 @@
 // (local/bot.ts and local/picture.ts, as a reader who drew them, with the stand's narrator and sheet and a ComfyUI on
 // loopback that keeps each job's graph), so that each frame's request, POV answer, prompt, references and graph are the
 // bot's; a story runs once per seed, and each run's frames are that seed's descriptions. Only the frames go to the text
-// card, as probes of the running bot's own model queue (local/background.ts, the socket beside its database): its
-// scheduler gives them the card only in its quiet window and stops them the moment a reader calls, and sends them through
-// the provider it runs, llama-cpp now or simple-serving, where a probe is `internal` work (local/serving.ts `workOf`).
-// The stand holds no key. Each description is saved as it comes, and the drawing takes it at once: one job at a time,
-// only while the picture card's queue is empty, and never with `front`, so the bot's own frames go first. Without
-// `--socket` it only draws what is described. A second run asks for and draws only what is missing. What this prints
-// and logs is keys, counts, codes and times: never a scene, a prompt or an answer.
+// card, and never ahead of a reader, by one of two routes:
+// - `--via socket` (the default): as probes of the running bot's own model queue (local/background.ts, the socket beside
+//   its database, which a bot with GPU control over llama.cpp serves). Its scheduler gives them the card only in its
+//   quiet window, stops them the moment a reader calls, and holds the key if there is one.
+// - `--via direct`: from this process, through createModel with the configuration loadModelConfig reads from this
+//   process's environment alone (no .env file is read), to a simple-serving gateway as `internal` work, which it serves
+//   after readers (local/serving.ts `workOf`). A llama-server cannot tell that a reader is waiting and is refused here.
+// A frame whose JSON does not parse on the second try, as a gateway's may run away into whitespace to its output limit,
+// fails with `unparsed_description` as the bot's would; it is counted by code and never asked again. Each description
+// is saved as it comes, and the drawing takes it at once: one job at a time, only while the picture card's queue is
+// empty, and never with `front`, so the bot's own frames go first. Without a route it only draws what is described. A
+// second run asks for and draws only what is missing. What this prints and logs is keys, counts, codes and times:
+// never a scene, a prompt, an answer or a key.
 import { parseArgs } from 'node:util';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -36,7 +42,10 @@ import { Store } from './store.ts';
 import { render, scenePrefix, sceneKeyboard } from './ui.ts';
 import { errorCode, safeErrorDetails } from './model-error.ts';
 import { PORTRAIT_CLOTHES, PORTRAIT_STYLE } from './image-portraits.ts';
+import { createModel } from './model.ts';
 import type { GenerateControls, GenerationResult, ModelRequest, Provider } from './model.ts';
+import { loadModelConfig } from './config.ts';
+import type { ModelConfig } from './config.ts';
 import { createBackgroundClient } from './background.ts';
 import { drawOne, stripPngMetadata } from './image-batch.ts';
 import type { Graph } from './image-batch.ts';
@@ -143,23 +152,57 @@ async function loopbackCard(out: string) {
   return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, graphs, uploads, close: () => server.close() };
 }
 
-type Status = { model?: unknown; contextTokens?: unknown; gpu?: { status?: unknown } };
-// Ends of a probe that are the queue's and not the frame's: a reader came, the card was busy or not ready, or the
-// probe waited too long to start. It is asked again, and the queue waits out its own quiet window. A probe stopped
-// for running too long (90 s, local/scheduler.ts `backgroundTimeoutMs`) is the frame's own, the second time.
-const QUEUE = new Set(['background_preempted', 'background_unavailable', 'background_timeout', 'queue_full']);
-const RUN_LIMIT_MS = 80000;
-// Ends that are the frame request's own: the frame fails with them, as the bot's would.
+// What the describing needs of a route: the card's model and context, once it can take a frame.
+type Status = { model?: unknown; contextTokens?: unknown; provider?: unknown; gpu?: { status?: unknown } };
+type Asker = { calls: number; stopped?: string; status(): Promise<Status | undefined>; ask(request: ModelRequest): Promise<GenerationResult> };
+// How a route's failures are taken: `again`, ends that are the queue's and not the frame's, asked again after `againMs`;
+// `own`, the frame request's own, which fail the frame as they would the bot's; `fatal`, a route that cannot work,
+// which ends the describing. Any other failure is asked again 30 s later, and ten in a row end the describing.
+type Codes = { again: Set<string>; againMs: number; own: Set<string>; fatal: Set<string> };
 const OWN = new Set(['context_limit', 'output_limit', 'empty_response', 'unexpected_tools', 'background_invalid_request',
   'background_request_too_large']);
-type Asker = { calls: number; stopped?: string; status(): Promise<Status | undefined>; ask(request: ModelRequest): Promise<GenerationResult> };
+// A probe the bot's queue stopped for a reader, refused while the card was busy or not ready, or held past its wait is
+// asked again, and the queue waits out its own quiet window. One it stopped for running over 90 s (local/scheduler.ts
+// `backgroundTimeoutMs`) is the frame's own the second time.
+const SOCKET: Codes = { again: new Set(['background_preempted', 'background_unavailable', 'background_timeout', 'queue_full']), againMs: 5000,
+  own: OWN, fatal: new Set(['unexpected_model']) };
+const RUN_LIMIT_MS = 80000;
+// A gateway that is full or not ready is asked again; a key, model or contract it refuses ends the describing.
+const DIRECT: Codes = { again: new Set(['rate_limited', 'model_unavailable']), againMs: 15000, own: OWN,
+  fatal: new Set(['unauthorized', 'unexpected_model', 'unsupported_server']) };
 
-// The running bot's model queue, asked as a probe until the answer comes or `until` is near. A card that is pausing
-// takes no probe (local/gpu.ts), so the stand waits for it to be ready again rather than ask in a loop, and a bot that
-// does not answer is waited for too. Any other failure is asked again 30 s later, and ten in a row end the describing.
+// One frame, asked until it is answered or `until` is near. What is logged of an answer is its size, how it finished
+// and how much blank it ends with, the mark of a JSON that ran away into whitespace.
+async function persist(asker: Asker, until: number, note: Note, codes: Codes, attempt: (signal: AbortSignal) => Promise<GenerationResult>) {
+  let failures = 0, overruns = 0;
+  for (;;) {
+    if (asker.stopped || !await asker.status()) throw coded(asker.stopped ?? 'until');
+    const signal = AbortSignal.timeout(Math.max(1, until - Date.now()));
+    const started = Date.now();
+    asker.calls++;
+    try {
+      const result = await attempt(signal);
+      note({ event: 'text_call', ms: Date.now() - started, input: result.usage?.inputTokens ?? null, output: result.usage?.outputTokens ?? null,
+        finish: result.finishReason, blankTail: result.text.length - result.text.trimEnd().length });
+      return result;
+    } catch (error) {
+      if (signal.aborted) throw coded(asker.stopped = 'until');
+      const code = String(errorCode(error) ?? 'unknown'), ms = Date.now() - started;
+      note({ event: 'text_failed', code, ms });
+      if (codes.fatal.has(code)) throw coded(asker.stopped = code);
+      if (code === 'background_timeout' && ms >= RUN_LIMIT_MS && ++overruns >= 2) throw error;
+      if (codes.own.has(code)) throw error;
+      if (codes.again.has(code)) { await delay(codes.againMs); continue; }
+      if (++failures >= 10) throw coded(asker.stopped = code);
+      await delay(30000);
+    }
+  }
+}
+
+// `--via socket`: the running bot's model queue, as a probe. A card that is pausing takes no probe (local/gpu.ts), so
+// the stand waits for it to be ready again rather than ask in a loop, and a bot that does not answer is waited for too.
 function botQueue(socketPath: string, until: number, note: Note): Asker {
   const client = createBackgroundClient({ socketPath, model: '', timeoutMs: 20 * 60000 });
-  const left = () => until - Date.now();
   let waiting = '';
   const wait = async (reason: string, ms: number) => {
     if (waiting !== reason) note({ event: 'text_waiting', reason });
@@ -168,39 +211,67 @@ function botQueue(socketPath: string, until: number, note: Note): Asker {
   };
   const asker: Asker = { calls: 0,
     async status() {
-      while (left() > 60000) {
+      while (until - Date.now() > 60000) {
         let state: Status;
         try { state = await client.status({ signal: AbortSignal.timeout(20000) }) as Status; } catch { await wait('no_bot', 30000); continue; }
         if (['draining', 'stopping', 'paused'].includes(String(state.gpu?.status))) { await wait('gpu_paused', 60000); continue; }
         waiting = '';
-        return state;
+        // Only a bot with GPU control serves the socket, and only over llama.cpp (local/config.ts `gpuConfig`).
+        return { ...state, provider: 'llama-cpp' };
       }
       asker.stopped ??= 'until';
       return undefined;
     },
-    async ask(request) {
-      let failures = 0, overruns = 0;
-      for (;;) {
-        if (asker.stopped || !await asker.status()) throw coded(asker.stopped ?? 'until');
-        const signal = AbortSignal.timeout(Math.max(1, left()));
-        const started = Date.now();
-        asker.calls++;
+    ask: request => persist(asker, until, note, SOCKET, signal => client.generate(request, { signal })) };
+  return asker;
+}
+
+// `--via direct`'s configuration: what loadModelConfig reads from this process's environment, in an empty directory so
+// that no .env file is read. The key comes with the environment and is never logged. Only a simple-serving gateway is
+// taken: a llama-server cannot tell that a reader is waiting.
+function directConfig(): ModelConfig {
+  const empty = mkdtempSync(join(tmpdir(), 'pov-stand-config-'));
+  let config: ModelConfig;
+  try { config = loadModelConfig(empty, process.env); } finally { rmSync(empty, { recursive: true, force: true }); }
+  if (config.provider === 'llama-cpp') throw new Error('direct_llama: llama-server cannot tell that a reader is waiting; describe with --via socket');
+  if (config.provider !== 'simple-serving') throw new Error('gpu_config_required: point SIMPLE_CHAT_* at the card\'s simple-serving gateway');
+  return config;
+}
+
+// `--via direct`: the card's provider in this process. A call names no reader, so simple-serving takes it as `internal`
+// work and serves every reader's call first. The gateway is checked before the first frame and again after it was not
+// ready or not reached, and while its check fails it is waited for without a frame; a check it refuses (key, model,
+// contract or context) ends the describing.
+function cardDirect(config: ModelConfig, until: number, note: Note): Asker {
+  // simple-serving keeps no database; the path is createModel's signature only.
+  const provider = createModel({ ...config, dbPath: join(tmpdir(), 'pov-stand-unused.sqlite') });
+  let checked = false, waiting = '';
+  const asker: Asker = { calls: 0,
+    async status() {
+      while (!asker.stopped && until - Date.now() > 60000) {
+        if (checked) return { model: config.model, contextTokens: config.contextTokens, provider: config.provider };
         try {
-          const result = await client.generate(request, { signal });
-          note({ event: 'text_call', ms: Date.now() - started, input: result.usage?.inputTokens ?? null, output: result.usage?.outputTokens ?? null });
-          return result;
+          await provider.check!({ signal: AbortSignal.timeout(30000) });
+          checked = true;
+          waiting = '';
+          note({ event: 'text_ready', contextTokens: config.contextTokens });
         } catch (error) {
-          if (signal.aborted) throw coded(asker.stopped = 'until');
-          const code = String(errorCode(error) ?? 'unknown'), ms = Date.now() - started;
-          note({ event: 'text_failed', code, ms });
-          if (code === 'background_timeout' && ms >= RUN_LIMIT_MS && ++overruns >= 2) throw error;
-          if (QUEUE.has(code)) { await delay(5000); continue; }
-          if (OWN.has(code)) throw error;
-          if (++failures >= 10) throw coded(asker.stopped = code);
+          const code = String(errorCode(error) ?? 'unknown');
+          if (DIRECT.fatal.has(code) || code === 'context_limit') { asker.stopped = code; note({ event: 'text_refused', code }); break; }
+          if (waiting !== code) note({ event: 'text_waiting', reason: code });
+          waiting = code;
           await delay(30000);
         }
       }
-    } };
+      asker.stopped ??= 'until';
+      return undefined;
+    },
+    ask: request => persist(asker, until, note, DIRECT, async signal => {
+      try { return await provider.generate(request, { signal, priority: 'background' }); } catch (error) {
+        if (['model_unavailable', 'provider_failed', 'timeout'].includes(String(errorCode(error)))) checked = false;
+        throw error;
+      }
+    }) };
   return asker;
 }
 
@@ -310,7 +381,7 @@ async function describeAll(out: string, asker: Asker, note: Note) {
   const state = await asker.status();
   if (!state) { note({ event: 'describe_stopped', reason: asker.stopped }); return; }
   // The bot's model names the frames' requests as the bot's own would be named; the stand's requests carry no estimate.
-  const model = { model: String(state.model), provider: 'llama-cpp', contextTokens: Number(state.contextTokens) || 65536 };
+  const model = { model: String(state.model), provider: String(state.provider), contextTokens: Number(state.contextTokens) || 65536 };
   for (const seed of SEEDS) {
     for (const story of STORIES) {
       if (story.scenes.every(scene => readCell(out, keyOf(scene.id, seed)))) continue;
@@ -348,6 +419,7 @@ function checks(out: string): Row {
   return { described: all.length, of: keys.length, answered: count('answered'), parsed: count('parsed'), drawable: count('drawn'),
     calls: all.reduce((sum, check) => sum + check.calls, 0),
     failed: Object.fromEntries(all.filter(check => check.code).map(check => [check.key, check.code])),
+    failedByCode: all.reduce<Record<string, number>>((counts, check) => check.code ? { ...counts, [check.code]: (counts[check.code] ?? 0) + 1 } : counts, {}),
     viewerInSceneRight: count('inScene'), viewerListedInPeople: count('listed'), othersCountRight: count('others'),
     viewerFieldRight: count('body'), reflectionFieldRight: count('reflection'), theViewerWordsInAnswer: count('viewerWords'),
     clauseRight: count('clause'), viewerWordInPrompt: count('viewerInPrompt'), viewerNameInPrompt: count('nameInPrompt'), stubSent: count('stubSent'),
@@ -461,24 +533,30 @@ async function drawAll(out: string, until: number, comfy: string, describing: ()
   note({ event: 'draw_done', pictures: keys.filter(({ key }) => existsSync(pictureFile(out, key))).length, of: keys.length, left: left() });
 }
 
-async function run(out: string, until: number, comfy: string, socket: string | undefined) {
+// The stand's log, run.log in the stand directory, which it makes if need be.
+function logTo(out: string): Note {
   for (const dir of [out, join(out, 'cells'), join(out, 'pictures')]) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const note: Note = row => {
+  return row => {
     const line = JSON.stringify({ at: new Date().toISOString(), ...row });
     appendFileSync(join(out, 'run.log'), line + '\n', { mode: 0o600 });
     console.log(line);
   };
+}
+
+// Both steps at once: the describing by `asker`, if there is one, and the drawing. The summary counts the frames that
+// failed by code, the runaway JSON's `unparsed_description` among them.
+async function run(out: string, until: number, comfy: string, note: Note, asker: Asker | undefined, via: string) {
   note({ event: 'run', until: new Date(until).toISOString(), described: keys.filter(({ key }) => readCell(out, key)).length,
-    drawn: keys.filter(({ key }) => existsSync(pictureFile(out, key))).length, of: keys.length, describing: !!socket });
-  let describing = !!socket;
-  const described = socket ? describeAll(out, botQueue(socket, until, note), note)
+    drawn: keys.filter(({ key }) => existsSync(pictureFile(out, key))).length, of: keys.length, describing: asker ? via : false });
+  let describing = !!asker;
+  const described = asker ? describeAll(out, asker, note)
     .catch(error => note({ event: 'describe_failed', code: String(errorCode(error) ?? 'unknown') })).finally(() => { describing = false; }) : undefined;
   await Promise.all([described, drawAll(out, until, comfy, () => describing, note)
     .catch(error => note({ event: 'draw_crashed', code: String(errorCode(error) ?? 'unknown') }))]);
   const summary = checks(out);
   writeFileSync(join(out, 'describe.json'), JSON.stringify(summary, null, 1), { mode: 0o600 });
-  note({ event: 'run_done', described: summary.described, drawable: summary.drawable,
-    drawn: keys.filter(({ key }) => existsSync(pictureFile(out, key))).length, of: keys.length });
+  note({ event: 'run_done', described: summary.described, drawable: summary.drawable, failedByCode: summary.failedByCode,
+    calls: summary.calls, drawn: keys.filter(({ key }) => existsSync(pictureFile(out, key))).length, of: keys.length });
 }
 
 // ---- judging ----
@@ -583,7 +661,7 @@ function tally(out: string) {
 // ---- the command ----
 
 const { positionals, values } = parseArgs({ allowPositionals: true, options: {
-  out: { type: 'string' }, until: { type: 'string' }, socket: { type: 'string' },
+  out: { type: 'string' }, until: { type: 'string' }, via: { type: 'string', default: 'socket' }, socket: { type: 'string' },
   comfy: { type: 'string', default: 'http://127.0.0.1:8188' }, partial: { type: 'boolean', default: false },
 } });
 if (!values.out) throw new Error('Name the stand directory with --out');
@@ -592,7 +670,14 @@ const time = (value: string) => /^\d+$/.test(value) ? Number(value) * 1000 : Dat
 const command = positionals[0];
 if (command === 'run') {
   if (!values.until || !Number.isFinite(time(values.until))) throw new Error('Name the end with --until, in epoch seconds or as an ISO time');
-  await run(out, time(values.until), values.comfy.replace(/\/$/, ''), values.socket && resolve(values.socket));
+  if (values.via !== 'socket' && values.via !== 'direct') throw new Error('Use --via socket (with --socket) or --via direct');
+  if (values.via === 'direct' && values.socket) throw new Error('--socket is the socket route\'s: leave it out with --via direct');
+  const until = time(values.until);
+  // The direct route's configuration is read, and refused, before anything is logged; without a route, only drawing.
+  const config = values.via === 'direct' ? directConfig() : undefined;
+  const note = logTo(out);
+  const asker = config ? cardDirect(config, until, note) : values.socket ? botQueue(resolve(values.socket), until, note) : undefined;
+  await run(out, until, values.comfy.replace(/\/$/, ''), note, asker, values.via);
 } else if (command === 'check') say(checks(out));
 else if (command === 'bundles') bundles(out);
 else if (command === 'judge') await judge(out, values.partial);
