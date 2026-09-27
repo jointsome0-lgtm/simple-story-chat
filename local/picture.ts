@@ -32,8 +32,9 @@
 // and so does a variant of the photo drawn from a prompt the reader wrote (`variant`).
 //
 // A portrait of one person of a story's sheet (`portrait`) is drawn on request from their card in the characters'
-// screens (local/ui.ts), from the sheet's text of them alone (`portraitText`), which is folded under it as a picture's
-// prompt is, and goes with its story the same way.
+// screens (local/ui.ts), from the bot's own prompt around the sheet's text of them (`portraitText`), or from the whole
+// prompt the reader wrote for them, which the sheet keeps (`portraitPrompt`). That prompt is folded under it as a
+// picture's prompt is, with the button for a variant, and goes with its story the same way.
 // The one a reader keeps is a file beside the database (local/store.ts). The optional reference experiment
 // uses it in frames, with the ordered files pinned in each frame's recipe (local/picture-references.ts).
 // A description the reader writes on that card is retold by the language model into the details a portrait is drawn
@@ -100,9 +101,11 @@ export type SampleRequest = {
 export type VariantRequest = { userId: string; chat: Chat; storyId: string; nodeId: string; prompt: string; signal: AbortSignal; log: Log };
 // A portrait of one person of a story's sheet (`portrait`), by story and name as their card showed them: the id its
 // keep button carries (`keepPortrait`), the caption with that button, and what stands in the chat while it is drawn.
+// `prompt` is the whole prompt the reader wrote for the person (`portraitPrompt` on the sheet), drawn as it came;
+// without it the bot's own is drawn. `seed` is that of the portrait it is a variant of, and without it a new one.
 export type PortraitRequest = {
   userId: string; chat: Chat; storyId: string; name: string; candidate: string; caption: Screen; status: string;
-  signal: AbortSignal; log: Log;
+  signal: AbortSignal; log: Log; prompt?: string; seed?: number;
 };
 export type Illustrator = ReturnType<typeof createIllustrator>;
 
@@ -158,11 +161,13 @@ export const LOOK_CHARS = 400;
 // (docs/illustrations-plan.md#three-layers). The image model never reads it: the portrait is drawn from its English
 // retelling and the frames from the look retold with it (`retell`), so the limit is the characters' card's, and the
 // owner's (2026-09-27). Beside a name of 60 characters, a look of 400 and clothes of 300 (the sheet asks for 8 to 20
-// words), the card in English has room for 1849 characters of it with no changes, and for 1653 with changes of 150,
-// about the 20 words the sheet's token limit counts them at; in Russian for 1994 and 1805. The wait for the description
-// has room for 3174 in English. A longer card, a reader's look of 400 beside long changes above all, or one with
-// characters outside the Basic Multilingual Plane, which a message counts twice, loses its last lines to the clip
-// (`payload` in local/ui.ts), the note on the portrait first, never the description kept, which comes first. The
+// words), a story's title of 18 and no portrait kept, the card in English has room for 2052 characters of it with no
+// changes, and for 1856 with changes of 150, about the 20 words the sheet's token limit counts them at; in Russian for
+// 2154 and 1964. The reference experiment's line on how frames take the portrait leaves 1868 and 1672 in English, 1989
+// and 1801 in Russian, and a portrait prompt of the reader's own 65 to 140 fewer. The wait for the description has room
+// for 3197 in English. A longer card, a reader's look of 400 beside long changes above all, or one with characters
+// outside the Basic Multilingual Plane, which a message counts twice, loses its last lines to the clip (`payload` in
+// local/ui.ts), those on the point of view and the portrait first, never the description kept, which comes first. The
 // sheet's own are 150 words at most, which a synthetic Russian one with a table of measurements takes about 1135
 // characters for.
 export const DESCRIPTION_CHARS = 1800;
@@ -178,6 +183,10 @@ export const descriptionOf = (person: SheetEntry) => person.description ?? perso
 // Whether that description is the reader's own: written on the card since 2026-09-27, or as details before that day.
 export const ownDescription = (person: SheetEntry) =>
   person.description === undefined ? !!person.detailsEdited && !!person.details?.trim() : !!person.descriptionEdited;
+// The whole prompt the reader wrote for a person's portraits (docs/telegram-ui.md#portrait-prompt), or undefined while
+// the bot's own is theirs: a portrait is drawn from it as it came, and nothing of the sheet goes into it.
+export const ownPortraitPrompt = (person: SheetEntry) =>
+  typeof person.portraitPrompt === 'string' && person.portraitPrompt.trim() ? person.portraitPrompt : undefined;
 // The most people one retelling answers for, as many as its answer's list holds and as a sheet the model writes has;
 // the rest of a sheet the reader's own people made longer waits for the next one (`retellPending`).
 const RETELL_PEOPLE = 6;
@@ -195,22 +204,23 @@ export function personAt(story: Story | undefined, index: string | undefined, ta
 // A sheet written again in place of an older one, or for the first time (`describeFrame`), keeps what the reader made
 // of it, under the same name, or with the person on their own if the new sheet lost the name: a description they
 // wrote, which wins over the one the new sheet took from the story (the owner, 2026-09-27), details they wrote before
-// that day counting as one; a look of their own; and a portrait they kept, with the other references, the pictures
-// they sent and which one is the main. Everybody on it with a description is then to be retold (`lookPending`), a look
-// of the reader's own staying as it is. A person kept on their own has their fields brought to the three layers, and
-// the changes and the outfit of a sheet of this kind, even empty. The card shows a portrait as drawn from another text
-// if the person's text differs now (local/ui.ts).
+// that day counting as one; a look of their own; a portrait they kept, with the other references, the pictures they
+// sent and which one is the main; and the prompt they wrote for the portraits. Everybody on it with a description is
+// then to be retold (`lookPending`), a look of the reader's own staying as it is. A person kept on their own has their
+// fields brought to the three layers, and the changes and the outfit of a sheet of this kind, even empty. The card
+// shows a portrait as drawn from another text if the person's text differs now (local/ui.ts).
 export function rewrittenSheet(before: SheetEntry[], written: Character[]): SheetEntry[] {
   const old = new Map(before.map(one => [personKey(one.name), one]));
   const kept = written.map((one): SheetEntry => {
     const mine = old.get(personKey(one.name));
     return { ...one, ...mine && ownDescription(mine) ? { description: descriptionOf(mine), descriptionEdited: true } : {},
       ...mine?.edited ? { look: mine.look, edited: true } : {}, ...mine?.portrait ? { portrait: mine.portrait } : {},
-      ...mine?.poses ? { poses: mine.poses } : {},
+      ...mine?.poses ? { poses: mine.poses } : {}, ...mine && ownPortraitPrompt(mine) ? { portraitPrompt: mine.portraitPrompt } : {},
       lookPending: true };
   });
   const names = new Set(written.map(one => personKey(one.name)));
-  return [...kept, ...before.filter(one => (one.edited || ownDescription(one) || referenceFiles(one).length) && !names.has(personKey(one.name)))
+  return [...kept, ...before.filter(one => (one.edited || ownDescription(one) || referenceFiles(one).length || ownPortraitPrompt(one))
+    && !names.has(personKey(one.name)))
     .map(person => {
       const { detailsEdited, details, description, descriptionEdited, lookPending, ...one } = person;
       const text = descriptionOf(person);
@@ -345,6 +355,10 @@ export function createIllustrator(config: ImageConfig, deps: {
   // down, 720x1280 for a graph of 1280x720, which leaves more of the frame to a figure standing full length. Nothing
   // else of the graph changes.
   const upright = { width: Math.min(size.width, size.height), height: Math.max(size.width, size.height) };
+  // A portrait's recipe is all the graph's and the checkpoint's but its seed, so its note's button carries the seed and
+  // this tag of the two, and a variant of it is drawn only while the tag is still the bot's: a portrait drawn with
+  // another graph or checkpoint would differ in more than its prompt (`portraitVariant`).
+  const portraitRecipe = createHash('sha256').update(JSON.stringify([graphId, config.checkpoint])).digest('hex').slice(0, 8);
 
   // The scene's own request, once more: the same system prompt and the same history up to this scene, so that a
   // server with a prefix cache pays for the appended instruction alone (the plan's "What the second call costs").
@@ -435,11 +449,12 @@ export function createIllustrator(config: ImageConfig, deps: {
   // whether it was.
   const frames = new Map<string, { storyId: string; nodeId: string; description: Description; sheet: Character[]; viewer?: string; pov?: boolean }>();
   // The portrait each reader was shown last, for its keep button (`keepPortrait`), with the text it was drawn from as
-  // `look` (`portraitText`): in memory only, one per reader, until the next one, the keep, a delivery that failed, or
-  // PORTRAIT_HELD_MS. That one timer is cleared with it, and knows the reader and the id alone, so that the map is the
-  // only holder of the picture: a timer that held it would keep every picture replaced or kept alive for the whole
-  // half hour.
-  type Candidate = { id: string; storyId: string; name: string; look: string; recipe: PictureRecipe; bytes: Uint8Array; at: number };
+  // `look` (`portraitText`), empty for one drawn from the reader's own prompt (`own`), and the whole `prompt`: in memory
+  // only, one per reader, until the next one, the keep, a delivery that failed, or PORTRAIT_HELD_MS. That one timer is
+  // cleared with it, and knows the reader and the id alone, so that the map is the only holder of the picture: a timer
+  // that held it would keep every picture replaced or kept alive for the whole half hour.
+  type Candidate = { id: string; storyId: string; name: string; look: string; prompt: string; own: boolean; recipe: PictureRecipe;
+    bytes: Uint8Array; at: number };
   const candidates = new Map<string, Candidate & { timer: ReturnType<typeof setTimeout> }>();
   function letGo(userId: string, id?: string) {
     const held = candidates.get(userId);
@@ -737,7 +752,7 @@ export function createIllustrator(config: ImageConfig, deps: {
     throw sceneGone({ picturesRemoved: removed, picturesNotRemoved: 1 - removed });
   }
 
-  // A note folded under a photo: a picture's prompt, or the text a portrait was drawn from. The photo is what the
+  // A note folded under a photo: the prompt of a picture, a portrait's among them. The photo is what the
   // reader waited for: a note that does not go out costs them the note alone and is told by a row of its own, unless
   // its scene or story is gone, which ends the picture.
   async function sendNote(request: { userId: string; chat: Chat; storyId: string; nodeId?: string; log: Log },
@@ -761,6 +776,16 @@ export function createIllustrator(config: ImageConfig, deps: {
     const keyboard = editable && photo !== undefined
       ? { inline_keyboard: [[{ text: t.variant.button, callback_data: `prompt-edit:${request.storyId}:${request.nodeId}` }]] } : undefined;
     await sendNote(request, photo, foldedPrompt(summary, prompt), keyboard);
+  }
+
+  // The button under a portrait's prompt, the same as under a scene's picture: the reader writes the whole prompt anew,
+  // the person keeps it, and a variant of this portrait is drawn from it with its seed (local/bot.ts). It names the
+  // person as the card's buttons do, by their place on the sheet and a tag of their name, with the seed and the recipe's
+  // tag, well inside the 64 bytes of a button's data; a longer one leaves the note without it.
+  function portraitEdit(userId: string, storyId: string, name: string, seed: number, label: string): InlineKeyboard | undefined {
+    const index = store.read(userId).stories[storyId]?.sheet?.findIndex(one => one.name === name) ?? -1;
+    const data = `portrait-edit:${storyId}:${index}:${personTag(name)}:${seed}:${portraitRecipe}`;
+    return index >= 0 && Buffer.byteLength(data) <= 64 ? { inline_keyboard: [[{ text: label, callback_data: data }]] } : undefined;
   }
 
   // One picture, from the status line to the photo. `described` is called the moment the language model is out
@@ -1002,33 +1027,37 @@ export function createIllustrator(config: ImageConfig, deps: {
     },
 
     // A portrait of one person of a story's sheet (`PortraitRequest`), drawn again with a new seed each time the reader
-    // asks, from the sheet's text of them alone (`portraitText`, `portraitPrompt`). It needs no description, so it
+    // asks: from the bot's own prompt around the sheet's text of them (`portraitText`, `portraitPrompt`), or from the
+    // whole prompt the reader wrote for them, as it came, with nothing of the sheet added. It needs no description, so it
     // neither wakes nor holds the language model's card: it waits for the picture card alone. The one sent last is held
-    // for its keep button; one whose person, story or text is gone by the time it is drawn is not sent. The reader's
-    // next move in the story stops it, as it stops a sample (local/bot.ts), until its photo is on its way; a failure is
-    // told, since they wait for it.
+    // for its keep button; one whose person or story is gone by the time it is drawn is not sent, nor one of the bot's
+    // own prompt whose text of the person changed meanwhile. The reader's next move in the story stops it, as it stops a
+    // sample (local/bot.ts), until its photo is on its way; a failure is told, since they wait for it.
     async portrait(request: PortraitRequest): Promise<void> {
       const { userId, chat, storyId, name, signal, log } = request;
       // The button is offered only to a reader who is drawn for, and that is asked again where the work starts.
       if (signal.aborted || !config.users.has(userId)) return;
       const t = texts(store.read(userId).language);
       const status = await statusLine(chat, request.status, log, t);
+      const own = request.prompt !== undefined;
       const sheetNow = () => store.read(userId).stories[storyId]?.sheet;
+      const personNow = () => sheetNow()?.find(one => one.name === name);
+      // The text of the person the bot's own prompt is drawn around; the reader's own prompt reads none of it.
       const lookNow = () => {
-        const person = sheetNow()?.find(one => one.name === name);
-        return person && portraitText(person);
+        const person = personNow();
+        return person && (own ? '' : portraitText(person));
       };
       try {
         const look = lookNow();
-        if (!look?.trim()) throw sceneGone();
-        const recipe = { ...recipeOf(storyId), ...upright, seed: randomInt(2 ** 32) };
-        const drawn = await draw(userId, recipe, portraitPrompt(name, look, (sheetNow() ?? []).map(one => one.name)).prompt, signal, log,
-          { status });
+        if (look === undefined || (!own && !look.trim())) throw sceneGone();
+        const prompt = request.prompt ?? portraitPrompt(name, look, (sheetNow() ?? []).map(one => one.name)).prompt;
+        const recipe = { ...recipeOf(storyId), ...upright, seed: request.seed ?? randomInt(2 ** 32) };
+        const drawn = await draw(userId, recipe, prompt, signal, log, { status });
         if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
         if (lookNow() !== look) throw sceneGone();
         // Held before it is sent, so that its button finds it however soon it is pressed, and let go if it never
         // arrives. The one shown before goes either way: its button keeps nothing once a newer one is shown.
-        if (drawn.bytes.length <= PORTRAIT_BYTES) hold(userId, { id: request.candidate, storyId, name, look, recipe, bytes: drawn.bytes, at: now() });
+        if (drawn.bytes.length <= PORTRAIT_BYTES) hold(userId, { id: request.candidate, storyId, name, look, prompt, own, recipe, bytes: drawn.bytes, at: now() });
         else letGo(userId);
         const photoStarted = now();
         let photo: number | undefined;
@@ -1039,42 +1068,50 @@ export function createIllustrator(config: ImageConfig, deps: {
         }
         const photoMs = Math.max(0, now() - photoStarted);
         await status.clear();
-        // The text it was drawn from follows it, folded as a picture's prompt does, with its size as the picture model
-        // reads that text: the English retelling where the reader wrote the details, which the card counts in
-        // characters alone (the owner, 2026-09-27). It has no button for a variant.
-        await sendNote({ userId, chat, storyId, log }, photo, foldedPrompt(t.characters.drawnFrom(tokensOf(look), [...look].length), look));
+        // The whole prompt it was drawn from follows it, folded as a picture's prompt does, with its size, the style's
+        // share of the bot's own prompt among it, and a button to write it anew (`portraitVariant`).
+        const size = promptSize(prompt, own ? undefined : PORTRAIT_STYLE);
+        const summary = t.notices.promptSummary(size.promptCharacters, size.pictureTokens ?? null, size.styleTokens ?? null);
+        await sendNote({ userId, chat, storyId, log }, photo, foldedPrompt(summary, prompt),
+          photo === undefined ? undefined : portraitEdit(userId, storyId, name, recipe.seed, t.variant.button));
         // A photo handed to Telegram is delivered: a stop that lands while it is on its way does not take it back, and
         // it stays there to keep. The row then says both, that it is ready and that it was stopped.
-        log('picture_portrait', undefined, { outcome: 'ready', cancelled: signal.aborted, imageQueueMs: drawn.queueMs, imageMs: drawn.totalMs,
+        log('picture_portrait', undefined, { outcome: 'ready', cancelled: signal.aborted, ownPrompt: own, imageQueueMs: drawn.queueMs, imageMs: drawn.totalMs,
           ...status.waited(),
-          imageSteps: recipe.steps, pictureAttention: drawn.pictureAttention, photoMs, photoBytes: drawn.bytes.length });
+          imageSteps: recipe.steps, pictureAttention: drawn.pictureAttention, photoMs, photoBytes: drawn.bytes.length, ...size });
       } catch (error) {
         const code = errorCode(error);
         const cancelled = signal.aborted || code === 'cancelled' || code === 'scene_gone';
         await status.clear(cancelled ? undefined : t.characters.portraitFailed);
         log('picture_portrait', signal.aborted ? 'cancelled' : safeCode(code),
-          { ...safeErrorDetails(error), outcome: cancelled ? 'cancelled' : 'failed', cancelled, ...status.waited() });
+          { ...safeErrorDetails(error), outcome: cancelled ? 'cancelled' : 'failed', cancelled, ownPrompt: own, ...status.waited() });
       }
       await settled();
     },
 
+    // Whether a variant of a portrait may still be drawn by the recipe tag its note's button carries (`portraitRecipe`),
+    // when the button is pressed and when its prompt arrives (local/bot.ts).
+    portraitVariant(recipe: string) { return recipe === portraitRecipe; },
+
     // Keeps the portrait a reader was shown under `candidateId`, inside the library write that `state` belongs to: the
     // file is written first and the sheet refers to it once that write commits; a rollback deletes the file, and the
     // caller sweeps the one it replaced afterwards (local/store.ts). Only the very portrait that button came with is
-    // kept, only while it is held, and only while its person still has the text it was drawn from. It is the front's
-    // drawing, and kept by hand it takes the front from a picture of the reader's own, pinned or not: pinning holds a pose
-    // against the poses drawn for the reader (lib/library.ts `OwnReference`), never against a portrait they chose. The
-    // caller sweeps that picture's file as well. Returns where that person is on the sheet, or null for a stale button.
-    // The portrait stays held until `portraitKept`.
+    // kept, only while it is held, and only while its person is on the sheet and, for one of the bot's own prompt, still
+    // has the text it was drawn from; one of the reader's own prompt read no text of theirs. It records the whole prompt
+    // it was drawn from. It is the front's drawing, and kept by hand it takes the front from a picture of the reader's
+    // own, pinned or not: pinning holds a pose against the poses drawn for the reader (lib/library.ts `OwnReference`),
+    // never against a portrait they chose. The caller sweeps that picture's file as well. Returns where that person is
+    // on the sheet, or null for a stale button. The portrait stays held until `portraitKept`.
     keepPortrait(userId: string, candidateId: string, state: Library) {
       const held = candidates.get(userId);
       if (!held || held.id !== candidateId || now() - held.at > PORTRAIT_HELD_MS) return null;
       const sheet = state.stories[held.storyId]?.sheet ?? [];
       const index = sheet.findIndex(one => one.name === held.name);
-      if (index < 0 || portraitText(sheet[index]) !== held.look) return null;
+      if (index < 0 || (!held.own && portraitText(sheet[index]) !== held.look)) return null;
       const person = sheet[index];
       person.portrait = { source: 'drawn', file: store.writePortrait(userId, held.bytes), ...held.recipe, look: held.look,
-        clothes: PORTRAIT_CLOTHES, style: PORTRAIT_STYLE, at: now() };
+        clothes: held.own ? '' : PORTRAIT_CLOTHES, style: held.own ? '' : PORTRAIT_STYLE, prompt: held.prompt,
+        ...held.own ? { ownPrompt: true } : {}, at: now() };
       if (person.poses?.front) {
         const { front, ...poses } = person.poses;
         if (Object.keys(poses).length) person.poses = poses; else delete person.poses;

@@ -959,10 +959,15 @@ story, since it runs apart from the frames.
 
 **The card** ([telegram-ui.md](telegram-ui.md#characters)) edits the description and counts it in characters alone,
 shows the changes under it, and gives the look and the clothes their tokens as before. The details are folded under
-each portrait drawn from them, with their tokens as the picture model reads them. Beside a name of 60 characters, a
-look of 400 and clothes of 300, the card in English has room for 1849 characters of description with no changes and
-for 1653 with changes of 150, and in Russian for 1994 and 1805. A longer card loses its last lines to the clip, the
-note on the portrait first, never the description, which comes first.
+each portrait drawn from them, within its whole prompt, with the prompt's tokens as the picture model reads them
+([a portrait's own prompt](telegram-ui.md#portrait-prompt)). Beside a name of 60 characters, a look of 400 and clothes
+of 300, a story's title of 18 and no portrait kept, the card in English has room for 2052 characters of description
+with no changes and for 1856 with changes of 150, and in Russian for 2154 and 1964; in the reference experiment, whose
+card says how the frames take the portrait, for 1868 and 1672, and 1989 and 1801. These are the numbers of 2026-09-28,
+after the card came to name the portrait's whole prompt; the 1849, 1653, 1994 and 1805 written here on 2026-09-27
+could not be reproduced, the same card before that change giving 2141, 1945, 2233 and 2044, and their setup was not
+recorded. A longer card loses its last lines to the clip, those on the point of view and the portrait first, never the
+description, which comes first.
 
 **Limits, measured or not:**
 

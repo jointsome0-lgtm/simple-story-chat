@@ -21,7 +21,7 @@ import type { CompactionStatus } from './compact-view.ts';
 import { etaText } from './eta.ts';
 import type { GpuController } from './gpu.ts';
 import type { Illustrator, PictureRequest, PortraitRequest, SampleRequest, VariantRequest } from './picture.ts';
-import { DESCRIPTION_CHARS, LOOK_CHARS, personAt, personTag } from './picture.ts';
+import { DESCRIPTION_CHARS, LOOK_CHARS, ownPortraitPrompt, personAt, personTag } from './picture.ts';
 import { seesThrough } from './picture-pov.ts';
 import { portraitText } from './image-portraits.ts';
 import type { ErrorDetails, Log } from './model-error.ts';
@@ -77,8 +77,9 @@ type Plan = {
   // The messages of the pictures whose scenes a deletion took with it (lib/library.ts `forgetLostPictures`), to be
   // deleted from the chat once the deletion screen is out.
   lostPictures?: number[];
-  // A portrait of a person of a story's sheet the reader asked for (local/picture.ts `portrait`).
-  portrait?: Pick<PortraitRequest, 'storyId' | 'name' | 'candidate' | 'caption' | 'status'>;
+  // A portrait of a person of a story's sheet the reader asked for (local/picture.ts `portrait`), from the prompt the
+  // reader wrote for them if they have one, and with the seed of the portrait it varies if it is a variant.
+  portrait?: Pick<PortraitRequest, 'storyId' | 'name' | 'candidate' | 'caption' | 'status' | 'prompt' | 'seed'>;
   // The write may have let go of a kept portrait — a deletion, or a portrait kept in its place — whose file goes once
   // it is committed (local/store.ts `sweepPortraits`).
   sweep?: boolean;
@@ -179,10 +180,10 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     if (fileInput && (state.ui?.input !== 'seed' || state.ui.draftId !== fileInput.draftId)) throw refuse(t, 'draftChanged');
     if (upload) return keptUpload(state, update, upload, t, pictureInfo);
     const text = fileInput ? fileInput.text : messageText(update.message);
-    // Writing a picture style, a look, details or the prompt of a variant, and the wait for a picture, end with any
-    // button or command, an unknown command included, so that no later message is kept as one by surprise (/last,
-    // /model or /typo would otherwise leave the next move to be taken for one).
-    if ((action || text?.startsWith('/')) && member(['style', 'look', 'details', 'prompt', 'reference'], state.ui?.input)) state.ui = null;
+    // Writing a picture style, a look, details or the prompt of a variant or of a portrait, and the wait for a picture,
+    // end with any button or command, an unknown command included, so that no later message is kept as one by surprise
+    // (/last, /model or /typo would otherwise leave the next move to be taken for one).
+    if ((action || text?.startsWith('/')) && member(['style', 'look', 'details', 'prompt', 'portrait-prompt', 'reference'], state.ui?.input)) state.ui = null;
     if (!action && !fileInput) {
       const command = text?.split(/[\s@]/)[0];
       const current = state.active;
@@ -342,7 +343,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     // hash of their name: a button of somebody whose place another person took since is refused (`personAt`). A look
     // and details are written the way a style is, and a portrait is drawn on request only, for a reader who is drawn for.
     if (action?.startsWith('look-edit:') || action?.startsWith('details-edit:') || action?.startsWith('portrait:')
-      || action?.startsWith('pov:') || action?.startsWith('pov-off:')) {
+      || action?.startsWith('pov:') || action?.startsWith('pov-off:') || action?.startsWith('portrait-default:')) {
       const [verb, storyId, index, tag] = action.split(':');
       const person = ID.story.test(storyId) ? personAt(state.stories[storyId], index, tag) : undefined;
       if (!person) throw refuse(t, 'staleButton');
@@ -359,14 +360,52 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         state.ui = { input, storyId, name: person.name };
         return { screen: render(state, `${input}-input`, pictureInfo) };
       }
+      // The prompt the reader wrote for this person's portraits goes, and the bot's own is theirs again.
+      if (verb === 'portrait-default') {
+        delete state.stories[storyId].sheet![person.index].portraitPrompt;
+        return { screen: render(state, `character:${storyId}:${index}:${tag}`, pictureInfo) };
+      }
       if (!pictureInfo.pictures) throw refuse(t, 'portraitOff');
-      // A person of a sheet not yet retold has no text to be drawn from, and a portrait of nobody in particular would
-      // spend the picture card for nothing.
-      if (!portraitText(person).trim()) throw refuse(t, 'portraitPending');
+      // A portrait is drawn from the prompt the reader wrote for the person, if they did. Otherwise a person of a sheet
+      // not yet retold has no text to be drawn from, and a portrait of nobody in particular would spend the picture card
+      // for nothing.
+      const prompt = ownPortraitPrompt(person);
+      if (prompt === undefined && !portraitText(person).trim()) throw refuse(t, 'portraitPending');
       // Names the portrait for its keep button, so that a button of an earlier one never keeps this one.
       const candidate = randomBytes(4).toString('hex');
-      return { portrait: { storyId, name: person.name, candidate, status: t.characters.drawing,
+      return { portrait: { storyId, name: person.name, candidate, status: t.characters.drawing, ...prompt === undefined ? {} : { prompt },
         caption: render(state, `portrait:${storyId}:${index}:${tag}:${candidate}`, pictureInfo) } };
+    }
+    // The whole prompt of a person's portraits, from the note under one of them (local/picture.ts `portrait`), as a
+    // scene's picture has its variant: the button waits for it, and the next text message is that prompt, which the
+    // person keeps as theirs (`portraitPrompt`) and a variant of the portrait whose note it was is drawn from, as it
+    // came, with that portrait's seed. The button names the person as the card's do, the seed, and a tag of the graph
+    // and the checkpoint it was drawn with, which must still be the bot's, when it is pressed and when the prompt
+    // arrives. A prompt that cannot be drawn leaves the wait open for the next try, as a variant's does.
+    if (action?.startsWith('portrait-edit:')) {
+      const [, storyId, index, tag, seed, recipe] = action.split(':');
+      if (!pictureInfo.pictures || !illustrator) throw refuse(t, 'portraitOff');
+      const person = ID.story.test(storyId) ? personAt(state.stories[storyId], index, tag) : undefined;
+      if (!person || !/^\d{1,10}$/.test(seed ?? '') || Number(seed) >= 2 ** 32 || !/^[0-9a-f]{8}$/.test(recipe ?? '')) throw refuse(t, 'staleButton');
+      if (!illustrator.portraitVariant(recipe)) throw refuse(t, 'variantChanged');
+      state.ui = { input: 'portrait-prompt', storyId, name: person.name, seed: Number(seed), recipe };
+      return { screen: render(state, 'portrait-prompt-input', pictureInfo) };
+    }
+    if (state.ui?.input === 'portrait-prompt' && !action) {
+      const wait = state.ui;
+      state.ui = null;
+      if (!pictureInfo.pictures || !illustrator) throw refuse(t, 'portraitOff');
+      if (!illustrator.portraitVariant(wait.recipe)) throw refuse(t, 'variantChanged');
+      const again = (key: 'promptNeedsText' | 'promptTooLong') => { state.ui = wait; return refuse(t, key); };
+      if (!text?.trim()) throw again('promptNeedsText');
+      if ([...text].length > PROMPT_CHARS) throw again('promptTooLong');
+      const sheet = state.stories[wait.storyId]?.sheet ?? [];
+      const index = sheet.findIndex(one => one.name === wait.name);
+      if (index < 0) throw refuse(t, 'portraitPromptGone');
+      sheet[index].portraitPrompt = text;
+      const candidate = randomBytes(4).toString('hex');
+      return { portrait: { storyId: wait.storyId, name: wait.name, candidate, status: t.characters.drawing, prompt: text, seed: wait.seed,
+        caption: render(state, `portrait:${wait.storyId}:${index}:${personTag(wait.name)}:${candidate}`, pictureInfo) } };
     }
     if (action?.startsWith('portrait-keep:')) {
       if (!pictureInfo.pictures || !illustrator) throw refuse(t, 'portraitOff');
