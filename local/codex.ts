@@ -24,9 +24,14 @@ const FEATURES_OFF = ['shell_tool', 'unified_exec', 'apps', 'plugins', 'memories
 // `error` items are the CLI's own warnings (unknown model metadata), not a failure; the turn's end decides that.
 const PASSIVE_ITEMS = ['agent_message', 'reasoning', 'error'];
 const SIGN_IN_OVERRIDES = ['OPENAI_API_KEY', 'CODEX_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_ORGANIZATION', 'OPENAI_PROJECT'];
+// A model named `<id>@<effort>` runs at that reasoning effort, as a judge of the eval does (`codex:gpt-6-astra@high`);
+// a plain id keeps the CLI's own default, as the bot's narrator always has.
+const EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'];
 const tokenCount = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
 
 export function createCodex(config: CodexConfig, { launch = spawn }: { launch?: Launch } = {}) {
+  const [model, effort] = config.model.split('@');
+  if (!model || (effort !== undefined && !EFFORTS.includes(effort))) throw new Error(`Name a Codex model as <id> or <id>@<effort>, with effort ${EFFORTS.join(', ')}`);
   return {
     async generate(request: ModelRequest, { onText = async () => {}, signal, inputLimitTokens }: GenerateControls = {}): Promise<GenerationResult> {
       const { input, inputBytes, inputTokens: estimatedInput, limitTokens } = requestBudget(request, config.contextTokens);
@@ -42,7 +47,7 @@ export function createCodex(config: CodexConfig, { launch = spawn }: { launch?: 
       const instructions = join(home, 'instructions.md');
       writeFileSync(instructions, request.system, { mode: 0o600 });
       const args = ['exec', '--json', '--ephemeral', '--ignore-user-config', '--ignore-rules', '--skip-git-repo-check',
-        '--sandbox', 'read-only', '--color', 'never', '--model', config.model,
+        '--sandbox', 'read-only', '--color', 'never', '--model', model, ...(effort ? ['-c', `model_reasoning_effort="${effort}"`] : []),
         '-c', `model_instructions_file=${JSON.stringify(instructions)}`, '-c', 'web_search="disabled"',
         ...FEATURES_OFF.flatMap(feature => ['--disable', feature])];
       if (request.outputSchema) {

@@ -79,6 +79,8 @@ The replay measures what a model keeps of a story someone else wrote. The walk m
 npm run eval -- walk --models claude:claude-haiku-4-5-20251001,claude:claude-opus-5-5 --judges claude:claude-opus-5-5,claude:claude-fable-5-1,codex:gpt-6-astra --out walk.json
 ```
 
+A Codex model may name its reasoning effort after `@`, as in `codex:gpt-6-astra@high`; without it the CLI's default applies, which is how the walks and the gold tree before 2026-09-27 were judged.
+
 Every judge's verdicts with their quotes stay next to the probe's report (`walk-judge-<judge>.json`, the council's checks in `walk-cross-<judge>.json`; the report directory is in the cell), and `npm run eval -- walk-judge --judge <model> --resume <directory>` adds a judge to a finished walk (`--cross` for its second round). Several judges are the point: one judge misreads a quote or has a taste of its own, and a model under test may also sit on the panel, so no scene is judged by one model alone. A walk is not a fixed set of questions: the model writes a different story each run, so compare walks the way [the noise section](improve-loop.md#noise) compares scenes, several runs per side.
 
 ## Seed audit
