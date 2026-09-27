@@ -11,6 +11,134 @@ line per decision. A new step gets its full entry here, on top, and its line the
 Paths to result directories say where the numbers came from at the time. They do not promise that the files still
 exist or that you may read them.
 
+<a id='l3-2026-09-27'></a>
+
+## 2026-09-27 · Opus 5.5 · L3: the value after the last change, with its basis, in plain extraction (not accepted)
+
+A step of the loop, and the first of the plan for story consistency that the owner asked for on 2026-09-27. GPT-6
+Astra ranked the candidates that day and put L3 first. Its stage A is a screen on hosted Gemma 4 31B alone, and it can
+only reject. A pass would have led to stage B on the main group after two answers from the owner. It failed, so the
+step ends here.
+
+Hypothesis. The counts that models below the frontier lose are values that no increment states correctly after their
+last change. Asking the extractor for that value with its basis, and for the total only when every term is known,
+would put the value in memory and raise `score` without false totals. Several models lose these counts at once
+([09-22](#scenarios-2026-09-22)), so it would be a general principle and not one model's failure.
+
+Change, in the plain `summaryRules` of `local/story-text/ru.ts` only. «Не вычисляй неизвестное состояние и не
+придумывай недостающие шаги.» ("Do not compute an unknown state and do not invent missing steps.") became «Если
+newScenes меняют количество, запас, счёт или время, известные из previousMemory или сцен, запиши значение после
+последнего изменения одним фактом вместе с основанием: прежнее значение, каждое изменение, итог. Выводи итог, только
+когда известны все слагаемые; иначе запиши изменения и что итог неизвестен. Не придумывай недостающие шаги.» ("If
+newScenes change a quantity, a stock, a count or a time known from previousMemory or the scenes, write the value after
+the last change as one fact with its basis: the previous value, each change, the total. State the total only when
+every term is known; otherwise write the changes and that the total is unknown. Do not invent missing steps.")
+`sgrRules`, the other four catalogs, the schema and the 4096 cap stayed as they were, and `MEMORY_THINKING` stayed
+unset. `npm test` and `npm run check` passed with the edit. It was never committed. The patch is `$R/l3.patch`, and
+`ru.ts` is back at 002beee's text.
+
+The gate, written in the step's plan before any run. The step goes on only if every candidate run beats the best
+baseline run on the 24 pooled `assault` and `hospital` checks, no `battle`, `chess` or `dance` run falls below that
+scenario's lowest baseline run, no key that all three baseline runs kept is lost twice, and the candidate side needs
+no more compaction retries.
+
+Commands, from the repository at 002beee, with `R=~/simple-story-chat-runs/2026-09-27/l3` and N = 1, 2, 3. The three
+runs of a side ran at once, the baseline from 03:56 to 04:04 UTC and the candidate from 04:07 to 04:17, and
+`npm run eval -- usage` ran before, between and after. Each run had its own `TMPDIR` under `$R/tmp`, so every probe
+directory belongs to one run.
+
+```
+TMPDIR=$R/tmp/base-N npm run eval -- --pack ~/simple-story-chat-eval --scenarios assault,hospital,battle,chess,dance --mode plain --models openrouter:google/gemma-4-31b-it --out $R/base-N.json
+TMPDIR=$R/tmp/l3-N npm run eval -- --pack ~/simple-story-chat-eval --scenarios assault,hospital,battle,chess,dance --mode plain --models openrouter:google/gemma-4-31b-it --out $R/l3-N.json
+```
+
+The second command ran with the edit. In all three of its runs the first `assault` compaction request was 18,669
+bytes, 477 more than the baseline's 18,192, which is the edit's size.
+
+Memory, mode `plain`, no judge:
+
+| Scenario | Baseline, runs 1 · 2 · 3 | L3, runs 1 · 2 · 3 |
+| --- | --- | --- |
+| `assault` | 8/12 · 9/12 · 8/12 | 8/12 · 8/12 · 8/12 |
+| `hospital` | 3/12 · 4/12 · 3/12 | 4/12 · 4/12 · 3/12 |
+| `assault` and `hospital` pooled | 11/24 · 13/24 · 11/24 | 12/24 · 12/24 · 11/24 |
+| `battle` | 7/8 · 8/8 · 8/8 | 7/8 · 8/8 · 8/8 |
+| `chess` | 6/7 · 6/7 · 6/7 | 6/7 · 6/7 · 6/7 |
+| `dance` | 12/13 · 13/13 · 10/13 | 10/13 · 13/13 · 13/13 |
+
+The gate, condition by condition:
+
+1. Pooled `assault` and `hospital`. The best baseline run scored 13/24 and the candidate runs 12, 12 and 11, so none
+   beat it. Failed. Both sides average 11.7 of 24.
+2. No run below its scenario's lowest baseline run. `battle` 7, 8 and 8 against 7, `chess` 6, 6 and 6 against 6,
+   `dance` 10, 13 and 13 against 10. Passed.
+3. 34 keys passed in all three baseline runs, and no candidate run lost any of them. Passed.
+4. Compaction retries. None on either side. Passed.
+
+Keys:
+- `assault`: L3 lost `river_barriers`, `road_barriers`, `tunnel_barriers` and `river_stock` in every run. The
+  baseline lost the same four in runs 1 and 3 and kept `river_stock` in run 2.
+- `hospital`: both sides lost `river_left`, `garden_cells`, `river_stretchers`, `boat_spare`, `next_departure`,
+  `origin_evacuated`, `polina_learned` and `boris_learned` in every run. `bridge_limit` was lost in baseline runs 1
+  and 3 and in L3 run 3.
+- `battle` lost `news` in run 1 of each side, and `chess` lost `fen`, its known ceiling, in every run. `dance` lost
+  `b_clean`, `all_clean` and `cancelled_tango` in baseline run 3 and L3 run 1, and `cancelled_tango` alone in baseline
+  run 1.
+- Six of the lost keys have answers of two digits or more, which `stated` covers. `road_barriers` and `boat_spare`
+  stood in no memory in any of the six runs. `river_barriers`, `river_left`, `garden_cells` and `origin_evacuated`
+  stood in every memory, and the recall misread them. The rule moved none of the six.
+
+Did Gemma follow the rule? Code counted the memories' facts without printing them. Facts with an equals sign before a
+number went from 0 to 11 on `assault` and from 0 to 28 on `hospital`, over three runs a side, and facts with «итог»
+("total") from 0 to 2 and from 0 to 8. `battle`, `chess` and `dance` had neither on either side. So the extractor
+wrote totals with their basis where the story accumulates, and the two counts that stood in no memory still stood in
+none. The counts cannot say whether it wrote a wrong total for them or none at all.
+
+Per compaction:
+
+| | Baseline, 45 compactions | L3, 45 compactions |
+| --- | --- | --- |
+| Output tokens, mean (range) | 998 (457–1736) | 1025 (461–2413) |
+| `assault` output tokens, mean (max) | 1024 (1479) | 894 (1175) |
+| `hospital` output tokens, mean (max) | 1467 (1736) | 1799 (2413) |
+| Facts, mean | 14.4 | 14.0 |
+| `assault`, `hospital` facts, mean | 17.3, 21.7 | 12.9, 24.4 |
+| Seconds, mean (range) | 24 (8–119) | 32 (11–168) |
+
+Output grew 23% on `hospital`, fell 13% on `assault` and grew 3% overall, where the plan expected 10 to 25%. The
+largest compaction wrote 2413 of its 4096 tokens. OpenRouter picks a provider for each request, so the seconds say
+little about the rule.
+
+The cost. By the providers' `usage`, the baseline's 60 requests took 356,216 tokens, 307,842 in and 48,374 out, and
+the candidate's 60 took 360,745, 311,009 in and 49,736 out. Together that is 716,961, against the plan's estimate of
+about 600,000. In the ledger `openrouter-paid` stood at 88 requests and 615,782 tokens at 03:56 UTC, 149 and 991,593
+between the sides, and 210 and 1,361,201 at 04:17, so the step took 122 requests and 745,419 tokens there. The
+difference is one dropped connection a side, which the probe waited out and repeated. Each keeps its reservation in the
+ledger: the recall of baseline run 2's `hospital`, 19,595 tokens, and the second compaction of L3 run 2's `chess`,
+8,863. No other request used the channel during the step. At the prices the thinking entry below used, $0.08 to $0.15
+a million in and $0.30 to $0.40 out, the six runs cost about $0.08 to $0.13. 2,638,799 of the day's 4,000,000 tokens
+were left.
+
+Conclusion: not accepted, the first of the three rejections in a row that stop the loop
+([the rule](../improve-loop.md#stop-conditions)). The rule changed how Gemma writes a count, not what it keeps. It
+wrote totals with their basis, and the pooled score stayed at 11 to 13 of 24 with the same keys lost. Four of the six
+lost counts of two digits or more stood in memory on both sides and the recall misread them, as the thinking entry
+below found with its switch off and on. Stage B did not run, so Ministral, mini and Haiku never saw the rule, and
+O1-lite, which waited for L3's acceptance, falls away. The plan's two questions to the owner, Ministral's daily budget
+and which model's row decides, stay open for the next step that reaches the main group.
+
+Limitations:
+- A screen on one model, which can only reject. Hosted Gemma stands in for the bot's heretic Q6_K
+  ([acceptance](../improve-loop.md#acceptance-on-gpu)), and the log does not say which provider OpenRouter picked for a
+  request.
+- Three runs a side, one pack, `plain` only. A weaker model might still gain from the rule, and the screen does not
+  ask.
+- `stated` is a diagnostic, and a short number can match by chance. The fact counts are regular expressions over the
+  facts' text, not a reading of it.
+- Results: `$R/base-N.json` and `$R/l3-N.json` with their `.log` and `.err` files, `$R/usage-before.txt`,
+  `usage-between.txt` and `usage-after.txt`, the patch `$R/l3.patch`, and the probes' directories under
+  `$R/tmp/<run>/`.
+
 <a id='memory-thinking-2026-09-27'></a>
 
 ## 2026-09-27 · Opus 5.5 · thinking while compacting, on hosted Gemma 4 31B

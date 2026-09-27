@@ -8,6 +8,12 @@ and the main result with its limit. A new step gets its full entry there and its
 accepted**: tried and reverted. **Measurement**: numbers without a decision on a change. **Open**: a decision still
 waits. An open line is unfinished work, not an order to finish it.
 
+- 2026-09-27 · **not accepted** · [L3: the value after the last change, with its basis, in plain extraction](knowledge/improve-runs.md#l3-2026-09-27).
+  Stage A, a screen on hosted Gemma 4 31B that can only reject, failed. With the rule the pooled `assault` and
+  `hospital` scored 12, 12 and 11 of 24, without it 11, 13 and 11, and every candidate run had to beat 13. Gemma did
+  write its totals with their basis, and the same keys were lost; `battle`, `chess` and `dance` held, with no retry on
+  either side. The first rejection of three in a row. Three runs a side on Gemma alone, so the other models never saw
+  the rule.
 - 2026-09-27 · **measurement** · [Thinking while compacting, on hosted Gemma 4 31B](knowledge/improve-runs.md#memory-thinking-2026-09-27).
   No gain. With thinking the memory scored 8, 9 and 8/12 on `assault` and 3, 5 and 4/12 on `hospital`; without it
   8/12 three times and 4, 4 and 5/12. Both sides lost the same keys, and thinking cost 3.6 times the output tokens
