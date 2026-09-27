@@ -14,7 +14,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { ACTION_SEEDS } from '../examples/action-set.ts';
 import { CLEANUP_RESERVE_MS, RECORD_LIFE_MS, RIDES, SAMPLER_DEFAULTS, apiGraph, applyToWorkflow, charge, drawOne, encoderResolution, logCursor,
-  logLines, partialLoadsAfter, pngSize, referenceGeometry, referenceSlots, ride, samplerSettingsOf, serverPins, settled, stageSocket,
+  linesAfter, logLines, partialLoadsAfter, pngSize, referenceGeometry, referenceSlots, ride, samplerSettingsOf, serverPins, settled, stageSocket,
   stopsTheRun, submitOnStage, textEncoderOf, transportCode, uploadReference } from './image-batch.ts';
 import type { Comfy, Graph, LogCursor, Outage, Phases, StagedJob, StageSocket, Vram } from './image-batch.ts';
 import { cardOf, pinsOf } from './image-identity.ts';
@@ -220,8 +220,12 @@ type Run = { root: string; index: DrawIndex; save: () => void; comfy: Comfy; pla
   sampler: Recipe; frontSampler: Recipe;
   uploaded: Map<string, string>; tokens?: (prompt: string, images: number, front: boolean) => { prompt: number; conditioning: number } | undefined;
   options: DrawStageOptions; log: (event: object) => void; session?: StageSocket; outage?: { windowMs: number; pauseMs: number };
-  cursor?: LogCursor & { epoch: number }; observe?: (cell: ActionCell, record: CellRecord, cached: string[] | undefined) => void;
-  stopAtFailure?: boolean; change?: (filled: Graph) => Graph; recipe?: Recipe };
+  cursor?: LogCursor & { epoch: number }; observe?: Observe; stopAtFailure?: boolean; change?: (filled: Graph) => Graph; recipe?: Recipe };
+// What the pilot's ear hears of a cell once it is saved and recorded: the nodes the server answered from its cache, the
+// server's own stamps of the job's start and success, and, for a clean cell, the card's log lines between the reads
+// before and after its job (`whole` false when the read after no longer reached back: the lines are a floor).
+export type Heard = { stamps?: { start: number; end: number }; logged?: string[]; whole?: boolean };
+export type Observe = (cell: ActionCell, record: CellRecord, cached: string[] | undefined, heard: Heard) => void;
 
 // The server a stage talks to, and when it must stop: `end` at `--until`, and the reserve a minute after it for a job
 // already submitted (image-batch.ts `Comfy`).
@@ -563,14 +567,17 @@ async function drawInTurn(run: Run, cells: ActionCell[], smoke: boolean, price?:
       const record = keep(run, cell, base, prepared, drawn, undefined);
       if (comfy.end?.aborted) return 'until';
       // The card's log after the job, for a clean story alone, once the picture is safe.
+      let logged: ReturnType<typeof linesAfter>;
       if (!sealed) {
-        const partialModelLoadEvents = partialLoadsAfter(before, await logLines(comfy));
+        const after = await logLines(comfy);
+        logged = linesAfter(before, after);
+        const partialModelLoadEvents = partialLoadsAfter(before, after);
         if (partialModelLoadEvents !== undefined) {
           record.partialModelLoadEvents = partialModelLoadEvents;
           run.save();
         }
       }
-      run.observe?.(cell, record, drawn.cached);
+      run.observe?.(cell, record, drawn.cached, { stamps: drawn.stamps, ...(logged ? { logged: logged.lines, whole: logged.whole } : {}) });
     } catch (error) {
       const ended = failure(run, cell, base, error, undefined);
       if (ended) return ended;
@@ -688,6 +695,7 @@ function launch(run: Run, one: { cell: ActionCell; base: Base; prepared: Prepare
     const reached = sealed ? undefined : logCursor(after);
     run.cursor = reached && { ...reached, epoch: run.session!.epoch };
     const partialModelLoadEvents = sealed ? undefined : partialLoadsAfter(before, after);
+    const logged = sealed || !run.observe ? undefined : linesAfter(before, after);
     // The picture comes down while the next job draws, and is recorded after the cell before it.
     flight = (async () => {
       try {
@@ -695,7 +703,7 @@ function launch(run: Run, one: { cell: ActionCell; base: Base; prepared: Prepare
         await first();
         const record = keep(run, cell, base, prepared, drawn, outage, partialModelLoadEvents);
         if (run.comfy.end?.aborted) end('until');
-        run.observe?.(cell, record, drawn.cached);
+        run.observe?.(cell, record, drawn.cached, { stamps: drawn.stamps, ...(logged ? { logged: logged.lines, whole: logged.whole } : {}) });
       } catch (error) {
         await first();
         end(failure(run, cell, base, error, outage));
@@ -718,8 +726,7 @@ function launch(run: Run, one: { cell: ActionCell; base: Base; prepared: Prepare
 export type PilotOptions = { root: string; comfy: string; until: number; checkpoint: string; pins: Record<string, string | number>;
   plans: StoryPlan[]; cells: ActionCell[]; seeded: Record<string, CellRecord>; roundTwo: boolean; timeoutMs?: number; waitMs?: number;
   pollMs?: number; outage?: { windowMs?: number; pauseMs?: number }; log?: (event: object) => void;
-  observe?: (cell: ActionCell, record: CellRecord, cached: string[] | undefined) => void; graph?: (filled: Graph) => Graph; recipe?: Recipe;
-  stopAtFailure?: boolean };
+  observe?: Observe; graph?: (filled: Graph) => Graph; recipe?: Recipe; stopAtFailure?: boolean };
 export async function drawPilot(options: PilotOptions): Promise<{ index: DrawIndex; ended: 'done' | 'until' | 'stopped' }> {
   const root = resolve(options.root);
   if (options.cells.some(cell => isSharp(cell.story) || storyDir(root, cell.story).split(/[\\/]/).includes('sealed'))) {
@@ -745,26 +752,4 @@ export async function drawPilot(options: PilotOptions): Promise<{ index: DrawInd
     run.save();
     return { index, ended };
   } finally { run.session?.close(); }
-}
-
-// The pilot's cells made ready and not sent, for a harness that sends them itself (local/image-levers.ts's queue):
-// each one's references checked against `seeded` and uploaded, and its graph filled and checked as a stage fills it
-// (`prepare`), then changed by `graph`. Nothing is written; a cell whose references are not all there is refused.
-export async function pilotGraphs(options: Omit<PilotOptions, 'roundTwo'>): Promise<{ cell: ActionCell; graph: Graph }[]> {
-  const root = resolve(options.root);
-  if (options.cells.some(cell => isSharp(cell.story) || storyDir(root, cell.story).split(/[\\/]/).includes('sealed'))) {
-    throw new Refusal('The pilot draws clean cells alone');
-  }
-  const index: DrawIndex = { pins: options.pins, startedAt: new Date().toISOString(), cells: { ...options.seeded } };
-  const run = makeRun({ stage: 'main', root, comfy: options.comfy, until: options.until, timeoutMs: options.timeoutMs, log: options.log },
-    { root, index, comfy: stageComfy(options), plans: new Map(options.plans.map(plan => [plan.id, plan])), checkpoint: options.checkpoint,
-      base: readGraph(ACTION_GRAPH), frontGraph: readGraph(FRONT_GRAPH) });
-  run.change = options.graph;
-  const ready: { cell: ActionCell; graph: Graph }[] = [];
-  for (const cell of options.cells) {
-    const refs = referencesOf(run, cell);
-    if ('out' in refs) throw new Refusal(`${cell.key} cannot be made ready: ${refs.out}`);
-    ready.push({ cell, graph: (await prepare(run, cell, refs.files, undefined, false)).filled });
-  }
-  return ready;
 }

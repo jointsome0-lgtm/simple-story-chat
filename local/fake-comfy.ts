@@ -67,6 +67,15 @@ export type FakeComfyOptions = {
   // A server of another build drawing the same graph a little otherwise: every `every`-th byte of a picture's pixels
   // moved by `delta` (local/image-levers.ts's dry run, whose changes round, or show).
   shift?: { every: number; delta: number };
+  // Triton tuning comfy-kitchen's int8 matmuls (local/image-levers.ts's dry run): a job whose shape, its canvas and the
+  // length of its prompt, the server has not met since its start tunes two kernels, printing a line for each under
+  // `print` (TRITON_PRINT_AUTOTUNING), unless `files`, the card's cache under TRITON_CACHE_AUTOTUNING, holds the
+  // kernel's tuning for that shape; it then writes the tuning there. `tunes: false` is a server whose CUDA backend
+  // runs the matmuls, which tunes nothing.
+  autotune?: { tunes: boolean; print: boolean; files?: Set<string> };
+  // A job with ModelAttentionBackend at the kitchen's attention: its sampler's time, and whether the node says the
+  // attention is unavailable and falls back to PyTorch's (comfy_extras/nodes_model_advanced.py:404-408).
+  attentionJobMs?: number; attentionFallback?: boolean;
 };
 // A request as the server saw it, for a test to assert on the order of things: the job it concerns, when there is one.
 export type FakeCall = { method: string; path: string; id?: string };
@@ -230,6 +239,8 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
   };
   for (const line of options.startupLog ?? []) say(line);
   const tell = (job: Job, type: string, data: object) => speakers.get(job.clientId)?.({ type, data: { ...data, prompt_id: job.id } });
+  // The shapes this server has tuned since its start (`FakeComfyOptions.autotune`).
+  const met = new Set<string>();
   // A drop (`FakeComfyOptions.drops`): the port stops listening and every open connection is cut, the sockets' too;
   // after `ms` the server listens on the same port again.
   let port = 0, down: Promise<void> = Promise.resolve(), timer: NodeJS.Timeout | undefined;
@@ -297,6 +308,25 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
       return slot && loader ? [{ slot: Number(slot[1]), file: String(loader.inputs.image), scaled: scale ? sizeOf(scale) : null,
         cropped: crop ? cropOf(crop) : null }] : [];
     })).sort((a, b) => a.slot - b.slot);
+    const attention = Object.values(graph).some(node => node.class_type === 'ModelAttentionBackend' && node.inputs.attention === 'comfy kitchen attention');
+    if (attention && options.attentionFallback) say('WARNING: Attention backend \'comfy kitchen attention\' is unavailable; using PyTorch attention.');
+    const tuning = options.autotune;
+    if (tuning?.tunes) {
+      const length = Object.values(graph).flatMap(node => Object.entries(node.inputs)).filter(([key, value]) => /prompt|text/.test(key) && typeof value === 'string')
+        .reduce((sum, [, value]) => sum + String(value).length, 0);
+      for (const n of [3072, 12288]) {
+        const shape = `${width}x${height}:${length}:${n}`;
+        if (met.has(shape)) continue;
+        met.add(shape);
+        if (tuning.files?.has(shape)) continue;
+        tuning.files?.add(shape);
+        if (tuning.print) {
+          say(`Triton autotuning for function _int8_matmul_dequant_kernel,\nwith key as (${width * height / 256 + length}, ${n}, 3072, 'torch.int8', `
+            + `'torch.int8', 'torch.bfloat16'),\nfinished after 0.41s,\nbest config selected: block_m: 128, block_n: 128, block_k: 32, group_size_m: 8, `
+            + 'num_warps: 4, num_ctas: 1, num_stages: 4, maxnreg: None;');
+        }
+      }
+    }
     const images: FakeJob['images'] = [];
     const messages: [string, object][] = [];
     const record = (type: string, data: object) => { messages.push([type, { ...data, prompt_id: job.id }]); tell(job, type, data); };
@@ -322,7 +352,8 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
           say('loaded partially; 21000.00 MB usable, 10000.00 MB loaded, 2000.00 MB offloaded, 1024.00 MB buffer reserved, lowvram patches: 0');
         }
         // `/interrupt` ends the wait, as the real server stops a job between two of its steps.
-        let took = await delay((options.jobMs ?? 0) + (options.referenceMs ?? 0) * references, true, { signal: job.stop.signal }).catch(() => false);
+        let took = await delay((attention && options.attentionJobMs !== undefined ? options.attentionJobMs : options.jobMs ?? 0)
+          + (options.referenceMs ?? 0) * references, true, { signal: job.stop.signal }).catch(() => false);
         if (took && options.untilSampled && sampled === sampledBefore) took = await nextSample(job);
         if (!took) {
           outcome = 'interrupted';

@@ -562,8 +562,10 @@ const POLL_RETRIES = 3;
 // answered from its cache (execution.py:770), `ran` each other node with the moment it began (execution.py:496),
 // `overAt` the moment the job ended, all on our clock; `oom` says an error was the card running out of memory.
 // `broken`: the socket closed before the job was over, and what the card said of it after that is lost (`stageSocket`).
+// `startStamp` and `endStamp`: the server's own clock at the job's start and its success, in milliseconds, as its
+// messages carry them (execution.py:677-684 at the pinned revision).
 type Told = { started: boolean; succeeded: boolean; over: boolean; outputs: NonNullable<HistoryEntry['outputs']>;
-  cached?: string[]; ran: { node: string; at: number }[]; overAt?: number; oom?: boolean; broken?: boolean };
+  cached?: string[]; ran: { node: string; at: number }[]; overAt?: number; oom?: boolean; broken?: boolean; startStamp?: number; endStamp?: number };
 
 // Where a job's time went, by the kind of node it was spent in: the time from one node's start to the next one's is
 // the first node's. The sampler's share includes moving the model onto the card, which ComfyUI does inside it.
@@ -607,12 +609,13 @@ function hearing(strict: boolean) {
       if (strict) return;
       jobs.set(data.prompt_id, job = { started: false, succeeded: false, over: false, outputs: {}, ran: [] });
     }
-    if (message.type === 'execution_start') job.started = true;
+    const stamp = typeof (data as { timestamp?: unknown }).timestamp === 'number' ? (data as { timestamp: number }).timestamp : undefined;
+    if (message.type === 'execution_start') { job.started = true; job.startStamp = stamp; }
     else if (message.type === 'execution_cached' && Array.isArray(data.nodes)) job.cached = data.nodes.map(String);
     else if (message.type === 'executing' && typeof data.node === 'string') job.ran.push({ node: data.node, at: performance.now() });
     else if (message.type === 'executed' && typeof data.node === 'string' && data.output && typeof data.output === 'object') {
       job.outputs[data.node] = data.output as Told['outputs'][string];
-    } else if (message.type === 'execution_success') job.succeeded = true;
+    } else if (message.type === 'execution_success') { job.succeeded = true; job.endStamp = stamp; }
     else if (message.type === 'execution_error' || message.type === 'execution_interrupted') {
       if (outOfMemory(data)) job.oom = true;
       notice();
@@ -651,6 +654,11 @@ function hearing(strict: boolean) {
     oom: (promptId: string) => jobs.get(promptId)?.oom === true,
     // The nodes the server answered from its cache, as the socket heard them at the job's start.
     cached: (promptId: string) => jobs.get(promptId)?.cached,
+    // The server's own stamps of the job's start and success, when the socket heard both.
+    stamps: (promptId: string) => {
+      const job = jobs.get(promptId);
+      return job?.startStamp !== undefined && job.endStamp !== undefined ? { start: job.startStamp, end: job.endStamp } : undefined;
+    },
   };
 }
 
@@ -677,12 +685,13 @@ function watchJob(comfy: Comfy) {
   } catch { socket = undefined; }
   return {
     clientId, opened, get heard() { return told.heard; }, record: told.record, timing: told.timing, oom: told.oom, cached: told.cached,
-    wait: told.wait, close() { socket?.close(); },
+    stamps: told.stamps, wait: told.wait, close() { socket?.close(); },
   };
 }
 type Watch = { readonly clientId: string; readonly heard: number; record: (promptId: string) => HistoryEntry | undefined;
   timing: (promptId: string, graph: Graph) => { phases: Phases; loaderCacheMiss?: boolean } | undefined;
-  oom: (promptId: string) => boolean; cached: (promptId: string) => string[] | undefined; wait: (ms: number, signal?: AbortSignal) => Promise<void> };
+  oom: (promptId: string) => boolean; cached: (promptId: string) => string[] | undefined;
+  stamps: (promptId: string) => { start: number; end: number } | undefined; wait: (ms: number, signal?: AbortSignal) => Promise<void> };
 
 // One socket for a whole stage of the harness (docs/action-experiment.md#one-socket), in place of one a picture:
 // every open cost the tunnel a channel of its own, 0.7-1.1 s in which the card had nothing to draw. It is open before
@@ -741,7 +750,7 @@ export function stageSocket(baseUrl: string) {
     },
     register(promptId: string) { told.jobs.set(promptId, { started: false, succeeded: false, over: false, outputs: {}, ran: [] }); },
     forget(promptId: string) { told.jobs.delete(promptId); },
-    record: told.record, timing: told.timing, oom: told.oom, cached: told.cached, wait: told.wait,
+    record: told.record, timing: told.timing, oom: told.oom, cached: told.cached, stamps: told.stamps, wait: told.wait,
     close() { ended = true; drop(); },
   };
 }
@@ -936,15 +945,12 @@ export async function submitOnStage(comfy: Comfy, graph: Graph, options: DrawOne
     { ...options, waitMs: waitMs - Math.round(submittedAt - began - (spentAtSubmit - spent)) }, { outage, uncertain, spentAtSubmit });
   const release = () => socket.forget(promptId);
   return {
-    promptId,
     untilOver: () => job.untilOver().catch((error: unknown) => { release(); throw error; }),
     lastSample: job.lastSample,
     fetch: () => job.fetch().finally(release),
   };
 }
-// `promptId`: the job's id on the card, for a harness that reads the job's record itself before `fetch` deletes it, or
-// takes the job out of the queue (local/image-levers.ts).
-export type StagedJob = Pick<ReturnType<typeof follow>, 'untilOver' | 'lastSample' | 'fetch'> & { promptId: string };
+export type StagedJob = Pick<ReturnType<typeof follow>, 'untilOver' | 'lastSample' | 'fetch'>;
 
 // A job the harness submitted in `submitOnStage`: the cell's window, whether its submit's answer was lost, and what of
 // the window the cell had lost by the moment its submit left, from which its time is measured.
@@ -1154,7 +1160,8 @@ function follow(comfy: Comfy, graph: Graph, watch: Watch, promptId: string, star
       // the server answer from its cache. `totalMs` runs from the submit to the picture on our side; the harness's
       // leaves out the time between the over and the download, which went to its next job's submit.
       return { bytes: stripPngMetadata(bytes), totalMs: Math.round(performance.now() - started - (staged ? viewStarted - at : 0)), viewMs,
-        vram: memory.vram, memory, timing: watch.timing(promptId, graph), cached: watch.cached(promptId), ...(copies.length ? { copies: copied } : {}) };
+        vram: memory.vram, memory, timing: watch.timing(promptId, graph), cached: watch.cached(promptId), stamps: watch.stamps(promptId),
+        ...(copies.length ? { copies: copied } : {}) };
     } catch (error) { return fail(error); }
   };
   return { untilOver, lastSample, fetch };
@@ -1251,6 +1258,14 @@ export function logCursor(lines: string[] | undefined): LogCursor | undefined {
   if (!lines) return undefined;
   const last = lines.at(-1);
   return last === undefined ? {} : { t: last.slice(0, Math.max(0, last.indexOf('\u0000'))), hash: lineHash(last) };
+}
+// The lines of `after` past the cursor, and whether the cursor's line was still there: without it the lines are the
+// whole ring, and a count of them is a floor.
+export function linesAfter(cursor: LogCursor | undefined, after: string[] | undefined): { lines: string[]; whole: boolean } | undefined {
+  if (!cursor || !after) return undefined;
+  if (cursor.hash === undefined) return { lines: after, whole: true };
+  for (let at = after.length - 1; at >= 0; at--) if (lineHash(after[at]) === cursor.hash) return { lines: after.slice(at + 1), whole: true };
+  return { lines: after, whole: false };
 }
 export function partialLoadsAfter(cursor: LogCursor | undefined, after: string[] | undefined): number | undefined {
   if (!cursor || !after) return undefined;
