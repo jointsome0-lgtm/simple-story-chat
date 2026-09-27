@@ -1679,3 +1679,65 @@ children, whether the build shows through it as through the tank top, and whethe
 into the scene than it carried of the tank top; and whether the probe's card would draw round one's T again, since the
 probe draws no T of its own: `probe.json`'s `sameServer` says whether ComfyUI, PyTorch and the card said what they
 said to round one.
+
+<a id='body-test'></a>
+
+## The body test
+
+The owner cares more for the silhouette, the height, the build and the proportions, and for the action, than for the
+face. On 2026-09-27 the owner agreed to prepare a test of the whole body built like the head test's `p-crop-080`, the
+one head variant that moved the faces and hair toward the portraits and still fitted every body in that day's blind
+judgment. [image-body-test.ts](../local/image-body-test.ts) cuts each of the 19 bound people of the probe's six clean
+scenes out of round one's A+ at seed 7, enlarges the crop, redraws the person with the person's full-length front as
+image 1, and pastes the result back into A+. The question: does the front's build come through while A+'s action, its
+contacts and the scene's clothes stay? Nothing is drawn before the card.
+
+- **The bodies**: `illustrations/t-probe-bodies/bodies.json`, one box a person round the whole figure on A+, marked by
+  eye, each holding the person's head from the probe's `boxes.json`. The script pins its sha256.
+- **The crop**: the box with 32 px a side, out to the latent's grid. It takes the most upright canvas whose crop fits
+  in the frame, of 576x1024 (the front's 9:16), 672x896, 896x896 and 1024x768, and is scaled bicubic to it, so each
+  body gains 1.09 to 2.25 times its pixels a side. The front goes whole, area-scaled to 576x1024 for every body.
+- **The masks**: the sampler redraws the region less every other head, the flight's unbound fifth person included. The
+  paste goes into A+'s pixels through the region feathered 24 px inward and 8 px away from those heads, so outside the
+  region and on the heads kept the picture is A+ pixel for pixel. The other people's limbs inside a region are redrawn
+  with it, since the contacts lie there.
+- **The prompt**: "The person from image 1", the person's own clause of round one's A+ without its look (the role, the
+  facing, the scene's clothes and the action), and round one's style line. The script reads the clause back from round
+  one's L, C and A+ and refuses a scene where they disagree.
+- **The variants**: every body at denoise 0.65 and 0.80 with round one's front, in the white tank top and trousers,
+  and the demon's and the flight's eight at 0.80 with the probe's suit front, to see whether the suit leaks into the
+  scene's clothes. Seed 7, 25 steps of euler/simple at CFG 1, as `p-crop-080`.
+
+**Its place** is the picture card after round two's draw and after the figure-age card test, on the same server,
+tunnel and `"$end"`, five minutes before the card's end as the runbook computes it. A body's jobs begin only if all of
+them can end by `--until` at the admission prices, the fronts' 38 jobs before the suit's 8, and what is not admitted
+waits for a resume on a later card. `estimate` gives 46 jobs on four canvases: 6 minutes at the head test's median warm
+job, 7.3 s, with half a compile, and 15.4 at the admission prices, its slowest warm job with the margin, 18.1 s, 45 s
+for the first compile and 15 s for each other canvas. With 16 minutes or more left before `"$end"` all of it is
+admitted; the termination keeps the five minutes after `"$end"`.
+
+```sh
+npm run image:body-test -- dry-run     # steps 0 to 14, then "the body test's dry run went as expected"
+npm run image:body-test -- estimate    # before the card: 19 bodies, 46 jobs, expectedMinutes 6, pricedMinutes 15.4
+npm run image:body-test -- plan        # illustrations/t-probe-bodies/plan.png: regions, crops and masks over A+
+# On the card, after round two's draw and the figure-age card test, with the server, the tunnel and "$end" as they are:
+ssh simple-chat-vast cat /workspace/simple-chat-gpu/image-verified.txt > illustrations/t-probe-bodies/card.txt
+npm run image:body-test -- draw --until "$end"    # body by body; bodies_done with drawn 46 and exit 0
+# After the termination, with no card:
+npm run image:body-test -- page    # illustrations/t-probe-bodies/index.html, which `draw` also writes after each body
+```
+
+`illustrations/t-probe-bodies` holds `bodies.json`, `plan.png`, `card.txt`, `redraws.json` (ids, codes, sizes, times
+and each body's crop and region, no prompt), `<scene>/<person>/<variant>.png` and `index.html`: each body's crop of A+
+beside its redraws, its front and its suit front, then the whole frames. Its `judge/` holds a blind judgment, not run:
+one gpt-6-astra session a scene answers, for each person, whether the build is like the front's, on A+ and on each
+redraw; whether the pose, each essential contact of the scene's checklist and the scene's clothes stayed as on A+; and
+whether a seam shows. The twister and the tango have no essential contact, and their pose stands for it.
+
+**Not verified without the card**: whether the front's build comes through at either strength with the scene's words
+beside it, and whether the front's standing pose comes with it, above all on the canvases whose shape is not the
+front's 9:16, where the encoder does not lay the front on the canvas cell for cell; whether the other people's limbs
+and the contacts inside a region survive the redraw, above all the flight's father, whose region holds every other
+head; whether the tank top or the suit leaks into the scene's clothes; whether the feather hides the seam at a
+region's edge and round a head kept; and the times, priced from the head test's. `draw` checks the card's `card.txt`
+against round one's pins before it sends anything.
