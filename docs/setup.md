@@ -62,7 +62,7 @@ reaches the card's `output/` folder. The card still holds each picture for a whi
 the server's cache, and each is emptied on its own schedule:
 [what the card keeps of a picture](gpu.md#what-the-card-keeps-of-a-picture).
 
-The `SIMPLE_CHAT_IMAGE_*` variables above belong to the bot on this computer. The picture card has one of its own: `SIMPLE_CHAT_IMAGE_QWEN` is read by [the bootstrap on the card](gpu.md#qwen-image) and decides which checkpoints it downloads; the bot never reads it.
+The `SIMPLE_CHAT_IMAGE_*` variables above belong to the bot on this computer. The picture card has its own: `SIMPLE_CHAT_IMAGE_QWEN` is read by [the bootstrap on the card](gpu.md#qwen-image) and decides which checkpoints it downloads, and `SIMPLE_CHAT_IMAGE_TORCH` which torch it installs and the server runs, cu130 on [the bot's card](gpu.md#bot-card); the bot never reads them. Before each picture it asks the server whether to draw with the kitchen's attention.
 
 ### Backup and restore
 

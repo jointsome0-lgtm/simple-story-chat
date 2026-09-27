@@ -44,13 +44,13 @@ import { recordPicture } from '../lib/library.ts';
 import type { Library, PictureRecipe, SceneNode, Story } from '../lib/library.ts';
 import type { ImageConfig } from './config.ts';
 import { estimateTokens, requestStamp, sameContext } from './context.ts';
-import { SAMPLER_DEFAULTS, apiGraph, applyToWorkflow, drawOne, latentSizeOf, previewOnly, referenceSlots, samplerSettingsOf, settled,
-  textEncoderOf } from './image-batch.ts';
+import { SAMPLER_DEFAULTS, apiGraph, applyToWorkflow, attentionOffered, drawOne, latentSizeOf, previewOnly, referenceSlots, samplerSettingsOf,
+  serverPins, settled, textEncoderOf, withAttention } from './image-batch.ts';
 import type { Comfy, Graph } from './image-batch.ts';
 import { STYLE, askJson, assemblePrompt, frameRequest, inWords, matchSheet, olderSheet, retellRequest, retoldOf, sheetOf, sheetRequest } from './illustrate.ts';
 import type { Character, Description, Excerpt } from './illustrate.ts';
 import { PORTRAIT_CLOTHES, PORTRAIT_STYLE, portraitPrompt, portraitText } from './image-portraits.ts';
-import type { Log } from './model-error.ts';
+import type { ErrorDetails, Log } from './model-error.ts';
 import { errorCode, safeErrorDetails } from './model-error.ts';
 import type { ModelRequest, Provider } from './model.ts';
 import { styleChoice, styleLine } from './picture-style.ts';
@@ -243,6 +243,20 @@ export function textTokens(qwen: QwenTokenizer, graph: Graph): ((text: string) =
   return encoder ? text => qwenPromptTokens(qwen, text, encoder).prompt : undefined;
 }
 
+type PictureAttention = NonNullable<ErrorDetails['pictureAttention']>;
+// Whether a picture is drawn with the kitchen's INT8 attention (docs/gpu.md#bot-card), asked of the server for each
+// one, since the card may be started again on another torch between two. The owner took the attention on 2026-09-27
+// together with the torch for CUDA 13 it was measured on (docs/action-experiment.md#levers), so it goes on only where
+// the server runs such a torch and its node offers it: round two's cu128 offers it too, and draws plainly. A server
+// that does not say draws plainly as well, so a question never costs the picture.
+async function kitchenAttention(comfy: Comfy): Promise<PictureAttention> {
+  const [pins, offered] = await Promise.all([serverPins(comfy, false), attentionOffered(comfy).catch(() => undefined)]);
+  const cuda = pins.pytorch === undefined ? undefined : Number(/\+cu(\d+)$/.exec(pins.pytorch)?.[1] ?? 0);
+  if (cuda !== undefined && cuda < 130) return 'plain_torch';
+  if (cuda === undefined || offered === undefined) return 'plain_unanswered';
+  return offered ? 'kitchen' : 'plain_offer';
+}
+
 export function createIllustrator(config: ImageConfig, deps: {
   store: Store; provider: Provider;
   // The story model as the bot names it in each scene's request stamp, and its context. Without it every description
@@ -297,6 +311,9 @@ export function createIllustrator(config: ImageConfig, deps: {
   const graphId = createHash('sha256').update(JSON.stringify(graph)).digest('hex').slice(0, 16);
   const recipeOf = (storyId: string): PictureRecipe => ({ seed: seedOf(storyId), graph: graphId, checkpoint: config.checkpoint,
     width: size.width, height: size.height, steps, cfg, sampler, scheduler });
+  // The kitchen's attention is the card's software, as its torch is, and no part of the graph named above: it is added
+  // to each job (`draw`), and only to Qwen-Image's graphs, the only ones it was measured on. Krea's draws plainly.
+  const attends = textEncoderOf(graph) === 'qwen_image' && withAttention(graph) !== undefined;
   // A portrait stands, so it is drawn on the graph's canvas turned upright: the smaller side across and the larger one
   // down, 720x1280 for a graph of 1280x720, which leaves more of the frame to a figure standing full length. Nothing
   // else of the graph changes.
@@ -476,11 +493,21 @@ export function createIllustrator(config: ImageConfig, deps: {
     return { promptCharacters };
   };
 
-  // One picture on the picture card: a whole prompt, drawn by a recipe.
+  // One picture on the picture card: a whole prompt, drawn by a recipe. The kitchen's attention is asked of the server
+  // while the job's socket opens (`kitchenAttention`), and the picture's row says what it was drawn with, a failed
+  // one's too once the answer had come.
   async function draw({ seed, checkpoint, width, height, steps, cfg, sampler, scheduler }: PictureRecipe, prompt: string, signal: AbortSignal) {
     const comfy: Comfy = { baseUrl: config.url, timeoutMs: config.timeoutMs, signal };
     const filled = applyToWorkflow(graph, { checkpoint, prompt, negative: '', seed, steps, sampler, scheduler, cfg, width, height });
-    return drawOne(comfy, filled, { waitMs: config.waitMs, pollMs });
+    let pictureAttention: PictureAttention | undefined;
+    const verdict: Promise<PictureAttention> = attends ? kitchenAttention(comfy) : Promise.resolve('plain_graph');
+    const job = verdict.then(said => {
+      const noded = said === 'kitchen' ? withAttention(filled) : undefined;
+      pictureAttention = noded ? 'kitchen' : said === 'kitchen' ? 'plain_graph' : said;
+      return noded ?? filled;
+    });
+    try { return { ...(await drawOne(comfy, job, { waitMs: config.waitMs, pollMs })), pictureAttention }; }
+    catch (error) { throw pictureAttention && error instanceof Error ? Object.assign(error, { pictureAttention }) : error; }
   }
 
   // One frame on the picture card in one style line, with the story's seed: a sample of a style and the scene's own
@@ -603,8 +630,9 @@ export function createIllustrator(config: ImageConfig, deps: {
       const size = promptSize(assembled.prompt, line);
       await sendPrompt(request, photo, assembled.prompt, size, true);
       log('picture', undefined, { outcome: 'ready', cancelled: signal.aborted, describeMs, imageMs: drawn.totalMs,
-        imageSteps: steps, photoMs, photoBytes: drawn.bytes.length, namesStripped: assembled.namesStripped,
-        withoutLook: assembled.withoutLook, clothesChanged: frame.clothesChanged, pictureStyle, ...size, ...elapsed() });
+        imageSteps: steps, pictureAttention: drawn.pictureAttention, photoMs, photoBytes: drawn.bytes.length,
+        namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook, clothesChanged: frame.clothesChanged,
+        pictureStyle, ...size, ...elapsed() });
     } catch (error) {
       const code = errorCode(error);
       const cancelled = signal.aborted || code === 'cancelled' || code === 'scene_gone';
@@ -696,8 +724,8 @@ export function createIllustrator(config: ImageConfig, deps: {
           const size = promptSize(assembled.prompt, style.line);
           await sendPrompt(request, photo, assembled.prompt, size);
           log('picture_sample', undefined, { outcome: 'ready', cancelled: signal.aborted, frameReused, describeMs,
-            imageMs: drawn.totalMs, imageSteps: steps, namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook,
-            pictureStyle, stylesAsked, ...size });
+            imageMs: drawn.totalMs, imageSteps: steps, pictureAttention: drawn.pictureAttention, namesStripped: assembled.namesStripped,
+            withoutLook: assembled.withoutLook, pictureStyle, stylesAsked, ...size });
           // The styles after the first are drawn from the frame already in hand.
           frameReused = true;
           describeMs = 0;
@@ -749,7 +777,7 @@ export function createIllustrator(config: ImageConfig, deps: {
         const size = promptSize(prompt);
         await sendPrompt(scene, photo, prompt, size, true);
         log('picture_variant', undefined, { outcome: 'ready', cancelled: signal.aborted, edited: true, imageMs: drawn.totalMs,
-          imageSteps: recipe.steps, photoMs, photoBytes: drawn.bytes.length, ...size });
+          imageSteps: recipe.steps, pictureAttention: drawn.pictureAttention, photoMs, photoBytes: drawn.bytes.length, ...size });
       } catch (error) {
         const code = errorCode(error);
         const cancelled = signal.aborted || code === 'cancelled' || code === 'scene_gone';
@@ -822,7 +850,7 @@ export function createIllustrator(config: ImageConfig, deps: {
         // A photo handed to Telegram is delivered: a stop that lands while it is on its way does not take it back, and
         // it stays there to keep. The row then says both, that it is ready and that it was stopped.
         log('picture_portrait', undefined, { outcome: 'ready', cancelled: signal.aborted, imageMs: drawn.totalMs,
-          imageSteps: recipe.steps, photoMs, photoBytes: drawn.bytes.length });
+          imageSteps: recipe.steps, pictureAttention: drawn.pictureAttention, photoMs, photoBytes: drawn.bytes.length });
       } catch (error) {
         const code = errorCode(error);
         const cancelled = signal.aborted || code === 'cancelled' || code === 'scene_gone';

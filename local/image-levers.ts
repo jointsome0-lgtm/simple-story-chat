@@ -40,7 +40,7 @@ import { join, relative, resolve, sep } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { crc32, deflateSync } from 'node:zlib';
 import { MARKER_STORY } from '../examples/action-set.ts';
-import { apiGraph, comfyUrl, logLines, serverPins } from './image-batch.ts';
+import { ATTENTION_NODE, KITCHEN_ATTENTION, apiGraph, attentionOffered, comfyUrl, logLines, serverPins, withAttention } from './image-batch.ts';
 import type { Comfy, Graph, Phases } from './image-batch.ts';
 import { cardOf, writeCardRecord } from './image-identity.ts';
 import { startFakeComfy } from './fake-comfy.ts';
@@ -81,9 +81,6 @@ const isStep = (value: string): value is Step => (STEPS as string[]).includes(va
 // tuned; attention draws on a server that has drawn already, so no cold pass.
 const KINDS: Record<Step, PassKind[]> = { reference: ['cold', 'warm', 'stream'], cu130: ['cold', 'warm', 'stream'], closing: ['cold', 'stream'],
   attention: ['warm', 'stream', 'plain'] };
-// The attention every graph of the step gets, through the pinned core node (comfy_extras/nodes_model_advanced.py:374-411).
-const ATTENTION_NODE = 'ModelAttentionBackend';
-const KITCHEN_ATTENTION = 'comfy kitchen attention';
 // The flags gpu/image-serve.sh starts every server with, and those of the Triton backend and of Viggle's node. A server
 // with any other is not round two's, and is refused.
 const OWN_FLAGS = new Set(['--listen', '--port', '--disable-auto-launch', '--temp-directory', '--disable-metadata', '--disable-all-custom-nodes',
@@ -414,26 +411,10 @@ async function argvOf(comfy: Comfy): Promise<string[]> {
   const argv = ((await response.json()) as { system?: { argv?: unknown } }).system?.argv;
   return Array.isArray(argv) ? argv.map(String) : [];
 }
-// Whether the server's ModelAttentionBackend offers the kitchen's attention, by /object_info (the V3 schema's combo,
-// `["COMBO", { options }]`, or a list of options first, as older nodes list them).
-async function attentionOffered(comfy: Comfy): Promise<boolean> {
-  const response = await fetch(`${comfy.baseUrl}/object_info/${ATTENTION_NODE}`, { signal: AbortSignal.any([AbortSignal.timeout(comfy.timeoutMs), ...(comfy.end ? [comfy.end] : [])]) });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const input = ((await response.json()) as Record<string, { input?: { required?: Record<string, unknown> } } | undefined>)[ATTENTION_NODE]?.input?.required?.attention;
-  const options = Array.isArray(input) ? (Array.isArray(input[0]) ? input[0] : (input[1] as { options?: unknown } | undefined)?.options) : undefined;
-  return Array.isArray(options) && options.includes(KITCHEN_ATTENTION);
-}
-// A graph with the kitchen's attention on the model the sampler takes, or the guider's where a SamplerCustomAdvanced
-// samples (the turbo row), under a node id of its own.
-export function withAttention(graph: Graph): Graph {
-  const out: Graph = JSON.parse(JSON.stringify(graph));
-  const sampler = Object.values(out).find(node => node.class_type === 'KSampler' || node.class_type === 'SamplerCustomAdvanced');
-  const guider = sampler && Array.isArray(sampler.inputs.guider) ? out[String(sampler.inputs.guider[0])] : undefined;
-  const holder = sampler && 'model' in sampler.inputs ? sampler : guider;
-  if (!holder || !Array.isArray(holder.inputs.model)) throw new Refusal('The graph has no sampler or guider that takes a model');
-  const id = String(Math.max(0, ...Object.keys(out).map(Number).filter(Number.isFinite)) + 1);
-  out[id] = { class_type: ATTENTION_NODE, inputs: { model: holder.inputs.model, attention: KITCHEN_ATTENTION } };
-  holder.inputs.model = [id, 0];
+// Every graph of the attention step with the kitchen's attention on its model (local/image-batch.ts `withAttention`).
+function attended(graph: Graph): Graph {
+  const out = withAttention(graph);
+  if (!out) throw new Refusal('The graph has no sampler or guider that takes a model');
   return out;
 }
 
@@ -621,7 +602,7 @@ async function drawPass(context: Context, kind: PassKind, attempt: number): Prom
   const drawn = await drawPilot({ root, comfy: context.comfy, until: context.until, checkpoint: context.card.model, pins: context.pins,
     plans: kind === 'stream' ? context.stream.plans : [source.plan], cells, seeded: kind === 'stream' ? {} : seededFor(source, root), roundTwo: true,
     stopAtFailure: true, timeoutMs: options.timeoutMs, waitMs: options.waitMs, pollMs: options.pollMs, outage: options.outage, log: context.log,
-    graph: filled => (noded ? withAttention(turbo(filled)) : turbo(filled)), ...(row === 'turbo' ? { recipe: TURBO_RECIPE } : {}),
+    graph: filled => (noded ? attended(turbo(filled)) : turbo(filled)), ...(row === 'turbo' ? { recipe: TURBO_RECIPE } : {}),
     observe: (cell, _record, cached, told) => {
       // A cell's cycle is its own only when the cell before it was drawn too; cells are heard in their order.
       const now = performance.now(), at = cells.findIndex(one => one.key === cell.key);

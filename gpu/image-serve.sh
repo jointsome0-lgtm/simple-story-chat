@@ -15,10 +15,11 @@ port="${SIMPLE_CHAT_IMAGE_PORT:-8188}"
 device="${SIMPLE_CHAT_IMAGE_GPU:-1}"
 [[ "$port" =~ ^[0-9]+$ && "$device" =~ ^[0-9]$ ]] || { echo 'Use a numeric SIMPLE_CHAT_IMAGE_PORT and a single-digit SIMPLE_CHAT_IMAGE_GPU index.' >&2; exit 1; }
 (( port > 0 && port <= 65535 )) || exit 1
-# Which torch the server runs on (docs/gpu.md#cu130): cu128 from ComfyUI/.venv, the default, or cu130 from
-# ComfyUI/.venv-cu130, which image-bootstrap.sh builds beside it when asked, so that a switch is a restart and no
-# install. That one is built beside a running server, and it starts only once its install has ended whole, with the
-# mark the bootstrap writes last. A run pins the torch /system_stats reports (local/image-batch.ts `serverPins`).
+# Which torch the server runs on (docs/gpu.md#cu130): cu128 from ComfyUI/.venv, the default, which the experiments
+# keep, or cu130 from ComfyUI/.venv-cu130, the bot's (docs/gpu.md#bot-card), which image-bootstrap.sh builds when asked,
+# alone or beside the other, so that a switch is a restart and no install. That one may be built beside a running
+# server, and it starts only once its install has ended whole, with the mark the bootstrap writes last. A run pins the
+# torch /system_stats reports (local/image-batch.ts `serverPins`).
 torch_line="${SIMPLE_CHAT_IMAGE_TORCH:-cu128}"
 case "$torch_line" in
   cu128) venv="$comfy_dir/.venv" ;;

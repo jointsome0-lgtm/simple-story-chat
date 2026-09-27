@@ -27,6 +27,10 @@ const OUTCOMES = ['ready', 'failed', 'cancelled', 'skipped'] as const;
 // Which style a picture was drawn in (local/picture-style.ts): the bot's own line, a preset, or one of the reader's
 // own, whose words and names stay out of the row as the prompt does.
 const PICTURE_STYLES = ['standard', 'semi', 'novel', 'film', 'graphic', 'watercolor', 'empty', 'custom'] as const;
+// Whether a picture was drawn with the kitchen's INT8 attention (local/picture.ts `kitchenAttention`), and why not where
+// it was not: the bot's graph is not one it was measured on, the server's torch is not for CUDA 13, its node does not
+// offer it, or the server did not say.
+const PICTURE_ATTENTION = ['kitchen', 'plain_graph', 'plain_torch', 'plain_offer', 'plain_unanswered'] as const;
 // Why the model's last message ended, as the API names it, for the row of a failed Claude CLI run: `max_tokens` there
 // means the run's output cap was hit, which the CLI reports as an error rather than a truncation.
 export const STOP_REASONS = ['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'refusal', 'other'] as const;
@@ -93,9 +97,9 @@ export type ErrorDetails = {
   // Whose request a bot log row belongs to. Only the owner allowed reading the owner's own stories for debugging.
   actor?: typeof ACTORS[number]; automatic?: boolean; agentCall?: typeof AGENT_CALLS[number]; stage?: typeof STAGES[number];
   // A picture: which checkpoint drew it, how it ended, whether the reader's next message ended it before it arrived,
-  // in which style, and for a sample of a style whether the scene's frame was still in memory.
+  // in which style, for a sample of a style whether the scene's frame was still in memory, and with which attention.
   imageRole?: typeof IMAGE_ROLES[number]; outcome?: typeof OUTCOMES[number]; cancelled?: boolean;
-  pictureStyle?: typeof PICTURE_STYLES[number]; frameReused?: boolean;
+  pictureStyle?: typeof PICTURE_STYLES[number]; frameReused?: boolean; pictureAttention?: typeof PICTURE_ATTENTION[number];
   // A picture drawn from a prompt the reader wrote whole (local/picture.ts `variant`) rather than one the bot assembled.
   edited?: boolean;
   // A sheet written in place of an older one that still had the clothes in its appearance lines.
@@ -135,6 +139,7 @@ export function safeErrorDetails(value: unknown = {}): ErrorDetails {
   if (typeof input?.cancelled === 'boolean') result.cancelled = input.cancelled;
   if (member(PICTURE_STYLES, input?.pictureStyle)) result.pictureStyle = input.pictureStyle;
   if (typeof input?.frameReused === 'boolean') result.frameReused = input.frameReused;
+  if (member(PICTURE_ATTENTION, input?.pictureAttention)) result.pictureAttention = input.pictureAttention;
   if (typeof input?.edited === 'boolean') result.edited = input.edited;
   if (typeof input?.sheetRewritten === 'boolean') result.sheetRewritten = input.sheetRewritten;
   if (member(CLI_RESULTS, input?.cliResult)) result.cliResult = input.cliResult;

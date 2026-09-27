@@ -37,8 +37,9 @@ viggle="${SIMPLE_CHAT_IMAGE_VIGGLE:-false}"
 [[ "$viggle" = true || "$viggle" = false ]] || { echo 'Use SIMPLE_CHAT_IMAGE_VIGGLE=true or false.' >&2; exit 1; }
 [[ "$viggle" = false || "$qwen" != false ]] || { echo 'Viggle'\''s LoRA is for Qwen-Image 2.1: set SIMPLE_CHAT_IMAGE_QWEN too.' >&2; exit 1; }
 # Which torch this run installs (docs/gpu.md#cu130): cu128, the default, into ComfyUI/.venv, or cu130 into
-# ComfyUI/.venv-cu130, for comfy-kitchen's CUDA backend. A cu130 run leaves the default environment as it is, so it can
-# run in the background beside a server started from that one, and image-serve.sh switches between them with a restart.
+# ComfyUI/.venv-cu130, for comfy-kitchen's CUDA backend: the bot's card installs cu130 alone (docs/gpu.md#bot-card), and
+# the experiments keep cu128. A cu130 run leaves the default environment as it is, so it can run in the background
+# beside a server started from that one, and image-serve.sh switches between them with a restart.
 torch_line="${SIMPLE_CHAT_IMAGE_TORCH:-cu128}"
 case "$torch_line" in
   cu128) venv="$comfy_dir/.venv"; torch_index="$TORCH_INDEX_URL"
@@ -209,7 +210,7 @@ if [[ "$dry_run" = true ]]; then
   [[ "$qwen" = only ]] || echo "The graph would load $IMAGE_MODEL_FILE, $encoder_file and $vae_file; --print-workflow prints it."
   [[ "$qwen" = false ]] || echo "Qwen is on: $IMAGE_QWEN_WORKFLOW and $IMAGE_QWEN_EDIT_WORKFLOW would load $IMAGE_QWEN_MODEL_FILE, $IMAGE_QWEN_ENCODER_FILE and $IMAGE_QWEN_VAE_FILE."
   [[ "$viggle" = false ]] || echo "Viggle is on: its LoRA into models/loras and $IMAGE_VIGGLE_NODE_FILE into custom_nodes, which image-serve.sh loads with SIMPLE_CHAT_IMAGE_VIGGLE=true."
-  [[ "$torch_line" = cu128 ]] || echo "Torch is $torch_line: ${torch_pins[*]} into $venv, beside the default environment."
+  [[ "$torch_line" = cu128 ]] || echo "Torch is $torch_line: ${torch_pins[*]} into $venv; the default environment, if the box has one, stays as it is."
   exit 0
 fi
 

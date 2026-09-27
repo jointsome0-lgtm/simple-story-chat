@@ -102,9 +102,10 @@ The picture card runs ComfyUI: [image-bootstrap.sh](../gpu/image-bootstrap.sh) p
 [image-manifest.env](../gpu/image-manifest.env), [image-serve.sh](../gpu/image-serve.sh) starts it on loopback, and
 `npm run image:batch` draws the frames of the synthetic stories through the tunnel. `image-serve.sh` takes card 1 by
 default, the second card beside a language server; a picture machine of its own passes `SIMPLE_CHAT_IMAGE_GPU=0`.
-The tunnel to such a machine is `bash gpu/tunnel.sh --pictures-only ALIAS`. The bot's settings for pictures are in
-[setup.md](setup.md#pictures) and what the reader gets in [telegram-ui.md](telegram-ui.md#picture-delivery); why any
-of this exists is in [illustrations-plan.md](illustrations-plan.md).
+The tunnel to such a machine is `bash gpu/tunnel.sh --pictures-only ALIAS`. A card for the bot is set up as
+[the bot's card](#bot-card) says. The bot's settings for pictures are in [setup.md](setup.md#pictures) and what the
+reader gets in [telegram-ui.md](telegram-ui.md#picture-delivery); why any of this exists is in
+[illustrations-plan.md](illustrations-plan.md).
 
 `image-serve.sh` runs the server in the foreground of the shell that starts it, and a server in the foreground of an
 ssh session dies with the session, as the action measurement's did on 2026-09-26. A run that lasts starts it detached
@@ -155,7 +156,7 @@ The bootstrap writes two graphs beside the Krea one: `image-workflow-qwen.json` 
 
 <a id='cu130'></a>
 
-### Torch for CUDA 13, opt-in
+### Torch for CUDA 13, the bot's line
 
 The pinned server turns comfy-kitchen's CUDA backend off on a torch built for CUDA below 13, and says so at its start
 (`You need pytorch with cu130 or higher`, comfy/quant_ops.py:22-28). On the default torch, cu128, every int8 layer
@@ -164,16 +165,18 @@ which [image-manifest.env](../gpu/image-manifest.env) pins beside the default: t
 0.26.0+cu130 and torchaudio 2.11.0+cu130, read on the cu130 index on 2026-09-26. That is the same release as cu128's,
 with the same triton, so the CUDA line and the kitchen's backend are what differs. The index's newest torch,
 2.14.0+cu130, asks for triton 3.8 and has no torchaudio of its release. The line needs a driver for CUDA 13, which the
-rent filter asks of every offer.
+rent filter asks of every offer. Since 2026-09-27 it is the bot's line, with the kitchen's attention on top
+([the bot's card](#bot-card)); the scripts' default stays cu128, which the experiments keep.
 
 ```sh
 SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_TORCH=cu130 bash /workspace/simple-chat/gpu/image-bootstrap.sh
 SIMPLE_CHAT_IMAGE_TORCH=cu130 SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 SIMPLE_CHAT_IMAGE_TRITON=1 bash /workspace/simple-chat/gpu/image-serve.sh   # detached in a long run, as above
 ```
 
-The bootstrap installs it into a second virtual environment, `ComfyUI/.venv-cu130`, and leaves `ComfyUI/.venv` as it
-is. It can therefore run in the background beside a server started from the default environment, and a switch is then
-a restart of the server with nothing installed. It checks what a default run checks: the ComfyUI revision, the sm_120
+The bootstrap installs it into a virtual environment of its own, `ComfyUI/.venv-cu130`: the only one on a fresh box,
+and on a box that has `ComfyUI/.venv`, beside it, which it leaves as it is. It can therefore run in the background
+beside a server started from the default environment, and a switch is then a restart of the server with nothing
+installed. It checks what a default run checks: the ComfyUI revision, the sm_120
 kernels of the torch it installed, and every pinned file's SHA256, which on a box that has the files reads the disk for
 a minute and downloads nothing. It asks for 13 GiB free and keeps no copy of the wheels in pip's cache
 (`--no-cache-dir`), since a Qwen-only box has 60 GB. Its last step writes `ComfyUI/.venv-cu130/simple-chat-ready` with
@@ -184,10 +187,80 @@ first by the sha256 the manifest pins for CPython 3.12 (read on 2026-09-27), wit
 `--no-deps`; a wheel of another hash stops the run. What they pull and ComfyUI's requirements go on by version, as on
 cu128.
 
-The default stays cu128, which runs on the widest range of drivers. [rent-plan.ts](../local/rent-plan.ts) prices a
-rental as before: only [the backend measurement](action-experiment.md#backend) downloads the second line's wheels. A run
-pins the torch the server reports on `/system_stats` (`pytorch`), so a drawing stage refuses a resume on the other line
-as it refuses any pin that changed.
+The scripts' default stays cu128, which runs on the widest range of drivers and is what every experiment's runbook
+draws on without naming a torch. [rent-plan.ts](../local/rent-plan.ts) prices a rental as before, torch's five gigabytes
+for either line; a box that installs both, as [the backend measurement](action-experiment.md#backend) and the
+throughput measurement did, downloads the second line's wheels on top. A run pins the torch the server reports on
+`/system_stats` (`pytorch`), so a drawing stage refuses a resume on the other line as it refuses any pin that changed.
+
+<a id='bot-card'></a>
+
+### The bot's picture card
+
+Since 2026-09-27 the bot's pictures are drawn on cu130 with the kitchen's INT8 attention: the owner looked at the
+throughput measurement's pictures and saw no difference on the base pipeline ([the verdict and its
+numbers](action-experiment.md#levers)). A bot's card is a Qwen-only box with cu130 alone, whose server starts with the
+Triton backend on, as the measurement's did:
+
+```sh
+SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_TORCH=cu130 bash /workspace/simple-chat/gpu/image-bootstrap.sh
+ssh -T simple-chat-vast 'SIMPLE_CHAT_IMAGE_TORCH=cu130 SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 SIMPLE_CHAT_IMAGE_TRITON=1 setsid -f nohup flock -n /root/.simple-chat-comfy.lock bash /workspace/simple-chat/gpu/image-serve.sh </dev/null >/dev/null 2>&1'
+```
+
+The bot draws with `SIMPLE_CHAT_IMAGE_WORKFLOW=gpu/image-workflow-qwen.json` ([its settings](setup.md#pictures)).
+Against a cu128 card the bootstrap builds `ComfyUI/.venv-cu130` and no `ComfyUI/.venv`, the four hashed wheels first,
+and should take the minutes a cu128 card took: the environment is built while the weights download, 7.7 minutes for
+Qwen's 17.28 GB at the 300 Mbit/s the rent filter asks, and the one cu130 install measured took 5.5 minutes, beside a
+drawing server on round two's card on 2026-09-27, with Viggle's two files and the verification of every weight. It
+asks for the same 13 GiB free beside the weights, for one environment, and keeps no copy of the wheels in pip's cache,
+which a cu128 run keeps; against the throughput measurement's box, which had both lines, it has one environment fewer.
+The environment's size on disk was not measured; the card check below reads it. The first pictures after a start cost
+more on cu130: the throughput measurement's cold pass of five took 56 s more than its warm one there, the reference's
+32 s.
+
+Before each picture the bot asks the server which torch it runs (`/system_stats`) and whether its
+`ModelAttentionBackend` offers `comfy kitchen attention` (`/object_info`), while the job's socket opens
+(`kitchenAttention` in [picture.ts](../local/picture.ts)). The node goes on the model of a Qwen-Image graph's sampler
+where the torch is for CUDA 13 or later and the option is offered. Anywhere else the picture is drawn plainly, and
+nothing fails for it; its row says why ([the bot log](#bot-log)): `plain_graph` for Krea's or another graph the
+attention was not measured on, `plain_torch` on cu128, where round two's server offered the option too, `plain_offer`,
+or `plain_unanswered`. The node is the card's software, as its torch is: a picture's recipe and its graph's hash do not
+change, and a variant of a picture drawn plainly is drawn with the node on a cu130 card.
+
+The experiments keep round two's backend: cu128, Triton and no node. The scripts' default stays cu128, so a runbook
+that names no torch, round two's action runs and figure-age's among them, draws where it drew. None of their harnesses
+draws through the bot's code, and only the throughput measurement's attention step adds the node. A run pins the torch
+and the Triton switch its server reports (`serverPins` in [image-batch.ts](../local/image-batch.ts)), so a resume on
+a changed server is refused, and a new run takes the default unless its runbook sets `SIMPLE_CHAT_IMAGE_TORCH=cu130`.
+That holds for a server the runbook started itself: a harness pins whatever server it is pointed at, so an experiment
+does not draw on a bot's card while the bot's server runs there, since a start of its own does nothing while another
+holds the lock.
+
+**The card check**, on the next picture card for the bot, before a reader's picture. The server's answers are
+matched and counted, never kept:
+
+```sh
+ssh -T simple-chat-vast 'd=/workspace/simple-chat-gpu/ComfyUI; test -f $d/.venv-cu130/simple-chat-ready && test ! -e $d/.venv && echo cu130 alone; date -u -r $d/.venv-cu130/simple-chat-ready +%FT%TZ; du -sh $d/.venv-cu130; df -h /workspace | tail -1'
+curl -s http://127.0.0.1:8188/system_stats | grep -o '"pytorch_version": *"[^"]*"'    # 2.11.0+cu130
+curl -s http://127.0.0.1:8188/system_stats | grep -c -- '--enable-triton-backend'    # 1
+curl -s http://127.0.0.1:8188/object_info/ModelAttentionBackend | grep -c '"comfy kitchen attention"'    # 1
+```
+
+The mark's time against the bootstrap's start gives its minutes, and `du` the environment's size.
+
+Then one smoke picture per graph the bot draws with, through the bot in the owner's own chat, from a synthetic seed of
+[examples/](../examples/): with `image-workflow-qwen.json`, a scene's frame and a portrait from the characters' card,
+which is the same graph turned upright. Their rows, `picture` and `picture_portrait`, say `outcome` `ready` and
+`pictureAttention` `kitchen`, and the server's log holds no fallback of the node to PyTorch's attention
+(nodes_model_advanced.py:406-408):
+
+```sh
+grep -E '"event":"picture(_portrait)?"' logs/bot-gpu.jsonl | tail -n 2 | grep -c '"pictureAttention":"kitchen"'    # 2
+curl -s http://127.0.0.1:8188/internal/logs/raw | grep -o 'is unavailable; using PyTorch attention' | wc -l    # 0
+```
+
+Another value in a row names what failed: `plain_torch`, a server started on cu128; `plain_offer`, a server whose
+kernel is not there; `plain_unanswered`, a server that did not answer. The pictures are drawn all the same, plainly.
 
 <a id='viggle'></a>
 
@@ -346,7 +419,9 @@ A `picture` row ends each scene's picture: `outcome` (`ready`, `failed`, `cancel
 not ready), `describeMs` of the description call, `imageMs` on the image server from submit to file, `photoMs` and
 `photoBytes` of the upload to Telegram, and `pictureSeconds`, what the reader waited from the end of the scene.
 `namesStripped`, `withoutLook` and `clothesChanged` count what the prompt assembly did, and `promptCharacters`,
-`pictureTokens` and `styleTokens` give the prompt's size. Samples, variants and portraits write `picture_sample`,
+`pictureTokens` and `styleTokens` give the prompt's size. `pictureAttention` says whether the picture was drawn with the
+kitchen's attention, `kitchen`, or why not ([the bot's card](#bot-card)); a failed picture's row has it once the
+server had answered. Samples, variants and portraits write `picture_sample`,
 `picture_variant` and `picture_portrait`. The details and looks retold from the people's descriptions write
 `look_retold` right after a reader writes a description, or `picture_look_retold` before a frame, with `retellPeople`,
 `retoldPeople`, `descriptionCharacters` and `lookWords` ([telegram-ui.md](telegram-ui.md#characters)). No prompt,

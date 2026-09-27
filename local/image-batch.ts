@@ -853,7 +853,7 @@ type DrawOneOptions = { pollMs?: number; waitMs?: number; sampleEvery?: number; 
 // as it always could; a run that measures the card (`requireSocket`) fails the cell instead, before anything is
 // submitted, because a picture without the start of its job has no account of where its time went.
 const SOCKET_OPEN_MS = 2000;
-export async function drawOne(comfy: Comfy, graph: Graph, options: DrawOneOptions = {}) {
+export async function drawOne(comfy: Comfy, graph: Graph | Promise<Graph>, options: DrawOneOptions = {}) {
   // A caller who has let go, or a stage whose end has come, puts nothing on the card: that is asked before the socket
   // opens and again once it has, and either ends the wait for it at once. Nothing is awaited between the second
   // asking, the caller's `admit` and the submit.
@@ -864,12 +864,15 @@ export async function drawOne(comfy: Comfy, graph: Graph, options: DrawOneOption
     // `undefined` once the wait for the socket has run out.
     const open = await Promise.race([watch.opened,
       delay(Math.min(SOCKET_OPEN_MS, waitMs), undefined, { ref: false, signal: any(comfy.signal, comfy.end) }).catch(() => undefined)]);
+    // A graph its caller is still settling while the socket opens, as the bot asks the server about the kitchen's
+    // attention (local/picture.ts `draw`): the questions go beside the socket's opening, not before it.
+    const job = await graph;
     halt(comfy);
     // The wait is the caller's, and the socket has had its share of it: a wait the socket used up submits nothing.
     if (open === undefined && waitMs <= SOCKET_OPEN_MS) throw Object.assign(new Error('image_timeout'), { code: 'image_timeout' });
     if (!open && options.requireSocket) throw Object.assign(new Error('comfy_socket_unavailable'), { code: 'comfy_socket_unavailable' });
     if (options.admit && !options.admit()) throw Object.assign(new Error('not_admitted'), { code: 'not_admitted' });
-    return await drawWatched(comfy, graph, watch, { ...options, waitMs: waitMs - Math.round(performance.now() - began) });
+    return await drawWatched(comfy, job, watch, { ...options, waitMs: waitMs - Math.round(performance.now() - began) });
   } finally { watch.close(); }
 }
 
@@ -1301,6 +1304,33 @@ export async function serverPins(comfy: Comfy, strict: boolean): Promise<Record<
       : 'The server did not say what it is on /system_stats (ComfyUI, PyTorch and the card), and a pinned run is pinned to that too');
   }
   return pins;
+}
+
+// The kitchen's INT8 attention (docs/action-experiment.md#levers) through the pinned ComfyUI's core node
+// (comfy_extras/nodes_model_advanced.py:374-411), which lists it only where the kernel is available (377-379).
+export const ATTENTION_NODE = 'ModelAttentionBackend';
+export const KITCHEN_ATTENTION = 'comfy kitchen attention';
+// Whether the server's ModelAttentionBackend offers the kitchen's attention, by /object_info (the V3 schema's combo,
+// `["COMBO", { options }]`, or a list of options first, as older nodes list them). A server without the node answers
+// with nothing for it, which is no.
+export async function attentionOffered(comfy: Comfy): Promise<boolean> {
+  const info = await (await call(comfy, `/object_info/${ATTENTION_NODE}`)).json() as Record<string, { input?: { required?: Record<string, unknown> } } | undefined>;
+  const input = info[ATTENTION_NODE]?.input?.required?.attention;
+  const options = Array.isArray(input) ? (Array.isArray(input[0]) ? input[0] : (input[1] as { options?: unknown } | undefined)?.options) : undefined;
+  return Array.isArray(options) && options.includes(KITCHEN_ATTENTION);
+}
+// A graph with the kitchen's attention on the model the sampler takes, or the guider's where a SamplerCustomAdvanced
+// samples (the levers' turbo row), under a node id of its own; nothing for a graph with neither.
+export function withAttention(graph: Graph): Graph | undefined {
+  const out: Graph = JSON.parse(JSON.stringify(graph));
+  const sampler = Object.values(out).find(node => node.class_type === 'KSampler' || node.class_type === 'SamplerCustomAdvanced');
+  const guider = sampler && Array.isArray(sampler.inputs.guider) ? out[String(sampler.inputs.guider[0])] : undefined;
+  const holder = sampler && 'model' in sampler.inputs ? sampler : guider;
+  if (!holder || !Array.isArray(holder.inputs.model)) return undefined;
+  const id = String(Math.max(0, ...Object.keys(out).map(Number).filter(Number.isFinite)) + 1);
+  out[id] = { class_type: ATTENTION_NODE, inputs: { model: holder.inputs.model, attention: KITCHEN_ATTENTION } };
+  holder.inputs.model = [id, 0];
+  return out;
 }
 
 export async function draw(options: DrawOptions): Promise<BatchIndex> {

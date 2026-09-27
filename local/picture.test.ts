@@ -63,8 +63,10 @@ const promptOf = (graph: Graph) => (Object.values(graph)
   .sort((one, other) => other.length - one.length)[0] ?? '';
 
 // The picture card: POST /prompt, poll /history/<id>, GET /view, and the two routes that stop a job. `jobMs` is how
-// long the card draws; `failing` answers as ComfyUI answers for a graph it could not run.
-function fakeComfy(options: { jobMs?: number; failing?: boolean } = {}) {
+// long the card draws; `failing` answers as ComfyUI answers for a graph it could not run. `pytorch` is the torch it
+// names on /system_stats, and `attention` the options its ModelAttentionBackend lists; without it /object_info fails.
+type Card = { jobMs?: number; failing?: boolean; pytorch?: string; attention?: string[] };
+function fakeComfy(options: Card = {}) {
   const submitted: Graph[] = [];
   const done = new Set<string>();
   // `interrupted`: the job each interrupt named.
@@ -107,7 +109,12 @@ function fakeComfy(options: { jobMs?: number; failing?: boolean } = {}) {
         seen.cleared.push(...((await body()).delete as string[]) ?? []);
         return json({});
       }
-      if (url.pathname === '/system_stats') return json({ devices: [{ index: 0, vram_total: 32 * 1024 ** 3, vram_free: 8 * 1024 ** 3 }] });
+      if (url.pathname === '/system_stats') {
+        return json({ ...(options.pytorch ? { system: { pytorch_version: options.pytorch } } : {}), devices: [{ index: 0, vram_total: 32 * 1024 ** 3, vram_free: 8 * 1024 ** 3 }] });
+      }
+      if (url.pathname === '/object_info/ModelAttentionBackend' && options.attention) {
+        return json({ ModelAttentionBackend: { input: { required: { model: ['MODEL', {}], attention: ['COMBO', { options: options.attention }] } } } });
+      }
       if (url.pathname.startsWith('/history/')) {
         const id = url.pathname.slice('/history/'.length);
         const at = finishAt.get(id);
@@ -226,7 +233,7 @@ function fakeServing(scene: { inputTokens: number; outputTokens: number }, heard
 type Options = {
   // A picture card of its own (`fakeComfy`), whose options a test may change while it runs; without one there is no
   // picture configuration at all.
-  card?: { jobMs?: number; failing?: boolean };
+  card?: Card;
   users?: string[]; style?: string; offsetMs?: number; sheetReply?: object;
   // What the retelling answers for every person it is asked for, the sheet's details and look without it.
   retold?: { details: string; look: string };
@@ -235,8 +242,8 @@ type Options = {
   // Scene deliveries and photos to hold on their way, so that a test can act while Telegram has them; the real queue
   // between the bot and the model; and what makes the bot prepare the next compaction while the reader reads.
   holdFinal?: number; holdPhotos?: number; scheduler?: boolean; compactAtTokens?: number; keepScenes?: number;
-  // A workflow that ends in SaveImage, as the ones pinned in gpu/ do.
-  saveImage?: boolean;
+  // A workflow that ends in SaveImage, as the ones pinned in gpu/ do, or one of those pinned graphs itself.
+  saveImage?: boolean; graphFile?: string;
   // A model that refuses the sheet or the retelling with this code, and a Telegram that will not delete a message or
   // send a photo's note.
   sheetError?: string; retellError?: string; refuseDelete?: boolean; refuseNote?: boolean;
@@ -259,7 +266,7 @@ async function fixture(t: TestContext, options: Options = {}) {
   if (card) t.after(() => card.server.close());
   const url = card && await card.listen();
   const workflow = join(directory, 'workflow.json');
-  const graph = defaultWorkflow();
+  const graph = options.graphFile ? JSON.parse(readFileSync(resolve(options.graphFile), 'utf8')) as Graph : defaultWorkflow();
   if (options.saveImage) graph['7'] = { class_type: 'SaveImage', inputs: { images: ['6', 0], filename_prefix: 'frame' } };
   writeFileSync(workflow, JSON.stringify(graph));
 
@@ -1541,6 +1548,34 @@ test('a reader\'s scene, the compaction prepared for them and their picture reac
   assert.deepEqual(whose(f.heard.slice(first)), [`reader ${readerScope('2')}`]);
   for (const kind of ['scene', 'compaction', 'sheet', 'retell', 'frame']) assert.ok(f.heard.slice(0, first).some(one => one.kind === kind), kind);
   assert.ok(f.heard.some(one => one.kind.startsWith('count ')), 'a count goes in the same scope as its generation');
+});
+
+// The kitchen's attention goes on a picture only where the owner took it (docs/gpu.md#bot-card): Qwen-Image's graph on
+// a server whose torch is for CUDA 13 and whose node offers it. Anywhere else the picture is drawn plainly and its row
+// says why, so a card that loses the attention costs its time where the log shows it, and no picture fails for it.
+test('the kitchen\'s attention goes on Qwen-Image\'s pictures on a cu130 server that offers it, and on nothing else', async t => {
+  const offered = ['pytorch attention', 'comfy kitchen attention'];
+  const qwen = 'gpu/image-workflow-qwen.json';
+  const cases: { graphFile: string; card: Card; attention: ErrorDetails['pictureAttention'] }[] = [
+    { graphFile: qwen, card: { pytorch: '2.11.0+cu130', attention: offered }, attention: 'kitchen' },
+    { graphFile: qwen, card: { pytorch: '2.11.0+cu128', attention: offered }, attention: 'plain_torch' },
+    { graphFile: qwen, card: { pytorch: '2.11.0+cu130', attention: ['pytorch attention'] }, attention: 'plain_offer' },
+    { graphFile: qwen, card: {}, attention: 'plain_unanswered' },
+    { graphFile: 'gpu/image-workflow.json', card: { pytorch: '2.11.0+cu130', attention: offered }, attention: 'plain_graph' },
+  ];
+  for (const { graphFile, card, attention } of cases) {
+    const f = await fixture(t, { card, graphFile });
+    await f.start();
+    await f.bot.idle();
+    const job = f.comfy.submitted[0];
+    const nodes = Object.entries(job).filter(([, node]) => node.class_type === 'ModelAttentionBackend');
+    const sampler = Object.values(job).find(node => node.class_type === 'KSampler')!;
+    const row = f.rows.find(one => one.event === 'picture')!;
+    // The node takes the loader's model and the sampler the node's; a plain picture's sampler takes the loader's.
+    const drawn = [sampler.inputs.model, ...nodes.map(([, node]) => node.inputs)];
+    const expected = attention === 'kitchen' ? [[nodes[0]?.[0], 0], { model: ['1', 0], attention: 'comfy kitchen attention' }] : [['1', 0]];
+    assert.deepEqual([row.outcome, row.pictureAttention, drawn], ['ready', attention, expected], `${graphFile} ${JSON.stringify(card)}`);
+  }
 });
 
 test('the picture configuration is off by default, loopback only, and never the language model\'s own card', t => {

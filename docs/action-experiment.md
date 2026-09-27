@@ -1480,7 +1480,8 @@ in through a node of the graph. `npm run image:levers` ([image-levers.ts](../loc
 `illustrations/levers` from round one's plans, portraits and views. It draws no sharp story, reads nothing under
 `sealed/`, and keeps and prints what the pilot does: labels, codes, counts, times, hashes and pixel counts. The order
 on a card, what each step may gain, the time and the runbook are [the card plan](#card-plan)'s, after this section.
-Pictures move to simple-serving after round two; until then the work is here.
+Pictures move to simple-serving after round two; until then the work is here. The owner's verdict on what it measured
+is [at the section's end](#levers-verdict).
 
 **What the records already say**, read on 2026-09-27 from `illustrations/pilot/pilot.json` and
 `illustrations/pilot-cuda/pilot.json` ([the backend measurement](#backend), both cards of 2026-09-26), the pictures
@@ -1609,6 +1610,28 @@ with autotune turns cudaMallocAsync off and sets cuDNN's benchmark, which reache
 (cuda_malloc.py:93, comfy/model_management.py:563-565). fp16 accumulation reaches a linear whose input is fp16 alone
 (comfy/ops.py:968-972), and the model draws in bf16 (comfy/supported_models.py:2071). flash-attn, SageAttention and
 cublas_ops would each bring a wheel onto the card and need a pin first.
+
+<a id='levers-verdict'></a>
+
+**The owner's verdict**, on 2026-09-27, having looked at `levers.html`: «ну на обычной 25 шагов не вижу разницы», no
+difference to see on the base pipeline at its 25 steps. By the numbers both steps were `visible` and waited for that
+eye: against the reference, cu130 had 0.37 to 38.1 per cent of the pixels off by more than 3 per cent, and against
+cu130 the attention 0.18 to 53.1. cu130 and the kitchen's attention together are therefore the bot's picture path
+([the bot's card](gpu.md#bot-card)). On the base row, pictures an hour against the comparison step:
+
+| Step | Against | Known lengths | New lengths | Round two's path |
+| --- | --- | --- | --- | --- |
+| cu130 | the reference | 1.169x | 1.616x | 1.129x |
+| attention | cu130 | 1.154x | 1.149x | 1.158x |
+| Together | the reference | 476 to 642 an hour, 1.35x | 343 to 637, 1.86x | 357 to 467, 1.31x |
+
+A scene's prompt is almost always a length the server has not drawn, so for the bot the new lengths are the nearer
+number. The turbo row stays out of the decision, and so does the attention on cu128, whose server offered the node too
+and which nothing here drew, and on Krea, which nothing here drew either. The experiments keep round two's backend,
+cu128 with Triton and no node: image-bootstrap.sh and image-serve.sh keep cu128 as their default, which the runbooks
+here take by naming no torch, the cu130 steps of this measurement and of the backend measurement aside, and a run's
+pins refuse a resume on another torch or Triton switch, so round two's action runs and figure-age's P run draw where
+they drew.
 
 <a id='card-plan'></a>
 
