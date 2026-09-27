@@ -257,6 +257,13 @@ export const ru = {
     // Opens the wait for a description, also for a person who has none yet.
     editDetails: '✏️ Изменить описание',
     portrait: '🖼 Портрет',
+    // The frames of the story seen through this person's eyes (local/picture-pov.ts): the button that turns it on, the
+    // one back to the usual frames, the last line of that person's card, and the last line of another person's card
+    // while the frames are seen through the eyes of `person`, where the first button switches them to this one.
+    povOn: '👁 Вид от первого лица',
+    povOff: '🎥 Обычный вид',
+    povNote: '👁 Картинки к сценам этой истории показывают то, что видит этот персонаж: со своего места, в своей позе, туда, куда смотрит. В кадр попадают его руки, ноги и тело, если он смотрит вниз, его одежда и то, что он держит, его тень и отражение, но сам он целиком со стороны не виден. Сцены без него рисуются как обычно.',
+    povOther: (person: string) => `👁 Сейчас картинки к сценам этой истории показаны глазами другого персонажа: ${person}. Кнопка «👁» ниже переключит их на этого.`,
     back: '↩️ К персонажам',
     // While the reader writes a short look. `max` is a limit in characters.
     editTitle: (person: string, story: string) => `✏️ Короткая внешность: ${person} · ${story}`,

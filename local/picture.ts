@@ -58,6 +58,7 @@ import { styleChoice, styleLine } from './picture-style.ts';
 import type { StyleChoice } from './picture-style.ts';
 import { REFERENCE_VERSION, frameReferences, pinReferences, readReference, referenceGraph, referencePrompt, temporaryReferences } from './picture-references.ts';
 import { pictureSize } from './reference.ts';
+import { povRequest, seenBy, viewerOf } from './picture-pov.ts';
 import { createProgress } from './progress.ts';
 import { contextParts, storyNarration } from './prompt.ts';
 import { fileErrorCode } from './store.ts';
@@ -422,7 +423,9 @@ export function createIllustrator(config: ImageConfig, deps: {
 
   // The frame of each reader's latest described scene, in memory only and only until the next one: a sample of a
   // style is drawn from it without asking the language model again. Never stored and never logged.
-  const frames = new Map<string, { storyId: string; nodeId: string; description: Description; sheet: Character[] }>();
+  // `viewer` is the person the frame was seen through, if the story had one then (local/picture-pov.ts), and `pov`
+  // whether it was.
+  const frames = new Map<string, { storyId: string; nodeId: string; description: Description; sheet: Character[]; viewer?: string; pov?: boolean }>();
   // The portrait each reader was shown last, for its keep button (`keepPortrait`), with the text it was drawn from as
   // `look` (`portraitText`): in memory only, one per reader, until the next one, the keep, a delivery that failed, or
   // PORTRAIT_HELD_MS. That one timer is cleared with it, and knows the reader and the id alone, so that the map is the
@@ -481,16 +484,24 @@ export function createIllustrator(config: ImageConfig, deps: {
       // described in the frame as somebody the sheet does not cover, and the next frame tries again.
       await retellPending(model, { userId, storyId, signal, log }, 'picture_look_retold');
       sheet = wornAt(story, nodeId, (store.read(userId).stories[storyId]?.sheet ?? []).filter(one => one.look.trim()));
-      return (await askJson(model, trusted(model, frameRequest(context, sheet), anchor), { signal })).value as unknown as Description;
+      // Seen through the eyes of a person of the sheet, when the reader chose one: the rule and its fields are added
+      // here, never in local/illustrate.ts, so that without it the request is the one the action experiment pins.
+      const viewer = viewerOf(story, sheet);
+      const request = frameRequest(context, sheet);
+      return (await askJson(model, trusted(model, viewer ? povRequest(request, viewer) : request, anchor), { signal })).value as unknown as Description;
     }, sharesPrefix ? { holder: userId, sharesPrefix } : { holder: userId });
+    const viewer = viewerOf(story, sheet);
+    const viewed = viewer && seenBy(description, viewer, sheet);
     // What the sheet's people wear in this frame is what the next picture below this scene starts from.
-    const worn = clothesOf(description, sheet);
+    const worn = clothesOf(viewed ? viewed.dressed : description, sheet);
     if (Object.keys(worn.clothes).length) store.mutate(userId, saved => {
       const node = saved.stories[storyId]?.nodes[nodeId];
       if (node) node.clothes = { ...node.clothes, ...worn.clothes };
     });
-    frames.set(userId, { storyId, nodeId, description, sheet });
-    return { description, sheet, clothesChanged: worn.changed };
+    const pov = viewed ? viewed.seen : undefined;
+    const frame = viewed ? viewed.description : description;
+    frames.set(userId, { storyId, nodeId, description: frame, sheet, viewer: viewer?.name, pov });
+    return { description: frame, sheet, clothesChanged: worn.changed, pov };
   }
 
   // The size of a prompt that ends with the style `line`: its characters, and, with a tokenizer, its tokens and how
@@ -727,6 +738,8 @@ export function createIllustrator(config: ImageConfig, deps: {
     let describeMs = 0;
     let pictureStyle: StyleChoice | undefined;
     let releasePortraits: (() => void) | undefined;
+    // Whether the frame was seen through a person's eyes, only for a story that has one (local/picture-pov.ts).
+    let pov: boolean | undefined;
     try {
       // The description call, on the language model's card, holding it the way a job holds it and no longer.
       const describeStarted = now();
@@ -737,10 +750,11 @@ export function createIllustrator(config: ImageConfig, deps: {
         await status.clear();
         return;
       }
-      let frame: { description: Description; sheet: Character[]; clothesChanged: number };
+      let frame: { description: Description; sheet: Character[]; clothesChanged: number; pov?: boolean };
       try { frame = await describeFrame(userId, storyId, nodeId, branchId, signal, log, true); }
       finally { release?.(); described(); }
       describeMs = Math.max(0, now() - describeStarted);
+      pov = frame.pov;
       if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
 
       // The prompt is assembled from the fields, in the order the readers of step 3 asked for, and ends with one
@@ -765,7 +779,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       log('picture', undefined, { outcome: 'ready', cancelled: signal.aborted, describeMs, imageMs: drawn.totalMs,
         imageSteps: steps, pictureAttention: drawn.pictureAttention, photoMs, photoBytes: drawn.bytes.length,
         namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook, clothesChanged: frame.clothesChanged,
-        pictureStyle, ...size, ...elapsed() });
+        pictureStyle, ...pov === undefined ? {} : { pov }, ...size, ...elapsed() });
     } catch (error) {
       const code = errorCode(error);
       const cancelled = signal.aborted || code === 'cancelled' || code === 'scene_gone';
@@ -776,7 +790,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       // A reader who has moved on gets no apology, only their own next scene; a reader still waiting is told once.
       await status.clear(outcome === 'failed' ? t.notices.pictureFailed : undefined);
       log('picture', signal.aborted ? 'cancelled' : safeCode(code),
-        { ...safeErrorDetails(error), outcome, cancelled, describeMs, pictureStyle, ...elapsed() });
+        { ...safeErrorDetails(error), outcome, cancelled, describeMs, pictureStyle, ...pov === undefined ? {} : { pov }, ...elapsed() });
     } finally { releasePortraits?.(); }
   }
 
@@ -829,12 +843,13 @@ export function createIllustrator(config: ImageConfig, deps: {
       const kept = frames.get(userId);
       const story = store.read(userId).stories[storyId];
       let frameReused = kept?.storyId === storyId && kept.nodeId === nodeId && !!story?.nodes[nodeId]
-        && kept.sheet.every(one => story.sheet?.find(other => other.name === one.name)?.look === one.look);
+        && kept.sheet.every(one => story.sheet?.find(other => other.name === one.name)?.look === one.look)
+        && viewerOf(story, kept.sheet)?.name === kept.viewer;
       const stylesAsked = styles.length;
       let describeMs = 0;
       let pictureStyle = styles[0].pictureStyle;
       try {
-        let frame: { description: Description; sheet: Character[] } | undefined = frameReused ? kept : undefined;
+        let frame: { description: Description; sheet: Character[]; pov?: boolean } | undefined = frameReused ? kept : undefined;
         if (!frame) {
           let release: (() => void) | undefined;
           try { release = request.hold?.(); }
@@ -860,7 +875,7 @@ export function createIllustrator(config: ImageConfig, deps: {
             await sendPrompt(request, photo, assembled.prompt, size);
             log('picture_sample', undefined, { outcome: 'ready', cancelled: signal.aborted, frameReused, describeMs,
               imageMs: drawn.totalMs, imageSteps: steps, pictureAttention: drawn.pictureAttention, namesStripped: assembled.namesStripped,
-              withoutLook: assembled.withoutLook, pictureStyle, stylesAsked, ...size });
+              withoutLook: assembled.withoutLook, pictureStyle, stylesAsked, ...frame.pov === undefined ? {} : { pov: frame.pov }, ...size });
           } finally { result.releasePortraits(); }
           // The styles after the first are drawn from the frame already in hand.
           frameReused = true;

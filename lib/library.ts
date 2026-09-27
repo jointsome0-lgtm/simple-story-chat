@@ -73,6 +73,10 @@ export type Story = {
   sheet?: { name: string; description?: string; changes?: string; details?: string; look: string; outfit?: string;
     descriptionEdited?: boolean; edited?: boolean; lookPending?: boolean; detailsEdited?: boolean; portrait?: KeptPortrait;
     poses?: Partial<Record<Pose, OwnReference>> }[];
+  // The person of the sheet, by name, whose eyes the frames of this story are seen through (the owner, 2026-09-27;
+  // local/picture-pov.ts). At most one; without it, or while that person is not in the scene or not on the sheet, a
+  // frame is drawn as usual. Only the local bot writes it, from the characters' card.
+  pov?: string;
 };
 export type Job = {
   id: string; storyId: string; branchId: string; head: string | null; memory: string | null; input: string; started: number;

@@ -123,6 +123,9 @@ export type ErrorDetails = {
   referencePlace?: typeof REFERENCE_PLACES[number]; referenceRefusal?: typeof REFERENCE_REFUSALS[number];
   // A picture drawn from a prompt the reader wrote whole (local/picture.ts `variant`) rather than one the bot assembled.
   edited?: boolean;
+  // A frame of a story seen through one person's eyes (local/picture-pov.ts): true when it was drawn through them,
+  // false when they were not in the scene and it was drawn as usual. A story without such a person leaves it out.
+  pov?: boolean;
   // A sheet written in place of an older one that still had the clothes in its appearance lines.
   sheetRewritten?: boolean;
   // A failed Claude CLI run: how it ended and whether the CLI itself called the result an error.
@@ -168,6 +171,7 @@ export function safeErrorDetails(value: unknown = {}): ErrorDetails {
   if (member(REFERENCE_PLACES, input?.referencePlace)) result.referencePlace = input.referencePlace;
   if (member(REFERENCE_REFUSALS, input?.referenceRefusal)) result.referenceRefusal = input.referenceRefusal;
   if (typeof input?.edited === 'boolean') result.edited = input.edited;
+  if (typeof input?.pov === 'boolean') result.pov = input.pov;
   if (typeof input?.sheetRewritten === 'boolean') result.sheetRewritten = input.sheetRewritten;
   if (member(CLI_RESULTS, input?.cliResult)) result.cliResult = input.cliResult;
   if (typeof input?.cliError === 'boolean') result.cliError = input.cliError;
