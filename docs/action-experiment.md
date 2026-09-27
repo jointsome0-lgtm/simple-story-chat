@@ -1642,8 +1642,8 @@ They are the nearest the round has to a bot's scene, which has a prompt of its o
 conditioning lengths, 204 to 555 tokens. The eight are chosen before the card by round one's key (width, height,
 conditioning tokens, reference sizes), distinct from each other and from the five cells', so that each brings a
 sequence length new to a server just started. The first eight give what a new prompt costs; the second eight the same
-lengths known, the sampler run again since the seed differs. Every picture of the stream is compared with the
-reference's of the same prompt and seed, so a change is judged on 21 pairs, not 5. Each job keeps the server's own
+lengths known, the sampler run again since the seed differs. Every picture of the stream is compared with its
+comparison step's of the same prompt and seed, so a change is judged on 21 pairs, not 5. Each job keeps the server's own
 stamps of its start and end (execution.py:677-684, 742, 824) beside the harness's cycle, so that the card's busy time
 and the handover between jobs show apart.
 
