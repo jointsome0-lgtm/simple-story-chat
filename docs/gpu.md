@@ -2,9 +2,10 @@
 
 How to rent a card on Vast, what the owner asks while it is paid for, how to reach it, and how the picture card runs
 and what it keeps. The language card's setup, checks, pause and diagnostics, on this page until 2026-09-25, are in
-[llama-cpp.md](llama-cpp.md), and its profile measurement in [llama-measurement.md](llama-measurement.md). The
-identity measurement follows [identity-experiment.md](identity-experiment.md). Past prices, downloads and failures
-are in [gpu-measurements.md](knowledge/gpu-measurements.md).
+[llama-cpp.md](llama-cpp.md), and its profile measurement in [llama-measurement.md](llama-measurement.md). From the
+next rental on, readers' text card runs [simple-serving](#serving-card) instead. The identity measurement follows
+[identity-experiment.md](identity-experiment.md). Past prices, downloads and failures are in
+[gpu-measurements.md](knowledge/gpu-measurements.md).
 
 ## Renting
 
@@ -77,7 +78,8 @@ ssh simple-chat-vast
 ```
 
 Copy with `tar` over SSH as above: `scp` hung through the proxy. What comes next depends on the lane:
-[the language card](llama-cpp.md#prepare-server) or [the picture card](#picture-card).
+[the language card](llama-cpp.md#prepare-server), [the text card on simple-serving](#serving-card) or
+[the picture card](#picture-card).
 
 <a id='the-tunnel'></a>
 
@@ -93,6 +95,114 @@ host's key. Ctrl-C or a TERM to it ends its ssh too. A server on the card has to
 out: [ensure-server.sh](../gpu/ensure-server.sh) starts the language server in the background under `nohup`, with no
 terminal and its output nowhere, and [the picture card](#picture-card) starts ComfyUI with `setsid` besides, in a
 session of its own.
+
+<a id='serving-card'></a>
+
+## The text card on simple-serving
+
+From the next rental on, readers' text card runs [simple-serving](model-providers.md#simple-serving-our-gateway), not
+llama.cpp. On 2026-09-27 the tester's card ran llama.cpp with one slot, and the story loop's probe, sent straight to
+llama-server, took turns in that slot with the tester («А нафига мы делали simple-serving?», the owner that night).
+Through the gateway the bot's turns, the compactions prepared while a reader reads and their pictures' descriptions
+are class `reader`, and eval, the probes and the stands are `internal` (`workOf` in [serving.ts](../local/serving.ts)).
+Readers have four places of their own, and `internal` two of the four it shares with `agent` and `external`. vLLM runs
+with `--scheduling-policy priority`: it takes a waiting reader before waiting internal work (priority 0 against 2), and
+when the cache runs out it preempts internal work first. A dry run that night against simple-serving's dev launcher
+and fake engine sent a reader's two scenes through the bot's code while three memory probes ran as eval runs them.
+The gateway logged the scenes as `reader` with a reader's scope and the probes' 12 counts and 12 generations as
+`internal`; `/v1/state` had a reader active beside internal calls in 82 of 296 samples, an internal one waiting in
+each, and a reader waiting in none.
+
+**Before the rental.** simple-serving's branch `next-card` is `mtp-min-p` (8672e62, pushed): phase2 with the drafter
+and the gateway's refusal of a `min_p` that vLLM refuses while it drafts. Its tests pass, and so does
+`npm run test:serving` against it. Each card needs the owner's «да» with its price and its end
+([the rules](#while-the-cards-are-paid-for)). A card's trial guard deletes it at most three hours after its first
+start (`--hours`), so a longer session is a second rental with its own preparation.
+
+**The text card**, prepared as round two's text card was on 2026-09-27. `HOST` is its alias in `~/.ssh/config`, and
+`git archive` and the `uv run` lines run in simple-serving's checkout at `next-card`:
+
+```sh
+SIMPLE_CHAT_RENT_DRY_RUN=1 npm run gpu:rent -- --lane text --hours 3    # each offer's session
+npm run gpu:rent -- --lane text --hours 3    # with the «да»; `rented` names ID, the host and destroyBy
+npm run gpu:rent -- --show ID                # ssh.direct: HostName and Port of HOST
+git archive next-card | ssh HOST 'mkdir -p /workspace/simple-serving && tar -xf - -C /workspace/simple-serving'
+uv run python -m simple_serving.cli keys | ssh HOST bash /workspace/simple-serving/card/bootstrap.sh
+uv run python -m simple_serving.cli trial --ssh-host HOST
+uv run python -m simple_serving.cli up       # in a terminal of its own, until it says ready
+# A fresh container's first start compiles and keeps the smaller cache: start the pair again, then `up` again.
+py=/workspace/simple-serving-card/gateway/bin/python
+ssh HOST "cd /workspace/simple-serving && $py -m simple_serving.card --stop && $py -m simple_serving.card"
+ssh HOST "grep -o '\"kv_cache_tokens\": [0-9]*' /workspace/simple-serving-card/logs/card.jsonl | tail -n 1"  # 151300
+mkdir -p logs; set -o pipefail; uv run python -m simple_serving.smoke | tee logs/smoke-text-card.jsonl    # exit 0
+```
+
+The keys stay in `~/.config/simple-serving/config.json`: `keys` makes the client and control keys once, keeps them
+after, and prints only the SHA-256 of each, which is all the card gets; `trial` writes the card's instance and host
+there. No key is printed; one is compared by its hash, `read -rs KEY && printf '%s' "$KEY" | sha256sum && unset KEY`.
+
+On 2026-09-27 a 5090 with these pins was running 2.3 minutes after its rental, its preparation took 9.2 (about 6 of
+them vLLM's venv at 16 MB/s, the weights at 97 MB/s) and its first start 137 s: 14.4 minutes to the first ready. That
+start kept 104492 tokens of cache; a start with the compile on disk kept 151300, 45 per cent more, and was ready in 29
+to 35 s (simple-serving's `docs/speed.md` on its branch `throughput`, "What the 5090 found"). The llama.cpp card that
+night was healthy 17 minutes after its rental, and the picture card passed its check after 12.
+
+| Here | On the card | What |
+| --- | --- | --- |
+| 127.0.0.1:8080 | 8090 | The gateway's public listener, for the bot, eval and the probes; `up` holds the tunnel |
+| 127.0.0.1:8081 | 8091 | Its control listener, for `up`, `sleep` and `status` |
+| none | 8092 | vLLM, on the card's loopback: nothing reaches it past the gateway |
+| 127.0.0.1:8188 | 8188 of the picture card | ComfyUI, through `bash gpu/tunnel.sh --pictures-only ALIAS` |
+
+`gpu/tunnel.sh` without `--pictures-only` would take 8080 as well, and has no place in this session.
+
+**The bot** takes these over `.env` and `.env.gpu`, which leave an exported value alone:
+
+```sh
+export SIMPLE_CHAT_PROVIDER=simple-serving SIMPLE_CHAT_BASE_URL=http://127.0.0.1:8080 \
+  SIMPLE_CHAT_MODEL=gemma-4-31b-heretic-nvfp4 SIMPLE_CHAT_CONTEXT_TOKENS=65536 SIMPLE_CHAT_VAST_INSTANCE_ID=
+export SIMPLE_CHAT_API_KEY="$(node -p 'require(process.argv[1]).client_key' ~/.config/simple-serving/config.json)"
+```
+
+`SIMPLE_CHAT_SERVING_LANES` keeps its default of 2 unless the owner asks for up to 4; the slot and pool settings do not
+apply. Start the bot once `up` says ready, so that its check at startup stops it on a wrong key, model, context or
+contract. When no call of ours comes for 13 minutes the card stops itself and `up` ends; a reader's turn is then told
+that the service is unavailable until `up` resumes the card, which the bot never does.
+
+**The tester's model** there is the heretic's 4-bit NVFP4 conversion
+(`llmfan46/gemma-4-31B-it-uncensored-heretic-NVFP4` at 24ac337e) with Google's assistant drafting 3 tokens a step
+(`google/gemma-4-31B-it-assistant` at 627c5ec1) and an fp8 cache, not the Q6_K with its q8_0 cache that served on
+2026-09-27. On 2026-09-26 eval found its memory as good as the Q6_K's and its scenes a little weaker at counting and
+at refuting a false premise ([route A](knowledge/improve-runs.md#route-a-2026-09-26)). Every turn reads its whole
+story again: under the manifest's retention 0 the 5090's prefix cache hit nothing, and a turn of 16000 tokens waited
+6.2 to 6.4 s for its first token. Dense retention took that to 372 ms; keeping it is the owner's call (simple-serving's
+`docs/speed.md`, item 8).
+
+**The picture card** runs as it did that night: `--lane pictures --qwen only` with `--avoid-host` and the text card's
+host, prepared, started and checked as [the bot's card](#bot-card) says, with the bot's picture settings of that
+session ([setup.md](setup.md#pictures)).
+
+**The loop** reaches the text card through the gateway alone, as `internal`: eval with `--model serving:<label>`
+([our own card](eval.md#own-card)), whose probes call the gateway with the client key from simple-serving's
+configuration, and a stand that asks the text card with the same settings (`SERVING` in
+[action-text.ts](../local/action-text.ts)). Not `gpu:<label>`, which takes llama.cpp's settings from `.env.gpu`, and no
+proxy past the gateway, whose calls would have no class. `internal` runs two calls at once and holds eight waiting;
+one more is refused, `queue_full`, which the adapter reads as `rate_limited`, and a call ends at 900 s. Both classes
+refuse more than 8192 tokens out, `limit_exceeded`: a compaction under `MEMORY_THINKING=true` asks 16384 or 20480, the
+walks' story audit 16384, so neither runs on this card. The bot never passes that switch on (`local/main.ts`).
+
+**The end** is `npm run gpu:rent -- --destroy ID` for each card, read back as gone. A card that stopped itself keeps
+its disk, and a stopped trial's guard does not run.
+
+Not known before the card:
+
+- How long a reader waits behind the loop. vLLM spends each step's 1024 tokens on the running requests first, and a
+  running prompt may take all that the others leave (`long_prefill_token_threshold` is 0); a waiting request gets
+  tokens only when some remain, and one that finds no free blocks preempts nothing (vLLM 0.30.0's
+  `vllm/v1/core/sched/scheduler.py:610-612,661-662,858,1173-1180`). So a reader's first token may wait for the rest of
+  an internal prompt, read at about 2500 tokens a second on the 5090, and for blocks the loop's prompts hold.
+  `--long-prefill-token-threshold` would bound the first; it is not set, and not measured.
+- Whether the pair started again by hand keeps the 151300 tokens that the throughput harness's second starts kept.
 
 <a id='picture-card'></a>
 
