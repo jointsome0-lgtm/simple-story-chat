@@ -18,6 +18,7 @@ import { createGpu, queueOptions } from './gpu.ts';
 import type { GpuController } from './gpu.ts';
 import { createGpuConnection } from './gpu-connection.ts';
 import { createScheduler } from './scheduler.ts';
+import { createDurations } from './eta.ts';
 import type { Scheduler } from './scheduler.ts';
 import { serveBackground } from './background.ts';
 import type { Log } from './model-error.ts';
@@ -60,7 +61,10 @@ try {
     if (config.provider !== 'simple-serving' || !unavailable(error)) throw error;
     log('model_check_deferred', (error as Failure).code, error);
   });
-  scheduler = createScheduler(rawProvider, { log,
+  // How long the bot's own work usually takes, text and pictures, from which a reader who waits is told roughly when
+  // their request starts (local/eta.ts). In memory: a restart starts the timing over.
+  const durations = createDurations();
+  scheduler = createScheduler(rawProvider, { log, durations,
     slots: config.slots, poolTokens: config.poolTokens, sharedCache: config.sharedCache,
     outputTokens: request => request.maxOutputTokens,
     // Without GPU control there is no socket, and no agent or probe work here.
@@ -90,7 +94,7 @@ try {
       return qwen && count(qwen, graph);
     } catch (error) { log('tokenizer_unreadable', undefined, error); return undefined; }
   };
-  const illustrator = config.images ? createIllustrator(config.images, { store, provider, ownerId: config.ownerId,
+  const illustrator = config.images ? createIllustrator(config.images, { store, provider, ownerId: config.ownerId, durations,
     model: { model: config.model, provider: config.provider, contextTokens: config.contextTokens },
     promptTokens: counter(encoderTokens), textTokens: counter(textTokens) }) : undefined;
   if (config.images) log('pictures_configured');

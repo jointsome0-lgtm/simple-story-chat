@@ -47,7 +47,9 @@ import type { ImageConfig } from './config.ts';
 import { estimateTokens, requestStamp, sameContext } from './context.ts';
 import { SAMPLER_DEFAULTS, apiGraph, applyToWorkflow, attentionOffered, drawOne, latentSizeOf, previewOnly, referenceSlots, samplerSettingsOf,
   serverPins, settled, textEncoderOf, withAttention } from './image-batch.ts';
-import type { Comfy, Graph, Steps } from './image-batch.ts';
+import type { CardPlace, Comfy, Graph, Steps } from './image-batch.ts';
+import { etaText, left, moved, waited } from './eta.ts';
+import type { Durations } from './eta.ts';
 import { STYLE, askJson, assemblePrompt, frameRequest, inWords, matchSheet, olderSheet, retellRequest, retoldOf, sheetOf, sheetRequest } from './illustrate.ts';
 import type { Character, Description, Excerpt } from './illustrate.ts';
 import { PORTRAIT_CLOTHES, PORTRAIT_STYLE, portraitPrompt, portraitText } from './image-portraits.ts';
@@ -65,6 +67,7 @@ import { fileErrorCode } from './store.ts';
 import type { Store } from './store.ts';
 import type { Chat, InlineKeyboard, Screen } from './telegram.ts';
 import { texts } from './text.ts';
+import type { Messages } from './text.ts';
 import { qwenPromptTokens } from './tokenizer.ts';
 import type { QwenTokenizer } from './tokenizer.ts';
 import { inTurn } from './turn.ts';
@@ -239,6 +242,8 @@ const stepsBar = (value: number, max: number) => {
   return `${'▰'.repeat(filled)}${'▱'.repeat(10 - filled)} ${value}/${max}`;
 };
 const PROGRESS_MS = 3000;
+// What a job's status line hears of it on the card: the steps done while it draws, and its place while it waits.
+type Watching = { progress: Steps; place: (place: CardPlace | null) => void };
 
 // One seed per story, from the story's id. Free sampling redraws the world from nothing in every scene; a seed that
 // stays put holds a place steadier between visits, and costs nothing (the plan, "What survives without reference
@@ -291,6 +296,9 @@ export function createIllustrator(config: ImageConfig, deps: {
   promptTokens?: (graph: Graph) => ((prompt: string) => number) | undefined;
   // The same for one field of a sheet on its own (`textTokens`), for the characters' card.
   textTokens?: (graph: Graph) => ((text: string) => number) | undefined;
+  // How long the bot's jobs on the card usually take (`frame`), timed here as they end, from which a reader whose
+  // picture waits behind other jobs is told roughly when it starts (`statusLine`). Without it, the place alone.
+  durations?: Durations;
 }) {
   const { store, provider, now = Date.now, pollMs } = deps;
   // The graph is read once, here, so that a workflow that is not a ComfyUI API export fails when the bot starts
@@ -489,7 +497,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       const viewer = viewerOf(story, sheet);
       const request = frameRequest(context, sheet);
       return (await askJson(model, trusted(model, viewer ? povRequest(request, viewer) : request, anchor), { signal })).value as unknown as Description;
-    }, sharesPrefix ? { holder: userId, sharesPrefix } : { holder: userId });
+    }, sharesPrefix ? { holder: userId, sharesPrefix, work: 'description' } : { holder: userId, work: 'description' });
     const viewer = viewerOf(story, sheet);
     const viewed = viewer && seenBy(description, viewer, sheet);
     // What the sheet's people wear in this frame is what the next picture below this scene starts from.
@@ -526,15 +534,16 @@ export function createIllustrator(config: ImageConfig, deps: {
 
   // One picture on the picture card: a whole prompt, drawn by a recipe. The kitchen's attention is asked of the server
   // while the job's socket opens (`kitchenAttention`), and the picture's row says what it was drawn with, a failed
-  // one's too once the answer had come. `onProgress` hears the steps of each job it runs (`statusLine`). Every job
-  // here is a reader's, a frame, a sample, a variant or a portrait, and goes to the head of the card's queue (`front`),
-  // ahead of the cells an experiment has queued on the same card between the readers' pictures.
+  // one's too once the answer had come. `status` hears each job it runs, its place in the card's queue and then its
+  // steps (`statusLine`). Every job here is a reader's, a frame, a sample, a variant or a portrait, and goes to the
+  // head of the card's queue (`front`), ahead of the cells an experiment has queued on the same card between the
+  // readers' pictures. A job that ends well is timed from the server's own stamps of its start and end (`durations`).
   type ReferenceReason = NonNullable<ErrorDetails['pictureReferences']>;
   const referenceGate = (userId: string): ReferenceReason | undefined => !config.references ? 'disabled'
     : !config.users.has(userId) || (!(deps.ownerId && userId === deps.ownerId) && !config.referenceUsers?.has(userId)) ? 'not_allowed' : undefined;
 
   async function draw(userId: string, recipe: PictureRecipe, prompt: string, signal: AbortSignal, log: Log,
-    { fallbackPrompt = prompt, reason = 'legacy', onProgress }: { fallbackPrompt?: string; reason?: ReferenceReason; onProgress?: Steps } = {}) {
+    { fallbackPrompt = prompt, reason = 'legacy', status }: { fallbackPrompt?: string; reason?: ReferenceReason; status?: Watching } = {}) {
     const comfy: Comfy = { baseUrl: config.url, timeoutMs: config.timeoutMs, signal };
     const { references, ...plainRecipe } = recipe;
     let actualRecipe: PictureRecipe = plainRecipe;
@@ -552,7 +561,10 @@ export function createIllustrator(config: ImageConfig, deps: {
         pictureAttention = noded ? 'kitchen' : said === 'kitchen' ? 'plain_graph' : said;
         return noded ?? filled;
       });
-      return drawOne(comfy, job, { waitMs: config.waitMs, pollMs, front: true, onSubmitted: () => { submitted = true; }, onProgress });
+      const drawn = await drawOne(comfy, job, { waitMs: config.waitMs, pollMs, front: true, onSubmitted: () => { submitted = true; },
+        onProgress: status?.progress, onPlace: status?.place });
+      if (drawn.stamps) deps.durations?.add('frame', drawn.stamps.end - drawn.stamps.start);
+      return drawn;
     };
     try {
       let edited: Graph | undefined;
@@ -614,7 +626,7 @@ export function createIllustrator(config: ImageConfig, deps: {
   // One frame on the picture card with the story's seed. A sample reuses a compatible scene recipe, including the
   // original portrait inputs, and changes the style at the end and, for references, at the opening too.
   async function drawFrame(userId: string, storyId: string, frame: { description: Description; sheet: Character[] },
-    line: string, signal: AbortSignal, log: Log, savedRecipe?: PictureRecipe, onProgress?: Steps) {
+    line: string, signal: AbortSignal, log: Log, savedRecipe?: PictureRecipe, status?: Watching) {
     const plain = assemblePrompt(frame.description, frame.sheet, line);
     let assembled = plain;
     // After a graph or checkpoint change, a sample uses today's recipe and portraits, as a new frame does.
@@ -644,26 +656,52 @@ export function createIllustrator(config: ImageConfig, deps: {
       catch (error) { log('portraits_unswept', fileErrorCode(error)); }
     };
     try {
-      const drawn = await draw(userId, recipe, assembled.prompt, signal, log, { fallbackPrompt: plain.prompt, reason, onProgress });
+      const drawn = await draw(userId, recipe, assembled.prompt, signal, log, { fallbackPrompt: plain.prompt, reason, status });
       return { assembled: drawn.referenceCount ? assembled : plain, recipe: drawn.recipe, drawn, releasePortraits };
     } catch (error) { releasePortraits(); throw error; }
   }
 
   // A status line of its own, not the scene's draft: it has to outlive the message it stands under and be removed
-  // by id once the photo is there. A chat that refuses it is no reason to skip the picture. While the card draws, the
-  // steps it has done go under the line (`progress`, `stepsBar`), in an edit at most every PROGRESS_MS. An edit
-  // Telegram refuses leaves a `picture_status_failed` row and waits for the next one, and none lands once the line is
-  // being cleared (local/progress.ts `close`): the removal, or the failure put in its place, is the line's last word.
-  async function statusLine(chat: Chat, text: string, log: Log) {
+  // by id once the photo is there. A chat that refuses it is no reason to skip the picture. While the job waits on
+  // the card behind other jobs, its place and roughly when it starts go under the line (`place`,
+  // docs/telegram-ui.md#waiting), again when the place changes or that time has moved by much (local/eta.ts `moved`);
+  // while the card draws, the steps it has done (`progress`, `stepsBar`). The first place and the first steps are
+  // edited in at once, and anything else at most every PROGRESS_MS. An edit Telegram refuses leaves a
+  // `picture_status_failed` row and waits for the next one, and none lands once the line is being cleared
+  // (local/progress.ts `close`): the removal, or the failure put in its place, is the line's last word.
+  async function statusLine(chat: Chat, text: string, log: Log, t: Messages) {
     let messageId: number | undefined;
     try { messageId = ((await chat.send({ text })) as { message_id?: number }).message_id; }
     catch (error) { log('picture_status_unsent', errorCode(error)); }
-    const bar = messageId === undefined ? undefined : createProgress<{ value: number; max: number }>({ chat, messageId, log,
+    type Stage = 'queued' | 'drawing';
+    const bar = messageId === undefined ? undefined : createProgress<{ stage: Stage; line: string }>({ chat, messageId, log,
       intervalMs: PROGRESS_MS, rows: { failed: 'picture_status_failed' },
-      render: ({ value, max }) => ({ text: `${text}\n${stepsBar(value, max)}` }) });
-    const progress: Steps = (value, max) => bar?.update({ value, max });
+      render: ({ line }) => ({ text: line ? `${text}\n${line}` : text }) });
+    let stage: Stage | undefined;
+    // The place the line shows now, and the first one shown for the job that waits now, for its row (local/eta.ts
+    // `waited`), which the row takes: the next job under the same line starts its own.
+    let told: { ahead: number; etaMs?: number } | undefined, shown: { ahead: number; etaMs?: number } | undefined;
+    const progress: Steps = (value, max) => { stage = 'drawing'; bar?.update({ stage, line: stepsBar(value, max) }); };
+    // The job the card draws meanwhile, the bot's or an experiment's, counts as one of the bot's usual jobs less the
+    // time this wait has seen it drawing, and each job before this one as a whole usual job. Once the job is next or
+    // on the card, its place leaves the line with the next edit, or with the first steps if they come sooner.
+    const place = (seen: CardPlace | null) => {
+      const ahead = seen ? seen.before + (seen.drawing ? 1 : 0) : 0;
+      if (!seen || !ahead) {
+        if (stage === 'queued' && told) { told = undefined; bar?.update({ stage, line: '' }); }
+        return;
+      }
+      const frame = deps.durations?.typical('frame');
+      const etaMs = frame === undefined ? undefined : (seen.drawing ? left(frame, seen.drawingMs) : 0) + seen.before * frame;
+      shown ??= { ahead, etaMs };
+      if (stage === 'queued' && told && told.ahead === ahead && !moved(told.etaMs, etaMs)) return;
+      stage = 'queued';
+      told = { ahead, etaMs };
+      bar?.update({ stage, line: t.wait.picture(ahead, etaText(t, etaMs)) });
+    };
     return {
-      progress,
+      progress, place,
+      waited: () => { const row = waited(shown); shown = undefined; return row; },
       async clear(replacement?: string) {
         if (messageId === undefined) return;
         await bar?.close();
@@ -735,7 +773,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       return { pictureAfterSceneMs: waited, pictureSeconds: Math.round(waited / 1000) };
     };
     const t = texts(store.read(userId).language);
-    const status = await statusLine(chat, t.notices.drawing, log);
+    const status = await statusLine(chat, t.notices.drawing, log, t);
 
     let describeMs = 0;
     let pictureStyle: StyleChoice | undefined;
@@ -766,7 +804,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       pictureStyle = styleChoice(reader, standard);
       const line = styleLine(reader, standard);
       const result = await drawFrame(userId, storyId, frame, line, signal, log, reader.stories[storyId]?.nodes[nodeId]?.picture,
-        status.progress);
+        status);
       releasePortraits = result.releasePortraits;
       const { assembled, recipe, drawn } = result;
       if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
@@ -778,8 +816,8 @@ export function createIllustrator(config: ImageConfig, deps: {
       await status.clear();
       const size = promptSize(assembled.prompt, line, drawn.referenceCount);
       await sendPrompt(request, photo, assembled.prompt, size, true);
-      log('picture', undefined, { outcome: 'ready', cancelled: signal.aborted, describeMs, imageMs: drawn.totalMs,
-        imageSteps: steps, pictureAttention: drawn.pictureAttention, photoMs, photoBytes: drawn.bytes.length,
+      log('picture', undefined, { outcome: 'ready', cancelled: signal.aborted, describeMs, imageQueueMs: drawn.queueMs, imageMs: drawn.totalMs,
+        ...status.waited(), imageSteps: steps, pictureAttention: drawn.pictureAttention, photoMs, photoBytes: drawn.bytes.length,
         namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook, clothesChanged: frame.clothesChanged,
         pictureStyle, ...pov === undefined ? {} : { pov }, ...size, ...elapsed() });
     } catch (error) {
@@ -792,7 +830,8 @@ export function createIllustrator(config: ImageConfig, deps: {
       // A reader who has moved on gets no apology, only their own next scene; a reader still waiting is told once.
       await status.clear(outcome === 'failed' ? t.notices.pictureFailed : undefined);
       log('picture', signal.aborted ? 'cancelled' : safeCode(code),
-        { ...safeErrorDetails(error), outcome, cancelled, describeMs, pictureStyle, ...pov === undefined ? {} : { pov }, ...elapsed() });
+        { ...safeErrorDetails(error), outcome, cancelled, describeMs, ...status.waited(), pictureStyle,
+          ...pov === undefined ? {} : { pov }, ...elapsed() });
     } finally { releasePortraits?.(); }
   }
 
@@ -838,7 +877,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       const { userId, chat, storyId, branchId, nodeId, signal, log, styles } = request;
       if (signal.aborted || !styles.length) return;
       const t = texts(store.read(userId).language);
-      const status = await statusLine(chat, request.status, log);
+      const status = await statusLine(chat, request.status, log, t);
       // A frame is reused only for the very scene it was described from, only while that scene still exists, and only
       // while its people have the looks it was described with: a look the reader edited since is described anew, and
       // so is one edited while that frame was still being described.
@@ -868,7 +907,7 @@ export function createIllustrator(config: ImageConfig, deps: {
         for (const style of styles) {
           pictureStyle = style.pictureStyle;
           if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
-          const result = await drawFrame(userId, storyId, frame, style.line, signal, log, story?.nodes[nodeId]?.picture, status.progress);
+          const result = await drawFrame(userId, storyId, frame, style.line, signal, log, story?.nodes[nodeId]?.picture, status);
           try {
             const { assembled, drawn } = result;
             if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
@@ -876,7 +915,8 @@ export function createIllustrator(config: ImageConfig, deps: {
             const size = promptSize(assembled.prompt, style.line, drawn.referenceCount);
             await sendPrompt(request, photo, assembled.prompt, size);
             log('picture_sample', undefined, { outcome: 'ready', cancelled: signal.aborted, frameReused, describeMs,
-              imageMs: drawn.totalMs, imageSteps: steps, pictureAttention: drawn.pictureAttention, namesStripped: assembled.namesStripped,
+              imageQueueMs: drawn.queueMs, imageMs: drawn.totalMs, ...status.waited(), imageSteps: steps,
+              pictureAttention: drawn.pictureAttention, namesStripped: assembled.namesStripped,
               withoutLook: assembled.withoutLook, pictureStyle, stylesAsked, ...frame.pov === undefined ? {} : { pov: frame.pov }, ...size });
           } finally { result.releasePortraits(); }
           // The styles after the first are drawn from the frame already in hand.
@@ -890,7 +930,7 @@ export function createIllustrator(config: ImageConfig, deps: {
         const outcome = cancelled ? 'cancelled' : GAVE_WAY.includes(String(code)) ? 'skipped' : 'failed';
         await status.clear(cancelled ? undefined : t.notices.sampleFailed);
         log('picture_sample', signal.aborted ? 'cancelled' : safeCode(code),
-          { ...safeErrorDetails(error), outcome, cancelled, frameReused, describeMs, pictureStyle, stylesAsked });
+          { ...safeErrorDetails(error), outcome, cancelled, frameReused, describeMs, ...status.waited(), pictureStyle, stylesAsked });
       }
       // As under a scene: over once the delete of its job's record has arrived too.
       await settled();
@@ -909,7 +949,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       const { userId, chat, storyId, nodeId, prompt, signal, log } = request;
       if (signal.aborted) return;
       const t = texts(store.read(userId).language);
-      const status = await statusLine(chat, t.variant.drawing, log);
+      const status = await statusLine(chat, t.variant.drawing, log, t);
       // Asked again before the drawing and before the photo goes out: the scene may have been deleted meanwhile.
       const target = () => {
         const found = config.users.has(userId) ? variantOf(store.read(userId), storyId, nodeId) : 'off';
@@ -919,7 +959,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       };
       try {
         const { recipe } = target();
-        const drawn = await draw(userId, recipe, prompt, signal, log, { onProgress: status.progress });
+        const drawn = await draw(userId, recipe, prompt, signal, log, { status });
         if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
         const { node } = target();
         const scene = { userId, chat, storyId, nodeId, log };
@@ -929,7 +969,8 @@ export function createIllustrator(config: ImageConfig, deps: {
         await status.clear();
         const size = promptSize(prompt, undefined, drawn.referenceCount);
         await sendPrompt(scene, photo, prompt, size, true);
-        log('picture_variant', undefined, { outcome: 'ready', cancelled: signal.aborted, edited: true, imageMs: drawn.totalMs,
+        log('picture_variant', undefined, { outcome: 'ready', cancelled: signal.aborted, edited: true, imageQueueMs: drawn.queueMs,
+          imageMs: drawn.totalMs, ...status.waited(),
           imageSteps: recipe.steps, pictureAttention: drawn.pictureAttention, photoMs, photoBytes: drawn.bytes.length, ...size });
       } catch (error) {
         const code = errorCode(error);
@@ -938,7 +979,8 @@ export function createIllustrator(config: ImageConfig, deps: {
         const refused = code === 'recipe_changed' ? t.errors.variantChanged : code === 'pictures_off' ? t.errors.variantOff : undefined;
         await status.clear(cancelled ? undefined : refused ?? t.variant.failed);
         log('picture_variant', signal.aborted ? 'cancelled' : safeCode(code),
-          { ...safeErrorDetails(error), outcome: cancelled ? 'cancelled' : refused ? 'skipped' : 'failed', cancelled, edited: true });
+          { ...safeErrorDetails(error), outcome: cancelled ? 'cancelled' : refused ? 'skipped' : 'failed', cancelled, edited: true,
+            ...status.waited() });
       }
       await settled();
     },
@@ -956,7 +998,7 @@ export function createIllustrator(config: ImageConfig, deps: {
     async retell({ userId, storyId, signal, log }: { userId: string; storyId: string; signal: AbortSignal; log: Log }) {
       if (!(store.read(userId).stories[storyId]?.sheet ?? []).some(one => one.lookPending)) return false;
       return inTurn(provider, async model => await retellPending(model, { userId, storyId, signal, log }, 'look_retold') > 0,
-        { holder: userId, yields: true });
+        { holder: userId, yields: true, work: 'retell' });
     },
 
     // A portrait of one person of a story's sheet (`PortraitRequest`), drawn again with a new seed each time the reader
@@ -970,7 +1012,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       // The button is offered only to a reader who is drawn for, and that is asked again where the work starts.
       if (signal.aborted || !config.users.has(userId)) return;
       const t = texts(store.read(userId).language);
-      const status = await statusLine(chat, request.status, log);
+      const status = await statusLine(chat, request.status, log, t);
       const sheetNow = () => store.read(userId).stories[storyId]?.sheet;
       const lookNow = () => {
         const person = sheetNow()?.find(one => one.name === name);
@@ -981,7 +1023,7 @@ export function createIllustrator(config: ImageConfig, deps: {
         if (!look?.trim()) throw sceneGone();
         const recipe = { ...recipeOf(storyId), ...upright, seed: randomInt(2 ** 32) };
         const drawn = await draw(userId, recipe, portraitPrompt(name, look, (sheetNow() ?? []).map(one => one.name)).prompt, signal, log,
-          { onProgress: status.progress });
+          { status });
         if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
         if (lookNow() !== look) throw sceneGone();
         // Held before it is sent, so that its button finds it however soon it is pressed, and let go if it never
@@ -1003,14 +1045,15 @@ export function createIllustrator(config: ImageConfig, deps: {
         await sendNote({ userId, chat, storyId, log }, photo, foldedPrompt(t.characters.drawnFrom(tokensOf(look), [...look].length), look));
         // A photo handed to Telegram is delivered: a stop that lands while it is on its way does not take it back, and
         // it stays there to keep. The row then says both, that it is ready and that it was stopped.
-        log('picture_portrait', undefined, { outcome: 'ready', cancelled: signal.aborted, imageMs: drawn.totalMs,
+        log('picture_portrait', undefined, { outcome: 'ready', cancelled: signal.aborted, imageQueueMs: drawn.queueMs, imageMs: drawn.totalMs,
+          ...status.waited(),
           imageSteps: recipe.steps, pictureAttention: drawn.pictureAttention, photoMs, photoBytes: drawn.bytes.length });
       } catch (error) {
         const code = errorCode(error);
         const cancelled = signal.aborted || code === 'cancelled' || code === 'scene_gone';
         await status.clear(cancelled ? undefined : t.characters.portraitFailed);
         log('picture_portrait', signal.aborted ? 'cancelled' : safeCode(code),
-          { ...safeErrorDetails(error), outcome: cancelled ? 'cancelled' : 'failed', cancelled });
+          { ...safeErrorDetails(error), outcome: cancelled ? 'cancelled' : 'failed', cancelled, ...status.waited() });
       }
       await settled();
     },

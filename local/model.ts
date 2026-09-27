@@ -6,6 +6,7 @@ import { createLlama, createOpenAI } from './llama.ts';
 import { createServing } from './serving.ts';
 import { createBudget, channelFor, capsFor } from './budget.ts';
 import { resolve } from 'node:path';
+import type { Work } from './eta.ts';
 
 // One ledger for every probe on this computer; *.sqlite is ignored by Git.
 export const BUDGET_PATH = resolve(import.meta.dirname, '..', 'eval-usage.sqlite');
@@ -24,14 +25,15 @@ export type ModelRequest = {
 // the agent interface (local/agent-api.ts), real work that fills the GPU while people read and, once started, is not
 // cut off by them. `background`: disposable probes that yield to anyone.
 export type Priority = 'foreground' | 'agent' | 'background';
-// `onWait`: a shared model's queue reports how many calls are ahead of this one, each time the number changes.
+// `onWait`: a shared model's queue reports how many calls are ahead of this one, each time the number changes, and
+// roughly in how many milliseconds this one starts, when it can tell (local/eta.ts), each time that moves by much.
 // `onStart`: the call has left a shared model's queue and runs.
 // `priority` and `holder`: whose call it is, as that queue passes them on (TurnOptions `holder`); a direct call has
 // neither, except an agent's, which says `agent` (local/agent-api.ts). The scheduler writes them over whatever its caller
 // passed, so no caller of the queue names its own. Only a provider that serves kinds of work apart reads them
 // (local/serving.ts).
 export type Controls = {
-  signal?: AbortSignal; onWait?: (ahead: number) => void; onStart?: () => void; priority?: Priority; holder?: string;
+  signal?: AbortSignal; onWait?: (ahead: number, etaMs?: number) => void; onStart?: () => void; priority?: Priority; holder?: string;
 };
 // `slot`: the llama.cpp slot a pooled scheduler places the call in (`id_slot`), so its cache stays with its owner.
 export type GenerateControls = Controls & {
@@ -48,7 +50,9 @@ export type GenerationResult = {
 // anybody else's call arrives, but which its holder's own turns wait for. `sharesPrefix`: work done ahead of need that
 // continues its holder's own last request rather than ask with a prompt of its own, so it belongs in the slot where that
 // prefix is cached and gives way to its holder's next turn as well; it yields whether or not `yields` is set.
-export type TurnOptions = { holder?: string; yields?: boolean; sharesPrefix?: boolean };
+// `work`: what the turn does, by which the queue times it for the start times it tells the people who wait
+// (local/eta.ts); it changes nothing of how the turn is run.
+export type TurnOptions = { holder?: string; yields?: boolean; sharesPrefix?: boolean; work?: Work };
 export type Provider = {
   generate(request: ModelRequest, controls?: GenerateControls): Promise<GenerationResult>;
   countInput?(request: ModelRequest, controls?: Controls): Promise<number>;

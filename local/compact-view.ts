@@ -1,10 +1,12 @@
 // Telegram status for one compaction job: a single message edited in place as the stage changes.
-// Plain text only (no parse_mode). Shows real stage and elapsed time; never a percentage, ETA,
-// memory text, fact preview, raw error or an unrecognised stage/reason value.
+// Plain text only (no parse_mode). Shows real stage and elapsed time, and while queued the place and roughly when
+// it starts (local/eta.ts); never a percentage, a time it will end, memory text, fact preview, raw error or an
+// unrecognised stage/reason value.
 
 import type { InlineButton, Screen } from './telegram.ts';
 import { texts } from './text.ts';
 import type { Messages } from './text.ts';
+import { etaText } from './eta.ts';
 
 // Stages and counters reported by generation.ts, plus `automatic` from the bot and `elapsedMs` from progress.ts.
 // Fields are optional because the renderer also accepts partial or unexpected statuses.
@@ -12,8 +14,8 @@ export type CompactionStatus = {
   stage?: 'queued' | 'extracting' | 'validating' | 'saving' | 'done' | 'failed' | 'cancelled';
   automatic?: boolean; elapsedMs?: number; scenes?: number; keptScenes?: number;
   outputCharacters?: number; repairScenes?: number; facts?: number; reason?: string | number;
-  // Calls ahead in the model queue while queued.
-  ahead?: number;
+  // Calls ahead in the model queue while queued, and roughly in how many milliseconds this one starts.
+  ahead?: number; etaMs?: number;
 };
 
 const STEPS = ['queued', 'extracting', 'validating', 'saving'] as const;
@@ -47,7 +49,8 @@ function view(t: Messages, p: CompactionStatus) {
       elapsed ? c.elapsed(elapsed) : null,
     ];
     const ahead = whole(p.ahead);
-    if (p.stage === 'queued' && ahead != null && ahead > 0) lines.push(t.wait.ahead(ahead));
+    const eta = typeof p.etaMs === 'number' ? p.etaMs : undefined;
+    if (p.stage === 'queued' && ahead != null && ahead > 0) lines.push(t.wait.ahead(ahead, etaText(t, eta)));
     if (scenes != null) lines.push(c.scope(scenes, kept));
     const repair = whole(p.repairScenes) ?? 0;
     if (repair > 0) lines.push(c.repair(repair));

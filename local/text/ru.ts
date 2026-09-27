@@ -604,10 +604,16 @@ export const ru = {
     discard: '🗑 Отменить черновик',
   },
 
-  // Waiting for the shared model: a line of the compaction status, and a disappearing draft before a scene.
+  // Waiting for a shared model: for the language model a line of the compaction status and a disappearing draft before
+  // a scene, for the picture card a second line under a picture's status. `eta` is roughly when the request starts,
+  // `seconds` or `minutes` below, and absent until the bot has timed enough of its own work
+  // (docs/telegram-ui.md#waiting).
   wait: {
-    ahead: (n: number) => `Перед вами в очереди к модели: ${count(n, 'запрос', 'запроса', 'запросов')}.`,
-    queued: (n: number) => `⏳ Очередь к модели: перед вами ${count(n, 'запрос', 'запроса', 'запросов')}.`,
+    ahead: (n: number, eta?: string) => `Перед вами в очереди к модели: ${count(n, 'запрос', 'запроса', 'запросов')}${eta ? `, начало ${eta}` : ''}.`,
+    queued: (n: number, eta?: string) => `⏳ Очередь к модели: перед вами ${count(n, 'запрос', 'запроса', 'запросов')}${eta ? `, начало ${eta}` : ''}.`,
+    picture: (n: number, eta?: string) => `⏳ Очередь к модели картинок: перед вами ${count(n, 'картинка', 'картинки', 'картинок')}${eta ? `, начало ${eta}` : ''}.`,
+    seconds: (s: number) => `примерно через ${s} с`,
+    minutes: (m: number) => `примерно через ${m} мин`,
     next: '⏳ Подошла ваша очередь.',
     reading: '📖 Модель читает историю, скоро начнёт писать…',
   },

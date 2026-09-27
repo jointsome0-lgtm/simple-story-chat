@@ -233,7 +233,9 @@ which the pinned server puts at the head of its pending queue (server.py `post_p
 negative): a cell queued on the same server without it waits until the readers' jobs sent before it have been drawn.
 The job being drawn is never interrupted, so a reader's picture can still wait for one cell to end, and between two
 jobs of the bot's the later one goes first. No harness sends `front`, `submitOnStage` included, and the fake server
-([fake-comfy.ts](../local/fake-comfy.ts)) orders its queue the same way.
+([fake-comfy.ts](../local/fake-comfy.ts)) orders its queue the same way. A reader whose picture waits is shown its
+place and roughly when it starts, from the server's queue and the bot's own jobs; a cell counts as long as one of those
+([what a waiting reader sees](telegram-ui.md#waiting)).
 
 The experiments keep round two's backend: cu128, Triton and no node. The scripts' default stays cu128, so a runbook
 that names no torch, round two's action runs and figure-age's among them, draws where it drew. None of their harnesses
@@ -435,11 +437,16 @@ became of it: `used`, `asked_again`, `unstarted` or `discarded` (`local/prepare.
 `compaction_request_completed` and `scene_request_completed` carry numbers only: `waitMs` in the model queue,
 `estimateTokens`, the bot's estimate of a scene request before any count, `countMs` of the token count (absent when
 the scene went on its estimate) and `elapsedMs`. llama-server adds its own timings
-([llama-cpp.md](llama-cpp.md#diagnostics)); a hosted provider sends none.
+([llama-cpp.md](llama-cpp.md#diagnostics)); a hosted provider sends none. A request that waited for somebody has
+`ahead`, the first place the reader was shown, and `etaSeconds`, the start the bot gave with it, absent until it had
+timed enough of its own work ([what a waiting reader sees](telegram-ui.md#waiting)); beside `waitMs` they say how far
+off that start was.
 
 A `picture` row ends each scene's picture: `outcome` (`ready`, `failed`, `cancelled`, or `skipped` when the card was
-not ready), `describeMs` of the description call, `imageMs` on the image server from submit to file, `photoMs` and
-`photoBytes` of the upload to Telegram, and `pictureSeconds`, what the reader waited from the end of the scene.
+not ready), `describeMs` of the description call, `imageMs` on the image server from submit to file and
+`imageQueueMs` from submit to the job's start there, as its socket heard it, `photoMs` and `photoBytes` of the upload
+to Telegram, and `pictureSeconds`, what the reader waited from the end of the scene. A job that waited on the card
+behind others has `ahead` and `etaSeconds` as a text request has them.
 `namesStripped`, `withoutLook` and `clothesChanged` count what the prompt assembly did, and `promptCharacters`,
 `pictureTokens` and `styleTokens` give the prompt's size. `pictureAttention` says whether the picture was drawn with the
 kitchen's attention, `kitchen`, or why not ([the bot's card](#bot-card)); a failed picture's row has it once the

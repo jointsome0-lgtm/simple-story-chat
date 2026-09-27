@@ -498,6 +498,27 @@ async function readQueue(comfy: Comfy): Promise<Queue | undefined> {
   } catch { return undefined; }
 }
 
+// Where a job waits on the card (`onPlace`): how many jobs go before it, whether the card is drawing another one
+// meanwhile, and how long the wait has seen that one drawing. The pinned server takes the waiting job with the lowest
+// number first, and between two equal numbers the lower prompt id (execution.py `PromptQueue` is a heap of
+// `(number, prompt id, …)`), and a job sent with `front` has its number made negative (server.py `post_prompt`). The
+// entries carry each job's whole graph, and only their first two elements are read.
+export type CardPlace = { before: number; drawing: boolean; drawingMs: number };
+async function readPlace(comfy: Comfy, promptId: string): Promise<{ before: number; running: string | undefined } | null | undefined> {
+  try {
+    const seen = await (await call(comfy, '/queue')).json() as { queue_running?: unknown; queue_pending?: unknown };
+    if (!Array.isArray(seen.queue_running) || !Array.isArray(seen.queue_pending)) return undefined;
+    const pending = seen.queue_pending.flatMap(one =>
+      Array.isArray(one) && typeof one[0] === 'number' && typeof one[1] === 'string' ? [{ number: one[0], id: one[1] }] : []);
+    const own = pending.find(one => one.id === promptId);
+    if (!own) return null;
+    const before = pending.filter(one => one.number < own.number || (one.number === own.number && one.id < own.id)).length;
+    return { before, running: promptIds(seen.queue_running)[0] };
+  } catch { return undefined; }
+}
+// How often the bot's wait reads its job's place while the job waits on the card.
+const PLACE_MS = 2000;
+
 // A picture that outlives the wait, or whose polls fail, is still the card's. ComfyUI runs one job at a time, so the
 // next cell would queue behind the abandoned one and inherit its seconds — and the seconds are what the rental is
 // decided on — and its history entry, which holds the whole prompt and the workflow, is written when it finishes, so
@@ -563,9 +584,10 @@ const POLL_RETRIES = 3;
 // `overAt` the moment the job ended, all on our clock; `oom` says an error was the card running out of memory.
 // `broken`: the socket closed before the job was over, and what the card said of it after that is lost (`stageSocket`).
 // `startStamp` and `endStamp`: the server's own clock at the job's start and its success, in milliseconds, as its
-// messages carry them (execution.py:677-684 at the pinned revision).
+// messages carry them (execution.py:677-684 at the pinned revision); `startedAt`, the start on our clock.
 type Told = { started: boolean; succeeded: boolean; over: boolean; outputs: NonNullable<HistoryEntry['outputs']>;
-  cached?: string[]; ran: { node: string; at: number }[]; overAt?: number; oom?: boolean; broken?: boolean; startStamp?: number; endStamp?: number };
+  cached?: string[]; ran: { node: string; at: number }[]; overAt?: number; oom?: boolean; broken?: boolean; startStamp?: number; endStamp?: number;
+  startedAt?: number };
 
 // Where a job's time went, by the kind of node it was spent in: the time from one node's start to the next one's is
 // the first node's. The sampler's share includes moving the model onto the card, which ComfyUI does inside it.
@@ -611,7 +633,7 @@ function hearing(strict: boolean, onProgress?: Steps) {
       jobs.set(data.prompt_id, job = { started: false, succeeded: false, over: false, outputs: {}, ran: [] });
     }
     const stamp = typeof (data as { timestamp?: unknown }).timestamp === 'number' ? (data as { timestamp: number }).timestamp : undefined;
-    if (message.type === 'execution_start') { job.started = true; job.startStamp = stamp; }
+    if (message.type === 'execution_start') { job.started = true; job.startStamp = stamp; job.startedAt = performance.now(); }
     else if (message.type === 'execution_cached' && Array.isArray(data.nodes)) job.cached = data.nodes.map(String);
     else if (message.type === 'executing' && typeof data.node === 'string') job.ran.push({ node: data.node, at: performance.now() });
     else if (message.type === 'executed' && typeof data.node === 'string' && data.output && typeof data.output === 'object') {
@@ -671,6 +693,8 @@ function hearing(strict: boolean, onProgress?: Steps) {
       const job = jobs.get(promptId);
       return job?.startStamp !== undefined && job.endStamp !== undefined ? { start: job.startStamp, end: job.endStamp } : undefined;
     },
+    // When the socket heard the job start, on our clock.
+    startedAt: (promptId: string) => jobs.get(promptId)?.startedAt,
   };
 }
 
@@ -697,13 +721,14 @@ function watchJob(comfy: Comfy, onProgress?: Steps) {
   } catch { socket = undefined; }
   return {
     clientId, opened, get heard() { return told.heard; }, record: told.record, timing: told.timing, oom: told.oom, cached: told.cached,
-    stamps: told.stamps, wait: told.wait, close() { socket?.close(); },
+    stamps: told.stamps, startedAt: told.startedAt, wait: told.wait, close() { socket?.close(); },
   };
 }
 type Watch = { readonly clientId: string; readonly heard: number; record: (promptId: string) => HistoryEntry | undefined;
   timing: (promptId: string, graph: Graph) => { phases: Phases; loaderCacheMiss?: boolean } | undefined;
   oom: (promptId: string) => boolean; cached: (promptId: string) => string[] | undefined;
-  stamps: (promptId: string) => { start: number; end: number } | undefined; wait: (ms: number, signal?: AbortSignal) => Promise<void> };
+  stamps: (promptId: string) => { start: number; end: number } | undefined; startedAt: (promptId: string) => number | undefined;
+  wait: (ms: number, signal?: AbortSignal) => Promise<void> };
 
 // One socket for a whole stage of the harness (docs/action-experiment.md#one-socket), in place of one a picture:
 // every open cost the tunnel a channel of its own, 0.7-1.1 s in which the card had nothing to draw. It is open before
@@ -762,8 +787,8 @@ export function stageSocket(baseUrl: string) {
     },
     register(promptId: string) { told.jobs.set(promptId, { started: false, succeeded: false, over: false, outputs: {}, ran: [] }); },
     forget(promptId: string) { told.jobs.delete(promptId); },
-    record: told.record, timing: told.timing, oom: told.oom, cached: told.cached, stamps: told.stamps, wait: told.wait,
-    close() { ended = true; drop(); },
+    record: told.record, timing: told.timing, oom: told.oom, cached: told.cached, stamps: told.stamps, startedAt: told.startedAt,
+    wait: told.wait, close() { ended = true; drop(); },
   };
 }
 export type StageSocket = ReturnType<typeof stageSocket>;
@@ -863,8 +888,11 @@ export const RIDES = 5;
 // (server.py `post_prompt`: the job's number made negative), ahead of every job sent without it, such as a stand's
 // cells; the job it is drawing goes on to its end. Among front jobs the later one goes first. Only the bot sets it
 // (local/picture.ts `draw`); the harnesses' jobs, `submitOnStage` included, keep their order.
+// `onPlace` tells the bot's status line where its job waits on the card (`CardPlace`), every PLACE_MS once it has
+// waited that long, and `null` when it sees that the job waits no longer; nothing once the wait is over. The stage's
+// jobs have none.
 type DrawOneOptions = { pollMs?: number; waitMs?: number; sampleEvery?: number; requireSocket?: boolean; copies?: string[];
-  admit?: () => boolean; onSubmitted?: () => void; onProgress?: Steps; front?: boolean };
+  admit?: () => boolean; onSubmitted?: () => void; onProgress?: Steps; front?: boolean; onPlace?: (place: CardPlace | null) => void };
 // How far the node the card is running has got: `value` of `max` steps, whole numbers, max at least 1 and value from
 // 0 to max.
 export type Steps = (value: number, max: number) => void;
@@ -1083,6 +1111,32 @@ function follow(comfy: Comfy, graph: Graph, watch: Watch, promptId: string, star
       if (over || stopped) forget();
     }
   };
+  // The bot's job in the card's queue (`onPlace`): one read of the queue at a time, never waited for, the first at the
+  // first poll and the next PLACE_MS after it, until the job waits no longer. The socket's word that the job has
+  // started settles that at once, and a read still out then says nothing. A place is told only once the job has
+  // waited PLACE_MS: one that starts sooner would flash on the reader's line for a moment, at the cost of two edits.
+  // `drawing`: the job the card was drawing at the last read, and since when this wait has seen it.
+  let placing = !!options.onPlace && !staged, reading = false, readAt = -Infinity;
+  let drawing: { id: string; since: number } | undefined;
+  const placed = (place: CardPlace | null) => {
+    if (!placing) return;
+    if (place === null) placing = false;
+    try { options.onPlace!(place); } catch { /* the listener's own */ }
+  };
+  const place = () => {
+    if (!placing) return;
+    if (watch.startedAt(promptId) !== undefined) return placed(null);
+    if (reading || performance.now() - readAt < PLACE_MS) return;
+    reading = true;
+    readAt = performance.now();
+    leave(readPlace(comfy, promptId).then(seen => {
+      if (seen === undefined || !placing) return;
+      if (seen === null || watch.startedAt(promptId) !== undefined) return placed(null);
+      if (seen.running !== drawing?.id) drawing = seen.running === undefined ? undefined : { id: seen.running, since: performance.now() };
+      if (performance.now() - started < PLACE_MS) return;
+      placed({ before: seen.before, drawing: !!drawing, drawingMs: drawing ? Math.round(performance.now() - drawing.since) : 0 });
+    }).finally(() => { reading = false; }));
+  };
   // The record's word that the job is over: the record, the picture it names, and when the wait heard it.
   let done: { entry: HistoryEntry; image: { filename: string; subfolder: string; type: string }; at: number } | undefined;
   const copies = options.copies ?? [];
@@ -1097,6 +1151,7 @@ function follow(comfy: Comfy, graph: Graph, watch: Watch, promptId: string, star
         // without another request, and `stopJob` takes the card off the job it is drawing.
         halt(comfy);
         const heard = watch.heard;
+        place();
         // A socket that heard the whole job succeed has its record already; the poll is for everything else.
         entry = watch.record(promptId);
         if (entry) break;
@@ -1141,6 +1196,7 @@ function follow(comfy: Comfy, graph: Graph, watch: Watch, promptId: string, star
       }
       done = { entry, image, at };
     } catch (error) { await fail(error); }
+    finally { placing = false; }
   };
   // The job's last sample of video memory, taken once it is over and waited for, after the sample still out if there is
   // one: the harness's, before its next job goes out, so that nothing of the next job lands in this one's maxima.
@@ -1184,8 +1240,11 @@ function follow(comfy: Comfy, graph: Graph, watch: Watch, promptId: string, star
       // `memory` fills in like `vram` did; `timing` is the socket's account of the job, and `cached` the nodes it heard
       // the server answer from its cache. `totalMs` runs from the submit to the picture on our side; the harness's
       // leaves out the time between the over and the download, which went to its next job's submit.
+      // `queueMs`: from the submit to the socket's word that the job started, when it heard that.
+      const startedAt = watch.startedAt(promptId);
       return { bytes: stripPngMetadata(bytes), totalMs: Math.round(performance.now() - started - (staged ? viewStarted - at : 0)), viewMs,
         vram: memory.vram, memory, timing: watch.timing(promptId, graph), cached: watch.cached(promptId), stamps: watch.stamps(promptId),
+        ...(startedAt === undefined ? {} : { queueMs: Math.max(0, Math.round(startedAt - started)) }),
         ...(copies.length ? { copies: copied } : {}) };
     } catch (error) { return fail(error); }
   };

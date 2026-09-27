@@ -1,6 +1,8 @@
 import type { Log } from './model-error.ts';
 import { ModelError } from './model-error.ts';
 import type { Controls, GenerateControls, Priority, Provider, TurnOptions } from './model.ts';
+import { left, moved, startAfter } from './eta.ts';
+import type { Durations, Work } from './eta.ts';
 
 // Reasons the scheduler aborts a running call with. The call rejects with the reason, whatever the provider throws.
 type AbortCode = 'cancelled' | 'background_preempted' | 'background_timeout' | 'background_unavailable';
@@ -12,8 +14,10 @@ type Slot = { signal: AbortSignal; slot?: number };
 // `sharesPrefix`: the turn continues its holder's own last request, so it runs in that holder's slot or nowhere.
 // `open`: its calls that have not settled yet. A turn that ends while some have not keeps its hold on the GPU,
 // `release`, until the last of them has.
+// `work`, `since` and `failed` only time it (`durations`): what it does, when it took its slot, and whether a call of
+// it failed or was refused, which leaves its length out.
 type Turn = { priority: Priority; ended: AbortCode | null; idleSince: number; holder?: string; yields?: boolean;
-  sharesPrefix?: boolean; open: number; release?: () => void };
+  sharesPrefix?: boolean; open: number; release?: () => void; work: Work; since?: number; failed?: boolean };
 export type SchedulerOptions<Request = unknown> = {
   // Agent work starts under `agentCanStart` and is stopped only when `agentCanRun` turns false (the GPU is paused).
   backgroundAllowed?: () => boolean; agentCanStart?: () => boolean; agentCanRun?: () => boolean;
@@ -36,14 +40,17 @@ export type SchedulerOptions<Request = unknown> = {
   // (the default) is the plain queue. `sharedCache` is llama.cpp's `--kv-unified`: the slots share `poolTokens` cells
   // and the scheduler admits calls by size. Isolated slots hold one request each and need no admission.
   slots?: number; poolTokens?: number; sharedCache?: boolean; outputTokens?: (request: Request) => number;
+  // Where the lengths of finished turns go, and where a person's waiting call finds how long the work before it
+  // usually takes (`startIn`). Without it the queue tells places alone. It changes nothing of what runs when.
+  durations?: Durations;
 };
 export type Scheduler<Request, Result> = ReturnType<typeof createScheduler<Request, Result>>;
 type Item<Request> = {
   priority: Priority; method: 'generate' | 'countInput'; request: Request; controls: GenerateControls; turn: Turn | null;
   resolve: (value: unknown) => void; reject: (reason: unknown) => void; signal: AbortSignal | undefined;
   controller: AbortController; cancel: () => void; done?: Promise<void>; ahead?: number;
-  // When the queue took it.
-  accepted: number;
+  // When the queue took it, and when it started. `eta`: the start time it was last told (`notify`).
+  accepted: number; startedAt?: number; eta?: number;
   // In a pool: the input the server counted, and the cache cells the call may fill (input and the whole output limit).
   // `sizing` is that count while it runs: the call settles only after it, however the call ends.
   inputTokens?: number; claim?: number; sizing?: Promise<void>;
@@ -82,7 +89,7 @@ export function createScheduler<Request, Result>(provider: {
   backgroundCanWait = () => true, holdAgentTurn = () => () => {}, holdBackgroundCall = () => () => {},
   turnIdleMs = 60000, quietMs = 60000,
   backgroundTimeoutMs = 90000, backgroundWaitMs = 600000, now = Date.now, pollMs = 1000, log = () => {},
-  slots = 1, poolTokens = 0, sharedCache = true, outputTokens = () => 0 }: SchedulerOptions<Request> = {}) {
+  slots = 1, poolTokens = 0, sharedCache = true, outputTokens = () => 0, durations }: SchedulerOptions<Request> = {}) {
   const pool = slots > 1;
   // Only a shared cache has to be divided. With isolated slots a call that fits one request fits its own slot, so
   // nothing is admitted by size and no token count is asked for before the call.
@@ -128,6 +135,7 @@ export function createScheduler<Request, Result>(provider: {
     const queue = queues[item.priority];
     const index = queue.indexOf(item);
     if (index >= 0) queue.splice(index, 1);
+    if (item.turn) item.turn.failed = true;
     item.signal?.removeEventListener('abort', item.cancel);
     // The call never ran, but a pool may already be counting its input: that count ends with it, and the call settles
     // only once the count has, so nothing held for the call is let go while the server still counts for it.
@@ -147,6 +155,8 @@ export function createScheduler<Request, Result>(provider: {
   // beside the slots in a pool is not stopped here: its caller's signal stops it.
   function endTurn(turn: Turn, code: AbortCode) {
     if (turn.ended) return;
+    // A turn that ran to its own end, from the moment it took its slot, is how long such work holds one.
+    if (code === 'cancelled' && !closed && !turn.failed && turn.since !== undefined) durations?.add(turn.work, now() - turn.since);
     turn.ended = code;
     yielding.delete(turn);
     for (const item of [...foreground, ...agent].filter(item => item.turn === turn)) rejectQueued(item, fail(code));
@@ -316,8 +326,41 @@ export function createScheduler<Request, Result>(provider: {
     for (const other of lanes) if (other !== lane && !other.active && other.person) used += other.claim + other.output + PERSON_GROWTH;
     return used > poolTokens;
   }
+  // Roughly in how many milliseconds a person's waiting call starts (docs/telegram-ui.md#waiting), from the state of
+  // the queue alone: each slot is free once the work in it has run its usual length (`durations`), less what it has
+  // run already, and the calls before this one in the queue then take the first free slot each for the usual length
+  // of their turn. Work that gives way to this call counts for nothing: a probe, a turn that shares a prefix, and a
+  // yielding turn of anybody else, as `yieldTo` and `stop` end them. Nothing for anybody but a person, and nothing
+  // while a kind of work in the way has not been timed often enough.
+  function startIn(item: Item<Request>, index: number): number | undefined {
+    if (!durations || item.priority !== 'foreground') return undefined;
+    const at = now();
+    const givesWay = (turn: Turn | null) => !!turn?.yields && turn !== item.turn
+      && (!!turn.sharesPrefix || !item.turn || turn.holder !== item.turn.holder);
+    const usual = (turn: Turn | null, call?: Item<Request>) =>
+      durations.typical(turn?.work ?? (call?.priority === 'agent' ? 'agent' : 'other'));
+    const free: number[] = [];
+    for (const lane of lanes) {
+      const turn = lane.reserved?.turn ?? null, call = lane.active ?? undefined;
+      const busy = turn ? !givesWay(turn) : !!call && call.priority !== 'background' && !call.controller.signal.aborted;
+      if (!busy) { free.push(0); continue; }
+      const typical = usual(turn, call);
+      if (typical === undefined) return undefined;
+      free.push(left(typical, at - (turn?.since ?? call?.startedAt ?? at)));
+    }
+    const ahead: number[] = [];
+    for (const other of foreground.slice(0, index)) {
+      if (laneOf(other.turn) || givesWay(other.turn)) continue;
+      const typical = usual(other.turn, other);
+      if (typical === undefined) return undefined;
+      ahead.push(typical);
+    }
+    return startAfter(free, ahead);
+  }
   // Tells every waiting call how many calls go before it: the queues of higher priority, the calls ahead in its own,
-  // and the work holding the slots it may use. A turn's own next call goes first while the turn holds its slot.
+  // and the work holding the slots it may use. A turn's own next call goes first while the turn holds its slot. A
+  // person's call that waits for anybody is also told roughly when it starts (`startIn`), and told again when the
+  // place changes or that time has moved by much (`moved`).
   function notify() {
     if (closed) return;
     let before = 0;
@@ -326,9 +369,11 @@ export function createScheduler<Request, Result>(provider: {
         const lane = laneOf(item.turn);
         const ahead = lane ? (lane.active ? 1 : 0)
           : before + index + ((item.priority === 'foreground' ? lanes : shared).some(free) ? 0 : 1);
-        if (ahead === item.ahead) return;
+        const eta = lane || !ahead ? undefined : startIn(item, index);
+        if (ahead === item.ahead && !moved(item.eta, eta)) return;
         item.ahead = ahead;
-        try { item.controls.onWait?.(ahead); } catch {}
+        item.eta = eta;
+        try { item.controls.onWait?.(ahead, eta); } catch {}
       });
       before += queue.length;
     }
@@ -414,6 +459,7 @@ export function createScheduler<Request, Result>(provider: {
     if (item.turn) {
       lane.reserved ??= { turn: item.turn, release: item.priority === 'agent' ? holdAgentTurn() : () => {} };
       item.turn.idleSince = Infinity;
+      item.turn.since ??= now();
     }
     // Whose prompt the slot holds from now on, with one slot as with a pool: a prefix-sharing call belongs to the
     // slot its own holder's prefix is in, so the marking has to be there to be found. What a yielding turn leaves is
@@ -436,6 +482,7 @@ export function createScheduler<Request, Result>(provider: {
     const timer = item.priority === 'background'
       ? setTimeout(() => item.controller.abort(fail('background_timeout')), backgroundTimeoutMs) : undefined;
     if (item.priority !== 'foreground') log(`${item.priority}_started`);
+    const startedAt = item.startedAt = now();
     item.done = (async () => {
       try {
         try { item.controls.onStart?.(); } catch {}
@@ -445,7 +492,10 @@ export function createScheduler<Request, Result>(provider: {
         item.controller.signal.throwIfAborted();
         item.resolve(result);
         if (item.priority !== 'foreground') log(`${item.priority}_completed`);
+        // A call outside any turn holds its slot for itself alone and is timed as one; a probe gives way to people.
+        if (!item.turn && lane && item.priority !== 'background') durations?.add(item.priority === 'agent' ? 'agent' : 'other', now() - startedAt);
       } catch (error) {
+        if (item.turn) item.turn.failed = true;
         item.reject(item.controller.signal.aborted ? item.controller.signal.reason : error);
       } finally {
         clearTimeout(timer);
@@ -485,9 +535,10 @@ export function createScheduler<Request, Result>(provider: {
   const wrap = (priority: 'foreground' | 'agent') => ({ ...calls(priority, null),
     // The calls of one turn, until `end`. `end` after a normal finish frees the slot; after a lost owner it also stops
     // the turn's call in the slot, though not a count it runs beside the slots (endTurn).
-    openTurn({ holder, yields = false, sharesPrefix = false }: TurnOptions = {}) {
+    openTurn({ holder, yields = false, sharesPrefix = false, work }: TurnOptions = {}) {
       // A call that continues its holder's last request is prepared ahead of need too, so it yields like the rest.
-      const turn: Turn = { priority, ended: null, idleSince: Infinity, holder, yields: yields || sharesPrefix, sharesPrefix, open: 0 };
+      const turn: Turn = { priority, ended: null, idleSince: Infinity, holder, yields: yields || sharesPrefix, sharesPrefix, open: 0,
+        work: work ?? (priority === 'agent' ? 'agent' : 'other') };
       if (turn.yields) yielding.add(turn);
       return { ...calls(priority, turn), end: () => endTurn(turn, 'cancelled') };
     },

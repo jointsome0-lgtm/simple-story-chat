@@ -18,6 +18,7 @@ import type { TelegramDocument } from './seed-file.ts';
 import { createProgress } from './progress.ts';
 import { renderCompaction } from './compact-view.ts';
 import type { CompactionStatus } from './compact-view.ts';
+import { etaText } from './eta.ts';
 import type { GpuController } from './gpu.ts';
 import type { Illustrator, PictureRequest, PortraitRequest, SampleRequest, VariantRequest } from './picture.ts';
 import { DESCRIPTION_CHARS, LOOK_CHARS, personAt, personTag } from './picture.ts';
@@ -582,7 +583,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       if (job.kind === 'compact') {
         // compactBranch writes the log rows of a compaction, manual or automatic, with its sizes and counts.
         const result = await inTurn(provider, provider => compactBranch({ store, userId, jobId: job.id, provider,
-          config: contextConfig, signal: controller.signal, prepared: preparedFor(userId), onProgress, log, labels }), { holder: userId });
+          config: contextConfig, signal: controller.signal, prepared: preparedFor(userId), onProgress, log, labels }), { holder: userId, work: 'compaction' });
         const completed = store.mutate(userId, state => {
           if (controller.signal.aborted || !jobTarget(state, job.id)) return false;
           state.job = null;
@@ -596,21 +597,23 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       let usage: GenerationResult['usage'];
       // Statuses share the scene's draft. They go out one after another; one already superseded by a newer status is
       // skipped, and none goes out once the scene's text has begun or the turn is over. The text and every later
-      // message wait for the status in flight, so a stale status never lands on top of them.
+      // message wait for the status in flight, so a stale status never lands on top of them. A status the same as the
+      // last one is not sent again: a start time that moved less than its rounding says nothing new.
       let status = Promise.resolve();
       let latest = '', over = false, queued = false, reading = false;
       const show = (text: string) => {
+        if (text === latest) return;
         latest = text;
         status = status.then(() => over || latest !== text ? undefined : chat.status(job.id, text));
       };
       const endStatus = () => { over = true; return status; };
       const outcome = await runTurn({ store, userId, job, provider, config: contextConfig, signal: controller.signal,
         prepared: preparedFor(userId), onProgress, log, labels,
-        waiting: ahead => {
+        waiting: (ahead, etaMs) => {
           if (reading) return;
-          const wait = texts(store.read(userId).language).wait;
+          const t = texts(store.read(userId).language), wait = t.wait;
           if (ahead === null) { reading = true; show(wait.reading); }
-          else if (ahead > 0) { queued = true; show(wait.queued(ahead)); }
+          else if (ahead > 0) { queued = true; show(wait.queued(ahead, etaText(t, etaMs))); }
           else if (queued) show(wait.next);
         },
         preview: (state, current, request) => {

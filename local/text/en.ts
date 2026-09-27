@@ -478,8 +478,11 @@ export const en: Messages = {
   },
 
   wait: {
-    ahead: n => `Ahead of you in the model queue: ${count(n, 'request', 'requests')}.`,
-    queued: n => `⏳ Model queue: ${count(n, 'request', 'requests')} ahead of you.`,
+    ahead: (n, eta) => `Ahead of you in the model queue: ${count(n, 'request', 'requests')}${eta ? `, starting ${eta}` : ''}.`,
+    queued: (n, eta) => `⏳ Model queue: ${count(n, 'request', 'requests')} ahead of you${eta ? `, starting ${eta}` : ''}.`,
+    picture: (n, eta) => `⏳ Picture model queue: ${count(n, 'picture', 'pictures')} ahead of you${eta ? `, starting ${eta}` : ''}.`,
+    seconds: s => `in about ${s} s`,
+    minutes: m => `in about ${m} min`,
     next: '⏳ Your turn has come.',
     reading: '📖 The model is reading the story and will start writing soon…',
   },
