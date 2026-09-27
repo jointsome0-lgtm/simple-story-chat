@@ -1,4 +1,5 @@
 import https from 'node:https';
+import { setTimeout as delay } from 'node:timers/promises';
 
 export type InlineButton = { text: string; callback_data: string };
 export type InlineKeyboard = { inline_keyboard: InlineButton[][] };
@@ -9,6 +10,8 @@ export type TelegramApi = (method: string, payload?: TelegramPayload) => Promise
 export type Chat = ReturnType<typeof createChat>;
 // `deleteMessages` takes from 1 to 100 message ids in one call.
 const DELETE_BATCH = 100;
+// The pauses before a photo's second and third upload (`photo`).
+const PHOTO_RETRY_MS = [2000, 5000];
 
 export class TelegramError extends Error {
   declare code: number | string;
@@ -99,12 +102,26 @@ export function createChat(api: TelegramApi, chatId: number | string) {
     // message cannot become a photo by an edit — editMessageMedia needs a message that already carries media — so
     // the status line that stood here is a message of its own, and the caller removes it once this one lands.
     // Resolves to the photo's own message id, by which a deletion of its scene takes it out of the chat again.
+    // An upload that got no answer (`network`: the connection dropped or went silent) is sent again 2 s after the
+    // failure and once more 5 s after a second one, since the picture is drawn already and the drops seen so far
+    // lasted seconds. No answer does not mean the photo did not arrive, so in rare cases a retry shows the reader the
+    // same photo twice, which is better than a lost picture. Any other failure throws at once, and so does a third
+    // upload without an answer.
     async photo(bytes: Uint8Array, replyTo?: number, caption?: Screen) {
-      const sent = await api('sendPhoto', { chat_id: chatId, photo: bytes,
+      const payload = { chat_id: chatId, photo: bytes,
         ...(caption ? { caption: caption.text, ...(caption.reply_markup ? { reply_markup: caption.reply_markup } : {}) } : {}),
-        ...(replyTo ? { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } } : {}) });
-      // Bot API results are not validated; the id is read as returned.
-      return (sent as { message_id?: number } | undefined)?.message_id;
+        ...(replyTo ? { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } } : {}) };
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const sent = await api('sendPhoto', payload);
+          // Bot API results are not validated; the id is read as returned.
+          return (sent as { message_id?: number } | undefined)?.message_id;
+        } catch (error) {
+          const noAnswer = error instanceof TelegramError && error.code === 'network';
+          if (!noAnswer || attempt === PHOTO_RETRY_MS.length) throw error;
+          await delay(PHOTO_RETRY_MS[attempt]);
+        }
+      }
     },
     // A rich message in HTML hung under another one: the folded prompt under a picture (local/picture.ts
     // `foldedPrompt`). Resolves to its own message id, by which a deletion of its scene takes it out of the chat too.
