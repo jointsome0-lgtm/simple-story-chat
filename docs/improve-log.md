@@ -8,6 +8,13 @@ and the main result with its limit. A new step gets its full entry there and its
 accepted**: tried and reverted. **Measurement**: numbers without a decision on a change. **Open**: a decision still
 waits. An open line is unfinished work, not an order to finish it.
 
+- 2026-09-27 · **not accepted** · [L1: the reference stamp as the last scene's opening, in lastMessage](knowledge/improve-runs.md#l1-2026-09-27).
+  `lastMessage` said that the stamp is the last scene's opening and that a new scene begins no earlier than what that
+  scene completed. Three `hospital` replays and three lighthouse walks a side on the main group: the target, a scene
+  that opens before the completed bell, failed in 4 of 9 candidate cells against all 8 judged on the baseline, Gemma
+  and Haiku passing it in 5 of 6 runs, but `gpt-5.4-mini` fell on the older traps, 4, 9 and 5 of 12 against a lowest
+  baseline run of 8, and Gemma gained on nothing. The second rejection in a row. Haiku's baseline run 2 has no trap
+  scenes: the Claude CLI failed it twice.
 - 2026-09-27 · **measurement** · [O2: traps for time across the scene boundary and for an unshown past](knowledge/improve-runs.md#o2-2026-09-27).
   15 traps with 18 questions, frozen before any wording was tested and scored apart as `sceneScoreO2`; GPT-6 Astra
   reviewed them twice. One run a model on the main group: each passed 17 of 18, and all three missed the same one, a

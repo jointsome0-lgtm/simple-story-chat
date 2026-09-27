@@ -11,6 +11,166 @@ line per decision. A new step gets its full entry here, on top, and its line the
 Paths to result directories say where the numbers came from at the time. They do not promise that the files still
 exist or that you may read them.
 
+<a id='l1-2026-09-27'></a>
+
+## 2026-09-27 · Opus 5.5 · L1: the reference stamp as the last scene's opening, in lastMessage (not accepted)
+
+A step of the loop, the second of the plan for story consistency that the owner asked for on 2026-09-27, and the one
+[O2](#o2-2026-09-27) gave a target: in O2's calibration all three models of the main group missed
+`o2_opening_before_completed_bell`, a scene that opens before an event the last scene completed.
+
+Hypothesis. The narrator anchors a new scene at the reference stamp, which is the last scene's opening, instead of
+after what that scene narrated. Saying in `lastMessage` that the stamp is the last scene's opening (before the first
+scene, the seed's start) and that, unless the author names a time, the new scene begins no earlier than the end of what
+the last scene showed as done, removes contradictions across the scene boundary without other losses.
+
+Change, in `lastMessage` of `local/story-text/ru.ts` only. «Опорная дата и время последней сцены: ${referenceTime}»
+("Reference date and time of the last scene") became «Опорная дата и время: ${referenceTime}. Это начало последней
+сцены, а до первой сцены — начало истории из сида. Если автор не назвал время, новая сцена начинается не раньше, чем
+закончилось всё, что последняя сцена показала совершившимся. Время, лишь названное в словах, планах или обещаниях, от
+этого не наступает.» ("Reference date and time: … . This is the start of the last scene, and before the first scene the
+start of the story from the seed. If the author named no time, the new scene begins no earlier than everything the last
+scene showed as done has ended. A time only named in words, plans or promises does not come about by this.") The
+author's message, `narratorRule`, the other four catalogs and the memory stayed as they were. `npm test` and
+`npm run check` passed with the edit. It was never committed: the patch is `$RL/l1.ru.diff`, and `ru.ts` is back at
+b166918's text.
+
+The rule, written before any run (`$RL/rule.md`, 18:15:59 UTC, sha256 f9491784…). Three runs a side of the main group
+(`openrouter:google/gemma-4-31b-it`, `openai:gpt-5.4-mini`, `claude:claude-haiku-4-5-20251001`): a replay of
+`hospital` judged by `claude:claude-opus-5-5`, and a walk of the lighthouse gold tree's trunk (`walk-nodes --branches 0
+--no-grow --max-path-tokens 6200`, the eight tasks d1 to d8) judged by Opus 5.5, Fable 5.1 and GPT-6 Astra at `high`,
+each walk on its own copy of the pack. Four measures for each model and run: M memory (12 checks), S the older scene
+traps (12 questions), O set o2 (7 questions, the target among them), W the walk (consistent of decided nodes). A gain
+on a measure: every candidate run above the best baseline run; a fall: the candidate mean below the lowest baseline
+run. Full success: the runs' worst values gain on one measure and neither they nor any model fall on any; semi-success:
+the same with Gemma's gain. Both sides on one UTC day, the baseline first; a provider failure is rerun once, and a
+second failure counts as the eval scores it.
+
+Commands, from the repository, with `RL=~/simple-story-chat-runs/2026-09-27/l1`, N = 1, 2, 3 and `$M` the three
+models. Each side ran its three replays at once and then its three walks at once, each run with its own `TMPDIR` under
+`$RL/tmp` and each walk on a fresh copy of the pack; `npm run eval -- usage` ran before, between and after
+(`$RL/side.sh`).
+
+```
+TMPDIR=$RL/tmp/<side>-N npm run eval -- --pack ~/simple-story-chat-eval --scenarios hospital --mode plain --models $M --judge claude:claude-opus-5-5 --out $RL/<side>-replay-N.json
+TMPDIR=$RL/tmp/<tag>-walk-N npm run eval -- walk-nodes --pack $RL/pack-<tag>-N --scenarios lighthouse --models $M --judges claude:claude-opus-5-5,claude:claude-fable-5-1,codex:gpt-6-astra@high --branches 0 --no-grow --max-path-tokens 6200 --out $RL/<tag>-walk-N/walk-nodes.json
+```
+
+- Baseline replays at 06eddc9, 18:16:54 to 18:33:12 UTC. Baseline walks (`base-redo`) at b166918, 19:08:45 to
+  19:24:35.
+- Candidate replays at b166918 with the edit, 19:25:34 to 19:40:14. Candidate walks (`l1`), 19:40:15 to 19:54:21.
+- Haiku's reruns of run 2, alone: the baseline's 18:51:26 to 19:07:10 at 06eddc9, the candidate's 19:54:41 to
+  20:09:54 at b166918 with the edit.
+
+What happened outside the rule, in order (`$RL/deviations.md` has each with its time):
+1. Baseline replay 2: Haiku's cell ended with `timeout`, the Claude CLI giving no answer for five minutes after its
+   third trap scene. Its one rerun failed too, with `provider_failed` from the CLI (exit 1, `cliError`, stop reason
+   `stop_sequence`) after the memory questions and before any trap was judged. By the rule it counts as the eval scores
+   it: memory 7/12, the traps 0/12 and 0/7 (`no_scenes`). So neither Haiku's nor the worst values' S and O could fall.
+2. Every GPT-6 Astra judge call of the first three baseline walks stopped before it reached Codex: `local/config.ts`
+   refused the model name `gpt-6-astra@high`, since its check allowed no `@`, and 06eddc9, which added the suffix, had
+   been checked with a stub launcher that skips that check. Every node went unjudged by Astra. Those walks were left
+   to finish and then discarded (`$RL/discarded/`), and b166918 accepts the suffix for `codex-cli` only. A free check
+   ran `walk-judge` over a copy of one finished task with a stand-in `codex` first on PATH that records its arguments
+   and fails: the judge started the CLI with `--model gpt-6-astra -c model_reasoning_effort="high"`. The three
+   baseline walks ran again at b166918 on fresh copies of the pack, and every node of them was decided by all three
+   judges. The replays' code and the walks' code differ only in that check and in docs, which no replay model or judge
+   touches.
+3. Two of the discarded walks had a Gemma step open from about 18:33 to 19:05 with no event: an OpenRouter stream stayed
+   open, the five-minute timeout in `local/llama.ts` did not end it, and walk-step's own 30-minute deadline did, with
+   `timeout` in `generate`; walk-nodes then ran the task again. Recorded for the owner, not investigated in this step.
+   In the kept walks no model went more than three minutes without an event.
+4. Candidate replay 2: Haiku's cell ended with `provider_failed` during its second memory compaction (exit 1,
+   `cliError`, stop reason `stop_sequence`, after 147 s), the same CLI error. Its one rerun, alone after the
+   candidate walks, passed: memory 4/12, the older traps 10/12, set o2 7/7.
+
+Numbers, per model, runs 1, 2 and 3; † marks a cell taken from Haiku's rerun:
+
+| Model | Side | M (memory /12) | S (older traps /12) | O (set o2 /7) | W (walk nodes /8) |
+| --- | --- | --- | --- | --- | --- |
+| Gemma 4 31B | baseline | 5, 4, 4 | 10, 9, 9 | 6, 6, 6 | 4/8, 1/8, 2/8 |
+| Gemma 4 31B | candidate | 5, 4, 4 | 10, 9, 11 | 7, 6, 7 | 3/8, 3/8, 5/8 |
+| gpt-5.4-mini | baseline | 2, 1, 0 | 8, 9, 8 | 6, 4, 5 | 1/8, 0/8, 1/8 |
+| gpt-5.4-mini | candidate | 0, 3, 3 | 4, 9, 5 | 5, 5, 6 | 0/8, 1/8, 1/8 |
+| Haiku 4.5 | baseline | 7, 7†, 5 | 9, 0†, 10 | 6, 0†, 6 | 0/8, 0/8, 2/8 |
+| Haiku 4.5 | candidate | 8, 4†, 6 | 9, 10†, 10 | 7, 7†, 7 | 0/8, 3/8, 1/8 |
+
+M is memory, S the older scene traps, O set o2 (`hospital` replays); W is consistent of decided walk nodes, and
+every node on both sides was decided, with no split and no error.
+
+The rule, measure by measure (a gain needs every candidate run above the best baseline run, a fall a candidate mean
+below the lowest baseline run):
+
+| Measure | Worst values | Gemma 4 31B | `gpt-5.4-mini` | Haiku 4.5 |
+| --- | --- | --- | --- | --- |
+| M, of 12 | 2, 1, 0 → 0, 3, 3 | 5, 4, 4 → 5, 4, 4 | 2, 1, 0 → 0, 3, 3 | 7, 7, 5 → 8, 4, 6 |
+| S, of 12 | 8, 0, 8 → 4, 9, 5 | 10, 9, 9 → 10, 9, 11 | 8, 9, 8 → 4, 9, 5: **fall** | 9, 0, 10 → 9, 10, 10 |
+| O, of 7 | 6, 0, 5 → 5, 5, 6 | 6, 6, 6 → 7, 6, 7 | 6, 4, 5 → 5, 5, 6 | 6, 0, 6 → 7, 7, 7: **gain** |
+| W, of 8 | 0, 0, 1 → 0, 1, 1 | 4, 1, 2 → 3, 3, 5 | 1, 0, 1 → 0, 1, 1 | 0, 0, 2 → 0, 3, 1 |
+
+Decision: not accepted. `gpt-5.4-mini` fell on the older traps: 4, 9 and 5 of 12, a mean of 6, below its lowest
+baseline run of 8. Nothing else fell. The worst values gained on nothing, and neither did Gemma: its set o2 went from
+6, 6 and 6 to 7, 6 and 7, and run 2 did not rise above the best baseline run. Haiku gained on set o2, 7 of 7 in every
+run, which the rule does not count for acceptance. `git checkout -- local/story-text/ru.ts` restored the text. The
+second rejection in a row, after [L3](#l3-2026-09-27); a third stops the loop for the owner's decision
+([the rule](../improve-loop.md#stop-conditions)).
+
+Diagnostics, which decide nothing:
+- The target. `o2_opening_before_completed_bell` failed in all 8 judged baseline cells (Haiku's run 2 had no scenes)
+  and in 4 of 9 candidate cells: Gemma in run 2 only, mini in every run, Haiku in none.
+  `o2_author_minute_kept_h`, an author's named minute that must stand, passed in every judged cell on both sides, so
+  the edit did not make the models override the author's time.
+- mini's older traps. On the baseline mini lost 11 of 36 questions over three runs, and with the edit 18: `key_fetched`,
+  `key_in_klim_pocket` and `nazar_knows_in_advance` in every run (twice each on the baseline), `order_explained`,
+  `yard_reopened` and `route_corrected` twice (once each), `cancelled_cargo_used` once (twice), and `fresh_cell_spent`
+  and `open_bridge_crossed` once (never). They ask about a key, orders, a route, stock and knowledge; none of them
+  concerns when a scene opens. Its run 2 lost 3, as on the baseline, whose runs lost 4, 3 and 4; runs 1 and 3 lost 8
+  and 7.
+- The walks' findings of kind `time`, as the council counts them (a finding confirmed when more judges confirm than
+  refute it), over 24 nodes a model a side: Gemma 34 confirmed in 12 nodes on the baseline and 29 in 8 with the edit,
+  mini 48 in 16 and 38 in 15, Haiku 62 in 18 and 33 in 12 (`$RL/timefindings.cjs`).
+- No compaction was repeated on either side. Requests repeated after a provider failure (`yielded`): the baseline's
+  Gemma once (`provider_failed`) and mini twice (`rate_limited`), the candidate's Gemma nine times and mini three
+  times, with the same codes.
+
+The cost, from `npm run eval -- usage`. openrouter-paid went from 1,922,807 tokens at 18:16 UTC to 3,448,668 after the
+candidate walks, and openai-small from 517,279 to 2,008,759, against the rule's estimate of about 1.2 million each:
+
+| Part | openrouter-paid | openai-small |
+| --- | --- | --- |
+| Baseline replays | 522,040 | 556,944 |
+| Discarded baseline walks, to 19:08 | 79,970 | 116,110 |
+| Baseline walks at b166918, with the discarded walks' tail | 160,855 | 115,615 |
+| Candidate replays | 645,714 | 584,761 |
+| Candidate walks | 117,282 | 118,050 |
+| The step | 1,525,861 | 1,491,480 |
+
+The candidate replays took 124 thousand more openrouter-paid tokens than the baseline's, with nine repeated Gemma
+requests to one; the ledger keeps a failed request's reservation, as L3 found. Haiku, the judges and both of Haiku's
+reruns ran on the Claude and ChatGPT subscriptions, which the ledger does not count. No limit was reached, and the
+day's caps stood at 3.45 of 4 million and 2.01 of 2.25 million after the step.
+
+Conclusion: not accepted. On the target the line worked for two of the three models: Gemma and Haiku opened after the
+completed bell in 5 of their 6 runs, where they did in none of their 5 judged baseline runs, and the walks' confirmed
+time findings fell for all three, most for Haiku. But mini, which failed the target in every run on both sides, lost
+older traps that do not concern time, and by the rule a fall of any model rejects. Three runs cannot say whether mini's
+loss comes from the edit or from its own spread: its run 2 kept the baseline's level. A narrower wording, or the same
+one with more runs of mini, would be a new step with its own rule, and the plan has none left: L2 is now a measurement,
+as the owner decided.
+
+Limitations:
+- Three runs a side, `hospital` only for the replays, one question for the target, so a model's target is three
+  yes-or-no answers.
+- Haiku's run 2 failed on the Claude CLI on both sides, on different operations. On the baseline its rerun failed too,
+  so only its memory counted there; on the candidate's side the rerun passed.
+- One judge, Opus 5.5, for the replays' traps; three for the walks.
+- The baseline replays ran at 06eddc9 and its walks at b166918, which differ in the model name check only.
+- Hosted Gemma stands in for the bot's heretic Q6_K, and the log does not say which provider OpenRouter picked.
+- Results: `$RL/{base,l1}-replay-N.json` and `-2r.json` with their `.log` and `.err` files, the walks under
+  `$RL/{base-redo,l1}-walk-N/` on `$RL/pack-{base-redo,l1}-N`, the usage snapshots `$RL/usage-*.jsonl`, the rule and
+  `decide.cjs`, which printed the decision, `table.cjs` and `timefindings.cjs`, and the discarded walks under
+  `$RL/discarded/`.
+
 <a id='o2-2026-09-27'></a>
 
 ## 2026-09-27 · Opus 5.5 · O2: traps for time across the scene boundary and for an unshown past (measurement)
