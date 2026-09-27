@@ -2301,3 +2301,78 @@ and the contacts inside a region survive the redraw, above all the flight's fath
 head; whether the tank top or the suit leaks into the scene's clothes; whether the feather hides the seam at a
 region's edge and round a head kept; and the times, priced from the head test's. `draw` checks the card's `card.txt`
 against round one's pins before it sends anything.
+
+<a id='refs-stand'></a>
+
+## The refs stand
+
+On 2026-09-27 qwen-refs' final report (§4, with its texts file) asked the next picture card four questions about
+references in the bot, and the owner added one: whether a second reference that shows the person turned as the scene
+turns them brings the figure closer («нам же важно чтобы фигура совпадала»). [image-refs-test.ts](../local/image-refs-test.ts)
+draws all of it on one card, 137 pictures in the report's card order, on the bot's picture path: cu130, the Triton
+backend and the kitchen's attention ([the bot's card](gpu.md#bot-card)). It keeps no cu128: no cell is compared with a
+picture drawn before, and C-now, the bot's frame today, is one of its cells.
+
+- **People and scenes**: two synthetic women, H (hourglass) and L (pear-shaped, for the pair), in three scenes at
+  seeds 7 and 11: K-solo (H hangs a lantern, turned three-quarters), K-pair (L hands her one) and P (H opens a window
+  in true profile). Two or three people a scene is what the owner cares about next, so the pair stays.
+- **Fronts**: H's in today's portrait style and in each reader style (VN, FILM, SEMI, PENCIL), L's for the pair, and
+  RF, H's front written as a sheet's recipe at CFG 2 with a negative. A frame takes the front of seed 7.
+- **Arm A**, the wording: C-now (the bot's frame, the front at 352x640 and "The person from image 1"), R (the same
+  front under ROLE, Qwen's own form: the medium named first, the reference as the identity source, what not to take
+  from it), W (no picture, the look in words) and FC (W with the top 720x400 of the VN front, cut by ImageCrop, as the
+  face).
+- **FV**, the owner's pose idea as "front + nearest view": each person's front beside a view drawn from it, turned as
+  the scene turns them (H three-quarters to the right in K, H in profile in P, L three-quarters to the left in the
+  pair), both at 352x640, under ROLE's words for two pictures a person. Round one's V, a view in place of the front,
+  lost 14 identity points (docs/knowledge/action-measurements.md:69) and is not drawn again.
+- **Arm C**, one shared style: W in FILM, SEMI and PENCIL, C with the VN front, and R in each style with the front of
+  that style.
+- **Arm B**, the sheets: H's and GPT's four cases (sheet-test's `gpt-sheet-prompts.md`) at 2048x1152 on the front
+  graph, CFG 2 with their shared negative; H's and case 4's with the measurements in words (SH-words) and at CFG 1
+  (SH-cfg1); frames with H's sheet at the encoder's `resolution` 1024 (1376x768), in PENCIL from each seed's sheet and
+  in VN; frames with RF at its own size; and GPT's edit prompt on each sheet (VIEW, 704x1280).
+- **Arm D**, last: the fronts at their own size (704x1280 at the encoder) under ROLE (Q), L's front for H (X), the
+  tags written as words (Naming), the pictures in the other order (Order), rough look words beside the picture
+  (Rough), and the pair with neither picture nor looks (L-now).
+
+No reference changes its shape by more than 2.2 % on its way to the encoder, whose resize does not crop
+(comfy_extras/nodes_qwen.py:155-165): the fronts (720x1280) reach it at 352x640 or 704x1280, the views (704x1280) at
+352x640, the crop (720x400) at 704x384 and the sheets (2048x1152) at 1376x768. The dry run prints each arm's and
+fails past 5 %.
+
+The texts are synthetic and clean, and are kept beside the run rather than in the repository, as the figure test's
+are: `build-texts.ts` in the run's directory writes `texts.json` from qwen-refs' `next-card-texts.txt` and
+`gpt-sheet-prompts.md`, checking every passage it takes against them. The script pins the sha256 of `texts.json` and
+refuses any other, or one whose cells are not its plan's, key by key, each with its graph, canvas, CFG and references.
+
+**The price.** `estimate`: 33 minutes at the seeded warm times with half a compile, 50 at the admission prices, within
+the 60 the day's budget left, $0.54 to $0.70 at $0.605 an hour with 20 minutes of bootstrap. A frame is seeded at the
+bot's times on the day's card, a sheet at 55 s at CFG 2 and 29 s at CFG 1 from its tokens; once the card has drawn a
+group, its own time prices it. A cell is begun only if it can end by `--until`, and none after the first that cannot,
+so arm D, last, is the first cut; an SH-cfg1 sheet is `cut` when the core cells after it would no longer fit. A cell
+whose reference was not drawn is `out` until a resume, and a fallback of the kitchen's attention to PyTorch's stops the
+run.
+
+```sh
+npm run image:refs-test -- estimate
+npm run image:refs-test -- dry-run --texts ~/simple-story-chat-runs/2026-09-27/refs-stand/texts.json    # steps 0 to 16, then "the refs stand's dry run went as expected"
+# On a card bootstrapped and served as the bot's card, the tunnel up, "$end" five minutes before the card's end:
+ssh simple-chat-vast cat /workspace/simple-chat-gpu/image-verified.txt > ~/simple-story-chat-runs/2026-09-27/refs-stand/card.txt
+npm run image:refs-test -- draw --out ~/simple-story-chat-runs/2026-09-27/refs-stand --until "$end"    # stand_done, 137 drawn, exit 0
+npm run image:refs-test -- page --out ~/simple-story-chat-runs/2026-09-27/refs-stand    # index.html, which draw writes after each cell
+```
+
+The run's `run.sh` does the last three with the server's checks first. The directory holds `texts.json`, `card.txt`,
+`cells.json` (keys, codes, sizes and times, no prompt), `fronts/`, `views/`, `sheets/`, `frames/` and `index.html`: a
+section an arm, the cells it compares side by side, each prompt folded under its picture.
+
+**Judging** is not built: after the card, blind as round two's, by gpt-6-astra at high (`JUDGE` in
+[action-judge.ts](../local/action-judge.ts)), with the questions of the texts file and the report's §4.6, and scored by
+its §4.7. Identity is judged against each cell's own reference; proportions, looks and anatomy against H's words and
+table.
+
+**Not verified without the card**: a sheet's time at 2048x1152 and CFG 2, and whether it fits the card's memory;
+whether ROLE's words keep the named medium and leave the reference's pose, light and backdrop; whether the view beside
+the front brings the figure closer or brings the front's standing pose along; whether the crop's face comes through
+without its body.
