@@ -82,7 +82,8 @@ function modelConfig(env: Env): ModelConfig {
   // The gateway serves one model under the name its operator gave it and refuses any other.
   if (provider === 'simple-serving' && !env.SIMPLE_CHAT_MODEL) throw new Error('Set SIMPLE_CHAT_MODEL to the model name the gateway serves');
   const model = env.SIMPLE_CHAT_MODEL || (provider === 'llama-cpp' ? 'gemma-4-31b-heretic-q6k' : 'claude-haiku-4-5-20251001');
-  if (!/^[A-Za-z0-9][A-Za-z0-9_./:-]{0,199}$/.test(model)) throw new Error('Invalid SIMPLE_CHAT_MODEL');
+  // A Codex model may end in `@<effort>`, which local/codex.ts checks; every other provider refuses `@`.
+  if (!/^[A-Za-z0-9][A-Za-z0-9_./:-]{0,199}$/.test(provider === 'codex-cli' ? model.replace(/@[a-z]+$/, '') : model)) throw new Error('Invalid SIMPLE_CHAT_MODEL');
   const contextTokens = integer('SIMPLE_CHAT_CONTEXT_TOKENS', 65536, 8192, 65536);
   const memoryMode = env.SIMPLE_CHAT_MEMORY_MODE || 'plain';
   if (memoryMode !== 'plain' && memoryMode !== 'sgr') throw new Error('Invalid SIMPLE_CHAT_MEMORY_MODE');

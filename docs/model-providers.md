@@ -184,7 +184,9 @@ The pictures move to simple-serving too, as the owner decided on 2026-09-26: aft
 `local/codex.ts` starts the installed `codex exec --json` the way `local/claude.ts` starts Claude Code. It signs in
 through the CLI's own login (`CODEX_HOME`); the OpenAI keys, address, organization and project, the bot's
 `SIMPLE_CHAT_*` settings and `TELEGRAM_BOT_TOKEN` are removed from its environment. `SIMPLE_CHAT_MODEL` is required,
-because the models depend on the account's plan.
+because the models depend on the account's plan. It may end in a reasoning effort after `@`, as in `gpt-6-astra@high`,
+which the CLI gets as `-c model_reasoning_effort="high"`; without it the CLI's default applies. No other provider
+accepts `@` in a model name.
 
 Codex is an agent with a shell, and the narrator needs none. The request runs with `--ephemeral --ignore-user-config
 --ignore-rules --skip-git-repo-check --sandbox read-only` in an empty temporary directory, with web search and every
