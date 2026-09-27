@@ -45,13 +45,14 @@ export function portraitDescription(name: string): Description {
 export const portraitPrompt = (name: string, text: string, names: string[] = []) =>
   assemblePrompt(portraitDescription(name), [{ name, look: text, outfit: '' }, ...names
     .filter(other => other.trim().toLowerCase() !== name.trim().toLowerCase()).map(other => ({ name: other, look: '', outfit: '' }))], PORTRAIT_STYLE);
-// What a portrait of a person of the sheet is drawn from (docs/illustrations-plan.md#portrait-details): their details,
-// the reader's or the model's, as written and in whatever language, since a portrait holds one person and can take all
-// of them; or the look, which is all a sheet written before 2026-09-26 has until the reader writes details. A look the
-// reader wrote changes the frames alone. `portraitFromDetails` says which of the two texts it is, for the card to name
-// it (local/ui.ts).
-type SheetPerson = { details?: string; look: string };
-export const portraitFromDetails = (person: SheetPerson) => !!person.details?.trim();
+// What a portrait of a person of the sheet is drawn from (docs/illustrations-plan.md#three-layers): their details, the
+// English prose retold from their description, since a portrait holds one person and can take all of it, and a table of
+// measurements given to the image model as written was drawn as lettering. Until the details are retold, it is the look,
+// and so on a sheet written before 2026-09-26, and for details a reader wrote before 2026-09-27, which were never
+// retold. A look the reader wrote changes the frames alone. `portraitFromDetails` says which of the two texts it is,
+// for the card to name it (local/ui.ts).
+type SheetPerson = { details?: string; detailsEdited?: boolean; look: string };
+export const portraitFromDetails = (person: SheetPerson) => !!person.details?.trim() && !person.detailsEdited;
 export const portraitText = (person: SheetPerson) => portraitFromDetails(person) ? person.details! : person.look;
 
 // The canvas a portrait is drawn on: the text-to-image graph's own latent turned upright, the smaller side across. A

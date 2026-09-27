@@ -1,7 +1,7 @@
-// The text run of the action measurement (docs/action-experiment.md#text-run): for each of the 26 stories and the
+// The text run of the action measurement (docs/action-experiment.md#text-run): for each of the 28 stories and the
 // owner's own sharp scenes (#own), the sharp seed where there is one, the opening and the action scene by the bot's
-// `generateScene`, the sheet, the bot's frame and the variant frame, every call the bot's own through one provider as
-// class `internal`. Each reply is decided by the rules the doc fixes, every attempt is recorded as counts and times,
+// `generateScene`, the sheet, the bot's frame, the variant frame and the retelling of the sheet, every call the bot's own
+// through one provider as class `internal`. Each reply is decided by the rules the doc fixes, every attempt is recorded as counts and times,
 // and nothing is asked again by choice. A story's words stay in its own directory, `sealed/<id>/` for a sharp one;
 // what this file prints and writes at the run's level is ids, codes, counts and times.
 import { createHash } from 'node:crypto';
@@ -19,7 +19,7 @@ import { capsFor, channelFor, createBudget } from './budget.ts';
 import { loadModelConfig } from './config.ts';
 import type { Env, ModelConfig } from './config.ts';
 import { generateScene } from './generation.ts';
-import { askJson, frameRequest, sheetOf, sheetRequest } from './illustrate.ts';
+import { askJson, frameRequest, inWords, retellRequest, retoldOf, sheetOf, sheetRequest } from './illustrate.ts';
 import type { Character, Description, Excerpt } from './illustrate.ts';
 import { createLlama, createOpenAI } from './llama.ts';
 import { safeErrorDetails } from './model-error.ts';
@@ -33,7 +33,7 @@ export function detailsOf(error: unknown): Details {
     .filter(([, value]) => value !== undefined)) as Details;
 }
 import type { ModelRequest, Provider } from './model.ts';
-import { rewrittenSheet, wornAt } from './picture.ts';
+import { descriptionOf, rewrittenSheet, wornAt } from './picture.ts';
 import { contextParts, normalizeScene, storyNarration } from './prompt.ts';
 import { createServing } from './serving.ts';
 import { Store } from './store.ts';
@@ -214,8 +214,8 @@ export const isSharp = (id: string) => id.startsWith('sharp-');
 export const storyDir = (root: string, id: string) => join(resolve(root), isSharp(id) || id === MARKER_STORY.id ? 'sealed' : 'clean', id);
 
 export type Outcome = 'ok' | 'unparsed' | 'truncated' | 'schema' | 'empty_sheet' | 'failed';
-export type StepName = 'seed' | 'opening' | 'action' | 'sheet' | 'frame' | 'variant';
-export const STEPS: StepName[] = ['seed', 'opening', 'action', 'sheet', 'frame', 'variant'];
+export type StepName = 'seed' | 'opening' | 'action' | 'sheet' | 'frame' | 'variant' | 'retell';
+export const STEPS: StepName[] = ['seed', 'opening', 'action', 'sheet', 'frame', 'variant', 'retell'];
 export type StepResult = { outcome: Outcome; code?: string; attempts: number; ms: number } & Details;
 // What a story's text run keeps in its directory: each step's outcome and what the steps that succeeded returned. The
 // scenes are in `story.sqlite` beside it.
@@ -223,15 +223,15 @@ export type StepResult = { outcome: Outcome; code?: string; attempts: number; ms
 export type StoryText = { id: string; pins: string; steps: Partial<Record<StepName, StepResult>>; nodeId?: string;
   sharp?: { seed: string; action: string }; sheet?: Character[]; worn?: Character[]; frame?: Description; variant?: VariantFrame;
   earlier?: { sheet: StepResult } };
-// The arms a step's failure takes out (docs/action-experiment.md#text-run): a scene or the sheet, the whole story; the
-// bot's frame, A; the variant, A+, L, C, V and T.
+// The arms a step's failure takes out (docs/action-experiment.md#text-run): a scene, the sheet or its retelling, the
+// whole story; the bot's frame, A; the variant, A+, L, C, V and T.
 export const ARMS = ['A', 'A+', 'L', 'C', 'V', 'T'] as const;
 export type ActionArm = typeof ARMS[number];
 export function armsOut(text: StoryText | undefined): Partial<Record<ActionArm, string>> {
   const steps = text?.steps ?? {};
   // A step that failed names its outcome; one never reached leaves its arms without a text.
   const reason = (step: StepName) => steps[step] ? (steps[step]!.outcome === 'ok' ? undefined : `${step}_${steps[step]!.outcome}`) : 'text_missing';
-  const story = (['seed', 'opening', 'action'] as StepName[]).map(step => steps[step] && reason(step)).find(Boolean) ?? reason('sheet');
+  const story = (['seed', 'opening', 'action'] as StepName[]).map(step => steps[step] && reason(step)).find(Boolean) ?? reason('sheet') ?? reason('retell');
   return Object.fromEntries(ARMS.flatMap(arm => {
     const why = story ?? reason(arm === 'A' ? 'frame' : 'variant');
     return why ? [[arm, why]] : [];
@@ -343,6 +343,7 @@ export function textPins(model: TextModel, gateway: Record<string, string | numb
   const empty: Excerpt = { system: '', messages: [] };
   const adapter = ADAPTERS[model.route];
   const instructions = { sheet: sheetRequest(empty), frame: frameRequest(empty, []), variant: variantRequest(empty, []),
+    retell: retellRequest([{ description: 'ОПИСАНИЕ', changes: 'ПЕРЕМЕНЫ' }, { description: 'ОПИСАНИЕ', look: 'LOOK' }], [0]),
     sharp: ([1, 2, 3, 4] as SharpPeople[]).map(people => sharpInstruction('ТЕМА', people)),
     sharpSchema: SHARP_SCHEMA, sharpTokens: SHARP_TOKENS };
   return { route: model.route, weights: model.weights, baseUrl: model.config.baseUrl ?? '', model: model.config.model,
@@ -434,7 +435,7 @@ export const sharpRequest = (theme: string, people: SharpPeople): ModelRequest =
 
 // The one reader of each story's own store.
 export const USER = 'action';
-type RunContext = { root: string; model: TextModel; pins: string; log: (row: Attempt) => void; say: (event: object) => void };
+type RunContext = { root: string; model: TextModel; pins: string; log: (row: Attempt) => void; say: (event: object) => void; retell?: boolean };
 
 // One story, step by step, resumed where it stopped: a step with an outcome is never asked again, and a scene already
 // in the store is not written twice.
@@ -553,6 +554,32 @@ export async function runStory(story: TextStory, run: RunContext): Promise<Story
       if (result.outcome === 'ok') text.variant = value as unknown as VariantFrame;
       done('variant', result);
     }
+    // The retelling of the whole sheet, as the bot asks it once the sheet is written (local/picture.ts `retellPending`),
+    // and last here: the frames take the names and the clothes alone, and the sheet check asks none (`retell: false`).
+    // Every person is retold in words or the step fails, and the story with it: a picture with a person the retelling
+    // left out would draw them as the frame's stranger, which is not the picture the arms compare.
+    if (run.retell !== false && !text.steps.retell) {
+      const sheet = store.read(USER).stories[storyId].sheet ?? [];
+      const people = sheet.map(one => ({ description: descriptionOf(one), changes: one.changes ?? '' }));
+      const asked = people.map((_, index) => index);
+      const everyone = (reply: Record<string, unknown>) => {
+        const retold = retoldOf(reply, people.length);
+        return asked.every(index => retold.has(index) && inWords(retold.get(index)!));
+      };
+      const { result, value } = await ask('retell', retellRequest(people, asked), everyone);
+      if (result.outcome === 'ok') {
+        const retold = retoldOf(value!, people.length);
+        store.mutate(USER, saved => {
+          for (const [index, one] of (saved.stories[storyId].sheet ?? []).entries()) {
+            Object.assign(one, retold.get(index));
+            delete one.lookPending;
+          }
+        });
+        text.sheet = text.sheet!.map((one, index) => ({ ...one, ...retold.get(index) }));
+        text.worn = wornAt(store.read(USER).stories[storyId], text.nodeId, store.read(USER).stories[storyId].sheet ?? []);
+      }
+      done('retell', result);
+    }
     return text;
   } finally { store.close(); }
 }
@@ -576,7 +603,7 @@ export function requestCounts(record: Pick<TextsRecord, 'attempts' | 'requests'>
 }
 
 export type TextsOptions = { root: string; model: TextModel; stories?: TextStory[]; concurrency?: number; smoke?: string;
-  say?: (event: object) => void; gateway?: Record<string, string | number>; again?: string[] };
+  say?: (event: object) => void; gateway?: Record<string, string | number>; again?: string[]; retell?: boolean };
 // The owner's exception of 2026-09-25 (docs/action-experiment.md#again): a sheet that came back empty is asked once
 // more, with the frame and the variant after it, on the scenes already written. Its first outcome moves to the story's
 // `earlier` and to the record's `again`. A story whose sheet did anything else is refused before any request, and one
@@ -639,7 +666,7 @@ export async function runTexts(options: TextsOptions): Promise<TextsRecord> {
   const stories = all.filter(story => !held.includes(story));
   askAgain(root, (options.again ?? []).filter(id => !held.some(story => story.id === id)), record);
   save();
-  const context: RunContext = { root, model: options.model, pins: pinsHash(pins), say,
+  const context: RunContext = { root, model: options.model, pins: pinsHash(pins), say, retell: options.retell,
     log: row => { record.attempts.push(row); save(); say({ event: 'text_attempt', ...row }); } };
   let next = 0;
   const worker = async () => {
@@ -693,7 +720,7 @@ export async function markerCheck(options: Omit<TextsOptions, 'stories'> & { tem
   }
   const found = searchBoundary({ root, tempDir, word: name, output: output.text() });
   rmSync(tempDir, { recursive: true, force: true });
-  const reached = Object.values(steps).length === 5 && Object.values(steps).every(step => step.outcome === 'ok');
+  const reached = Object.values(steps).length === 6 && Object.values(steps).every(step => step.outcome === 'ok');
   const result = { pass: found.pass && reached, reached, files: found.files, bytes: found.bytes, tempFiles: found.tempFiles, unread: found.unread,
     hits: { files: found.hits.files.length, temp: found.hits.temp, output: found.hits.output }, pins: pinsHash(pins), at: new Date().toISOString(),
     steps: Object.fromEntries(Object.entries(steps).map(([step, one]) => [step, one.outcome])), requests: { ...options.model.requests } };

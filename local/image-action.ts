@@ -3,7 +3,7 @@
 // commands, in the runbook's order (docs/action-experiment.md#runbook), all in illustrations/action, whose sealed/ the
 // owner's deny covers; only `dry-run` takes another `--dir`:
 //   texts       on the text card, through simple-serving's gateway: `--marker` first, the marker check of the sealed
-//               path, then the 26 stories and the owner's own. `--smoke-record` names the record of the gateway's
+//               path, then the 28 stories and the owner's own. `--smoke-record` names the record of the gateway's
 //               smoke, which route A starts on; `--model gpu:<label>` takes the llama.cpp fallback from .env.gpu
 //               instead. `--again id,...` asks once more the sheets that came back empty (docs/action-experiment.md#again)
 //   own         how many themes and scenes the owner's sealed/own.txt holds, before the text card (#own)
@@ -211,12 +211,15 @@ export function reportCommand(root: string) {
 // ---- The dry run ----
 
 // The gateway's faults in the dry run: each of the doc's outcomes once, the provider's error on a sharp story, whose
-// body then carries the marker, and two faults in each of two stories so that 25 scenes keep both A and A+. The beach
-// scene, which binds the most people, has them all face the viewer: the smoke then draws another scene's view and its
-// front, and V is C's picture there.
+// body then carries the marker, and two faults in each of two stories so that 26 scenes keep both A and A+; and a
+// retelling asked twice, and one that leaves a person out, which takes its story out whole. The beach scene, which
+// binds the most people, has them all face the viewer: the smoke then draws another scene's view and its front, and V
+// is C's picture there.
 const DRY_FAULTS: Faults = {
   beach: { variant: 'all_viewer' },
   demon: { sheet: 'retry' },
+  giants: { retell: 'retry' },
+  fence: { retell: 'retold_short' },
   tango: { frame: 'unparsed', variant: 'duplicate_roles' },
   cheer: { sheet: 'empty_sheet' },
   'sharp-2': { frame: 'error', variant: 'truncated' },
@@ -338,8 +341,8 @@ export async function dryRun(out: string, options: { tokenizers?: string } = {})
     const tokenizer = qwenTokenizer(options.tokenizers);
     const prompts = promptsCommand(root, tokenizer);
     say(`4 prompts: ${JSON.stringify({ arms: prompts.arms, vIsC: prompts.vIsC, fronts: prompts.fronts, views: prompts.views, out: prompts.out, nonLatin: prompts.nonLatin, tokens: prompts.tokens })}`);
-    // The fakes write every person's details, as round two's sheets do (#the-sheet): a step that lost them on the way
-    // would draw round two's fronts from the look, and say so nowhere.
+    // The fakes retell every person with details, as round two's retelling does (#the-sheet): a step that lost them on
+    // the way would draw round two's fronts from the look, and say so nowhere.
     const fromDetails = textStories().flatMap(story => {
       const worn = readJson<StoryText>(join(storyDir(root, story.id), 'text.json'))?.worn ?? [];
       return (readPlan(root, story.id)?.portraits ?? []).map(front => {

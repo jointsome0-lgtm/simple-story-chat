@@ -174,8 +174,8 @@ export function planStory(story: TextStory, text: StoryText | undefined, tokens?
   plan.arms.L = { prompt: light.prompt, references: [] };
   plan.counts.L = countsOf(light.prompt, people, 0, light.namesStripped, tokens);
   if (!bound) return plan;
-  // A front is drawn as the bot draws a portrait: from the sheet's details of that person where it has them, which
-  // round two's sheets do (docs/action-experiment.md#the-sheet).
+  // A front is drawn as the bot draws a portrait: from the details the retelling wrote of that person, which everybody
+  // of a story that reached its prompts has (docs/action-experiment.md#the-sheet).
   plan.portraits = manifest.bound.map(one => {
     const character = worn[Number(one.entry.slice(1)) - 1];
     return { id: one.portrait, entry: one.entry, prompt: portraitPrompt(character.name, portraitText(character), worn.map(other => other.name)).prompt };

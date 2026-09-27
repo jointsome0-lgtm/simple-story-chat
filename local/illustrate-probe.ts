@@ -1,7 +1,7 @@
 // The description step of docs/illustrations-plan.md#step-1, brought in from the scratch script it was iterated in. For
-// chosen scenes of the frozen synthetic stories it asks the story model for one character sheet per story and then a
-// structured description of one frame, and assembles the text-to-image prompt here, in code (step 3 of the plan: the
-// model writing the prompt itself dropped fields it had filled). Nothing is drawn here; local/image-batch.ts draws.
+// chosen scenes of the frozen synthetic stories it asks the story model for one character sheet per story, the looks
+// retold from its descriptions, and then a structured description of one frame, and assembles the text-to-image prompt
+// here, in code (step 3 of the plan: the model writing the prompt itself dropped fields it had filled). Nothing is drawn here; local/image-batch.ts draws.
 // Synthetic stories only: examples/ is safe to send to a hosted model, a reader's story is not. With `--stories` it is
 // the sheet check of the action measurement instead (`checkSheets` below).
 import { parseArgs, parseEnv } from 'node:util';
@@ -21,7 +21,7 @@ import { ACTION_STORIES } from '../examples/action-set.ts';
 import { Refusal } from './action-boundary.ts';
 import { hostedModel, readJson, runTexts, storyDir, textStories } from './action-text.ts';
 import type { Attempt, Fetch, StoryText } from './action-text.ts';
-import { askJson, assemblePrompt, frameRequest, matchSheet, sheetOf, sheetRequest, stripNames } from './illustrate.ts';
+import { askJson, assemblePrompt, frameRequest, inWords, matchSheet, retellRequest, retoldOf, sheetOf, sheetRequest, stripNames } from './illustrate.ts';
 import type { Character, Description } from './illustrate.ts';
 
 // What one frame is: written to the output directory and read by local/image-batch.ts and local/image-portraits.ts.
@@ -72,8 +72,8 @@ function modelEnv(spec: string | undefined, keys: Env): Env {
 
 // ---- The sheet check (docs/action-experiment.md#the-sheet) ----
 
-// The age words the sheet and the frame allow, and the children's among them; a skin tone, as a tone word just before
-// skin, skinned or complexion; and a short list of clothes, which neither `details` nor `look` may hold.
+// The age words the retelling and the frame allow, and the children's among them; a skin tone, as a tone word just
+// before skin, skinned or complexion; and a short list of clothes, which neither `details` nor `look` may hold.
 const AGE = /\b(?:small[\s-]child|child|teenager|young[\s-]adult|middle[\s-]aged|elderly)\b/i;
 const CHILD = /\b(?:small[\s-]child|child|teenager)\b/i;
 const SKIN = /\b(?:pale|fair|light|olive|tan|tanned|brown|dark|deep|ruddy|golden|bronze|black|white|ivory|porcelain|sallow|swarthy)(?:[\s,-]+[a-z]+)?[\s,-]+(?:skin|skinned|complexion)\b/i;
@@ -92,6 +92,18 @@ function tally(texts: string[], names: string[]) {
   return { people: all.length, words: words.length ? [Math.min(...words), Math.max(...words)] : [], digit: count('digit'),
     name: count('name'), clothing: count('clothing'), ageFirst: count('ageFirst'), age: count('age'), child: count('child'), skin: count('skin') };
 }
+// The same short list in Russian, the set's language, which a description may not hold either: the stems of the clothes
+// the set's seeds put on their people, each at the start of a word, and none of them a stem of a body's word.
+const CLOTHES_RU = /(?<![а-яё])(?:одет|одежд|плать|рубах|рубашк|футболк|майк(?:а|и|е|у|ой)(?![а-яё])|толстовк|курт[кч]|плащ|пальто|брюк|штан(?:ы|ов|ах|ам|ами)(?![а-яё])|шорт|джинс|легинс|лосин|юбк|сапог|ботин|кеды|кроссовк|туфл|шляп|шапк|капюшон|доспех|кольчуг|поддоспешник|ряс[аеуы](?![а-яё])|халат|фартук|жилет|туник|купальник|парео|кимоно|пиджак|свитер|шарф|перчатк|пояс(?!ниц)|униформ)/iu;
+// A sheet's descriptions: their words and characters at the fewest and the most, how many say what the story left
+// unsaid in the line the instruction asks for, name a person of the sheet or a garment, and have changes beside them.
+function descriptions(sheet: Character[], names: string[]) {
+  const texts = sheet.map(one => one.description ?? ''), words = texts.map(text => text.split(/\s+/).filter(Boolean).length);
+  const range = (values: number[]) => values.length ? [Math.min(...values), Math.max(...values)] : [];
+  return { people: texts.length, words: range(words), characters: range(texts.map(text => [...text].length)),
+    unsaid: texts.filter(text => /^Не сказано в истории:/m.test(text)).length, name: texts.filter(text => stripNames(text, names).removed > 0).length,
+    clothing: texts.filter(text => CLOTHES_RU.test(text)).length, changes: sheet.filter(one => one.changes?.trim()).length };
+}
 // A frame's people, those whose `who` names nobody on the sheet, and the age and skin of the looks it wrote them.
 function strangers(frame: { people?: { who?: string; look?: string }[] } | undefined, names: string[]) {
   if (!frame) return null;
@@ -107,14 +119,15 @@ function sheetCounts(root: string, id: string, attempts: Attempt[]) {
   return { event: 'sheet_counts', story: id, steps: Object.fromEntries(Object.entries(text?.steps ?? {}).map(([step, one]) =>
     [step, { outcome: one.outcome, ...(one.code ? { code: one.code } : {}), attempts: one.attempts }])),
   length: mine.filter(row => row.finish === 'length').length, tokens: { input: sum(row => row.inputTokens), output: sum(row => row.outputTokens) },
-  people: sheet.length, cast: ACTION_STORIES.find(story => story.id === id)?.cast.length ?? 0,
+  people: sheet.length, cast: ACTION_STORIES.find(story => story.id === id)?.cast.length ?? 0, descriptions: descriptions(sheet, names),
   details: tally(sheet.flatMap(one => one.details ? [one.details] : []), names),
-  look: tally(sheet.map(one => one.look), names), frame: strangers(text?.frame, names), variant: strangers(text?.variant, names) };
+  look: tally(sheet.flatMap(one => one.look ? [one.look] : []), names), frame: strangers(text?.frame, names), variant: strangers(text?.variant, names) };
 }
 
 // Round two's text run (local/action-text.ts `runTexts`) on a hosted model for a few clean stories of the action set:
 // the two scenes, the sheet, the frame and the variant, so that an instruction the model does not follow shows before
-// the text card is paid for. A sharp story, the marker check's and the owner's own never go to a hosted model
+// the text card is paid for. The retelling is not asked here: the sheet's descriptions are what this checks, and the
+// retelling is checked on them, and on descriptions a reader would write, apart from it. A sharp story, the marker check's and the owner's own never go to a hosted model
 // (docs/improve-loop.md#acceptance-on-gpu), and anything but a clean story is refused before the first request. A rerun
 // into `directory` asks only what is not there yet. True when every step of every story came back ok.
 export async function checkSheets({ ids, env, directory, ledger, fetch, print = report }: {
@@ -129,7 +142,7 @@ export async function checkSheets({ ids, env, directory, ledger, fetch, print = 
   try {
     const model = hostedModel({ env, configRoot, ledger, ...(fetch ? { fetch } : {}) });
     print({ event: 'sheet_check', directory, model: model.config.model, stories: stories.length });
-    const record = await runTexts({ root: directory, model, stories, say: event => { if ((event as { event?: string }).event === 'text_step') print(event); } });
+    const record = await runTexts({ root: directory, model, stories, retell: false, say: event => { if ((event as { event?: string }).event === 'text_step') print(event); } });
     const counts = stories.map(story => sheetCounts(directory, story.id, record.attempts));
     counts.forEach(one => print(one));
     return counts.every(one => Object.keys(one.steps).length === 5 && Object.values(one.steps).every(step => step.outcome === 'ok'));
@@ -191,9 +204,14 @@ async function main(args: string[]) {
       if (existsSync(sheetPath)) sheet = JSON.parse(readFileSync(sheetPath, 'utf8'));
       else {
         const reply = await askJson(provider, sheetRequest({ system, messages: messages(scenes.at(-1)!.id) }));
-        sheet = sheetOf(reply.value);
+        const written = sheetOf(reply.value);
+        // The details and the looks, retold from the descriptions as the bot retells them before its first frame
+        // (local/picture.ts `retellPending`); a person left without them is described in each frame as a stranger.
+        const people = written.map(one => ({ description: one.description ?? '', changes: one.changes ?? '' }));
+        const retold = people.length ? retoldOf((await askJson(provider, retellRequest(people, people.map((_, index) => index)))).value, people.length) : new Map();
+        sheet = written.flatMap((one, index) => retold.has(index) && inWords(retold.get(index)!) ? [{ ...one, ...retold.get(index)! }] : []);
         writeFileSync(sheetPath, JSON.stringify(sheet, null, 2));
-        report({ event: 'sheet_written', scenario, characters: sheet.length, retried: reply.retried });
+        report({ event: 'sheet_written', scenario, characters: written.length, retold: sheet.length, retried: reply.retried });
       }
       for (const scene of todo) {
         const node = scenes[scene.index];

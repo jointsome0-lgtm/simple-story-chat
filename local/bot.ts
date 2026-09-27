@@ -20,7 +20,8 @@ import { renderCompaction } from './compact-view.ts';
 import type { CompactionStatus } from './compact-view.ts';
 import type { GpuController } from './gpu.ts';
 import type { Illustrator, PictureRequest, PortraitRequest, SampleRequest, VariantRequest } from './picture.ts';
-import { DETAILS_CHARS, LOOK_CHARS, personAt, personTag } from './picture.ts';
+import { DESCRIPTION_CHARS, LOOK_CHARS, personAt, personTag } from './picture.ts';
+import { portraitText } from './image-portraits.ts';
 import type { Log } from './model-error.ts';
 import { errorCode, member, safeErrorDetails, unavailable } from './model-error.ts';
 import type { GenerationResult, Provider } from './model.ts';
@@ -72,9 +73,9 @@ type Plan = {
   sweep?: boolean;
   // The id of a portrait this write keeps, let go from memory once the write is committed and not before.
   portraitKept?: string;
-  // The person of a story's sheet whose details this write keeps, for their look to be compressed from them and their
-  // card shown (`compressed`).
-  compress?: { storyId: string; name: string };
+  // The person of a story's sheet whose description this write keeps, for their details and look to be retold from it
+  // and their card shown (`retold`).
+  retell?: { storyId: string; name: string };
 };
 // One reader's turn, for as long as it can still be cancelled. What it leaves behind — a picture being stopped on
 // the other card — outlives the entry and is awaited through `inFlight` instead.
@@ -101,9 +102,9 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
   const sampling = new Map<string, AbortController>();
   // One variant of a picture at a time per reader (local/picture.ts `variant`), beside that one and ended the same way.
   const varying = new Map<string, AbortController>();
-  // The looks being compressed from details readers have just written (`compressed`), as many as they wrote: each is
-  // one short call, and only the bot's stop ends one.
-  const compressing = new Set<AbortController>();
+  // The retellings of descriptions readers have just written (`retold`), as many as they wrote: each is one call, and
+  // only the bot's stop ends one.
+  const retelling = new Set<AbortController>();
   // Every turn's work, whether or not its entry is still the reader's current one: a replaced turn is aborted, and
   // what it is unwinding (the picture it had on the other card) still has to finish before the bot may stop. A sample
   // and the removal of a deletion's pictures are awaited the same way.
@@ -335,6 +336,9 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         return { screen: render(state, `${input}-input`, pictureInfo) };
       }
       if (!pictureInfo.pictures) throw refuse(t, 'portraitOff');
+      // A person of a sheet not yet retold has no text to be drawn from, and a portrait of nobody in particular would
+      // spend the picture card for nothing.
+      if (!portraitText(person).trim()) throw refuse(t, 'portraitPending');
       // Names the portrait for its keep button, so that a button of an earlier one never keeps this one.
       const candidate = randomBytes(4).toString('hex');
       return { portrait: { storyId, name: person.name, candidate, status: t.characters.drawing,
@@ -346,30 +350,34 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       if (!kept) throw refuse(t, 'portraitStale');
       return { screen: render(state, `portrait-kept:${kept.storyId}:${kept.index}`), sweep: true, portraitKept: action.slice(14) };
     }
-    // While a look or details are being written, text is that text: one line, whatever the lines it was sent in. The
-    // person is looked for again by name, since the story may be gone or its sheet written anew in the meantime.
+    // While a look or a description is being written, text is that text. A look is one line, whatever the lines it was
+    // sent in; a description keeps its lines, since a table of measurements is lines (the owner, 2026-09-27), with the
+    // spaces at their ends and the blank lines past one cut. The person is looked for again by name, since the story
+    // may be gone or its sheet written anew in the meantime.
     if ((state.ui?.input === 'look' || state.ui?.input === 'details') && !action) {
       const { input, storyId, name } = state.ui;
       const look = input === 'look';
-      const written = (text ?? '').replace(/\s+/g, ' ').trim();
+      const written = look ? (text ?? '').replace(/\s+/g, ' ').trim()
+        : (text ?? '').replace(/\r\n?/g, '\n').split('\n').map(one => one.trimEnd()).join('\n').replace(/\n{3,}/g, '\n\n').trim();
       if (!written) throw refuse(t, look ? 'lookNeedsText' : 'detailsNeedsText');
-      if ([...written].length > (look ? LOOK_CHARS : DETAILS_CHARS)) throw refuse(t, look ? 'lookTooLong' : 'detailsTooLong');
+      if ([...written].length > (look ? LOOK_CHARS : DESCRIPTION_CHARS)) throw refuse(t, look ? 'lookTooLong' : 'detailsTooLong');
       state.ui = null;
       const sheet = state.stories[storyId]?.sheet ?? [];
       const index = sheet.findIndex(one => one.name === name);
       if (index < 0) throw refuse(t, look ? 'lookGone' : 'detailsGone');
-      // The owner's design of 2026-09-26 (docs/illustrations-plan.md#portrait-details): the details are the person's
-      // text, portraits are drawn from them as written (local/image-portraits.ts `portraitText`), and the look the
-      // frames take is compressed from them. A look the reader writes overrides that one in the frames alone, until they
-      // write the details again: those clear it, and a look is compressed from them once this write is committed.
+      // The owner's design of 2026-09-27 (docs/illustrations-plan.md#three-layers): the description is the person's
+      // text, which wins over the one the sheet took from the story, and the details a portrait is drawn from and the
+      // look the frames take are retold from it (local/picture.ts `retell`). A look the reader writes overrides that one
+      // in the frames alone, and details still to be retold stay so; a description replaces the reader's look as well,
+      // and both are retold from it once this write is committed. Until then a portrait is drawn from the details retold
+      // before, while details the reader wrote before that day, which no retelling ever read, go.
       if (look) {
-        const { lookPending, ...person } = sheet[index];
-        sheet[index] = { ...person, look: written, edited: true };
+        sheet[index] = { ...sheet[index], look: written, edited: true };
         return { screen: render(state, `character:${storyId}:${index}:${personTag(name)}`, pictureInfo) };
       }
-      const { edited, ...person } = sheet[index];
-      sheet[index] = { ...person, details: written, detailsEdited: true, lookPending: true };
-      return { compress: { storyId, name } };
+      const { edited, detailsEdited, details, ...person } = sheet[index];
+      sheet[index] = { ...person, ...!detailsEdited && details ? { details } : {}, description: written, descriptionEdited: true, lookPending: true };
+      return { retell: { storyId, name } };
     }
     if (action === 'last') return { savedText: last(state) };
     if (action === 'new-seed') {
@@ -596,27 +604,28 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     return picture;
   }
 
-  // The look compressed from the details a reader has just written (local/picture.ts `compressLook`), then the person's
-  // card in place of the status line that stood meanwhile: the new look, or the word that it is still to be compressed.
-  // Only for a reader who is drawn for, and only while the language model's GPU is up, which it keeps up as a job does
-  // and never wakes; the look is otherwise compressed before the next picture of the story, and the card says so at once.
-  async function compressed(userId: string, chat: Chat, { storyId, name }: { storyId: string; name: string }, signal: AbortSignal) {
+  // The details and the look retold from the description a reader has just written (local/picture.ts `retell`), then
+  // the person's card in place of the status line that stood meanwhile: the new look, or the word that it is still to
+  // be retold. Only for a reader who is drawn for, and only while the language model's GPU is up, which it keeps up as a
+  // job does and never wakes; the two are otherwise retold before the next picture of the story, and the card says so
+  // at once.
+  async function retold(userId: string, chat: Chat, { storyId, name }: { storyId: string; name: string }, signal: AbortSignal) {
     const log = logFor(userId);
     let status: number | undefined;
-    if (!illustrator?.enabledFor(userId)) log('look_compressed', 'pictures_off', { outcome: 'skipped' });
+    if (!illustrator?.enabledFor(userId)) log('look_retold', 'pictures_off', { outcome: 'skipped' });
     else {
       let release: (() => void) | undefined;
       let held = true;
       try { release = gpu?.acquire(); }
       catch {
         held = false;
-        log('look_compressed', 'gpu_not_ready', { outcome: 'skipped' });
+        log('look_retold', 'gpu_not_ready', { outcome: 'skipped' });
       }
       if (held) {
         try {
-          try { status = (await chat.send({ text: texts(store.read(userId).language).characters.compressing }) as { message_id?: number }).message_id; }
+          try { status = (await chat.send({ text: texts(store.read(userId).language).characters.retelling }) as { message_id?: number }).message_id; }
           catch (error) { log('telegram_send_failed', errorCode(error)); }
-          await illustrator.compressLook({ userId, storyId, name, signal, log });
+          await illustrator.retell({ userId, storyId, signal, log });
         } finally { release?.(); }
       }
     }
@@ -760,15 +769,15 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
           inFlight.add(task);
         }
       }
-      // Details the reader wrote are kept whatever the model does with them, and the card that follows says what became
-      // of the look. Beside every other request of theirs: it is one short call, and their next scene waits for it.
-      if (plan.compress) {
+      // A description the reader wrote is kept whatever the model does with it, and the card that follows says what
+      // became of the look. Beside every other request of theirs: it is one call, and their next scene waits for it.
+      if (plan.retell) {
         const stop = new AbortController();
-        compressing.add(stop);
-        const task: Promise<unknown> = compressed(userId, chat, plan.compress, stop.signal)
+        retelling.add(stop);
+        const task: Promise<unknown> = retold(userId, chat, plan.retell, stop.signal)
           .catch(error => log('turn_task_failed', errorCode(error)))
           .finally(() => {
-            compressing.delete(stop);
+            retelling.delete(stop);
             inFlight.delete(task);
           });
         inFlight.add(task);
@@ -833,7 +842,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       for (const entry of running.values()) entry.controller.abort();
       for (const stop of sampling.values()) stop.abort();
       for (const stop of varying.values()) stop.abort();
-      for (const stop of compressing) stop.abort();
+      for (const stop of retelling) stop.abort();
       await this.idle();
     },
   };

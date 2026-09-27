@@ -13,15 +13,16 @@ import type { ChecklistInput, Exec, RawChecklist } from './action-judge.ts';
 // What the fake gateway does to one kind of call of one story: `unparsed` answers something that is not JSON twice,
 // `retry` once and then a valid reply, `truncated` a valid reply cut at the limit, `duplicate_roles` a variant whose
 // two participants share a role, `empty_sheet` a sheet with nobody on it, `error` a refusal whose body carries the
-// marker, which the adapter must read the code of and nothing else, and `all_viewer` a variant whose participants all
-// face the viewer, so that nobody needs a view.
-export type Fault = 'unparsed' | 'retry' | 'truncated' | 'duplicate_roles' | 'empty_sheet' | 'error' | 'all_viewer';
-export type CallKind = 'seed' | 'scene' | 'sheet' | 'frame' | 'variant';
+// marker, which the adapter must read the code of and nothing else, `all_viewer` a variant whose participants all
+// face the viewer, so that nobody needs a view, and `retold_short` a retelling that leaves its last person out.
+export type Fault = 'unparsed' | 'retry' | 'truncated' | 'duplicate_roles' | 'empty_sheet' | 'error' | 'all_viewer' | 'retold_short';
+export type CallKind = 'seed' | 'scene' | 'sheet' | 'frame' | 'variant' | 'retell';
 export type Faults = Record<string, Partial<Record<CallKind, Fault>>>;
 
 const SHARP_CAST = ['Агата', 'Богдан', 'Вацлав', 'Гелла'];
 // The kind of a call, by the instruction it ends with.
 export function kindOf(last: string): CallKind {
+  if (last.startsWith('Перескажи для художника описания')) return 'retell';
   if (last.startsWith('Придумай завязку')) return 'seed';
   if (last.includes('Составь лист внешности')) return 'sheet';
   if (last.includes('role — поле каждой записи people')) return 'variant';
@@ -48,8 +49,9 @@ export type FakeGateway = { fetch: Fetch; calls: { story: string; kind: CallKind
 
 // A gateway of contract 2 as local/serving.ts reads it: the state, the models, the count and the stream with its usage,
 // every request with the key. `stories` names each story by its seed's first line, `СИД: <title>`, which every call
-// after its seed holds, or, for a sharp seed, by its theme; `sharp` are the ids whose replies carry `marker`. The
-// title alone is not enough: the narrator's instruction holds «накопленную», and so the third theme, «плен».
+// after its seed holds, or, for a sharp seed, by its theme, and a retelling, which holds no story, by the story's id
+// the fake's sheet writes into each description; `sharp` are the ids whose replies carry `marker`. The title alone is
+// not enough: the narrator's instruction holds «накопленную», and so the third theme, «плен».
 export function fakeGateway({ key, model = 'gemma-4-31b-heretic-nvfp4', stories = fakeStories(), sharp, marker, faults = {} }: {
   key: string; model?: string; stories?: FakeStory[]; sharp: string[]; marker: string; faults?: Faults;
 }): FakeGateway {
@@ -72,7 +74,8 @@ export function fakeGateway({ key, model = 'gemma-4-31b-heretic-nvfp4', stories 
     const last = body.messages.at(-1)?.content ?? '';
     const kind = kindOf(last);
     const everything = body.messages.map(message => message.content).join('\n');
-    const story = stories.find(one => kind === 'seed' ? one.theme && last.includes(`«${one.theme}»`) : everything.includes(`СИД: ${one.title}\n`));
+    const story = stories.find(one => kind === 'seed' ? one.theme && last.includes(`«${one.theme}»`)
+      : kind === 'retell' ? last.includes(`(story ${one.id})`) : everything.includes(`СИД: ${one.title}\n`));
     const id = story?.id ?? 'unknown';
     const attempt = (seen.get(`${id}:${kind}`) ?? 0) + 1;
     seen.set(`${id}:${kind}`, attempt);
@@ -91,13 +94,18 @@ export function fakeGateway({ key, model = 'gemma-4-31b-heretic-nvfp4', stories 
     } else if (kind === 'scene') {
       text = `${people.join(', ')} стоят рядом и держат друг друга за руки, как велит сцена${secret}.`;
     } else if (kind === 'sheet') {
-      // Every person has details before the look, as the schema orders them, and more than it says: the dry run checks
-      // that the fronts are drawn from them.
-      text = JSON.stringify({ characters: fault === 'empty_sheet' ? [] : people.slice(0, 6).map((name, at) => {
-        const build = ['slim', 'broad', 'tall', 'short', 'stocky', 'wiry'][at % 6], hair = ['dark', 'fair', 'red', 'grey', 'black', 'brown'][at % 6];
-        return { name, details: `An adult of ${build} build with ${['olive', 'pale', 'dark brown', 'freckled', 'tanned', 'ruddy'][at % 6]} skin, `
-          + `long ${hair} hair tied back, a narrow face, grey eyes and a scar on the left cheek${secret}`,
-          look: `An adult of ${build} build with ${hair} hair${secret}`, outfit: `wearing a ${['blue', 'green', 'grey', 'brown', 'white', 'black'][at % 6]} tunic` };
+      // A description of each person in the story's language, with the story's id for the retelling to be told apart by.
+      text = JSON.stringify({ characters: fault === 'empty_sheet' ? [] : people.slice(0, 6).map((name, at) => ({ name,
+        description: `Взрослый человек, ${['худой', 'широкий в плечах', 'высокий', 'невысокий', 'коренастый', 'жилистый'][at % 6]}, (story ${id})${secret}`,
+        changes: '', outfit: `wearing a ${['blue', 'green', 'grey', 'brown', 'white', 'black'][at % 6]} tunic` })) });
+    } else if (kind === 'retell') {
+      // Every person asked has details, and more than the look says: the dry run checks that the fronts are drawn
+      // from them.
+      const asked = [...(/Перескажи: ([^.]*)\./.exec(last)?.[1] ?? '').matchAll(/человек (\d+)/g)].map(match => Number(match[1]));
+      text = JSON.stringify({ retold: asked.slice(0, fault === 'retold_short' ? -1 : undefined).map(person => {
+        const at = person - 1, build = ['slim', 'broad', 'tall', 'short', 'stocky', 'wiry'][at % 6], hair = ['dark', 'fair', 'red', 'grey', 'black', 'brown'][at % 6];
+        return { person, details: `An adult of ${build} build with ${['olive', 'pale', 'dark brown', 'freckled', 'tanned', 'ruddy'][at % 6]} skin, `
+          + `long ${hair} hair tied back, a narrow face, grey eyes and a scar on the left cheek${secret}`, look: `An adult of ${build} build with ${hair} hair${secret}` };
       }) });
     } else {
       const variant = kind === 'variant';

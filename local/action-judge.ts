@@ -88,7 +88,7 @@ ${ENDING}`,
 ${ENDING}`,
   pictures: `Ты оцениваешь картинки к сцене из интерактивной истории.
 
-В input.json: scene — сцена; sheet — лист персонажей (entry, name, look, outfit); ${SHOWN}; pictures — имена картинок, они лежат в этой папке и приложены.
+В input.json: scene — сцена; sheet — лист персонажей (entry, name, look, outfit и, если look их называет, proportions — пропорции тела, у каждой слова look о ней); ${SHOWN}; pictures — имена картинок, они лежат в этой папке и приложены.
 
 Для каждой картинки сначала скажи, кто есть кто: каждый участник present, absent или unsure, и где он, по его внешности и месту, прежде чем оценивать действие. Если не можешь понять, кто есть кто, отвечай unsure за этого участника, а не решай по действию.
 Потом для каждой картинки:
@@ -96,6 +96,7 @@ ${ENDING}`,
 2. mixups — есть ли путаница каждого вида: действие делает не тот участник (wrong_person), двое поменялись внешностью (swapped_looks), двое слились в одного (merged).
 3. anatomy — есть ли ошибка анатомии: лишняя или недостающая конечность, слившиеся тела, сустав, согнутый так, как он не гнётся.
 4. looks — для каждого участника, у которого есть entry: выглядит ли он так, как говорит его строка листа.
+5. proportions — для каждого участника, у записи которого есть proportions, и каждой пропорции оттуда (height — рост, build — телосложение, shoulders — плечи, bust — грудь, waist — талия, hips — бёдра, buttocks — ягодицы, legs — ноги, arms — руки), каждой отдельно: такая ли она у него на картинке, как говорят слова look о ней, yes или no; not_visible — если картинка её не показывает: она закрыта, срезана краем кадра или не видна с этой стороны.
 В mixups, anatomy и looks отвечай yes, no или unsure. Картинки можно сравнивать между собой.
 
 ${ENDING}`,
@@ -115,6 +116,7 @@ const TEXT: Schema = { type: 'string' };
 const YN: Schema = { type: 'string', enum: ['yes', 'no'] };
 const YNU: Schema = { type: 'string', enum: ['yes', 'no', 'unsure'] };
 const PRESENCE: Schema = { type: 'string', enum: ['present', 'absent', 'unsure'] };
+const SHOWN_AS: Schema = { type: 'string', enum: ['yes', 'no', 'not_visible'] };
 const strict = (properties: Record<string, Schema>): Schema => ({ type: 'object', additionalProperties: false, required: Object.keys(properties), properties });
 const each = (keys: string[], value: Schema) => strict(Object.fromEntries(keys.map(key => [key, value])));
 const list = (item: Record<string, Schema>, minItems?: number): Schema => ({ type: 'array', ...(minItems ? { minItems } : {}), items: strict(item) });
@@ -142,11 +144,14 @@ export function textSchema(input: TextInput): Schema {
     fronts: each(input.portraits.filter(one => one.front).map(one => one.entry), each(['face_hair', 'build_marks'], YNU)),
     views: each(input.portraits.filter(one => one.view).map(one => one.entry), each(['same_person', 'turned'], YNU)) });
 }
+// A participant's proportions are those their sheet line names, each asked apart.
 export function picturesSchema(input: PicturesInput): Schema {
   const people = input.checklist.participants;
+  const named = (entry: string | null) => Object.keys(input.sheet.find(line => line.entry === entry)?.proportions ?? {});
   return strict({ pictures: each(input.pictures, strict({ participants: each(people.map(one => one.id), PRESENCE),
     items: each(input.checklist.items.map(item => item.id), YNU), mixups: each([...MIXUPS], YNU), anatomy: YNU,
-    looks: each(people.filter(one => one.entry).map(one => one.id), YNU) })) });
+    looks: each(people.filter(one => one.entry).map(one => one.id), YNU),
+    proportions: strict(Object.fromEntries(people.flatMap(one => named(one.entry).length ? [[one.id, each(named(one.entry), SHOWN_AS)]] : []))) })) });
 }
 // Since 2026-09-26 the identity asks for the silhouette, the height, the build and proportions and the outline of the
 // hair, apart from the face, where round one asked for the face and the build (docs/action-experiment.md#silhouette).
@@ -160,15 +165,16 @@ function schemaTemplates(): Record<string, string> {
   return { checklist: sha256(JSON.stringify(checklistSchema(['e1']))),
     text: sha256(JSON.stringify(textSchema({ scene: '', sheet: [], checklist, shot: '', prompts: [{ id: 'q1', text: '' }],
       portraits: [{ entry: 'e1', facing: 'away', front: 'front-e1.png', view: 'view-e1.png', turn: 'away' }] }))),
-    pictures: sha256(JSON.stringify(picturesSchema({ scene: '', sheet: [], checklist, pictures: ['pic-0.png'] }))),
+    pictures: sha256(JSON.stringify(picturesSchema({ scene: '', sheet: [{ entry: 'e1', name: 'n', look: 'l', outfit: 'o', proportions: { height: 'h' } }],
+      checklist, pictures: ['pic-0.png'] }))),
     identity: sha256(JSON.stringify(identitySchema({ pictures: ['pic-0.png'], portraits: [{ entry: 'e1', handle: null, front: 'front-e1.png' }] }))) };
 }
-// What the judging is pinned to: the models, the effort, each task and each schema by its hash, and the sizes the
-// pictures are attached at.
+// What the judging is pinned to: the models, the effort, each task and each schema by its hash, the words the
+// proportions are found by, and the sizes the pictures are attached at.
 export function judgePins(): Record<string, string | number> {
   const schemas = schemaTemplates();
   return { model: JUDGE.model, fallback: JUDGE.fallback, effort: JUDGE.effort, attached: Object.values(ATTACHED).join(','),
-    referenceSize: `${SCALED.width}x${SCALED.height}`,
+    referenceSize: `${SCALED.width}x${SCALED.height}`, proportions: sha256(JSON.stringify(PROPORTIONS.map(([key, words]) => [key, words.source, words.flags]))),
     ...Object.fromEntries(Object.entries(TASKS).map(([kind, text]) => [`task.${kind}`, sha256(text)])),
     ...Object.fromEntries(Object.entries(schemas).map(([kind, hash]) => [`schema.${kind}`, hash])) };
 }
@@ -243,7 +249,7 @@ const shown = (checklist: Checklist): ShownChecklist => ({ participants: checkli
 
 // ---- The bundles ----
 
-type SheetLine = { entry: string; name: string; details?: string; look: string; outfit: string };
+type SheetLine = { entry: string; name: string; details?: string; look: string; outfit: string; proportions?: Record<string, string> };
 export type ChecklistInput = { scene: string; target: { contact: string; participants: string[]; count?: SharpPeople }; sheet: SheetLine[] };
 export type TextInput = { scene: string; sheet: SheetLine[]; checklist: ShownChecklist; shot: string; prompts: { id: string; text: string }[];
   portraits: { entry: string; facing: Facing; front?: string; view?: string; turn?: Turn }[] };
@@ -258,11 +264,37 @@ export const bundleDir = (root: string, session: Session) => join(storyDir(root,
 export const keyFile = (root: string, session: Session) => join(storyDir(root, session.story), 'keys', `${sessionName(session)}.json`);
 export const answersFile = (root: string, session: Session, owner = false) =>
   join(storyDir(root, session.story), 'answers', `${sessionName(session)}${owner ? '.owner' : ''}.json`);
+// The proportions a look may name, each asked of a picture apart since 2026-09-27: the owner asked what becomes of a
+// woman whose look and front give her large buttocks and whom a picture draws with small ones, and one question about
+// the whole look answers for the look at best. Code finds them by these words, and the pictures session is shown each
+// with the parts of the look that name it, so that it judges the look's own words; a look that names none adds no
+// question. "short" is a height before a comma, an "and", the end or a word for the person, and not before hair.
+export const PROPORTIONS: [string, RegExp][] = [
+  ['height', /\b(?:tall|petite|towering|diminutive)\b|\bshort\b(?=\s*(?:$|,|;|and\b|(?:[a-z-]+\s+)?(?:woman|man|girl|boy|adult|figure|stature|frame)\b))/i],
+  ['build', /\b(?:slender|slim|slight|lean|skinny|lanky|wiry|willowy|gaunt|frail|heavyset|stocky|sturdy|burly|bulky|stout|plump|chubby|fat|portly|curvy|voluptuous|full-figured|muscular|athletic|toned|brawny|hefty|build|built|physique)\b|\bthin\b(?!\s+(?:[a-z-]+\s+)?(?:lips|eyebrows|brows|moustache|mustache|beard|nose|face|hair|braids?|scar|glasses|mouth))/i],
+  ['shoulders', /\bshoulder(?:s|ed)?\b/i],
+  ['bust', /\b(?:bust|busty|breasts?|bosom|chest|chested)\b/i],
+  ['waist', /\bwaist(?:ed)?\b/i],
+  ['hips', /\bhip(?:s|ped)?\b/i],
+  ['buttocks', /\b(?:buttocks|backside|glutes|butt)\b/i],
+  ['legs', /\b(?:legs|legged|thighs|calves)\b/i],
+  ['arms', /\b(?:arms|armed|biceps|forearms)\b/i],
+];
+export function proportionsOf(look: string): Record<string, string> {
+  const parts = look.split(/[,;]/).map(part => part.trim()).filter(Boolean);
+  return Object.fromEntries(PROPORTIONS.flatMap(([key, words]) => {
+    const naming = parts.filter(part => words.test(part));
+    return naming.length ? [[key, naming.join('; ')]] : [];
+  }));
+}
 // The text session also gets each person's details, which their front was drawn from (image-portraits.ts
 // `portraitText`), so that it can check the skin, the face and the marks with their sides that a look leaves out; the
-// checklist and the pictures keep the look, which is what the frames were given.
-const sheetLines = (sheet: Character[], details = false): SheetLine[] => sheet.map((one, at) => ({ entry: entryId(at), name: one.name,
-  ...details && one.details?.trim() ? { details: one.details } : {}, look: one.look, outfit: one.outfit ?? '' }));
+// checklist and the pictures keep the look, which is what the frames were given, and the pictures its proportions.
+const sheetLines = (sheet: Character[], extra?: 'details' | 'proportions'): SheetLine[] => sheet.map((one, at) => {
+  const proportions = extra === 'proportions' ? proportionsOf(one.look) : {};
+  return { entry: entryId(at), name: one.name, ...extra === 'details' && one.details?.trim() ? { details: one.details } : {}, look: one.look,
+    outfit: one.outfit ?? '', ...Object.keys(proportions).length ? { proportions } : {} };
+});
 
 // The action scene as the narrator wrote it, from the story's own store.
 export function sceneOf(root: string, story: string, nodeId: string): string {
@@ -334,7 +366,7 @@ export function pictureBundles(root: string, log: (event: object) => void = () =
     const plan = readPlan(root, story.id);
     if (!checklist || !text?.worn || !text.nodeId || !plan) { skip(counts, 'no_checklist'); continue; }
     const scene = sceneOf(root, story.id, text.nodeId);
-    const sheet = sheetLines(text.worn);
+    const sheet = sheetLines(text.worn, 'proportions');
     const bound = plan.manifest && !plan.manifest.stop ? plan.manifest.bound : [];
     const fronts = bound.flatMap(one => {
       const file = drawnFile(root, draw, `front:${one.portrait}`, ATTACHED.front);
@@ -363,7 +395,7 @@ export function pictureBundles(root: string, log: (event: object) => void = () =
         ...(view ? { view: `view-${one.entry}.png`, turn: view.view.turn } : {}) };
     });
     if (prompts.length || portraits.length) {
-      const input: TextInput = { scene, sheet: sheetLines(text.worn, true), checklist: shown(checklist), shot: text.variant?.shot ?? text.frame?.shot ?? '',
+      const input: TextInput = { scene, sheet: sheetLines(text.worn, 'details'), checklist: shown(checklist), shot: text.variant?.shot ?? text.frame?.shot ?? '',
         prompts: prompts.map(({ id, text: prompt }) => ({ id, text: prompt })), portraits };
       build({ story: story.id, kind: 'text' }, input, textSchema(input),
         [...fronts.map(one => ({ name: `front-${one.entry}.png`, from: one.file.path })), ...views.map(one => ({ name: `view-${one.entry}.png`, from: one.file.path }))],

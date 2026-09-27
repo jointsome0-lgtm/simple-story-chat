@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SMOKE_PROBES, markerCheck, readClientKey, runTexts, servingModel, textStories } from './action-text.ts';
@@ -66,7 +66,7 @@ test('the sharp stories wait for a marker check without a hit, and a finished ru
   const gateway = fakeGateway({ key: 'k', sharp: ['sharp-1', 'marker'], marker: 'Зурбаганец' });
   // A route that writes what it sends to a file of the run's own level, as a leak would.
   const leaking: typeof gateway.fetch = async (url, init) => {
-    if (new URL(url).pathname === '/v1/chat/completions') writeFileSync(join(dir, 'leak.txt'), String(init.body));
+    if (new URL(url).pathname === '/v1/chat/completions') appendFileSync(join(dir, 'leak.txt'), String(init.body));
     return gateway.fetch(url, init);
   };
   let configs = 0;

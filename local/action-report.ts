@@ -21,7 +21,7 @@ import type { BundleKey, JudgingRecord, Projection, Session } from './action-jud
 
 type YNU = 'yes' | 'no' | 'unsure';
 type PictureAnswer = { participants: Record<string, 'present' | 'absent' | 'unsure'>; items: Record<string, YNU>;
-  mixups: Record<string, YNU>; anatomy: YNU; looks: Record<string, YNU> };
+  mixups: Record<string, YNU>; anatomy: YNU; looks: Record<string, YNU>; proportions?: Record<string, Record<string, 'yes' | 'no' | 'not_visible'>> };
 type IdentityAnswer = Record<string, { present: YNU; silhouette: YNU; face: YNU }>;
 type TextAnswers = { prompts: Record<string, Record<string, 'yes' | 'no'>>; facing: Record<string, YNU>;
   fronts: Record<string, { face_hair: YNU; build_marks: YNU }>; views: Record<string, { same_person: YNU; turned: YNU }> };
@@ -39,11 +39,13 @@ const points = (value: number | null | undefined) => value === null || value ===
 // are those with the subject's own body and with a thing too; the mirror items are counted apart, outside the contacts.
 // Identity counts a bound person present with the silhouette of their front, and `identityFace` the face apart, which
 // no gate reads: the owner judged on 2026-09-26 the silhouette, and what the people do, worth more than the face.
+// `proportions` is the share of the proportions the looks of the people present name that the picture shows as named,
+// each asked apart since 2026-09-27, and those it does not show left out; no gate reads it either.
 export type Score = { contacts?: number; allContacts?: boolean; gazesFaces?: number; clothes?: number; scale?: number; complete: boolean;
-  mixups: Record<string, boolean>; mixup: boolean; anatomy: boolean; looks?: number; identity?: number; identityFace?: number; shown: string[];
+  mixups: Record<string, boolean>; mixup: boolean; anatomy: boolean; looks?: number; proportions?: number; identity?: number; identityFace?: number; shown: string[];
   mirror?: { shown: number; of: number } };
-export type ScoreName = 'contacts' | 'gazesFaces' | 'clothes' | 'scale' | 'looks' | 'identity' | 'identityFace';
-export const SCORES: ScoreName[] = ['contacts', 'gazesFaces', 'clothes', 'scale', 'looks', 'identity', 'identityFace'];
+export type ScoreName = 'contacts' | 'gazesFaces' | 'clothes' | 'scale' | 'looks' | 'proportions' | 'identity' | 'identityFace';
+export const SCORES: ScoreName[] = ['contacts', 'gazesFaces', 'clothes', 'scale', 'looks', 'proportions', 'identity', 'identityFace'];
 export function scorePicture(projection: Projection, answer: PictureAnswer, identity?: IdentityAnswer): Score {
   const kind = (...kinds: string[]) => projection.items.filter(item => kinds.includes(item.kind)).map(item => item.id);
   const essential = projection.items.filter(item => item.kind === 'relation' && item.essential).map(item => item.id);
@@ -53,11 +55,13 @@ export function scorePicture(projection: Projection, answer: PictureAnswer, iden
   const mixups = Object.fromEntries(MIXUPS.map(name => [name, answer.mixups[name] !== 'no']));
   const bound = identity ? Object.keys(identity) : [];
   const mirrors = kind('mirror');
+  const shownAs = Object.entries(answer.proportions ?? {}).flatMap(([id, named]) => present(id) ? Object.values(named).filter(value => value !== 'not_visible') : []);
   return { contacts: share(essential, yes), ...(essential.length ? { allContacts: essential.every(yes) } : {}),
     ...(mirrors.length ? { mirror: { shown: mirrors.filter(yes).length, of: mirrors.length } } : {}),
     gazesFaces: share(kind('gaze', 'face'), yes), clothes: share(kind('clothes'), yes), scale: share(kind('scale'), yes),
     complete: projection.participants.every(one => present(one.id)), mixups, mixup: Object.values(mixups).some(Boolean),
     anatomy: answer.anatomy !== 'no', looks: share(sheetPeople, id => present(id) && answer.looks[id] === 'yes'),
+    proportions: shownAs.length ? shownAs.filter(value => value === 'yes').length / shownAs.length : undefined,
     identity: identity ? share(bound, entry => identity[entry].present === 'yes' && identity[entry].silhouette === 'yes') : undefined,
     identityFace: identity ? share(bound, entry => identity[entry].present === 'yes' && identity[entry].face === 'yes') : undefined,
     shown: essential.filter(yes) };
@@ -329,6 +333,9 @@ function repeatsOf(run: Run, main: Gate[], views: Parameters<typeof gatesOf>[1])
       for (const kind of MIXUPS) count('mixup', other.mixups[kind] === one.mixups[kind]);
       count('anatomy', other.anatomy === one.anatomy);
       for (const [id, value] of Object.entries(one.looks)) count('looks', other.looks[id] === value);
+      for (const [id, named] of Object.entries(one.proportions ?? {})) {
+        for (const [key, value] of Object.entries(named)) count('proportions', other.proportions?.[id]?.[key] === value);
+      }
     }
   }
   const swapped = gatesOf(scenesOf(run, ACTION_SEEDS[0], 'repeat', scenes), views, { all: 14, clean: 10 });
@@ -490,11 +497,11 @@ export function reportMarkdown(report: ActionReport): string {
   }
   lines.push('', 'Направление разниц на сиде 11: ' + report.seed11.direction.flatMap(gate => gate.clauses.map(clause =>
     `${gate.gate}/${clause.clause} ${clause.same === null ? '—' : clause.same ? 'то же' : 'обратное'}`)).join(', ') + '.', '');
-  lines.push('## Руки, сид 7', '', '| Рука | Сцен | Контакты | Все контакты | Взгляды и лица | Одежда | Масштаб | Полнота | Путаницы | Анатомия | Внешность | Сходство | Лицо |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
+  lines.push('## Руки, сид 7', '', '| Рука | Сцен | Контакты | Все контакты | Взгляды и лица | Одежда | Масштаб | Полнота | Путаницы | Анатомия | Внешность | Пропорции | Сходство | Лицо |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
   for (const [arm, one] of Object.entries(report.arms.seed7)) {
     const row = one as unknown as Record<string, number | null>;
-    lines.push(`| ${arm} | ${row.scenes} | ${points(row.contacts)} | ${row.allContacts} | ${points(row.gazesFaces)} | ${points(row.clothes)} | ${points(row.scale)} | ${row.complete} | ${row.mixups} | ${row.anatomy} | ${points(row.looks)} | ${points(row.identity)} | ${points(row.identityFace)} |`);
+    lines.push(`| ${arm} | ${row.scenes} | ${points(row.contacts)} | ${row.allContacts} | ${points(row.gazesFaces)} | ${points(row.clothes)} | ${points(row.scale)} | ${row.complete} | ${row.mixups} | ${row.anatomy} | ${points(row.looks)} | ${points(row.proportions)} | ${points(row.identity)} | ${points(row.identityFace)} |`);
   }
   const ratio = (pair: number[]) => pair[1] ? `${pair[0]} из ${pair[1]}` : '—';
   lines.push('', 'Отражение (тот же человек в той же позе; в контакты не входит), сид 7: '

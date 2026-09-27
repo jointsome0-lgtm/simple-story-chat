@@ -613,7 +613,10 @@ the variant's contract, are in [telegram-ui.md](telegram-ui.md#picture-variants)
 ## Portraits from a longer description (2026-09-26)
 
 The owner decided on 2026-09-26 that a portrait is drawn from a detailed description, which Gemma compresses into the
-short look the frames use now.
+short look the frames use now. On 2026-09-27 the owner replaced how that description is made and kept with three
+layers ([below](#three-layers)): the sheet takes each person's description from the story instead of writing English
+details and a look, and one retelling of the whole sheet writes those two. This section keeps the first design, the
+reasons for it and the measurements that set the rules the retelling now keeps.
 
 Round one of the action measurement drew its fronts from the look ([the sheet](action-experiment.md#the-sheet)). In
 `flight` both daughters, 8 and 4 in the seed, came out of the sheet as a "young girl", and their fronts drew adult
@@ -621,31 +624,38 @@ women: the sheet's rule allowed only the age words of adults (young adult, middl
 sheet's four looks named no skin tone. A look of 15 to 25 words has to serve a frame of up to four people, where every
 word of it competes with the action; a portrait holds one person and can take far more.
 
-- The sheet (`SHEET` in `local/illustrate.ts`) writes, for each person, `name`, `details`, `look` and `outfit`, in
-  that order. `details` comes before `look` in the schema's properties and in its required list, so that the model
-  writes the long description first and compresses it in the same answer, as the variant frame of the action
-  measurement relies on `role` and `facing` coming right after `who`.
-- `details` is English, 50 to 80 words, without names and without clothes, in this order: sex and age as a word,
-  with the words of children (small child, child, teenager) beside those of adults, and never a number; skin tone;
-  height and build with their proportions; hair, its colour, length, texture and style; the face, its shape, brows,
-  eyes and their colour, nose, lips, facial hair and lines; permanent marks with their place and side. What the story
-  names comes from the story, and the rest is invented once, plausibly for the story's world, so that the characters
-  differ in silhouette, hair and face.
-- `look` stays at 15 to 25 words, compressed from `details`: the same age word, skin tone, build, hair and one or two
-  marks. The frames use it as before.
-- A portrait is drawn from `details` (`portraitText` in `local/image-portraits.ts`), through the same
-  `assemblePrompt`, which cuts out names and ages given as numbers. It now cuts out every name of the sheet, since
-  the details of one person may name another. A sheet without details, as every sheet written before this one is,
-  draws its portraits from the look and is not written again for them. A kept portrait records the text it was drawn
-  from in its `look` field, and the card calls it a portrait of the earlier look once the person's text differs.
-- The details are the person's main text, and the reader may write them, up to 1000 characters and in any language.
-  Each time, one call of the language model compresses them into the look again by the sheet's rule for the look
-  (`lookRequest` in `local/illustrate.ts`): English, the sex and the age as words, numbers as words about the build,
-  nothing else the details do not say, JSON with one retry and at most 120 tokens. It runs right after the edit, so
-  that the card shows the new look and the reader can write another. If the model is off or the call fails, the
-  reader's details stay, the look is marked `lookPending` and the card says so, and it is compressed before the next
-  frame of the story, in the turn that describes it. A sheet written anew keeps the reader's details and the look
-  beside them.
+- In the first design the sheet (`SHEET` in `local/illustrate.ts`) wrote, for each person, `name`, `details`, `look`
+  and `outfit`, in that order. `details` came before `look` in the schema's properties and in its required list, so
+  that the model wrote the long description first and compressed it in the same answer, as the variant frame of the
+  action measurement relies on `role` and `facing` coming right after `who`. The retelling keeps that order.
+- `details` was English, 50 to 80 words, without names, clothes or numbers, in this order: sex and age as a word,
+  with the words of children (small child, child, teenager) beside those of adults, and never a number, the age a
+  person looks where the story says they look younger or older than their years; skin tone; height and build with
+  their proportions, a height, a weight or a measurement the story gives as a number turned into words against an
+  ordinary person of the same sex and age, a strong difference in the numbers with "very", and what the story says
+  of the body in words as strongly as it says it; hair, its colour, length, texture and usual style; the face, its
+  shape, brows, eyes and their colour, nose, lips, facial hair and lines; permanent marks with their place and side.
+  What the story named came from the story, and the rest was invented once, plausibly for the story's world, so that
+  the characters differ in silhouette, hair and face. A hairstyle that comes and goes stayed out, as injuries and
+  things in hand do.
+- `look` stayed at 15 to 25 words without numbers, compressed from `details`: the same age word, height and build
+  with each noticeable proportion in words of its own rather than one general word (curvy, voluptuous, muscular),
+  skin tone, hair and one or two marks. The frames use it as before.
+- A portrait is drawn from `details` (`portraitText` in `local/image-portraits.ts`), retold from the description since
+  2026-09-27 ([three layers](#three-layers)), through the same `assemblePrompt`, which cuts out names and ages given
+  as numbers. It now cuts out every name of the sheet, since the details of one person may name another. A sheet
+  written before 2026-09-26 had no details and drew its portraits from the look, and was not written again for them;
+  since 2026-09-27 a sheet without the story's changes, which every earlier one is, is written again by the next
+  picture. A kept portrait records the text it was drawn from in its `look` field, and the card calls it a portrait of
+  the earlier look once the person's text differs.
+- The details were also the reader's main text, up to 1000 characters in any language. Each time, one call of the
+  language model compressed them into the look again by the sheet's rule for the look (`lookRequest`), and on the
+  morning of 2026-09-27 also retold them as English details for the portrait, beside the looks of the sheet's other
+  people: prose without markup, names, clothes or numbers, JSON with one retry and at most 900 tokens, an answer with a
+  digit or a table's bar refused. It ran right after the edit, so that the card showed the new look, and before the
+  next frame where it had not. Since the three layers the reader writes the person's description instead, and the
+  retelling of the whole sheet reads it ([three layers](#three-layers)); details a reader wrote before become their
+  description.
 - The owner decided two more things on 2026-09-26. First, the portrait is drawn from the details as written, in any
   language, with no translation and no call added. Whether the image model follows a Russian description as closely
   as the same one in English is checked at the next rental by the T probe's
@@ -653,11 +663,19 @@ word of it competes with the action; a portrait holds one person and can take fa
   age given as a number in another language reaches the portrait. Second, a look the reader writes stays as an
   override (`edited`): the frames take it until the reader writes the details again, whose new look replaces it. It
   keeps the details, which portraits are still drawn from, and a sheet written anew keeps it over the model's new
-  look.
+  look. Since the three layers it stays until the reader writes the description again.
+- The owner replaced the first of those on 2026-09-27: a reader's table of measurements, drawn as written, came out
+  as lettering on the picture. What the reader writes now reaches a portrait only as the language model retells it in
+  English prose, with the look, and never as written.
 - The frame instruction and the portrait's clothes, style and pose stay as they were, but for one rule, changed the
   same day as the owner agreed: the look the frame writes of a person the sheet does not name takes the sheet's age
-  words, children's included, and the skin tone, where it allowed an adult's words only. The identity measurement's
-  recipe still draws from the look, as its run pinned it ([portrait recipe](identity-experiment.md#portrait-recipe)).
+  words, children's included, and the skin tone, where it allowed an adult's words only. Since 2026-09-27, as the
+  owner agreed, that word is the age the person looks, never their years, as in the sheet and the retelling. The sheet
+  check of that day had no one off the sheet ([its counts](action-experiment.md#sheet-check)), so the frame alone was
+  asked of the hosted `google/gemma-4-31b-it` the same day, 3 calls, on a synthetic scene whose ferryman, seventy and
+  looking forty-five, is not on the sheet of the two travellers: all three looks gave him "male", "middle-aged" and a
+  fair skin, with no digit. The identity measurement's recipe still draws from the look, as its run pinned it
+  ([portrait recipe](identity-experiment.md#portrait-recipe)).
 - The owner decided on 2026-09-26 that a height, a weight or a body's measurements the reader gives as numbers reach
   the look as words about height, build and proportions, measured against an ordinary person of the same sex and age:
   the look holds no numbers, and a frame keeps a person's build by the look and the portrait alone. Before that rule
@@ -671,19 +689,163 @@ word of it competes with the action; a portrait holds one person and can take fa
   slender man, broad-shouldered, narrow-waisted, long-legged" twice, with no age but a sex it was not given; the
   woman "slender, wide-hipped", still with the fair skin; the man of 192 cm "heavyset, broad-shouldered", still
   without "tall"; and the girl "Teenager girl". No look held a digit, and a description in words alone came out as
-  before.
+  before. A second run of the rule gave the man "tall" twice, so "tall" in two of four looks, and again a sex to the
+  table and a fair or light skin to the woman.
+- On 2026-09-27 the owner set where a height in numbers becomes a word, against an ordinary adult of the same sex and
+  age: a woman is tall from about 175 cm, so one of 170 is not, and a height the text also gives in a word keeps that
+  word. A man is tall from 188 cm, on the same step of 10 cm over an ordinary man's 178 as 175 is over an ordinary
+  woman's 165; very tall is 18 cm over (183 and 196 cm) and short 10 cm under (155 and 168 cm). `HEIGHTS` in
+  `local/illustrate.ts` gives them, with feet and inches beside the centimetres, to the retelling, as it gave them to
+  the sheet's details until the three layers. Where the sex cannot be told, the retelling named only what is unusual
+  for either sex, which left a table alone empty ([the check](#retell-check)), and since that check it compares with
+  an ordinary adult and names no sex. The same day the owner
+  allowed the retelling a sex that words about the body leave in no doubt, a beard or a bra size, never one read from
+  measurements alone, so a text with no sign of it still gives none; and kept one age word, the age the person looks
+  and never the real one, with "looks about N" left to the card test ([below](#figure-card-test)).
+- On 2026-09-27 the look's rule named what those runs still got wrong: a sex or a skin tone only where the details
+  name it outright, since measurements are not a sex and freckles not a skin tone; height with the build, and "very"
+  for a strong difference; the age a person looks where the details give both their years and that age; and the usual
+  hairstyle where it changes by the day. On the same descriptions, two samples each, and three new ones, three
+  samples each, the hosted Gemma gave the table "Tall, slender, broad-shouldered, narrow-waisted, long-legged" twice,
+  with no sex; the woman "woman, young adult, slender, wide-hipped", with no skin tone; the man of 192 cm and the man
+  of 6'4" "tall" and "very tall" in all four; a man of 52 who looks 25 "young adult" in all three, where the rule of
+  2026-09-26 gave "Middle-aged" in all three; and a boy of six "boy" in all three, where it lost his sex once and gave
+  him a fair skin his details did not name in all three. The hard case, 35 years old and looking 22, with a table of
+  ten measurements, a body described in words and a bun on busy days, came out as "Young adult woman, very large
+  breasts, narrow-waisted, wide-hipped, very fair skin, long wavy copper-red hair, green eyes, freckles on shoulders"
+  and twice close to it, with no bun and no digit in any look. Its text names no sex outright, and all three looks
+  said "woman" all the same, against the rule: the model read it from the bust, as it no longer did from the table
+  alone. None of the three kept the soft limbs without muscle, one gave "average height" and two no height at all.
+- The sheet's details and look took the same rules the same day. On a synthetic story that holds the hard case, a
+  boatman of 52 who looks 25, 196 cm and 120 kg, and a girl of seven small for her age, the sheet of 2026-09-26 put
+  the measurements as numbers into four of its six details of the two measured people, called the boatman
+  "middle-aged" in all three samples, and gave the woman's look her market-day bun in all three and a general
+  "hourglass" or "curvy" figure in place of her waist and hips. With the rules (five samples) no details held a
+  digit; the boatman was "young adult" and "very tall" in all five, and his heavy build, in all five details, reached
+  two of the five looks; the woman's look named her bust, waist and hips in all five and her bun in none, while her
+  soft limbs and rounded hips stayed in the details alone; and the girl's details kept "small for her age" in all
+  five, her looks "small and slender" or "petite". Two drafts, three samples each, show why the rules say what they
+  say: without the words for each proportion the woman's look was "tall and very voluptuous" or "very curvy with
+  very large breasts" in two of three, and with "very" for any strong difference, not only in numbers, the girl was
+  "very small" or "very short" in both her details and her look in two of three. The woman of 170 cm came out "tall"
+  in all five sheet looks, where the rule for the look alone gave her "average height" once and no height twice: a
+  height near the border goes either way. Round two's pins change with it
+  ([the sheet](action-experiment.md#the-sheet)). The retelling of a reader's details took these rules for one
+  person, and those of the rule above on the sex, the skin and the age ([asked of a model](#retell-check)); since the
+  three layers it takes them for the whole sheet. The sheet check was asked again on these rules on 2026-09-27
+  ([its counts](action-experiment.md#sheet-check)).
+- Two people of one story whom the reader describes alike (a mother and daughter, both very fair, tall, curvy,
+  young-looking, with very light hair: the owner's concern of 2026-09-27) would each be compressed on their own into
+  much the same look, and a frame holding both could not tell them apart. The retelling therefore saw the looks of
+  the sheet's other people, and since the three layers sees their descriptions too, and names, right after the sex and
+  the age, what tells this person apart from one they resemble, and a look is the same words in every frame. It takes
+  that from the texts alone: where the texts do not differ, neither do the looks, and the reader's note on the card
+  asks for what tells a person apart from afar, such as a hairstyle of their own, which the look keeps as the usual
+  one. Since the check below, it asks for what the others lack, in the order hair, height, skin, marks, and for what
+  they share after that, in words about this person alone. Whether a frame keeps two such people apart is not
+  measured.
+<a id='retell-check'></a>
+- The retelling was asked of the hosted `google/gemma-4-31b-it` on 2026-09-27, through the bot's adapter and without
+  a story, as the card asks it: six synthetic descriptions, three samples each, 18 calls. They were the hard case
+  above; a look-alike of nineteen, 176 cm, as fair, with the same narrow waist and wide hips but a small bust, soft
+  arms and straight light red-golden hair always in a high ponytail, who saw the hard case's look as the sheet wrote
+  it ("Young adult female, tall, very large bust, very narrow waist, very wide hips, fair skin, long copper-red hair"),
+  while the hard case saw the look-alike's new look; the table of eight measurements with no sex, age or words; the
+  boy of six; the man of 52 who looks 25; and the man of 6'4". No answer held a digit or a bar, the table got no sex
+  or age, and every age was the one looked. The hard case was a woman by her bust in all three, as the owner now
+  allows, not tall, and her soft limbs stayed in all three retellings; the look-alike was tall in all three, as the
+  heights say. But the table came back with both fields empty all three times (`look_missing`), the boy was a "small
+  child" with no word of his sex all three times and once got a fair skin, and the man of 6'4" was "very tall" all
+  three times where the heights make him tall. Of the pair, the look-alike led with "tall" all three times, which the
+  look she saw said too, and her small bust reached none of her looks; the hard case led with her bust once, with her
+  narrow waist, which the look-alike's look had too, once, and once with "unlike the other woman she is not tall", a
+  look of 31 words that names another person.
+  - Revised once, as the check's rules allowed, the text asks for the sex and the age as two words, says that an age
+    word is not a sex and fair hair not a skin tone, gives the heights in feet and inches too, says that details and a
+    look are never empty, and asks the look-alike rule for what the others' looks lack. The failing cases were asked
+    again, 9 calls: the boy was a "boy child" twice with no skin, the man of 6'4" "tall", and the hard case led with
+    her "copper-red wavy hair" twice with no comparison, but the look-alike still led with "tall" twice. The table
+    came back empty once and as "A person with broad shoulders and a narrow waist" once. The retellings grew terse,
+    43 to 46 words where the first text wrote 58 to 77 for the same two women, opening with "Woman young adult"; the
+    hard case lost her soft limbs in both, the look-alike her small bust and soft arms in both, and the man of 6'4",
+    in 11 words of details, the tattoo his look kept.
+  - So each pair's two looks led with different traits (four of four after the revision, four of six before), but
+    the rule's own ask, what the other's look lacks, was met by the hard case alone. A table with no sex, age or words
+    could still leave a person's look pending before every frame, and the revision that fixed the boy and the heights
+    made the retelling lose the build it was made to keep. The replies are synthetic and kept outside the repository.
+  - The retelling of the three layers keeps what that revision fixed and changes what it broke or left failing: the
+    sex and the age as one ordinary phrase ("a young adult woman"), where two words each of its own gave "Woman young
+    adult"; the build with arms and legs named, soft or muscled; a table alone put into words, compared with an
+    ordinary adult where the sex cannot be told; people alike led by what the others lack, hair first; and the scale
+    of words kept within one sex and one age group ([three layers](#three-layers)).
+- The retelling of the three layers was checked on 2026-09-27 on the hosted `google/gemma-4-31b-it`, through the bot's
+  adapter, 16 calls: the descriptions the sheet check took from `gym`, three samples, `huddle`, two, and `flight`, one
+  ([the sheet check](action-experiment.md#sheet-check)); one of `gym`'s two sevens rewritten as a reader would, in
+  English and partly a table, asked alone beside the others' looks, two; the six descriptions of the first check as
+  one sheet, three; the hard case and the look-alike each on a sheet of her own, one each, for the card test's pair;
+  and a woman whose build is only «фигура как у Грейс Ховард из Zenless Zone Zero», three. `flight`'s call went out
+  with nobody on it, since the script read the sheet of a run a provider failure had stopped, and `flight` was asked
+  with the revision below. No answer held a digit, a name, a comparison or a person left out, and no child got a word
+  for the bust, the hips or the buttocks.
+  - It passed where the two sevens got the same words in all three samples, and the reader's seven the words of the
+    sheet's, twice, led by her braid; where `huddle`'s women were young adult and tall, the mother's bust a step above
+    the daughter's and the daughter's hips a step above the mother's, both led by their hair, and Рустам short and
+    heavyset with no beard; where the man of 52 who looks 25 was young adult; where the hard case kept her soft limbs
+    and no "tall" and the look-alike her small bust in her details, both led by their hair, in details of 64 to 69
+    words; and where the named figure's name reached no look and no details.
+  - It failed where the size 6 got a stronger bust word than the sevens in two samples of three ("extremely large"
+    over "very large") and the size 8 two intensifiers in all three ("extremely very large"), so that the sizes came
+    out in order once; where the size 6's «очень широкие бёдра и очень большие ягодицы» became "extremely" once; where
+    the man of 194 cm and the man of 6'4" were "very tall" in all five, though the heights make them tall; where the
+    table alone was "a man" in all three, a sex read from measurements; and where the boy of six was "a small child"
+    with no word of his sex in all three.
+  - Revised once, as the check's rules allow: the people are put in order by a measure before its words are given, on
+    a ladder of small, medium, large, very large, extremely large and huge, one intensifier a word; «очень» is very and
+    not extremely; each height word's range is closed at both ends; a child's age word takes the sex word after it ("a
+    small child, a boy"); no measurements give a sex however male or female they seem, and details and a look with no
+    sex open with "a person". The failing cases were asked again, with `flight`, 9 calls. The busts were large, very
+    large, very large and extremely large in all three samples, so the sizes 6, 7, 7 and 8 came out apart and in
+    order, with no collapse into one word and no "huge"; the hips and buttocks kept the story's words; both tall men
+    were tall in all five; the table opened with "A person" in all three, with no age; the boy was "a small child, a
+    boy" in all three, with no skin; and `flight`'s daughters were "a child, a girl" and "a small child, a girl", with
+    the skin tones of the sheet's line and no word for the bust, the hips or the buttocks. The reader's seven, the pair
+    and the named figure were not asked again.
+  - What the revision lost or left: the bust became "chest" in two samples of `gym` of three and in one of `huddle` of
+    two, a word the image model may take for a man's; the boy's "small for his age" reached none of his three
+    retellings, where the first text gave him "short" in all three; the man of 179 cm was "tall" once; `gym`'s women
+    were "slender", which their descriptions do not say in words, in the details of all three; and the hard case, 72 kg
+    at 170 cm, was "heavyset" in all three, as in two of the first text's three on the same sheet, where on a sheet of
+    her own she was "slender". The named figure came out in all three as a tall woman with broad shoulders, a large or
+    very large bust, a narrow waist, wide hips and large buttocks, a build the description does not give in words: the
+    model put a guess at the character's figure in place of the name. The replies are synthetic and kept outside the
+    repository.
+- How long a portrait's text may be. The pinned ComfyUI 73c9bad4 cuts none of it: Qwen-Image 2.1's tokenizer has a
+  `max_length` of 99999999 and no padding to it (`comfy/text_encoders/qwen3vl.py`, line 151), the tokenizer of
+  `comfy/sd1_clip.py` splits a text into batches only past that length (lines 572-674), the encoder drops the
+  template's system turn and, unless it is asked to keep them, the pictures' placeholders
+  (`comfy/text_encoders/qwen_image21.py`, lines 47-72), and the model numbers every text token it is given
+  (`comfy/ldm/qwen_image21/model.py`, lines 265-278). The 512 tokens often quoted for Qwen-Image are the default
+  `max_sequence_length` of diffusers' pipeline for the original Qwen-Image, which cuts there and allows up to 1024;
+  diffusers' Qwen-Image 2.1 pipeline cuts nothing. Whether the model follows the end of a long text as well as its
+  start is not measured. A retelling of at most 200 words, as its rule asks, is at most about 270 of the encoder's
+  tokens (150 words of the sheet's English took 205), so a portrait's prompt with its pose, clothes and style (102
+  tokens) stays under those 512. The reader's own text never reaches the image model now, so it is limited in
+  characters alone, `DESCRIPTION_CHARS` in `local/picture.ts`, 1800, and the characters' card's room for it is given
+  under [three layers](#three-layers). Until 2026-09-27 the limit was 1000 characters, drawn as written:
+  about 230 tokens of English, 430 of Russian and 880 of Japanese. The hard case is 684 characters and 303 tokens,
+  and its portrait as written 413 tokens as the encoder takes it.
 
 The sheet had the frames' limit of 900 tokens. A synthetic reply of six people at the top of every word range, counted
-by Gemma 4's tokenizer (`local/tokenizer.ts`), takes 1102 tokens as compact JSON and 1225 indented, where the sheet
-before this took 450 and 555 at the top of its own ranges. With a quarter more words than the ranges allow it takes
-1341 and 1464, and with half more, 1570 and 1693. The details cost about 106 tokens a person, 1.32 tokens a word. So the sheet has a limit of
-its own, `SHEET_TOKENS`, 1800 as the variant frame has, and the frame keeps 900. A reply that runs away into newlines
-still gets its one retry, and now runs up to twice as long before it. The estimate that lets a description far from
-the end of the context skip the server's count (`trusted` in `local/picture.ts`) leaves room for those 1800 tokens
-of answer.
+by Gemma 4's tokenizer (`local/tokenizer.ts`), took 1102 tokens as compact JSON and 1225 indented, where the sheet
+before the details took 450 and 555 at the top of its own ranges. With a quarter more words than the ranges allow it
+took 1341 and 1464, and with half more, 1570 and 1693. The details cost about 106 tokens a person, 1.32 tokens a word.
+So the sheet got a limit of its own, `SHEET_TOKENS`, 1800 as the variant frame has, and the frame kept 900; since the
+three layers it is 3600 ([three layers](#three-layers)). A reply that runs away into newlines still gets its one
+retry, and runs that much longer before it. The estimate that lets a description far from the end of the context skip
+the server's count (`trusted` in `local/picture.ts`) leaves room for the answer's limit, whichever it is.
 
-Round two of the action measurement draws its fronts from the details, and the new instruction changes its pins
-([the sheet](action-experiment.md#the-sheet)).
+Round two of the action measurement draws its fronts from the details, retold since the three layers, and each new
+instruction changes its pins ([the sheet](action-experiment.md#the-sheet)).
 
 The bot's style line changed the same day, as the owner agreed: `STYLE` in `local/illustrate.ts`, the `novel` preset,
 asks for "Naturalistic facial proportions true to each person's age" where it asked for "Naturalistic adult facial
@@ -693,6 +855,179 @@ two's pins; the T probe keeps round one's line, to set its variants beside round
 `graphic` and `watercolor` presets asked for adult faces or anatomy for the same reason and now ask for anatomy and
 proportions true to each person's age (`local/picture-style.ts`); `semi` names no age and stays as the owner approved
 it.
+
+<a id='three-layers'></a>
+
+## Three layers of a person's appearance (2026-09-27)
+
+The owner decided on 2026-09-27 that each person of a story's sheet has three layers of appearance, made along one
+path whether the reader writes the first or the sheet takes it from the story:
+
+1. `description`: the person's whole appearance, in any language and form, with its line breaks and tables, up to
+   1800 characters (`DESCRIPTION_CHARS` in `local/picture.ts`). The sheet takes it from the story, or the reader writes
+   it on the characters' card, and the reader's wins. It never reaches the image model.
+2. `details`: English prose for the portrait, at most 200 words, retold from the description and the story's changes.
+3. `look`: 15 to 25 words for the frames, retold with the details. The reader may still write it, up to 400
+   characters (`LOOK_CHARS`), and a description written later replaces it.
+
+A portrait is drawn from the details (`portraitText` in `local/image-portraits.ts`), and `assemblePrompt` puts the
+look into each frame, as before.
+
+**The sheet takes the descriptions from the story.** `SHEET` in `local/illustrate.ts` asks for each person's `name`,
+`description`, `changes` and `outfit`. The description is everything the story says of the person's lasting
+appearance, as detailed as the story gives it and at most 150 words: the sex, the age and the age the person looks,
+the skin, the height and build, the measurements, the hair and its usual style, the face, and the permanent marks with
+their place and side. Numbers, measurements and tables go in as the story writes them, and words about the body as
+strongly as it says them, with no name and no clothes, and the appearance is the one the story leaves by its last
+scene. It is in the story's language: the reader reads it on the card and writes over it there, and the story's own
+numbers and words are put into English once, by the retelling, rather than rounded or reworded by the sheet first.
+
+Where the story is silent on the sex, the age a person looks, the skin, the height and build, the hair or the face,
+the sheet still chooses, once, plausibly for the story's world and so that the people of the sheet differ in
+silhouette, hair and face, and writes the choice as the description's last line, which starts «Не сказано в истории:»
+in the story's language. The look of the first design made the same choice once, and every frame repeated it. The
+line keeps that, since the choice is now part of the text every retelling reads, and it shows the reader which part of
+the description the story never said.
+
+`changes` is one line in the story's language: the lasting changes of appearance the story made (a scar, a new
+haircut, a shaved head, dyed hair, a tattoo), which the description holds already, empty when there are none. Wounds
+and bandages that heal, dirt, wet hair, things in hand and a hairstyle for one day stay out of both, as clothes do:
+they are the frame's to say, scene by scene. The changes are what the story adds on top of a description the reader
+wrote. The retelling reads the two together, and where they disagree the description wins (the owner, 2026-09-27).
+The card shows the changes under the description, and only the story makes them.
+
+A synthetic reply of six people with descriptions of 150 Russian words, changes of 20 and outfits of 20, counted by
+Gemma 4's tokenizer, took 2494 tokens as compact JSON and 2634 indented, and with descriptions of 200 words 3342
+indented, so the sheet's limit is 3600 tokens (`SHEET_TOKENS`).
+
+**One retelling for the whole sheet.** `RETELL` and `retellRequest` in `local/illustrate.ts` make one call, with no
+story, for everybody on the sheet still to be retold (`lookPending`). Each person is numbered, never named, and shown
+with their description, the story's changes and, for somebody not asked this time, the look they have. The answer
+gives each person asked `details` and then `look`, in that order in the schema, so that the long text is written
+first and the look compressed from it. The rules are those the first design's checks set (above): numbers as words,
+heights by `HEIGHTS`, the age a person looks as one age word, a sex only where the text names it or words about the
+body leave no doubt, a skin tone only where the text names it, the usual hairstyle, and each noticeable proportion in
+words of its own. Two rules need the whole sheet in view:
+
+- Graded words (the owner, 2026-09-27). One measure of people of the same sex and age group is given in the words of
+  one absolute scale across the sheet: the same size in the same word, one size more in the next word up ("large",
+  "very large", "extremely large"), and never a comparison ("larger than hers", "the largest"), since a look is the
+  same words in every frame, beside different people each time. A look carries the word and not the number behind it,
+  so other people's looks alone cannot keep that scale, and their descriptions can. Since the check, the retelling
+  puts the people in order by the measure before it gives the words, on one ladder (small, medium, large, very large,
+  extremely large, huge) with one intensifier a word: without that a size 6 got a stronger word than two sevens, and
+  with it `gym`'s four got large, very large, very large and extremely large ([the check](#retell-check)).
+- People alike. Right after the sex and the age, each look names what the people it resembles lack, in the order
+  hair, height, skin, marks, and what they share, proportions included, after that.
+
+A child or a teenager gets no word for the bust, the hips or the buttocks, in the details or the look, even where the
+description has one: their build is their height, how thin or plump they are, their shoulders, arms and legs. The
+proportions the rule lists for everybody name those three, so the rule is said apart, and since 2026-09-27, before the
+second check ran, a hit fails the sheet's check and the retelling's; neither had one. The sheet's description leaves
+them out for a child as well, and so does the look a frame writes of somebody the sheet does not name. The age word is
+the age a person looks, so an adult described as looking a teenager loses them too.
+
+One call for the sheet, rather than one per person as the reader's details had: two women of the same size 7 retold in
+two calls get whatever word each call picks, and neither call sees the other's number, while one call sees every
+number at once. It is also one call per sheet written instead of one per person. An answer with a digit or a table's
+bar in a person's details or look is refused for that person (`inWords`), and a person it leaves out stays to be
+retold. The limit is 200 tokens and 500 more for each person asked (`RETELL_TOKENS`): details of 200 words and a look
+of 25 came to 295 tokens of Gemma 4's tokenizer as compact JSON and 321 indented for one person, and to 1861 indented
+for six. One call answers for six people at most, as many as the sheet the model writes, and the rest of a sheet made
+longer by the reader's own people wait for the next.
+
+**When people are retold** (`retellPending` in `local/picture.ts`):
+
+- The reader writes a description: that person is retold at once, beside everybody else's description and look, so
+  that the card shows the new look (`retell`, the row `look_retold`). The description replaces the reader's own look,
+  if they wrote one.
+- The sheet is written, or written anew: everybody on it is retold before the frame, in the turn that describes it
+  (the row `picture_look_retold`). A sheet written anew keeps the reader's description, their own look and the portrait
+  they kept (`rewrittenSheet`).
+- A sheet from before the three layers has no changes, and the next picture writes it anew. Details a reader wrote
+  before become their description, and until that rewrite a sheet's details stand in for its descriptions
+  (`descriptionOf`).
+- If the model is off or the call fails, the descriptions stay, the people wait as `lookPending` and the card says so,
+  a portrait is drawn from the look meanwhile, and they are retold before the next frame. A person left without a look
+  is described in that frame as somebody the sheet does not name.
+
+**Order and cost.** A story's first picture waits for the sheet, the retelling and the frame, one after another. The
+sheet and the frame continue the scene's own request, so a server with a prefix cache pays for their instructions
+alone. The retelling carries no story, so on a llama.cpp server with one slot the frame after it reads the story's
+prefix once more: one more prefill of the story for each sheet written. A reader's edit costs no prefill of the
+story, since it runs apart from the frames.
+
+**The card** ([telegram-ui.md](telegram-ui.md#characters)) edits the description and counts it in characters alone,
+shows the changes under it, and gives the look and the clothes their tokens as before. The details are folded under
+each portrait drawn from them, with their tokens as the picture model reads them. Beside a name of 60 characters, a
+look of 400 and clothes of 300, the card in English has room for 1849 characters of description with no changes and
+for 1653 with changes of 150, and in Russian for 1994 and 1805. A longer card loses its last lines to the clip, the
+note on the portrait first, never the description, which comes first.
+
+**Limits, measured or not:**
+
+- A reader's own look has no limit but its 400 characters (the owner, 2026-09-27). Looks over 25 words are not
+  measured: round one's were 15 to 25 words, and in a frame of four, where each look comes before its person's action
+  (`assemblePrompt`), a longer one may crowd the action out. The card gives no hint of it.
+- A lasting change the story makes after the sheet was written reaches the sheet only when the sheet is written anew,
+  which happens to an older sheet and never by itself. A cheap way, not built: the frame, which reads each new scene
+  anyway, could name a lasting change of a person on the sheet in a field of its own, and the bot would then write the
+  sheet anew before the next frame.
+- The reader's description wins over a change the story makes later: a braid the reader described stays after the
+  story cuts it, until the reader writes the description again.
+- A sheet is the story's, not a branch's: a change taken from one branch reaches the pictures of every branch.
+- Whether the graded words reach a picture as grades, and whether two people alike stay apart in one frame, is the
+  card test's to show ([below](#figure-card-test)).
+
+<a id='figure-card-test'></a>
+
+### The card test at the next rental (plan, 2026-09-27)
+
+The owner agreed on 2026-09-27 that the next rental's plan holds this test. It is a plan only and rents nothing. It
+asks what no text check can: whether Qwen-Image 2.1 draws the words of a build as proportions or averages them, whether
+a kept front as a reference keeps the build where the words alone do not, whether two alike people stay apart in one
+frame, whether "looks about N" moves the age a person looks, whether graded words keep four figures apart, and what a
+game character named for a figure does. Its texts are synthetic and fixed before the rental: the hard case and its
+look-alike of the [retelling check](#retell-check) stand for a reader's descriptions, and the four women of `gym`
+([the set](action-experiment.md#the-set)) for a sheet the story wrote. The retold texts are the check's: the hard
+case's details and look, and the pair's looks with each other in view, from the revised text's first sample of the six
+people; the pair's looks without, from the first text; and `gym`'s looks from the revised text's second sample, the one
+of three that says "breasts" where the other two say "chest". The scenes are written by hand. Every picture is drawn by
+the bot's model and recipe, not the pilot's few-step pass.
+
+- 4 fronts: the hard case drawn from its English retelling and from its table as written, seeds 7 and 11. The test
+  stops here if no retold front keeps the build.
+- 12 frames: three fixed synthetic scenes (a market stall, carrying crates, sweeping a porch), in clothes unlike the
+  portrait's, two seeds each, from the look's words alone and from the words with the kept front as a C reference. The
+  reference goes forward only if it keeps the build in 6 of 6 where the words alone do not.
+- 4 frames: the hard case and the look-alike in one frame, two seeds, from looks retold without the other in view
+  and with her. The rule stays if it tells them apart in 2 of 2 where they merge without it. The looks without her
+  were each retold on a sheet of her own, two calls of the check's first text.
+- 2 fronts, the owner's arm of 2026-09-27: the hard case's retelling with "looks about 22" after its one age word
+  (young adult), seeds 7 and 11, beside the retold fronts above, which are the same prompt without it. N is the age the
+  person looks, never their years (35 here), and the arm asks which front reads closer to 22.
+- 4 frames, the owner's arm of 2026-09-27 on graded words: the four women of `gym` in one frame, seeds 7 and 11, from
+  `gym`'s variant frame of the sheet check with their retold looks, once as it is and once with the order stated
+  outright after the looks ("from left to right, each woman's bust is larger than the last, the middle two alike"), the
+  women placed in that order, the one the frame lists them in. It asks whether the absolute words alone keep the sizes
+  6, 7, 7 and 8 apart, and whether the stated order does where they do not; the hips and buttocks, graded the other way,
+  stay in the looks of both.
+- 8 pictures, the owner's arm of 2026-09-27 on a named figure: one synthetic woman's front by the portrait recipe
+  (`portraitPrompt`), from her words alone and from the same words with "with a figure like Grace Howard from Zenless
+  Zone Zero", seeds 7, 11 and 13; and the `gym` frame above with that phrase added to one woman's look alone, seeds 7
+  and 11. It asks whether the figure moves toward the character's, and whether her face, hair or clothes come with
+  it. A page like the pilot's `turbo.html` puts each pair side by side. In the retelling's check the language model
+  put a guess at the figure in place of the name ([the check](#retell-check)), so the name reaches the image model
+  only in a look a reader writes in English.
+
+That is 34 pictures, 12 fronts, 16 frames from words and 6 with a reference, about 4 minutes warm at the pilot's times
+with Triton (a front 6.4 s, a frame 6.1 s, a frame with a reference about 7 s by estimate) and 6 to 9 minutes with the
+start. Which pictures keep the build, tell the two apart, read closer to 22, keep the four figures in their order or
+move toward the character is for the owner's eye, as the T probe's are. Everything in it stays clean: sportswear and
+ordinary training, and neutral words for the body. It is drawn whole and read after: the 12 fronts first, since the
+frames with a reference need the kept front, which is fixed before the card as the retold front at seed 7; then the 16
+frames from words; then the 6 with the reference. A gate above that fails is read from the page, and the pictures after
+it are not judged.
 
 <a id='blind-review'></a>
 

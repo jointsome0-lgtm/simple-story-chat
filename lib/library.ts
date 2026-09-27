@@ -34,7 +34,7 @@ export type Checkpoint = { id: string; branchId: string; label: string; kind: st
 // A portrait of one person of a sheet that the reader kept to pick a reference by (local/picture.ts): the name of its
 // file among the reader's portraits beside the database (local/store.ts), never the picture itself, and how it was
 // drawn — its recipe, on a canvas of its own, the text of the person it was drawn from as `look` (their `details` or
-// their look, `portraitText` in local/image-portraits.ts), which an edit of that text no longer matches, and the
+// their look, `portraitText` in local/image-portraits.ts), which a new text of theirs no longer matches, and the
 // clothes and the style line of its prompt. Frames never use it.
 export type KeptPortrait = PictureRecipe & { file: string; look: string; clothes: string; style: string; at: number };
 export type Story = {
@@ -44,13 +44,17 @@ export type Story = {
   // the story's own history and kept beside its memory (docs/illustrations-plan.md#step-3), and the clothes they
   // wore when it was written. A sheet without `outfit` is older and had clothes in `look`; the next picture writes it
   // again. Only the local bot writes it, and only when pictures are switched on; a story without pictures never has it.
-  // `details`, the long description the look is compressed from and portraits are drawn from, is in a sheet written
-  // since 2026-09-26. `detailsEdited` marks details the reader wrote themselves, into any sheet, since that day; the
-  // look is then compressed from them again, and `lookPending` marks one not compressed yet. `edited` marks a look the
-  // reader wrote themselves, which the frames take until the reader writes the details again. That rewrite keeps all
-  // of these (local/picture.ts `rewrittenSheet`).
-  sheet?: { name: string; details?: string; look: string; outfit?: string; edited?: boolean; detailsEdited?: boolean;
-    lookPending?: boolean; portrait?: KeptPortrait }[];
+  // Since 2026-09-27 a person has three layers of appearance (docs/illustrations-plan.md#three-layers): `description`,
+  // the whole text in any language and form, which the sheet takes from the story with the lasting `changes` the story
+  // made beside it, and `descriptionEdited` marks one the reader wrote, which wins over the story's; `details`, the
+  // English prose a portrait is drawn from, and `look`, which the frames take, are retold from those two, and
+  // `lookPending` marks a person still to be retold. `edited` marks a look the reader wrote themselves, which the frames
+  // take until the reader writes the description again. A sheet without `changes` is older and is written again by the
+  // next picture as well: in one written from 2026-09-26, `details` were the sheet's own or, with `detailsEdited`, the
+  // reader's, and the look was compressed from them. That rewrite keeps what the reader wrote and the portrait they kept
+  // (local/picture.ts `rewrittenSheet`).
+  sheet?: { name: string; description?: string; changes?: string; details?: string; look: string; outfit?: string;
+    descriptionEdited?: boolean; edited?: boolean; lookPending?: boolean; detailsEdited?: boolean; portrait?: KeptPortrait }[];
 };
 export type Job = {
   id: string; storyId: string; branchId: string; head: string | null; memory: string | null; input: string; started: number;

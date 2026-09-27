@@ -18,7 +18,7 @@ function readyRun(root: string, id: string) {
   const ok = { outcome: 'ok' as const, attempts: 1, ms: 1 };
   const sheet = ['Бранд', 'Лиэль'].map((name, at) => ({ name, look: `An adult with hair ${at}`, outfit: `a tunic ${at}` }));
   const scene = { moment: 'They hold on', shot: 'Medium wide shot', setting: 'A room', objects: '', props: '', light: 'Evening' };
-  const text: StoryText = { id, pins: '', steps: { opening: ok, action: ok, sheet: ok, frame: ok, variant: ok }, sheet, worn: sheet,
+  const text: StoryText = { id, pins: '', steps: { opening: ok, action: ok, sheet: ok, frame: ok, variant: ok, retell: ok }, sheet, worn: sheet,
     frame: { ...scene, people: sheet.map(one => ({ who: one.name, look: '', clothes: '', state: '', action: 'holds on' })) },
     variant: { ...scene, people: sheet.map((one, at) => ({ who: one.name, role: `the holder ${at}`, facing: 'viewer' as const, look: '', clothes: '', state: '', action: 'holds on' })) } };
   mkdirSync(storyDir(root, id), { recursive: true });

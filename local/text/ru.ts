@@ -224,54 +224,62 @@ export const ru = {
     none: 'Персонажи появятся в истории после первой иллюстрации.',
     toStory: '📖 К истории',
     cardTitle: (person: string, story: string) => `👤 ${person} · ${story}`,
-    // The look the pictures of the scenes take, compressed from the detailed look below or written by the reader.
+    // The look the pictures of the scenes take, retold from the description above or written by the reader.
     look: 'Короткая внешность для картинок к сценам (нажми, чтобы скопировать):',
     // The size of the text above, alone: `tokens` as the picture model reads it, null when the bot has no tokenizer.
     lookSize: (tokens: number | null, chars: number) => textSize('Текст короткой внешности', tokens, chars),
-    // Under the look the reader wrote themselves: it stays until they write the detailed look again.
-    lookOwn: '✍️ Это твой текст. Картинки к сценам берут его, пока ты не изменишь подробную внешность: тогда короткую снова сожмут из неё.',
-    // Under a look not compressed yet from the detailed look the reader wrote: the model was off, or its answer failed.
-    lookPending: '⏳ Подробная внешность сохранена, но короткую из неё ещё не сжали, и картинки к сценам пока берут прежнюю. Бот сожмёт её перед следующей картинкой этой истории.',
-    // Only for a person who has a detailed look, the person's main text, above the look; its size as lookSize.
-    details: 'Подробная внешность, по ней рисуется портрет (нажми, чтобы скопировать):',
-    detailsSize: (tokens: number | null, chars: number) => textSize('Текст подробной внешности', tokens, chars),
+    // Under the look the reader wrote themselves: it stays until they write the description again.
+    lookOwn: '✍️ Это твой текст. Картинки к сценам берут его, пока ты не изменишь описание: тогда короткую внешность снова перескажут из него.',
+    // Under a person not retold yet from the description the reader wrote, or from the sheet just written: the model
+    // was off, or its answer failed.
+    lookPending: '⏳ Описание сохранено, но бот ещё не пересказал его для картинок, и картинки к сценам и портрет пока берут прежнюю внешность. Бот перескажет его перед следующей картинкой этой истории.',
+    // The person's description, the main text of the card, above the look: `own` is true for one the reader wrote,
+    // false for the one the sheet took from the story. Its size in characters alone: the picture model reads the text
+    // a portrait is drawn from, which is under the portrait with its tokens (drawnFrom).
+    description: (own: boolean): string => own ? 'Описание внешности, твоё (нажми, чтобы скопировать):' : 'Описание внешности из истории (нажми, чтобы скопировать):',
+    descriptionSize: (chars: number) => `Текст описания: ${grouped(chars, ' ')} ${form(chars, 'знак', 'знака', 'знаков')}`,
+    // Above the lasting changes the story made to the person's look, a scar or a haircut, in the story's language.
+    changes: 'Постоянные перемены по ходу истории:',
     // `branch` is the quoted name of the branch being played.
     clothesOfBranch: (branch: string) => `Одежда на последней картинке ветки ${branch}:`,
     clothesAtStart: 'Одежда, с которой начались картинки этой истории:',
     clothesSize: (tokens: number | null, chars: number) => textSize('Текст одежды', tokens, chars),
     noClothes: 'Одежда пока не записана.',
     clothesNote: 'Одежду здесь не правят: её меняет сама история, и картинки берут её из сцен.',
-    sizeNote: 'Числа относятся к каждому тексту отдельно. В промпт также входят описание сцены и стиль; точный размер указан под картинкой.',
+    sizeNote: 'Числа относятся к каждому тексту отдельно. В промпт также входят описание сцены и стиль; точный размер указан под картинкой. Само описание модель картинок не читает: портрет рисуется по его пересказу по-английски, и тот с числом токенов свёрнут под портретом.',
     scope: 'Правка внешности действует на следующие картинки всех веток этой истории. Текст истории, память и уже нарисованные картинки не меняются, а картинка, которая рисуется сейчас, может выйти по-старому.',
-    // What a portrait is drawn from: `details` is true for the detailed look shown on the card, false for the short
-    // look of a person who has no detailed one.
-    portraitNone: (details: boolean) => `🖼 Портрета пока нет. Портрет рисует лицо и фигуру в полный рост по ${details ? 'подробной' : 'короткой'} внешности — так проще подобрать референс.`,
-    portraitKept: (details: boolean) => `🖼 Портрет сохранён: лицо и фигура по ${details ? 'подробной' : 'короткой'} внешности.`,
-    portraitStale: (details: boolean) => `🖼 Сохранённый портрет нарисован по прежней внешности. Новый покажет лицо и фигуру по ${details ? 'подробной' : 'короткой'}.`,
+    // What a portrait is drawn from: `details` is true for the English retelling of the description, false for the short
+    // look of a person not retold yet.
+    portraitNone: (details: boolean) => `🖼 Портрета пока нет. Портрет рисует лицо и фигуру в полный рост по ${details ? 'пересказу описания' : 'короткой внешности'}, так проще подобрать референс.`,
+    portraitKept: (details: boolean) => `🖼 Портрет сохранён: лицо и фигура по ${details ? 'пересказу описания' : 'короткой внешности'}.`,
+    portraitStale: (details: boolean) => `🖼 Сохранённый портрет нарисован по прежней внешности. Новый покажет лицо и фигуру по ${details ? 'пересказу описания' : 'короткой внешности'}.`,
     edit: '✏️ Изменить короткую внешность',
-    // Opens the wait for a detailed look, also for a person who has none yet.
-    editDetails: '✏️ Изменить подробную внешность',
+    // Opens the wait for a description, also for a person who has none yet.
+    editDetails: '✏️ Изменить описание',
     portrait: '🖼 Портрет',
     back: '↩️ К персонажам',
     // While the reader writes a short look. `max` is a limit in characters.
     editTitle: (person: string, story: string) => `✏️ Короткая внешность: ${person} · ${story}`,
     editNote: (max: number) => `Пришли новую короткую внешность одним сообщением, до ${max} знаков: лицо, волосы, телосложение, рост, приметы. Одежду и имя не пиши: одежду меняет история, а имя остаётся прежним. Модель картинок лучше всего понимает английский.`,
-    // Under editNote, when the person has a detailed look: it stays, and so does what the portrait is drawn from.
-    editKeepsDetails: 'Портрет по-прежнему рисуется по подробной внешности. Твоя короткая заменит сжатую из неё до следующей правки подробной.',
-    // While the reader writes a detailed look. `max` is a limit in characters.
-    detailsTitle: (person: string, story: string) => `✏️ Подробная внешность: ${person} · ${story}`,
-    detailsNote: (max: number) => `Пришли подробную внешность одним сообщением, до ${max} знаков, на любом языке: пол, возраст словом, а не числом, цвет кожи, рост и телосложение, волосы, лицо, приметы. Одежду и имя не пиши: одежду берут из сцен. Портрет рисуется по этому тексту как есть, а короткую внешность для картинок к сценам бот сожмёт из него по-английски. Модель картинок лучше всего понимает английский.`,
+    // Under editNote, when the portrait is drawn from the retold description: it stays so.
+    editKeepsDetails: 'Портрет по-прежнему рисуется по пересказу описания. Твоя короткая внешность заменит пересказанную до следующей правки описания.',
+    // While the reader writes a description. `max` is a limit in characters.
+    detailsTitle: (person: string, story: string) => `✏️ Описание внешности: ${person} · ${story}`,
+    detailsNote: (max: number) => `Пришли описание внешности одним сообщением, до ${max} знаков, на любом языке и в любом виде, с переносами строк и таблицей мерок тоже: пол, возраст и на сколько человек выглядит, цвет кожи, рост и телосложение, мерки, волосы и обычная причёска, лицо, приметы. Одежду и имя не пиши: одежду берут из сцен. Бот перескажет его по-английски для портрета и сожмёт в короткую внешность для картинок к сценам, ничего не добавляя от себя. Постоянные перемены по ходу истории (шрам, стрижку) он прибавит к описанию, а где они с ним расходятся, поверит описанию. Короткая внешность, написанная тобой, заменится пересказанной.`,
     nowText: 'Сейчас:',
     backToCard: '↩️ К персонажу',
     // Under a portrait, which is drawn in plain neutral clothes whatever the story's.
     caption: (person: string) => `🖼 Портрет: ${person}. Лицо и фигура в полный рост, в простой нейтральной одежде.`,
+    // The one line of the folded block under a portrait that holds the text of the person it was drawn from: the English
+    // retelling of the description, or the short look (local/picture.ts `portrait`). Its size as lookSize.
+    drawnFrom: (tokens: number | null, chars: number) => textSize('🖼 Внешность, по которой нарисован портрет', tokens, chars),
     again: '🔄 Ещё вариант',
     keep: '✅ Оставить',
     // Once the reader kept a portrait. The scenes' pictures do not use it yet.
     kept: (person: string) => `✅ Портрет сохранён: ${person}. В картинки к сценам он пока не попадает.`,
     drawing: '🎨 Рисую портрет…',
-    // While the look is compressed from the detailed look the reader has just written; the card replaces it.
-    compressing: '⏳ Сжимаю подробную внешность в короткую…',
+    // While the description the reader has just written is retold; the card replaces it.
+    retelling: '⏳ Пересказываю описание для картинок…',
     portraitFailed: 'Не получилось нарисовать портрет. Попробуй ещё раз чуть позже.',
   },
 
@@ -726,11 +734,12 @@ export const ru = {
     lookNeedsText: 'Пришли внешность текстом, одним сообщением. Выйти без изменений можно кнопкой «↩️» или командой /cancel.',
     lookTooLong: 'Слишком длинно: внешность должна уложиться в 400 знаков. Сократи и пришли снова.',
     lookGone: 'Этого персонажа уже нет в истории, внешность не сохранена. Открой /menu.',
-    // The same for a detailed look. The number is DETAILS_CHARS in local/picture.ts.
-    detailsNeedsText: 'Пришли подробную внешность текстом, одним сообщением. Выйти без изменений можно кнопкой «↩️» или командой /cancel.',
-    detailsTooLong: 'Слишком длинно: подробная внешность должна уложиться в 1000 знаков. Сократи и пришли снова.',
-    detailsGone: 'Этого персонажа уже нет в истории, подробная внешность не сохранена. Открой /menu.',
+    // The same for a description. The number is DESCRIPTION_CHARS in local/picture.ts.
+    detailsNeedsText: 'Пришли описание внешности текстом, одним сообщением. Выйти без изменений можно кнопкой «↩️» или командой /cancel.',
+    detailsTooLong: 'Слишком длинно: описание внешности должно уложиться в 1800 знаков. Сократи и пришли снова.',
+    detailsGone: 'Этого персонажа уже нет в истории, описание не сохранено. Открой /menu.',
     portraitOff: 'Картинки к твоим сценам пока не включены, поэтому портрет нарисовать нельзя.',
+    portraitPending: 'Внешность этого персонажа ещё не пересказана для картинок, поэтому портрет пока нарисовать нельзя. Попробуй после следующей картинки этой истории.',
     portraitStale: 'Этот портрет уже не сохранить: он устарел или внешность с тех пор изменилась. Нарисуй новый.',
     portraitInFlight: 'Уже рисую картинку по твоей просьбе. Портрет можно попросить, когда она придёт.',
   },

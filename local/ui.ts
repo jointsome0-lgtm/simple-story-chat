@@ -7,7 +7,7 @@ import type { GpuStatus } from './gpu.ts';
 import type { InlineButton, InlineKeyboard, Screen } from './telegram.ts';
 import { STYLE } from './illustrate.ts';
 import { portraitFromDetails, portraitText } from './image-portraits.ts';
-import { DETAILS_CHARS, LOOK_CHARS, personAt, personTag, wornAt } from './picture.ts';
+import { DESCRIPTION_CHARS, LOOK_CHARS, descriptionOf, ownDescription, personAt, personTag, wornAt } from './picture.ts';
 import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX, PRESETS, PROMPT_CHARS, lineOf, ownStyle, ownStyles, pickerKeys, presetOf, styleKey } from './picture-style.ts';
 import { LANGS, LANGUAGE_BUTTON, REGISTERED, shownLang, texts } from './text.ts';
 import type { Messages } from './text.ts';
@@ -118,7 +118,7 @@ function screen(state: State, route: string, details: RenderDetails) {
     case 'sample': return sampleScreen(state, args[0], details);
     case 'characters': return charactersScreen(state, args[0]);
     case 'character': return characterScreen(state, args[0], args[1], args[2], details);
-    // Only while the reader is writing a look or details, as for a style.
+    // Only while the reader is writing a look or a description, as for a style.
     case 'look-input': return sheetInputScreen(state, 'look', details);
     case 'details-input': return sheetInputScreen(state, 'details', details);
     case 'portrait': return portraitCaption(state, args[0], args[1], args[2], args[3]);
@@ -468,20 +468,22 @@ function charactersScreen(state: State, storyId: string | undefined) {
   if (!story) return stale(t, t.story.notFound);
   const sheet = people(story);
   return payload([c.title(storyName(state, story)), '', sheet.length ? c.note : c.none, sheet.length ? '' : null,
-    ...sheet.map((one, n) => `${n + 1}. ${line(one.name, 40)} — ${line(one.look, 90)}`)], [
+    ...sheet.map((one, n) => `${n + 1}. ${line(one.name, 40)} — ${line(one.look || descriptionOf(one), 90)}`)], [
     ...sheet.map(one => [btn(`👤 ${line(one.name, 30) || t.format.untitledButton}`, `view:character:${personRef(story, one)}`)]),
     [btn(c.toStory, `view:story:${story.id}`), btn(t.buttons.menu, 'view:home')],
   ]);
 }
 
-// One person: their details where they have any, the look and the clothes, tap-to-copy, each with its size as the
-// picture model counts that text alone (never their sum: a prompt takes names and ages out of them, joins them with
-// the scene and adds the style), where an edited look reaches, and the portrait kept to pick a reference by. The
-// details are the person's text, which the portraits are drawn from and the look is compressed from (local/bot.ts);
-// the card says when the look is the reader's own instead, or not compressed yet. Both have a button to write them,
-// the details also for a person who has none yet. The clothes are the story's to change, so they are only shown:
-// those of the active branch's latest picture for the active story (local/picture.ts `wornAt`), the sheet's own
-// otherwise.
+// One person (docs/illustrations-plan.md#three-layers): their description, the story's changes to it, the look and the
+// clothes, tap-to-copy, where an edited look reaches, and the portrait kept to pick a reference by. The description is
+// the person's text, the story's or the reader's own, which the details a portrait is drawn from and the look are
+// retold from (local/bot.ts). It has its characters alone, since the picture model never reads it: the details are
+// folded under a portrait with their tokens (local/picture.ts `portrait`). The look and the clothes each have their size
+// as the picture model counts that text alone (never their sum: a prompt takes names and ages out of them, joins them
+// with the scene and adds the style). The card says when the look is the reader's own instead, or not retold yet. Both
+// have a button to write them, the description also for a person who has none yet. The changes and the clothes are the
+// story's to make, so they are only shown: the clothes of the active branch's latest picture for the active story
+// (local/picture.ts `wornAt`), the sheet's own otherwise.
 function characterScreen(state: State, storyId: string | undefined, rawIndex: string | undefined, tag: string | undefined,
   details: RenderDetails) {
   const t = texts(state.language);
@@ -501,15 +503,18 @@ function characterScreen(state: State, storyId: string | undefined, rawIndex: st
     try { tokens = details.textTokens?.(text) ?? null; } catch { /* unknown, as without a tokenizer */ }
     return [tokens, [...text].length] as const;
   };
-  const described = person.details?.trim() ?? '';
-  // A kept portrait records the text it was drawn from, the person's details or, on a sheet without them, the look
+  const described = descriptionOf(person).trim();
+  const descriptionTitle = c.description(ownDescription(person));
+  const changes = person.changes?.trim() ?? '';
+  // A kept portrait records the text it was drawn from, the person's details or, until they are retold, the look
   // (`portraitText`), and the card names which of the two a portrait is drawn from now.
   const fromDetails = portraitFromDetails(person);
   const portrait = person.portrait ? (person.portrait.look === portraitText(person) ? c.portraitKept(fromDetails) : c.portraitStale(fromDetails))
     : details.pictures ? c.portraitNone(fromDetails) : null;
   const whose = person.edited ? c.lookOwn : person.lookPending ? c.lookPending : null;
   const result = payload([c.cardTitle(line(person.name, 60), storyName(state, story)), '',
-    ...described ? [c.details, described, c.detailsSize(...size(described)), ''] : [],
+    ...described ? [descriptionTitle, described, c.descriptionSize([...described].length), ''] : [],
+    ...changes ? [c.changes, changes, ''] : [],
     c.look, person.look, c.lookSize(...size(person.look)), whose, '',
     ...clothes ? [clothesTitle, clothes, c.clothesSize(...size(clothes))] : [c.noClothes], c.clothesNote, '',
     c.sizeNote, '', c.scope, portrait === null ? null : '', portrait], [
@@ -522,14 +527,14 @@ function characterScreen(state: State, storyId: string | undefined, rawIndex: st
     const offset = result.text.indexOf(text, result.text.indexOf(after) + after.length);
     return text && offset >= 0 ? [{ type: 'pre' as const, offset, length: text.length }] : [];
   };
-  result.entities = [...described ? pre(described, c.details) : [], ...pre(person.look, c.look), ...clothes ? pre(clothes, clothesTitle) : []];
+  result.entities = [...described ? pre(described, descriptionTitle) : [], ...pre(person.look, c.look), ...clothes ? pre(clothes, clothesTitle) : []];
   return result;
 }
 
-// Waiting for a look or details the reader writes for the person `state.ui` names, with the text as it is now to copy
-// in one tap, where there is one. Without the wait this is the menu: otherwise the reader's next message would be taken
-// for a move in the story. A look the reader writes keeps the details, which the portraits are still drawn from
-// (local/bot.ts), and the wait for it says so where there are any.
+// Waiting for a look or a description the reader writes for the person `state.ui` names, with the text as it is now to
+// copy in one tap, where there is one. Without the wait this is the menu: otherwise the reader's next message would be
+// taken for a move in the story. A look the reader writes keeps the details retold from the description, which the
+// portraits are still drawn from (local/bot.ts), and the wait for it says so where there are any.
 function sheetInputScreen(state: State, input: 'look' | 'details', details: RenderDetails) {
   const t = texts(state.language);
   const c = t.characters;
@@ -538,10 +543,10 @@ function sheetInputScreen(state: State, input: 'look' | 'details', details: Rend
   const person = story && people(story).find(one => one.name === ui?.name);
   if (!story || !person) return home(state, null, details.modelInfo, gpuFor(details), details.pictures === true);
   const look = input === 'look';
-  const now = look ? person.look : person.details?.trim() ?? '';
-  const keeps = look && !!person.details?.trim();
+  const now = look ? person.look : descriptionOf(person).trim();
+  const keeps = look && portraitFromDetails(person);
   const result = payload([(look ? c.editTitle : c.detailsTitle)(line(person.name, 60), storyName(state, story)), '',
-    look ? c.editNote(LOOK_CHARS) : c.detailsNote(DETAILS_CHARS), ...keeps ? ['', c.editKeepsDetails] : [], ...now ? ['', c.nowText, now] : []],
+    look ? c.editNote(LOOK_CHARS) : c.detailsNote(DESCRIPTION_CHARS), ...keeps ? ['', c.editKeepsDetails] : [], ...now ? ['', c.nowText, now] : []],
     [[btn(c.backToCard, `view:character:${personRef(story, person)}`)]]);
   const offset = now ? result.text.lastIndexOf(now) : -1;
   if (offset >= 0) result.entities = [{ type: 'pre', offset, length: now.length }];

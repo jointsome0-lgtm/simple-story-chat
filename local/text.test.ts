@@ -6,7 +6,7 @@ import { contextStats } from './context.ts';
 import { renderCompaction } from './compact-view.ts';
 import type { CompactionStatus } from './compact-view.ts';
 import type { GpuStatus } from './gpu.ts';
-import { DETAILS_CHARS, LOOK_CHARS, personTag } from './picture.ts';
+import { DESCRIPTION_CHARS, LOOK_CHARS, personTag } from './picture.ts';
 import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX, PRESETS, PROMPT_CHARS } from './picture-style.ts';
 import type { Screen } from './telegram.ts';
 import { LANGS, LANGUAGE_BUTTON, REGISTERED, commandSets, langFromTelegram, texts } from './text.ts';
@@ -69,11 +69,14 @@ const MODEL_STATUSES = ['ready', 'unavailable', 'configured', 'other'];
 
 // One of the reader's own picture styles, in the same script as the rest of the library.
 const OWN = { id: 'y20', name: 'Candle oil', line: 'Oil painting with visible impasto brushstrokes, warm candlelight and deep shadows.' };
-// A story's people as its first picture writes them, one with a look the reader wrote and one with details the reader
-// wrote and no look compressed from them yet, and a library whose first scene dressed one of them otherwise.
-const SHEET = [{ name: 'Mira', look: 'A tall woman in her forties, short grey hair, a scar on the left cheek.', outfit: 'wearing a dark wool coat', edited: true },
-  { name: 'Oleg', details: 'A broad-shouldered man in his fifties, weathered pale skin, a shaved head, a grey beard.', look: 'A broad-shouldered man with a shaved head.',
-    outfit: 'wearing a fisherman sweater', detailsEdited: true, lookPending: true }, { name: 'Ora', look: 'An old woman.' }];
+// A story's people as its first picture writes them: one with a look the reader wrote, one with a description in lines
+// the reader wrote, not retold from yet, beside a change the story made, and one from a sheet older than descriptions;
+// and a library whose first scene dressed one of them otherwise.
+const SHEET = [{ name: 'Mira', description: 'A tall woman in her forties with short grey hair.', changes: '', look: 'A tall woman in her forties, short grey hair, a scar on the left cheek.',
+  outfit: 'wearing a dark wool coat', edited: true },
+{ name: 'Oleg', description: 'A broad-shouldered man in his fifties, a grey beard.\n| Height | 190 cm |\n| Weight | 95 kg |', descriptionEdited: true, changes: 'Shaved his head.',
+  details: 'A broad-shouldered man in his fifties, weathered pale skin, a shaved head, a grey beard.', look: 'A broad-shouldered man with a shaved head.',
+  outfit: 'wearing a fisherman sweater', lookPending: true }, { name: 'Ora', look: 'An old woman.' }];
 function drawn(lang: Lang | undefined): Library {
   const state = library(lang);
   state.stories.h2.sheet = SHEET;
@@ -258,7 +261,7 @@ for (const lang of [undefined, ...REGISTERED]) {
     for (const [text, limits] of [[t.errors.styleTooLong, [OWN_STYLE_CHARS]], [t.errors.stylesFull, [OWN_STYLES_MAX]],
       [t.pictureStyle.inputNote(OWN_STYLE_CHARS, OWN_NAME_CHARS), [OWN_STYLE_CHARS, OWN_NAME_CHARS]], [t.pictureStyle.editNote(OWN_STYLE_CHARS), [OWN_STYLE_CHARS]],
       [t.errors.promptTooLong, [PROMPT_CHARS]], [t.variant.note(PROMPT_CHARS), [PROMPT_CHARS]], [t.errors.lookTooLong, [LOOK_CHARS]],
-      [t.characters.editNote(LOOK_CHARS), [LOOK_CHARS]], [t.errors.detailsTooLong, [DETAILS_CHARS]], [t.characters.detailsNote(DETAILS_CHARS), [DETAILS_CHARS]]] as const) for (const limit of limits) assert.match(text, new RegExp(`\\b${limit}\\b`), text);
+      [t.characters.editNote(LOOK_CHARS), [LOOK_CHARS]], [t.errors.detailsTooLong, [DESCRIPTION_CHARS]], [t.characters.detailsNote(DESCRIPTION_CHARS), [DESCRIPTION_CHARS]]] as const) for (const limit of limits) assert.match(text, new RegExp(`\\b${limit}\\b`), text);
     const [name, line, ...rest] = t.pictureStyle.exampleText.split('\n');
     assert.ok(name && [...name].length <= OWN_NAME_CHARS && line && [...line].length <= OWN_STYLE_CHARS && !rest.length && !/[^\x20-\x7e]/.test(line), 'the example style');
     assert.doesNotThrow(() => addSeed(emptyLibrary(), t.newSeed.example), 'the example seed');

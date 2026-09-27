@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { askJson, assemblePrompt, frameRequest, matchSheet, sheetLooks, sheetOf, sheetRequest, stripAges, stripNames, DESCRIBE_TOKENS, SHEET_TOKENS, STYLE } from './illustrate.ts';
+import { askJson, assemblePrompt, frameRequest, inWords, matchSheet, retellRequest, retoldOf, sheetLooks, sheetOf, sheetRequest, stripAges, stripNames,
+  DESCRIBE_TOKENS, RETELL_TOKENS, SHEET_TOKENS, STYLE } from './illustrate.ts';
 import type { Assembled, Character, Description, Excerpt } from './illustrate.ts';
 import type { GenerationResult, ModelRequest, Provider } from './model.ts';
 import { checkSheets, scenesWanted } from './illustrate-probe.ts';
@@ -137,7 +138,7 @@ test('a description is asked for in its schema after the scene, once more when i
   type Schema = { required: string[]; additionalProperties: boolean; properties: Record<string, { maxItems: number; items: Schema }> };
   // Both calls continue the scene's own request, their instruction last, in a schema that asks for every field.
   const requests: [string, ModelRequest, string[], string, number, string[], number][] = [
-    ['the sheet', sheetRequest(context), ['characters'], 'characters', 6, ['name', 'details', 'look', 'outfit'], SHEET_TOKENS],
+    ['the sheet', sheetRequest(context), ['characters'], 'characters', 6, ['name', 'description', 'changes', 'outfit'], SHEET_TOKENS],
     ['the frame', frameRequest(context, sheet), ['moment', 'shot', 'setting', 'objects', 'props', 'light', 'people'], 'people', 4,
       ['who', 'look', 'clothes', 'state', 'action'], DESCRIBE_TOKENS],
   ];
@@ -150,13 +151,32 @@ test('a description is asked for in its schema after the scene, once more when i
   // The frame's instruction names the people of the sheet for `who`, and repeats the clothes they wore before.
   const worn = frameRequest(context, [{ ...sheet[0], outfit: 'wearing a grey wool coat' }, sheet[1]]).messages.at(-1)!.content;
   assert.match(worn, /\[Элин, Тарек\][^]*\n {2}- Элин: wearing a grey wool coat\n/);
-  // A reply that parsed without a string name or look would otherwise reach the assembly as undefined.
-  assert.deepEqual(sheetOf({ characters: [{ name: 'Элин', look: 'A lean woman' }, { name: 7, look: 'x' }, { name: 'Тарек' }, null] }),
-    [{ name: 'Элин', look: 'A lean woman', outfit: '' }]);
+  // A reply that parsed without a string name or description would otherwise reach the retelling as undefined, and a
+  // person with an empty description has nothing to retell.
+  assert.deepEqual(sheetOf({ characters: [{ name: 'Элин', description: ' Худая женщина.\n| рост | 170 | ', changes: 'Остригла волосы.' },
+    { name: 7, description: 'x' }, { name: 'Тарек' }, { name: 'Мара', description: '  ' }, null] }),
+  [{ name: 'Элин', description: 'Худая женщина.\n| рост | 170 |', changes: 'Остригла волосы.', look: '', outfit: '' }]);
   assert.deepEqual(sheetOf({ people: [] }), []);
+  // The retelling carries no story: every person's description as written, their changes on one line, and the look of
+  // one not asked this time, numbered so that no name reaches the model's English; its limit grows with the people asked.
+  const retell = retellRequest([{ description: 'Высокая.\n| рост | 180 |', changes: 'Остригла\nволосы.' }, { description: 'Низкий.', look: 'A short man' },
+    { description: 'Худая.', changes: ' ', look: 'A thin woman' }], [0, 1]);
+  const { properties: retold, ...retellSchema } = retell.outputSchema as Schema;
+  assert.deepEqual([retellSchema.required, retold.retold.maxItems, retold.retold.items.required], [['retold'], 6, ['person', 'details', 'look']]);
+  assert.deepEqual([retell.system, retell.messages.length, retell.maxOutputTokens], ['', 1, RETELL_TOKENS.reply + 2 * RETELL_TOKENS.person]);
+  const asked = retell.messages[0].content;
+  assert.ok(asked.includes('Человек 1\nОписание:\nВысокая.\n| рост | 180 |\nИзменения из истории: Остригла волосы.\n\nЧеловек 2\nОписание:\nНизкий.\nИзменения из истории: нет\n\n'
+    + 'Человек 3\nОписание:\nХудая.\nИзменения из истории: нет\nГотовый look: A thin woman\n\nПерескажи: человек 1, человек 2.'), 'the people as the retelling reads them');
+  assert.doesNotMatch(asked, /A short man/);
+  // Its answer by person, each once, in range and with both texts; and a digit or a table's bar refuses a person.
+  assert.deepEqual([...retoldOf({ retold: [{ person: 2, details: ' A short\n man. ', look: 'A short man' }, { person: 2, details: 'x', look: 'y' },
+    { person: 4, details: 'x', look: 'y' }, { person: 1, details: '', look: 'z' }, { person: 1.5, details: 'x', look: 'y' }, null] }, 3)],
+  [[1, { details: 'A short man.', look: 'A short man' }]]);
+  assert.deepEqual([{ details: 'A tall woman.', look: 'A tall woman' }, { details: 'She is 180 cm tall.', look: 'A tall woman' },
+    { details: 'A tall woman.', look: 'tall | slim' }].map(inWords), [true, false, false]);
   // A reader who has moved on while the first answer was arriving gets no second attempt: their next scene needs
   // the slot more than their last one needs a picture. [label, the answers, moved on, attempts, the reply]
-  const character = { characters: [{ name: 'Элин', look: 'A middle-aged woman' }] };
+  const character = { characters: [{ name: 'Элин', description: 'Женщина средних лет.', changes: '', outfit: '' }] };
   const replies: [string, string[], boolean, number, object | null][] = [
     ['a runaway, then JSON', ['\n\n\n\n', JSON.stringify(character)], false, 2, { value: character, retried: true }],
     ['never JSON', ['PRIVATE_SCENE_TEXT', 'PRIVATE_SCENE_TEXT', 'PRIVATE_SCENE_TEXT'], false, 2, null],
@@ -197,6 +217,9 @@ test('the sheet check sends a hosted model clean stories alone, and prints count
   assert.equal(sent, 0);
   assert.equal(await check(['flight', 'mirror']), true);
   const counts = lines.map(line => JSON.parse(line)).filter(line => line.event === 'sheet_counts');
-  assert.deepEqual(counts.map(one => [one.story, one.people, one.details.people, one.variant.people]), [['flight', 4, 4, 4], ['mirror', 1, 1, 1]]);
+  // The retelling is not asked there: the descriptions are what it checks.
+  assert.deepEqual(counts.map(one => [one.story, Object.keys(one.steps).length, one.people, one.descriptions.people, one.details.people, one.variant.people]),
+    [['flight', 5, 4, 4, 0, 4], ['mirror', 5, 1, 1, 0, 1]]);
+  assert.ok(!gateway.calls.some(call => call.kind === 'retell'));
   assert.doesNotMatch(lines.join('\n'), /\p{Script=Cyrillic}|tunic|participant/u);
 });

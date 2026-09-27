@@ -93,9 +93,9 @@ further, so the mechanisms inside a difference stay open.
 
 ## The set
 
-Twenty-six stories: the 13 clean stories of stage 1, eight clean ones of one to three people added for round two, and
-five sharp ones that Gemma writes itself. The owner may add up to ten sharp scenes of their own ([own](#own)). Round
-one had the first eighteen.
+Twenty-eight stories: the 13 clean stories of stage 1, eight clean ones of one to three people and two of four people
+given in measurements added for round two, and five sharp ones that Gemma writes itself. The owner may add up to ten
+sharp scenes of their own ([own](#own)). Round one had the first eighteen.
 
 - The owner's five: a warrior flees a rockfall with his wife on his back and his daughters in his arms (`flight`);
   three people hold a demon by different parts of his body (`demon`); women close tightly round a young man on a
@@ -111,8 +111,20 @@ one had the first eighteen.
   (`archer`), an arm-wrestling match (`armwrestle`), a forearm being bandaged (`bandage`), two friends carrying a
   third across a ford on their joined hands (`crossing`), and a boost over a fence (`fence`). By the people their
   targets need, the clean scenes now hold one in four of them, two in four (`guard`, `tango`, `armwrestle`,
-  `bandage`), three in four (`giants`, `twister`, `crossing`, `fence`) and four in nine. A scene of one person has no
+  `bandage`), three in four (`giants`, `twister`, `crossing`, `fence`) and four in eleven. A scene of one person has no
   contact between people, so its checklist counts a touch of one's own body or of a thing ([one](#one)).
+- Two for round two, which the owner approved on 2026-09-27, of four people each given in measurements, so that the
+  figure is tested beside the action. In `gym` four women train side by side, each at an exercise that shows the hips
+  and buttocks from the side: a squat with a barbell, a Romanian deadlift, lunges with dumbbells and kettlebell swings.
+  Their busts are the Russian sizes 6, 7, 7 and 8, each with its two girths, and their hips and buttocks are graded in
+  words the other way, from very wide and very large at the 6 to narrow and smallish at the 8, so that a picture that
+  draws one woman larger all over cannot pass; the two sevens are alike in all of it but their hair, and each woman has
+  one trait seen from afar. In `huddle` a relay team stacks four right hands before the start: a mother of 44 who looks
+  under thirty and her daughter of 22, alike, tall and very fair, with their heights and girths in one table; a man of
+  51 who shaved off the beard he wore for twenty years before the race; and a tall thin student. Both are clean:
+  sportswear, ordinary training, neutral words for the body. The owner asked on 2026-09-27 that `gym` test the hips
+  and buttocks as well as the bust, since one question about the build lets a wrong proportion pass
+  ([judging](#proportions)).
 - Five sharp scenes, one per theme, with exactly the planned number of characters, all active in the target moment.
   The counts are fixed before the text card: a bathhouse (`sharp-1`, one), a harem (`sharp-2`, four), captivity
   (`sharp-3`, three), an interrogation (`sharp-4`, two), and a battle with wounds (`sharp-5`, four). The bathhouse
@@ -124,7 +136,7 @@ A story is a seed and one reader's action, in Russian, as the bot's stories are.
 and each person with a name and a look. The narrator writes the opening scene from the seed and the action scene from
 the reader's action, through the bot's `generateScene`, and the frames describe the action scene. Two scenes rather
 than one, because the sheet's instruction asks for the people who appear in more than one. The first thirteen clean
-seeds and actions are written from stage 1's stories, their `target` and `cast`, and the eight of round two as stories
+seeds and actions are written from stage 1's stories, their `target` and `cast`, and the ten of round two as stories
 of their own. All are fixed in `examples/action-set.ts` before any card, each with its target: the contact the moment
 should hold and the participants it needs. No moment has more than four participants, and no cast more than four
 people, the bot's own limit for a frame ([four](#four)). The scenes are not stage 1's: the reader's action says what
@@ -208,10 +220,11 @@ own ([the rentals](#the-rentals)); the text card is never stopped. Every call is
 2. the opening scene and the action scene, by `generateScene`, in the harness's own store;
 3. the sheet, by `sheetRequest`, read by `sheetOf` as the bot reads it;
 4. the bot's frame, by `frameRequest`;
-5. the variant frame.
+5. the variant frame;
+6. the retelling of the whole sheet, by `retellRequest` ([the sheet](#the-sheet)).
 
-That is 135 calls before retries, 5 seeds and five calls for each of the 26 stories, where round one's 18 took 95;
-each of the owner's scenes adds five, and each of their themes six. The gateway's smoke, the marker check, the retries
+That is 173 calls before retries, 5 seeds and six calls for each of the 28 stories, where round one's 18 took 95;
+each of the owner's scenes adds six, and each of their themes seven. The gateway's smoke, the marker check, the retries
 and the counts the adapter may ask for before it sends are requests on top of these, and the report gives them apart.
 Two stories run at once, since the gateway admits two `internal` calls; that is a provisional limit of its contract,
 not a measured throughput.
@@ -225,12 +238,14 @@ decided by rules fixed now:
 - `truncated`: a reply that parsed but finished on `length`;
 - `schema`: a reply that parsed and breaks its schema, checked on the raw reply before `sheetOf` could drop an
   entry: a required field missing, a value outside an enum, more than four people, or, in the variant, two
-  participants with the same role, compared trimmed and without case;
+  participants with the same role, compared trimmed and without case, or, in the retelling, a person of the sheet
+  left out or given a digit or a table's bar;
 - `empty_sheet`: a sheet with no entry;
 - `failed`: the call failed, with the adapter's code.
 
-A failure takes out what needs its output: a scene or the sheet, the whole story; the bot's frame, arm A; the
-variant, A+, L, C, V and T. Nothing is asked again by choice.
+A failure takes out what needs its output: a scene, the sheet or the retelling, the whole story, since the retold
+looks are in every arm's prompt and the retold details draw the fronts; the bot's frame, arm A; the variant, A+, L,
+C, V and T. Nothing is asked again by choice.
 
 <a id='again'></a>
 One exception, the owner's of 2026-09-25. On the text cards of that day simple-serving's gateway forbade whitespace
@@ -331,11 +346,29 @@ style line that ends every frame (`STYLE` in `local/illustrate.ts`) from adult f
 age, so that the child a look names is not made an adult at the prompt's end. Round two's L, C and T take the new
 line, and it changes their pins too; the T probe keeps round one's ([the T probe](#t-probe)). The frame's look of a
 person the sheet does not name takes the same age words and the skin tone, which changes the frames' pins as well.
+On 2026-09-27 the sheet's details and look took the rules of the reader's look: numbers turned into words, with the
+heights where a number becomes tall or short, the age a person looks, the usual hairstyle and each noticeable
+proportion in words of its own; and the frame's look of a person the sheet does not name took the age that person
+looks ([portrait details](illustrations-plan.md#portrait-details)). The instructions' pin changes again, and with it
+the frames', so the check below was asked again before the text card, with `--out` naming a new directory: the first
+check's `texts.json` holds the old pins, and a rerun there is refused.
+
+The same day the owner replaced that design with three layers
+([three layers](illustrations-plan.md#three-layers)). The sheet takes each person's description from the story, in
+the story's language with its numbers and tables as written, and the lasting changes the story made beside it, and
+writes no details or look. One retelling of the whole sheet writes both, as the sixth step of the text run and the
+last, since the frames take the sheet's names and clothes alone and the looks go into the prompts by code
+([assembly](#assembly)). Every person must come back retold in words, or the step fails and takes the story out: a
+person without a look would be drawn as somebody the sheet does not name, which is not the picture the arms compare.
+Round two's fronts are drawn from the retold details. The instructions, the retelling's among them, and the set with
+`gym` and `huddle` change the pins again.
 
 <a id='sheet-check'></a>
 Before the text card, a cheap check the owner approved on 2026-09-26 says whether the new instruction is followed at
 all: round two's text run for a few clean stories on the hosted `google/gemma-4-31b-it`, through the bot's
-OpenAI-compatible adapter as a route of its own, `hosted`, five calls a story.
+OpenAI-compatible adapter as a route of its own, `hosted`, five calls a story. The retelling is not asked there: since
+the three layers the descriptions are what it checks, and the retelling is checked on them and on descriptions a
+reader would write, apart from it ([the retelling's check](illustrations-plan.md#retell-check)).
 
 ```sh
 npm run illustrate:probe -- --stories flight,mirror,armwrestle --model openrouter:google/gemma-4-31b-it
@@ -346,10 +379,35 @@ go to `illustrations/sheet-check` unless `--out` names another directory. A reru
 yet and, as in the text run, never a step that failed. Any id but a clean story's is refused before the first request:
 "Adult content is never sent to hosted APIs: the test-ground scenarios stay clean"
 ([acceptance on GPU](improve-loop.md#acceptance-on-gpu)). Each story gets one line of counts and no word of its text:
-the steps' outcomes and attempts, the cut replies, the sheet's people, the words of `details` and `look`, how many hold
-a digit, a name or clothes, how many open with or hold an allowed age word or a child's, how many name a skin tone,
-and the same age and skin counts for the people of the frames who are not on the sheet. The hosted Gemma is not the
-heretic: a pass says that the instruction can be followed, not that the card's model follows it.
+the steps' outcomes and attempts, the cut replies, the sheet's people; the words and characters of the descriptions at
+the fewest and the most, and how many end in the line of what the story did not say, name a person of the sheet, name
+a garment or have changes beside them; the words of `details` and `look`, how many hold a digit, a name or clothes,
+how many open with or hold an allowed age word or a child's and how many name a skin tone, where a sheet still has
+them; and the same age and skin counts for the people of the frames who are not on the sheet. The hosted Gemma is not
+the heretic: a pass says that the instruction can be followed, not that the card's model follows it.
+
+Asked again on 2026-09-27 on that day's rules, 15 calls, every step was ok at its first attempt, with no reply cut.
+The sheet held the whole cast of each story, seven people, and no details or look held a digit, a name or clothes.
+Each opened with an allowed age word within its first three words, the two daughters of `flight` with a child's
+("Slender child girl", "Small child girl"); every details named a skin tone, and six looks of seven, the younger
+daughter's none. Six details of seven stayed under the 50 words asked, at 25 to 45, where the first check had four
+under at 33 to 47, and three looks of `flight` under 15, at 10 to 14. No frame had a person off the sheet and none of
+the three stories gives a height in numbers, so neither the stranger's age nor the heights were asked.
+
+On the three layers the same day the check asked `gym`, `huddle` and `flight`: 15 steps in 17 calls, since a provider
+failure stopped `flight`'s opening, and then its action, once each, and each was asked once more. Every step was ok,
+and the sheets held the whole cast, twelve people. The descriptions were Russian, with no name and no clothes; the
+count of a garment found one, «пояса» in «коса до пояса», a braid down to the waist. Every number went in as the story
+wrote it: each `gym` woman's size, girths and height, `huddle`'s rows of the table, Рустам's 167 cm and 92 kg, Лёша's
+194 and 74. So did every word about the body, as strongly: «очень широкие», «широкие» and «узкие» hips, «очень
+большие», «большие» and «небольшие» buttocks, and Ирина's «выглядит не старше тридцати». `gym` and `flight` ended
+each description with what the story left unsaid, as its last sentence rather than a line of its own, so the count of
+that line found none; it chose the faces in `gym` and the skin and more in `flight`, and contradicted nothing.
+`huddle`'s sheet had no such line, so Рустам's and Лёша's skin was never chosen, and their looks have none. Рустам's
+shaved beard was in his changes and in his description, and nobody else had changes. Every outfit was English and
+began with "wearing", and `flight`'s daughters had no word for the bust, the hips or the buttocks. Two descriptions
+copied a comparison from the story, Ксения's «Силуэт мягче, чем у матери» and Лёша's «Выглядит самым хрупким в
+команде», which no retelling carried into a look ([the retelling's check](illustrations-plan.md#retell-check)).
 
 <a id='assembly'></a>
 
@@ -590,23 +648,25 @@ portrait:
 | | minutes |
 | --- | --- |
 | ssh, Qwen's files, torch, the verification and the tunnel, at 300 Mbit/s (the identity run's table) | 14 |
-| about 70 fronts at 15 s | 18 |
-| about 40 views at 18 s | 12 |
-| seed 7: 78 frames without references at 15 s | 20 |
-| seed 7: about 48 frames of C and V at 20 to 30 s | 16 to 24 |
-| seed 7: 26 frames of T at 25 to 85 s | 11 to 37 |
-| seed 11, the same frames again | 47 to 81 |
+| about 78 fronts at 15 s | 20 |
+| about 46 views at 18 s | 14 |
+| seed 7: 84 frames without references at 15 s | 21 |
+| seed 7: about 52 frames of C and V at 20 to 30 s | 17 to 26 |
+| seed 7: 28 frames of T at 25 to 85 s | 12 to 40 |
+| seed 11, the same frames again | 50 to 87 |
 | the margin before the guard | 5 |
 
-That is 143 to 211 minutes of the guard's 180 for round two's 26 stories, where round one's 18 came to 115 to 163, and
-the owner's scenes come on top. Without seed 11 it is 96 to 130, so seed 11 fits only toward the fast end, and the
+That is 153 to 227 minutes of the guard's 180 for round two's 28 stories, where round one's 18 came to 115 to 163, and
+the owner's scenes come on top. Without seed 11 it is 103 to 140, so seed 11 fits only toward the fast end, and the
 admission after seed 7 decides it as above. Round one's sharp scenes took about three and a half minutes each at seed
-7 ([own](#own)), where this table allows a scene three at most; at that pace seed 11 would not fit. The fronts and
-views stay about as many as in round one: the eight new scenes add 14 to the clean casts, and the cut to four took 11
-out of them. T's time is the least known: four portraits of 704x1280 took 82 s in the identity run and two took about
-20 s, and the cause of that jump was not measured. T sends L's picture at 1280x704 and up to four references at
-352x640, between those two in pixels. The rows count the jobs alone: the gaps between them, which [the next job at the
-over](#pipeline) shortens, are in none of them, so that change leaves the table as it was.
+7 ([own](#own)), where this table allows a scene three at most; at that pace seed 11 would not fit. The eight new
+scenes of 2026-09-26 add 14 to the clean casts and the cut to four took 11 out of them, which kept the fronts and views
+about as many as in round one; `gym` and `huddle` add eight fronts and about six views, and with their frames at both
+seeds 10 to 16 of the table's minutes. T's time is the least known: four portraits of 704x1280 took 82 s in the
+identity run and two took about 20 s, and the cause of that jump was not measured. T sends L's picture at 1280x704
+and up to four references at 352x640, between those two in pixels. The rows count the jobs alone: the gaps between
+them, which [the next job at the over](#pipeline) shortens, are in none of them, so that change leaves the table as it
+was.
 
 <a id='judging'></a>
 
@@ -656,11 +716,30 @@ hypothesis or a threshold. Four kinds of session work on each scene.
    - a mix-up of each kind: an action done by the wrong person, two people's looks swapped, two people merged into
      one;
    - an anatomy error: a limb too many or missing, bodies merged, a joint bent the way it cannot;
-   - for each sheet person present, whether they look as their line says.
+   - for each sheet person present, whether they look as their line says;
+   - since round two, each proportion their look names, asked on its own: `yes`, `no` or `not_visible`
+     ([proportions](#proportions)).
 4. **The identity**, once session 3's answers are stored: the same pictures and the front portraits of the bound
    people, the same references for every arm. For each picture and each bound person: present or not, whether the
    silhouette matches the front, the height, the build and proportions and the outline of the hair, and whether the
    face does ([the silhouette](#silhouette)). Round one asked for the face and the build.
+
+<a id='proportions'></a>
+
+**Each proportion on its own, since 2026-09-27.** The owner asked what becomes of a woman whose look and front give her
+large buttocks and whom a picture draws with small ones: «а если например на картине у девушки сгенерится маленькая
+попа, хоть на референсах профиля у нее большая?» One question of whether a person looks as their line says answers for
+the whole look at best, and round one's identity session found the build matching in about half its answers. So the
+pictures session is now asked about each proportion a person's look names, apart: height, build, shoulders, bust,
+waist, hips, buttocks, legs and arms. Code finds them in the look by their words (`PROPORTIONS` in
+`local/action-judge.ts`) and gives each person's sheet line the parts of the look that name each one, so that the
+judge weighs the look's own words, "very wide hips" and not a hip in general; a look that names none adds no question.
+Each is `yes`, `no`, or `not_visible` where the picture hides it, cuts it off or shows it from a side where it cannot
+be seen, and a small buttock at the right height is then a `no` rather than a matching build. The report gives
+`proportions`, the share of the shown ones that are as named, over the people present, per arm and in the pairs; no
+gate reads it. The words, the task and the schema are pinned by their hashes. The finder reads "short" as a height
+before a comma, an "and", the end or a word for the person, so a look with "short, dark hair" is asked about a height
+it does not give, and a proportion in words it does not know is not asked.
 
 <a id='one'></a>
 
@@ -722,9 +801,9 @@ Each report ends with its answers as one JSON block, and each kind of session ha
 hash. The checklist's schema describes the items it lists. The other three take only the ids code gave and values from
 their enums, and a block with anything more or anything missing is invalid; the report's prose stays with the report.
 A clean scene's report without a valid block gets one fresh session of the same kind, and a second one without counts
-as a judge's failure; a sharp scene's goes as [below](#sealed). With both seeds there are 26 checklists before the
-picture card, and 134 sessions after it: 26 of text and portraits, 52 of pictures, 52 of identity and 4 repeats. With
-seed 7 alone there are 82 after it. Each of the owner's scenes adds a checklist and five sessions after the card,
+as a judge's failure; a sharp scene's goes as [below](#sealed). With both seeds there are 28 checklists before the
+picture card, and 144 sessions after it: 28 of text and portraits, 56 of pictures, 56 of identity and 4 repeats. With
+seed 7 alone there are 88 after it. Each of the owner's scenes adds a checklist and five sessions after the card,
 three with seed 7 alone. The fresh sessions for invalid reports come on top.
 
 <a id='gates'></a>
@@ -940,7 +1019,7 @@ dry=$(mktemp -d)
 npm run image:action -- dry-run --dir "$dry"    # eleven steps, then "the dry run went as expected"
 # In simple-serving's checkout, in a terminal of its own. dev.json holds the dry run's made-up client key.
 uv run python -m simple_serving.dev --config "$dry/dev.json" --engine-port 8200 --public-port 8201 --control-port 8202
-npm run image:action -- dry-run --dir "$dry" --dev http://127.0.0.1:8201    # reached false, then 21 stories
+npm run image:action -- dry-run --dir "$dry" --dev http://127.0.0.1:8201    # reached false, then 23 stories
 grep -cF 'illustrations/action/sealed' .claude/settings.json    # before each card: 1 or more
 # The text card (the rentals, 2), prepared as simple-serving's README says in "The card". In that checkout, once SSH
 # to the card works, `trial` names this card in the configuration, and `up`, in a terminal of its own, holds the tunnel.
@@ -1048,7 +1127,7 @@ with the served name, the context and that client key. With the launcher up, `dr
 the texts in `dev/` beside `run/`, with that key file and that smoke record, through the real gateway in front of its
 fake engine: the adapter, the client key read alone, class `internal`, the gateway's times in each `text_attempt`, and
 the requests counted apart. The fake engine answers every call with one sentence, so the scenes pass and no sheet
-parses: the marker check prints `reached: false`, and `texts` 21 stories whose sheet is `unparsed`, with the five
+parses: the marker check prints `reached: false`, and `texts` 23 stories whose sheet is `unparsed`, with the five
 sharp ones held as `marker_failed`. A marker check that passes there means that a model answered, and `dry-run --dev`
 stops before the texts, so that no sharp story is asked for outside `illustrations/action`. Anything else, a refusal
 or a failed scene above all, is looked into before any card.
@@ -1064,7 +1143,7 @@ card's own, so that no earlier record, the rehearsal's among them, can stand for
 searched, what it could not read, and the hits as counts; a directory, a file or a link the search cannot read fails
 it as a hit does. `pass: true` lets `texts` ask for the sharp seeds. A hit keeps them out for the rest of the card:
 the leak is the harness's, its fix is code, and no code is written on a paid card. `texts` then writes the clean
-stories and holds the sharp ones as `marker_failed`, and the gates would read the 21 clean scenes alone, so whether
+stories and holds the sharp ones as `marker_failed`, and the gates would read the 23 clean scenes alone, so whether
 the picture card still comes is the owner's question. `reached: false` with no hit is a synthetic story the model did
 not take through every step, and a check again is a new story with a new name.
 
@@ -1592,6 +1671,14 @@ Russian description as faithfully as from the same description in English?
   and the marks, their sides included, as closely as the English one. A side is the person's own, as the sheet writes
   it: on a front, the person's left is the viewer's right.
 
+The six were drawn on 2026-09-26 (`illustrations/t-probe/lang`). Two reviewers who read them on 2026-09-27, not the
+owner, found the Russian redhead narrower, without her stocky build and her shaved side, the Russian elder fuller and
+younger, and the Russian girl older. Each pair differs in more than the language, though: "white" hair and beard in
+English are "седые", which allows grey, in Russian; the girl's "a child" has no Russian counterpart; and both redheads
+wear the tattoo on the side the text did not ask for. One seed decides nothing about how often it happens. The same
+day the owner had a reader's details retold in English before any portrait
+([portrait details](illustrations-plan.md#portrait-details)), so the bot no longer draws from a Russian text.
+
 The test is 6 jobs, each priced as one of round one's fronts: `estimate` gives it 1.5 minutes, and 2.4 at the
 admission prices. The cold start falls on the clothing test, or on this test's first front where it is drawn alone. The dry run's estimate, at its made-up round's 18.7 s a front, gives it
 1.9 minutes and 2.6 at the admission prices.
@@ -1661,7 +1748,10 @@ clothing test as a whole, 10 jobs and 4.7 minutes with the cold start, then the 
 at its own prices, at most 15 jobs and 7 minutes (the flight, the twister and the demon), and what is not admitted
 waits for a resume on the next card. [The pilot](#pilot) follows on the same card, 11 to 16 minutes more, when 20
 minutes or more are left: about 60 to 65 card minutes expected in all, estimates both, under the guard's two hours.
-The card is billed until its termination, not for the two hours.
+The card is billed until its termination, not for the two hours. The next rental's plan also holds the card test of
+the figure the owner agreed to on 2026-09-27, 34 pictures and about 4 minutes warm
+([the card test](illustrations-plan.md#figure-card-test)); it has no harness yet, and its texts are the retelling's,
+which passed its check after the one revision the check allowed.
 
 **Not verified without the card**: whether `words` moves any face while image 1 lies on the canvas's grid; whether
 `no-style` takes the edges and colours away; where `half` puts the scene, since its 640x352 is centred on the canvas's
@@ -1708,13 +1798,14 @@ contacts and the scene's clothes stay? Nothing is drawn before the card.
   and the demon's and the flight's eight at 0.80 with the probe's suit front, to see whether the suit leaks into the
   scene's clothes. Seed 7, 25 steps of euler/simple at CFG 1, as `p-crop-080`.
 
-**Its place** is the picture card after round two's draw and after the figure-age card test, on the same server,
-tunnel and `"$end"`, five minutes before the card's end as the runbook computes it. A body's jobs begin only if all of
-them can end by `--until` at the admission prices, the fronts' 38 jobs before the suit's 8, and what is not admitted
-waits for a resume on a later card. `estimate` gives 46 jobs on four canvases: 6 minutes at the head test's median warm
-job, 7.3 s, with half a compile, and 15.4 at the admission prices, its slowest warm job with the margin, 18.1 s, 45 s
-for the first compile and 15 s for each other canvas. With 16 minutes or more left before `"$end"` all of it is
-admitted; the termination keeps the five minutes after `"$end"`.
+**Its place** is the picture card after round two's draw and after [the figure-age card
+test](illustrations-plan.md#figure-card-test), on the same server, tunnel and `"$end"`, five minutes before the card's
+end as the runbook computes it. A body's jobs begin only if all of them can end by `--until` at the admission prices,
+the fronts' 38 jobs before the suit's 8, and what is not admitted waits for a resume on a later card. `estimate` gives
+46 jobs on four canvases: 6 minutes at the head test's median warm job, 7.3 s, with half a compile, and 15.4 at the
+admission prices, its slowest warm job with the margin, 18.1 s, 45 s for the first compile and 15 s for each other
+canvas. With 16 minutes or more left before `"$end"` all of it is admitted; the termination keeps the five minutes after
+`"$end"`.
 
 ```sh
 npm run image:body-test -- dry-run     # steps 0 to 14, then "the body test's dry run went as expected"

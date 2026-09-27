@@ -1,9 +1,10 @@
 // The fixed synthetic set of the action measurement (docs/action-experiment.md#the-set), written here before any card
 // is rented, so that nothing about it is chosen after a scene or a picture has been seen.
 //
-// Twenty-six stories. Twenty-one are clean: the first thirteen are stage 1's (illustrations/action/stage1/stories.json),
-// and the eight after twister, of one, two and three people, came for round two on 2026-09-26, so that every count of
-// people in a moment from one to four has at least four scenes. Each is written as a seed and one reader's action, in
+// Twenty-eight stories. Twenty-three are clean: the first thirteen are stage 1's (illustrations/action/stage1/stories.json),
+// the eight after twister, of one, two and three people, came for round two on 2026-09-26, so that every count of
+// people in a moment from one to four has at least four scenes, and gym and huddle, of four people given in
+// measurements, on 2026-09-27. Each is written as a seed and one reader's action, in
 // Russian, as the bot's stories are: the seed names the place, the time and every person of the moment with a name and
 // a look, so that both scenes can name them, and the action says what the moment is. Each carries its target, the
 // contact the moment should hold and the participants it needs, by name; and its cast, every named person of the seed,
@@ -313,6 +314,42 @@ export const ACTION_STORIES: ActionStory[] = [
     target: { contact: 'Эльдар лезет на забор: одна его нога стоит в сцепленных ладонях Вадима, руками он держится за верх забора; Соня сзади подталкивает его в спину.',
       participants: ['Вадим', 'Эльдар', 'Соня'] },
     cast: ['Вадим', 'Эльдар', 'Соня'],
+  },
+  // Round two's scenes of four people given in measurements, which the owner approved on 2026-09-27: the gym's four
+  // women have busts of the Russian sizes 6, 7, 7 and 8, and hips and buttocks graded in words the other way, so that
+  // drawing one of them larger all over cannot pass; the huddle has a mother and a daughter described alike, their
+  // measurements in a table, and a pile of four hands. Everyone is an adult, and nothing is erotic.
+  {
+    id: 'gym', label: 'Спортзал', title: 'Суббота в спортзале', startTime: '2026-11-07 09:00',
+    seed: `Спортивная история. Все участники взрослые, подруги, которые тренируются вместе по субботам.
+Утро субботы, небольшой спортзал в подвале жилого дома: зеркальная стена, резиновый пол, стойка со штангами, гантели и гири.
+Инга — 27 лет, рост 166 см, грудь 6-го размера (обхват 94 см, под грудью 72 см), очень широкие бёдра и очень большие ягодицы, светлая кожа, ярко-рыжие волосы в высоком хвосте. Чёрные леггинсы и зелёный спортивный топ.
+Дарья — 30 лет, рост 169 см, грудь 7-го размера (обхват 98 см, под грудью 74 см), широкие бёдра и большие ягодицы, светлая кожа, короткая платиновая стрижка. Серые леггинсы и синяя майка.
+Ульяна — 29 лет, рост 168 см, грудь 7-го размера (обхват 99 см, под грудью 75 см), широкие бёдра и большие ягодицы, светлая кожа, длинная чёрная коса до пояса. Тёмно-синие леггинсы и белая майка.
+Тоня — 33 года, рост 171 см, грудь 8-го размера (обхват 104 см, под грудью 78 см), узкие бёдра и небольшие ягодицы, смуглая кожа, пышные каштановые кудри до плеч. Бордовые леггинсы и серая майка.
+Сегодня у них круговая тренировка, и каждая встаёт боком к зеркалу, чтобы видеть свою технику.`,
+    action: 'Таймер пищит, и каждая начинает своё упражнение: Инга приседает со штангой на плечах, Дарья делает румынскую тягу, Ульяна — выпады с гантелями, Тоня — махи гирей.',
+    target: { contact: 'Четыре подруги тренируются в ряд, каждая своё упражнение: Инга в глубоком приседе со штангой на плечах; Дарья в наклоне держит штангу у колен; Ульяна в выпаде с гантелями в опущенных руках, заднее колено почти касается пола; Тоня в махе держит гирю обеими руками на вытянутых руках перед грудью.',
+      participants: ['Инга', 'Дарья', 'Ульяна', 'Тоня'] },
+    cast: ['Инга', 'Дарья', 'Ульяна', 'Тоня'],
+  },
+  {
+    id: 'huddle', label: 'Руки стопкой', title: 'Перед финалом эстафеты', startTime: '2026-06-14 10:00',
+    seed: `Добрая спортивная история. Все участники взрослые.
+Воскресное утро, городской стадион, финал любительской эстафеты: беговая дорожка, на трибунах болельщики, серое небо.
+Команда соседей по одному дому бежит в одинаковых синих майках и чёрных шортах.
+Ирина — мать, 44 года, но выглядит не старше тридцати; высокая, очень светлая кожа, светлые пепельные волосы, прямое каре до подбородка, широкое лицо с высокими скулами, прямые брови.
+Ксения — её дочь, 22 года, высокая, очень светлая кожа, золотисто-русые волнистые волосы в длинной косе, овальное лицо, дугообразные брови.
+Мерки из заявки команды (см):
+| | рост | грудь | талия | бёдра |
+| Ирина | 178 | 104 | 70 | 100 |
+| Ксения | 177 | 96 | 68 | 108 |
+Рустам — 51 год, рост 167 см, вес 92 кг, лысый, мощная шея; двадцать лет носил густую чёрную бороду, а перед соревнованиями сбрил её.
+Лёша — студент, 20 лет, рост 194 см, вес 74 кг, чёрные кудри, очки в тонкой оправе.`,
+    action: 'Перед стартом Рустам зовёт всех в круг: четверо наклоняются друг к другу и кладут правые руки одна на другую в середине.',
+    target: { contact: 'Четверо стоят тесным кругом, наклонившись к середине; их правые ладони лежат стопкой одна на другой в центре круга.',
+      participants: ['Ирина', 'Ксения', 'Рустам', 'Лёша'] },
+    cast: ['Ирина', 'Ксения', 'Рустам', 'Лёша'],
   },
 ];
 
