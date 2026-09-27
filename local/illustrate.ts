@@ -210,10 +210,12 @@ const SHEET_SCHEMA = { type: 'object', additionalProperties: false, required: ['
 
 // The sheet's own rule for `look`, for one person on their own: the details the reader wrote, in any language, are
 // compressed into an English look (the owner's design of 2026-09-26, docs/illustrations-plan.md#portrait-details).
-// Only what the reader wrote goes in, since the look stands for their words in every frame.
+// Only what the reader wrote goes in, since the look stands for their words in every frame, and a height, a weight or a
+// body's measurements go in as words about the build (the owner, 2026-09-26), since the look holds no numbers.
 const LOOK = `Сожми описание внешности одного человека в конце этого сообщения в look для художника.
-- look: по-английски, 15-25 слов, без имён, без одежды и без чисел. Это описание, сжатое до того, по чему этого человека узнают издали среди других: пол и возраст ТОЛЬКО словом (${AGE_WORDS}) и никогда числом, цвет кожи, телосложение, волосы и одна-две приметы.
-- Описание может быть на любом языке. Бери всё только из него и ничего не придумывай: чего в нём нет, того нет и в look.
+- look: по-английски, 15-25 слов, без имён, без одежды и без чисел. Это описание, сжатое до того, по чему этого человека узнают издали среди других: пол словом (man, woman, boy, girl), возраст ТОЛЬКО словом (${AGE_WORDS}) и никогда числом, цвет кожи, телосложение, волосы и одна-две приметы.
+- Рост, вес и мерки тела, если описание даёт их числами, переведи в слова о росте, телосложении и пропорциях, сравнивая с обычным человеком того же пола и возраста: tall, petite, slender, heavyset, broad-shouldered, narrow-waisted, wide-hipped, long-legged. Назови всё, что заметно отличается от обычного: это не выдумка, а те же числа словами.
+- Описание может быть на любом языке. Бери всё только из него и ничего не придумывай: чего в нём нет, того нет и в look, даже пола, возраста и цвета кожи.
 
 Описание:
 `;

@@ -640,11 +640,12 @@ word of it competes with the action; a portrait holds one person and can take fa
   from in its `look` field, and the card calls it a portrait of the earlier look once the person's text differs.
 - The details are the person's main text, and the reader may write them, up to 1000 characters and in any language.
   Each time, one call of the language model compresses them into the look again by the sheet's rule for the look
-  (`lookRequest` in `local/illustrate.ts`): English, the age as a word, nothing the details do not say, JSON with one
-  retry and at most 120 tokens. It runs right after the edit, so that the card shows the new look and the reader can
-  write another. If the model is off or the call fails, the reader's details stay, the look is marked `lookPending`
-  and the card says so, and it is compressed before the next frame of the story, in the turn that describes it. A
-  sheet written anew keeps the reader's details and the look beside them.
+  (`lookRequest` in `local/illustrate.ts`): English, the sex and the age as words, numbers as words about the build,
+  nothing else the details do not say, JSON with one retry and at most 120 tokens. It runs right after the edit, so
+  that the card shows the new look and the reader can write another. If the model is off or the call fails, the
+  reader's details stay, the look is marked `lookPending` and the card says so, and it is compressed before the next
+  frame of the story, in the turn that describes it. A sheet written anew keeps the reader's details and the look
+  beside them.
 - The owner decided two more things on 2026-09-26. First, the portrait is drawn from the details as written, in any
   language, with no translation and no call added. Whether the image model follows a Russian description as closely
   as the same one in English is checked at the next rental by the T probe's
@@ -657,6 +658,20 @@ word of it competes with the action; a portrait holds one person and can take fa
   same day as the owner agreed: the look the frame writes of a person the sheet does not name takes the sheet's age
   words, children's included, and the skin tone, where it allowed an adult's words only. The identity measurement's
   recipe still draws from the look, as its run pinned it ([portrait recipe](identity-experiment.md#portrait-recipe)).
+- The owner decided on 2026-09-26 that a height, a weight or a body's measurements the reader gives as numbers reach
+  the look as words about height, build and proportions, measured against an ordinary person of the same sex and age:
+  the look holds no numbers, and a frame keeps a person's build by the look and the portrait alone. Before that rule
+  the hosted `google/gemma-4-31b-it` compressed six synthetic descriptions, two samples each. A table of eight
+  measurements came out as "young adult, lean build, tall stature", with an age it was not given and no word of the
+  shoulders, the waist or the hips; a woman whose chest, waist and hips were 92, 66 and 98 cm as "slim" or "slender
+  build"; a man of 192 cm as "heavy build", without "tall". The same check found the rule giving that woman a fair
+  skin her details did not name, and a girl of fourteen the look "Teenager", with no word of her sex. So the rule
+  names the words of the sex (man, woman, boy, girl) apart from those of the age, and a sex, an age or a skin tone the
+  details do not give stays out of the look. With the rule, the same descriptions and samples gave the table "Tall,
+  slender man, broad-shouldered, narrow-waisted, long-legged" twice, with no age but a sex it was not given; the
+  woman "slender, wide-hipped", still with the fair skin; the man of 192 cm "heavyset, broad-shouldered", still
+  without "tall"; and the girl "Teenager girl". No look held a digit, and a description in words alone came out as
+  before.
 
 The sheet had the frames' limit of 900 tokens. A synthetic reply of six people at the top of every word range, counted
 by Gemma 4's tokenizer (`local/tokenizer.ts`), takes 1102 tokens as compact JSON and 1225 indented, where the sheet
