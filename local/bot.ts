@@ -21,6 +21,7 @@ import type { CompactionStatus } from './compact-view.ts';
 import type { GpuController } from './gpu.ts';
 import type { Illustrator, PictureRequest, PortraitRequest, SampleRequest, VariantRequest } from './picture.ts';
 import { DESCRIPTION_CHARS, LOOK_CHARS, personAt, personTag } from './picture.ts';
+import { seesThrough } from './picture-pov.ts';
 import { portraitText } from './image-portraits.ts';
 import type { ErrorDetails, Log } from './model-error.ts';
 import { errorCode, member, safeErrorDetails, unavailable } from './model-error.ts';
@@ -339,10 +340,19 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     // The people of a story's sheet (local/ui.ts, the characters' screens), by the story, their place on it and the
     // hash of their name: a button of somebody whose place another person took since is refused (`personAt`). A look
     // and details are written the way a style is, and a portrait is drawn on request only, for a reader who is drawn for.
-    if (action?.startsWith('look-edit:') || action?.startsWith('details-edit:') || action?.startsWith('portrait:')) {
+    if (action?.startsWith('look-edit:') || action?.startsWith('details-edit:') || action?.startsWith('portrait:')
+      || action?.startsWith('pov:') || action?.startsWith('pov-off:')) {
       const [verb, storyId, index, tag] = action.split(':');
       const person = ID.story.test(storyId) ? personAt(state.stories[storyId], index, tag) : undefined;
       if (!person) throw refuse(t, 'staleButton');
+      // The frames of the story seen through this person's eyes, or as usual again (local/picture-pov.ts). A story has
+      // one such person at most, so choosing another switches; the way back ends it only while it is this person's.
+      if (verb === 'pov' || verb === 'pov-off') {
+        const story = state.stories[storyId];
+        if (verb === 'pov') story.pov = person.name;
+        else if (seesThrough(story, person.name)) delete story.pov;
+        return { screen: render(state, `character:${storyId}:${index}:${tag}`, pictureInfo) };
+      }
       if (verb === 'look-edit' || verb === 'details-edit') {
         const input = verb === 'look-edit' ? 'look' : 'details';
         state.ui = { input, storyId, name: person.name };

@@ -256,6 +256,58 @@ A reader in the [reference experiment](setup.md#pictures), the owner or a tester
   - A frame takes every reference at its own shape and never stretches it to another: the size its file's header gives is scaled to about the area of 352x640, the shorter side rounded to a multiple of 32 first and the longer following it (`referenceScale`). The bot's portraits of 720x1280 come out at 352x640 as before, a square picture at 480x480, a 3:4 one at 416x544 and a 16:9 one at 640x352.
   - `reference_saved` logs how the picture came (`referenceSent`: `photo` or `document`), its format, its pose (`referencePlace`), the bytes sent and the bytes stripped, and its width and height; `reference_refused` logs the reason alone (`referenceRefusal`: `type`, `broken`, `small`, `huge`, `shape`, `too_large`, `incomplete` or `archive`). Neither has a name, a caption or a file name.
 
+<a id='seen-through-their-eyes'></a>
+
+### Seen through their eyes
+
+A second picture mode, asked for by the owner on 2026-09-27 for a tester («может сделать POV типа у гг истории?», «я бы
+не делал такое ограничение, а просто то что он может увидеть глазами, это же реальный POV»). With it on, a frame shows
+what one person of the sheet sees from where they stand, given their pose and where they look: whatever of their own
+body falls into view (hands, arms, legs, chest or belly when they look down, their clothes, what they hold), their
+shadow, and their reflection in a mirror, water or glass. They are never drawn whole from outside. A scene they are not
+in is drawn as usual. The code is `local/picture-pov.ts`.
+
+- **Switch:** the card of a reader whose scenes are drawn has «👁 Вид от первого лица» ("First-person view",
+  `pov:<storyId>:<index>:<tag>`), which stores the person's sheet name as `story.pov`. A story has one such person at
+  most: the same button on another person's card switches to them, and that card's last line names whose eyes the
+  frames are seen through now. The person's own card ends with a line on what the frames show and offers «🎥 Обычный
+  вид» ("Back to the usual view", `pov-off:…`) instead, which ends the mode only while it is that person's. The list
+  marks them with 👁 in place of 👤. The name is compared as the sheet compares names, apart from spaces and case. A
+  press draws nothing: the next frame takes it, and a sample describes its scene again if the mode or its person
+  changed since the frame it would reuse. A library without `pov` loads and draws as before.
+- **Request:** `povRequest` adds the rule after the frame's instruction and three fields to its schema, at the call in
+  `local/picture.ts` rather than in `local/illustrate.ts`, whose request builders the action experiment pins by hash
+  (`textPins` in `local/action-text.ts`). `viewer_in_scene` comes first, so that the shot and the people are written
+  knowing it; `viewer_clothes` and `viewer`, what of the viewer's own body is in view with its place in the frame,
+  come after `people`. The rule names the person once, names the last scene by its first ten words, keeps the person
+  out of `people`, calls them `the viewer` in the moment, the props and the objects, and asks for a first-person shot
+  from their eye height and where they look. The answer's limit grows by 200 tokens. A person with no look on the
+  sheet yet is not seen through, and their frames are described and drawn as usual.
+- **Prompt:** when the answer says the viewer is in the scene, or lists them among its people anyway, `seenBy` takes
+  them out of `people`, under their name or as "the viewer", and puts a first-person clause ahead of the shot: «First-
+  person point of view: the picture shows what the viewer sees with their own eyes, and the viewer is never shown
+  whole. In view of the viewer's own body: … The viewer's own body and clothes: …», with the look from the sheet and
+  what they wear now, so that an arm or a belly matches their figure. With nothing of their body in view the clause
+  says so and gives no look. Being part of the shot, it passes the nets for names and ages, opens the prompt, and in a
+  prompt of the reference experiment follows the reference instruction. What the viewer wears is kept for the next
+  picture, as a person's clothes are.
+- **References:** the viewer is not among the frame's people, so their kept portrait is never sent as a reference: it
+  would pull their whole figure into the frame. The others keep theirs. In this first version a reflection in a mirror
+  is therefore drawn from the words of their look alone.
+- **Row:** `picture` and `picture_sample` rows carry `pov`, true for a frame drawn through the person's eyes and false
+  for one drawn as usual because they were not in the scene. A story without such a person leaves it out.
+- With the mode off every request, prompt, graph and recipe is byte for byte what it was before the mode came
+  (checked on 2026-09-27 by a dry run against 40e11d1 with a fake model and a fake ComfyUI, with and without
+  references).
+- Checked on 2026-09-27 with six calls to the hosted Gemma 4 31B through OpenRouter, on synthetic scenes after
+  `examples/seed.txt`: on the pier the answer kept the viewer out of `people`, left the old man there and filled
+  `viewer` with the hand that holds the lantern and the reflection in the water, twice; before a mirror, the one call
+  asked before the rule named the last scene, it wrote the reflection with the face and the raised hands. A cutaway
+  without the viewer («Тем временем Ефим…») came back as the scene before it, with the viewer, in two answers of two
+  until the rule named the last scene by its first words, and then as the cutaway, `viewer_in_scene: false`, drawn as
+  usual. Not checked yet: the Gemma on the card, and whether Qwen-Image keeps the whole viewer out of the frame when the
+  clause carries the face and hair words of their look.
+
 ## Interface language
 
 What the bot itself says (screens, buttons, refusals, the compaction status, the command menu) comes from a catalog per language in `local/text/`. The button labels quoted in this document are the Russian ones. The language of a story is a separate choice, made by its seed, not by this picker: see [story language](#story-language).

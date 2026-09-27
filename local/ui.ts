@@ -9,6 +9,7 @@ import { STYLE } from './illustrate.ts';
 import { portraitFromDetails, portraitText } from './image-portraits.ts';
 import { DESCRIPTION_CHARS, LOOK_CHARS, descriptionOf, ownDescription, personAt, personTag, wornAt } from './picture.ts';
 import { REFERENCE_BYTES, REFERENCE_SIDES } from './reference.ts';
+import { seesThrough } from './picture-pov.ts';
 import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX, PRESETS, PROMPT_CHARS, lineOf, ownStyle, ownStyles, pickerKeys, presetOf, styleKey } from './picture-style.ts';
 import { LANGS, LANGUAGE_BUTTON, REGISTERED, shownLang, texts } from './text.ts';
 import type { Messages } from './text.ts';
@@ -476,7 +477,7 @@ function charactersScreen(state: State, storyId: string | undefined) {
   const sheet = people(story);
   return payload([c.title(storyName(state, story)), '', sheet.length ? c.note : c.none, sheet.length ? '' : null,
     ...sheet.map((one, n) => `${n + 1}. ${line(one.name, 40)} — ${line(one.look || descriptionOf(one), 90)}`)], [
-    ...sheet.map(one => [btn(`👤 ${line(one.name, 30) || t.format.untitledButton}`, `view:character:${personRef(story, one)}`)]),
+    ...sheet.map(one => [btn(`${seesThrough(story, one.name) ? '👁' : '👤'} ${line(one.name, 30) || t.format.untitledButton}`, `view:character:${personRef(story, one)}`)]),
     [btn(c.toStory, `view:story:${story.id}`), btn(t.buttons.menu, 'view:home')],
   ]);
 }
@@ -523,16 +524,22 @@ function characterScreen(state: State, storyId: string | undefined, rawIndex: st
     : person.portrait ? (person.portrait.look === portraitText(person) ? c.portraitKept(fromDetails) : c.portraitStale(fromDetails))
     : details.pictures ? c.portraitNone(fromDetails) : null;
   const whose = person.edited ? c.lookOwn : person.lookPending ? c.lookPending : null;
+  // The frames seen through this person's eyes, or through another's (local/picture-pov.ts): a line last on the card,
+  // the first a long card loses, since the button says it too, and the button that switches it.
+  const viewer = seesThrough(story, person.name);
+  const other = people(story).find(one => seesThrough(story, one.name));
+  const pov = !details.pictures ? null : viewer ? c.povNote : other ? c.povOther(line(other.name, 60)) : null;
   const result = payload([c.cardTitle(line(person.name, 60), storyName(state, story)), '',
     ...described ? [descriptionTitle, described, c.descriptionSize([...described].length), ''] : [],
     ...changes ? [c.changes, changes, ''] : [],
     c.look, person.look, c.lookSize(...size(person.look)), whose, '',
     ...clothes ? [clothesTitle, clothes, c.clothesSize(...size(clothes))] : [c.noClothes], c.clothesNote, '',
-    c.sizeNote, '', c.scope, portrait === null ? null : '', portrait], [
+    c.sizeNote, '', c.scope, portrait === null ? null : '', portrait, pov === null ? null : '', pov], [
     [btn(c.editDetails, `details-edit:${personRef(story, person)}`)],
     [btn(c.edit, `look-edit:${personRef(story, person)}`)],
     details.pictures ? [btn(c.portrait, `portrait:${personRef(story, person)}`),
       details.references ? btn(c.ownPortrait, `ref-send:${personRef(story, person)}:front`) : null] : null,
+    details.pictures ? [btn(viewer ? c.povOff : c.povOn, `${viewer ? 'pov-off' : 'pov'}:${personRef(story, person)}`)] : null,
     [btn(c.back, `view:characters:${story.id}`)],
   ]);
   const pre = (text: string, after: string) => {
