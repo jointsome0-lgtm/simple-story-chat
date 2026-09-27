@@ -2376,3 +2376,41 @@ table.
 whether ROLE's words keep the named medium and leave the reference's pose, light and backdrop; whether the view beside
 the front brings the figure closer or brings the front's standing pose along; whether the crop's face comes through
 without its body.
+
+<a id='refs-stand-2'></a>
+
+## The second refs stand
+
+The same night's tester, whose frames take references with the bot's wording of 47f7f80, saw two things: a woman
+whose look says a large bust, a very narrow waist and long legs came out much heavier in one picture, and the
+portrait's grey suit came into a scene where a man was to be bare-chested. The owner holds the figure the more
+important. [image-refs-stand-2.ts](../local/image-refs-stand-2.ts) draws 96 frames of H alone on the refs stand's
+card, in K-solo and P at seeds 21, 23, 29, 31, 37 and 41, seed by seed:
+
+- **R-L0**: the refs stand's R with H's look beside the reference, as the bot's wording keeps it
+  ([picture-references.ts](../local/picture-references.ts)); the first stand's R had no look.
+- **R-L1**: the same with weight anchors in the look ("Slender", "slim hourglass figure", "long slim legs"): 25 words
+  where the look has 26, with "pale skin" for "very light skin" to make room.
+- **W-L0** and **W-L1**: no picture, the two looks. **FV-L0** and **FC-L0**: as the first stand drew them, FV without
+  a look.
+- **R-L0-NEG** and **W-L0-NEG**, last so the end cuts them first: R-L0's and W-L0's texts at CFG 2 with a negative
+  against a suit (named without a color, since the tester's own pictures wear a skin-colored one), a heavier figure,
+  an extra person, hands and writing. The frame graph takes a negative as the sheets do: Qwen's encoder conditions the
+  negative from the same references, and the sampler takes both of its outputs.
+
+The references are the first stand's pictures: H's front, H's VN front and both of H's views, which `--from` takes from
+that run's `cells.json` by their sha256 and never draws again. A run drawn from other graphs, weights or attention is
+refused, and so is a resume under other pictures. `build-texts.ts` in the run's directory builds `texts.json` from the
+first stand's pinned texts, and the script pins it. The directory has the first stand's layout, with `cells.json` in
+its format.
+
+**The price.** `estimate`: 14 minutes at the seeded times and 23 at the admission prices; the first stand's card drew
+R, W, FV and FC frames in 5.0 to 5.5 s warm, which makes about 10.
+
+```sh
+npm run image:refs-stand-2 -- dry-run --texts ~/simple-story-chat-runs/2026-09-27/refs-stand-2/texts.json --from ~/simple-story-chat-runs/2026-09-27/refs-stand    # steps 0 to 13
+bash ~/simple-story-chat-runs/2026-09-27/refs-stand-2/run.sh "$end"    # the server's checks, then draw --from the first stand; stand_done, 96 drawn
+```
+
+**Not verified without the card**: a frame's time at CFG 2 with a reference; whether the anchors thin the figure
+without taking the bust and hips the look asks for; whether the negative keeps a reference's suit out of the scene.

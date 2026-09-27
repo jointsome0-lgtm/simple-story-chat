@@ -52,9 +52,9 @@ import type { FakeJob } from './fake-comfy.ts';
 
 const ROOT = resolve(import.meta.dirname, '..');
 // texts.json as ~/simple-story-chat-runs/2026-09-27/refs-stand/build-texts.ts wrote it, byte for byte.
-const TEXTS_FILE = 'texts.json';
-const TEXTS_SHA256 = 'd0678be9753c496fc3ad754ad5124a0add622b8298a3f744f6c71f0da2728f61';
-const INDEX_FILE = 'cells.json';
+export const TEXTS_FILE = 'texts.json';
+export const TEXTS_SHA256 = 'd0678be9753c496fc3ad754ad5124a0add622b8298a3f744f6c71f0da2728f61';
+export const INDEX_FILE = 'cells.json';
 // As the figure test prices: the run's first job pays the compile, the first job of each other group a shape of its
 // own. A socket that did not open is waited out this long, once.
 const COLD_MS = 45000, SHAPE_MS = 15000, RETRY_PAUSE_MS = 3000;
@@ -81,33 +81,36 @@ const FALLBACK = /Attention backend '.*' is unavailable; using PyTorch attention
 
 // ---- The plan ----
 
-type Size = { width: number; height: number };
+export type Size = { width: number; height: number };
 type Kind = 'front' | 'view' | 'sheet' | 'frame';
 // How a reference reaches its slot: area-scaled to 352x640 (round two's C), at its own size, the top of a front through
 // ImageCrop at its own size, or a sheet at the encoder's `resolution` 1024. The last is the whole node's setting, so a
 // cell never mixes it with the others.
-type How = 's352' | 'own' | 'crop' | 'r1024';
-type Ref = { from: string; how: How };
-type Negative = 'none' | 'shared' | 'rf';
+export type How = 's352' | 'own' | 'crop' | 'r1024';
+export type Ref = { from: string; how: How };
+// The sheets' shared negative, RF's, and the one of the second stand (local/image-refs-stand-2.ts).
+export type Negative = 'none' | 'shared' | 'rf' | 'neg';
 // `core` is drawn while it fits; `cfg1` only if every core cell after it fits too; `D` is last, the first cut.
-type Tier = 'core' | 'cfg1' | 'D';
+export type Tier = 'core' | 'cfg1' | 'D';
 export type Scene = 'K-solo' | 'K-pair' | 'P';
 // What a cell is priced and timed with: its graph, canvas, CFG and references.
-const GROUPS = ['front', 'front2', 'view', 'words', 'ref1', 'ref2', 'ref4', 'crop', 'own1', 'own2', 'sheet', 'sheet1', 'sheetref', 'sheetview'] as const;
+const GROUPS = ['front', 'front2', 'view', 'words', 'ref1', 'ref2', 'ref4', 'crop', 'own1', 'own2', 'sheet', 'sheet1', 'sheetref', 'sheetview',
+  'wordsCfg2', 'ref1Cfg2'] as const;
 type Group = typeof GROUPS[number];
 const FRONT_CANVAS: Size = { width: 720, height: 1280 };
 const SHEET_CANVAS: Size = { width: 2048, height: 1152 };
 // The face crop: the top 720x400 of H's VN front at seed 7, which the encoder takes at 704x384 (next-card-texts.txt, FC).
-const CROP = { x: 0, y: 0, width: 720, height: 400 };
+export const CROP = { x: 0, y: 0, width: 720, height: 400 };
 const SHEET_RESOLUTION = 1024;
 export const SEEDS = [7, 11];
 // A group's warm time in ms before the card has drawn one of it. A front, a frame from words and a frame with one
 // reference at 352x640 as the pilot drew them with Triton (docs/illustrations-plan.md: 6.4, 6.1 and about 7 s) and
 // the bot on the day's card (6 and 7 s). The rest are estimates from their tokens (qwen-refs' final report §4.3 and
 // §4.5): CFG 2 runs the sampler twice, a reference is computed once into the prefix cache, and a 2048x1152 sheet has
-// 9,216 tokens to a frame's 3,520. Once the card has drawn a group, its measured time prices it (`drawStand`).
+// 9,216 tokens to a frame's 3,520. Once the card has drawn a group, its measured time prices it (`drawStand`). The
+// second stand's frames at CFG 2 from the card's own times: a front took 5.0 s at CFG 1 and 8.2 s at CFG 2.
 const SEED_MS: Record<Group, number> = { front: 6500, front2: 12000, view: 9000, words: 6500, ref1: 7500, ref2: 8000, ref4: 9500, crop: 7500,
-  own1: 9000, own2: 10500, sheet: 55000, sheet1: 29000, sheetref: 10500, sheetview: 10500 };
+  own1: 9000, own2: 10500, sheet: 55000, sheet1: 29000, sheetref: 10500, sheetview: 10500, wordsCfg2: 10000, ref1Cfg2: 11000 };
 // The price a cell is admitted by: its time, a quarter more, and three seconds, as round two prices.
 const priceOf = (ms: number) => Math.round(ms * MARGIN + CELL_MS);
 
@@ -133,21 +136,27 @@ function groupOf(one: { kind: Kind; cfg: number; refs: Ref[]; canvas: Size }): G
   if (one.kind === 'sheet') return one.cfg === 1 ? 'sheet1' : 'sheet';
   if (one.kind === 'view') return 'view';
   const how = one.refs[0]?.how;
+  if (one.cfg !== 1) {
+    if (how && (how !== 's352' || one.refs.length !== 1)) throw new Error('A frame at CFG 2 takes one reference at 352x640 or none');
+    return how ? 'ref1Cfg2' : 'wordsCfg2';
+  }
   if (!how) return 'words';
   if (how === 'r1024') return one.canvas.height > one.canvas.width ? 'sheetview' : 'sheetref';
   if (how === 'crop') return 'crop';
   if (how === 'own') return one.refs.length === 1 ? 'own1' : 'own2';
   return one.refs.length === 1 ? 'ref1' : one.refs.length === 2 ? 'ref2' : 'ref4';
 }
+// A cell with its group and its file in the run's directory, under fronts, views, sheets or frames by its kind.
+export const cellOf = (one: Omit<Planned, 'group' | 'file' | 'tier'> & { tier?: Tier }): Planned => {
+  const cell = { ...one, tier: one.tier ?? 'core' };
+  const dir = { front: 'fronts', view: 'views', sheet: 'sheets', frame: 'frames' }[one.kind];
+  return { ...cell, group: groupOf(cell), file: join(dir, `${one.id}${one.scene ? `-${one.scene}` : ''}-s${one.seed}.png`) };
+};
 // The card's cells in the order drawn: fronts and RF, FV's views, arm A with FV, arm C, the sheets, the frames from the
 // sheets and RF, arm D (the report's §4.3, FV beside R, which it is compared with).
 function planOf(): Planned[] {
   const out: Planned[] = [];
-  const add = (one: Omit<Planned, 'group' | 'file' | 'tier'> & { tier?: Tier }) => {
-    const cell = { ...one, tier: one.tier ?? 'core' };
-    const dir = { front: 'fronts', view: 'views', sheet: 'sheets', frame: 'frames' }[one.kind];
-    out.push({ ...cell, group: groupOf(cell), file: join(dir, `${one.id}${one.scene ? `-${one.scene}` : ''}-s${one.seed}.png`) });
-  };
+  const add = (one: Parameters<typeof cellOf>[0]) => out.push(cellOf(one));
   const frames = (arm: string, id: string, scenes: Scene[], refs: (scene: Scene) => Ref[], tier: Tier = 'core') => {
     for (const scene of scenes) for (const seed of SEEDS) {
       add({ key: frameKey(id, scene, seed), id, arm, kind: 'frame', scene, seed, graph: 'action', canvas: FRAME_CANVAS, cfg: 1, negative: 'none', refs: refs(scene), tier });
@@ -194,8 +203,8 @@ function planOf(): Planned[] {
   return out;
 }
 export const PLANNED = planOf();
-const BY_KEY = new Map(PLANNED.map(one => [one.key, one]));
-const sizeText = (size: Size) => `${size.width}x${size.height}`;
+export const BY_KEY = new Map(PLANNED.map(one => [one.key, one]));
+export const sizeText = (size: Size) => `${size.width}x${size.height}`;
 // The size a reference reaches the encoder at, from the picture it is made of.
 const atEncoder = (how: How, from: Size): Size => {
   const [width, height] = how === 's352' ? [SCALED.width, SCALED.height] : how === 'crop' ? referenceGeometry(CROP.width, CROP.height, 0)
@@ -211,9 +220,10 @@ export type TextCell = { key: string; kind: Kind; seed: number; graph: 'front' |
   negative: string };
 type Texts = { hash: string; cells: Map<string, TextCell> };
 // texts.json, read as the figure test reads its texts: a link, a missing file and a file other than the one pinned are
-// refused, and so is one whose cells are not PLANNED's, key by key in its order, each on its graph, canvas and CFG with
-// its references, a prompt, no negative where CFG 1 skips it, and one negative for all the sheets and one for RF.
-function readTexts(file: string, pinned: string): Texts {
+// refused, and so is one whose cells are not the plan's, key by key in its order, each on its graph, canvas and CFG with
+// its references, a prompt, no negative where CFG 1 skips it, and one negative a kind: all the sheets', RF's, the NEG
+// cells' of the second stand.
+function readTexts(file: string, pinned: string, plan: Planned[]): Texts {
   noLink(file);
   if (!existsSync(file)) throw new Refusal(`${file} is missing: the texts are fixed before the card, and nothing is drawn`);
   const bytes = readFileSync(file), bad = (why: string) => new Refusal(`${file} ${why}; nothing is drawn from it`);
@@ -221,9 +231,9 @@ function readTexts(file: string, pinned: string): Texts {
   let read: unknown;
   try { read = JSON.parse(bytes.toString('utf8')); } catch { throw bad('is not JSON'); }
   const cells = typeof read === 'object' && read !== null ? (read as { cells?: unknown }).cells : undefined;
-  if (!Array.isArray(cells) || cells.length !== PLANNED.length) throw bad(`does not hold the card's ${PLANNED.length} cells`);
+  if (!Array.isArray(cells) || cells.length !== plan.length) throw bad(`does not hold the stand's ${plan.length} cells`);
   const found = new Map<string, TextCell>(), negatives = new Map<Negative, Set<string>>();
-  PLANNED.forEach((one, at) => {
+  plan.forEach((one, at) => {
     const cell = cells[at] as Partial<TextCell> | null;
     const right = typeof cell === 'object' && cell !== null && cell.key === one.key && cell.kind === one.kind && cell.seed === one.seed
       && cell.graph === one.graph && cell.canvas === sizeText(one.canvas) && cell.cfg === one.cfg && same(cell.refs, one.refs)
@@ -233,7 +243,7 @@ function readTexts(file: string, pinned: string): Texts {
     negatives.set(one.negative, (negatives.get(one.negative) ?? new Set()).add(cell.negative!));
     found.set(one.key, cell as TextCell);
   });
-  if (negatives.get('shared')?.size !== 1 || negatives.get('rf')?.size !== 1) throw bad('has more than one shared negative or RF negative');
+  if ([...negatives].some(([kind, texts]) => kind !== 'none' && texts.size !== 1)) throw bad('has more than one negative of a kind');
   return { hash: sha256(bytes), cells: found };
 }
 
@@ -244,27 +254,27 @@ const recipeOf = (graph: Graph): Recipe => {
   const own = samplerSettingsOf(graph);
   return { steps: own.steps ?? SAMPLER_DEFAULTS.steps, sampler: own.sampler ?? SAMPLER_DEFAULTS.sampler, scheduler: own.scheduler ?? SAMPLER_DEFAULTS.scheduler };
 };
-type Inputs = { texts: Texts; frontGraph: Graph; base: Graph; recipe: Recipe };
+export type Inputs = { texts: Texts; frontGraph: Graph; base: Graph; recipe: Recipe };
 // The graphs as pinned, the canvases they pin, and one recipe for both; then the texts.
-function inputsOf(textsFile: string, pinned: string): Inputs {
+export function inputsOf(textsFile: string, pinned: string, plan = PLANNED): Inputs {
   const frontGraph = apiGraph(JSON.parse(readFileSync(FRONT_GRAPH, 'utf8'))), base = apiGraph(JSON.parse(readFileSync(ACTION_GRAPH, 'utf8')));
   const recipe = recipeOf(frontGraph);
   if (!same(portraitCanvas(frontGraph), FRONT_CANVAS) || !same(latentSizeOf(base), FRAME_CANVAS) || !same(recipeOf(base), recipe)
     || referenceSlots(base).length < 4) {
     throw new Refusal('The pinned graphs no longer give the fronts 720x1280, the frames 1280x704, one recipe and four reference slots; nothing is drawn');
   }
-  return { texts: readTexts(textsFile, pinned), frontGraph, base, recipe };
+  return { texts: readTexts(textsFile, pinned, plan), frontGraph, base, recipe };
 }
 type Setup = Inputs & { card: ReturnType<typeof cardOf>; pins: Record<string, string> };
 // And the card's record at <out>/card.txt. The pins are all a picture here depends on beyond the server: the texts,
 // both graphs, the canvases, the crop, the sizes references reach the encoder at, the attention, and the weights the
 // card verified. A resume under any other, or on a server that says another thing of itself, is refused.
-function setupOf(out: string, pinned: string): Setup {
+export function setupOf(out: string, pinned: string, plan = PLANNED): Setup {
   let card: ReturnType<typeof cardOf>;
   noLink(join(out, 'card.txt'));
   try { card = cardOf(join(out, 'card.txt')); }
   catch { throw new Refusal(`${join(out, 'card.txt')} is missing or differs from gpu/image-manifest.env: copy the card's image-verified.txt there first; nothing is drawn`); }
-  const inputs = inputsOf(join(out, TEXTS_FILE), pinned);
+  const inputs = inputsOf(join(out, TEXTS_FILE), pinned, plan);
   return { ...inputs, card, pins: { texts: inputs.texts.hash, frontGraph: sha256(readFileSync(FRONT_GRAPH)), actionGraph: sha256(readFileSync(ACTION_GRAPH)),
     frontCanvas: sizeText(FRONT_CANVAS), sheetCanvas: sizeText(SHEET_CANVAS), frameCanvas: sizeText(FRAME_CANVAS), viewCanvas: sizeText(VIEW_CANVAS),
     scaled: sizeText(SCALED), crop: `${CROP.width}x${CROP.height}+${CROP.x}+${CROP.y}`, sheetResolution: String(SHEET_RESOLUTION),
@@ -289,22 +299,22 @@ function needOf(cells: Planned[], price: (group: Group) => number, reached = fal
 const seeded = (group: Group) => priceOf(SEED_MS[group]);
 // The cells at the seeded warm times with half the compile and half each group's shape, and at the admission prices;
 // the arms, the tiers the end cuts first, and the card's cost: the drawing alone and with the bootstrap.
-function estimateOf(rate = RATE, bootstrap = BOOTSTRAP_MINUTES, budget = 60) {
-  const count = (test: (one: Planned) => boolean) => PLANNED.filter(test).length;
-  const groups = new Set(PLANNED.map(one => one.group)).size;
-  const expectedMs = PLANNED.reduce((sum, one) => sum + SEED_MS[one.group], 0) + COLD_MS / 2 + (groups - 1) * SHAPE_MS / 2;
-  const pricedMs = needOf(PLANNED, seeded), coreMs = needOf(PLANNED.filter(one => one.tier === 'core'), seeded);
-  const fits = minutes(pricedMs) <= budget, cut = fits ? [] : minutes(needOf(PLANNED.filter(one => one.tier !== 'D'), seeded)) <= budget ? ['D'] : ['D', 'cfg1'];
+export function estimateOf(rate = RATE, bootstrap = BOOTSTRAP_MINUTES, budget = 60, plan = PLANNED) {
+  const count = (test: (one: Planned) => boolean) => plan.filter(test).length;
+  const groups = new Set(plan.map(one => one.group)).size;
+  const expectedMs = plan.reduce((sum, one) => sum + SEED_MS[one.group], 0) + COLD_MS / 2 + (groups - 1) * SHAPE_MS / 2;
+  const pricedMs = needOf(plan, seeded), coreMs = needOf(plan.filter(one => one.tier === 'core'), seeded);
+  const fits = minutes(pricedMs) <= budget, cut = fits ? [] : minutes(needOf(plan.filter(one => one.tier !== 'D'), seeded)) <= budget ? ['D'] : ['D', 'cfg1'];
   const cost = (ms: number) => Math.round((minutes(ms) + bootstrap) / 60 * rate * 100) / 100;
-  return { cells: PLANNED.length, fronts: count(one => one.kind === 'front'), views: count(one => one.kind === 'view'), sheets: count(one => one.kind === 'sheet'),
-    frames: count(one => one.kind === 'frame'), arms: Object.fromEntries(['A', 'FV', 'C', 'B', 'D'].map(arm => [arm, count(one => one.arm === arm)])),
+  return { cells: plan.length, fronts: count(one => one.kind === 'front'), views: count(one => one.kind === 'view'), sheets: count(one => one.kind === 'sheet'),
+    frames: count(one => one.kind === 'frame'), arms: Object.fromEntries([...new Set(plan.map(one => one.arm))].map(arm => [arm, count(one => one.arm === arm)])),
     expectedMinutes: minutes(expectedMs), pricedMinutes: minutes(pricedMs), coreMinutes: minutes(coreMs),
-    tiers: { cfg1: { cells: count(one => one.tier === 'cfg1'), minutes: minutes(needOf(PLANNED.filter(one => one.tier === 'cfg1'), seeded, true, new Set())) },
-      D: { cells: count(one => one.tier === 'D'), minutes: minutes(needOf(PLANNED.filter(one => one.tier === 'D'), seeded, true, new Set(PLANNED.map(one => one.group)))) } },
+    tiers: { cfg1: { cells: count(one => one.tier === 'cfg1'), minutes: minutes(needOf(plan.filter(one => one.tier === 'cfg1'), seeded, true, new Set())) },
+      D: { cells: count(one => one.tier === 'D'), minutes: minutes(needOf(plan.filter(one => one.tier === 'D'), seeded, true, new Set(plan.map(one => one.group)))) } },
     budgetMinutes: budget, fits, cut, bootstrapMinutes: bootstrap, dollarsPerHour: rate,
     dollars: { expected: cost(expectedMs), priced: cost(pricedMs) },
-    cellSeconds: Object.fromEntries(GROUPS.map(group => [group, { cells: count(one => one.group === group), expected: SEED_MS[group] / 1000,
-      priced: seeded(group) / 1000 }])) };
+    cellSeconds: Object.fromEntries(GROUPS.filter(group => count(one => one.group === group)).map(group => [group, { cells: count(one => one.group === group),
+      expected: SEED_MS[group] / 1000, priced: seeded(group) / 1000 }])) };
 }
 
 // ---- The graphs ----
@@ -314,7 +324,7 @@ const cropNode = (slot: number) => String(40 + slot);
 // scale node to 352x640 on each slot that asks for one and an ImageCrop on the slot of the face crop, the slots it
 // leaves empty gone with their chains, and the encoder at `resolution` 1024 for a sheet, 0 otherwise. Each with the
 // graphs' recipe, the cell's CFG and seed, its prompt and negative, and the kitchen's attention on the sampler's model.
-function buildJob(setup: Inputs & { card: { model: string } }, one: Planned, text: TextCell, names: string[]): Graph {
+export function buildJob(setup: Inputs & { card: { model: string } }, one: Planned, text: TextCell, names: string[]): Graph {
   const values = { checkpoint: setup.card.model, prompt: text.prompt, negative: text.negative, seed: one.seed, ...setup.recipe, cfg: one.cfg, ...one.canvas };
   let graph: Graph;
   if (one.graph === 'front') graph = applyToWorkflow(setup.frontGraph, values);
@@ -337,7 +347,7 @@ function buildJob(setup: Inputs & { card: { model: string } }, one: Planned, tex
 }
 // Each reference slot of the encoder in slot order as the graph goes out: the nodes between it and its loader, with
 // what each asks for, and the file on the loader.
-function slotChains(graph: Graph) {
+export function slotChains(graph: Graph) {
   const from = (link: unknown) => (Array.isArray(link) ? graph[String(link[0])] : undefined);
   const found: { order: number; chain: unknown[] }[] = [];
   for (const node of Object.values(graph)) {
@@ -364,7 +374,7 @@ const wantedChain = (ref: Ref, name: string) => (ref.how === 's352' ? ['ImageSca
 // model from the loader of the card's transformer through the kitchen's attention, and the action graph's cache on a
 // view or a frame; each slot the chain its reference asks for, and no other loader, scale or crop; one save, of the
 // sampler's decode.
-function cellRight(graph: Graph, one: Planned, text: TextCell, names: string[], setup: Inputs & { card: { model: string } }): boolean {
+export function cellRight(graph: Graph, one: Planned, text: TextCell, names: string[], setup: Inputs & { card: { model: string } }): boolean {
   const from = (value: unknown) => (Array.isArray(value) ? graph[String(value[0])] : undefined);
   const nodes = Object.values(graph), recipe = setup.recipe;
   const samplers = nodes.filter(node => node.class_type === 'KSampler'), saves = nodes.filter(node => node.class_type === 'SaveImage');
@@ -400,27 +410,46 @@ type Cell = { key: string; id: string; arm: string; kind: Kind; seed: number; gr
 type KitchenRecord = { seen: boolean; argv: boolean; tritonImported: boolean; tritonImportFailed: boolean; backends: Record<string, { available: boolean; disabled: boolean }> };
 // cells.json: keys, codes, sizes, counts and times, no prompt. `server`: what the server said it is, triton among it;
 // `kitchen`: what its log said of comfy-kitchen's backends at its start.
-type StandIndex = { startedAt: string; completedAt?: string; pins: Record<string, string>; server: Record<string, string>; kitchen?: KitchenRecord;
+export type StandIndex = { startedAt: string; completedAt?: string; pins: Record<string, string>; server: Record<string, string>; kitchen?: KitchenRecord;
   cells: Record<string, Cell>; stopped?: 'until'; error?: string };
-// `keys`: the dry run's, the cells a run draws, in PLANNED's order; every one otherwise.
-type Options = { out: string; comfy: string; until: number; pinned: string; keys?: string[]; timeoutMs?: number; waitMs?: number; pollMs?: number;
-  log: (event: object) => void };
-const countsOf = (index: StandIndex) => {
+// `keys`: the dry run's, the cells a run draws, in the plan's order; every one otherwise. `stand`: a stand beside
+// PLANNED's; `from`: the directory of the run whose pictures its cells take.
+type Options = { out: string; comfy: string; until: number; pinned: string; stand?: Stand; from?: string; keys?: string[]; timeoutMs?: number;
+  waitMs?: number; pollMs?: number; log: (event: object) => void };
+export const countsOf = (index: StandIndex) => {
   const cells = Object.values(index.cells), tally = (status: Cell['status']) => cells.filter(one => one.status === status)
     .reduce<Record<string, number>>((all, one) => ({ ...all, [one.code ?? 'image_failed']: (all[one.code ?? 'image_failed'] ?? 0) + 1 }), {});
   return { drawn: cells.filter(one => one.status === 'drawn').length, failed: tally('failed'), out: tally('out') };
 };
 
-// Every cell not yet drawn, one at a time through the harness's drawOne, in PLANNED's order. A cell whose references
+// The pictures a stand's cells take and do not draw: each drawn by the run in `from`, as that run's cells.json records
+// it, on the same graphs, weights and attention. Which pictures they are is pinned with the run's own pins.
+function lentOf(plan: Planned[], pins: Record<string, string>, from: string | undefined) {
+  const keys = [...new Set(plan.flatMap(one => one.refs.map(ref => ref.from)))].filter(key => !plan.some(one => one.key === key));
+  if (!keys.length) return undefined;
+  if (from === undefined) throw new Refusal(`The cells take ${keys.length} pictures another run drew: --from names its directory; nothing is drawn`);
+  const dir = resolve(from), file = join(dir, INDEX_FILE);
+  noLink(file);
+  const index = readJson<StandIndex>(file);
+  if (!index || ['frontGraph', 'actionGraph', 'attention', 'comfyuiRevision', 'transformer', 'encoder', 'vae'].some(name => index.pins[name] !== pins[name])) {
+    throw new Refusal(`${file} is missing, or its run was drawn from other graphs, weights or attention; nothing is drawn`);
+  }
+  const cells: Record<string, Cell | undefined> = Object.fromEntries(keys.map(key => [key, index.cells[key]]));
+  return { dir, cells, pin: sha256(JSON.stringify(keys.map(key => [key, cells[key]?.sha256 ?? null]))) };
+}
+
+// Every cell not yet drawn, one at a time through the harness's drawOne, in the plan's order. A cell whose references
 // are not all drawn is `out` until a resume. Each is begun only if it can end by `until` at its group's price, the
 // compile of the run's first cell and a shape of each other group's first priced in, and none after the first that
 // cannot; an SH-cfg1 sheet only if the core cells after it fit too, or it is `cut`. A group is priced from the seeded
 // time until the card has drawn it: then from the slowest of its warm cells, or its first cell's until one is warm.
 // A socket that does not open is waited out once; a failed cell is recorded and the run goes on, unless its code says
 // the graph or the server is wrong (stopsTheRun), or the kitchen's attention fell back, which stop the run.
-async function drawStand(options: Options): Promise<StandIndex> {
+export async function drawStand(options: Options): Promise<StandIndex> {
+  const stand = options.stand ?? FIRST, byKey = new Map(stand.plan.map(one => [one.key, one]));
   const out = resolve(options.out), file = join(out, INDEX_FILE);
-  const setup = setupOf(out, options.pinned), earlier = readJson<StandIndex>(file);
+  const setup = setupOf(out, options.pinned, stand.plan), earlier = readJson<StandIndex>(file);
+  const lent = lentOf(stand.plan, setup.pins, options.from), pins = lent ? { ...setup.pins, lent: lent.pin } : setup.pins;
   const at = (ms: number) => AbortSignal.timeout(Math.max(0, Math.round(ms - Date.now())));
   const comfy: Comfy = { baseUrl: options.comfy, timeoutMs: options.timeoutMs ?? 60000, end: at(options.until), reserve: at(options.until + CLEANUP_RESERVE_MS) };
   const server = await serverPins(comfy, true).catch(() => {
@@ -434,11 +463,11 @@ async function drawStand(options: Options): Promise<StandIndex> {
     throw new Refusal('The stand draws on the bot\'s picture path: a server on cu130 with SIMPLE_CHAT_IMAGE_TRITON=1 whose ModelAttentionBackend offers '
       + `the kitchen's attention (docs/gpu.md#bot-card); this one has cu${cuda || '?'}, Triton ${server.triton ?? 'off'}, the attention ${offered ? 'offered' : 'not offered'}; nothing is drawn`);
   }
-  if (earlier && (!same(earlier.pins, setup.pins) || !same(earlier.server, server))) {
-    throw new Refusal(`${file} was drawn from other texts, graphs or weights, or on a server that said another thing of itself: move it aside; nothing is drawn`);
+  if (earlier && (!same(earlier.pins, pins) || !same(earlier.server, server))) {
+    throw new Refusal(`${file} was drawn from other texts, graphs, weights or pictures, or on a server that said another thing of itself: move it aside; nothing is drawn`);
   }
   const kitchen = kitchenOf(await logLines(comfy), server.triton === 'enabled');
-  const index: StandIndex = earlier ?? { startedAt: new Date().toISOString(), pins: setup.pins, server, cells: {} };
+  const index: StandIndex = earlier ?? { startedAt: new Date().toISOString(), pins, server, cells: {} };
   if (kitchen.seen || !index.kitchen) {
     index.kitchen = { seen: kitchen.seen, argv: kitchen.argv, tritonImported: kitchen.tritonImported, tritonImportFailed: kitchen.tritonImportFailed,
       backends: Object.fromEntries(Object.entries(kitchen.backends).map(([name, one]) => [name, { available: one.available, disabled: one.disabled }])) };
@@ -449,16 +478,19 @@ async function drawStand(options: Options): Promise<StandIndex> {
   mkdirSync(out, { recursive: true, mode: 0o700 });
   const save = () => writeJson(file, index);
   save();
-  const page = () => writePage(out, setup, index);
+  const page = () => writePage(out, setup, index, stand);
   page();
   const done = (key: string) => {
     const cell = index.cells[key], path = cell?.file === undefined ? undefined : join(out, cell.file);
     return cell?.status === 'drawn' && path !== undefined && existsSync(path) && sha256(readFileSync(path)) === cell.sha256;
   };
-  // A reference as a cell takes it: drawn, where its record says, the very bytes, at its cell's canvas.
+  // A reference as a cell takes it: drawn, where its record says, the very bytes, at its cell's canvas; by this run, or
+  // by the run it borrows from.
   const pictureOf = (key: string) => {
-    const bytes = done(key) ? readFileSync(join(out, index.cells[key].file!)) : undefined, size = bytes ? pngSize(bytes) : undefined;
-    return bytes && same(size, BY_KEY.get(key)!.canvas) ? bytes : undefined;
+    const [dir, cell]: [string | undefined, Cell | undefined] = byKey.has(key) ? [out, done(key) ? index.cells[key] : undefined] : [lent?.dir, lent?.cells[key]];
+    const path = dir !== undefined && cell?.status === 'drawn' && cell.file !== undefined ? join(dir, cell.file) : undefined;
+    const bytes = path !== undefined && existsSync(path) ? readFileSync(path) : undefined;
+    return bytes && sha256(bytes) === cell?.sha256 && same(pngSize(bytes), (byKey.get(key) ?? BY_KEY.get(key))?.canvas) ? bytes : undefined;
   };
   // The prices: seeded until the card has drawn a group, then measured, from this run's cells and a resumed one's.
   const warm = new Map<Group, number>(), firsts = new Map<Group, number>();
@@ -469,7 +501,7 @@ async function drawStand(options: Options): Promise<StandIndex> {
   };
   Object.values(index.cells).forEach(learn);
   const price = (group: Group) => priceOf(warm.get(group) ?? firsts.get(group) ?? SEED_MS[group]);
-  const plan = options.keys ? PLANNED.filter(one => options.keys!.includes(one.key)) : PLANNED;
+  const plan = options.keys ? stand.plan.filter(one => options.keys!.includes(one.key)) : stand.plan;
   const left = plan.filter(one => !done(one.key));
   options.log({ event: 'stand_plan', cells: plan.length, left: left.length, pricedMinutes: minutes(needOf(left, price)) });
   const uploaded = new Map<string, string>();
@@ -601,9 +633,9 @@ async function drawStand(options: Options): Promise<StandIndex> {
 
 // ---- The page ----
 
-const SCENE_WORDS: Record<Scene, string> = { 'K-solo': 'двор, одна', 'K-pair': 'двор, двое', P: 'окно, профиль' };
+export const SCENE_WORDS: Record<Scene, string> = { 'K-solo': 'двор, одна', 'K-pair': 'двор, двое', P: 'окно, профиль' };
 const HOW_WORDS: Record<How, string> = { s352: '352x640', own: 'свой размер', crop: 'верх 720x400', r1024: 'лист, resolution 1024' };
-type Section = { title: string; note: string; columns: string[]; rows: { label: string; keys: (string | undefined)[] }[] };
+export type Section = { title: string; note: string; columns: string[]; rows: { label: string; keys: (string | undefined)[] }[] };
 const known = (key: string) => (BY_KEY.has(key) ? key : undefined);
 const sceneRows = (scenes: Scene[], ids: string[]) => scenes.flatMap(scene => SEEDS.map(seed => ({ label: `${SCENE_WORDS[scene]}, сид ${seed}`,
   keys: ids.map(id => known(frameKey(id, scene, seed))) })));
@@ -629,16 +661,20 @@ const SECTIONS: Section[] = [
     + 'в обратном порядке; Rough с грубыми словами внешности; L-now без картинок и без внешностей.', columns: ['Q', 'X', 'Naming', 'Order', 'Rough', 'L-now'],
     rows: sceneRows(KS, ['Q', 'X', 'Naming', 'Order', 'Rough', 'L-now']) },
 ];
+// What a run draws, and its page: PLANNED's here, the second stand's in local/image-refs-stand-2.ts.
+export type Stand = { plan: Planned[]; title: string; intro: string; sections: Section[] };
+const FIRST: Stand = { plan: PLANNED, title: 'Стенд референсов', sections: SECTIONS,
+  intro: 'Синтетические тексты qwen-refs (next-card-texts.txt и запросы листов GPT), путь бота: cu130, Triton, внимание кухни. Сиды 7 и 11, 25 шагов euler.' };
 
 // index.html beside cells.json: a section an arm, a row a scene and seed of the cells it compares, each picture with its
 // references, its time and its prompt folded under it, linked where it lies, never copied. Under the sections the warm
 // times of each group, the first cells apart.
-function writePage(out: string, inputs: Inputs | undefined, index: StandIndex | undefined) {
-  const cells = index?.cells ?? {}, drawing = index !== undefined && !index.completedAt;
+export function writePage(out: string, inputs: Inputs | undefined, index: StandIndex | undefined, stand = FIRST) {
+  const cells = index?.cells ?? {}, drawing = index !== undefined && !index.completedAt, byKey = new Map(stand.plan.map(one => [one.key, one]));
   const href = (path: string) => escapeHtml(relative(out, path).split(sep).join('/'));
   const figure = (key: string | undefined) => {
     if (!key) return '<td></td>';
-    const one = BY_KEY.get(key)!, cell = cells[key], text = inputs?.texts.cells.get(key), shape = `aspect-ratio:${one.canvas.width}/${one.canvas.height}`;
+    const one = byKey.get(key)!, cell = cells[key], text = inputs?.texts.cells.get(key), shape = `aspect-ratio:${one.canvas.width}/${one.canvas.height}`;
     const path = cell?.status === 'drawn' && cell.file ? join(out, cell.file) : undefined;
     const why = cell?.status === 'out' ? (cell.code === 'cut' ? 'срезано по времени' : 'нет картинки-образца') : cell?.status === 'failed'
       ? `не вышло: ${cell.code}` : 'не нарисовано';
@@ -649,11 +685,11 @@ function writePage(out: string, inputs: Inputs | undefined, index: StandIndex | 
     const words = text ? `<details><summary>промпт</summary><pre>${escapeHtml(text.prompt)}</pre>${text.negative ? `<p>негатив, CFG ${one.cfg}:</p><pre>${escapeHtml(text.negative)}</pre>` : ''}</details>` : '';
     return `<td><figure>${picture}<figcaption>${escapeHtml(key)}${refs ? `<br>по ${escapeHtml(refs)}` : ''}${escapeHtml(time)}</figcaption>${words}</figure></td>`;
   };
-  const sections = SECTIONS.map(section => `<section><h2>${escapeHtml(section.title)}</h2><p>${escapeHtml(section.note)}</p>
+  const sections = stand.sections.map(section => `<section><h2>${escapeHtml(section.title)}</h2><p>${escapeHtml(section.note)}</p>
 <table><tr><th></th>${section.columns.map(column => `<th>${escapeHtml(column)}</th>`).join('')}</tr>
 ${section.rows.map(row => `<tr><th>${escapeHtml(row.label)}</th>${row.keys.map(figure).join('')}</tr>`).join('\n')}</table></section>`);
   const drawnCells = Object.values(cells).filter(one => one.status === 'drawn' && one.totalMs !== undefined);
-  const times = GROUPS.map(group => {
+  const times = GROUPS.filter(group => stand.plan.some(one => one.group === group)).map(group => {
     const warm = drawnCells.filter(one => one.group === group && !one.cold && !one.firstOfGroup);
     return `<tr><td>${group}</td><td>${warm.length}</td><td>${seconds(median(warm.map(one => one.totalMs!)))}</td><td>${seconds(median(warm.flatMap(one => (one.sampleMs === undefined ? [] : [one.sampleMs]))))}</td></tr>`;
   }).join('');
@@ -663,14 +699,14 @@ ${section.rows.map(row => `<tr><th>${escapeHtml(row.label)}</th>${row.keys.map(f
   const state = !index ? 'карта ещё не рисовала' : drawing ? 'рисуется' : index.error ? `остановлено: ${index.error}` : index.stopped ? 'остановлено концом времени' : 'закончено';
   const server = index ? `Сервер: ComfyUI ${index.server.comfyui ?? '?'}, torch ${index.server.pytorch ?? '?'}, Triton ${index.server.triton === 'enabled' ? 'включён' : 'выключен'}, внимание кухни.` : '';
   writeFileSync(join(out, 'index.html'), `<!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><title>Стенд референсов, 2026-09-27</title>
+<html lang="ru"><head><meta charset="utf-8"><title>${escapeHtml(stand.title)}, 2026-09-27</title>
 <style>body{font:15px/1.4 system-ui,sans-serif;margin:1em}table{border-collapse:collapse}td,th{vertical-align:top;padding:4px}
 img,.none{height:300px;max-width:none;display:block;background:#8883}.none{display:flex;align-items:center;justify-content:center;color:#888}
 figure{margin:0}figcaption{font-size:12px;color:#666;max-width:360px}pre{white-space:pre-wrap;max-width:520px;font-size:12px}</style></head><body>
-<h1>Стенд референсов</h1>
-<p>Синтетические тексты qwen-refs (next-card-texts.txt и запросы листов GPT), путь бота: cu130, Triton, внимание кухни. Сиды 7 и 11, 25 шагов euler.
+<h1>${escapeHtml(stand.title)}</h1>
+<p>${escapeHtml(stand.intro)}
 Промпт свёрнут под каждой картинкой. Оценок здесь нет: их дают слепые судьи после карты.</p>
-<p>Состояние: ${escapeHtml(state)}. Нарисовано ${counts.drawn} из ${PLANNED.length}${tally(counts.failed) ? `, не вышло: ${escapeHtml(tally(counts.failed))}` : ''}${tally(counts.out) ? `, не начато: ${escapeHtml(tally(counts.out))}` : ''}. ${escapeHtml(server)}</p>
+<p>Состояние: ${escapeHtml(state)}. Нарисовано ${counts.drawn} из ${stand.plan.length}${tally(counts.failed) ? `, не вышло: ${escapeHtml(tally(counts.failed))}` : ''}${tally(counts.out) ? `, не начато: ${escapeHtml(tally(counts.out))}` : ''}. ${escapeHtml(server)}</p>
 ${sections.join('\n')}
 <section><h2>Время</h2><table><tr><th>группа</th><th>тёплых</th><th>всего, с</th><th>сэмплер, с</th></tr>${times}</table>
 <p>Медианы по тёплым картинкам. Первые задания запуска и групп: ${escapeHtml(firsts || 'нет')}.</p></section>
@@ -682,27 +718,26 @@ ${sections.join('\n')}
 
 // The real texts' tokens: each prompt and negative as the encoder takes it (local/tokenizer.ts), with its references,
 // and the tokens of each canvas and of each reference at the size it reaches the encoder.
-function tokenReport(texts: Texts, tokenizers: string) {
+export function tokenReport(texts: Texts, tokenizers: string, plan = PLANNED) {
   const qwen = loadTokenizers(tokenizers).qwen();
   if (!qwen) throw new Refusal(`No Qwen tokenizer in ${tokenizers}: pass --tokenizers with the directory that holds qwen-2.5.json.gz`);
-  const groups = GROUPS.map(group => {
-    const cells = PLANNED.filter(one => one.group === group);
+  const groups = GROUPS.filter(group => plan.some(one => one.group === group)).map(group => {
+    const cells = plan.filter(one => one.group === group);
     const counted = cells.map(one => qwenPromptTokens(qwen, texts.cells.get(one.key)!.prompt, 'qwen_image', { images: one.refs.length }));
     const refs = cells[0]?.refs.map(ref => tokensOf(atEncoder(ref.how, BY_KEY.get(ref.from)!.canvas))) ?? [];
     return { group, cells: cells.length, promptTokens: [Math.min(...counted.map(one => one.prompt)), Math.max(...counted.map(one => one.prompt))],
       conditioningMax: Math.max(...counted.map(one => one.conditioning)), canvasTokens: cells[0] ? tokensOf(cells[0].canvas) : 0, referenceTokens: refs };
   });
-  const negative = (kind: Negative) => {
-    const one = PLANNED.find(cell => cell.negative === kind)!;
-    return qwenPromptTokens(qwen, texts.cells.get(one.key)!.negative, 'qwen_image').prompt;
-  };
-  return { groups, negatives: { shared: negative('shared'), rf: negative('rf') } };
+  const kinds = [...new Set(plan.map(one => one.negative))].filter(kind => kind !== 'none');
+  const negatives: Partial<Record<Negative, number>> = Object.fromEntries(kinds.map(kind => [kind,
+    qwenPromptTokens(qwen, texts.cells.get(plan.find(one => one.negative === kind)!.key)!.negative, 'qwen_image').prompt]));
+  return { groups, negatives };
 }
 
 // The server's command line with the Triton backend on, and ModelAttentionBackend offering the kitchen's attention or
 // not, as the levers' dry run serves them.
-const TRITON_ARGV = ['main.py', '--listen', '127.0.0.1', '--enable-triton-backend'];
-const attentionInfo = (offered: boolean) => ({ ModelAttentionBackend: { input: { required: { model: ['MODEL', {}],
+export const TRITON_ARGV = ['main.py', '--listen', '127.0.0.1', '--enable-triton-backend'];
+export const attentionInfo = (offered: boolean) => ({ ModelAttentionBackend: { input: { required: { model: ['MODEL', {}],
   attention: ['COMBO', { options: ['pytorch attention', ...(offered ? [KITCHEN_ATTENTION] : [])] }] } } } });
 
 // The whole stand without a card, in `dir`. First the real texts at `textsFile`: their pin, their tokens, and every

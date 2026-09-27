@@ -36,6 +36,7 @@
     "image:t-probe": "node local/image-t-probe.ts",
     "image:body-test": "node local/image-body-test.ts",
     "image:figure-test": "node local/image-figure-test.ts",
+    "image:refs-stand-2": "node local/image-refs-stand-2.ts",
     "image:refs-test": "node local/image-refs-test.ts",
     "agent": "node local/agent-cli.ts",
     "agent:gpu": "node --env-file=.env.gpu local/agent-cli.ts",
