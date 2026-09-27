@@ -110,7 +110,7 @@ export const RESTART_VARIABLES: Record<Row, string> = { base: 'TRITON_PRINT_AUTO
 // is read on the card to find the cache and never leaves it.
 export type Probe = { servers: number; pid: number; env: EnvCounts; files: number };
 export type Prober = () => Promise<Probe>;
-const PROBE_SCRIPT = String.raw`pid=$(pgrep -f '[C]omfyUI/main.py' | head -n 1); echo "servers $(pgrep -fc '[C]omfyUI/main.py')"; echo "pid ${'${pid:-0}'}"; `
+export const PROBE_SCRIPT = String.raw`pid=$(pgrep -f '[C]omfyUI/main.py' | head -n 1); echo "servers $(pgrep -fc '[C]omfyUI/main.py')"; echo "pid ${'${pid:-0}'}"; `
   + String.raw`[ -n "$pid" ] || exit 0; for name in ${VARIABLES.join(' ')}; do echo "env $name $(tr '\0' '\n' < /proc/$pid/environ | grep -c "^$name=") `
   + String.raw`$(tr '\0' '\n' < /proc/$pid/environ | grep -cx "$name=1")"; done; home=$(tr '\0' '\n' < /proc/$pid/environ | sed -n 's/^HOME=//p' | head -n 1); `
   + String.raw`echo "files $(find "${'${home:-/root}'}/.triton/cache" -name '*.autotune.json' 2>/dev/null | wc -l)"`;
@@ -499,6 +499,11 @@ export async function leverCommand(step: Step, options: LeverOptions): Promise<L
   }
   if (step === 'closing' && standing.pid === reference?.pid) throw new Refusal('closing is the reference after a restart: start the server again first');
   if (step === 'attention') {
+    // Its passes are one server's: a step begun on one torch is not finished on the other.
+    const began = record.passes.find(pass => pass.step === 'attention' && pass.row === row);
+    if (began && began.pytorch !== standing.pytorch) {
+      throw new Refusal(`attention began on the ${row} row's ${began.pytorch} server, and its passes are not mixed with this one's`);
+    }
     const host = hostOf(row, standing.pytorch, cu130), hosted = record.evidence[`${host}:${row}`];
     if (!hosted || hosted.pid !== standing.pid || !stepDone(record, host, row)) {
       throw new Refusal(`attention draws on ${host}'s server of the ${row} row once ${host} has drawn, without a restart: this server is not that one`);
