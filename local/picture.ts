@@ -47,7 +47,7 @@ import type { ImageConfig } from './config.ts';
 import { estimateTokens, requestStamp, sameContext } from './context.ts';
 import { SAMPLER_DEFAULTS, apiGraph, applyToWorkflow, attentionOffered, drawOne, latentSizeOf, previewOnly, referenceSlots, samplerSettingsOf,
   serverPins, settled, textEncoderOf, withAttention } from './image-batch.ts';
-import type { Comfy, Graph } from './image-batch.ts';
+import type { Comfy, Graph, Steps } from './image-batch.ts';
 import { STYLE, askJson, assemblePrompt, frameRequest, inWords, matchSheet, olderSheet, retellRequest, retoldOf, sheetOf, sheetRequest } from './illustrate.ts';
 import type { Character, Description, Excerpt } from './illustrate.ts';
 import { PORTRAIT_CLOTHES, PORTRAIT_STYLE, portraitPrompt, portraitText } from './image-portraits.ts';
@@ -57,6 +57,7 @@ import type { ModelRequest, Provider } from './model.ts';
 import { styleChoice, styleLine } from './picture-style.ts';
 import type { StyleChoice } from './picture-style.ts';
 import { REFERENCE_VERSION, frameReferences, pinReferences, readReference, referenceGraph, referencePrompt, temporaryReferences } from './picture-references.ts';
+import { createProgress } from './progress.ts';
 import { contextParts, storyNarration } from './prompt.ts';
 import { fileErrorCode } from './store.ts';
 import type { Store } from './store.ts';
@@ -223,6 +224,16 @@ export function foldedPrompt(summary: string, prompt: string): string {
   const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   return `<details><summary>${escape(summary)}</summary>${escape(prompt)}</details>`;
 }
+
+// How far the card has got with a picture, as the second line of its status line: ten cells filled as far as the steps
+// done reach, and the steps, «▰▰▰▰▱▱▱▱▱▱ 12/25». It has no words, so it is the same in every language. It is edited at
+// most every PROGRESS_MS, a few times a picture and well under the one message a second in a chat that the Bot API
+// FAQ asks bots to stay below.
+const stepsBar = (value: number, max: number) => {
+  const filled = Math.floor(10 * value / max);
+  return `${'▰'.repeat(filled)}${'▱'.repeat(10 - filled)} ${value}/${max}`;
+};
+const PROGRESS_MS = 3000;
 
 // One seed per story, from the story's id. Free sampling redraws the world from nothing in every scene; a seed that
 // stays put holds a place steadier between visits, and costs nothing (the plan, "What survives without reference
@@ -500,13 +511,13 @@ export function createIllustrator(config: ImageConfig, deps: {
 
   // One picture on the picture card: a whole prompt, drawn by a recipe. The kitchen's attention is asked of the server
   // while the job's socket opens (`kitchenAttention`), and the picture's row says what it was drawn with, a failed
-  // one's too once the answer had come.
+  // one's too once the answer had come. `onProgress` hears the steps of each job it runs (`statusLine`).
   type ReferenceReason = NonNullable<ErrorDetails['pictureReferences']>;
   const referenceGate = (userId: string): ReferenceReason | undefined => !config.references ? 'disabled'
     : !config.users.has(userId) || (!(deps.ownerId && userId === deps.ownerId) && !config.referenceUsers?.has(userId)) ? 'not_allowed' : undefined;
 
   async function draw(userId: string, recipe: PictureRecipe, prompt: string, signal: AbortSignal, log: Log,
-    fallbackPrompt = prompt, reason: ReferenceReason = 'legacy') {
+    { fallbackPrompt = prompt, reason = 'legacy', onProgress }: { fallbackPrompt?: string; reason?: ReferenceReason; onProgress?: Steps } = {}) {
     const comfy: Comfy = { baseUrl: config.url, timeoutMs: config.timeoutMs, signal };
     const { references, ...plainRecipe } = recipe;
     let actualRecipe: PictureRecipe = plainRecipe;
@@ -524,7 +535,7 @@ export function createIllustrator(config: ImageConfig, deps: {
         pictureAttention = noded ? 'kitchen' : said === 'kitchen' ? 'plain_graph' : said;
         return noded ?? filled;
       });
-      return drawOne(comfy, job, { waitMs: config.waitMs, pollMs, onSubmitted: () => { submitted = true; } });
+      return drawOne(comfy, job, { waitMs: config.waitMs, pollMs, onSubmitted: () => { submitted = true; }, onProgress });
     };
     try {
       let edited: Graph | undefined;
@@ -584,7 +595,7 @@ export function createIllustrator(config: ImageConfig, deps: {
   // One frame on the picture card with the story's seed. A sample reuses a compatible scene recipe, including the
   // original portrait inputs, and changes the style at the end and, for references, at the opening too.
   async function drawFrame(userId: string, storyId: string, frame: { description: Description; sheet: Character[] },
-    line: string, signal: AbortSignal, log: Log, savedRecipe?: PictureRecipe) {
+    line: string, signal: AbortSignal, log: Log, savedRecipe?: PictureRecipe, onProgress?: Steps) {
     const plain = assemblePrompt(frame.description, frame.sheet, line);
     let assembled = plain;
     // After a graph or checkpoint change, a sample uses today's recipe and portraits, as a new frame does.
@@ -614,20 +625,31 @@ export function createIllustrator(config: ImageConfig, deps: {
       catch (error) { log('portraits_unswept', fileErrorCode(error)); }
     };
     try {
-      const drawn = await draw(userId, recipe, assembled.prompt, signal, log, plain.prompt, reason);
+      const drawn = await draw(userId, recipe, assembled.prompt, signal, log, { fallbackPrompt: plain.prompt, reason, onProgress });
       return { assembled: drawn.referenceCount ? assembled : plain, recipe: drawn.recipe, drawn, releasePortraits };
     } catch (error) { releasePortraits(); throw error; }
   }
 
   // A status line of its own, not the scene's draft: it has to outlive the message it stands under and be removed
-  // by id once the photo is there. A chat that refuses it is no reason to skip the picture.
+  // by id once the photo is there. A chat that refuses it is no reason to skip the picture. While the card draws, the
+  // steps it has done go under the line (`progress`, `stepsBar`), in an edit at most every PROGRESS_MS. An edit
+  // Telegram refuses leaves a `picture_status_failed` row and waits for the next one, and none lands once the line is
+  // being cleared (local/progress.ts `close`): the removal, or the failure put in its place, is the line's last word.
   async function statusLine(chat: Chat, text: string, log: Log) {
-    let status: number | undefined;
-    try { status = ((await chat.send({ text })) as { message_id?: number }).message_id; }
+    let messageId: number | undefined;
+    try { messageId = ((await chat.send({ text })) as { message_id?: number }).message_id; }
     catch (error) { log('picture_status_unsent', errorCode(error)); }
-    return async (replacement?: string) => {
-      if (status === undefined) return;
-      try { await (replacement === undefined ? chat.remove(status) : chat.edit(status, { text: replacement })); } catch { /* a hint, never needed */ }
+    const bar = messageId === undefined ? undefined : createProgress<{ value: number; max: number }>({ chat, messageId, log,
+      intervalMs: PROGRESS_MS, rows: { failed: 'picture_status_failed' },
+      render: ({ value, max }) => ({ text: `${text}\n${stepsBar(value, max)}` }) });
+    const progress: Steps = (value, max) => bar?.update({ value, max });
+    return {
+      progress,
+      async clear(replacement?: string) {
+        if (messageId === undefined) return;
+        await bar?.close();
+        try { await (replacement === undefined ? chat.remove(messageId) : chat.edit(messageId, { text: replacement })); } catch { /* a hint, never needed */ }
+      },
     };
   }
 
@@ -694,7 +716,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       return { pictureAfterSceneMs: waited, pictureSeconds: Math.round(waited / 1000) };
     };
     const t = texts(store.read(userId).language);
-    const clear = await statusLine(chat, t.notices.drawing, log);
+    const status = await statusLine(chat, t.notices.drawing, log);
 
     let describeMs = 0;
     let pictureStyle: StyleChoice | undefined;
@@ -706,7 +728,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       try { release = request.hold?.(); }
       catch {
         log('picture', 'gpu_not_ready', { outcome: 'skipped', ...elapsed() });
-        await clear();
+        await status.clear();
         return;
       }
       let frame: { description: Description; sheet: Character[]; clothesChanged: number };
@@ -721,7 +743,8 @@ export function createIllustrator(config: ImageConfig, deps: {
       const reader = store.read(userId);
       pictureStyle = styleChoice(reader, standard);
       const line = styleLine(reader, standard);
-      const result = await drawFrame(userId, storyId, frame, line, signal, log, reader.stories[storyId]?.nodes[nodeId]?.picture);
+      const result = await drawFrame(userId, storyId, frame, line, signal, log, reader.stories[storyId]?.nodes[nodeId]?.picture,
+        status.progress);
       releasePortraits = result.releasePortraits;
       const { assembled, recipe, drawn } = result;
       if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
@@ -730,7 +753,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       const photoStarted = now();
       const photo = await sendKept(request, () => chat.photo(drawn.bytes, request.sceneMessageId), recipe);
       const photoMs = Math.max(0, now() - photoStarted);
-      await clear();
+      await status.clear();
       const size = promptSize(assembled.prompt, line, drawn.referenceCount);
       await sendPrompt(request, photo, assembled.prompt, size, true);
       log('picture', undefined, { outcome: 'ready', cancelled: signal.aborted, describeMs, imageMs: drawn.totalMs,
@@ -745,7 +768,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       const gaveWay = GAVE_WAY.includes(String(code));
       const outcome = cancelled ? 'cancelled' : gaveWay ? 'skipped' : 'failed';
       // A reader who has moved on gets no apology, only their own next scene; a reader still waiting is told once.
-      await clear(outcome === 'failed' ? t.notices.pictureFailed : undefined);
+      await status.clear(outcome === 'failed' ? t.notices.pictureFailed : undefined);
       log('picture', signal.aborted ? 'cancelled' : safeCode(code),
         { ...safeErrorDetails(error), outcome, cancelled, describeMs, pictureStyle, ...elapsed() });
     } finally { releasePortraits?.(); }
@@ -793,7 +816,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       const { userId, chat, storyId, branchId, nodeId, signal, log, styles } = request;
       if (signal.aborted || !styles.length) return;
       const t = texts(store.read(userId).language);
-      const clear = await statusLine(chat, request.status, log);
+      const status = await statusLine(chat, request.status, log);
       // A frame is reused only for the very scene it was described from, only while that scene still exists, and only
       // while its people have the looks it was described with: a look the reader edited since is described anew, and
       // so is one edited while that frame was still being described.
@@ -811,7 +834,7 @@ export function createIllustrator(config: ImageConfig, deps: {
           try { release = request.hold?.(); }
           catch {
             log('picture_sample', 'gpu_not_ready', { outcome: 'skipped', frameReused, pictureStyle, stylesAsked });
-            await clear(t.notices.gpuPaused);
+            await status.clear(t.notices.gpuPaused);
             return;
           }
           const describeStarted = now();
@@ -822,7 +845,7 @@ export function createIllustrator(config: ImageConfig, deps: {
         for (const style of styles) {
           pictureStyle = style.pictureStyle;
           if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
-          const result = await drawFrame(userId, storyId, frame, style.line, signal, log, story?.nodes[nodeId]?.picture);
+          const result = await drawFrame(userId, storyId, frame, style.line, signal, log, story?.nodes[nodeId]?.picture, status.progress);
           try {
             const { assembled, drawn } = result;
             if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
@@ -837,12 +860,12 @@ export function createIllustrator(config: ImageConfig, deps: {
           frameReused = true;
           describeMs = 0;
         }
-        await clear();
+        await status.clear();
       } catch (error) {
         const code = errorCode(error);
         const cancelled = signal.aborted || code === 'cancelled' || code === 'scene_gone';
         const outcome = cancelled ? 'cancelled' : GAVE_WAY.includes(String(code)) ? 'skipped' : 'failed';
-        await clear(cancelled ? undefined : t.notices.sampleFailed);
+        await status.clear(cancelled ? undefined : t.notices.sampleFailed);
         log('picture_sample', signal.aborted ? 'cancelled' : safeCode(code),
           { ...safeErrorDetails(error), outcome, cancelled, frameReused, describeMs, pictureStyle, stylesAsked });
       }
@@ -863,7 +886,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       const { userId, chat, storyId, nodeId, prompt, signal, log } = request;
       if (signal.aborted) return;
       const t = texts(store.read(userId).language);
-      const clear = await statusLine(chat, t.variant.drawing, log);
+      const status = await statusLine(chat, t.variant.drawing, log);
       // Asked again before the drawing and before the photo goes out: the scene may have been deleted meanwhile.
       const target = () => {
         const found = config.users.has(userId) ? variantOf(store.read(userId), storyId, nodeId) : 'off';
@@ -873,14 +896,14 @@ export function createIllustrator(config: ImageConfig, deps: {
       };
       try {
         const { recipe } = target();
-        const drawn = await draw(userId, recipe, prompt, signal, log);
+        const drawn = await draw(userId, recipe, prompt, signal, log, { onProgress: status.progress });
         if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
         const { node } = target();
         const scene = { userId, chat, storyId, nodeId, log };
         const photoStarted = now();
         const photo = await sendKept(scene, () => chat.photo(drawn.bytes, node.messageId));
         const photoMs = Math.max(0, now() - photoStarted);
-        await clear();
+        await status.clear();
         const size = promptSize(prompt, undefined, drawn.referenceCount);
         await sendPrompt(scene, photo, prompt, size, true);
         log('picture_variant', undefined, { outcome: 'ready', cancelled: signal.aborted, edited: true, imageMs: drawn.totalMs,
@@ -890,7 +913,7 @@ export function createIllustrator(config: ImageConfig, deps: {
         const cancelled = signal.aborted || code === 'cancelled' || code === 'scene_gone';
         // A picture that can no longer be drawn the same way is refused with the reason, as the bot refuses it at input.
         const refused = code === 'recipe_changed' ? t.errors.variantChanged : code === 'pictures_off' ? t.errors.variantOff : undefined;
-        await clear(cancelled ? undefined : refused ?? t.variant.failed);
+        await status.clear(cancelled ? undefined : refused ?? t.variant.failed);
         log('picture_variant', signal.aborted ? 'cancelled' : safeCode(code),
           { ...safeErrorDetails(error), outcome: cancelled ? 'cancelled' : refused ? 'skipped' : 'failed', cancelled, edited: true });
       }
@@ -924,7 +947,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       // The button is offered only to a reader who is drawn for, and that is asked again where the work starts.
       if (signal.aborted || !config.users.has(userId)) return;
       const t = texts(store.read(userId).language);
-      const clear = await statusLine(chat, request.status, log);
+      const status = await statusLine(chat, request.status, log);
       const sheetNow = () => store.read(userId).stories[storyId]?.sheet;
       const lookNow = () => {
         const person = sheetNow()?.find(one => one.name === name);
@@ -934,7 +957,8 @@ export function createIllustrator(config: ImageConfig, deps: {
         const look = lookNow();
         if (!look?.trim()) throw sceneGone();
         const recipe = { ...recipeOf(storyId), ...upright, seed: randomInt(2 ** 32) };
-        const drawn = await draw(userId, recipe, portraitPrompt(name, look, (sheetNow() ?? []).map(one => one.name)).prompt, signal, log);
+        const drawn = await draw(userId, recipe, portraitPrompt(name, look, (sheetNow() ?? []).map(one => one.name)).prompt, signal, log,
+          { onProgress: status.progress });
         if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
         if (lookNow() !== look) throw sceneGone();
         // Held before it is sent, so that its button finds it however soon it is pressed, and let go if it never
@@ -949,7 +973,7 @@ export function createIllustrator(config: ImageConfig, deps: {
           throw error;
         }
         const photoMs = Math.max(0, now() - photoStarted);
-        await clear();
+        await status.clear();
         // The text it was drawn from follows it, folded as a picture's prompt does, with its size as the picture model
         // reads that text: the English retelling where the reader wrote the details, which the card counts in
         // characters alone (the owner, 2026-09-27). It has no button for a variant.
@@ -961,7 +985,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       } catch (error) {
         const code = errorCode(error);
         const cancelled = signal.aborted || code === 'cancelled' || code === 'scene_gone';
-        await clear(cancelled ? undefined : t.characters.portraitFailed);
+        await status.clear(cancelled ? undefined : t.characters.portraitFailed);
         log('picture_portrait', signal.aborted ? 'cancelled' : safeCode(code),
           { ...safeErrorDetails(error), outcome: cancelled ? 'cancelled' : 'failed', cancelled });
       }

@@ -587,8 +587,9 @@ const outOfMemory = (data: { exception_type?: unknown; exception_message?: unkno
 // when a job is over, so that the wait ends then rather than at the next poll. What it carries names the job's file,
 // so none of it is logged. `strict`: only a job already in `jobs` is heard, as on the harness's socket, which carries
 // a whole stage's jobs (`stageSocket`); otherwise every job a message names is, as on the bot's, which carries one.
+// `onProgress` hears how far the running node has got, for the bot's status line (`drawOne`).
 // The line numbers here are those of the revision gpu/image-manifest.env pins.
-function hearing(strict: boolean) {
+function hearing(strict: boolean, onProgress?: Steps) {
   const jobs = new Map<string, Told>();
   let heard = 0;
   let wake: () => void = () => undefined;
@@ -600,7 +601,7 @@ function hearing(strict: boolean) {
   const notice = () => { heard++; wake(); };
   const hear = (event: { data: unknown }) => {
     let message: { type?: unknown; data?: { prompt_id?: unknown; node?: unknown; output?: unknown; nodes?: unknown;
-      exception_type?: unknown; exception_message?: unknown } } | null;
+      exception_type?: unknown; exception_message?: unknown; value?: unknown; max?: unknown } } | null;
     try { message = typeof event.data === 'string' ? JSON.parse(event.data) : null; } catch { return; }
     const data = message?.data;
     if (!message || !data || typeof data.prompt_id !== 'string') return;
@@ -620,6 +621,17 @@ function hearing(strict: boolean) {
       if (outOfMemory(data)) job.oom = true;
       notice();
     } else if (message.type === 'executing' && data.node === null) { job.over = true; job.overAt = performance.now(); notice(); }
+    // The steps of the node that is running, most often the sampler's (latent_preview.py:128-138), sent to the client
+    // that submitted the job alone (main.py:432-435, execution.py:736-739), the first and the last always and the rest
+    // at most every 100 ms (comfy/utils.py:1316-1344). They are no news for the wait, and a listener that throws costs
+    // it nothing.
+    else if (message.type === 'progress' && onProgress) {
+      const { value, max } = data;
+      if (typeof value === 'number' && typeof max === 'number' && Number.isSafeInteger(max) && max > 0
+        && Number.isSafeInteger(value) && value >= 0 && value <= max) {
+        try { onProgress(value, max); } catch { /* the listener's own */ }
+      }
+    }
   };
   // The job's record without a read of it, once the socket has heard the whole job succeed. The record's outputs are
   // the very objects the `executed` messages carried (execution.py:826-834), from a node that ran (execution.py:574-577)
@@ -665,9 +677,9 @@ function hearing(strict: boolean) {
 // The socket for one picture, the bot's: for it everything about the socket is optional. One that cannot open, closes
 // early or says nothing useful leaves the wait to the polls in `drawOne`, which end it exactly as they did before there
 // was a socket. None of what it heard outlives the job.
-function watchJob(comfy: Comfy) {
+function watchJob(comfy: Comfy, onProgress?: Steps) {
   const clientId = randomUUID();
-  const told = hearing(false);
+  const told = hearing(false, onProgress);
   // Whether the socket opened, or `false` once it failed or closed first.
   let opened = Promise.resolve(false);
   let socket: WebSocket | undefined;
@@ -846,8 +858,12 @@ export const RIDES = 5;
 // as `not_admitted`. The harness's picture goes on the stage's one socket, with the cell's way through a dropped
 // connection, and is followed in its two halves (`submitOnStage`); the bot's goes through `drawOne`, as it always did.
 // `onSubmitted` tells the bot that a job exists, so an accepted reference job's failure never starts a fallback job.
+// `onProgress` gives the bot's status line the steps its socket hears (`hearing`); the stage's socket has none.
 type DrawOneOptions = { pollMs?: number; waitMs?: number; sampleEvery?: number; requireSocket?: boolean; copies?: string[];
-  admit?: () => boolean; onSubmitted?: () => void };
+  admit?: () => boolean; onSubmitted?: () => void; onProgress?: Steps };
+// How far the node the card is running has got: `value` of `max` steps, whole numbers, max at least 1 and value from
+// 0 to max.
+export type Steps = (value: number, max: number) => void;
 // The card tells a job's news only to a socket that is connected when it is sent, and the first of it, the job's start
 // and the nodes its cache answered, comes at the very start of the job (execution.py:683-720). So the submit waits
 // for the socket to open, this long at most. One that does not open in time leaves the bot's picture to the polls,
@@ -859,7 +875,7 @@ export async function drawOne(comfy: Comfy, graph: Graph | Promise<Graph>, optio
   // opens and again once it has, and either ends the wait for it at once. Nothing is awaited between the second
   // asking, the caller's `admit` and the submit.
   halt(comfy);
-  const watch = watchJob(comfy);
+  const watch = watchJob(comfy, options.onProgress);
   const began = performance.now(), waitMs = options.waitMs ?? 600000;
   try {
     // `undefined` once the wait for the socket has run out.

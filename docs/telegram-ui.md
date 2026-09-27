@@ -78,7 +78,12 @@ Pictures are off by default. Only the readers in `SIMPLE_CHAT_IMAGE_USERS` get t
 the access list ([the settings](setup.md#pictures)). For such a reader every scene gets a picture after it:
 
 1. The scene is saved and sent first. Nothing of the picture delays or changes it.
-2. A status line of its own goes up under the scene.
+2. A status line of its own goes up under the scene. While ComfyUI's sampler runs, a second line under it shows the
+   steps done, «▰▰▰▰▱▱▱▱▱▱ 12/25», as the card's websocket reports them, in an edit at most every 3 s (`statusLine`
+   in `local/picture.ts`). Before the first step (the description, the queue, the model loading) the line stands
+   alone. An edit Telegram refuses leaves a `picture_status_failed` row with Telegram's code, and the next one waits
+   as long as Telegram asks. No edit lands after the line is removed or rewritten to a failure. A sample, a variant
+   and a portrait show the same steps under their own lines, and the line of all styles shows each picture's in turn.
 3. On the language model's card, in one scheduler turn that shares the scene's prefix and holds the GPU no longer than
    a job would, the bot writes the story's character sheet if it has none, then the frame of this scene
    ([from the sheet to the prompt](#picture-pipeline)). When that card is not ready, or the scheduler gives the slot to
