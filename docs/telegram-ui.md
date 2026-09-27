@@ -80,10 +80,12 @@ the access list ([the settings](setup.md#pictures)). For such a reader every sce
 1. The scene is saved and sent first. Nothing of the picture delays or changes it.
 2. A status line of its own goes up under the scene. While ComfyUI's sampler runs, a second line under it shows the
    steps done, «▰▰▰▰▱▱▱▱▱▱ 12/25», as the card's websocket reports them, in an edit at most every 3 s (`statusLine`
-   in `local/picture.ts`). Before the first step (the description, the queue, the model loading) the line stands
+   in `local/picture.ts`). While the job waits on the card behind other jobs, the second line shows its place instead
+   ([waiting](#waiting)). Before that and before the first step (the description, the model loading) the line stands
    alone. An edit Telegram refuses leaves a `picture_status_failed` row with Telegram's code, and the next one waits
    as long as Telegram asks. No edit lands after the line is removed or rewritten to a failure. A sample, a variant
-   and a portrait show the same steps under their own lines, and the line of all styles shows each picture's in turn.
+   and a portrait show the same place and steps under their own lines, and the line of all styles shows each
+   picture's in turn.
 3. On the language model's card, in one scheduler turn that shares the scene's prefix and holds the GPU no longer than
    a job would, the bot writes the story's character sheet if it has none, then the frame of this scene
    ([from the sheet to the prompt](#picture-pipeline)). When that card is not ready, or the scheduler gives the slot to
@@ -401,6 +403,60 @@ seed. With no more than the kept number of scenes uncompacted, the bot says that
 ## Busy state (`state.job`)
 
 Navigation, previews and «Последняя сцена» stay available. Buttons for `start`, `use`, `fork`, `continue` and delete confirmations are left out. Where one would normally appear, the screen says it will be available once the scene is done and shows «✖️ Отменить генерацию» ("Cancel generation", `cancel`). Seed entry stays available. There, the cancel button is the ordinary «✖️ Отмена» ("Cancel"); note that `cancel` also stops a running generation.
+
+<a id='waiting'></a>
+
+## Waiting for a model
+
+The bot shares its models. The language model serves every reader and the agents in turn, and the picture card draws
+every reader's pictures and, from the next rental on, an experiment's cells in the gaps, behind the readers' jobs
+([the bot's picture card](gpu.md#bot-card)). A reader whose request waits is told their place and, once the bot can
+tell, roughly when the request starts; never whose requests are ahead, or when theirs will end.
+
+- **Before a scene** the disappearing draft says «⏳ Очередь к модели: перед вами 2 запроса, начало примерно через
+  40 с.» ("Model queue: 2 requests ahead of you, starting in about 40 s"), then «⏳ Подошла ваша очередь.» ("Your turn
+  has come") and «📖 Модель читает историю, скоро начнёт писать…» ("The model is reading the story and will start
+  writing soon…").
+- **A compaction** that waits has a line in its status, «Перед вами в очереди к модели: 1 запрос, начало примерно
+  через 2 мин.» ("Ahead of you in the model queue: 1 request, starting in about 2 min").
+- **A picture**, a scene's, a sample, a variant or a portrait, that has waited 2 s on the card gets a second line under
+  its status line, «⏳ Очередь к модели картинок: перед вами 1 картинка, начало примерно через 20 с.» ("Picture model
+  queue: 1 picture ahead of you, starting in about 20 s"): the job the card is drawing and the jobs that go before this
+  one, read from the card's queue every 2 s. Once the job starts, the line goes and the steps take its place. The
+  frame's description before it waits for the language model and shows no place.
+
+Until the bot has timed enough of its own work, and whenever it cannot tell, the reader sees the place alone, as in
+«⏳ Очередь к модели: перед вами 2 запроса.». The start comes from what the bot itself sees (`local/eta.ts`):
+
+- **Its own durations**, in memory, from its work as it ends: a turn of the language model by what it does (a scene,
+  a compaction, a frame's description, a retelling of looks, an agent's turn), from the moment it takes a slot to its
+  end, and a job on the picture card from the server's own stamps of its start and end. The usual length of a kind is
+  the median of its last 15, and a kind timed fewer than 3 times has none. A turn with a failed or refused call is not
+  timed, and a restart starts over.
+- **Text** (`startIn` in `local/scheduler.ts`): each slot is free once the turn in it has run its usual length, less
+  what it has run already. Work that gives way to this reader counts for nothing: a probe, a turn that shares a prefix,
+  and work prepared ahead for somebody else. The requests before this one then take the first free slot each for their
+  usual length. Only a reader is given a start, and only while every kind of work in the way has a usual length.
+- **Pictures** (`statusLine` in `local/picture.ts`): the job the card is drawing counts as one of the bot's usual jobs
+  less the time this wait has seen it drawing, whoever's it is, and each job before this one as a whole one.
+- What is left of work already running counts as 5 s at least, so work past its usual length still counts as 5 s
+  more. The start is rounded up to tens of seconds, from «примерно через 10 с» to 50 s, and to whole minutes after
+  that, «примерно через 2 мин». The place and the start are told again when the place changes or the start has moved
+  by 5 s, or by a fifth of itself when that is more. A picture's line is edited at once for its first place and its
+  first steps and otherwise at most every 3 s, and a draft with the same text is not sent again.
+
+What the start cannot see:
+
+- Work that does not go through this bot: another process on the same language model, a gateway's other users, an
+  eval, and above all how long an experiment's cells take on the picture card, where each counts as one of the bot's
+  own jobs. A cell drawn larger or in more steps than the bot's pictures makes the start too early.
+- Readers who come later: every reader's picture goes to the head of the card's queue and the later of two goes first,
+  so a picture's place can grow while it waits. On the language model the readers keep their order.
+- A shared cache's admission by size and the choice of a slot by the prefix it holds. A scene's turn includes its
+  token count and a compaction before it when there is one, so its usual length mixes both kinds of scene.
+
+A row of a request that waited says what the reader was first told, `ahead` and `etaSeconds`, beside what it took in
+fact, `waitMs` in the model queue or `imageQueueMs` on the card ([the bot log](gpu.md#bot-log)).
 
 <a id='telegram-limits'></a>
 

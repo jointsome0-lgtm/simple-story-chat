@@ -171,7 +171,9 @@ step; user answers are never repeated automatically.
 - A started agent turn keeps the GPU up until its last call has ended on the server, the gaps between its calls
   included: a pause waits for it, and the auto-pause counts from then.
 - A person waiting for the model sees how many requests are ahead, never whose, in the disappearing draft before a
-  scene and in the compaction status. Once the model starts reading the scene request, the draft says so.
+  scene and in the compaction status, and roughly when theirs starts once the bot has timed enough of its own work
+  ([what a waiting reader sees](telegram-ui.md#waiting)). Once the model starts reading the scene request, the draft
+  says so.
 
 <a id='slot-pool'></a>
 

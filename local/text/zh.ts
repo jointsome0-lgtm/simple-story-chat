@@ -488,8 +488,11 @@ export const zh: Messages = {
   },
 
   wait: {
-    ahead: n => `模型队列中你前面还有 ${n} 个请求。`,
-    queued: n => `⏳ 模型队列：你前面还有 ${n} 个请求。`,
+    ahead: (n, eta) => `模型队列中你前面还有 ${n} 个请求${eta ? `，${eta}开始` : ''}。`,
+    queued: (n, eta) => `⏳ 模型队列：你前面还有 ${n} 个请求${eta ? `，${eta}开始` : ''}。`,
+    picture: (n, eta) => `⏳ 插图模型队列：你前面还有 ${n} 张图${eta ? `，${eta}开始` : ''}。`,
+    seconds: s => `约 ${s} 秒后`,
+    minutes: m => `约 ${m} 分钟后`,
     next: '⏳ 轮到你了。',
     reading: '📖 模型正在阅读故事，很快开始写作…',
   },

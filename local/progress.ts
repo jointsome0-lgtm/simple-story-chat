@@ -7,9 +7,9 @@ type StatusChat = { send(screen: Screen): Promise<unknown>; edit(messageId: numb
 type Rows = { updated?: string; failed: string };
 
 // One status message per compaction, or per picture while the card draws it (local/picture.ts `statusLine`). UI
-// writes never delay model streaming or drawing, overlap one another, or retry an uncertain sendMessage. A stage, which
-// a compaction's status has and a picture's steps do not, goes out the moment it changes, and 'done', 'failed' and
-// 'cancelled' stop its clock. `messageId`: a message already in the chat, which the status edits instead of sending
+// writes never delay model streaming or drawing, overlap one another, or retry an uncertain sendMessage. A stage, a
+// compaction's or a picture's (its place in the card's queue, then its steps), goes out the moment it changes, and
+// 'done', 'failed' and 'cancelled' stop its clock. `messageId`: a message already in the chat, which the status edits instead of sending
 // one of its own.
 export function createProgress<S extends object = CompactionStatus>({ chat, render, signal, log = () => {}, now = Date.now,
   intervalMs = 5000, messageId: shown, rows = { updated: 'compaction_status_updated', failed: 'compaction_status_failed' } }: {

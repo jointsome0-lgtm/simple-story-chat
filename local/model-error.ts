@@ -62,6 +62,10 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   // One model request: time in the queue and in token counting, then llama-server's own timings (local/model.ts Timings).
   'waitMs', 'countMs', 'cacheTokens', 'promptTokens', 'promptMs', 'predictedTokens', 'predictedMs', 'draftTokens',
   'draftAcceptedTokens', 'slot',
+  // What a waiting reader was told first (local/eta.ts `waited`): how many requests or pictures were ahead, and in
+  // how many seconds the bot expected theirs to start, when it could tell; `waitMs` or `imageQueueMs` is how long it
+  // took in fact.
+  'ahead', 'etaSeconds',
   // A simple-serving gateway's own measurements of one request instead (local/serving.ts), each from the moment it
   // accepted the request: until it handed the request to its engine, until the first token, until its last event.
   // `waitMs` stays the bot's own queue.
@@ -71,10 +75,10 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   'estimateTokens',
   // Which run of local/prepare.ts a row belongs to, counted from the start of the process.
   'prepareRun',
-  // One illustrated scene (docs/gpu.md#bot-log): the description call, then the image server from submit to
-  // file, and what the reader waits from the end of the scene to the picture. The seed stays out: it is drawn from
-  // 0..2^64-1 and is not a safe integer, and so do the prompt, the description and the file name, which are the
-  // reader's scene in another form.
+  // One illustrated scene (docs/gpu.md#bot-log): the description call, then the image server from submit to the job's
+  // start (`imageQueueMs`) and to the file, and what the reader waits from the end of the scene to the picture. The
+  // seed stays out: it is drawn from 0..2^64-1 and is not a safe integer, and so do the prompt, the description and
+  // the file name, which are the reader's scene in another form.
   // `pictureSeconds` is the same wait as `pictureAfterSceneMs`, rounded:
   // docs/illustrations-plan.md#reader-experience-history asks for the seconds from the end of the scene to the
   // picture as a non-negative integer, and that is the number a reader's patience is read in.

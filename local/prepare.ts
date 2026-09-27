@@ -64,7 +64,7 @@ export function createPrepared() {
       const { story, branch, seed } = active(state);
       const nodes = context(story, branch).recent.slice(0, -(config.keepScenes ?? 4));
       if (!nodes.length) return;
-      const turn = provider.openTurn?.({ holder, yields: true });
+      const turn = provider.openTurn?.({ holder, yields: true, work: 'compaction' });
       // Without a shared model there is no turn to wait behind.
       const id = ++runs;
       let settled = false;

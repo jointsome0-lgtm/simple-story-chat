@@ -497,8 +497,11 @@ export const ko: Messages = {
   },
 
   wait: {
-    ahead: n => `모델 대기열에서 앞에 ${n}건이 있습니다.`,
-    queued: n => `⏳ 모델 대기열: 앞에 ${n}건.`,
+    ahead: (n, eta) => `모델 대기열에서 앞에 ${n}건이 있습니다${eta ? ` (${eta} 시작 예정)` : ''}.`,
+    queued: (n, eta) => `⏳ 모델 대기열: 앞에 ${n}건${eta ? `, ${eta} 시작 예정` : ''}.`,
+    picture: (n, eta) => `⏳ 삽화 모델 대기열: 앞에 ${n}장${eta ? `, ${eta} 시작 예정` : ''}.`,
+    seconds: s => `약 ${s}초 후`,
+    minutes: m => `약 ${m}분 후`,
     next: '⏳ 차례가 되었습니다.',
     reading: '📖 모델이 이야기를 읽고 있습니다. 곧 쓰기 시작합니다…',
   },
