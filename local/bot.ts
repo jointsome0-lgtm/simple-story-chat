@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { UserError, id, active, addSeed, newStory, fork, beginJob,
-  deleteSeed, deleteBranch, forgetLostPictures, context, jobTarget, setLanguage } from '../lib/library.ts';
-import type { Job, Library, SceneNode } from '../lib/library.ts';
+  deleteSeed, deleteBranch, forgetLostPictures, context, jobTarget, setLanguage, isPose } from '../lib/library.ts';
+import type { Job, Library, ReferenceInput, SceneNode } from '../lib/library.ts';
 import { storyNarration } from './prompt.ts';
 import { createChat } from './telegram.ts';
 import type { Chat, InlineKeyboard, Screen, TelegramApi } from './telegram.ts';
@@ -22,8 +22,10 @@ import type { GpuController } from './gpu.ts';
 import type { Illustrator, PictureRequest, PortraitRequest, SampleRequest, VariantRequest } from './picture.ts';
 import { DESCRIPTION_CHARS, LOOK_CHARS, personAt, personTag } from './picture.ts';
 import { portraitText } from './image-portraits.ts';
-import type { Log } from './model-error.ts';
+import type { ErrorDetails, Log } from './model-error.ts';
 import { errorCode, member, safeErrorDetails, unavailable } from './model-error.ts';
+import { REFERENCE_WAIT_MS, REFUSAL_CODES, captionOf, keepReference } from './reference.ts';
+import type { ReceivedPicture } from './reference.ts';
 import type { GenerationResult, Provider } from './model.ts';
 import { STYLE } from './illustrate.ts';
 import { OWN_STYLE_CHARS, OWN_STYLES_MAX, PROMPT_CHARS, choiceOf, lineOf, ownStyle, ownStyleInput, ownStyles, pickerKeys, styleKey, styleName } from './picture-style.ts';
@@ -39,6 +41,9 @@ export type BotOptions = {
   // without it nothing is described and nothing is drawn.
   illustrator?: Illustrator;
   readSeedFile?: (document: TelegramDocument) => Promise<string>;
+  // A picture a reader in the reference experiment sent of a person (local/reference.ts), read before the library write
+  // as a seed file is. Without it, a wait for one refuses whatever comes.
+  readPicture?: (message: { photo?: unknown; document?: TelegramDocument }) => Promise<ReceivedPicture>;
   render: (state: Library, route: string, details: RenderDetails) => Screen;
   scenePrefix?: (stats: ContextStats | null, provenance: ModelInfo | undefined, lang?: unknown) => string;
   sceneKeyboard: (state: Library) => InlineKeyboard | undefined;
@@ -48,12 +53,16 @@ export type BotOptions = {
 // Bot API updates are not validated in advance; these are the fields the bot reads.
 export type Update = {
   update_id: number;
-  message?: IncomingMessage & { from?: Sender; chat?: { id: number; type: string }; document?: TelegramDocument };
+  message?: IncomingMessage & { from?: Sender; chat?: { id: number; type: string }; document?: TelegramDocument; photo?: unknown; caption?: unknown };
   callback_query?: { id?: string; data?: string; from?: Sender; message?: { chat?: { id: number; type: string } } };
 };
 type Sender = { id: number; is_bot?: boolean; language_code?: string };
 // A seed file read before the library write: its text for the draft, or the error to show instead.
 type FileInput = { draftId: string; text: string; error?: undefined } | { error: UserError; draftId?: undefined; text?: undefined };
+// A picture a reader sent while the bot waited for one of a person (local/reference.ts), read before the library write
+// as a seed file is: the picture as it will be kept, or the refusal to show instead, beside the wait it answered, which
+// the write must find still standing.
+type Upload = { wait: ReferenceInput; picture?: ReceivedPicture; error?: UserError };
 // What to do after the library write; handle acts on each field that is set.
 type Plan = {
   screen?: Screen; cancel?: boolean; gpuAction?: string; modelStatus?: boolean;
@@ -76,6 +85,8 @@ type Plan = {
   // The person of a story's sheet whose description this write keeps, for their details and look to be retold from it
   // and their card shown (`retold`).
   retell?: { storyId: string; name: string };
+  // A row for the log once the write is committed: what a picture a reader sent became.
+  logged?: { event: string; details: ErrorDetails };
 };
 // One reader's turn, for as long as it can still be cancelled. What it leaves behind — a picture being stopped on
 // the other card — outlives the entry and is awaited through `inFlight` instead.
@@ -93,7 +104,7 @@ const refuse = (t: Messages, key: keyof Messages['errors']) => new UserError(t.e
 const errorText = (t: Messages, error: UserError) =>
   (error.key !== undefined && Object.hasOwn(t.errors, error.key) ? t.errors[error.key as keyof Messages['errors']] : error.message);
 
-export function createBot({ store, api, provider, gpu, illustrator, readSeedFile, render: renderUi, scenePrefix = () => '', sceneKeyboard, allowedUsers, ownerId = '', maxOutputTokens,
+export function createBot({ store, api, provider, gpu, illustrator, readSeedFile, readPicture, render: renderUi, scenePrefix = () => '', sceneKeyboard, allowedUsers, ownerId = '', maxOutputTokens,
   contextTokens = 65536, compactAtTokens = 54000, keepScenes = 4, memoryMode = 'plain', repairCoverage = false, model = 'unknown', providerName = 'claude-code', log = () => {} }: BotOptions) {
   const running = new Map<string, Running>();
   // One drawing on request at a time per reader, a sample of a style or a portrait (local/picture.ts `sample`,
@@ -117,9 +128,10 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
   const render = (state: Library, route: string, details: RenderDetails = {}) =>
     renderUi(state, route, { ...details, modelInfo: { ...modelInfo }, gpuInfo: gpu?.snapshot() satisfies Required<GpuInfo> | undefined });
   // Whether this reader's scenes are illustrated, so that their menu offers the picture style, the bot's own style
-  // line, and the counter of a text's tokens for the characters' card (local/ui.ts `RenderDetails`).
+  // line, and the counter of a text's tokens for the characters' card, and whether they may send a portrait of their
+  // own (local/ui.ts `RenderDetails`).
   const pictureInfoOf = (userId: string) => ({ pictures: illustrator?.enabledFor(userId) ?? false,
-    standardStyle: illustrator?.standardStyle, textTokens: illustrator?.textTokens });
+    standardStyle: illustrator?.standardStyle, textTokens: illustrator?.textTokens, references: illustrator?.referencesFor(userId) ?? false });
   const requireGpu = (t: Messages) => {
     if (!gpu) return;
     try { gpu.assertReady(); }
@@ -158,16 +170,17 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
   };
   // `pictureInfo`: whether this reader's scenes are illustrated, so that their menu offers the picture style, and the
   // bot's own style line (local/ui.ts `RenderDetails`).
-  function prepare(state: Library, update: Update, fileInput: FileInput | undefined, pictureInfo: RenderDetails): Plan {
+  function prepare(state: Library, update: Update, fileInput: FileInput | undefined, pictureInfo: RenderDetails, upload?: Upload): Plan {
     let action = update.callback_query?.data;
     const t = texts(state.language);
     if (fileInput?.error) throw fileInput.error;
     if (fileInput && (state.ui?.input !== 'seed' || state.ui.draftId !== fileInput.draftId)) throw refuse(t, 'draftChanged');
+    if (upload) return keptUpload(state, update, upload, t, pictureInfo);
     const text = fileInput ? fileInput.text : messageText(update.message);
-    // Writing a picture style, a look, details or the prompt of a variant ends with any button or command, an unknown
-    // command included, so that no later message is kept as one by surprise (/last, /model or /typo would otherwise
-    // leave the next move to be taken for one).
-    if ((action || text?.startsWith('/')) && member(['style', 'look', 'details', 'prompt'], state.ui?.input)) state.ui = null;
+    // Writing a picture style, a look, details or the prompt of a variant, and the wait for a picture, end with any
+    // button or command, an unknown command included, so that no later message is kept as one by surprise (/last,
+    // /model or /typo would otherwise leave the next move to be taken for one).
+    if ((action || text?.startsWith('/')) && member(['style', 'look', 'details', 'prompt', 'reference'], state.ui?.input)) state.ui = null;
     if (!action && !fileInput) {
       const command = text?.split(/[\s@]/)[0];
       const current = state.active;
@@ -351,6 +364,19 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       return { screen: render(state, `portrait-kept:${kept.storyId}:${kept.index}`, { retainsPortraits: kept.retainsPortraits }),
         sweep: true, portraitKept: action.slice(14) };
     }
+    // A picture of a person of the reader's own for a pose, the front being their portrait (local/reference.ts): the
+    // button waits for it, as for a look, and the next photo or file is read before the write that keeps it
+    // (`readUpload`, `keptUpload`).
+    if (action?.startsWith('ref-send:')) {
+      if (!pictureInfo.references) throw refuse(t, 'referencesOff');
+      const [, storyId, index, tag, pose] = action.split(':');
+      const person = ID.story.test(storyId) ? personAt(state.stories[storyId], index, tag) : undefined;
+      if (!person || !isPose(pose)) throw refuse(t, 'staleButton');
+      state.ui = { input: 'reference', storyId, name: person.name, pose, at: Date.now() };
+      return { screen: render(state, 'reference-input', pictureInfo) };
+    }
+    // While a picture is awaited, text is no move in the story either; a button or a command leaves (above).
+    if (state.ui?.input === 'reference' && !action) throw refuse(t, 'referenceNeedsPicture');
     // While a look or a description is being written, text is that text. A look is one line, whatever the lines it was
     // sent in; a description keeps its lines, since a table of measurements is lines (the owner, 2026-09-27), with the
     // spaces at their ends and the blank lines past one cut. The person is looked for again by name, since the story
@@ -440,6 +466,50 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     state.interrupted = false;
     const job = beginTurn(state, input, Date.now());
     return { job };
+  }
+
+  // Reads a picture a reader sent while the bot waited for one (local/reference.ts), before the library write, as a seed
+  // file is read. Nothing is downloaded for a reader without access to references or past the wait's half hour: the
+  // write says which. A refusal is logged by its reason alone.
+  async function readUpload(userId: string, wait: ReferenceInput, message: NonNullable<Update['message']>, t: Messages): Promise<Upload> {
+    if (!illustrator?.referencesFor(userId) || Date.now() - wait.at > REFERENCE_WAIT_MS) return { wait };
+    try {
+      if (!readPicture) throw new Error('picture_reader_unavailable');
+      return { wait, picture: await readPicture(message) };
+    } catch (error) {
+      const refusal = error instanceof UserError ? error : refuse(t, 'referenceIncomplete');
+      const key = refusal.key !== undefined && Object.hasOwn(REFUSAL_CODES, refusal.key) ? refusal.key as keyof typeof REFUSAL_CODES : 'referenceIncomplete';
+      logFor(userId)('reference_refused', undefined, { referenceRefusal: REFUSAL_CODES[key] });
+      return { wait, error: refusal };
+    }
+  }
+
+  // What a picture a reader sent becomes inside the library write (local/reference.ts `keepReference`): nothing unless
+  // the wait it answered still stands, with access to references and within its half hour, and the person it is of is
+  // still on the story's sheet. It ends the wait, and a picture refused leaves the wait open for another, as a prompt
+  // does. An English caption is kept with it and any other is not: a caption is what frames are to be matched by later.
+  // The portrait it replaces as the front stays under it (lib/library.ts `poseReference`), and a picture of the reader's
+  // own it replaces goes with the sweep, unless a recipe still needs its file.
+  function keptUpload(state: Library, update: Update, upload: Upload, t: Messages, pictureInfo: RenderDetails): Plan {
+    const { storyId, name, pose, at } = upload.wait;
+    const wait = state.ui?.input === 'reference' ? state.ui : undefined;
+    if (wait?.storyId !== storyId || wait.name !== name || wait.pose !== pose || wait.at !== at) throw refuse(t, 'referenceChanged');
+    if (!pictureInfo.references || Date.now() - at > REFERENCE_WAIT_MS) {
+      state.ui = null;
+      throw refuse(t, pictureInfo.references ? 'referenceExpired' : 'referencesOff');
+    }
+    const picture = upload.picture;
+    if (!picture) throw upload.error ?? refuse(t, 'referenceIncomplete');
+    state.ui = null;
+    const sheet = state.stories[storyId]?.sheet ?? [];
+    const index = sheet.findIndex(one => one.name === name);
+    if (index < 0) throw refuse(t, 'referenceGone');
+    const caption = typeof update.message?.caption === 'string' ? captionOf(update.message.caption) : undefined;
+    keepReference(store, String(update.message?.from?.id), sheet[index], picture, pose, caption, Date.now());
+    return { screen: render(state, `portrait-kept:${storyId}:${index}`, { retainsPortraits: true }), sweep: true,
+      logged: { event: 'reference_saved', details: { referenceSent: picture.sent, referenceFormat: picture.format, referencePlace: pose,
+        referenceBytes: picture.bytes.length + picture.strippedBytes, strippedBytes: picture.strippedBytes,
+        referenceWidth: picture.width, referenceHeight: picture.height } } };
   }
 
   // Prepares the compaction of this person's active branch while they read (local/prepare.ts). Their own work: it keeps
@@ -661,19 +731,26 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         try { await api('answerCallbackQuery', { callback_query_id: update.callback_query.id }); } catch {}
       }
       let fileInput: FileInput | undefined;
-      if (update.message?.document) {
+      let upload: Upload | undefined;
+      const message = update.message;
+      // A photo or a file is a picture of a person while one is awaited, and a file is otherwise a seed file. A photo
+      // nobody asked for goes to the write, which answers it as any message without text.
+      if (message && (message.document || message.photo !== undefined)) {
         const state = store.read(userId);
         if (state.seen.includes(update.update_id)) return;
         const t = texts(state.language);
-        if (state.ui?.input !== 'seed') {
-          fileInput = { error: refuse(t, 'fileNeedsDraft') };
-        } else {
-          const draftId = state.ui.draftId;
-          try {
-            if (!readSeedFile) throw new Error('file_reader_unavailable');
-            fileInput = { draftId, text: await readSeedFile(update.message.document) };
-          } catch (error) {
-            fileInput = { error: error instanceof UserError ? error : refuse(t, 'fileFailed') };
+        if (state.ui?.input === 'reference') upload = await readUpload(userId, state.ui, message, t);
+        else if (message.document) {
+          if (state.ui?.input !== 'seed') {
+            fileInput = { error: refuse(t, 'fileNeedsDraft') };
+          } else {
+            const draftId = state.ui.draftId;
+            try {
+              if (!readSeedFile) throw new Error('file_reader_unavailable');
+              fileInput = { draftId, text: await readSeedFile(message.document) };
+            } catch (error) {
+              fileInput = { error: error instanceof UserError ? error : refuse(t, 'fileFailed') };
+            }
           }
         }
       }
@@ -683,13 +760,14 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         // already exists keeps what it has; without a stored language it stays Russian (text.ts).
         if (state.language === undefined && !state.seen.length && !state.seq) setLanguage(state, langFromTelegram(from?.language_code));
         state.seen = [...state.seen.slice(-511), update.update_id];
-        try { return prepare(state, update, fileInput, pictureInfoOf(userId)); }
+        try { return prepare(state, update, fileInput, pictureInfoOf(userId), upload); }
         catch (error) {
           if (error instanceof UserError) return { screen: { text: errorText(texts(state.language), error) } };
           throw error;
         }
       });
       if (!plan) return;
+      if (plan.logged) log(plan.logged.event, undefined, plan.logged.details);
       if (plan.portraitKept) illustrator?.portraitKept(userId, plan.portraitKept);
       if (plan.sweep) {
         try { store.sweepPortraits(userId); } catch (error) { log('portraits_unswept', fileErrorCode(error)); }

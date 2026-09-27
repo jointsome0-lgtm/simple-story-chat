@@ -205,6 +205,11 @@ export const en: Messages = {
     drawing: '🎨 Drawing a portrait…',
     retelling: '⏳ Retelling the description for the pictures…',
     portraitFailed: 'The portrait did not work out. Try again a little later.',
+    ownPortrait: '📎 Own portrait',
+    ownPortraitTitle: (person, story) => `📎 Own portrait: ${person} · ${story}`,
+    ownPortraitNote: (min, max, megabytes) => `Send a picture of this character as a photo or as a PNG, JPEG or WebP file, up to ${megabytes} MB: the shorter side at least ${min} pixels, the longer at most ${max} and no more than 2.5 times the shorter. The bot neither crops nor stretches it. A drawing only: do not send a photo of a real person. The bot removes the file's metadata (place, camera, captions) and keeps the picture as the character's portrait: frames take it just as they take a drawn portrait. The bot waits half an hour; to leave without a change, tap “↩️” or send /cancel.`,
+    ownPortraitReplaces: 'The new picture replaces the kept portrait. If you later draw a portrait and keep it, it takes this place again.',
+    ownPortraitKept: (width, height) => `🖼 Portrait kept: your own picture, ${width}×${height}. Frames take it just as they take a drawn portrait.`,
   },
 
   model: {
@@ -597,6 +602,19 @@ export const en: Messages = {
     portraitPending: 'This character’s look has not been retold for pictures yet, so a portrait cannot be drawn. Try again after the next picture of this story.',
     portraitStale: 'This portrait can no longer be kept: it is too old, or the look has changed since. Draw a new one.',
     portraitInFlight: 'Already drawing a picture you asked for. You can ask for a portrait once it arrives.',
+    referencesOff: 'Your own character pictures are not available to you now. Open /menu.',
+    referenceNeedsPicture: 'Waiting for a picture: send it as a photo or as a PNG, JPEG or WebP file. To leave without a change, tap “↩️” or send /cancel.',
+    referenceType: 'That will not do: send a photo or a PNG, JPEG or WebP file, not an animation. Send another picture or leave with “↩️”.',
+    referenceBroken: 'Could not read the picture: the file is damaged or written in a way the bot does not read. Save it again and resend it.',
+    referenceSmall: 'The picture is too small: its shorter side must be at least 320 pixels. Send a larger one.',
+    referenceHuge: 'The picture is too big: its longer side must be at most 4096 pixels. Send a smaller one.',
+    referenceShape: 'The picture is too drawn out: its longer side may be at most 2.5 times the shorter. The bot neither crops nor stretches it; crop it closer to the character and send it again.',
+    referenceTooLarge: 'The file is too large: a picture may weigh up to 10 MB. Send a smaller one.',
+    referenceIncomplete: 'Could not get the whole picture. Nothing changed; send it again.',
+    referenceArchive: 'That is an archive, and one picture is needed: a photo or a PNG, JPEG or WebP file.',
+    referenceExpired: 'The bot is no longer waiting for a picture: more than half an hour has passed. Open the character and tap the button again.',
+    referenceGone: 'That character is no longer in the story, so the picture was not saved. Open /menu.',
+    referenceChanged: 'The wait changed while the picture was loading, so it was not saved. Send it again.',
   },
 
   labels: {

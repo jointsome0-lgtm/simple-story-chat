@@ -224,6 +224,11 @@ export const ko: Messages = {
     drawing: '🎨 초상화를 그리는 중…',
     retelling: '⏳ 외모 설명을 삽화용으로 다시 쓰는 중…',
     portraitFailed: '초상화를 그리지 못했어요. 조금 뒤에 다시 시도해 주세요.',
+    ownPortrait: '📎 내 초상화',
+    ownPortraitTitle: (person, story) => `📎 내 초상화: ${person} · ${story}`,
+    ownPortraitNote: (min, max, megabytes) => `이 인물의 그림을 사진이나 PNG, JPEG, WebP 파일로 보내 주세요. 최대 ${megabytes}MB이고, 짧은 변은 ${min}픽셀 이상, 긴 변은 ${max}픽셀 이하이면서 짧은 변의 2.5배를 넘지 않아야 해요. 봇은 그림을 자르거나 늘이지 않아요. 그림만 보내 주세요. 실제 사람의 사진은 보내면 안 돼요. 봇은 파일의 메타데이터(장소, 카메라, 설명)를 지우고 그림을 이 인물의 초상화로 저장해요. 장면 그림은 그린 초상화와 똑같이 이 그림을 써요. 봇은 30분 동안 기다려요. 바꾸지 않고 나가려면 ‘↩️’를 누르거나 /cancel을 보내 주세요.`,
+    ownPortraitReplaces: '새 그림이 저장된 초상화를 대신해요. 나중에 초상화를 그려서 저장하면 그 초상화가 다시 이 자리를 차지해요.',
+    ownPortraitKept: (width, height) => `🖼 초상화를 저장했어요: 내가 보낸 그림, ${width}×${height}. 장면 그림은 그린 초상화와 똑같이 이 그림을 써요.`,
   },
 
   model: {
@@ -616,6 +621,19 @@ export const ko: Messages = {
     portraitPending: '이 인물의 외모가 아직 삽화용으로 다시 쓰이지 않아서 초상화를 아직 그릴 수 없어요. 이 이야기의 다음 삽화가 나온 뒤에 다시 해 봐요.',
     portraitStale: '이 초상화는 이제 저장할 수 없어요. 너무 오래됐거나 그 뒤로 외모가 바뀌었어요. 새로 그려 주세요.',
     portraitInFlight: '요청한 그림을 이미 그리고 있어요. 그림이 도착하면 초상화를 요청할 수 있어요.',
+    referencesOff: '지금은 내 인물 그림을 쓸 수 없어요. 메뉴 열기: /menu',
+    referenceNeedsPicture: '그림을 기다리고 있어요. 사진이나 PNG, JPEG, WebP 파일로 보내 주세요. 바꾸지 않고 나가려면 ‘↩️’를 누르거나 /cancel을 보내 주세요.',
+    referenceType: '이건 쓸 수 없어요. 움직이지 않는 사진이나 PNG, JPEG, WebP 파일이 필요해요. 다른 그림을 보내거나 ‘↩️’로 나가 주세요.',
+    referenceBroken: '그림을 읽지 못했어요. 파일이 손상됐거나 봇이 읽지 못하는 방식으로 저장됐어요. 다시 저장해서 보내 주세요.',
+    referenceSmall: '그림이 너무 작아요. 짧은 변이 320픽셀 이상이어야 해요. 더 큰 그림을 보내 주세요.',
+    referenceHuge: '그림이 너무 커요. 긴 변이 4096픽셀 이하여야 해요. 더 작은 그림을 보내 주세요.',
+    referenceShape: '그림이 너무 길쭉해요. 긴 변은 짧은 변의 2.5배를 넘을 수 없어요. 봇은 그림을 자르거나 늘이지 않아요. 인물에 더 가깝게 잘라서 다시 보내 주세요.',
+    referenceTooLarge: '파일이 너무 커요. 그림은 최대 10MB예요. 더 작은 그림을 보내 주세요.',
+    referenceIncomplete: '그림을 끝까지 받지 못했어요. 바뀐 것은 없어요. 다시 보내 주세요.',
+    referenceArchive: '압축 파일이에요. 여기에는 그림 하나가 필요해요: 사진이나 PNG, JPEG, WebP 파일.',
+    referenceExpired: '봇이 더 이상 그림을 기다리지 않아요. 30분이 넘게 지났어요. 인물을 열고 버튼을 다시 눌러 주세요.',
+    referenceGone: '이 인물은 이제 이야기에 없어서 그림을 저장하지 못했어요. 메뉴 열기: /menu',
+    referenceChanged: '그림을 불러오는 동안 기다리던 내용이 바뀌어서 저장하지 않았어요. 다시 보내 주세요.',
   },
 
   labels: {

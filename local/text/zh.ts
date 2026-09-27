@@ -215,6 +215,11 @@ export const zh: Messages = {
     drawing: '🎨 正在绘制肖像…',
     retelling: '⏳ 正在为插图改写外貌描述…',
     portraitFailed: '肖像没有画成。请稍后再试。',
+    ownPortrait: '📎 自己的肖像',
+    ownPortraitTitle: (person, story) => `📎 自己的肖像：${person} · ${story}`,
+    ownPortraitNote: (min, max, megabytes) => `以照片或 PNG、JPEG、WebP 文件发送这个人物的图片，最大 ${megabytes} MB：短边至少 ${min} 像素，长边最多 ${max} 像素，且不超过短边的 2.5 倍。机器人不会裁剪或拉伸图片。只能是绘画：不能发送真人的照片。机器人会删除文件的元数据（地点、相机、说明），并把图片保存为这个人物的肖像：画面会像使用画出的肖像一样使用它。机器人等待半小时；不做修改离开：点“↩️”或发送 /cancel。`,
+    ownPortraitReplaces: '新图片会替换已保存的肖像。之后如果画出并保存一张肖像，它会重新占据这个位置。',
+    ownPortraitKept: (width, height) => `🖼 肖像已保存：你自己的图片，${width}×${height}。画面会像使用画出的肖像一样使用它。`,
   },
 
   model: {
@@ -607,6 +612,19 @@ export const zh: Messages = {
     portraitPending: '这个角色的外貌还没有为插图改写，所以暂时无法绘制肖像。请在这个故事的下一张插图之后再试。',
     portraitStale: '这张肖像已经无法保存：它已过期，或者外貌之后改过了。请重新画一张。',
     portraitInFlight: '正在绘制你请求的图片。等它发来后再请求肖像。',
+    referencesOff: '你现在无法使用自己的人物图片。打开 /menu 看看。',
+    referenceNeedsPicture: '正在等待图片：请以照片或 PNG、JPEG、WebP 文件发送。不做修改离开：点“↩️”或发送 /cancel。',
+    referenceType: '这个不行：需要照片或 PNG、JPEG、WebP 文件，不能是动图。请发送另一张图片，或点“↩️”离开。',
+    referenceBroken: '无法读取这张图片：文件已损坏，或者写入方式机器人读不了。请重新保存后再发送。',
+    referenceSmall: '图片太小：短边至少要 320 像素。请发送大一点的。',
+    referenceHuge: '图片太大：长边最多 4096 像素。请发送小一点的。',
+    referenceShape: '图片太狭长：长边最多是短边的 2.5 倍。机器人不会裁剪或拉伸图片；请把它裁得更贴近人物后再发送。',
+    referenceTooLarge: '文件太大：图片最大 10 MB。请发送小一点的。',
+    referenceIncomplete: '无法完整获取图片。没有任何变化，请再发一次。',
+    referenceArchive: '这是一个压缩包，而这里需要一张图片：照片或 PNG、JPEG、WebP 文件。',
+    referenceExpired: '机器人已不再等待图片：已经过了半小时以上。请打开人物，再点一次按钮。',
+    referenceGone: '这个人物已经不在故事里了，图片没有保存。打开 /menu 看看。',
+    referenceChanged: '图片加载期间等待的内容变了，所以没有保存。请再发送一次。',
   },
 
   labels: {

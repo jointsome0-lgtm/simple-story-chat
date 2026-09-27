@@ -1,4 +1,6 @@
 // Provider errors are safe codes, never raw HTTP/CLI output or story text.
+import { POSES } from '../lib/library.ts';
+
 const PHASES = ['count_input', 'generate', 'health', 'gpu_read', 'gpu_write', 'ssh_wait', 'ssh_connect', 'ssh_tunnel'] as const;
 const OPERATIONS = ['compact', 'scene'] as const;
 const MEMORY_REASONS = ['output_limit', 'finish_reason', 'json', 'shape', 'fact', 'source', 'coverage', 'evidence', 'quote', 'conflict'] as const;
@@ -33,6 +35,16 @@ const PICTURE_STYLES = ['standard', 'semi', 'novel', 'film', 'graphic', 'waterco
 const PICTURE_ATTENTION = ['kitchen', 'plain_graph', 'plain_torch', 'plain_offer', 'plain_unanswered'] as const;
 const PICTURE_REFERENCES = ['used', 'disabled', 'not_allowed', 'no_portrait', 'legacy', 'unsupported_graph',
   'unavailable', 'upload_failed', 'graph_rejected'] as const;
+// A picture of a person that a reader in the reference experiment sent (local/reference.ts): whether it came as a photo
+// or as a file, its format by its first bytes, and the pose it went to. Its caption and the name of its file stay out,
+// as the person's name does.
+const REFERENCE_SENT = ['photo', 'document'] as const;
+const REFERENCE_FORMATS = ['png', 'jpeg', 'webp'] as const;
+const REFERENCE_PLACES = POSES;
+// Why such a picture was refused (local/reference.ts `REFUSAL_CODES`): not a PNG, JPEG or WebP, or not one the bot
+// reads; its shorter side too short, its longer side too long, or the two too far apart; its bytes over the limit;
+// its download cut short; or an archive where a picture was awaited.
+const REFERENCE_REFUSALS = ['type', 'broken', 'small', 'huge', 'shape', 'too_large', 'incomplete', 'archive'] as const;
 // Why the model's last message ended, as the API names it, for the row of a failed Claude CLI run: `max_tokens` there
 // means the run's output cap was hit, which the CLI reports as an error rather than a truncation.
 export const STOP_REASONS = ['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'refusal', 'other'] as const;
@@ -89,7 +101,10 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   // The details and looks retold from the people's descriptions (local/picture.ts `retellPending`): how many people one
   // call was asked for and how many it wrote, the characters of the longest description it read, and the words of the
   // longest look it wrote, which the rule asks 15-25 of.
-  'retellPeople', 'retoldPeople', 'descriptionCharacters', 'lookWords', 'referenceCount', 'referenceAttempted'] as const;
+  'retellPeople', 'retoldPeople', 'descriptionCharacters', 'lookWords', 'referenceCount', 'referenceAttempted',
+  // A picture a reader sent of a person (local/reference.ts): its bytes as it came, those its metadata took, which were
+  // stripped, and its size in pixels.
+  'referenceBytes', 'strippedBytes', 'referenceWidth', 'referenceHeight'] as const;
 
 export type ErrorDetails = {
   httpStatus?: number; phase?: typeof PHASES[number]; operation?: typeof OPERATIONS[number];
@@ -103,6 +118,9 @@ export type ErrorDetails = {
   imageRole?: typeof IMAGE_ROLES[number]; outcome?: typeof OUTCOMES[number]; cancelled?: boolean;
   pictureStyle?: typeof PICTURE_STYLES[number]; frameReused?: boolean; pictureAttention?: typeof PICTURE_ATTENTION[number];
   pictureReferences?: typeof PICTURE_REFERENCES[number]; referenceCleanup?: boolean;
+  // A picture a reader sent of a person: as what, in which format, and where it went, or why it was refused.
+  referenceSent?: typeof REFERENCE_SENT[number]; referenceFormat?: typeof REFERENCE_FORMATS[number];
+  referencePlace?: typeof REFERENCE_PLACES[number]; referenceRefusal?: typeof REFERENCE_REFUSALS[number];
   // A picture drawn from a prompt the reader wrote whole (local/picture.ts `variant`) rather than one the bot assembled.
   edited?: boolean;
   // A sheet written in place of an older one that still had the clothes in its appearance lines.
@@ -145,6 +163,10 @@ export function safeErrorDetails(value: unknown = {}): ErrorDetails {
   if (member(PICTURE_ATTENTION, input?.pictureAttention)) result.pictureAttention = input.pictureAttention;
   if (member(PICTURE_REFERENCES, input?.pictureReferences)) result.pictureReferences = input.pictureReferences;
   if (typeof input?.referenceCleanup === 'boolean') result.referenceCleanup = input.referenceCleanup;
+  if (member(REFERENCE_SENT, input?.referenceSent)) result.referenceSent = input.referenceSent;
+  if (member(REFERENCE_FORMATS, input?.referenceFormat)) result.referenceFormat = input.referenceFormat;
+  if (member(REFERENCE_PLACES, input?.referencePlace)) result.referencePlace = input.referencePlace;
+  if (member(REFERENCE_REFUSALS, input?.referenceRefusal)) result.referenceRefusal = input.referenceRefusal;
   if (typeof input?.edited === 'boolean') result.edited = input.edited;
   if (typeof input?.sheetRewritten === 'boolean') result.sheetRewritten = input.sheetRewritten;
   if (member(CLI_RESULTS, input?.cliResult)) result.cliResult = input.cliResult;
