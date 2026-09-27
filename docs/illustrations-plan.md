@@ -1029,6 +1029,37 @@ frames with a reference need the kept front, which is fixed before the card as t
 frames from words; then the 6 with the reference. A gate above that fails is read from the page, and the pictures after
 it are not judged.
 
+**The harness.** [image-figure-test.ts](../local/image-figure-test.ts) draws the test on the picture card after round
+two's draw and before [the body test](action-experiment.md#body-test), on the same server, tunnel and `"$end"`. Its
+texts are figure-age's `figure-card-texts.json` of 2026-09-27, the 34 cells in the card order with each exact prompt,
+copied before the rental to `illustrations/figure-card/texts.json`. They stay out of the repository as the body test's
+`bodies.json` does; the script pins their sha256 and refuses any other file, or one whose cells are not its plan's.
+The card order: the 12 fronts on the front graph at 720x1280, then the 16 frames from words on the action graph at
+1280x704, then the 6 C frames with `front:hard-retold:s7` as image 1, area-scaled to 352x640 as round two's C, each at
+its own seed with the graphs' 25 steps of euler/simple at CFG 1. A cell begins only if it can end by `--until` at its
+admission price, the pilot's warm time with Triton a quarter more and 3 s: 11 s a front, 10.7 s a frame from words and
+17.1 s a C frame, which takes the pilot's V with four references rather than the 7 s estimated above; the run's first
+cell adds 45 s for the compile, and the first cell of each other group 15 s. A C frame whose front failed waits for a
+resume, which draws the front first. `estimate` gives 4.4 minutes at the pilot's warm times with half a compile and 8
+at the admission prices, so with 9 minutes or more left before `"$end"` all of it is admitted. `cells.json` holds each
+cell's key, file, sha256, size and milliseconds and the server's pins, never a prompt, and a resume under other pins or
+on another server is refused. `index.html` has a section an arm, the pictures compared side by side a seed, in arm 2
+each scene's pair beside the kept front, each prompt folded under its picture, and the risks the texts carry: the
+retold text's "heavyset", `gym`'s second sample, the pair's two texts. It gives no scores.
+
+```sh
+npm run image:figure-test -- dry-run     # steps 0 to 13, then "the figure test's dry run went as expected"
+npm run image:figure-test -- estimate    # before the card: 34 cells, expectedMinutes 4.4, pricedMinutes 8
+# On the card, after round two's draw, with the server, the tunnel and "$end" as they are:
+ssh simple-chat-vast cat /workspace/simple-chat-gpu/image-verified.txt > illustrations/figure-card/card.txt
+npm run image:figure-test -- draw --until "$end"    # cell by cell; figures_done with drawn 34 and exit 0
+# Then the body test (action-experiment.md#body-test). After the termination, with no card:
+npm run image:figure-test -- page    # illustrations/figure-card/index.html, which `draw` also writes after each cell
+```
+
+**Not verified without the card**: the times, since the pilot drew no frame with one reference, and all that the
+pictures show. `draw` checks `card.txt` against the manifest before it sends anything.
+
 <a id='blind-review'></a>
 
 ## Blind review of pictures

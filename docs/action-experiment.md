@@ -1750,8 +1750,9 @@ waits for a resume on the next card. [The pilot](#pilot) follows on the same car
 minutes or more are left: about 60 to 65 card minutes expected in all, estimates both, under the guard's two hours.
 The card is billed until its termination, not for the two hours. The next rental's plan also holds the card test of
 the figure the owner agreed to on 2026-09-27, 34 pictures and about 4 minutes warm
-([the card test](illustrations-plan.md#figure-card-test)); it has no harness yet, and its texts are the retelling's,
-which passed its check after the one revision the check allowed.
+([the card test](illustrations-plan.md#figure-card-test)); [image-figure-test.ts](../local/image-figure-test.ts) draws
+it before the body test, and its texts are the retelling's, which passed its check after the one revision the check
+allowed.
 
 **Not verified without the card**: whether `words` moves any face while image 1 lies on the canvas's grid; whether
 `no-style` takes the edges and colours away; where `half` puts the scene, since its 640x352 is centred on the canvas's

@@ -34,6 +34,7 @@
     "image:pilot": "node local/image-pilot.ts",
     "image:t-probe": "node local/image-t-probe.ts",
     "image:body-test": "node local/image-body-test.ts",
+    "image:figure-test": "node local/image-figure-test.ts",
     "agent": "node local/agent-cli.ts",
     "agent:gpu": "node --env-file=.env.gpu local/agent-cli.ts",
     "mcp": "node local/mcp.ts",
