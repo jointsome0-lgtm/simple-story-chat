@@ -526,7 +526,9 @@ export function createIllustrator(config: ImageConfig, deps: {
 
   // One picture on the picture card: a whole prompt, drawn by a recipe. The kitchen's attention is asked of the server
   // while the job's socket opens (`kitchenAttention`), and the picture's row says what it was drawn with, a failed
-  // one's too once the answer had come. `onProgress` hears the steps of each job it runs (`statusLine`).
+  // one's too once the answer had come. `onProgress` hears the steps of each job it runs (`statusLine`). Every job
+  // here is a reader's, a frame, a sample, a variant or a portrait, and goes to the head of the card's queue (`front`),
+  // ahead of the cells an experiment has queued on the same card between the readers' pictures.
   type ReferenceReason = NonNullable<ErrorDetails['pictureReferences']>;
   const referenceGate = (userId: string): ReferenceReason | undefined => !config.references ? 'disabled'
     : !config.users.has(userId) || (!(deps.ownerId && userId === deps.ownerId) && !config.referenceUsers?.has(userId)) ? 'not_allowed' : undefined;
@@ -550,7 +552,7 @@ export function createIllustrator(config: ImageConfig, deps: {
         pictureAttention = noded ? 'kitchen' : said === 'kitchen' ? 'plain_graph' : said;
         return noded ?? filled;
       });
-      return drawOne(comfy, job, { waitMs: config.waitMs, pollMs, onSubmitted: () => { submitted = true; }, onProgress });
+      return drawOne(comfy, job, { waitMs: config.waitMs, pollMs, front: true, onSubmitted: () => { submitted = true; }, onProgress });
     };
     try {
       let edited: Graph | undefined;

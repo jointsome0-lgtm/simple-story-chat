@@ -859,8 +859,12 @@ export const RIDES = 5;
 // connection, and is followed in its two halves (`submitOnStage`); the bot's goes through `drawOne`, as it always did.
 // `onSubmitted` tells the bot that a job exists, so an accepted reference job's failure never starts a fallback job.
 // `onProgress` gives the bot's status line the steps its socket hears (`hearing`); the stage's socket has none.
+// `front`: a reader's picture, sent with `front: true`, which the pinned server puts at the head of its pending queue
+// (server.py `post_prompt`: the job's number made negative), ahead of every job sent without it, such as a stand's
+// cells; the job it is drawing goes on to its end. Among front jobs the later one goes first. Only the bot sets it
+// (local/picture.ts `draw`); the harnesses' jobs, `submitOnStage` included, keep their order.
 type DrawOneOptions = { pollMs?: number; waitMs?: number; sampleEvery?: number; requireSocket?: boolean; copies?: string[];
-  admit?: () => boolean; onSubmitted?: () => void; onProgress?: Steps };
+  admit?: () => boolean; onSubmitted?: () => void; onProgress?: Steps; front?: boolean };
 // How far the node the card is running has got: `value` of `max` steps, whole numbers, max at least 1 and value from
 // 0 to max.
 export type Steps = (value: number, max: number) => void;
@@ -980,9 +984,9 @@ type Staged = { outage: Outage; uncertain: boolean; spentAtSubmit: number };
 // It is one request to loopback, bounded by the reserve alone, and the abort or the end is answered at the top of the
 // loop in `follow`, with an id in hand. It is not repeated either: a submit that failed may still have reached the
 // card.
-async function submitOnce(comfy: Comfy, graph: Graph, clientId: string): Promise<string> {
+async function submitOnce(comfy: Comfy, graph: Graph, clientId: string, front = false): Promise<string> {
   const submitted = await (await call(afterAbort(comfy), '/prompt', { method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ prompt: freshPreviews(graph), client_id: clientId }) })).json() as { prompt_id?: string; error?: unknown };
+    body: JSON.stringify({ prompt: freshPreviews(graph), client_id: clientId, ...front ? { front: true } : {} }) })).json() as { prompt_id?: string; error?: unknown };
   if (!submitted.prompt_id) throw Object.assign(new Error('comfy_rejected_prompt'), { code: 'comfy_rejected_prompt' });
   return submitted.prompt_id;
 }
@@ -990,7 +994,7 @@ async function submitOnce(comfy: Comfy, graph: Graph, clientId: string): Promise
 // The bot's picture: submitted, then followed to its picture in one go, as it always was.
 async function drawWatched(comfy: Comfy, graph: Graph, watch: Watch, options: DrawOneOptions) {
   const started = performance.now();
-  const promptId = await submitOnce(comfy, graph, watch.clientId);
+  const promptId = await submitOnce(comfy, graph, watch.clientId, options.front);
   options.onSubmitted?.();
   const job = follow(comfy, graph, watch, promptId, started, options);
   await job.untilOver();

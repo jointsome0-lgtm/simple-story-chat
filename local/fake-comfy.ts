@@ -200,7 +200,11 @@ function acceptSocket(request: IncomingMessage, socket: Duplex) {
   };
 }
 
-type Job = { id: string; number: number; clientId: string; graph: Graph; stop: AbortController };
+// `number` counts the submits from 1, and the knobs below go by it. `place` is the job's place in the queue, as the
+// pinned server keeps it (server.py `post_prompt`, execution.py `PromptQueue`): its number, made negative when the job
+// was sent with `front`, which puts it ahead of every job waiting without it and ahead of the front jobs sent before
+// it. The job drawing is never stopped for it. The server reports `place` as the job's number.
+type Job = { id: string; number: number; place: number; clientId: string; graph: Graph; stop: AbortController };
 
 export async function startFakeComfy(initial: FakeComfyOptions = {}) {
   const options: FakeComfyOptions = { jobMs: 40, referenceMs: 5, loadersCached: true, ...initial };
@@ -374,7 +378,7 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
       }
     }
     if (outcome === 'success') record('execution_success', { timestamp: Date.now() });
-    history.set(job.id, { prompt: [job.number, job.id, {}, {}, []], outputs,
+    history.set(job.id, { prompt: [job.place, job.id, {}, {}, []], outputs,
       status: { status_str: outcome === 'success' ? 'success' : 'error', completed: outcome === 'success', messages }, meta: {} });
     say(`Prompt executed in ${((performance.now() - began) / 1000).toFixed(2)} seconds`);
     jobs.push({ references, width, height, cached: cached.length, outcome, slots, images, sampler: sampler?.class_type ?? null, model, ...masked });
@@ -395,23 +399,24 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
       const call: FakeCall = { method: request.method ?? 'GET', path: url.pathname };
       calls.push(call);
       if (request.method === 'POST' && url.pathname === '/prompt') {
-        const asked = JSON.parse((await read()).toString('utf8')) as { prompt?: Graph; client_id?: unknown; prompt_id?: unknown };
+        const asked = JSON.parse((await read()).toString('utf8')) as { prompt?: Graph; client_id?: unknown; prompt_id?: unknown; front?: unknown };
         if (!asked.prompt || typeof asked.prompt !== 'object') { response.statusCode = 400; return json({ error: 'no prompt' }); }
         const missing = Object.values(asked.prompt).some(node => node.class_type === 'LoadImage' && !uploaded.has(String(node.inputs.image)));
         if (options.requireUploads && missing) { response.statusCode = 400; return json({ error: { type: 'prompt_outputs_failed_validation' }, node_errors: {} }); }
         // The id the client sent, as the pinned server takes one (server.py), or one of its own.
         const number = ++count;
         const id = typeof asked.prompt_id === 'string' && asked.prompt_id ? asked.prompt_id : `fake-${number}`;
-        const job = { id, number, clientId: String(asked.client_id ?? ''), graph: asked.prompt, stop: new AbortController() };
+        const job = { id, number, place: asked.front ? -number : number, clientId: String(asked.client_id ?? ''), graph: asked.prompt, stop: new AbortController() };
         call.id = id;
         numbers.set(id, number);
         say('got prompt');
         queue.push(job);
+        queue.sort((a, b) => a.place - b.place || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
         held = Math.max(held, queue.length + (running ? 1 : 0));
         pump();
         // The job is on the card, and its answer is lost with the connection.
         if (dropAt('prompt', number)) return;
-        return json({ prompt_id: job.id, number: job.number, node_errors: {} });
+        return json({ prompt_id: job.id, number: job.place, node_errors: {} });
       }
       if (request.method === 'POST' && url.pathname === '/upload/image') {
         const form = await new Response(await read(), { headers: { 'content-type': String(request.headers['content-type']) } }).formData();
@@ -463,8 +468,8 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
         return json(Object.hasOwn(known, name) ? { [name]: known[name] } : {});
       }
       if (url.pathname === '/queue' && request.method === 'GET') {
-        return json({ queue_running: running ? [[running.number, running.id, {}, {}, []]] : [],
-          queue_pending: queue.map(job => [job.number, job.id, {}, {}, []]) });
+        return json({ queue_running: running ? [[running.place, running.id, {}, {}, []]] : [],
+          queue_pending: queue.map(job => [job.place, job.id, {}, {}, []]) });
       }
       if (url.pathname === '/queue' && request.method === 'POST') {
         const asked = JSON.parse((await read()).toString('utf8')) as { delete?: string[] };

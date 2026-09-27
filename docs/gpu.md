@@ -227,6 +227,14 @@ attention was not measured on, `plain_torch` on cu128, where round two's server 
 or `plain_unanswered`. The node is the card's software, as its torch is: a picture's recipe and its graph's hash do not
 change, and a variant of a picture drawn plainly is drawn with the node on a cu130 card.
 
+Readers go first on a card that also draws for an experiment. Every job the bot sends, a scene's frame, a style
+sample, a variant or a portrait, goes with `front: true` (`drawOne` in [image-batch.ts](../local/image-batch.ts)),
+which the pinned server puts at the head of its pending queue (server.py `post_prompt` makes the job's number
+negative): a cell queued on the same server without it waits until the readers' jobs sent before it have been drawn.
+The job being drawn is never interrupted, so a reader's picture can still wait for one cell to end, and between two
+jobs of the bot's the later one goes first. No harness sends `front`, `submitOnStage` included, and the fake server
+([fake-comfy.ts](../local/fake-comfy.ts)) orders its queue the same way.
+
 The experiments keep round two's backend: cu128, Triton and no node. The scripts' default stays cu128, so a runbook
 that names no torch, round two's action runs and figure-age's among them, draws where it drew. None of their harnesses
 draws through the bot's code, and only the throughput measurement's attention step adds the node. A run pins the torch
