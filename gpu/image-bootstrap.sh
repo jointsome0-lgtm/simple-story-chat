@@ -365,7 +365,15 @@ pip_flags=(--quiet)
 "$python" -m pip install "${pip_flags[@]}" --upgrade pip
 # Torch first and pinned, from the CUDA index: ComfyUI's requirements.txt asks for a bare `torch` (and a bare
 # torchvision and torchaudio, which the pinned ones satisfy), and the default index would serve a build without sm_120
-# kernels.
+# kernels. On cu130 its four wheels go on by their sha256 first (image-manifest.env), alone, and the line after them
+# adds what they pull.
+if [[ "$torch_line" = cu130 ]]; then
+  lock="$(mktemp)"
+  printf '%s --hash=sha256:%s\n' "torch==$TORCH_CU130_VERSION" "$TORCH_CU130_SHA256" "torchvision==$TORCHVISION_CU130_VERSION" "$TORCHVISION_CU130_SHA256" \
+    "torchaudio==$TORCHAUDIO_CU130_VERSION" "$TORCHAUDIO_CU130_SHA256" "triton==$TRITON_CU130_VERSION" "$TRITON_CU130_SHA256" > "$lock"
+  "$python" -m pip install "${pip_flags[@]}" --require-hashes --no-deps --index-url "$torch_index" -r "$lock"
+  rm -f -- "$lock"
+fi
 "$python" -m pip install "${pip_flags[@]}" --index-url "$torch_index" "${torch_pins[@]}"
 "$python" -m pip install "${pip_flags[@]}" -r "$comfy_dir/requirements.txt"
 torch_said="$("$python" - "$TORCH_ARCH" <<'PY'

@@ -179,7 +179,10 @@ a minute and downloads nothing. It asks for 13 GiB free and keeps no copy of the
 (`--no-cache-dir`), since a Qwen-only box has 60 GB. Its last step writes `ComfyUI/.venv-cu130/simple-chat-ready` with
 the torch it checked. `image-serve.sh` refuses to start on cu130 without that mark, so a server never starts on an
 environment that is half built. ComfyUI's requirements name torch, torchvision and torchaudio bare, so they keep the
-pinned ones installed first.
+pinned ones installed first. The line's four wheels, torch, torchvision, torchaudio and the index's triton 3.6.0, go on
+first by the sha256 the manifest pins for CPython 3.12 (read on 2026-09-27), with pip's `--require-hashes` and
+`--no-deps`; a wheel of another hash stops the run. What they pull and ComfyUI's requirements go on by version, as on
+cu128.
 
 The default stays cu128, which runs on the widest range of drivers. [rent-plan.ts](../local/rent-plan.ts) prices a
 rental as before: only [the backend measurement](action-experiment.md#backend) downloads the second line's wheels. A run
