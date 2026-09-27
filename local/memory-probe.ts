@@ -16,7 +16,7 @@ import { member, safeErrorDetails } from './model-error.ts';
 import type { ModelRequest } from './model.ts';
 import { Store } from './store.ts';
 import type { ProbeNode } from './story-probe.ts';
-import { contextParts, makeRequest } from './prompt.ts';
+import { contextParts, makeRequest, normalizeScene } from './prompt.ts';
 import { addSeed, newStory, beginJob, commitTurn, active, context, history, emptyLibrary } from '../lib/library.ts';
 import type { Library, Usage } from '../lib/library.ts';
 import { loadScenario } from './scenarios.ts';
@@ -31,10 +31,12 @@ export type ModeReport = {
   answers?: { key: string; expected: string; actual: unknown; pass: boolean; stated?: 'memory' | 'scenes' | 'none' }[]; recallUsage?: Usage | null;
   // With --traps: one scene per continuity trap, each written from the same final state and never committed.
   // local/scene-judge.ts adds the verdicts.
-  traps?: { key: string; text: string; truncated: boolean }[];
+  traps?: TrapScene[];
   verdicts?: { key: string; expected: string; actual: unknown; pass: boolean }[];
   error?: string; completedAt?: string;
 };
+// `then`: the scene written over the trap's scene, or the code of the failure that left it unwritten.
+type TrapScene = { key: string; text: string; truncated: boolean; then?: { text: string; truncated: boolean } | { error: string } };
 // The report written by this probe; a resumed run trusts what an earlier run wrote.
 export type ReplayReport = {
   scenario: string; sourceHash: string; model: string; startedAt: string; scope: string;
@@ -150,9 +152,33 @@ try {
       mkdirSync(join(directory, 'lab', name), { recursive: true });
       writeFileSync(join(directory, 'lab', name, 'report.json'), JSON.stringify({ scenario, model: config.model, modes: { [memoryMode]: { traps: labScenes[name] } } }, null, 2));
     };
+    // `then`: the trap's scene is committed in a copy of the story, as the bot commits a scene, and the next one is written
+    // over it; the replayed story keeps neither. The trap's scene is saved before this request, and a failure of it is
+    // recorded on `then` alone, so that the other traps do not depend on it; the judge fails its questions.
+    const writeThen = async (trap: typeof fixture.traps[number], saved: TrapScene) => {
+      const copy = structuredClone(store.read('synthetic'));
+      let event;
+      try {
+        const turn = beginJob(copy, trap.input ?? fixture.turns[trap.afterTurn!], 0);
+        const story = copy.stories[turn.storyId];
+        commitTurn(copy, turn.id, normalizeScene(saved.text, story.nodes[turn.head as string]?.time ?? copy.seeds[story.seedId].startTime));
+        const written = await provider.generate(makeRequest(copy, beginJob(copy, trap.then!.input, 0), config.maxOutputTokens));
+        saved.then = { text: written.text, truncated: written.finishReason !== 'stop' };
+        event = { characters: written.text.length, truncated: saved.then.truncated };
+      } catch (error) {
+        if (deadline.aborted) throw error;
+        const code = (error as Failure).code;
+        saved.then = { error: /^[a-z_]{1,40}$/.test(code ?? '') ? code! : 'probe_failed' };
+        event = { code: saved.then.error, ...safeErrorDetails(error) };
+      }
+      persist(); progress({ event: 'trap_scene', mode: memoryMode, then: true, ...event });
+    };
     const writeTraps = async (after: number | undefined) => {
       for (const trap of values.traps ? fixture.traps : []) {
-        if (trap.afterTurn !== after || current!.traps?.some(done => done.key === trap.key) || (lab?.only && !lab.only.includes(trap.key))) continue;
+        if (trap.afterTurn !== after || (lab?.only && !lab.only.includes(trap.key))) continue;
+        // A resumed run writes the `then` scene an earlier run left missing over the scene that run saved.
+        const done = current!.traps?.find(written => written.key === trap.key);
+        if (done) { if (trap.then && !lab && !done.truncated && !done.then) await writeThen(trap, done); continue; }
         const turn = store.mutate('synthetic', state => beginJob(state, trap.input ?? fixture.turns[trap.afterTurn!], 0));
         let scene;
         try {
@@ -184,8 +210,10 @@ try {
           scene = first ?? await provider.generate(makeRequest(store.read('synthetic'), turn, config.maxOutputTokens));
         }
         finally { store.mutate('synthetic', state => { state.job = null; }); }
-        (current!.traps ??= []).push({ key: trap.key, text: scene.text, truncated: scene.finishReason !== 'stop' });
-        persist(); progress({ event: 'trap_scene', mode: memoryMode, characters: scene.text.length, truncated: scene.finishReason !== 'stop' });
+        const saved: TrapScene = { key: trap.key, text: scene.text, truncated: scene.finishReason !== 'stop' };
+        (current!.traps ??= []).push(saved);
+        persist(); progress({ event: 'trap_scene', mode: memoryMode, characters: scene.text.length, truncated: saved.truncated });
+        if (trap.then && !lab && !saved.truncated) await writeThen(trap, saved);
       }
     };
     for (let index = current.through; index <= scenes.length; index++) {

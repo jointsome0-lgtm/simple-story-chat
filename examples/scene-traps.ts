@@ -8,8 +8,13 @@
 // Ask the judge in the affirmative: a question with a double negative was answered wrongly.
 // - `set: 'o2'` marks the traps added on 2026-09-27 for time across the scene boundary and for claims about an
 //   unrecorded past, with their controls. The eval scores them apart, so the older traps stay the legacy set.
-export type Trap = { key: string; afterTurn?: number; input?: string; facts?: string; set?: 'o2';
-  questions: [key: string, question: string, expected: 'yes' | 'no'][] };
+// - `set: 'open'` marks the traps on a compatible claim about a past no scene shows, in a story whose seed does not
+//   rule it out. By the owner's word of 2026-09-27 the narrator confirms such a claim and the story keeps to it.
+// - `then`, in set open only, writes one more scene over the trap's scene, from its own input, as the bot would after the
+//   player's next message; its questions are asked of that scene with the trap's scene before it.
+type Question = [key: string, question: string, expected: 'yes' | 'no'];
+export type Trap = { key: string; afterTurn?: number; input?: string; facts?: string; set?: 'o2' | 'open';
+  questions: Question[]; then?: { input: string; questions: Question[] } };
 
 const BATTLE = `- «Красная печать» тратит 3 заряда из браслета Элин и после применения недоступна 10 минут. Других способов восстановить заряды нет.
 - Левое запястье Элин сломано в 08:01. Шина и повязка перелом не лечат: левой рукой она не может держать, поднимать или толкать тяжёлое. Сава не лечит.

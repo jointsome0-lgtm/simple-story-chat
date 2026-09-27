@@ -20,10 +20,10 @@ export type Item = { key: string; pass: boolean; expected?: string; actual?: str
 // when the source kept the per-question outcome. `error` marks a cell that eval.ts pools into the headline as 0/N.
 export type Cell = { run: string; source: 'report' | 'summary' | 'events'; model: string; scenario: string; mode: string;
   instrument: Instrument; passed: number; total: number; error?: string; truncated?: number; items?: Item[] };
-// The fixed answers of one scenario by key, and which trap each judged question belongs to. `o2` names the questions
-// and traps of set o2, which eval.ts scores apart and the legacy `scene` instrument here leaves out.
+// The fixed answers of one scenario by key, and which trap each judged question belongs to. `sets` names the questions
+// and traps of every set (o2, open), which eval.ts scores apart and the legacy `scene` instrument here leaves out.
 export type KeySet = { memory: Map<string, string>; scene: Map<string, string>; trapOf: Map<string, string>;
-  o2?: { questions: Set<string>; traps: Set<string> } };
+  sets?: { questions: Set<string>; traps: Set<string> } };
 
 const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
 const round = (value: number | null) => value === null ? null : Math.round(value * 10000) / 10000;
@@ -173,9 +173,9 @@ function cellsFromReport(path: string, report: ReplayReport, keys: Map<string, K
       passed: answers.filter(answer => answer.pass).length, total: answers.length || (key?.memory.size ?? 0),
       items: answers.map(answer => ({ key: answer.key, pass: answer.pass, expected: answer.expected, actual: typeof answer.actual === 'string' ? answer.actual : null })),
       ...(result.completedAt ? {} : { error: result.error ?? 'probe_failed' }) });
-    // A report of a fixture with set o2 holds its scenes and verdicts too; the legacy cell leaves them out.
-    const verdicts = (result.verdicts ?? []).filter(verdict => !key?.o2?.questions.has(verdict.key));
-    const traps = result.traps?.filter(trap => !key?.o2?.traps.has(trap.key));
+    // A report of a fixture with a set holds its scenes and verdicts too; the legacy cell leaves them out.
+    const verdicts = (result.verdicts ?? []).filter(verdict => !key?.sets?.questions.has(verdict.key));
+    const traps = result.traps?.filter(trap => !key?.sets?.traps.has(trap.key));
     // Without verdicts a scene cell exists only when the replay finished and the judge then failed. The research
     // batches under lab/ never reach this function: `find` reads the two writers' own directories only.
     if (!verdicts.length && !(result.completedAt && traps?.length)) continue;
@@ -441,12 +441,12 @@ export async function loadKeys(names: string[], pack?: string): Promise<Map<stri
   for (const name of names) {
     let fixture;
     try { fixture = await loadScenario(name, pack); } catch { continue; }
-    // The legacy traps only: eval.ts scores those of `set: 'o2'` apart, and this tool reads the legacy instrument.
-    const [legacy, o2] = [fixture.traps.filter(trap => trap.set === undefined), fixture.traps.filter(trap => trap.set === 'o2')];
+    // The legacy traps only: eval.ts scores those of a set apart, and this tool reads the legacy instrument.
+    const [legacy, sets] = [fixture.traps.filter(trap => trap.set === undefined), fixture.traps.filter(trap => trap.set !== undefined)];
     keys.set(name, { memory: new Map(fixture.checks.map(([key, , expected]) => [key, expected])),
       scene: new Map(legacy.flatMap(trap => trap.questions.map(([key, , expected]) => [key, expected]))),
       trapOf: new Map(legacy.flatMap(trap => trap.questions.map(([key]) => [key, trap.key]))),
-      o2: { questions: new Set(o2.flatMap(trap => trap.questions.map(([key]) => key))), traps: new Set(o2.map(trap => trap.key)) } });
+      sets: { questions: new Set(sets.flatMap(trap => [...trap.questions, ...(trap.then?.questions ?? [])].map(([key]) => key))), traps: new Set(sets.map(trap => trap.key)) } });
   }
   return keys;
 }
