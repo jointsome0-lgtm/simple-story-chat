@@ -34,7 +34,8 @@
 // A portrait of one person of a story's sheet (`portrait`) is drawn on request from their card in the characters'
 // screens (local/ui.ts), from the sheet's text of them alone (`portraitText`), which is folded under it as a picture's
 // prompt is, and goes with its story the same way.
-// The one a reader keeps is a file beside the database (local/store.ts), to pick a reference by; no frame uses it.
+// The one a reader keeps is a file beside the database (local/store.ts). The optional reference experiment
+// uses it in frames, with the ordered files pinned in each frame's recipe (local/picture-references.ts).
 // A description the reader writes on that card is retold by the language model into the details a portrait is drawn
 // from and the look the frames take: at once (`retell`), or before the next frame of the story if that did not happen
 // (`describeFrame`).
@@ -55,7 +56,9 @@ import { errorCode, safeErrorDetails } from './model-error.ts';
 import type { ModelRequest, Provider } from './model.ts';
 import { styleChoice, styleLine } from './picture-style.ts';
 import type { StyleChoice } from './picture-style.ts';
+import { REFERENCE_VERSION, frameReferences, pinReferences, readReference, referenceGraph, referencePrompt, temporaryReferences } from './picture-references.ts';
 import { contextParts, storyNarration } from './prompt.ts';
+import { fileErrorCode } from './store.ts';
 import type { Store } from './store.ts';
 import type { Chat, InlineKeyboard, Screen } from './telegram.ts';
 import { texts } from './text.ts';
@@ -258,7 +261,7 @@ async function kitchenAttention(comfy: Comfy): Promise<PictureAttention> {
 }
 
 export function createIllustrator(config: ImageConfig, deps: {
-  store: Store; provider: Provider;
+  store: Store; provider: Provider; ownerId?: string;
   // The story model as the bot names it in each scene's request stamp, and its context. Without it every description
   // is counted by the server before it is sent (`trusted` below).
   model?: { model: string; provider: string; contextTokens: number };
@@ -480,13 +483,15 @@ export function createIllustrator(config: ImageConfig, deps: {
   // the description's last word meets it. It is counted once the photo is in the chat, so a tokenizer that fails
   // costs the counts alone and never the picture. A prompt the reader wrote whole has no line the bot knows of, and
   // its style's share is not given at all.
-  const promptSize = (prompt: string, line?: string) => {
+  const promptSize = (prompt: string, line?: string, references = 0) => {
     const promptCharacters = [...prompt].length;
     try {
-      if (promptTokens) {
-        const pictureTokens = promptTokens(prompt);
+      const countedGraph = references ? referenceGraph(graph, references) : undefined;
+      const count = countedGraph ? deps.promptTokens?.(countedGraph) : promptTokens;
+      if (count) {
+        const pictureTokens = count(prompt);
         if (line === undefined) return { promptCharacters, pictureTokens };
-        const described = promptTokens(prompt.slice(0, prompt.length - line.length).trimEnd());
+        const described = count(prompt.slice(0, prompt.length - line.length).trimEnd());
         return { promptCharacters, pictureTokens, styleTokens: Math.max(0, pictureTokens - described) };
       }
     } catch { /* the characters alone */ }
@@ -496,26 +501,123 @@ export function createIllustrator(config: ImageConfig, deps: {
   // One picture on the picture card: a whole prompt, drawn by a recipe. The kitchen's attention is asked of the server
   // while the job's socket opens (`kitchenAttention`), and the picture's row says what it was drawn with, a failed
   // one's too once the answer had come.
-  async function draw({ seed, checkpoint, width, height, steps, cfg, sampler, scheduler }: PictureRecipe, prompt: string, signal: AbortSignal) {
+  type ReferenceReason = NonNullable<ErrorDetails['pictureReferences']>;
+  const referenceGate = (userId: string): ReferenceReason | undefined => !config.references ? 'disabled'
+    : !config.users.has(userId) || (!(deps.ownerId && userId === deps.ownerId) && !config.referenceUsers?.has(userId)) ? 'not_allowed' : undefined;
+
+  async function draw(userId: string, recipe: PictureRecipe, prompt: string, signal: AbortSignal, log: Log,
+    fallbackPrompt = prompt, reason: ReferenceReason = 'legacy') {
     const comfy: Comfy = { baseUrl: config.url, timeoutMs: config.timeoutMs, signal };
-    const filled = applyToWorkflow(graph, { checkpoint, prompt, negative: '', seed, steps, sampler, scheduler, cfg, width, height });
+    const { references, ...plainRecipe } = recipe;
+    let actualRecipe: PictureRecipe = plainRecipe;
+    let referenceCount = 0, referenceAttempted = 0;
+    let pictureReferences = referenceGate(userId) ?? reason;
+    const temporary = temporaryReferences(comfy, log);
     let pictureAttention: PictureAttention | undefined;
-    const verdict: Promise<PictureAttention> = attends ? kitchenAttention(comfy) : Promise.resolve('plain_graph');
-    const job = verdict.then(said => {
-      const noded = said === 'kitchen' ? withAttention(filled) : undefined;
-      pictureAttention = noded ? 'kitchen' : said === 'kitchen' ? 'plain_graph' : said;
-      return noded ?? filled;
-    });
-    try { return { ...(await drawOne(comfy, job, { waitMs: config.waitMs, pollMs })), pictureAttention }; }
-    catch (error) { throw pictureAttention && error instanceof Error ? Object.assign(error, { pictureAttention }) : error; }
+    let submitted = false;
+    const run = async (base: Graph, text: string, files: string[] = []) => {
+      // Empty references also remove any slots a configured edit workflow carried into a plain request.
+      const filled = applyToWorkflow(base, { ...plainRecipe, prompt: text, negative: '', references: files });
+      const verdict: Promise<PictureAttention> = attends ? kitchenAttention(comfy) : Promise.resolve('plain_graph');
+      const job = verdict.then(said => {
+        const noded = said === 'kitchen' ? withAttention(filled) : undefined;
+        pictureAttention = noded ? 'kitchen' : said === 'kitchen' ? 'plain_graph' : said;
+        return noded ?? filled;
+      });
+      return drawOne(comfy, job, { waitMs: config.waitMs, pollMs, onSubmitted: () => { submitted = true; } });
+    };
+    try {
+      let edited: Graph | undefined;
+      let bytes: Uint8Array[] = [], uploaded: string[] = [];
+      // This is the final gate, including saved recipes on the variant path. Readers outside the experiment's
+      // list get no portrait reads or uploads, even when their ordinary pictures are on.
+      if (references && !referenceGate(userId)) {
+        edited = references.version === REFERENCE_VERSION ? referenceGraph(graph, references.portraits.length) : undefined;
+        pictureReferences = edited ? 'unavailable' : 'unsupported_graph';
+        if (edited) {
+          try {
+            bytes = references.portraits.map(one => {
+              const read = readReference(store, userId, one.file);
+              if (read.sha256 !== one.sha256) throw new Error('reference_unavailable');
+              return read.bytes;
+            });
+          } catch { edited = undefined; }
+        }
+        if (edited) {
+          try { for (const one of bytes) { referenceAttempted++; uploaded.push(await temporary.send(one)); } }
+          catch {
+            if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
+            pictureReferences = 'upload_failed';
+            edited = undefined;
+          }
+        }
+      }
+      let drawn;
+      if (edited) {
+        referenceCount = uploaded.length;
+        pictureReferences = 'used';
+        try {
+          drawn = await run(edited, prompt, uploaded);
+          actualRecipe = recipe;
+        } catch (error) {
+          const code = errorCode(error), status = safeErrorDetails(error).httpStatus;
+          // Only an explicit refusal before a job exists gets a plain attempt. A lost submit response, a timeout
+          // or an accepted job's failure may still be running and never gets a second paid job automatically.
+          if (signal.aborted || submitted || !(code === 'comfy_rejected_prompt'
+            || code === 'comfy_http_error' && status !== undefined && status >= 400 && status < 500)) throw error;
+          pictureReferences = 'graph_rejected';
+          referenceCount = 0;
+        }
+      }
+      // Erase before a fallback too, so its wait cannot prolong the portraits' stay on the card.
+      await temporary.clear();
+      drawn ??= await run(graph, fallbackPrompt);
+      return { ...drawn, pictureAttention, recipe: actualRecipe, referenceCount };
+    } catch (error) {
+      throw pictureAttention && error instanceof Error ? Object.assign(error, { pictureAttention }) : error;
+    } finally {
+      await temporary.clear();
+      log('picture_references', undefined, { pictureReferences, referenceCount, referenceAttempted });
+    }
   }
 
-  // One frame on the picture card in one style line, with the story's seed: a sample of a style and the scene's own
-  // picture differ in their last sentence alone.
-  async function drawFrame(storyId: string, frame: { description: Description; sheet: Character[] }, line: string, signal: AbortSignal) {
-    const assembled = assemblePrompt(frame.description, frame.sheet, line);
-    const recipe = recipeOf(storyId);
-    return { assembled, recipe, drawn: await draw(recipe, assembled.prompt, signal) };
+  // One frame on the picture card with the story's seed. A sample reuses the scene's recipe, including the original
+  // portrait inputs, and changes the style at the end and, for references, at the opening too.
+  async function drawFrame(userId: string, storyId: string, frame: { description: Description; sheet: Character[] },
+    line: string, signal: AbortSignal, log: Log, savedRecipe?: PictureRecipe) {
+    const plain = assemblePrompt(frame.description, frame.sheet, line);
+    let assembled = plain;
+    if (savedRecipe && (savedRecipe.graph !== graphId || savedRecipe.checkpoint !== config.checkpoint)) {
+      throw Object.assign(new Error('recipe_changed'), { code: 'recipe_changed' });
+    }
+    const recipe = savedRecipe ?? recipeOf(storyId);
+    let reason: ReferenceReason = referenceGate(userId) ?? (savedRecipe ? 'legacy' : 'no_portrait');
+    if (!referenceGate(userId)) {
+      const story = store.read(userId).stories[storyId];
+      if (!story) throw sceneGone();
+      const bound = savedRecipe ? savedRecipe.references?.portraits ?? [] : frameReferences(story, frame.description);
+      if (bound.length) {
+        reason = 'unsupported_graph';
+        if (referenceGraph(graph, bound.length)) {
+          try {
+            if (!savedRecipe) recipe.references = pinReferences(store, userId, bound);
+            assembled = referencePrompt(frame, bound, line);
+          } catch { reason = 'unavailable'; }
+        }
+      }
+    }
+    const files = !referenceGate(userId) ? recipe.references?.portraits.map(one => one.file) ?? [] : [];
+    const unhold = files.length ? store.holdPortraits(userId, files) : undefined;
+    const releasePortraits = () => {
+      if (!unhold) return;
+      unhold();
+      try { store.sweepPortraits(userId); }
+      catch (error) { log('portraits_unswept', fileErrorCode(error)); }
+    };
+    try {
+      const drawn = await draw(userId, recipe, assembled.prompt, signal, log, plain.prompt, reason);
+      return { assembled: drawn.referenceCount ? assembled : plain, recipe: drawn.recipe, drawn, releasePortraits };
+    } catch (error) { releasePortraits(); throw error; }
   }
 
   // A status line of its own, not the scene's draft: it has to outlive the message it stands under and be removed
@@ -597,6 +699,7 @@ export function createIllustrator(config: ImageConfig, deps: {
 
     let describeMs = 0;
     let pictureStyle: StyleChoice | undefined;
+    let releasePortraits: (() => void) | undefined;
     try {
       // The description call, on the language model's card, holding it the way a job holds it and no longer.
       const describeStarted = now();
@@ -619,7 +722,9 @@ export function createIllustrator(config: ImageConfig, deps: {
       const reader = store.read(userId);
       pictureStyle = styleChoice(reader, standard);
       const line = styleLine(reader, standard);
-      const { assembled, recipe, drawn } = await drawFrame(storyId, frame, line, signal);
+      const result = await drawFrame(userId, storyId, frame, line, signal, log, reader.stories[storyId]?.nodes[nodeId]?.picture);
+      releasePortraits = result.releasePortraits;
+      const { assembled, recipe, drawn } = result;
       if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
       // The photo hangs under the scene it belongs to, and the status line goes only once the photo is there; the
       // prompt follows it, folded, even if the picture was stopped while the photo was on its way.
@@ -627,7 +732,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       const photo = await sendKept(request, () => chat.photo(drawn.bytes, request.sceneMessageId), recipe);
       const photoMs = Math.max(0, now() - photoStarted);
       await clear();
-      const size = promptSize(assembled.prompt, line);
+      const size = promptSize(assembled.prompt, line, drawn.referenceCount);
       await sendPrompt(request, photo, assembled.prompt, size, true);
       log('picture', undefined, { outcome: 'ready', cancelled: signal.aborted, describeMs, imageMs: drawn.totalMs,
         imageSteps: steps, pictureAttention: drawn.pictureAttention, photoMs, photoBytes: drawn.bytes.length,
@@ -644,7 +749,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       await clear(outcome === 'failed' ? t.notices.pictureFailed : undefined);
       log('picture', signal.aborted ? 'cancelled' : safeCode(code),
         { ...safeErrorDetails(error), outcome, cancelled, describeMs, pictureStyle, ...elapsed() });
-    }
+    } finally { releasePortraits?.(); }
   }
 
   // A reader's scene as a variant of its picture is drawn from it: the scene, with the recipe its own picture was
@@ -718,14 +823,17 @@ export function createIllustrator(config: ImageConfig, deps: {
         for (const style of styles) {
           pictureStyle = style.pictureStyle;
           if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
-          const { assembled, drawn } = await drawFrame(storyId, frame, style.line, signal);
-          if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
-          const photo = await sendKept(request, () => chat.photo(drawn.bytes, undefined, style.caption));
-          const size = promptSize(assembled.prompt, style.line);
-          await sendPrompt(request, photo, assembled.prompt, size);
-          log('picture_sample', undefined, { outcome: 'ready', cancelled: signal.aborted, frameReused, describeMs,
-            imageMs: drawn.totalMs, imageSteps: steps, pictureAttention: drawn.pictureAttention, namesStripped: assembled.namesStripped,
-            withoutLook: assembled.withoutLook, pictureStyle, stylesAsked, ...size });
+          const result = await drawFrame(userId, storyId, frame, style.line, signal, log, story?.nodes[nodeId]?.picture);
+          try {
+            const { assembled, drawn } = result;
+            if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
+            const photo = await sendKept(request, () => chat.photo(drawn.bytes, undefined, style.caption));
+            const size = promptSize(assembled.prompt, style.line, drawn.referenceCount);
+            await sendPrompt(request, photo, assembled.prompt, size);
+            log('picture_sample', undefined, { outcome: 'ready', cancelled: signal.aborted, frameReused, describeMs,
+              imageMs: drawn.totalMs, imageSteps: steps, pictureAttention: drawn.pictureAttention, namesStripped: assembled.namesStripped,
+              withoutLook: assembled.withoutLook, pictureStyle, stylesAsked, ...size });
+          } finally { result.releasePortraits(); }
           // The styles after the first are drawn from the frame already in hand.
           frameReused = true;
           describeMs = 0;
@@ -766,7 +874,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       };
       try {
         const { recipe } = target();
-        const drawn = await draw(recipe, prompt, signal);
+        const drawn = await draw(userId, recipe, prompt, signal, log);
         if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
         const { node } = target();
         const scene = { userId, chat, storyId, nodeId, log };
@@ -774,7 +882,7 @@ export function createIllustrator(config: ImageConfig, deps: {
         const photo = await sendKept(scene, () => chat.photo(drawn.bytes, node.messageId));
         const photoMs = Math.max(0, now() - photoStarted);
         await clear();
-        const size = promptSize(prompt);
+        const size = promptSize(prompt, undefined, drawn.referenceCount);
         await sendPrompt(scene, photo, prompt, size, true);
         log('picture_variant', undefined, { outcome: 'ready', cancelled: signal.aborted, edited: true, imageMs: drawn.totalMs,
           imageSteps: recipe.steps, pictureAttention: drawn.pictureAttention, photoMs, photoBytes: drawn.bytes.length, ...size });
@@ -827,7 +935,7 @@ export function createIllustrator(config: ImageConfig, deps: {
         const look = lookNow();
         if (!look?.trim()) throw sceneGone();
         const recipe = { ...recipeOf(storyId), ...upright, seed: randomInt(2 ** 32) };
-        const drawn = await draw(recipe, portraitPrompt(name, look, (sheetNow() ?? []).map(one => one.name)).prompt, signal);
+        const drawn = await draw(userId, recipe, portraitPrompt(name, look, (sheetNow() ?? []).map(one => one.name)).prompt, signal, log);
         if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
         if (lookNow() !== look) throw sceneGone();
         // Held before it is sent, so that its button finds it however soon it is pressed, and let go if it never

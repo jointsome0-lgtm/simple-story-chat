@@ -200,7 +200,7 @@ export const en: Messages = {
     drawnFrom: (tokens, chars) => textSize('🖼 The look this portrait was drawn from', tokens, chars),
     again: '🔄 Another version',
     keep: '✅ Keep this one',
-    kept: person => `✅ Portrait kept: ${person}. The pictures of the scenes do not use it yet.`,
+    kept: person => `✅ Portrait kept: ${person}.`,
     drawing: '🎨 Drawing a portrait…',
     retelling: '⏳ Retelling the description for the pictures…',
     portraitFailed: 'The portrait did not work out. Try again a little later.',

@@ -135,8 +135,12 @@ def sweep(temp, history, now, grace, file_cap):
                 age = now - os.lstat(path).st_mtime
             except FileNotFoundError:
                 continue
-            unnamed = history is not None and os.path.normpath(os.path.relpath(path, temp)) not in named
-            if age < file_cap and not (unnamed and age >= grace):
+            relative = os.path.normpath(os.path.relpath(path, temp))
+            # Bot portraits are uploaded before a job exists and may wait in its queue. The bot overwrites them
+            # with a blank PNG on every exit; a crash or failed overwrite leaves at most this ten-minute cap.
+            reference = relative.startswith('bot-references' + os.sep)
+            unnamed = history is not None and relative not in named
+            if age < file_cap and (reference or not (unnamed and age >= grace)):
                 continue
             try:
                 os.unlink(path)

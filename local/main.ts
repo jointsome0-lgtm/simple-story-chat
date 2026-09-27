@@ -89,7 +89,7 @@ try {
       return qwen && count(qwen, graph);
     } catch (error) { log('tokenizer_unreadable', undefined, error); return undefined; }
   };
-  const illustrator = config.images ? createIllustrator(config.images, { store, provider,
+  const illustrator = config.images ? createIllustrator(config.images, { store, provider, ownerId: config.ownerId,
     model: { model: config.model, provider: config.provider, contextTokens: config.contextTokens },
     promptTokens: counter(encoderTokens), textTokens: counter(textTokens) }) : undefined;
   if (config.images) log('pictures_configured');

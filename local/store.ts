@@ -14,6 +14,9 @@ export class Store {
   declare path: string;
   // The portrait files written inside the write under way (`writePortrait`), which a rollback takes with it.
   declare writing: string[] | undefined;
+  // A frame may still be drawing when its reader keeps another portrait. Its old files live until the frame's
+  // recipe is saved, or the drawing is abandoned. The caller sweeps again after releasing the hold.
+  heldPortraits = new Set<{ userId: string; files: string[] }>();
 
   // A read-only store serves a process that only looks while another one writes: it creates nothing and takes no lock.
   constructor(path: string, { readOnly = false }: { readOnly?: boolean } = {}) {
@@ -99,6 +102,11 @@ export class Store {
     this.writing?.push(join(directory, file));
     return file;
   }
+  holdPortraits(userId: string, files: string[]): () => void {
+    const held = { userId, files };
+    this.heldPortraits.add(held);
+    return () => { this.heldPortraits.delete(held); };
+  }
   // Called once a write that may have let a portrait go is committed, never inside one. Returns how many files went.
   sweepPortraits(userId: string): number {
     if (this.path === ':memory:') return 0;
@@ -107,7 +115,11 @@ export class Store {
     // No directory yet is no portrait yet. A directory that cannot be read is another matter, for the caller to tell.
     try { files = readdirSync(directory); }
     catch (error) { if ((error as { code?: unknown }).code === 'ENOENT') return 0; throw error; }
-    const kept = new Set(Object.values(this.read(userId).stories).flatMap(story => (story.sheet ?? []).map(one => one?.portrait?.file)));
+    const kept = new Set(Object.values(this.read(userId).stories).flatMap(story => [
+      ...(story.sheet ?? []).map(one => one?.portrait?.file),
+      ...Object.values(story.nodes).flatMap(node => node.picture?.references?.portraits.map(one => one.file) ?? []),
+    ]));
+    for (const held of this.heldPortraits) if (held.userId === userId) for (const file of held.files) kept.add(file);
     const lost = files.filter(file => !kept.has(file));
     for (const file of lost) rmSync(join(directory, file), { force: true });
     return lost.length;

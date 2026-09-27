@@ -276,7 +276,7 @@ export const ru = {
     again: '🔄 Ещё вариант',
     keep: '✅ Оставить',
     // Once the reader kept a portrait. The scenes' pictures do not use it yet.
-    kept: (person: string) => `✅ Портрет сохранён: ${person}. В картинки к сценам он пока не попадает.`,
+    kept: (person: string) => `✅ Портрет сохранён: ${person}.`,
     drawing: '🎨 Рисую портрет…',
     // While the description the reader has just written is retold; the card replaces it.
     retelling: '⏳ Пересказываю описание для картинок…',

@@ -81,7 +81,10 @@ export type OwnStyle = { id: string; name: string; line: string };
 // the request and not the card: after a change to the card's software, or to weights under the same file name, the
 // same recipe can draw another picture (docs/telegram-ui.md#picture-variants).
 export type PictureRecipe = { seed: number; graph: string; checkpoint: string; width: number; height: number;
-  steps: number; cfg: number; sampler: string; scheduler: string };
+  steps: number; cfg: number; sampler: string; scheduler: string;
+  // Ordered, immutable portrait inputs of the reference experiment. No field means the older text-only recipe.
+  // The version fixes the reference graph and scaling; hashes refuse a file whose bytes have changed.
+  references?: { version: 'qwen-identity-v1'; portraits: { name: string; file: string; sha256: string }[] } };
 // A picture the local bot sent into its reader's chat (local/picture.ts): the scene it shows, the message it is, and
 // when it was sent, in milliseconds since the epoch. A portrait of a person of the story's sheet shows no scene.
 export type SentPicture = { storyId: string; nodeId?: string; messageId: number; at: number };

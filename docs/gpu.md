@@ -304,6 +304,20 @@ The last point holds for one job only because of the card's size. The pinned bui
 
 `output/` keeps what the batch harness saved and `input/` its reference portraits, synthetic scenes only, until the card is destroyed. A server started before the sweeper existed wrote its previews to `ComfyUI/temp` on the disk, which the sweeper does not watch: empty that once by hand.
 
+The bot's [reference experiment for the owner and named testers](setup.md#pictures) uses neither of those folders. It strips the kept
+portraits' metadata and uploads them with `type=temp` to random names in `bot-references/` under the same RAM temp
+directory as previews. `LoadImage` reads their annotated `[temp]` names. The bot overwrites every allocated name with
+a blank PNG after drawing, cancellation, rejection or upload failure, even when an upload response was lost. Those
+overwrites have their own timeout and ignore the cancelled scene's signal. Their acknowledgment is recorded as
+`referenceCleanup`, never with a file name. The history deletion and the accepted lifetime of the last job in the
+server's memory are the same as for ordinary frames.
+
+Install this version of `image-sweeper.py` before enabling references. It leaves the `bot-references/` folder alone
+until the ten-minute file cap, since an upload may precede the job or wait in its queue. A successful overwrite leaves
+only a blank image until that cap; a crashed bot or failed overwrite leaves the portrait for at most ten minutes.
+This exception changes no preview lifetime and no synthetic experiment's input or output. The same requirements
+for writable tmpfs and a container that cannot swap apply to references.
+
 Every PNG the bot takes from the card is rewritten without its text chunks, which hold the whole prompt and workflow
 (`stripPngMetadata` in [image-batch.ts](../local/image-batch.ts)).
 

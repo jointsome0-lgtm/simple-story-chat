@@ -21,7 +21,7 @@ export type GpuConfig = { instanceId: string; apiKey: string; sshHost: string; i
 // (local/illustrate.ts `STYLE`). `users` are the Telegram IDs whose scenes may be drawn — nobody by default.
 export type ImageConfig = {
   url: string; workflow: string; checkpoint: string; style: string | undefined; users: Set<string>;
-  waitMs: number; timeoutMs: number;
+  waitMs: number; timeoutMs: number; references?: boolean; referenceUsers?: Set<string>;
 };
 export type Config = ModelConfig & { gpu: GpuConfig | undefined; images: ImageConfig | undefined; token: string; allowedUsers: Set<string>; ownerId: string; dbPath: string };
 // The agent interface (docs/agent-interface.md#privacy-a-separate-library): its own library file, and the bot's model
@@ -197,10 +197,16 @@ export function imageConfig(env: Env, directory: string, allowedUsers: Set<strin
   }
   const seconds = Number(env.SIMPLE_CHAT_IMAGE_WAIT_SECONDS || 180);
   if (!Number.isSafeInteger(seconds) || seconds < 5 || seconds > 1800) throw new Error('Invalid SIMPLE_CHAT_IMAGE_WAIT_SECONDS');
+  const references = env.SIMPLE_CHAT_IMAGE_REFERENCES?.trim() || 'false';
+  if (!['true', 'false'].includes(references)) throw new Error('SIMPLE_CHAT_IMAGE_REFERENCES must be true or false');
+  const referenceUsers = new Set((env.SIMPLE_CHAT_IMAGE_REFERENCE_USERS || '').split(',').map(one => one.trim()).filter(Boolean));
+  for (const user of referenceUsers) if (!users.has(user)) {
+    throw new Error('Every SIMPLE_CHAT_IMAGE_REFERENCE_USERS entry must be one of SIMPLE_CHAT_IMAGE_USERS');
+  }
   // One HTTP request of the picture lane is a submit, a poll or a download through the tunnel, never the drawing
   // itself: it may be short even when a picture may take minutes.
   return { url: url.origin, workflow: resolve(directory, workflow), checkpoint, style, users,
-    waitMs: seconds * 1000, timeoutMs: Math.min(60000, seconds * 1000) };
+    waitMs: seconds * 1000, timeoutMs: Math.min(60000, seconds * 1000), references: references === 'true', referenceUsers };
 }
 
 // A hosted API or a consumer Codex account may log requests and train on them. By default they serve synthetic probes

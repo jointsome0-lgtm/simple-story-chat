@@ -210,7 +210,7 @@ export const zh: Messages = {
     drawnFrom: (tokens, chars) => textSize('🖼 画这张肖像所用的外貌', tokens, chars),
     again: '🔄 再画一张',
     keep: '✅ 保留这张',
-    kept: person => `✅ 肖像已保存：${person}。场景插图暂时还不会用到它。`,
+    kept: person => `✅ 肖像已保存：${person}。`,
     drawing: '🎨 正在绘制肖像…',
     retelling: '⏳ 正在为插图改写外貌描述…',
     portraitFailed: '肖像没有画成。请稍后再试。',

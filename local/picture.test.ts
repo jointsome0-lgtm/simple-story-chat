@@ -19,7 +19,7 @@ import type { Update } from './bot.ts';
 import { imageConfig } from './config.ts';
 import { createScheduler } from './scheduler.ts';
 import type { ImageConfig } from './config.ts';
-import { defaultWorkflow, latentSizeOf } from './image-batch.ts';
+import { defaultWorkflow, latentSizeOf, referenceSlots } from './image-batch.ts';
 import type { Graph } from './image-batch.ts';
 import { STYLE, sheetOf } from './illustrate.ts';
 import type { Description } from './illustrate.ts';
@@ -31,6 +31,7 @@ import { createServing, readerScope } from './serving.ts';
 import { PORTRAIT_CLOTHES, PORTRAIT_STYLE } from './image-portraits.ts';
 import { clothesOf, createIllustrator, encoderTokens, foldedPrompt, personTag, rewrittenSheet, textTokens, wornAt } from './picture.ts';
 import { PRESETS, PROMPT_CHARS } from './picture-style.ts';
+import { pinReferences } from './picture-references.ts';
 import type { GpuController } from './gpu.ts';
 import { Store } from './store.ts';
 import type { TelegramPayload } from './telegram.ts';
@@ -70,13 +71,20 @@ function fakeComfy(options: Card = {}) {
   const submitted: Graph[] = [];
   const done = new Set<string>();
   // `interrupted`: the job each interrupt named.
-  const seen = { interrupted: [] as unknown[], queueDeletes: 0, cleared: [] as string[] };
+  const seen = { interrupted: [] as unknown[], queueDeletes: 0, cleared: [] as string[], uploads: 0 };
   const finishAt = new Map<string, number>();
   const server = createServer((request, response) => {
     const url = new URL(request.url!, 'http://127.0.0.1');
     const body = async () => { const parts = []; for await (const part of request) parts.push(part as Buffer); return JSON.parse(Buffer.concat(parts).toString('utf8')); };
     const json = (value: unknown) => { response.setHeader('content-type', 'application/json'); response.end(JSON.stringify(value)); };
     void (async () => {
+      if (request.method === 'POST' && url.pathname === '/upload/image') {
+        const parts: Buffer[] = [];
+        for await (const part of request) parts.push(part as Buffer);
+        const form = await new Response(Buffer.concat(parts), { headers: { 'content-type': request.headers['content-type']! } }).formData();
+        seen.uploads++;
+        return json({ name: (form.get('image') as File).name, subfolder: form.get('subfolder'), type: form.get('type') });
+      }
       if (request.method === 'POST' && url.pathname === '/prompt') {
         submitted.push((await body()).prompt as Graph);
         const id = `p${submitted.length}`;
@@ -165,7 +173,7 @@ const COMPRESSED = 'A tall woman in her fifties, olive skin, lean build, a long 
 const seedText = 'Маяк\n2026-08-02 20:00\nСмотритель встречает лодку. Кодовая фраза: СЕВЕР.';
 // Every word of these stories, looks, prompts and styles, and the card's address and checkpoint: a log row carries
 // counts and words of its own, and none of these.
-const PRIVATE = /Элин|Тарек|Мира|Маяк|Смотритель|Кодовая|СЕВЕР|Синтетическ|Уголь|hair|braid|coat|door|lighthouse|Charcoal|[Ss]ynthetic|Photorealistic|Semi-realistic|Watercolor|Hand-painted|athletic suit|reference|127\.0\.0\.1|safetensors/;
+const PRIVATE = /Элин|Тарек|Мира|Маяк|Смотритель|Кодовая|СЕВЕР|Синтетическ|Уголь|hair|braid|coat|door|lighthouse|Charcoal|[Ss]ynthetic|Photorealistic|Semi-realistic|Watercolor|Hand-painted|athletic suit|\breference\b|127\.0\.0\.1|safetensors/;
 // A tokenizer of whole words, so that what a note or a card says can be counted by hand.
 const words = (text: string) => text.split(/\s+/).filter(Boolean).length;
 type Row = { event: string; code?: string | number } & ErrorDetails;
@@ -243,7 +251,7 @@ type Options = {
   // between the bot and the model; and what makes the bot prepare the next compaction while the reader reads.
   holdFinal?: number; holdPhotos?: number; scheduler?: boolean; compactAtTokens?: number; keepScenes?: number;
   // A workflow that ends in SaveImage, as the ones pinned in gpu/ do, or one of those pinned graphs itself.
-  saveImage?: boolean; graphFile?: string;
+  saveImage?: boolean; graphFile?: string; references?: boolean; pictureOwner?: string; referenceUsers?: string[];
   // A model that refuses the sheet or the retelling with this code, and a Telegram that will not delete a message or
   // send a photo's note.
   sheetError?: string; retellError?: string; refuseDelete?: boolean; refuseNote?: boolean;
@@ -327,12 +335,13 @@ async function fixture(t: TestContext, options: Options = {}) {
 
   const images: ImageConfig | undefined = url === undefined ? undefined : {
     url, workflow, checkpoint: 'synthetic.safetensors', style: options.style,
-    users: new Set(options.users ?? ['1']), waitMs: 5000, timeoutMs: 5000,
+    users: new Set(options.users ?? ['1']), waitMs: 5000, timeoutMs: 5000, references: options.references,
+    referenceUsers: new Set(options.referenceUsers),
   };
   // A test that wants whole seconds of wait moves the bot's clock forward by `offsetMs`. `restart` builds the bot and
   // its illustrator again over the same store and Telegram, and so forgets whatever they kept in memory.
   const boot = () => {
-    const illustrator = images && createIllustrator(images, { store, provider, pollMs: 2, now: () => Date.now() + (options.offsetMs ?? 0),
+    const illustrator = images && createIllustrator(images, { store, provider, ownerId: options.pictureOwner ?? '1', pollMs: 2, now: () => Date.now() + (options.offsetMs ?? 0),
       model: { model: options.llama?.illustratorModel ?? 'test-model', provider: 'claude-code', contextTokens: 65536 },
       promptTokens: () => options.promptTokens, textTokens: () => options.textTokens });
     const bot = createBot({ store, api, provider, gpu: options.gpu, illustrator, allowedUsers: new Set(['1', '2']), maxOutputTokens: 4096,
@@ -396,8 +405,49 @@ const idOf = (sent: Sent[], one: Sent) => sent.indexOf(one) + 1;
 const editOf = (note: Sent) => note.payload.reply_markup!.inline_keyboard[0][0].callback_data;
 // The numbers a note's summary gives, in order.
 const countsOf = (summary: string) => summary.match(/\d[\d ]*/g)!.map(number => Number(number.replace(/ /g, '')));
-const KEPT = '✅ Портрет сохранён: Элин. В картинки к сценам он пока не попадает.';
+const KEPT = '✅ Портрет сохранён: Элин.';
 const STALE = 'Этот портрет уже не сохранить: он устарел или внешность с тех пор изменилась. Нарисуй новый.';
+
+// One privacy boundary, across all three frame entry points. The owner and named tester are positive controls;
+// even a saved reference recipe in another reader's library must never cause a portrait read or upload.
+test('reference frames read and send portraits only for the owner or named testers, including saved variants', async t => {
+  for (const [user, enabled, owner, testers, permitted] of [[2, true, '1', [], false], [1, undefined, '1', [], false],
+    [1, true, '', [], false], [1, true, '1', [], true], [2, true, '1', ['2'], true]] as const) {
+    const f = await fixture(t, { card: {}, graphFile: 'gpu/image-workflow-qwen.json', users: ['1', '2'],
+      references: enabled, pictureOwner: owner, referenceUsers: [...testers] });
+    await f.start(user);
+    await f.bot.idle();
+    const userId = String(user), storyId = f.store.read(userId).active!.storyId;
+    const file = f.store.writePortrait(userId, pngCarrying('synthetic portrait'));
+    const pinned = pinReferences(f.store, userId, [{ name: 'Элин', file }]);
+    f.store.mutate(userId, state => {
+      const story = state.stories[storyId], node = story.nodes[story.branches[state.active!.branchId].head!];
+      story.sheet![0].portrait = { ...node.picture!, file, look: DETAILS, clothes: PORTRAIT_CLOTHES, style: PORTRAIT_STYLE, at: Date.now() };
+    });
+    let reads = 0;
+    const directoryOf = f.store.portraits.bind(f.store);
+    f.store.portraits = id => { reads++; return directoryOf(id); };
+    const before = f.comfy.submitted.length;
+    await f.bot.handle(f.message('Дальше.', user));
+    await f.bot.idle();
+    const active = f.store.read(userId).active!;
+    const nodeId = f.store.read(userId).stories[storyId].branches[active.branchId].head!;
+    await f.bot.handle(f.click('style-sample:film', user));
+    await f.bot.idle();
+    // A crafted/imported recipe cannot bypass the access gate on the prompt-variant path.
+    f.store.mutate(userId, state => { state.stories[storyId].nodes[nodeId].picture!.references = pinned; });
+    await f.bot.handle(f.click(`prompt-edit:${storyId}:${nodeId}`, user));
+    await f.bot.handle(f.message('A quiet room. Hand-painted illustration.', user));
+    await f.bot.idle();
+    const frames = f.comfy.submitted.slice(before);
+    assert.equal(frames.length, 3, 'scene, style sample and variant all drew');
+    assert.deepEqual(frames.map(graph => referenceSlots(graph).length), permitted ? [1, 1, 1] : [0, 0, 0]);
+    assert.equal(reads > 0, permitted, 'the access check precedes even a local portrait read');
+    assert.equal(f.comfy.seen.uploads, permitted ? 6 : 0, 'one private upload and one blank overwrite per permitted frame');
+    assert.doesNotMatch(JSON.stringify(f.rows), PRIVATE);
+    await f.bot.stop();
+  }
+});
 
 // Off by default and per reader: the story of a reader who did not ask for pictures is never drawn, not even on a card
 // we run (AGENTS.md), whatever button they press.

@@ -64,6 +64,35 @@ the server's cache, and each is emptied on its own schedule:
 
 The `SIMPLE_CHAT_IMAGE_*` variables above belong to the bot on this computer. The picture card has its own: `SIMPLE_CHAT_IMAGE_QWEN` is read by [the bootstrap on the card](gpu.md#qwen-image) and decides which checkpoints it downloads, and `SIMPLE_CHAT_IMAGE_TORCH` which torch it installs and the server runs, cu130 on [the bot's card](gpu.md#bot-card); the bot never reads them. Before each picture it asks the server whether to draw with the kitchen's attention.
 
+`SIMPLE_CHAT_IMAGE_REFERENCES=true` enables the kept-portrait experiment for `SIMPLE_CHAT_OWNER_ID`. It is
+`false` by default. To admit a tester as well, put their Telegram ID in `SIMPLE_CHAT_IMAGE_REFERENCE_USERS`, a
+comma-separated list that is empty by default. Every listed ID must already be in `SIMPLE_CHAT_IMAGE_USERS`.
+The owner must also be in `SIMPLE_CHAT_IMAGE_USERS`; readers outside the experiment always get ordinary frames.
+Keep `SIMPLE_CHAT_IMAGE_WORKFLOW=gpu/image-workflow-qwen.json`. The bot adds the reference nodes to Qwen's graph
+only when a permitted reader's frame contains somebody with a kept portrait. Missing portraits leave those people's words
+unchanged, and a frame with no portraits uses the ordinary prompt and graph. Other models draw ordinary frames.
+Set the variable in the bot's launch environment or its chosen local profile, then restart the bot.
+
+The experiment keeps each person's full appearance and build words, names the chosen medium first, and asks Qwen
+to take identity alone from the portraits. It sends the full portraits scaled to 352x640. The frame keeps its usual
+canvas, seed and sampler settings. This combines C's reference path with proposed wording; its pictures have not
+been judged. The owner should compare faces, builds, relative heights, scene poses and clothes, and the chosen style.
+
+A frame's recipe pins its ordered portrait files and hashes. Variants and redraws, including style samples, reuse
+those files after the reader keeps a new portrait. Old recipes remain text-only. Turning the setting off disables
+references on those paths too. A missing or changed file, failed upload or explicit graph rejection falls back to
+an ordinary drawing and records why. An uncertain submission or failure after acceptance does not start a second
+job. Variants still draw the whole prompt the reader supplied, including any image numbers in it.
+
+Before enabling this on a card, install this branch's `gpu/image-sweeper.py` and launch through `gpu/image-serve.sh`.
+Portraits use the RAM temp directory and are blanked after the job; the disk-backed input upload used by experiments
+is never used here. See [the retention rules](gpu.md#what-the-card-keeps-of-a-picture). The `picture_references`
+row gives `referenceCount`, `referenceAttempted` and `pictureReferences`: `used`, `disabled`, `not_allowed`,
+`no_portrait`, `legacy`, `unsupported_graph`, `unavailable`, `upload_failed` or `graph_rejected`.
+`picture_reference_cleanup` gives the number of uploaded files and `referenceCleanup`, whether every blank overwrite
+was acknowledged. Neither row contains a name, path, hash, portrait or prompt. A failed cleanup leaves the sweeper's
+ten-minute cap in force.
+
 ### Backup and restore
 
 The database is the file at `SIMPLE_CHAT_DB_PATH`. The portraits readers keep lie beside it in `<path>.portraits/`, and only the database says whose each one is: a backup takes both, copied while the bot is stopped, so that no portrait is kept or swept in between.

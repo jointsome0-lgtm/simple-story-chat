@@ -845,8 +845,9 @@ export const RIDES = 5;
 // open, such as whether the job can still end by the harness's `--until`; a job it refuses is not sent, and fails
 // as `not_admitted`. The harness's picture goes on the stage's one socket, with the cell's way through a dropped
 // connection, and is followed in its two halves (`submitOnStage`); the bot's goes through `drawOne`, as it always did.
+// `onSubmitted` tells the bot that a job exists, so an accepted reference job's failure never starts a fallback job.
 type DrawOneOptions = { pollMs?: number; waitMs?: number; sampleEvery?: number; requireSocket?: boolean; copies?: string[];
-  admit?: () => boolean };
+  admit?: () => boolean; onSubmitted?: () => void };
 // The card tells a job's news only to a socket that is connected when it is sent, and the first of it, the job's start
 // and the nodes its cache answered, comes at the very start of the job (execution.py:683-720). So the submit waits
 // for the socket to open, this long at most. One that does not open in time leaves the bot's picture to the polls,
@@ -974,6 +975,7 @@ async function submitOnce(comfy: Comfy, graph: Graph, clientId: string): Promise
 async function drawWatched(comfy: Comfy, graph: Graph, watch: Watch, options: DrawOneOptions) {
   const started = performance.now();
   const promptId = await submitOnce(comfy, graph, watch.clientId);
+  options.onSubmitted?.();
   const job = follow(comfy, graph, watch, promptId, started, options);
   await job.untilOver();
   return job.fetch();

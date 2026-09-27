@@ -219,7 +219,7 @@ export const ko: Messages = {
     drawnFrom: (tokens, chars) => textSize('🖼 이 초상화를 그린 외모', tokens, chars),
     again: '🔄 다시 그리기',
     keep: '✅ 이걸로 저장',
-    kept: person => `✅ 초상화를 저장했어요: ${person}. 장면 삽화에는 아직 쓰이지 않아요.`,
+    kept: person => `✅ 초상화를 저장했어요: ${person}.`,
     drawing: '🎨 초상화를 그리는 중…',
     retelling: '⏳ 외모 설명을 삽화용으로 다시 쓰는 중…',
     portraitFailed: '초상화를 그리지 못했어요. 조금 뒤에 다시 시도해 주세요.',

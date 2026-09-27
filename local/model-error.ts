@@ -31,6 +31,8 @@ const PICTURE_STYLES = ['standard', 'semi', 'novel', 'film', 'graphic', 'waterco
 // it was not: the bot's graph is not one it was measured on, the server's torch is not for CUDA 13, its node does not
 // offer it, or the server did not say.
 const PICTURE_ATTENTION = ['kitchen', 'plain_graph', 'plain_torch', 'plain_offer', 'plain_unanswered'] as const;
+const PICTURE_REFERENCES = ['used', 'disabled', 'not_allowed', 'no_portrait', 'legacy', 'unsupported_graph',
+  'unavailable', 'upload_failed', 'graph_rejected'] as const;
 // Why the model's last message ended, as the API names it, for the row of a failed Claude CLI run: `max_tokens` there
 // means the run's output cap was hit, which the CLI reports as an error rather than a truncation.
 export const STOP_REASONS = ['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'refusal', 'other'] as const;
@@ -87,7 +89,7 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   // The details and looks retold from the people's descriptions (local/picture.ts `retellPending`): how many people one
   // call was asked for and how many it wrote, the characters of the longest description it read, and the words of the
   // longest look it wrote, which the rule asks 15-25 of.
-  'retellPeople', 'retoldPeople', 'descriptionCharacters', 'lookWords'] as const;
+  'retellPeople', 'retoldPeople', 'descriptionCharacters', 'lookWords', 'referenceCount', 'referenceAttempted'] as const;
 
 export type ErrorDetails = {
   httpStatus?: number; phase?: typeof PHASES[number]; operation?: typeof OPERATIONS[number];
@@ -100,6 +102,7 @@ export type ErrorDetails = {
   // in which style, for a sample of a style whether the scene's frame was still in memory, and with which attention.
   imageRole?: typeof IMAGE_ROLES[number]; outcome?: typeof OUTCOMES[number]; cancelled?: boolean;
   pictureStyle?: typeof PICTURE_STYLES[number]; frameReused?: boolean; pictureAttention?: typeof PICTURE_ATTENTION[number];
+  pictureReferences?: typeof PICTURE_REFERENCES[number]; referenceCleanup?: boolean;
   // A picture drawn from a prompt the reader wrote whole (local/picture.ts `variant`) rather than one the bot assembled.
   edited?: boolean;
   // A sheet written in place of an older one that still had the clothes in its appearance lines.
@@ -140,6 +143,8 @@ export function safeErrorDetails(value: unknown = {}): ErrorDetails {
   if (member(PICTURE_STYLES, input?.pictureStyle)) result.pictureStyle = input.pictureStyle;
   if (typeof input?.frameReused === 'boolean') result.frameReused = input.frameReused;
   if (member(PICTURE_ATTENTION, input?.pictureAttention)) result.pictureAttention = input.pictureAttention;
+  if (member(PICTURE_REFERENCES, input?.pictureReferences)) result.pictureReferences = input.pictureReferences;
+  if (typeof input?.referenceCleanup === 'boolean') result.referenceCleanup = input.referenceCleanup;
   if (typeof input?.edited === 'boolean') result.edited = input.edited;
   if (typeof input?.sheetRewritten === 'boolean') result.sheetRewritten = input.sheetRewritten;
   if (member(CLI_RESULTS, input?.cliResult)) result.cliResult = input.cliResult;

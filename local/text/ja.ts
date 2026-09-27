@@ -209,7 +209,7 @@ export const ja: Messages = {
     drawnFrom: (tokens, chars) => textSize('🖼 この肖像を描いた外見', tokens, chars),
     again: '🔄 別の案',
     keep: '✅ これを残す',
-    kept: person => `✅ 肖像を保存しました：${person}。シーンの挿絵にはまだ使われません。`,
+    kept: person => `✅ 肖像を保存しました：${person}。`,
     drawing: '🎨 肖像を描いています…',
     retelling: '⏳ 外見の説明を挿絵用に書き直しています…',
     portraitFailed: '肖像は描けませんでした。少し時間をおいてもう一度お試しください。',
