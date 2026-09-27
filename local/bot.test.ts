@@ -125,7 +125,7 @@ function speaking<T extends Update>(update: T, languageCode: string | undefined)
 
 // A card that draws nothing: the bot's side of the picture styles, with the samples it asks for kept here.
 function sketchbook(drawn: SampleRequest[]) {
-  return { enabledFor: (userId: string) => userId === '1', standardStyle: PRESETS.semi,
+  return { enabledFor: (userId: string) => userId === '1', standardStyle: PRESETS.semi, referencesFor: () => false,
     illustrate: async () => {}, sample: async (request: SampleRequest) => { drawn.push(request); } } as unknown as Illustrator;
 }
 

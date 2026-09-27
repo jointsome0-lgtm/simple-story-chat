@@ -41,7 +41,7 @@
 // (`describeFrame`).
 import { createHash, randomInt } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { recordPicture } from '../lib/library.ts';
+import { recordPicture, referenceFiles } from '../lib/library.ts';
 import type { Library, PictureRecipe, SceneNode, Story } from '../lib/library.ts';
 import type { ImageConfig } from './config.ts';
 import { estimateTokens, requestStamp, sameContext } from './context.ts';
@@ -57,6 +57,7 @@ import type { ModelRequest, Provider } from './model.ts';
 import { styleChoice, styleLine } from './picture-style.ts';
 import type { StyleChoice } from './picture-style.ts';
 import { REFERENCE_VERSION, frameReferences, pinReferences, readReference, referenceGraph, referencePrompt, temporaryReferences } from './picture-references.ts';
+import { pictureSize } from './reference.ts';
 import { createProgress } from './progress.ts';
 import { contextParts, storyNarration } from './prompt.ts';
 import { fileErrorCode } from './store.ts';
@@ -190,19 +191,22 @@ export function personAt(story: Story | undefined, index: string | undefined, ta
 // A sheet written again in place of an older one, or for the first time (`describeFrame`), keeps what the reader made
 // of it, under the same name, or with the person on their own if the new sheet lost the name: a description they
 // wrote, which wins over the one the new sheet took from the story (the owner, 2026-09-27), details they wrote before
-// that day counting as one; a look of their own; and a portrait they kept. Everybody on it with a description is then
-// to be retold (`lookPending`), a look of the reader's own staying as it is. A person kept on their own has their fields
-// brought to the three layers, and the changes and the outfit of a sheet of this kind, even empty. The card shows a
-// portrait as drawn from another text if the person's text differs now (local/ui.ts).
+// that day counting as one; a look of their own; and a portrait they kept, with the other references, the pictures
+// they sent and which one is the main. Everybody on it with a description is then to be retold (`lookPending`), a look
+// of the reader's own staying as it is. A person kept on their own has their fields brought to the three layers, and
+// the changes and the outfit of a sheet of this kind, even empty. The card shows a portrait as drawn from another text
+// if the person's text differs now (local/ui.ts).
 export function rewrittenSheet(before: SheetEntry[], written: Character[]): SheetEntry[] {
   const old = new Map(before.map(one => [personKey(one.name), one]));
   const kept = written.map((one): SheetEntry => {
     const mine = old.get(personKey(one.name));
     return { ...one, ...mine && ownDescription(mine) ? { description: descriptionOf(mine), descriptionEdited: true } : {},
-      ...mine?.edited ? { look: mine.look, edited: true } : {}, ...mine?.portrait ? { portrait: mine.portrait } : {}, lookPending: true };
+      ...mine?.edited ? { look: mine.look, edited: true } : {}, ...mine?.portrait ? { portrait: mine.portrait } : {},
+      ...mine?.poses ? { poses: mine.poses } : {},
+      lookPending: true };
   });
   const names = new Set(written.map(one => personKey(one.name)));
-  return [...kept, ...before.filter(one => (one.edited || ownDescription(one) || one.portrait) && !names.has(personKey(one.name)))
+  return [...kept, ...before.filter(one => (one.edited || ownDescription(one) || referenceFiles(one).length) && !names.has(personKey(one.name)))
     .map(person => {
       const { detailsEdited, details, description, descriptionEdited, lookPending, ...one } = person;
       const text = descriptionOf(person);
@@ -552,6 +556,8 @@ export function createIllustrator(config: ImageConfig, deps: {
               if (read.sha256 !== one.sha256) throw new Error('reference_unavailable');
               return read.bytes;
             });
+            // Each at its own shape, never stretched to a portrait's (local/picture-references.ts `referenceScale`).
+            edited = referenceGraph(graph, bytes.map(pictureSize));
           } catch { edited = undefined; }
         }
         if (edited) {
@@ -995,18 +1001,30 @@ export function createIllustrator(config: ImageConfig, deps: {
     // Keeps the portrait a reader was shown under `candidateId`, inside the library write that `state` belongs to: the
     // file is written first and the sheet refers to it once that write commits; a rollback deletes the file, and the
     // caller sweeps the one it replaced afterwards (local/store.ts). Only the very portrait that button came with is
-    // kept, only while it is held, and only while its person still has the text it was drawn from. Returns where that
-    // person is on the sheet, or null for a stale button. The portrait stays held until `portraitKept`.
+    // kept, only while it is held, and only while its person still has the text it was drawn from. It is the front's
+    // drawing, and kept by hand it takes the front from a picture of the reader's own, pinned or not: pinning holds a pose
+    // against the poses drawn for the reader (lib/library.ts `OwnReference`), never against a portrait they chose. The
+    // caller sweeps that picture's file as well. Returns where that person is on the sheet, or null for a stale button.
+    // The portrait stays held until `portraitKept`.
     keepPortrait(userId: string, candidateId: string, state: Library) {
       const held = candidates.get(userId);
       if (!held || held.id !== candidateId || now() - held.at > PORTRAIT_HELD_MS) return null;
       const sheet = state.stories[held.storyId]?.sheet ?? [];
       const index = sheet.findIndex(one => one.name === held.name);
       if (index < 0 || portraitText(sheet[index]) !== held.look) return null;
-      sheet[index].portrait = { file: store.writePortrait(userId, held.bytes), ...held.recipe, look: held.look,
+      const person = sheet[index];
+      person.portrait = { source: 'drawn', file: store.writePortrait(userId, held.bytes), ...held.recipe, look: held.look,
         clothes: PORTRAIT_CLOTHES, style: PORTRAIT_STYLE, at: now() };
+      if (person.poses?.front) {
+        const { front, ...poses } = person.poses;
+        if (Object.keys(poses).length) person.poses = poses; else delete person.poses;
+      }
       return { storyId: held.storyId, index, retainsPortraits: !referenceGate(userId) };
     },
+
+    // Whether a reader may send a picture of a person of their own, which frames then take as they take a portrait: the
+    // reference experiment's own readers (`referenceGate`). Nobody else sees those buttons or what they keep (local/ui.ts).
+    referencesFor(userId: string) { return !referenceGate(userId); },
 
     // Lets a kept portrait go, once the write that refers to its file is committed (local/bot.ts). One whose write was
     // rolled back is still held, so the same button keeps it again.

@@ -35,8 +35,23 @@ export type Checkpoint = { id: string; branchId: string; label: string; kind: st
 // file among the reader's portraits beside the database (local/store.ts), never the picture itself, and how it was
 // drawn — its recipe, on a canvas of its own, the text of the person it was drawn from as `look` (their `details` or
 // their look, `portraitText` in local/image-portraits.ts), which a new text of theirs no longer matches, and the
-// clothes and the style line of its prompt. Frames never use it.
-export type KeptPortrait = PictureRecipe & { file: string; look: string; clothes: string; style: string; at: number };
+// clothes and the style line of its prompt. Only the reference experiment's frames use it (local/picture-references.ts).
+// One kept before a reader could send pictures of their own, on 2026-09-27, has no `source`.
+export type KeptPortrait = PictureRecipe & { source?: 'drawn'; file: string; look: string; clothes: string; style: string; at: number };
+// The standard poses of a person's references (the owner, 2026-09-27: «по дефолту генерация стандартных поз, а далее с
+// возможностью поменять на свое закрепить»). `front` is the kept portrait, standing and facing the viewer, or the
+// reader's own picture in its place, and the only pose so far: the others are to be drawn from it by editing, which is
+// not built yet. The keys stay English, as captions do.
+export const POSES = ['front', 'three-quarter', 'profile', 'sitting', 'walking'] as const;
+export type Pose = typeof POSES[number];
+export const isPose = (value: unknown): value is Pose => (POSES as readonly unknown[]).includes(value);
+// A picture of a person that a reader in the reference experiment sent (local/reference.ts): the name of its file
+// beside the portraits, stripped of its metadata and kept in the format it came in, its size in pixels, and the English
+// caption it came with, if any. Nothing drew it, so it has no recipe. Frames take it as they take a drawn portrait (the
+// owner, 2026-09-27: «мы можем просто добавить фичу менять на свой портрет?»). `pinned` is to keep it in its pose when
+// the poses are drawn, and every picture sent is pinned.
+export type OwnReference = { source: 'own'; file: string; format: 'png' | 'jpeg' | 'webp'; width: number; height: number;
+  at: number; pinned: boolean; caption?: string };
 export type Story = {
   id: string; seedId: string; title: string; branches: Record<string, Branch>; checkpoints: Record<string, Checkpoint>;
   nodes: Record<string, SceneNode>; memories: Record<string, MemoryVersion>;
@@ -52,9 +67,12 @@ export type Story = {
   // take until the reader writes the description again. A sheet without `changes` is older and is written again by the
   // next picture as well: in one written from 2026-09-26, `details` were the sheet's own or, with `detailsEdited`, the
   // reader's, and the look was compressed from them. That rewrite keeps what the reader wrote and the portrait they kept
-  // (local/picture.ts `rewrittenSheet`).
+  // (local/picture.ts `rewrittenSheet`), and their references with it.
+  // A reader in the reference experiment may send a picture of a person of their own (docs/telegram-ui.md#references),
+  // which is kept in a pose (`poses`); the front's stands over the portrait.
   sheet?: { name: string; description?: string; changes?: string; details?: string; look: string; outfit?: string;
-    descriptionEdited?: boolean; edited?: boolean; lookPending?: boolean; detailsEdited?: boolean; portrait?: KeptPortrait }[];
+    descriptionEdited?: boolean; edited?: boolean; lookPending?: boolean; detailsEdited?: boolean; portrait?: KeptPortrait;
+    poses?: Partial<Record<Pose, OwnReference>> }[];
 };
 export type Job = {
   id: string; storyId: string; branchId: string; head: string | null; memory: string | null; input: string; started: number;
@@ -74,6 +92,10 @@ export type PromptInput = { input: 'prompt'; storyId: string; nodeId: string; co
 // their next text message is that text. The person is the one they opened, by story and name, never whatever is
 // active by then.
 export type LookInput = { input: 'look' | 'details'; storyId: string; name: string; confirm?: undefined };
+// A reader in the reference experiment sending a picture of one person of a story's sheet for `pose` (local/reference.ts):
+// their next photo or file is that, if it comes within half an hour of `at`, when the wait began. The person is the one
+// whose card they opened, by story and name.
+export type ReferenceInput = { input: 'reference'; storyId: string; name: string; pose: Pose; at: number; confirm?: undefined };
 // One of the reader's own picture styles: the name on its button and the line that ends the prompt.
 export type OwnStyle = { id: string; name: string; line: string };
 // How a picture was drawn, all but its prompt (local/picture.ts): its seed, a hash of the graph, the checkpoint's file
@@ -83,7 +105,9 @@ export type OwnStyle = { id: string; name: string; line: string };
 export type PictureRecipe = { seed: number; graph: string; checkpoint: string; width: number; height: number;
   steps: number; cfg: number; sampler: string; scheduler: string;
   // Ordered, immutable portrait inputs of the reference experiment. No field means the older text-only recipe.
-  // The version fixes the reference graph and scaling; hashes refuse a file whose bytes have changed.
+  // The version fixes the reference graph; each file is scaled to its own shape, which keeps the card's portraits of
+  // 720x1280 at the 352x640 they were first pinned at (local/picture-references.ts `referenceScale`). Hashes refuse a
+  // file whose bytes have changed.
   references?: { version: 'qwen-identity-v1'; portraits: { name: string; file: string; sha256: string }[] } };
 // A picture the local bot sent into its reader's chat (local/picture.ts): the scene it shows, the message it is, and
 // when it was sent, in milliseconds since the epoch. A portrait of a person of the story's sheet shows no scene.
@@ -93,7 +117,7 @@ export type Language = 'ru' | 'en' | 'zh' | 'ko' | 'ja';
 export type Library = {
   version: 1; seq: number; seeds: Record<string, Seed>; stories: Record<string, Story>;
   active: { storyId: string; branchId: string } | null; job: Job | null;
-  ui: SeedDraft | DeleteConfirmation | StyleInput | PromptInput | LookInput | null; seen: number[];
+  ui: SeedDraft | DeleteConfirmation | StyleInput | PromptInput | LookInput | ReferenceInput | null; seen: number[];
   interrupted?: boolean; language?: Language;
   // The look of this reader's pictures: a preset's key or the id of one of their own styles, and those styles. Only
   // the local bot reads them (local/picture-style.ts), and only for a reader it draws for; without a choice the bot's
@@ -319,4 +343,15 @@ export function forgetLostPictures(state: Library, now: number): number[] {
     return false;
   });
   return lost;
+}
+
+type SheetEntry = NonNullable<Story['sheet']>[number];
+// What a pose of a person holds: the picture the reader sent for it over the one the card drew, which only the front
+// has until the other poses are drawn (the kept portrait).
+export function poseReference(person: SheetEntry, pose: Pose): OwnReference | KeptPortrait | undefined {
+  return person.poses?.[pose] ?? (pose === 'front' ? person.portrait : undefined);
+}
+// Every file a person's references hold, which the store keeps while the sheet refers to them (local/store.ts).
+export function referenceFiles(person: SheetEntry): string[] {
+  return [person.portrait, ...Object.values(person.poses ?? {})].flatMap(one => one?.file ? [one.file] : []);
 }

@@ -3,7 +3,7 @@ import { createHmac, randomBytes } from 'node:crypto';
 import { mkdirSync, chmodSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { Library } from '../lib/library.ts';
-import { emptyLibrary } from '../lib/library.ts';
+import { emptyLibrary, referenceFiles } from '../lib/library.ts';
 import type { Log } from './model-error.ts';
 
 type AccessRequest = { userId: string; at: number };
@@ -82,22 +82,23 @@ export class Store {
       try { this.sweepPortraits(user_id as string); } catch (error) { log?.('portraits_unswept', fileErrorCode(error)); }
     }
   }
-  // The portraits a reader kept (local/picture.ts) are PNG files beside the database, never in it: one directory for
-  // each reader, named by a keyed hash of their id, and a random name for each file, so that no path says whose it
-  // is or whom it shows. The library refers to a file by that name alone. A file is written before the library write
-  // that refers to it, and `sweepPortraits` deletes every file of a reader's that their library does not refer to —
-  // a portrait replaced, one whose story is deleted, and one whose write was rolled back or never came.
+  // The portraits a reader kept (local/picture.ts), and the pictures of their people they sent (local/reference.ts), are
+  // files beside the database, never in it: one directory for each reader, named by a keyed hash of their id, and a
+  // random name for each file, so that no path says whose it is or whom it shows. The library refers to a file by that
+  // name alone. A file is written before the library write that refers to it, and `sweepPortraits` deletes every file of
+  // a reader's that their library does not refer to — a portrait or a picture replaced or removed, one whose story is
+  // deleted, and one whose write was rolled back or never came.
   portraits(userId: string) {
     if (this.path === ':memory:') throw new Error('Portraits need a database file to sit beside');
     const key = this.db.prepare("SELECT value FROM metadata WHERE key='portrait_key'").get()!.value as string;
     return join(`${this.path}.portraits`, createHmac('sha256', key).update(userId).digest('hex').slice(0, 32));
   }
   // Writes one portrait of `userId`'s and returns the name the library is to refer to it by. Inside a write, a rollback
-  // of that write deletes the file again (`mutate`).
-  writePortrait(userId: string, bytes: Uint8Array): string {
+  // of that write deletes the file again (`mutate`). A picture a reader sent keeps the extension of its format.
+  writePortrait(userId: string, bytes: Uint8Array, extension: 'png' | 'jpg' | 'webp' = 'png'): string {
     const directory = this.portraits(userId);
     mkdirSync(directory, { recursive: true, mode: 0o700 });
-    const file = `${randomBytes(16).toString('hex')}.png`;
+    const file = `${randomBytes(16).toString('hex')}.${extension}`;
     writeFileSync(join(directory, file), bytes, { mode: 0o600, flag: 'wx' });
     this.writing?.push(join(directory, file));
     return file;
@@ -116,7 +117,7 @@ export class Store {
     try { files = readdirSync(directory); }
     catch (error) { if ((error as { code?: unknown }).code === 'ENOENT') return 0; throw error; }
     const kept = new Set(Object.values(this.read(userId).stories).flatMap(story => [
-      ...(story.sheet ?? []).map(one => one?.portrait?.file),
+      ...(story.sheet ?? []).flatMap(one => one ? referenceFiles(one) : []),
       ...Object.values(story.nodes).flatMap(node => node.picture?.references?.portraits.map(one => one.file) ?? []),
     ]));
     for (const held of this.heldPortraits) if (held.userId === userId) for (const file of held.files) kept.add(file);

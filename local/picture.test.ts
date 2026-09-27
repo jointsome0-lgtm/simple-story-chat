@@ -1020,7 +1020,7 @@ test('keeping a portrait writes the very one shown into a private file beside th
   const person = f.store.read('1').stories[storyId].sheet![0];
   const portrait = person.portrait!;
   assert.match(`${portrait.file} ${portrait.graph}`, /^[0-9a-f]{32}\.png [0-9a-f]{16}$/);
-  assert.deepEqual({ ...portrait, file: '', graph: '', at: 0 }, { file: '', graph: '', at: 0, seed: second.seed, look: details,
+  assert.deepEqual({ ...portrait, file: '', graph: '', at: 0 }, { source: 'drawn', file: '', graph: '', at: 0, seed: second.seed, look: details,
     clothes: PORTRAIT_CLOTHES, style: PORTRAIT_STYLE, checkpoint: 'synthetic.safetensors', width: 768, height: 1344, steps: 8, cfg: 1,
     sampler: 'er_sde', scheduler: 'simple' });
 

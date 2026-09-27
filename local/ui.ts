@@ -8,6 +8,7 @@ import type { InlineButton, InlineKeyboard, Screen } from './telegram.ts';
 import { STYLE } from './illustrate.ts';
 import { portraitFromDetails, portraitText } from './image-portraits.ts';
 import { DESCRIPTION_CHARS, LOOK_CHARS, descriptionOf, ownDescription, personAt, personTag, wornAt } from './picture.ts';
+import { REFERENCE_BYTES, REFERENCE_SIDES } from './reference.ts';
 import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX, PRESETS, PROMPT_CHARS, lineOf, ownStyle, ownStyles, pickerKeys, presetOf, styleKey } from './picture-style.ts';
 import { LANGS, LANGUAGE_BUTTON, REGISTERED, shownLang, texts } from './text.ts';
 import type { Messages } from './text.ts';
@@ -23,10 +24,12 @@ export type GpuInfo = {
 // `standardStyle`: the bot's own style line, when it draws for anybody.
 // `textTokens`: the tokens of one field of a sheet as the picture model reads that text alone, null when unknown.
 // `retainsPortraits`: the keep confirmation explains retention for a reader in the reference experiment.
+// `references`: the reader is in the reference experiment (local/picture.ts `referencesFor`), so a person's card offers
+// to send a portrait of their own; anybody else is shown the card as if they could not.
 export type RenderDetails = {
   modelInfo?: ModelInfo | null; gpuInfo?: GpuInfo | null; contextStats?: ContextStats | null; pictures?: boolean; standardStyle?: string;
   textTokens?: (text: string) => number | null;
-  retainsPortraits?: boolean;
+  retainsPortraits?: boolean; references?: boolean;
 };
 // State is read defensively (docs/telegram-ui.md#renderer), so any library field may be missing.
 type State = Partial<Library>;
@@ -125,6 +128,8 @@ function screen(state: State, route: string, details: RenderDetails) {
     case 'details-input': return sheetInputScreen(state, 'details', details);
     case 'portrait': return portraitCaption(state, args[0], args[1], args[2], args[3]);
     case 'portrait-kept': return portraitKept(state, args[0], args[1], details.retainsPortraits === true);
+    // Only while the reader is to send a picture of a person of their own (local/reference.ts), as for a look.
+    case 'reference-input': return referenceInputScreen(state, details);
     case 'seeds': return seedList(state, args[0]);
     case 'seed': return seedScreen(state, args[0], args[1], details.pictures === true);
     case 'story': return storyScreen(state, args[0], args[1], details.pictures === true);
@@ -477,7 +482,8 @@ function charactersScreen(state: State, storyId: string | undefined) {
 }
 
 // One person (docs/illustrations-plan.md#three-layers): their description, the story's changes to it, the look and the
-// clothes, tap-to-copy, where an edited look reaches, and the portrait kept to pick a reference by. The description is
+// clothes, tap-to-copy, where an edited look reaches, and the portrait kept to pick a reference by, which a reader in
+// the reference experiment may send a picture of their own for (local/reference.ts). The description is
 // the person's text, the story's or the reader's own, which the details a portrait is drawn from and the look are
 // retold from (local/bot.ts). It has its characters alone, since the picture model never reads it: the details are
 // folded under a portrait with their tokens (local/picture.ts `portrait`). The look and the clothes each have their size
@@ -509,9 +515,12 @@ function characterScreen(state: State, storyId: string | undefined, rawIndex: st
   const descriptionTitle = c.description(ownDescription(person));
   const changes = person.changes?.trim() ?? '';
   // A kept portrait records the text it was drawn from, the person's details or, until they are retold, the look
-  // (`portraitText`), and the card names which of the two a portrait is drawn from now.
+  // (`portraitText`), and the card names which of the two a portrait is drawn from now. A picture of the reader's own
+  // in its place was drawn from nothing of the kind (local/reference.ts).
   const fromDetails = portraitFromDetails(person);
-  const portrait = person.portrait ? (person.portrait.look === portraitText(person) ? c.portraitKept(fromDetails) : c.portraitStale(fromDetails))
+  const mine = details.references ? person.poses?.front : undefined;
+  const portrait = mine ? c.ownPortraitKept(mine.width, mine.height)
+    : person.portrait ? (person.portrait.look === portraitText(person) ? c.portraitKept(fromDetails) : c.portraitStale(fromDetails))
     : details.pictures ? c.portraitNone(fromDetails) : null;
   const whose = person.edited ? c.lookOwn : person.lookPending ? c.lookPending : null;
   const result = payload([c.cardTitle(line(person.name, 60), storyName(state, story)), '',
@@ -522,7 +531,8 @@ function characterScreen(state: State, storyId: string | undefined, rawIndex: st
     c.sizeNote, '', c.scope, portrait === null ? null : '', portrait], [
     [btn(c.editDetails, `details-edit:${personRef(story, person)}`)],
     [btn(c.edit, `look-edit:${personRef(story, person)}`)],
-    details.pictures ? [btn(c.portrait, `portrait:${personRef(story, person)}`)] : null,
+    details.pictures ? [btn(c.portrait, `portrait:${personRef(story, person)}`),
+      details.references ? btn(c.ownPortrait, `ref-send:${personRef(story, person)}:front`) : null] : null,
     [btn(c.back, `view:characters:${story.id}`)],
   ]);
   const pre = (text: string, after: string) => {
@@ -553,6 +563,21 @@ function sheetInputScreen(state: State, input: 'look' | 'details', details: Rend
   const offset = now ? result.text.lastIndexOf(now) : -1;
   if (offset >= 0) result.entities = [{ type: 'pre', offset, length: now.length }];
   return result;
+}
+
+// Waiting for a picture the reader sends of the person `state.ui` names, to keep as their portrait (local/reference.ts).
+// Without the wait, or for a reader outside the reference experiment, this is the menu, as for a look.
+function referenceInputScreen(state: State, details: RenderDetails) {
+  const t = texts(state.language);
+  const c = t.characters;
+  const ui = state.ui?.input === 'reference' ? state.ui : null;
+  const story = own(state.stories, ui?.storyId);
+  const person = story && people(story).find(one => one.name === ui?.name);
+  if (!story || !person || !details.references) return home(state, null, details.modelInfo, gpuFor(details), details.pictures === true);
+  const { min, max } = REFERENCE_SIDES;
+  return payload([c.ownPortraitTitle(line(person.name, 60), storyName(state, story)), '',
+    c.ownPortraitNote(min, max, REFERENCE_BYTES / 1024 / 1024), ...person.portrait || person.poses?.front ? ['', c.ownPortraitReplaces] : []],
+    [[btn(c.backToCard, `view:character:${personRef(story, person)}`)]]);
 }
 
 // The caption and the buttons of a portrait (local/picture.ts `portrait`): another one, keeping this one by the id it
