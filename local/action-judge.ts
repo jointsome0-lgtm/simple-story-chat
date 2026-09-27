@@ -117,8 +117,8 @@ const YN: Schema = { type: 'string', enum: ['yes', 'no'] };
 const YNU: Schema = { type: 'string', enum: ['yes', 'no', 'unsure'] };
 const PRESENCE: Schema = { type: 'string', enum: ['present', 'absent', 'unsure'] };
 const SHOWN_AS: Schema = { type: 'string', enum: ['yes', 'no', 'not_visible'] };
-const strict = (properties: Record<string, Schema>): Schema => ({ type: 'object', additionalProperties: false, required: Object.keys(properties), properties });
-const each = (keys: string[], value: Schema) => strict(Object.fromEntries(keys.map(key => [key, value])));
+export const strict = (properties: Record<string, Schema>): Schema => ({ type: 'object', additionalProperties: false, required: Object.keys(properties), properties });
+export const each = (keys: string[], value: Schema) => strict(Object.fromEntries(keys.map(key => [key, value])));
 const list = (item: Record<string, Schema>, minItems?: number): Schema => ({ type: 'array', ...(minItems ? { minItems } : {}), items: strict(item) });
 export const MIXUPS = ['wrong_person', 'swapped_looks', 'merged'] as const;
 
@@ -508,6 +508,24 @@ export function validated(root: string, session: Session, read: Read): Read {
   return fits ? read : { code: 'schema' };
 }
 
+// One attempt of a session, as every judging here runs it: a fresh copy of its bundle at `copy`, `codex exec` started
+// in it with the pictures `images` names in the copy attached, and the report's answers read by `validate`, or
+// `timeout` at the deadline. The refs stand's judging (local/image-refs-judge.ts) runs its sessions through it too.
+export type Attempt = { bundle: string; copy: string; report: string; events: string; stderr: string; model: string; prompt: string;
+  images: (copy: string) => string[]; validate: (read: Read) => Read; env?: NodeJS.ProcessEnv; exec?: Exec; codex?: string };
+export async function runAttempt(one: Attempt): Promise<{ read: Read; exitCode: number; ms: number }> {
+  rmSync(one.copy, { recursive: true, force: true });
+  rmSync(one.report, { force: true });
+  mkdirSync(dirname(one.copy), { recursive: true, mode: 0o700 });
+  cpSync(one.bundle, one.copy, { recursive: true });
+  const began = performance.now();
+  const deadline = AbortSignal.timeout(SESSION_MS);
+  const exitCode = await (one.exec ?? spawnExec)(one.codex ?? 'codex', codexArgs({ model: one.model, dir: one.copy, report: one.report, images: one.images(one.copy),
+    prompt: one.prompt }), { cwd: one.copy, env: one.env ?? process.env, stdout: one.events, stderr: one.stderr, signal: deadline });
+  const read: Read = deadline.aborted ? { code: 'timeout' } : one.validate(answersOf(existsSync(one.report) ? readFileSync(one.report, 'utf8') : undefined));
+  return { read, exitCode, ms: Math.round(performance.now() - began) };
+}
+
 // The run's record of the judging, `judging.json`: its pins and each session's attempts, by model, code and time.
 export type AttemptRecord = { model: string; code: Read['code']; exitCode?: number; ms: number };
 export type SessionRecord = Session & { state?: 'answered' | 'failed' | 'owner'; by?: 'judge' | 'owner'; attempts: AttemptRecord[] };
@@ -561,21 +579,13 @@ export async function judgeSessions(options: JudgeOptions): Promise<JudgingRecor
     const sealed = isSharp(session.story);
     const base = sealed ? join(root, 'sealed', 'sessions') : join(root, 'sessions');
     const name = `${session.story}.${sessionName(session)}.${entry.attempts.length + 1}`;
-    const copy = join(base, name), report = join(base, `${name}.report.md`);
-    rmSync(copy, { recursive: true, force: true });
-    rmSync(report, { force: true });
-    mkdirSync(base, { recursive: true, mode: 0o700 });
-    cpSync(bundleDir(root, session), copy, { recursive: true });
     const tmp = join(root, 'sealed', 'tmp');
     if (sealed) mkdirSync(tmp, { recursive: true, mode: 0o700 });
-    const began = performance.now();
-    const deadline = AbortSignal.timeout(SESSION_MS);
-    const exitCode = await exec(options.codex ?? 'codex', codexArgs({ model, dir: copy, report, images: attachments(copy, session.kind), prompt: taskOf(session.kind) }),
-      { cwd: copy, env: sealed ? { ...process.env, TMPDIR: tmp } : process.env, stdout: join(base, `${name}.events.jsonl`), stderr: join(base, `${name}.stderr.log`),
-        signal: deadline });
-    const read: Read = deadline.aborted ? { code: 'timeout' }
-      : validated(root, session, answersOf(existsSync(report) ? readFileSync(report, 'utf8') : undefined));
-    entry.attempts.push({ model, code: read.code, ...(exitCode === 0 ? {} : { exitCode }), ms: Math.round(performance.now() - began) });
+    const { read, exitCode, ms } = await runAttempt({ bundle: bundleDir(root, session), copy: join(base, name), report: join(base, `${name}.report.md`),
+      events: join(base, `${name}.events.jsonl`), stderr: join(base, `${name}.stderr.log`), model, prompt: taskOf(session.kind),
+      images: copy => attachments(copy, session.kind), validate: one => validated(root, session, one),
+      env: sealed ? { ...process.env, TMPDIR: tmp } : process.env, exec, codex: options.codex });
+    entry.attempts.push({ model, code: read.code, ...(exitCode === 0 ? {} : { exitCode }), ms });
     if (read.code === 'ok') {
       store(root, session, read.value);
       entry.state = 'answered';

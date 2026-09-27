@@ -24,6 +24,7 @@
 //   dry-run   the real texts' tokens and every graph built from them, then the whole run against local/fake-comfy.ts
 //   draw      on the card, --out DIR --until EPOCH: cell by cell, each begun only if it can end by --until
 //   page      DIR/index.html: a section an arm, the cells it compares side by side, each prompt folded under its picture
+// The blind judging of the drawn cells is local/image-refs-judge.ts's (docs/action-experiment.md#refs-judging).
 // What it prints is keys, codes, counts and times, one JSON object a line: never a word of a prompt.
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -734,10 +735,10 @@ const SECTIONS: Section[] = [
     + 'Картинкой кадров служит фронт сида 7.', columns: ['сид 7', 'сид 11'], rows: [...FRONT_IDS, 'RF'].map(id => ({ label: id, keys: SEEDS.map(seed => frontKey(id, seed)) })) },
   { title: 'Виды для FV', note: 'Правка фронта сида 7, повёрнутого как в сцене: H на три четверти вправо (двор), H в профиль влево (окно), L на три четверти влево (пара).',
     columns: VIEWS.map(view => view.id), rows: [{ label: 'сид 7', keys: VIEWS.map(view => viewKey(view.id)) }] },
-  { title: 'Рука A: формулировка, фронт с видом, лицо', note: 'C-now: кадр бота сегодня, фронт 352x640. R: тот же фронт и формулировка ROLE. FV: фронт и ближний '
+  { title: 'Рука A: формулировка, фронт с видом, лицо', note: 'C-now: формулировка C второго раунда, фронт 352x640. R: тот же фронт и формулировка ROLE, ближе к нынешнему кадру бота. FV: фронт и ближний '
     + 'вид, оба 352x640, с ROLE. W: без картинки, внешность словами. FC: верх фронта VN как лицо, фигура словами. Решают фигура и пропорции.',
     columns: ['C-now', 'R', 'FV', 'W', 'FC'], rows: sceneRows(ALL, ['C-now', 'R', 'FV', 'W', 'FC']) },
-  { title: 'Рука C: общий стиль', note: 'W в FILM, SEMI и PENCIL; C-VN: фронт VN с формулировкой сегодня; R в каждом стиле: фронт в том же стиле с ROLE.',
+  { title: 'Рука C: общий стиль', note: 'W в FILM, SEMI и PENCIL; C-VN: фронт VN с формулировкой C-now; R в каждом стиле: фронт в том же стиле с ROLE.',
     columns: ['W-FILM', 'W-SEMI', 'W-PENCIL', 'C-VN', 'R-VN', 'R-FILM', 'R-SEMI', 'R-PENCIL'],
     rows: sceneRows(SOLO, ['W-FILM', 'W-SEMI', 'W-PENCIL', 'C-VN', 'R-VN', 'R-FILM', 'R-SEMI', 'R-PENCIL']) },
   { title: 'Листы', note: 'H и случаи с 1 по 4 из запросов GPT: CFG 2 с общим негативом, 2048x1152. SH-words: цифры заменены словами. SH-cfg1: CFG 1 без негатива.',

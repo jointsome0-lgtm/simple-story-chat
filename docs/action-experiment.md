@@ -2311,14 +2311,17 @@ references in the bot, and the owner added one: whether a second reference that 
 turns them brings the figure closer («нам же важно чтобы фигура совпадала»). [image-refs-test.ts](../local/image-refs-test.ts)
 draws all of it on one card, 137 pictures in the report's card order, on the bot's picture path: cu130, the Triton
 backend and the kitchen's attention ([the bot's card](gpu.md#bot-card)). It keeps no cu128: no cell is compared with a
-picture drawn before, and C-now, the bot's frame today, is one of its cells.
+picture drawn before. This section first called C-now the bot's frame of today; it is round two's C wording. Since
+47f7f80 the bot's frames with references open with an identity-only instruction close to R's and keep each person's
+full look words beside the image number (`referencePrompt` in [picture-references.ts](../local/picture-references.ts)).
+R is the closer of the two to what the bot draws now.
 
 - **People and scenes**: two synthetic women, H (hourglass) and L (pear-shaped, for the pair), in three scenes at
   seeds 7 and 11: K-solo (H hangs a lantern, turned three-quarters), K-pair (L hands her one) and P (H opens a window
   in true profile). Two or three people a scene is what the owner cares about next, so the pair stays.
 - **Fronts**: H's in today's portrait style and in each reader style (VN, FILM, SEMI, PENCIL), L's for the pair, and
   RF, H's front written as a sheet's recipe at CFG 2 with a negative. A frame takes the front of seed 7.
-- **Arm A**, the wording: C-now (the bot's frame, the front at 352x640 and "The person from image 1"), R (the same
+- **Arm A**, the wording: C-now (round two's C, the front at 352x640 and "The person from image 1"), R (the same
   front under ROLE, Qwen's own form: the medium named first, the reference as the identity source, what not to take
   from it), W (no picture, the look in words) and FC (W with the top 720x400 of the VN front, cut by ImageCrop, as the
   face).
@@ -2367,10 +2370,175 @@ The run's `run.sh` does the last three with the server's checks first. The direc
 `cells.json` (keys, codes, sizes and times, no prompt), `fronts/`, `views/`, `sheets/`, `frames/` and `index.html`: a
 section an arm, the cells it compares side by side, each prompt folded under its picture.
 
-**Judging** is not built: after the card, blind as round two's, by gpt-6-astra at high (`JUDGE` in
-[action-judge.ts](../local/action-judge.ts)), with the questions of the texts file and the report's §4.6, and scored by
-its §4.7. Identity is judged against each cell's own reference; proportions, looks and anatomy against H's words and
-table.
+<a id='refs-judging'></a>
+
+**Judging.** [image-refs-judge.ts](../local/image-refs-judge.ts) judges the drawn cells blind, as round two did: by
+gpt-6-astra at high (`JUDGE` in [action-judge.ts](../local/action-judge.ts)), each session one `codex exec` in a
+read-only sandbox through action-judge.ts's `runAttempt`, with the questions of the report's §4.6 and the texts file
+as the review below changed them. 71 sessions in five kinds, in the report's rank order with FV right after arm A
+(A, FV, B, C, D), so a cut leaves D out first:
+
+- `frames`: one comparison's frames of one scene and seed side by side, against the scene, each woman's words and H's
+  table: clean, medium, panels, lettering, anatomy (a torso twisted at the waist so that chest and hips face clearly
+  different ways among the errors); for each woman, found by her looks and her place, presence, looks, hair, clothes
+  (the scene's and nothing in their place), facing (the orientation alone, from the torso and pelvis: a profile is not
+  a three-quarter view), action and each part of her build (`matches`, `too_small`, `too_large`, `mismatch`, `unsure`,
+  `not_visible`); the mix-ups in the pair.
+- `identity`: the same frames beside one pool of pictures: the comparison's references and every other picture its
+  frames were drawn from (FV's views, FC's very crop), the latter for resemblance only. Each woman is found by the
+  place the scene gives her before any likeness is judged (present `yes`, `no` or `unsure`), then set against each
+  reference compared: silhouette (proportions and volumes, allowing for pose, perspective and clothing) and face (by
+  its features, not its painting). For each picture shown, the frame's visible resemblance in what conflicts with the
+  scene or medium: rendering, grey backdrop, even light, standing pose, and clothes (the reference's identifiable
+  garment or a distinctive mix of its cut, material and colour, not a shared colour or a close fit). So every frame is
+  asked whether it wears a reference's clothes, the leak the live tester saw on 2026-09-27 (a portrait's grey bodysuit
+  on a man who should have been bare-chested). These are resemblance, not source: the score reads them against the
+  pictures each cell was drawn from, by the keys the judge never sees, and W's and L-now's give the base rate.
+- `fronts`; `sheet`, against one evaluation specification per build, the same for SH, SH-words and SH-cfg1 (layout,
+  consistency including one coherent three-dimensional build across the views, build in front and profile, anatomy
+  `right`, `wrong` or `unsure` per category, glamour as a pose, medium); `turns` (FV's views and VIEW against the
+  picture each was made from: same person, turned, build part by part as `same`, `smaller`, `larger`, `different`,
+  `unsure` or `not_visible`, outfit).
+
+A bundle holds `TASK.md`, `input.json`, `schema.json`, `form.json` (the answers' skeleton) and its pictures as
+`pic-`/`ref-` and the first eight hex digits of their sha256, listed and attached in that order, with every text chunk
+stripped; which cell is which stays in `judge/keys/`. The words the judges see (people, parts, scenes, style lines,
+sheets' requests, turns) are synthetic and kept beside the run: `judge/build-judge-texts.ts` writes
+`judge/judge-texts.json` from `next-card-texts.txt`, `texts.json` and `gpt-sheet-prompts.md`, checking each of its 126
+passages against them, and the script pins its sha256 (6460753f…bc78). The questions' pin, the sha256 of the tasks,
+the schemas, the effort and those texts, is `b948c50d54fb10954ffb1770a746b25e2a3dd3dfcb826c77757162654c150efa`
+after the review below, frozen before any judging. A picture a judge calls not clean gets placeholder answers by a
+fixed order and is left out everywhere. A refusal (a report with no answers block) goes once to gpt-6-sol, any other
+failure once more to Astra; three sessions run at a time in one queue, and the run stops after two failures of codex
+itself in a row, once the fallback has judged more than a quarter of a record's sessions, at a record's attempt limit,
+or at `--until`.
+
+**The review.** Before any judging, GPT-6 Astra (gpt-6-astra at high, read-only, on 2026-09-27 from 20:51 to 20:58 UTC;
+a packet with the five tasks, the layout, the rules and blinded samples of each kind) answered «freeze with the listed
+changes — the bundles are sufficiently blinded, but the current questions and rules can certify preservation, identity
+gains and pose success without the evidence those claims require». All twelve changes are in:
+1. parts gain `mismatch` and `unsure`, with its rule for judging visible proportions rather than measurements (no
+   height or weight without a scale, no width from a profile, no buttocks from the hip girth); turned builds gain
+   `different` and `unsure`; only `matches` or `same` counts;
+2. identity finds each woman by her place before any likeness, and answers per woman and per reference, so X is read
+   against both fronts;
+3. what a frame takes is per picture shown and is resemblance, not source; FV's views and FC's crop join the pool;
+   removal needs an explicit `no`;
+4. facing is the orientation alone;
+5. a sheet's shape asks for one coherent build rather than equal outlines, its anatomy is `right`, `wrong` or `unsure`
+   (a hidden hand is not a missing one), glamour is a pose;
+6. a sheet is judged against one specification per build, so no judge learns which carried numbers or CFG 1;
+7. X keeps Y when nowhere below it at the rule's cells, loses when below at every one; a tie is no gain;
+8. the FV rule below, in place of the brief's;
+9. a build holds with a valid layout, bust, waist and hips matching in front and bust and waist in profile;
+10. frames ask for hair apart, and Rough is read per woman;
+11. the face artifact and the wording rule say what they cannot show;
+12. a fixed placeholder for the answers about a picture that is not clean.
+
+After the review, before the pin, the anatomy question also names a torso twisted at the waist, which the second
+stand's first question needs.
+
+**The score** reads qwen-refs' rules into the answers. A part is right only when `matches` (`unsure` and
+`not_visible` are shown apart); silhouette and face count only `yes` against the cell's own reference (the picture it
+was drawn with; for W, H's VN front); an anatomy error is any answer but `no`; a picture any judge calls not clean is
+unjudged everywhere. X keeps Y on a measure when it is nowhere below Y at the rule's cells (K-solo and P at both seeds
+unless it says otherwise); X beats Y when it has more parts matching at every cell, a silhouette nowhere below and an
+anatomy error at no cell where Y has none. (b), the wording, needs R to hold VN at every cell, an explicit `no` from R
+wherever C-now took the pose, light or backdrop, and R keeping C-now's face and parts. R is the tested wording closest
+to the bot's frame since 47f7f80, whose instruction is about identity alone, but the bot also keeps each person's full
+look beside her image, which R does not, and C-now (round two's C) is not the bot's frame. **FV** pays only if, in
+K-solo and P at both seeds, Mara is present with facing and action `yes`, FV has more parts matching than R, its
+silhouette and face against H's front are each no worse than R's and one of them better, and its anatomy no worse; and
+in K-pair at both seeds it keeps both women apart with each one's silhouette and face `yes` against her own front.
+Where the parts gain and the identity only ties, the score says so. The rules of arms A to D follow §4.7 and the
+phase-1 rules as `scoreStand` writes them, one verdict each with the cells it read.
+
+gpt-6-sol, whose vision the owner heard was fixed, judged arm A's and FV's 22 sessions alone as well (no fallback, 60
+attempts at most), only to be compared with Astra, question by question (`agreement`); Astra's answers decide.
+
+**The second stand** ([below](#refs-stand-2)) is judged with the same questions, pin and judging texts, in 24 sessions
+of its own (60 attempts at most): each scene and seed, seed by seed, has one `frames` and one `identity` session with
+its eight cells side by side. Every cell is judged against H's words and table, L1's as well, so no judge learns which
+look a cell was drawn with; H's front is the reference compared, and the K view or the P view and FC's crop are shown
+for resemblance. `score` gives the tester's three questions as tables, seed by seed, with no rule deciding: the
+negative at CFG 2 against the same texts without it, L1 against L0 with the spread over the seeds, and how often each
+cell's frames wear the clothes of what it was drawn from, W's frames giving the base rate.
+
+The night's queue ran as one: the first stand's A and FV by Astra, the same by Sol, the second stand, then the first
+stand's B, C and D.
+
+```sh
+node local/image-refs-judge.ts bundles --out ~/simple-story-chat-runs/2026-09-27/refs-stand      # 71 built, 0 missing
+node local/image-refs-judge.ts bundles --out ~/simple-story-chat-runs/2026-09-27/refs-stand-2    # 24 built, 0 missing; its references from refs-stand
+node local/image-refs-judge.ts dry-run --jobs ~/simple-story-chat-runs/2026-09-27/refs-stand/judge/night-jobs.json --per-session 7    # stand-ins for codex
+node local/image-refs-judge.ts judge --jobs ~/simple-story-chat-runs/2026-09-27/refs-stand/judge/night-jobs.json --until 2026-09-28T05:00:00Z
+node local/image-refs-judge.ts score --out ~/simple-story-chat-runs/2026-09-27/refs-stand        # judge/score.md
+node local/image-refs-judge.ts score --out ~/simple-story-chat-runs/2026-09-27/refs-stand-2      # judge/score.md
+node local/image-refs-judge.ts agreement --out ~/simple-story-chat-runs/2026-09-27/refs-stand --second ~/simple-story-chat-runs/2026-09-27/refs-stand/judge/sol
+```
+
+The dry run judged all 117 sessions with stand-ins, one refusal going to the fallback, scored both stands (19
+decisions, none undecided; 96 cells of the second) and compared Sol's 22 sessions on 57 questions; at 7 minutes a
+session it expected 273 minutes.
+
+**The night's judging.** On 2026-09-27 from 21:27 to 22:27 UTC the queue judged its 117 sessions: the first stand's
+71, Sol's 22 and the second stand's 24. Each was answered at its first attempt, with no refusal, no fallback, no
+failure of codex and no picture called not clean. The median was 1.0 minutes a session on the first stand, 1.2 for
+Sol and 2.3 on the second, eight pictures a session. From 22:28 to 22:50 Astra judged the second stand again, to
+measure its own noise: 24 sessions from the jobs file `judge/retest-jobs.json`, with their own record in
+`judge/retest/` and no fallback. Of the caps, the first stand used 72 of its 120 sessions, the review included; Sol
+used 22 of 60; the second stand used 48 of 60.
+
+**The first stand** (its `judge/score.md`): 6 decisions pay, 13 do not, none undecided.
+
+- **Arm A.**
+  - (b) is a tie. R and C-now got the same answers at every cell: parts 3, 4, 2 and 4 of 9 at K-solo s7 and s11 and P
+    s7 and s11, and the face not like H's front at all four. C-now took no pose, light or backdrop from its front, so
+    nothing was there to drop.
+  - (a) does not pay: C-VN's and R-VN's parts are the same as C-now's and R's.
+  - FC keeps W's parts but gains the face in K-solo only.
+- **FV does not pay.**
+  - H's profile view was judged not turned.
+  - Facing and action are right at 2 of 4 cells, R's at 1.
+  - The parts are above R's only at K-solo s11, and the likeness ties.
+- **Arm B.**
+  - The build holds on H's sheet at s7, on cases 1 and 2 at both seeds and on case 3 at s11. It never holds on case 4.
+  - The sheet format, the recipe's words, CFG 2 and the numbers do not pay.
+- **Arm C.**
+  - Parts matching over each style's fronts, W and R cells: PENCIL 58 of 90, VN 45, SEMI 45, FILM 37. No style has an
+    anatomy error.
+  - R-PENCIL took its front's backdrop at two cells.
+- **Arm D.**
+  - The references carry the build: X drew L's figure under H's words.
+  - Rough loses Lina's face at both pair seeds.
+  - Order loses Mara's silhouette at s11.
+- **Clothes.** None of the 92 frames resembles a reference's clothes, though every front wears a dark grey one-piece
+  athletic suit.
+- **Look words.** Without them, the bust came out too small in every frame of C-now, R and FV.
+
+**The second stand** (its `judge/score.md`).
+
+- **The negative had nothing to cut.** With it or without it, no frame wore the suit, came out heavier or had a broken
+  body. It drew 70 parts against 69 with the reference and 50 against 51 without. It took 9.2 s a frame warm against
+  5.5.
+- **R-L0 was the steadiest cell:** 5.75 of 9 parts, SD 0.60, silhouette 11 and face 9 of 12.
+- **L1's anchors.**
+  - With the picture, they changed nothing in K-solo and lost parts in P at three seeds.
+  - They drew the stand's only two broken bodies (K-solo s41, P s31).
+  - Without a picture, they thinned H: build too small in 7 of 12 frames, silhouette 3 of 12 against 10.
+- **FV-L0 and FC-L0.** FV-L0's bust was too small in 12 of 12 frames. FC-L0 held R-L0's figure: 5.67 parts,
+  silhouette 11 of 12.
+- **Height and buttocks were `unsure` in every frame,** so 7 of 9 is the ceiling.
+
+**The judges.**
+
+- **Sol against Astra.** They agree on anatomy and clothes everywhere, less on the face and the build: kappa 0.24 on
+  the face, where Sol calls it alike 46 times of 88 and Astra 26, and 0.19 on the build. Under Sol's answers all five
+  of arm A's and FV's verdicts stand.
+- **Astra against itself.** The second judging changed the parts at 36 of 96 frames, by one part at 32 (SD 0.79). It
+  moved no cell's mean by more than 0.5, which was FC-L0's. The zeros for the suit, the weight and anatomy all held.
+- **Ties on the first stand.** There, Astra answered every picture of a session alike in 5 of 22 frames sessions,
+  though the pictures differ in their pixels. So its ties between close cells mean only that it saw no difference.
 
 **Not verified without the card**: a sheet's time at 2048x1152 and CFG 2, and whether it fits the card's memory;
 whether ROLE's words keep the named medium and leave the reference's pose, light and backdrop; whether the view beside

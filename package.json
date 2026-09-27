@@ -39,6 +39,7 @@
     "image:refs-backlog": "node local/image-refs-backlog.ts",
     "image:refs-stand-2": "node local/image-refs-stand-2.ts",
     "image:refs-test": "node local/image-refs-test.ts",
+    "image:refs-judge": "node local/image-refs-judge.ts",
     "agent": "node local/agent-cli.ts",
     "agent:gpu": "node --env-file=.env.gpu local/agent-cli.ts",
     "mcp": "node local/mcp.ts",
