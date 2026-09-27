@@ -23,8 +23,9 @@ import { SERVING, readClientKey } from './action-text.ts';
 type Env = NodeJS.Dict<string>;
 // A cell of the result: one model, one scenario, one memory mode.
 // readingMisses: failed numeric questions whose answer stood in the memory message, so the memory was right and the reading was not.
-type Cell = { passed: number; total: number; error?: string; failedKeys: string[]; readingMisses?: string[]; scene?: Part; compactionRetries?: number };
-// With --judge: the verdicts on the trap scenes this model wrote after the replay.
+type Cell = { passed: number; total: number; error?: string; failedKeys: string[]; readingMisses?: string[]; scene?: Part; sceneO2?: Part; compactionRetries?: number };
+// With --judge: the verdicts on the trap scenes this model wrote after the replay. `scene` holds the legacy traps and
+// `sceneO2` those of `set: 'o2'` (examples/scene-traps.ts), so that the log's older numbers stay comparable.
 type Part = { passed: number; total: number; error?: string; failedKeys: string[] };
 // A cell of a walk: one model, one walk scenario, with the panel's verdict on every scene and each judge's own counts.
 // `directory` is the probe's own directory, so that a judge can be added to the panel with `eval walk-judge`.
@@ -200,15 +201,18 @@ async function replay(spec: string): Promise<Record<string, Record<string, Cell>
         readingMisses: answers.filter(a => !a.pass && a.stated === 'memory').map(a => a.key),
         ...(result?.completedAt ? {} : { error: result?.error ?? (run.code || 'probe_failed') }),
         ...(result?.compactionRetries ? { compactionRetries: result.compactionRetries } : {}) };
-      const questions = fixtures[scenario].traps.flatMap(trap => trap.questions.map(([key]) => key));
-      if (!judgeEnv || !questions.length) continue;
+      const questionsOf = (set?: string) => fixtures[scenario].traps.filter(trap => trap.set === set).flatMap(trap => trap.questions.map(([key]) => key));
+      const [legacy, o2] = [questionsOf(undefined), questionsOf('o2')];
+      if (!judgeEnv || (!legacy.length && !o2.length)) continue;
       // Without a finished replay there are no trap scenes, and every question fails.
       const judged = result?.completedAt ? await probe('scene-judge.ts', ['--report', run.directory, '--mode', mode, ...packArgs], judgeEnv, spec, { scenario, mode }) : null;
       let verdicts: NonNullable<ModeReport['verdicts']> = [];
       try { verdicts = (JSON.parse(readFileSync(join(run.directory, 'report.json'), 'utf8')) as ReplayReport).modes[mode]?.verdicts ?? []; } catch { /* counted as failed below */ }
-      cells[scenario][mode].scene = { passed: verdicts.filter(v => v.pass).length, total: questions.length,
+      const part = (questions: string[]): Part => ({ passed: verdicts.filter(v => v.pass && questions.includes(v.key)).length, total: questions.length,
         failedKeys: questions.filter(key => !verdicts.some(v => v.key === key && v.pass)),
-        ...(judged?.status === 0 ? {} : { error: judged ? judged.code || 'probe_failed' : 'no_scenes' }) };
+        ...(judged?.status === 0 ? {} : { error: judged ? judged.code || 'probe_failed' : 'no_scenes' }) });
+      if (legacy.length) cells[scenario][mode].scene = part(legacy);
+      if (o2.length) cells[scenario][mode].sceneO2 = part(o2);
     }
   }
   return cells;
@@ -216,8 +220,8 @@ async function replay(spec: string): Promise<Record<string, Record<string, Cell>
 
 if (positionals[0] === 'watch') {
   // A live table of the current run: the last event of every model, scenario and mode, and today's counters.
-  const label = (e: { event?: string; code?: string; passed?: number; total?: number; turn?: number; afterTurn?: number; confirmed?: number; findings?: number }, waits: number) =>
-    e.event === 'mode_complete' ? `память ${e.passed}/${e.total}` : e.event === 'judged' ? `сцены ${e.passed}/${e.total}`
+  const label = (e: { event?: string; code?: string; passed?: number; total?: number; o2Passed?: number; o2Total?: number; turn?: number; afterTurn?: number; confirmed?: number; findings?: number }, waits: number) =>
+    e.event === 'mode_complete' ? `память ${e.passed}/${e.total}` : e.event === 'judged' ? `сцены ${e.passed}/${e.total}${e.o2Total ? `, o2 ${e.o2Passed}/${e.o2Total}` : ''}`
       : e.event === 'trap_scene' || e.event === 'trap_judged' ? 'сцены-ловушки' : e.event === 'deferred_or_failed' || e.event === 'failed' ? `сбой: ${e.code}`
       : e.event === 'yielded' ? `ждёт (${e.code}) ×${waits}` : e.event === 'compacted' || e.event === 'compaction' ? `сжатие после сцены ${e.afterTurn}`
         : e.event === 'scene' ? `сцена ${e.turn}` : e.event === 'scene_judged' ? `судья: сцена ${e.turn}` : e.event === 'scene_crossed' ? `консилиум: сцена ${e.turn}`
@@ -710,19 +714,21 @@ if (positionals[0] === 'watch') {
   };
   // The worst model decides, so a change cannot win by pleasing the most obedient one.
   const score = Object.fromEntries(MODES.map(mode => [mode, Math.min(...models.map(spec => rate(spec, mode)))]));
-  // The same rule for the judged trap scenes; null when no chosen scenario has traps.
-  const sceneRate = (spec: string, mode: string) => {
-    const parts = scenarios.flatMap(scenario => results[spec][scenario][mode].scene ?? []);
+  // The same rule for the judged trap scenes, the legacy traps and set o2 apart; null when no chosen scenario has them.
+  const sceneRate = (spec: string, mode: string, field: 'scene' | 'sceneO2') => {
+    const parts = scenarios.flatMap(scenario => results[spec][scenario][mode][field] ?? []);
     return parts.length ? parts.reduce((sum, part) => sum + part.passed, 0) / parts.reduce((sum, part) => sum + part.total, 0) : null;
   };
-  const sceneScore = values.judge ? Object.fromEntries(MODES.map(mode => {
-    const rates = models.map(spec => sceneRate(spec, mode));
+  const worstScene = (field: 'scene' | 'sceneO2') => Object.fromEntries(MODES.map(mode => {
+    const rates = models.map(spec => sceneRate(spec, mode, field));
     return [mode, rates.some(value => value === null) ? null : Math.min(...rates as number[])];
-  })) : undefined;
-  const summary = { at: new Date().toISOString(), scenarios, ...(pack ? { pack: true, authors: Object.fromEntries(scenarios.map(name => [name, fixtures[name].authors])) } : {}), score, sceneScore, judge: values.judge,
+  }));
+  const sceneScore = values.judge ? worstScene('scene') : undefined;
+  const sceneScoreO2 = values.judge && scenarios.some(name => fixtures[name].traps.some(trap => trap.set === 'o2')) ? worstScene('sceneO2') : undefined;
+  const summary = { at: new Date().toISOString(), scenarios, ...(pack ? { pack: true, authors: Object.fromEntries(scenarios.map(name => [name, fixtures[name].authors])) } : {}), score, sceneScore, sceneScoreO2, judge: values.judge,
     models: Object.fromEntries(models.map(spec => [spec, { ...Object.fromEntries(MODES.map(mode => [mode, rate(spec, mode)])), cells: results[spec] }])) };
   const out = resolve(values.out ?? join(mkdtempSync(join(tmpdir(), 'simple-chat-eval-')), 'eval.json'));
   writeFileSync(out, JSON.stringify(summary, null, 2));
-  record({ event: 'eval', out, score, sceneScore });
-  console.log(JSON.stringify({ event: 'eval', out, score, sceneScore, models: Object.fromEntries(models.map(spec => [spec, Object.fromEntries(MODES.map(mode => [mode, rate(spec, mode)]))])) }));
+  record({ event: 'eval', out, score, sceneScore, sceneScoreO2 });
+  console.log(JSON.stringify({ event: 'eval', out, score, sceneScore, sceneScoreO2, models: Object.fromEntries(models.map(spec => [spec, Object.fromEntries(MODES.map(mode => [mode, rate(spec, mode)]))])) }));
 }

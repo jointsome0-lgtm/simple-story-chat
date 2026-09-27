@@ -6,7 +6,9 @@
 // - Without `afterTurn` the scene follows the last frozen scene. These inputs never state the fact they test; some
 //   mention in passing a thing that never happened, and some are allowed, as a control for a narrator that refuses.
 // Ask the judge in the affirmative: a question with a double negative was answered wrongly.
-export type Trap = { key: string; afterTurn?: number; input?: string; facts?: string;
+// - `set: 'o2'` marks the traps added on 2026-09-27 for time across the scene boundary and for claims about an
+//   unrecorded past, with their controls. The eval scores them apart, so the older traps stay the legacy set.
+export type Trap = { key: string; afterTurn?: number; input?: string; facts?: string; set?: 'o2';
   questions: [key: string, question: string, expected: 'yes' | 'no'][] };
 
 const BATTLE = `- «Красная печать» тратит 3 заряда из браслета Элин и после применения недоступна 10 минут. Других способов восстановить заряды нет.

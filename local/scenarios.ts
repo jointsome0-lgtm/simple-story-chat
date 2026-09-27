@@ -37,7 +37,7 @@ export async function loadScenario(name: string, pack?: string): Promise<Scenari
       || (data.traps?.length && !text(data.facts, 8000)) || !(data.traps ?? []).every(trap => text(trap?.key, 40) && questions(trap.questions)
         && trap.questions.every(question => question[2] === 'yes' || question[2] === 'no')
         && (trap.afterTurn === undefined ? text(trap.input, 4000) : Number.isInteger(trap.afterTurn) && trap.afterTurn > 0 && trap.afterTurn < data.turns!.length)
-        && (trap.facts === undefined || text(trap.facts, 8000)))) throw new Error('Invalid scenario.json');
+        && (trap.facts === undefined || text(trap.facts, 8000)) && (trap.set === undefined || trap.set === 'o2'))) throw new Error('Invalid scenario.json');
   return { name, seed: data.seed, turns: data.turns, checks: data.checks, facts: data.facts ?? '', traps: data.traps ?? [], authors: data.authors,
     frozenPath: join(directory, 'frozen.json') };
 }

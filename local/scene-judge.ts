@@ -64,7 +64,11 @@ try {
   }
   result.verdicts = verdicts;
   writeFileSync(path, JSON.stringify(report, null, 2));
-  progress({ event: 'judged', mode: values.mode, passed: verdicts.filter(v => v.pass).length, total: verdicts.length, directory });
+  // `passed` and `total` stay the legacy traps' counts, the ones the event log has always held; set o2 is counted beside.
+  const o2 = new Set(fixture.traps.filter(trap => trap.set === 'o2').flatMap(trap => trap.questions.map(([key]) => key)));
+  const [legacy, added] = [verdicts.filter(v => !o2.has(v.key)), verdicts.filter(v => o2.has(v.key))];
+  progress({ event: 'judged', mode: values.mode, passed: legacy.filter(v => v.pass).length, total: legacy.length,
+    ...(added.length ? { o2Passed: added.filter(v => v.pass).length, o2Total: added.length } : {}), directory });
 } catch (error) {
   const failure = error as Failure;
   const code = deadline.aborted ? 'deadline' : /^[a-z_]{1,40}$/.test(failure.code ?? '') ? failure.code : 'probe_failed';

@@ -25,6 +25,12 @@ With `--judge openai:gpt-5.4`, after the memory questions each model writes one 
 the finished scenes again, with `--pack` and `--scenarios` for a scenario of a pack. It writes its verdicts over the old
 ones in the probe's `report.json`, so each judge gets a copy of the directory.
 
+The traps marked `set: 'o2'` (step O2 of 2026-09-27: time across the scene boundary and claims about an unrecorded
+past, with controls; in `battle` of examples/ and in the pack's `assault` and `hospital`) are scored apart. A cell holds
+them as `sceneO2` and the summary as `sceneScoreO2`, by the same worst-model rule, while `scene` and `sceneScore` keep
+the older traps alone, so the log's earlier numbers stay comparable. The judge's `judged` event counts the older traps
+in `passed` and `total` and the new ones in `o2Passed` and `o2Total`.
+
 `score` for each mode is the share of correct answers of the worst model, so a change cannot win because of the most
 obedient model. An unfinished mode gives zero answers, and its error code stays in the report. The full report with
 the failed keys goes to `eval.json`, whose path is the last line printed. The checks are fixed, without a judge
