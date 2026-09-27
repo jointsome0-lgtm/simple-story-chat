@@ -128,8 +128,13 @@ Three runs are a floor, not a proof. Under the counters change of 18 September t
 The main group, decisions are made on it:
 
 ```
-openrouter:google/gemma-4-31b-it,mistral:ministral-14b-2512,openai:gpt-5.4-mini,claude:claude-haiku-4-5-20251001
+openrouter:google/gemma-4-31b-it,openai:gpt-5.4-mini,claude:claude-haiku-4-5-20251001
 ```
+
+Ministral left the main group on 2026-09-27, with the owner's agreement («не против»). Its `mistral` channel stops at
+500 000 tokens a day ([eval.md](eval.md)), and a judged `assault` or `hospital` block of three runs a side needs about
+800 000 ([the L3 entry](knowledge/improve-runs.md#l3-2026-09-27)). `gpt-5.4-mini` on `openai-small`, 2 250 000 tokens a
+day, is now the weakest model the group keeps. Ministral's past rows stay in the log as they were measured.
 
 Gemma here is paid (`openrouter-paid`). The owner raised its limit from 600 000 to 4 000 000 tokens a day on the night
 of 2026-09-27, about $1.3 a day at most at the old rate. Why the free one was not taken is in
