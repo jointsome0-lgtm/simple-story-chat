@@ -384,7 +384,7 @@ test('a slot answers exactly one question of the fixture, and both instruments a
   // Folding two questions into one slot credits the yes/no judge with the one it failed: on the scene below it
   // answered `seal_allowed_worked` right and `seal_allowed_charges` wrong, and both belong in the comparison.
   for (const [scenario, keys] of Object.entries(KEYS)) {
-    const questions = traps[scenario].traps.flatMap(trap => trap.questions.map(([key]) => key));
+    const questions = traps[scenario].traps.filter(trap => !trap.set).flatMap(trap => trap.questions.map(([key]) => key));
     const mapped = keys.items.flatMap(one => one.slots.map(one => one.verdictKey));
     assert.deepEqual([...mapped].sort(), [...questions].sort(), `${scenario} carries every question of the fixture once`);
   }
@@ -402,8 +402,10 @@ test('every built-in key names a trap of examples/scene-traps.ts and a question 
   for (const [scenario, keys] of Object.entries(KEYS)) {
     const fixture = traps[scenario];
     assert.ok(fixture, `${scenario} has traps`);
-    const questions = fixture.traps.flatMap(trap => trap.questions.map(([key]) => key));
-    assert.deepEqual(keys.items.map(one => one.key), fixture.traps.map(trap => trap.key), `${scenario} covers every trap`);
+    // The keys cover the older traps; those of set o2 have the yes/no judge alone.
+    const older = fixture.traps.filter(trap => !trap.set);
+    const questions = older.flatMap(trap => trap.questions.map(([key]) => key));
+    assert.deepEqual(keys.items.map(one => one.key), older.map(trap => trap.key), `${scenario} covers every older trap`);
     for (const one of keys.items) for (const slot of one.slots) {
       assert.ok(!slot.verdictKey || questions.includes(slot.verdictKey), `${scenario}/${one.key}: ${slot.verdictKey} is a question of the fixture`);
     }
