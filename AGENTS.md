@@ -11,7 +11,8 @@ change, what may not, how one step is measured with [`npm run eval`](docs/eval.m
 in [docs/improve-log.md](docs/improve-log.md).
 
 When you delegate: Opus subagents run at `max` reasoning effort, GPT-6 (codex) sessions at `high`; Fable and GPT-6
-are kept for the steps that decide something. The owner's rule, 2026-09-21; details in the same document.
+Astra, not Sol or Luna, are kept for the steps that decide something. The owner's rule, 2026-09-21, with Astra named
+on 2026-09-28; details in the same document.
 
 ## What this project is
 

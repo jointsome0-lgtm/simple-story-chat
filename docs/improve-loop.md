@@ -47,7 +47,7 @@ and traps stay as a separately scored legacy set so the log stays readable, and 
 Measured in Russian only for now: the tester reads Russian, and the other four catalogs in `local/story-text/` wait.
 A change to the narrator's rule is made in the catalog, not only in `local/prompt.ts`, which interpolates it.
 
-Who does the work: Opus agents, paired with the local model, for the bulk; Fable and GPT-6 only at the steps that
+Who does the work: Opus agents, paired with the local model, for the bulk; Fable and GPT-6 Astra only at the steps that
 decide something — a design, a review of core code, a verdict on pictures — because they cost much more.
 Opus agents are started at `max` reasoning effort, always; GPT-6 sessions at `high`.
 
