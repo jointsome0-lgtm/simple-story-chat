@@ -207,7 +207,9 @@ draws nothing.
 
 - **List:** each person's name and the start of their look, and a button per person (`view:character:<storyId>:<index>:<tag>`). A button names a person by their place on the sheet and `<tag>`, the first 8 hex digits of a SHA-256 of their name (`personTag` in `local/picture.ts`), never the name itself. A sheet written anew may put somebody else in that place, and a button of the earlier person is then refused rather than acting on the new one: the card button opens the list, and the edit and portrait buttons say the button is stale.
 - **Card:** the person's description, titled as the story's or the reader's own, the lasting changes the story made
-  where it made any, the short look and the clothes. The description, the look and the clothes are each in a `pre`
+  where it made any, the short look and the clothes. The list and the card show the person as they are at the scene
+  the reader stands at in the story being played, and as the sheet has them elsewhere; the card says in one line how
+  many times their look changed along that line, where it did ([along the story](#along-the-story)). The description, the look and the clothes are each in a `pre`
   block. The description keeps its lines, a table among them, and has its characters alone, since the picture model
   never reads it: the details retold from it are in the portrait's prompt, which is under the portrait with its tokens
   (the owner, 2026-09-27; see Portrait). The look and the clothes each have their size as the picture model reads that
@@ -245,7 +247,8 @@ draws nothing.
   - A written look is marked `edited`, keeps the details, and says on the card that it is the reader's own: the frames
     take it until the reader writes the description again, which retells a new look in its place. A sheet written
     again, as one from before 2026-09-27 is by its next picture, keeps the reader's description, the reader's look, the
-    portrait and a person with any of them whom the new sheet lost, and everybody on it is retold. A change reaches the next pictures of every branch of the story. The story text, its memory and the pictures already drawn stay as they are, and a picture being drawn at that moment may still show the old look. A sample describes its scene again once a look it was described with has changed. A person is known by their name alone, apart from spaces and case, so identity survives only an unchanged name: one the model renames in that rewrite is somebody new, and the look, portrait and buttons of the old name stay with the old name beside them.
+    portrait and a person with any of them whom the new sheet lost, and everybody on it is retold. A change reaches the next pictures of every branch of the story, unless a reader with
+    versions of the sheet wrote it «only from this moment» ([along the story](#along-the-story)). The story text, its memory and the pictures already drawn stay as they are, and a picture being drawn at that moment may still show the old look. A sample describes its scene again once a look it was described with has changed. A person is known by their name alone, apart from spaces and case, so identity survives only an unchanged name: one the model renames in that rewrite is somebody new, and the look, portrait and buttons of the old name stay with the old name beside them.
 - **Portrait:** «🖼 Портрет» ("Portrait", `portrait:<storyId>:<index>:<tag>`) draws the person, to pick a reference by, from the bot's own prompt around the sheet's text of them, or from the whole prompt the reader wrote for them ([a portrait's own prompt](#portrait-prompt)). The sheet's text is their details, the English prose retold from their description, or their look until the details are retold, as on a sheet written before 2026-09-26 and for details a reader wrote before 2026-09-27 (`portraitText` in `local/image-portraits.ts`). Every name of the sheet and every age given as a number are cut out of it, as out of a frame. The bot's prompt shows the face and the whole figure: full length from the front on a plain grey backdrop, standing and facing the viewer with no expression asked for, in even frontal light, in a close-fitting dark grey one-piece suit and plain dark shoes (`PORTRAIT_CLOTHES`, the T probe's suit, chosen on 2026-09-27) and a plain style of the bot's own (`portraitPrompt`), so build, height, silhouette and permanent marks can be read. None of it is hidden: all of it is in the note under the portrait, to copy and edit. The text-to-image graph draws it with a random seed on the graph's canvas turned upright, the smaller side across and the larger down (720x1280 for a graph of 1280x720), which leaves more of the frame to a figure standing full length. No model is asked, so the card is not held for one. It is a drawing on request like a style sample: one at a time with the samples, in the same slot, with the same status line. A second portrait or sample asked for meanwhile is refused, and the first goes on; a move in the story, /cancel or the bot's stop ends it. A variant has a slot of its own and may be drawn beside it. A photo already handed to Telegram is delivered all the same, with its note, and can be kept: a stop while it is on its way does not take it back, and its `picture_portrait` row is `ready` with `cancelled: true`. It is only for a reader whose scenes are drawn, checked on the press and again before the work. A portrait is not sent if its person or its story is deleted meanwhile, nor one of the bot's own prompt whose text of the person changes while it is drawn, as a retelling changes it.
   - Right after the photo comes its note, folded to one line as the prompt under a scene's picture is: «🖼 Промпт: 312 токенов, из них стиль 27 · 1 560 знаков». Opened, it shows the whole prompt the portrait was drawn from, as the picture model got it: the bot's own, with the shot, the backdrop, the moment, the person's text with the clothes and the pose, the light and the style, or the reader's own as it came. The tokens are those of that prompt as the graph's encoder reads it, and the style's share is that of the bot's style line (`PORTRAIT_STYLE`); a prompt the reader wrote has none, as a variant's has none. A caption holds 1024 characters and a prompt of 4000 does not fit, so the note is a rich message of its own, as under every other picture ([limits](#telegram-limits)). It has «✏️ Изменить промпт и нарисовать вариант» ([a portrait's own prompt](#portrait-prompt)). It is recorded and deleted with the portrait, and a note Telegram refuses leaves the photo as it is, with a `picture_prompt_unsent` row. Until then the note held the person's text alone, and the rest of the prompt was nowhere to be seen.
   - Under the photo are «🔄 Ещё вариант» ("Another version", the same prompt with a new seed), «✅ Оставить» ("Keep", `portrait-keep:<candidate>`) and the way back to the card. The bot holds the photo it showed in memory for 30 minutes, one per reader, under the id the keep button carries, and with a single timer that knows the id alone. A newer portrait takes its place, so an older button keeps nothing, and neither does one of the bot's own prompt pressed after the text it was drawn from changed. One drawn from the reader's own prompt read no text of the person, and is kept while the person is on the sheet. A kept portrait is let go once its write is committed; if that write is rolled back, the same button keeps it again.
@@ -286,7 +289,10 @@ button and wait. The code is `local/profile.ts`.
   retelling or a new picture's clothes change it, shows the profile as it is now and waits for nothing. A sheet older
   than the three layers, which the story's next picture writes anew without the changes, details and clothes written
   into it, is only shown, with a line saying so, and so is a profile a field of which has a line that starts with `#`,
-  which could not come back as it went.
+  which could not come back as it went. So is the profile of a person whose look changed along the branch being played
+  ([along the story](#along-the-story)): it shows them as the card does at the branch's last scene, and its line says
+  that a profile sent back would write for the whole story and points to the card's own edits, which can be made only
+  from this moment. Its button pressed, or a profile sent back, after such a change counts as a changed profile.
 - **Reading it back:** the text is taken whole or not at all. It runs from the first heading that is no field's, `#`
   and the person's name, apart from spaces and case, to the first end line after it. The lines around the two are left
   out, so a copy of the whole message, its title above the block and the hint under it, reads as the block alone, but
@@ -428,6 +434,92 @@ in is drawn as usual. The code is `local/picture-pov.ts`.
   the reflection, tried in between, drew the viewer whole beside the water on the pier in two of two. Not checked: a
   frame with two references, as the tester's was, whether the card's Gemma follows the rule on the pier and the
   workbench, and a reflection that looks like the viewer.
+
+<a id='along-the-story'></a>
+
+### Along the story
+
+The tester, 2026-09-28: «версонировать персонажей каким то образом в каждый момент истории или на чекпоинтах»; the
+owner: «Делай». A lasting change the story makes to a person's look, a haircut, a scar, dyed hair, reaches the picture
+of the scene where it happens and of every later scene on that line. A picture on another branch, or after going back
+to a checkpoint before the change, shows the person as they were there. The code is `local/picture-versions.ts`.
+
+- **Where it lives:** the sheet stays each person as the story's first scene has them. A version is written only where
+  something changes, on that scene (`SceneNode.appearance`, by sheet name): the lasting changes a frame of the scene
+  named, one line each in the story's language; a description or a look the reader wrote «only from this moment»; and
+  the details and the look retold from what is in force there, with a hash of what they were retold from. A person at
+  any scene is the sheet with the versions of the line down to it, the nearest last, as the clothes are found (`sheetAt`
+  beside `wornAt`). A branch, a checkpoint and going back to one need nothing of their own, and deleting a branch takes
+  the versions of its own scenes with them and nothing else. Only text varies: the portrait, the pictures the reader
+  sent and a portrait's own prompt are the person's, on the sheet, for the whole story, and the portrait files are
+  swept by the sheet as before. A story without versions is drawn from its sheet exactly as before.
+- **Who:** versions are read for every reader, but only readers named in `SIMPLE_CHAT_SHEET_VERSION_USERS`, each of
+  them a picture reader, have frames that name changes and the choice «only from this moment» ([setup](setup.md)).
+  With nobody named every frame request, prompt, graph, recipe and message is byte for byte 189918e's: a dry run with
+  a fake model, a fake ComfyUI and a fake Telegram on 2026-09-28 gave the same apart from ComfyUI's per-job nonce, on a new
+  library and on one 189918e wrote.
+- **The frame names a change:** such a reader's frame request gets `lasting_changes`, at the top level and first in
+  the answer, and a rule after the instruction that lists each person's look and changes as the frame has them
+  (`changesRequest`). It asks for the lasting changes the story made in the last scene or before it that neither shows:
+  hair cut, shaved, grown, dyed or gone grey, a beard shaved or grown, a scar, a tattoo, a lost eye, finger or hand.
+  Not clothes, jewellery or what is in hand; not what washes off or passes (wet, dirty or tousled hair, blood, bruises,
+  fresh wounds and bandages, a blush, tears, a hairstyle for once), a pose or a mood; not where the look merely
+  disagrees with the story; not a change the person's changes list already; when in doubt, none. The field is never
+  the last key of a person: `view` there ran away into whitespace in 42 answers of 124 on the card on 2026-09-28, every
+  one right after `action`, and in none of 124 right after `who`, and the point of view's top-level fields in none of
+  40. The answer's limit grows by 150 tokens. A change named for a person of the sheet other than the point of view's
+  viewer, three at most for one scene and 200 characters each, and not one they have already, is written as a version
+  of the scene, and those people are retold at once, so that this very frame draws it: one more call of the language
+  model, on a scene with a change alone. It carries no story, so on a server with one slot the next request of the
+  story reads its prefix once more. A retelling that fails leaves the person pending, as on the sheet, and the next
+  frame of the line tries again.
+- **What wins is what is later.** A change a frame named wins over the description in force above it, the story's or
+  the reader's: the retelling gets those later changes after its pinned rule, with a rule that they win
+  (`laterRequest`). A description the reader wrote «only from this moment» wins over the changes above it, as the
+  reader's description wins over the sheet's changes (the owner, 2026-09-27). A look the reader wrote stays in the
+  frames until they write a description, whatever the story changes meanwhile, as on the sheet.
+- **The reader's edits:** such a reader's wait for a description or a look says the edit is for the whole story, on
+  every branch, and has «📍 Только с этого момента» ("Only from this moment", `edit-scope:here`). It keeps the scene
+  the reader stands at in the wait (`ui.from`), and the wait then says the edit is for that scene of the branch and
+  every scene after it, with «🌐 Для всей истории» (`edit-scope:all`) to go back. The choice is on the wait, before the
+  text, so that the text is taken in one message as ever and the bot never holds it while asking. At a scene another
+  branch goes on from, as right after going back to a checkpoint, it is not offered, since the version would reach that
+  branch's later scenes too, and the wait says so until the next scene. An edit for the whole story lands on the sheet
+  as before, and takes the place of what the reader wrote «only from this moment» anywhere in the story, which the wait
+  counts: a description takes the place of their descriptions and looks, and a look of their looks, and is written
+  beside a description of theirs, whose retold look would otherwise stand there. So it holds in every scene of every
+  line, and the changes the story made stay and are retold over it. `landEdit` decides where an edit lands. The
+  [whole profile](#profile) does not call it yet and writes as before, for the whole story; the profile of a person
+  with a version on the reader's line is only shown, as the card shows them there.
+- **Card, list and portrait:** each person is as they are at the scene the reader stands at in that story, the head of
+  the branch being played, and as the sheet has them elsewhere. The card adds «📜 По ходу истории внешность менялась 2
+  раза…» where the look changed along that line, a count of the scenes that changed it. A portrait is drawn from the
+  person at that scene, and the card calls a kept one current only while it was drawn from what they have there.
+- **Rows:** `sheet_version_written` (`versionSource` `story` or `reader`, `versionField` `change`, `description` or
+  `look`, `versionPeople`, `storyVersions`), `sheet_versions_cleared` when an edit for the whole story took the place of
+  some (`versionsCleared`), `picture_version_retold` before a frame and `version_retold` after an edit, with the
+  retelling's fields, and `lastingChanges` on the `picture` row of such a reader. Never a word of a change, a
+  description or a look.
+- **Older code:** 189918e reads a library with versions, draws from its sheet and keeps the versions as they are when
+  it writes (the same dry run).
+- **Checked** on 2026-09-28 with 29 calls to the hosted Gemma 4 31B through OpenRouter on synthetic scenes. The frame
+  kept its fields in every answer and named the haircut, the scar that stayed, the dyed hair, the shaved beard, the
+  tattoo and a haircut two scenes back, 2 of 2 each, and nothing for wet hair, blood and a bandage, for a look that
+  merely disagrees with the story or for plaits for a feast, 2 of 2 each. It named a change the person's changes
+  already had, while their look did not show it yet, in 2 answers of 2, until the rule said not to: then 0 of 1, 0 of
+  1 with the look retold, and the two haircuts still 1 of 1 each. The retelling, 5 calls: a later haircut made the hair
+  short. A dyed-hair change above a description of chestnut hair with a scar after it, and a shave for the second of
+  two people, each failed a check stricter than the rule once (a hair colour named, the shave said in words); the
+  second answers, read for words alone, had the scar and no red but no hair colour, and the beard gone and the first
+  person's long chestnut hair kept. The retellings took 1.9 to 3.1 s there, which is not the card.
+- **Not built, or not known:** the sheet is still written once, from the history of the first illustrated scene, on
+  whatever line that was. A change is written at the first scene whose frame names it, so a scene between, drawn later,
+  names it again, and the person counts it once. A look the reader wrote hides the changes, as on the sheet. The
+  point of view's viewer is not in the field. The reference experiment's frames take the kept portrait whatever look it
+  shows, as before, so a portrait drawn after the haircut on one branch lends its hair to another. A version that is
+  out of date is retold before the next frame of its line, or at the reader's scene after an edit, and a card elsewhere
+  says the person is pending until then. The card's Gemma has not answered the field yet: the probe for the next
+  rental is ~/simple-story-chat-runs/2026-09-28/sheet-versions/run.mts.
 
 ## Interface language
 

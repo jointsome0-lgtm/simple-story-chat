@@ -240,6 +240,10 @@ export const ru = {
     descriptionSize: (chars: number) => `Текст описания: ${grouped(chars, ' ')} ${form(chars, 'знак', 'знака', 'знаков')}`,
     // Above the lasting changes the story made to the person's look, a scar or a haircut, in the story's language.
     changes: 'Постоянные перемены по ходу истории:',
+    // Under the lasting changes, while the reader plays this story and the person's look changed along the line of the
+    // scene they stand at (local/picture-versions.ts): `times` is how many scenes of that line changed it, by the story or
+    // by the reader «only from this moment». The card above shows the person as they are at that scene.
+    along: (times: number) => `📜 По ходу истории внешность менялась ${count(times, 'раз', 'раза', 'раз')}: здесь она такая, какой стала к сцене, где ты сейчас.`,
     // `branch` is the quoted name of the branch being played.
     clothesOfBranch: (branch: string) => `Одежда, с которой начнутся следующие картинки ветки ${branch}:`,
     clothesAtStart: 'Одежда, с которой начались картинки этой истории:',
@@ -293,6 +297,19 @@ export const ru = {
     detailsNote: (max: number) => `Пришли описание внешности одним сообщением, до ${max} знаков, на любом языке и в любом виде, с переносами строк и таблицей мерок тоже: пол, возраст и на сколько человек выглядит, цвет кожи, рост и телосложение, мерки, волосы и обычная причёска, лицо, приметы. Одежду и имя не пиши: одежду берут из сцен. Бот перескажет его по-английски для портрета и сожмёт в короткую внешность для картинок к сценам, ничего не добавляя от себя. Постоянные перемены по ходу истории (шрам, стрижку) он прибавит к описанию, а где они с ним расходятся, поверит описанию. Короткая внешность, написанная тобой, заменится пересказанной.`,
     nowText: 'Сейчас:',
     backToCard: '↩️ К персонажу',
+    // For a reader who has versions of the sheet (local/picture-versions.ts), under the wait for a short look (`look`
+    // true) or a description: where the text lands. For the whole story, the default: the lasting changes the story makes
+    // lie over a description from their scenes on, and the edit replaces the `n` texts of the person's the reader wrote
+    // «only from this moment». Or only from the scene the reader stands at, on the branch `branch` (common.quote), and
+    // in every scene after it. At a scene another branch goes on from, the whole story alone, and why. The two buttons
+    // switch between them; the first names what the second of these lines calls «только с этого момента».
+    scopeAll: (look: boolean): string => look ? '🌐 Это правка для всей истории, на всех ветках.'
+      : '🌐 Это правка для всей истории, на всех ветках: таким персонаж будет с её начала, а постоянные перемены, которые история делает по ходу (стрижка, шрам), лягут поверх описания с тех сцен, где случились.',
+    scopeReplaces: (n: number) => `Она заменит и твои правки «только с этого момента» (их ${n}).`,
+    scopeHere: (branch: string, look: boolean) => `📍 Это правка только с этого момента: со сцены ветки ${branch}, где ты сейчас, и во всех сценах после неё. Раньше этой сцены и на других ветках персонаж останется прежним.${look ? '' : ' Постоянные перемены, которые история сделает дальше, лягут поверх описания.'}`,
+    scopeShared: '📍 Правку «только с этого момента» здесь не сделать: от этой сцены идёт и другая ветка, и правка задела бы её. Кнопка появится после следующей сцены.',
+    scopeHereButton: '📍 Только с этого момента',
+    scopeAllButton: '🌐 Для всей истории',
     // Under a portrait of the bot's own prompt, which is drawn in plain neutral clothes whatever the story's, and under
     // one drawn from a prompt the reader wrote. The whole prompt follows it, folded as under every picture.
     caption: (person: string) => `🖼 Портрет: ${person}. Лицо и фигура в полный рост, в простой нейтральной одежде.`,
@@ -340,6 +357,11 @@ export const ru = {
     // writes anew, and a field with a line that would be read as a heading.
     profileOlder: 'Этот список персонажей записан прежней версией бота, и следующая картинка истории запишет его заново, поэтому здесь профиль только показан. Описание и короткую внешность можно поправить на карточке: они сохранятся.',
     profileUnreadable: 'В одном из полей есть строка, которая начинается с «#», как заголовок, поэтому этот профиль не прочитать обратно, и здесь его не поправить. Поля можно поправить на карточке персонажа.',
+    // Above a block that is shown and cannot be sent back because the person's look changed along the branch being played
+    // (local/profile.ts `versioned`): the profile is the person at its last scene, while a profile sent back would write
+    // for the whole story. The card's own edits, «✏️ Изменить описание» and «✏️ Изменить короткую внешность», offer
+    // «📍 Только с этого момента».
+    profileVersions: '📜 Внешность персонажа менялась по ходу этой ветки, и профиль показан таким, как в сцене, где ты сейчас. Правка профиля целиком легла бы на всю историю, поэтому здесь её нет. Описание и короткую внешность поправь кнопками на карточке: там правку можно сделать и только с этого момента.',
     // Above the profile as it is now, when the reader pressed the button under one that has changed since, or sent one
     // back from it.
     profileChanged: 'Профиль изменился с тех пор, как бот прислал его выше: например, закончился пересказ описания или новая картинка сменила одежду. Ничего не сохранено. Вот он сейчас.',

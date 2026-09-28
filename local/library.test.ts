@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as source from '../lib/library.ts';
 import type { Library } from '../lib/library.ts';
 import { Store } from './store.ts';
+import { sheetAt } from './picture-versions.ts';
 
 // A synthetic library in format v1, built with the original JS domain plus the fields the bot adds to scenes and
 // memory: sent and pending scenes, a compacted branch, a fork and a pending job.
@@ -52,6 +53,28 @@ test('a stored v1 library is read and saved unchanged, and recovery only marks i
   assert.equal(store.read('2').language, undefined);
   store.mutate('1', state => source.setLanguage(state, 'ja'));
   assert.deepEqual(store.read('1'), { ...structuredClone(stored), job: null, interrupted: true, language: 'ja' });
+});
+
+// The versions of a person's look sit on the scenes (local/picture-versions.ts): nothing else holds them, so a save that
+// dropped them, or a deleted branch that took those of scenes it shares with another, would lose them unnoticed.
+test('versions of the people along a story are saved as they are, and a deleted branch takes only those of its own scenes', t => {
+  const store = new Store(':memory:');
+  t.after(() => store.close());
+  const state: Library = JSON.parse(payload);
+  const story = state.stories.h2;
+  story.sheet = [{ name: 'Мира', description: 'Смотрительница с длинными русыми волосами.', look: 'young woman, long fair hair' }];
+  // Scene 4 is written on b18 alone; n9 is on both branches.
+  const { nodeId } = source.commitTurn(state, 'j20', '2026-08-02 20:04\n\nСцена 4.')!;
+  story.nodes.n9.appearance = { 'Мира': { changes: ['шрам через левую бровь'], retold: { details: 'scar', look: 'young woman, scar', from: '0' } } };
+  story.nodes[nodeId].appearance = { 'Мира': { changes: ['волосы коротко острижены'], look: 'short hair' } };
+  store.db.prepare('INSERT INTO libraries VALUES (?, ?)').run('1', JSON.stringify(state));
+  store.mutate('1', () => {});
+  assert.deepEqual(store.read('1'), state);
+  store.mutate('1', saved => source.deleteBranch(saved, 'h2', 'b18'));
+  const kept = store.read('1').stories.h2;
+  assert.equal(kept.nodes[nodeId], undefined);
+  assert.deepEqual([kept.sheet, kept.nodes.n9.appearance], [story.sheet, story.nodes.n9.appearance]);
+  assert.equal(sheetAt(kept, 'n12')[0].changes, 'шрам через левую бровь');
 });
 
 test('pictures are recorded as sent, and a deletion forgets those of its lost scenes and those too old to delete', () => {

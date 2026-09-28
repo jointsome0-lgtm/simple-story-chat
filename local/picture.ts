@@ -39,7 +39,8 @@
 // uses it in frames, with the ordered files pinned in each frame's recipe (local/picture-references.ts).
 // A description the reader writes on that card is retold by the language model into the details a portrait is drawn
 // from and the look the frames take: at once (`retell`), or before the next frame of the story if that did not happen
-// (`describeFrame`).
+// (`describeFrame`). A frame draws each person as they are at its own scene, where the story or the reader changed their
+// text from some scene on (local/picture-versions.ts).
 import { createHash, randomInt } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { recordPicture, referenceFiles } from '../lib/library.ts';
@@ -62,6 +63,8 @@ import type { StyleChoice } from './picture-style.ts';
 import { REFERENCE_VERSION, frameReferences, pinReferences, readReference, referenceGraph, referencePrompt, temporaryReferences } from './picture-references.ts';
 import { pictureSize } from './reference.ts';
 import { povRequest, seenBy, viewerOf } from './picture-pov.ts';
+import { addChanges, changesRequest, countVersions, descriptionOf, lastingChangesOf, laterRequest, ownDescription, personHere, personKey,
+  sceneOf, sheetAt, staleAt } from './picture-versions.ts';
 import { createProgress } from './progress.ts';
 import { contextParts, storyNarration } from './prompt.ts';
 import { fileErrorCode } from './store.ts';
@@ -175,17 +178,12 @@ export const LOOK_CHARS = 400;
 // takes about 1135 characters for.
 export const DESCRIPTION_CHARS = 1800;
 
-// A person of a sheet is their name, apart from spaces and case. One the model renames is somebody new, and what the
-// reader made of the old name stays with it: merging two people by a like name would be worse than keeping both.
+// A person of a sheet is their name, apart from spaces and case (`personKey`). One the model renames is somebody new, and
+// what the reader made of the old name stays with it: merging two people by a like name would be worse than keeping both.
+// A person's description, and whether it is the reader's own (`descriptionOf`, `ownDescription`), are read in
+// local/picture-versions.ts, beside how a person looks at one scene of the story.
 type SheetEntry = NonNullable<Story['sheet']>[number];
-const personKey = (name: string) => name.trim().toLowerCase();
-// A person's description as the card shows it and the retelling reads it (docs/illustrations-plan.md#three-layers): the
-// one the sheet took from the story, or the reader's. A sheet written before 2026-09-27 has none, and its details stand
-// in until the sheet is written again: the reader's own text, or the English prose the sheet wrote since 2026-09-26.
-export const descriptionOf = (person: SheetEntry) => person.description ?? person.details ?? '';
-// Whether that description is the reader's own: written on the card since 2026-09-27, or as details before that day.
-export const ownDescription = (person: SheetEntry) =>
-  person.description === undefined ? !!person.detailsEdited && !!person.details?.trim() : !!person.descriptionEdited;
+export { descriptionOf, ownDescription };
 // The whole prompt the reader wrote for a person's portraits (docs/telegram-ui.md#portrait-prompt), or undefined while
 // the bot's own is theirs: a portrait is drawn from it as it came, and nothing of the sheet goes into it.
 export const ownPortraitPrompt = (person: SheetEntry) =>
@@ -446,6 +444,61 @@ export function createIllustrator(config: ImageConfig, deps: {
     }
   }
 
+  // The details and the looks of the people whose versions on the line of the scene `nodeId` are to be retold there
+  // (local/picture-versions.ts `staleAt`): a change a frame has just named, a description the reader wrote «only from this
+  // moment», or anything they rest on written anew since. One call, as for the sheet (`retellPending`), beside everybody
+  // as they are at that scene, with the changes the story made after the description in force added and the rule that
+  // they win (`laterRequest`). Each is written into its version only while it would still be retold from the same.
+  // Its row gives what `retellPending`'s gives, and nothing is thrown. Returns how many people were written.
+  async function retellVersions(model: Provider, { userId, storyId, nodeId, signal, log }: { userId: string; storyId: string;
+    nodeId: string | null; signal: AbortSignal; log: Log }, event: string): Promise<number> {
+    const story = store.read(userId).stories[storyId];
+    const due = story && nodeId ? staleAt(story, nodeId).slice(0, RETELL_PEOPLE) : [];
+    if (!story || !nodeId || !due.length) return 0;
+    const people = sheetAt(story, nodeId).map((one, index) => {
+      const mine = due.find(person => person.index === index);
+      return { name: one.name, description: mine ? mine.inputs.description : descriptionOf(one),
+        changes: mine ? mine.inputs.earlier.join('; ') : one.changes ?? '', look: one.look };
+    });
+    const asked = due.map(one => one.index);
+    const later = new Map(due.flatMap(one => one.inputs.later.length ? [[one.index, one.inputs.later] as const] : []));
+    const started = now();
+    const sizes = () => ({ elapsedMs: Math.max(0, now() - started), retellPeople: asked.length,
+      descriptionCharacters: Math.max(...asked.map(index => [...people[index].description].length)) });
+    try {
+      const request = laterRequest(retellRequest(people, asked), later);
+      const retold = retoldOf((await askJson(model, trusted(model, request, 0), { signal })).value, people.length);
+      const words = asked.filter(index => retold.has(index) && inWords(retold.get(index)!));
+      const written = store.mutate(userId, state => {
+        const saved = state.stories[storyId];
+        const current = saved?.nodes[nodeId] ? staleAt(saved, nodeId) : [];
+        return words.filter(index => {
+          const was = due.find(one => one.index === index)!;
+          const still = current.some(one => one.node === was.node && one.key === was.key && one.stamp === was.stamp);
+          const version = still ? saved?.nodes[was.node]?.appearance?.[was.key] : undefined;
+          if (!version) return false;
+          version.retold = { ...retold.get(index)!, from: was.stamp };
+          return true;
+        });
+      });
+      const code = asked.some(index => !retold.has(index)) ? 'look_missing' : words.length < asked.length ? 'look_numbers'
+        : written.length < asked.length ? 'look_changed' : undefined;
+      const outcome = written.length ? 'ready' : words.length ? 'skipped' : 'failed';
+      log(event, code, { outcome, ...sizes(), retoldPeople: written.length,
+        ...written.length ? { lookWords: Math.max(...written.map(index => retold.get(index)!.look.split(' ').length)) } : {} });
+      return written.length;
+    } catch (error) {
+      const code = errorCode(error);
+      const outcome = signal.aborted || code === 'cancelled' ? 'cancelled' : GAVE_WAY.includes(String(code)) ? 'skipped' : 'failed';
+      log(event, signal.aborted ? 'cancelled' : safeCode(code), { ...safeErrorDetails(error), outcome, ...sizes() });
+      return 0;
+    }
+  }
+  // Whether a reader has versions of the sheet (config SIMPLE_CHAT_SHEET_VERSION_USERS): their frames name the lasting
+  // changes the story makes, and they may write a person's text «only from this moment». Versions a story already has
+  // are drawn for everybody.
+  const versionsFor = (userId: string) => config.users.has(userId) && !!config.versionUsers?.has(userId);
+
   // The frame of each reader's latest described scene, in memory only and only until the next one: a sample of a
   // style is drawn from it without asking the language model again. Never stored and never logged.
   // `viewer` is the person the frame was seen through, if the story had one then (local/picture-pov.ts), and `pov`
@@ -476,7 +529,9 @@ export function createIllustrator(config: ImageConfig, deps: {
   // The description of one scene: the story's sheet first if it has none yet, then the frame, both on the language
   // model's card. `sharesPrefix` holds it to the slot where the scene's own request is cached, which is where the
   // picture that follows the scene belongs; a sample asked for later may find that slot gone, after a restart or under
-  // another reader's scene, and is described like any request of its reader instead.
+  // another reader's scene, and is described like any request of its reader instead. The people are drawn as they are at
+  // this scene (local/picture-versions.ts), and a lasting change the frame names costs one more call, a retelling after
+  // it; the slot's cached story is then read once more by the next request that continues it.
   async function describeFrame(userId: string, storyId: string, nodeId: string, branchId: string, signal: AbortSignal, log: Log,
     sharesPrefix: boolean) {
     const state = store.read(userId);
@@ -485,6 +540,9 @@ export function createIllustrator(config: ImageConfig, deps: {
     const context = excerpt(state, storyId, nodeId, branchId);
     const anchor = anchorOf(story.nodes[nodeId], context);
     let sheet: Character[] = [];
+    // How many lasting changes this frame found in the story, for a reader who has versions of the sheet.
+    const versions = versionsFor(userId);
+    let lastingChanges = versions ? 0 : undefined;
     // Both calls continue the request the scene itself was written from, so right after the scene they belong in the
     // slot where that prefix is cached and nowhere else: `sharesPrefix` is the scheduler's word for it, and it also
     // ends this turn the moment its own reader asks for the next scene (local/scheduler.ts).
@@ -509,12 +567,39 @@ export function createIllustrator(config: ImageConfig, deps: {
       // (docs/illustrations-plan.md#three-layers). One that fails leaves the looks as they stand, a person with none is
       // described in the frame as somebody the sheet does not cover, and the next frame tries again.
       await retellPending(model, { userId, storyId, signal, log }, 'picture_look_retold');
-      sheet = wornAt(story, nodeId, (store.read(userId).stories[storyId]?.sheet ?? []).filter(one => one.look.trim()));
+      // The people as they are at this scene, with the versions of its own line (local/picture-versions.ts), retold
+      // first where anything they rest on was written anew since; without versions, as the sheet has them.
+      await retellVersions(model, { userId, storyId, nodeId, signal, log }, 'picture_version_retold');
+      const frameSheet = () => {
+        const current = store.read(userId).stories[storyId];
+        return wornAt(story, nodeId, (current ? sheetAt(current, nodeId) : []).filter(one => one.look.trim()));
+      };
+      sheet = frameSheet();
       // Seen through the eyes of a person of the sheet, when the reader chose one: the rule and its fields are added
       // here, never in local/illustrate.ts, so that without it the request is the one the action experiment pins.
       const viewer = viewerOf(story, sheet);
       const request = frameRequest(context, sheet);
-      return (await askJson(model, trusted(model, viewer ? povRequest(request, viewer) : request, anchor), { signal })).value as unknown as Description;
+      // For a reader who has versions the frame also names the lasting changes the story made to its people's looks,
+      // the viewer's apart. Each becomes a version at this scene, retold before this frame is drawn, so that the frame
+      // of the scene with the haircut already has it. Without them the request is as it was.
+      const named = versions ? sheet.filter(one => one !== viewer) : [];
+      const asked = changesRequest(request, named);
+      const answer = (await askJson(model, trusted(model, viewer ? povRequest(asked, viewer) : asked, anchor), { signal })).value;
+      if (!versions) return answer as unknown as Description;
+      const { lasting_changes: changes, ...plain } = answer;
+      const found = lastingChangesOf(changes, named.map(one => one.name));
+      const written = found.size ? store.mutate(userId, saved => {
+        const one = saved.stories[storyId];
+        return one?.nodes[nodeId] ? addChanges(one, nodeId, found) : [];
+      }) : [];
+      lastingChanges = written.length;
+      if (written.length) {
+        log('sheet_version_written', undefined, { versionSource: 'story', versionField: 'change', versionPeople: written.length,
+          storyVersions: countVersions(store.read(userId).stories[storyId]) });
+        await retellVersions(model, { userId, storyId, nodeId, signal, log }, 'picture_version_retold');
+        sheet = frameSheet();
+      }
+      return plain as unknown as Description;
     }, sharesPrefix ? { holder: userId, sharesPrefix, work: 'description' } : { holder: userId, work: 'description' });
     const viewer = viewerOf(story, sheet);
     const viewed = viewer && seenBy(description, viewer, sheet);
@@ -531,7 +616,7 @@ export function createIllustrator(config: ImageConfig, deps: {
     const pov = viewed ? viewed.seen : undefined;
     const frame = viewed ? viewed.description : description;
     frames.set(userId, { storyId, nodeId, description: frame, sheet, viewer: viewer?.name, pov });
-    return { description: frame, sheet, clothesChanged: worn.changed, pov };
+    return { description: frame, sheet, clothesChanged: worn.changed, pov, lastingChanges };
   }
 
   // The size of a prompt that ends with the style `line`: its characters, and, with a tokenizer, its tokens and how
@@ -822,7 +907,7 @@ export function createIllustrator(config: ImageConfig, deps: {
         await status.clear();
         return;
       }
-      let frame: { description: Description; sheet: Character[]; clothesChanged: number; pov?: boolean };
+      let frame: { description: Description; sheet: Character[]; clothesChanged: number; pov?: boolean; lastingChanges?: number };
       try { frame = await describeFrame(userId, storyId, nodeId, branchId, signal, log, true); }
       finally { release?.(); described(); }
       describeMs = Math.max(0, now() - describeStarted);
@@ -851,7 +936,8 @@ export function createIllustrator(config: ImageConfig, deps: {
       log('picture', undefined, { outcome: 'ready', cancelled: signal.aborted, describeMs, imageQueueMs: drawn.queueMs, imageMs: drawn.totalMs,
         ...status.waited(), imageSteps: steps, pictureAttention: drawn.pictureAttention, photoMs, photoBytes: drawn.bytes.length,
         namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook, clothesChanged: frame.clothesChanged,
-        pictureStyle, ...pov === undefined ? {} : { pov }, ...size, ...elapsed() });
+        pictureStyle, ...pov === undefined ? {} : { pov }, ...frame.lastingChanges === undefined ? {} : { lastingChanges: frame.lastingChanges },
+        ...size, ...elapsed() });
     } catch (error) {
       const code = errorCode(error);
       const cancelled = signal.aborted || code === 'cancelled' || code === 'scene_gone';
@@ -915,8 +1001,10 @@ export function createIllustrator(config: ImageConfig, deps: {
       // so is one edited while that frame was still being described.
       const kept = frames.get(userId);
       const story = store.read(userId).stories[storyId];
+      // The looks are those of the scene, with the versions of its line (local/picture-versions.ts).
+      const here = story ? sheetAt(story, nodeId) : [];
       let frameReused = kept?.storyId === storyId && kept.nodeId === nodeId && !!story?.nodes[nodeId]
-        && kept.sheet.every(one => story.sheet?.find(other => other.name === one.name)?.look === one.look)
+        && kept.sheet.every(one => here.find(other => other.name === one.name)?.look === one.look)
         && viewerOf(story, kept.sheet)?.name === kept.viewer;
       const stylesAsked = styles.length;
       let describeMs = 0;
@@ -1027,9 +1115,16 @@ export function createIllustrator(config: ImageConfig, deps: {
     // to spare it takes one that keeps nobody's scenes, a call of anybody else's that it would keep waiting ends it, and
     // the reader's own next scene waits for it. The bot's stop ends it too (`signal`). What it did not do is done before
     // the next frame of the story (`describeFrame`). Returns whether anybody was retold.
+    // The people's versions at the scene the reader stands at are retold after them, where they are due there
+    // (`retellVersions`): a description written «only from this moment», or one for the whole story under a change the
+    // story made. Anywhere else they are retold before the next frame of their line.
     async retell({ userId, storyId, signal, log }: { userId: string; storyId: string; signal: AbortSignal; log: Log }) {
-      if (!(store.read(userId).stories[storyId]?.sheet ?? []).some(one => one.lookPending)) return false;
-      return inTurn(provider, async model => await retellPending(model, { userId, storyId, signal, log }, 'look_retold') > 0,
+      const state = store.read(userId);
+      const story = state.stories[storyId];
+      const at = sceneOf(state, storyId);
+      if (!(story?.sheet ?? []).some(one => one.lookPending) && !(story && at && staleAt(story, at).length)) return false;
+      return inTurn(provider, async model => await retellPending(model, { userId, storyId, signal, log }, 'look_retold')
+        + await retellVersions(model, { userId, storyId, nodeId: at, signal, log }, 'version_retold') > 0,
         { holder: userId, yields: true, work: 'retell' });
     },
 
@@ -1048,7 +1143,12 @@ export function createIllustrator(config: ImageConfig, deps: {
       const status = await statusLine(chat, request.status, log, t);
       const own = request.prompt !== undefined;
       const sheetNow = () => store.read(userId).stories[storyId]?.sheet;
-      const personNow = () => sheetNow()?.find(one => one.name === name);
+      // The person as the reader has them now, at the scene they stand at (local/picture-versions.ts), as their card shows them.
+      const personNow = () => {
+        const state = store.read(userId);
+        const index = state.stories[storyId]?.sheet?.findIndex(one => one.name === name) ?? -1;
+        return index < 0 ? undefined : personHere(state, storyId, index);
+      };
       // The text of the person the bot's own prompt is drawn around; the reader's own prompt reads none of it.
       const lookNow = () => {
         const person = personNow();
@@ -1114,7 +1214,10 @@ export function createIllustrator(config: ImageConfig, deps: {
       if (!held || held.id !== candidateId || now() - held.at > PORTRAIT_HELD_MS) return null;
       const sheet = state.stories[held.storyId]?.sheet ?? [];
       const index = sheet.findIndex(one => one.name === held.name);
-      if (index < 0 || (!held.own && portraitText(sheet[index]) !== held.look)) return null;
+      // The text is the person's at the scene the reader stands at, as it was drawn from (`portrait`); the portrait is
+      // the person's own for the whole story.
+      const here = index < 0 ? undefined : personHere(state, held.storyId, index);
+      if (!here || (!held.own && portraitText(here) !== held.look)) return null;
       const person = sheet[index];
       person.portrait = { source: 'drawn', file: store.writePortrait(userId, held.bytes), ...held.recipe, look: held.look,
         clothes: held.own ? '' : PORTRAIT_CLOTHES, style: held.own ? '' : PORTRAIT_STYLE, prompt: held.prompt,
@@ -1129,6 +1232,10 @@ export function createIllustrator(config: ImageConfig, deps: {
     // Whether a reader may send a picture of a person of their own, which frames then take as they take a portrait: the
     // reference experiment's own readers (`referenceGate`). Nobody else sees those buttons or what they keep (local/ui.ts).
     referencesFor(userId: string) { return !referenceGate(userId); },
+
+    // Whether a reader has versions of the sheet (`versionsFor`): their wait for a person's text offers «only from this
+    // moment» (local/ui.ts).
+    versionsFor(userId: string) { return versionsFor(userId); },
 
     // Lets a kept portrait go, once the write that refers to its file is committed (local/bot.ts). One whose write was
     // rolled back is still held, so the same button keeps it again.

@@ -30,7 +30,18 @@ export type SceneNode = {
   // How this scene's own picture was drawn, all but its prompt: a variant of it is drawn with the same, for as long
   // as the scene is kept (local/picture.ts `variant`). Only the local bot writes it.
   picture?: PictureRecipe;
+  // How people of the story's sheet look from this scene on, by their sheet name, where it is not what the sheet and
+  // the scenes above say (local/picture-versions.ts): a version holds here and in every scene below this one, on every
+  // line through it. Only the local bot writes it.
+  appearance?: Record<string, SheetVersion>;
 };
+// One person's appearance from one scene on (the owner's design of 2026-09-28, local/picture-versions.ts): text alone,
+// since their portrait and their references are the person's whatever the scene. `changes` are the lasting changes the
+// story made by this scene, as a frame named them, one line each in the story's language; `description` and `look` are
+// what the reader wrote «only from this moment», their own description or their own look; `retold` is the details and
+// the look retold from what is in force at this scene, and `from` a hash of what they were retold from, which tells a
+// retelling that is out of date.
+export type SheetVersion = { changes?: string[]; description?: string; look?: string; retold?: { details: string; look: string; from: string } };
 export type Branch = { id: string; name: string; head: string | null; memory: string | null };
 export type Checkpoint = { id: string; branchId: string; label: string; kind: string; head: string | null; memory: string | null };
 // A portrait of one person of a sheet that the reader kept to pick a reference by (local/picture.ts): the name of its
@@ -79,6 +90,9 @@ export type Story = {
   // `portraitPrompt` is the whole prompt the reader wrote for this person's portraits, from the one folded under a
   // portrait (docs/telegram-ui.md#portrait-prompt): every portrait of them is drawn from it word for word until they
   // drop it, and without it from the bot's own (local/image-portraits.ts `portraitPrompt`).
+  // The sheet is each person as the story's first scene has them. Where the story or the reader changed their text from
+  // some scene on, that scene holds the change (`SceneNode.appearance`), and a scene is drawn with what is in force on
+  // its own line (local/picture-versions.ts `sheetAt`); the portrait and the references stay here, one per person.
   sheet?: { name: string; description?: string; changes?: string; details?: string; look: string; outfit?: string;
     descriptionEdited?: boolean; edited?: boolean; lookPending?: boolean; detailsEdited?: boolean; portrait?: KeptPortrait;
     poses?: Partial<Record<Pose, OwnReference>>; portraitPrompt?: string }[];
@@ -103,8 +117,9 @@ export type StyleInput = { input: 'style'; styleId?: string; confirm?: undefined
 export type PromptInput = { input: 'prompt'; storyId: string; nodeId: string; confirm?: undefined };
 // A reader writing the look of one person of a story's sheet, or their details (local/ui.ts, the characters' card):
 // their next text message is that text. The person is the one they opened, by story and name, never whatever is
-// active by then.
-export type LookInput = { input: 'look' | 'details'; storyId: string; name: string; confirm?: undefined };
+// active by then. `from` is the scene the reader stood at when they chose to write it «only from this moment»
+// (local/picture-versions.ts `landEdit`); without it the text is for the whole story.
+export type LookInput = { input: 'look' | 'details'; storyId: string; name: string; from?: string; confirm?: undefined };
 // A reader in the reference experiment sending a picture of one person of a story's sheet for `pose` (local/reference.ts):
 // their next photo or file is that, if it comes within half an hour of `at`, when the wait began. The person is the one
 // whose card they opened, by story and name.

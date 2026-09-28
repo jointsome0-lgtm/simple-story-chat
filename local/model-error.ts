@@ -54,6 +54,11 @@ const REFERENCE_REFUSALS = ['type', 'broken', 'small', 'huge', 'shape', 'too_lar
 const PROFILE_FITS = ['whole', 'no_prompt', 'no_description'] as const;
 const PROFILE_CLOTHES = ['scene', 'sheet'] as const;
 const PROFILE_REFUSALS = ['gone', 'changed', 'no_text', 'incomplete', 'name', 'heading', 'sections', 'outside', 'empty', 'too_long'] as const;
+// A version of a person's look along the story (local/picture-versions.ts): whether the story wrote it, from a lasting
+// change a frame named, or the reader, «only from this moment», and which of the person's texts it holds. The change,
+// the description and the look stay out, as the person's name does.
+const VERSION_SOURCES = ['story', 'reader'] as const;
+const VERSION_FIELDS = ['change', 'description', 'look'] as const;
 // Why the model's last message ended, as the API names it, for the row of a failed Claude CLI run: `max_tokens` there
 // means the run's output cap was hit, which the CLI reports as an error rather than a truncation.
 export const STOP_REASONS = ['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'refusal', 'other'] as const;
@@ -120,7 +125,11 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   'referenceBytes', 'strippedBytes', 'referenceWidth', 'referenceHeight',
   // A profile a reader sent back (local/bot.ts `profileSent`): the characters of the whole text, and of each field it
   // changed as it was written, the description's in `descriptionCharacters` and the prompt's in `promptCharacters`.
-  'profileCharacters', 'changesCharacters', 'detailsCharacters', 'lookCharacters', 'clothesCharacters'] as const;
+  'profileCharacters', 'changesCharacters', 'detailsCharacters', 'lookCharacters', 'clothesCharacters',
+  // Versions of people's looks along a story (local/picture-versions.ts): how many lasting changes a frame found and
+  // wrote, how many people one write gave a version, how many versions the story holds after it, and how many of the
+  // reader's «only from this moment» an edit for the whole story took the place of.
+  'lastingChanges', 'versionPeople', 'storyVersions', 'versionsCleared'] as const;
 
 export type ErrorDetails = {
   httpStatus?: number; phase?: typeof PHASES[number]; operation?: typeof OPERATIONS[number];
@@ -153,6 +162,8 @@ export type ErrorDetails = {
   profileClothes?: boolean; profilePrompt?: boolean; profileRetell?: boolean;
   profileFit?: typeof PROFILE_FITS[number]; profileClothesAt?: typeof PROFILE_CLOTHES[number];
   profileRefusal?: typeof PROFILE_REFUSALS[number];
+  // A version of a person's look along the story: who wrote it and which text it holds.
+  versionSource?: typeof VERSION_SOURCES[number]; versionField?: typeof VERSION_FIELDS[number];
   // A failed Claude CLI run: how it ended and whether the CLI itself called the result an error.
   cliResult?: typeof CLI_RESULTS[number]; cliError?: boolean; stopReason?: typeof STOP_REASONS[number];
 } & { [Key in typeof COUNTS[number]]?: number };
@@ -205,6 +216,8 @@ export function safeErrorDetails(value: unknown = {}): ErrorDetails {
   if (member(PROFILE_FITS, input?.profileFit)) result.profileFit = input.profileFit;
   if (member(PROFILE_CLOTHES, input?.profileClothesAt)) result.profileClothesAt = input.profileClothesAt;
   if (member(PROFILE_REFUSALS, input?.profileRefusal)) result.profileRefusal = input.profileRefusal;
+  if (member(VERSION_SOURCES, input?.versionSource)) result.versionSource = input.versionSource;
+  if (member(VERSION_FIELDS, input?.versionField)) result.versionField = input.versionField;
   if (member(CLI_RESULTS, input?.cliResult)) result.cliResult = input.cliResult;
   if (typeof input?.cliError === 'boolean') result.cliError = input.cliError;
   if (member(STOP_REASONS, input?.stopReason)) result.stopReason = input.stopReason;

@@ -10,6 +10,7 @@ import type { Library, Story } from '../lib/library.ts';
 import { olderSheet } from './illustrate.ts';
 import { DESCRIPTION_CHARS, LOOK_CHARS, descriptionOf, ownDescription, ownPortraitPrompt, wornAt } from './picture.ts';
 import { PROMPT_CHARS } from './picture-style.ts';
+import { sheetAt, versionsOf } from './picture-versions.ts';
 import { REGISTERED, texts } from './text.ts';
 
 type SheetEntry = NonNullable<Story['sheet']>[number];
@@ -49,12 +50,16 @@ export const profileText = (field: ProfileField, text: string) => MULTILINE.incl
 // them; for a story not being played, or a branch with no scene yet, they are the sheet's own, which the story's
 // pictures start from where no scene dressed the person. A sheet older than the three layers (`older`) is written
 // anew by the story's next picture, which would drop the changes, the details and the clothes written into it, so its
-// profile is only shown.
-export type Profile = { values: Record<ProfileField, string>; present: ProfileField[]; clothesAt: string | null; older: boolean };
-export function profileOf(state: Partial<Library>, story: Story, person: SheetEntry): Profile {
+// profile is only shown. So is the profile of a person whose look changed along the line of that head
+// (`versioned`, local/picture-versions.ts): it shows them as the card does at that scene, while a profile sent back
+// writes the sheet, for the whole story; the card's own edits offer «only from this moment» instead.
+export type Profile = { values: Record<ProfileField, string>; present: ProfileField[]; clothesAt: string | null; older: boolean; versioned: boolean };
+export function profileOf(state: Partial<Library>, story: Story, entry: SheetEntry): Profile {
   const where = state.active?.storyId === story.id ? state.active : null;
   const branch = where && Object.hasOwn(story.branches ?? {}, where.branchId) ? story.branches[where.branchId] : undefined;
   const clothesAt = branch?.head && Object.hasOwn(story.nodes ?? {}, branch.head) ? branch.head : null;
+  const versioned = clothesAt !== null && versionsOf(story, clothesAt, entry.name) > 0;
+  const person = versioned ? sheetAt(story, clothesAt).find(one => one?.name === entry.name) ?? entry : entry;
   const worn = clothesAt === null ? '' : wornAt(story, clothesAt, [{ ...person, outfit: '' }])[0].outfit ?? '';
   const prompt = ownPortraitPrompt(person);
   // Details a reader wrote before 2026-09-27 stood for their description, which shows them, and no portrait read them.
@@ -64,7 +69,7 @@ export function profileOf(state: Partial<Library>, story: Story, person: SheetEn
     clothes: profileText('clothes', worn || (typeof person.outfit === 'string' ? person.outfit : '')), prompt: profileText('prompt', prompt ?? ''),
   };
   return { values, present: PROFILE_FIELDS.filter(field => field !== 'prompt' || prompt !== undefined), clothesAt,
-    older: olderSheet(story.sheet ?? []) };
+    older: olderSheet(story.sheet ?? []), versioned };
 }
 
 // The fields a message showed, as its button and the wait name them: a mask in hexadecimal, a bit for each field in

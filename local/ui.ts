@@ -10,6 +10,7 @@ import { portraitFromDetails, portraitText } from './image-portraits.ts';
 import { DESCRIPTION_CHARS, LOOK_CHARS, descriptionOf, ownDescription, ownPortraitPrompt, personAt, personTag, wornAt } from './picture.ts';
 import { REFERENCE_BYTES, REFERENCE_SIDES } from './reference.ts';
 import { seesThrough } from './picture-pov.ts';
+import { editableFrom, ownVersions, sceneOf, sheetAt, versionsOf } from './picture-versions.ts';
 import { CHANGES_CHARS, CLOTHES_CHARS, DETAILS_CHARS, fieldsMask, maskFields, profileBlock, profileHash, profileOf, roundTrips } from './profile.ts';
 import type { ProfileField } from './profile.ts';
 import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX, PRESETS, PROMPT_CHARS, lineOf, ownStyle, ownStyles, pickerKeys, presetOf, styleKey } from './picture-style.ts';
@@ -29,10 +30,12 @@ export type GpuInfo = {
 // `retainsPortraits`: the keep confirmation explains retention for a reader in the reference experiment.
 // `references`: the reader is in the reference experiment (local/picture.ts `referencesFor`), so a person's card offers
 // to send a portrait of their own; anybody else is shown the card as if they could not.
+// `versions`: the reader has versions of the sheet (local/picture.ts `versionsFor`), so the wait for a person's text
+// offers to write it «only from this moment».
 export type RenderDetails = {
   modelInfo?: ModelInfo | null; gpuInfo?: GpuInfo | null; contextStats?: ContextStats | null; pictures?: boolean; standardStyle?: string;
   textTokens?: (text: string) => number | null;
-  retainsPortraits?: boolean; references?: boolean;
+  retainsPortraits?: boolean; references?: boolean; versions?: boolean;
 };
 // State is read defensively (docs/telegram-ui.md#renderer), so any library field may be missing.
 type State = Partial<Library>;
@@ -485,8 +488,13 @@ function charactersScreen(state: State, storyId: string | undefined) {
   const story = own(state.stories, storyId);
   if (!story) return stale(t, t.story.notFound);
   const sheet = people(story);
+  // Each as they are at the scene the reader stands at in this story (local/picture-versions.ts), as their card shows them.
+  const here = sheetAt(story, sceneOf(state, story.id));
   return payload([c.title(storyName(state, story)), '', sheet.length ? c.note : c.none, sheet.length ? '' : null,
-    ...sheet.map((one, n) => `${n + 1}. ${line(one.name, 40)} — ${line(one.look || descriptionOf(one), 90)}`)], [
+    ...sheet.map((one, n) => {
+      const now = here[one.index] ?? one;
+      return `${n + 1}. ${line(one.name, 40)} — ${line(now.look || descriptionOf(now), 90)}`;
+    })], [
     ...sheet.map(one => [btn(`${seesThrough(story, one.name) ? '👁' : '👤'} ${line(one.name, 30) || t.format.untitledButton}`, `view:character:${personRef(story, one)}`)]),
     [btn(c.toStory, `view:story:${story.id}`), btn(t.buttons.menu, 'view:home')],
   ]);
@@ -513,10 +521,14 @@ function characterScreen(state: State, storyId: string | undefined, rawIndex: st
   const story = own(state.stories, storyId);
   if (!story) return stale(t, t.story.notFound);
   // A button of somebody whose place on the sheet another person took since opens the list, not that other person.
-  const person = personAt(story, rawIndex, tag);
-  if (!person) return charactersScreen(state, story.id);
+  const found = personAt(story, rawIndex, tag);
+  if (!found) return charactersScreen(state, story.id);
   const ref = activeRef(state);
   const branch = ref?.story === story && ref.branch.head ? ref.branch : null;
+  // The person as they are at the scene the reader stands at, with the versions of its line (local/picture-versions.ts),
+  // and how many times their look changed along it; elsewhere, as the sheet has them.
+  const person = { ...sheetAt(story, branch?.head)[found.index] ?? found, index: found.index };
+  const changed = branch ? versionsOf(story, branch.head, person.name) : 0;
   const worn = branch ? wornAt(story, branch.head!, [{ ...person, outfit: '' }])[0].outfit ?? '' : '';
   const clothes = worn || (typeof person.outfit === 'string' ? person.outfit : '');
   const clothesTitle = worn ? c.clothesOfBranch(quote(t, branch!.name)) : c.clothesAtStart;
@@ -554,7 +566,7 @@ function characterScreen(state: State, storyId: string | undefined, rawIndex: st
   const pov = !details.pictures ? null : viewer ? c.povNote : other ? c.povOther(line(other.name, 60)) : null;
   const result = payload([c.cardTitle(line(person.name, 60), storyName(state, story)), '',
     ...described ? [descriptionTitle, described, c.descriptionSize([...described].length), ''] : [],
-    ...changes ? [c.changes, changes, ''] : [],
+    ...changes ? [c.changes, changes, ''] : [], ...changed ? [c.along(changed), ''] : [],
     c.look, person.look, c.lookSize(...size(person.look)), whose, '',
     ...clothes ? [clothesTitle, clothes, c.clothesSize(...size(clothes))] : [c.noClothes], c.clothesNote, '',
     c.sizeNote, '', c.scope, portrait === null ? null : '', portrait, source, frames, pov === null ? null : '', pov], [
@@ -588,13 +600,26 @@ function sheetInputScreen(state: State, input: 'look' | 'details', details: Rend
   const person = story && people(story).find(one => one.name === ui?.name);
   if (!story || !person) return home(state, null, details.modelInfo, gpuFor(details), details.pictures === true);
   const look = input === 'look';
-  const now = look ? person.look : descriptionOf(person).trim();
+  // For a reader who has versions of the sheet, where the text lands (local/picture-versions.ts `landEdit`): the whole
+  // story, where it takes the place of what they wrote «only from this moment», or, as they chose here, the scene they
+  // stood at then and those after it. The text shown now is the one it replaces: the sheet's, or the person's at that
+  // scene. A scene another line goes on from offers the whole story alone, and says why.
+  const scope = details.versions ? editableFrom(state, story.id) : undefined;
+  const from = details.versions && ui?.from !== undefined && Object.hasOwn(story.nodes, ui.from) ? ui.from : undefined;
+  const shown = from === undefined ? person : { ...sheetAt(story, from)[person.index] ?? person, index: person.index };
+  const now = look ? shown.look : descriptionOf(shown).trim();
   const promptOwn = ownPortraitPrompt(person) !== undefined;
-  const keeps = look && !promptOwn && portraitFromDetails(person);
+  const keeps = look && !promptOwn && portraitFromDetails(shown);
+  const branch = activeRef(state)?.branch;
+  const replaced = details.versions && from === undefined ? ownVersions(story, person.name) : 0;
+  const where = !details.versions ? [] : from !== undefined ? ['', c.scopeHere(quote(t, branch?.name ?? ''), look)]
+    : ['', c.scopeAll(look), ...replaced ? [c.scopeReplaces(replaced)] : [], ...scope?.shared ? [c.scopeShared] : []];
   const result = payload([(look ? c.editTitle : c.detailsTitle)(line(person.name, 60), storyName(state, story)), '',
     look ? c.editNote(LOOK_CHARS) : c.detailsNote(DESCRIPTION_CHARS), ...keeps ? ['', c.editKeepsDetails] : [], ...promptOwn ? ['', c.ownPromptKeeps] : [],
-    ...now ? ['', c.nowText, now] : []],
-    [[btn(c.backToCard, `view:character:${personRef(story, person)}`)]]);
+    ...where, ...now ? ['', c.nowText, now] : []],
+    [details.versions && from !== undefined ? [btn(c.scopeAllButton, 'edit-scope:all')] : null,
+      details.versions && from === undefined && scope && !scope.shared ? [btn(c.scopeHereButton, 'edit-scope:here')] : null,
+      [btn(c.backToCard, `view:character:${personRef(story, person)}`)]]);
   const offset = now ? result.text.lastIndexOf(now) : -1;
   if (offset >= 0) result.entities = [{ type: 'pre', offset, length: now.length }];
   return result;
@@ -605,8 +630,9 @@ function sheetInputScreen(state: State, input: 'look' | 'details', details: Rend
 // text. It is one message or nothing: one over the bot's 4000 characters leaves out the reader's prompt for the
 // portraits, which the note under a portrait drawn from it has, then the description too, which the card shows and has
 // a button for, and at last shows no block at all, never one clipped. A block that would not read back as it is shown,
-// and one of a sheet the next picture writes anew, are shown without the button, with a line on why. `notice` goes on
-// top: the profile the reader edited had changed since.
+// one of a sheet the next picture writes anew, and one of a person whose look changed along the branch being played,
+// shown as at its last scene (local/profile.ts `versioned`), are shown without the button, with a line on why. `notice`
+// goes on top: the profile the reader edited had changed since.
 function profileScreen(state: State, storyId: string | undefined, rawIndex: string | undefined, tag: string | undefined, notice?: string) {
   const t = texts(state.language);
   const c = t.characters;
@@ -623,8 +649,8 @@ function profileScreen(state: State, storyId: string | undefined, rawIndex: stri
   for (const [n, fields] of fits.entries()) {
     if (n && fields.length === fits[n - 1].length) continue;
     const block = profileBlock(person.name, profile, fields, state.language);
-    const editable = !profile.older && roundTrips(block, person.name, profile, fields);
-    const notes = [profile.older ? c.profileOlder : editable ? null : c.profileUnreadable,
+    const editable = !profile.older && !profile.versioned && roundTrips(block, person.name, profile, fields);
+    const notes = [profile.older ? c.profileOlder : profile.versioned ? c.profileVersions : editable ? null : c.profileUnreadable,
       profile.present.includes('prompt') && !fields.includes('prompt') ? c.profileNoPrompt : null,
       fields.includes('description') ? null : c.profileNoDescription].filter(note => note !== null);
     const lines = [title, ...notice ? ['', notice] : [], ...notes.length ? ['', ...notes] : [], '', block, ...editable ? ['', c.profileHint] : []];
