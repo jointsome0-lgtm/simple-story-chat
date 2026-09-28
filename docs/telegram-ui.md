@@ -287,22 +287,28 @@ button and wait. The code is `local/profile.ts`.
   than the three layers, which the story's next picture writes anew without the changes, details and clothes written
   into it, is only shown, with a line saying so, and so is a profile a field of which has a line that starts with `#`,
   which could not come back as it went.
-- **Reading it back:** the text is taken whole or not at all. Blank lines around it aside, its first line must be `#`
-  and the person's name, apart from spaces and case, and its last the end line. Telegram splits a message over 4096
-  characters, and then one part lacks the end line and the other the name, so both are refused. Between them come the
-  fields the message showed, each once, under their headings in any of the five languages, case and a colon at the end
-  aside, with nothing above the first. A line that starts with `#` and a space is a heading, and one the bot does not
-  know is refused with the line quoted. The description and the prompt keep their lines, with the spaces at their ends
-  and the blank lines past one cut, as the card's wait for a description has them, and the other fields are one line
-  each. A refusal says what to fix, and the bot keeps waiting.
-- **Saving:** only a field whose text differs from the person's is written, exactly as it came, within its limit: the
-  description 1800 (`DESCRIPTION_CHARS`), the changes 300, the details 1500, the look 400 (`LOOK_CHARS`), the clothes
-  300 and the prompt 4000 (`PROMPT_CHARS`). Only the changes and the prompt may be emptied, and an emptied prompt
-  drops the reader's own, so that portraits are the bot's again. A field over its limit, or emptied where it may not
-  be, is refused and nothing is written. The name cannot be changed. The answer names the fields that changed, or says
-  nothing did, with the ways to the profile and to the card. A person gone from the sheet meanwhile, or a profile that
-  has changed since its message (the hash), ends the wait with nothing written; the second shows the profile as it is
-  now, since the fields sent back unchanged would otherwise write what it said then over what it says now.
+- **Reading it back:** the text is taken whole or not at all. It runs from the first heading that is no field's, `#`
+  and the person's name, apart from spaces and case, to the first end line after it. The lines around the two are left
+  out, so a copy of the whole message, its title above the block and the hint under it, reads as the block alone, but
+  a heading among them is refused as another profile, or a part of one, so two profiles in one message are refused.
+  Telegram splits a message over 4096 characters, and then one part lacks the end line and the other the name, so both
+  are refused. Between the two come the fields the message showed, each once, under their headings in any of the five
+  languages, case and a colon at the end aside, with nothing above the first. A line that starts with `#` and a space
+  is a heading, and one the bot does not know is refused with the line quoted. The description and the prompt keep
+  their lines, with the spaces at their ends and the blank lines past one cut, as the card's wait for a description
+  has them, and the other fields are one line each. A refusal says what to fix, and the bot keeps waiting.
+- **Saving:** only a field whose text differs from the person's by more than its spaces, its line breaks and its
+  Unicode normalization (`changedFields`) is written. A client may send non-breaking spaces back, join blank lines or
+  turn a table's spaces into tabs; a field that differs by that alone stays as the person has it, since writing it
+  would make an untouched description the reader's own and retell it over a look the reader wrote. A changed field is
+  written exactly as it came, within its limit: the description 1800 (`DESCRIPTION_CHARS`), the changes 300, the
+  details 1500, the look 400 (`LOOK_CHARS`), the clothes 300 and the prompt 4000 (`PROMPT_CHARS`). Only the changes
+  and the prompt may be emptied, and an emptied prompt drops the reader's own, so that portraits are the bot's again.
+  A field over its limit, or emptied where it may not be, is refused and nothing is written. The name cannot be
+  changed. The answer names the fields that changed, or says nothing did, with the ways to the profile and to the
+  card. A person gone from the sheet meanwhile, or a profile that has changed since its message (the hash), ends the
+  wait with nothing written; the second shows the profile as it is now, since the fields sent back unchanged would
+  otherwise write what it said then over what it says now.
 - **Retelling:** a new description or new changes are retold into the details and the look as a description written on
   the card is, with the same status line and the card after it, unless the same message wrote new details: those are
   the reader's, nothing retells over them, and a retelling still to come for the person goes (`lookPending`), so that

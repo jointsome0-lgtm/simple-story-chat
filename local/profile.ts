@@ -104,37 +104,57 @@ function headingOf(text: string | undefined) {
   return headings.get(headingKey(text));
 }
 
-// Why a text sent back is not a profile: its first line is not a heading, or its last is not the end line, as with a
-// message Telegram split; the name is not the person's; a heading no language of the bot has; a field twice, missing,
-// or one the message did not show; text before the first field.
+// Why a text sent back is not a profile: no line with the name, or no end line after it, as in either part of a
+// message Telegram split; a heading outside the two, as of a second profile in the same message; the name is not the
+// person's; a heading no language of the bot has; a field twice, missing, or one the message did not show; text
+// between the name and the first field.
 export type ProfileRefusal = 'incomplete' | 'name' | 'heading' | 'sections' | 'outside';
 export type ParsedProfile = { values: Partial<Record<ProfileField, string>>; refusal?: undefined; heading?: undefined }
   | { refusal: ProfileRefusal; heading?: string; values?: undefined };
 // Reads a profile sent back as the fields `fields` of the person `name`, or says why it cannot: all of them, each once,
-// or nothing. A line inside a field that looks like a heading is not taken as text, and a profile whose own text has
+// or nothing. The profile runs from its first heading that is no field's, the line with the name, to the first end
+// line after it. The lines around the two are left out, as the title above the block and the hint under it are when
+// the reader copies the whole message, but a heading among them belongs to another profile, or to a part of one, and
+// is refused. A line inside a field that looks like a heading is not taken as text, and a profile whose own text has
 // such a line is never offered for editing (local/ui.ts), since it could not come back as it went.
 export function parseProfile(text: string, name: string, fields: readonly ProfileField[]): ParsedProfile {
   const lines = text.replace(/\r\n?/g, '\n').split('\n');
-  const first = lines.findIndex(line => line.trim()), last = lines.findLastIndex(line => line.trim());
-  const top = first < 0 ? null : HEADING.exec(lines[first].trim()), bottom = last <= first ? null : HEADING.exec(lines[last].trim());
-  if (!top || !bottom || headingOf(bottom[1]) !== 'end' || headingOf(top[1]) !== undefined) return { refusal: 'incomplete' };
-  if (oneLine(top[1] ?? '').toLowerCase() !== oneLine(name).toLowerCase()) return { refusal: 'name' };
+  const headingLines = lines.map(line => HEADING.exec(line.trim()));
+  // What each line is: a field's heading, the end line, any other heading (the name's, or one the bot does not know),
+  // or text.
+  const kinds = headingLines.map(heading => heading ? headingOf(heading[1]) ?? 'other' : 'text');
+  const first = kinds.indexOf('other'), last = first < 0 ? -1 : kinds.indexOf('end', first + 1);
+  if (last < 0) return { refusal: 'incomplete' };
+  if (kinds.some((kind, at) => kind !== 'text' && (at < first || at > last))) return { refusal: 'sections' };
+  if (oneLine(headingLines[first]?.[1] ?? '').toLowerCase() !== oneLine(name).toLowerCase()) return { refusal: 'name' };
   const sections = new Map<ProfileField, string[]>();
   let open: string[] | undefined;
-  for (const line of lines.slice(first + 1, last)) {
-    const heading = HEADING.exec(line.trim());
-    if (!heading) {
-      if (open) open.push(line);
-      else if (line.trim()) return { refusal: 'outside' };
-      continue;
-    }
-    const field = headingOf(heading[1]);
-    if (field === undefined || field === 'end') return { refusal: 'heading', heading: [...oneLine(line)].slice(0, 80).join('') };
-    if (!fields.includes(field) || sections.has(field)) return { refusal: 'sections' };
-    sections.set(field, open = []);
+  for (let at = first + 1; at < last; at++) {
+    const kind = kinds[at];
+    if (kind === 'text') {
+      if (open) open.push(lines[at]);
+      else if (lines[at].trim()) return { refusal: 'outside' };
+    } else if (kind === 'other' || kind === 'end') return { refusal: 'heading', heading: [...oneLine(lines[at])].slice(0, 80).join('') };
+    else if (!fields.includes(kind) || sections.has(kind)) return { refusal: 'sections' };
+    else sections.set(kind, open = []);
   }
   if (fields.some(field => !sections.has(field))) return { refusal: 'sections' };
   return { values: Object.fromEntries([...sections].map(([field, body]) => [field, profileText(field, body.join('\n'))])) };
+}
+
+// The fields a profile sent back changes: those whose text differs from what the person has by more than its spaces,
+// its line breaks and its Unicode normalization, which a client may change on the way (non-breaking spaces, blank lines
+// joined, a table's spaces turned into tabs). A field that differs by those alone is left as the person has it, where
+// writing it would have made it the reader's own and retold the person over a look the reader wrote. A changed field is
+// written as it came.
+const compared = (text: string) => text.normalize('NFC').replace(/\s+/g, ' ').trim();
+export function changedFields(profile: Profile, values: Partial<Record<ProfileField, string>>, fields: readonly ProfileField[]) {
+  const changed: Partial<Record<ProfileField, string>> = {};
+  for (const field of fields) {
+    const value = values[field];
+    if (value !== undefined && compared(value) !== compared(profile.values[field])) changed[field] = value;
+  }
+  return changed;
 }
 
 // Whether the block of these fields reads back as exactly what it shows.

@@ -24,7 +24,7 @@ import type { Illustrator, PictureRequest, PortraitRequest, SampleRequest, Varia
 import { DESCRIPTION_CHARS, LOOK_CHARS, ownPortraitPrompt, personAt, personTag } from './picture.ts';
 import { seesThrough } from './picture-pov.ts';
 import { portraitText } from './image-portraits.ts';
-import { MAY_BE_EMPTY, PROFILE_CHARS, applyProfile, fieldsMask, maskFields, parseProfile, profileHash, profileOf } from './profile.ts';
+import { MAY_BE_EMPTY, PROFILE_CHARS, applyProfile, changedFields, fieldsMask, maskFields, parseProfile, profileHash, profileOf } from './profile.ts';
 import type { ProfileField } from './profile.ts';
 import type { ErrorDetails, Log } from './model-error.ts';
 import { errorCode, member, safeErrorDetails, unavailable } from './model-error.ts';
@@ -544,9 +544,10 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
   // each field it changed has to be within its limit and not emptied, where the field may not be; anything else is
   // refused with what to fix, and the wait stays for the next try. A person gone meanwhile, or a profile that has
   // changed since its message was sent, ends the wait: the second is shown as it is now, since the fields sent back
-  // unchanged would otherwise write what it said then over what it says now. Only the fields whose text differs are
-  // written (`applyProfile`), and the person is retold where that says so. One row says which fields changed, with
-  // their sizes and the whole text's, or why the text was refused; never a word of it.
+  // unchanged would otherwise write what it said then over what it says now. Only the fields whose text differs by more
+  // than its spaces and line breaks (`changedFields`) are written (`applyProfile`), and the person is retold where that
+  // says so. One row says which fields changed, with their sizes and the whole text's, or why the text was refused;
+  // never a word of it.
   function profileSent(state: Library, wait: ProfileInput, text: string | undefined, t: Messages, pictureInfo: RenderDetails): Plan {
     const c = t.characters;
     const characters = [...text ?? ''].length;
@@ -573,8 +574,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         : t.errors[parsed.refusal === 'incomplete' ? 'profileIncomplete' : parsed.refusal === 'sections' ? 'profileSections' : 'profileOutside'] },
       parsed.refusal);
     }
-    const changed: Partial<Record<ProfileField, string>> = {};
-    for (const field of fields) if (parsed.values[field] !== profile.values[field]) changed[field] = parsed.values[field];
+    const changed = changedFields(profile, parsed.values, fields);
     for (const [field, value] of Object.entries(changed) as [ProfileField, string][]) {
       if (!value && !MAY_BE_EMPTY.includes(field)) return refused({ text: c.profileEmpty(c.profileHeadings[field]) }, 'empty');
       if ([...value].length > PROFILE_CHARS[field]) return refused({ text: c.profileLong(c.profileHeadings[field], PROFILE_CHARS[field]) }, 'too_long');
