@@ -11,6 +11,169 @@ line per decision. A new step gets its full entry here, on top, and its line the
 Paths to result directories say where the numbers came from at the time. They do not promise that the files still
 exist or that you may read them.
 
+<a id='ceiling-boundary-2026-09-28'></a>
+
+## 2026-09-28 · Opus 5.5 · memory steps 1 and 2: the reading ceiling, and checks at the memory's boundary (measurement)
+
+Not steps of the loop: steps 1 and 2 of the memory proposal of 2026-09-28
+(`~/simple-story-chat-runs/2026-09-28/memory-next/proposal.md`, outside the repository), measurements that change no
+prompt. Step 1 asks whether the memory questions measure the memory or its reader. Step 2 adds checks that ask the
+memory alone: `boundary` in the eval (87faddd), and in the pack since 75d69a1. [Step 3](#read-thinking-2026-09-28), the
+same reader thinking over step 1's memories, ran between the two and has its own entry.
+
+Step 1, the reading ceiling. Hosted Gemma 4 31B's memory `score` on the pack's `hospital` and `assault` had not moved
+under [L3](#l3-2026-09-27) or [thinking while compacting](#memory-thinking-2026-09-27). The replay compacts after scenes
+7, 11 and 15 and keeps 4 scenes, so its 12 questions a scenario are asked over a memory of scenes 1 to 11 and over
+scenes 12 to 16 as text. `eval ceiling` asks the same questions over all 16 frozen scenes as text, with no memory. If a
+reader with every scene in front of it loses the same keys, the score measures the reader.
+
+The runs: three of each side for Gemma (`openrouter:google/gemma-4-31b-it`, thinking off) and `gpt-5.4-mini`, both
+scenarios in each run, mode `plain`, no judge, `MEMORY_THINKING` unset, at 71a159f from the main tree between 08:00 and
+08:05 UTC. `$R/run.sh` holds the commands, one `TMPDIR` a run, with
+`R=~/simple-story-chat-runs/2026-09-28/memory-ceiling`, `<tag>` `gemma` or `mini` and N = 1, 2, 3:
+
+```
+TMPDIR=$R/tmp/<tag>-ceil-N npm run eval -- ceiling --model <model> --scenarios hospital,assault --pack ~/simple-story-chat-eval
+TMPDIR=$R/tmp/<tag>-mem-N npm run eval -- --pack ~/simple-story-chat-eval --scenarios hospital,assault --mode plain --models <model> --out $R/<tag>-mem-N.json
+```
+
+Ceiling run 1 of each model ran first as the smoke, the other ten runs at once (`$R/batch.sh`). Every run finished at
+its first attempt, with no compaction retry or `budget_exceeded`.
+
+Correct answers of 12:
+
+| Model, side | `hospital`, runs 1 · 2 · 3 | Mean | `assault`, runs 1 · 2 · 3 | Mean |
+| --- | --- | --- | --- | --- |
+| Gemma, compacted replay | 4 · 4 · 4 | 4.0 | 8 · 8 · 8 | 8.0 |
+| Gemma, ceiling | 4 · 3 · 3 | 3.3 | 8 · 8 · 8 | 8.0 |
+| `gpt-5.4-mini`, compacted replay | 0 · 1 · 1 | 0.7 | 8 · 9 · 9 | 8.7 |
+| `gpt-5.4-mini`, ceiling | 1 · 1 · 2 | 1.3 | 8 · 9 · 8 | 8.3 |
+
+A key counts as lost when it failed in two or three runs of three.
+
+- Gemma's replays lost 12 keys: `river_left`, `garden_cells`, `river_stretchers`, `boat_spare`, `next_departure`,
+  `origin_evacuated`, `polina_learned` and `boris_learned` of `hospital`, and `river_barriers`, `road_barriers`,
+  `tunnel_barriers` and `river_stock` of `assault`. The ceiling lost all twelve. It lost `bridge_limit` too, which
+  changes last in scene 15 and so stands as text on both sides: the replays answered it right in two runs, the ceiling
+  in none.
+- mini's replays lost 14: all of `hospital`'s but `uninformed`, and `road_barriers`, `tunnel_barriers` and `river_stock`
+  of `assault`. The ceiling lost 12 of them, kept `river_stretchers` and `road_barriers` in two runs of three, and lost
+  `river_barriers`, which every replay kept.
+- The three time keys of `hospital` failed on both sides in all 12 runs: `polina_learned` 4 or 6 minutes early in 10 of
+  them, `boris_learned` 7 minutes late in 8, `next_departure` `unknown` in 8.
+
+So on these two scenarios the end-of-story questions measure the reader: a reader with every scene in front of it
+scored no better and lost the same keys, and what compaction drops cannot be told from their `score`. Step 3 then had
+the same reader, thinking, answer nearly all of them from Gemma's memories.
+
+The cost of step 1, by the providers' usage: Gemma 30 requests and 238,820 tokens on `openrouter-paid`, mini 30 and
+253,332 on `openai-small`. A ceiling request took about 14.4k tokens on `hospital` and 12.1k on `assault`, a replay's
+four requests 29k to 31k and 23k to 28k. The ledger's day went from 145,389 to 395,037 tokens on `openrouter-paid` (of
+4,000,000) and from 168,051 to 421,383 on `openai-small` (of 2,250,000); `openrouter-paid` grew by one request and
+10,828 tokens more than the probes settled, which was not traced.
+
+Step 2, checks at the memory's boundary. What does the compacted memory itself keep? A boundary check is a memory
+question asked as of the end of scene 11, the last scene the final memory covers, in a request of its own at that
+scene: the seed, the memory and the questions, without scenes as text and with scene 11's time as the reference, so a
+miss is the compactions' and not a reading of the later scenes. In `full` the same request carries scenes 1 to 11 as
+text, the ceiling of these checks ([eval.md](../eval.md), 87faddd).
+
+The checks, with `B=~/simple-story-chat-runs/2026-09-28/memory-boundary`:
+
+- An audit of step 1's twelve replays (`$B/audit.cjs`) found every final memory covering exactly scenes 1 to 11. For
+  most keys all six memories of a scenario hold the parts the answer at scene 11 is made of. The exceptions:
+  `boat_spare`'s rule stands as a fact only in mini's run 3, `key_holder` is explicit in Gemma's three memories and
+  mini's run 2, `polina_learned`'s reading keeps its clock time in three of the six, and `river_stock`'s running totals
+  are wrong in Gemma's runs 1 and 3 and mini's run 2.
+- The drafts ask the end-of-story questions with their "now" at the end of scene 11: 11 of `hospital`'s, where
+  `door_clock` takes the place of `boris_learned` and `uninformed` is left out, and 10 of `assault`'s, without
+  `farid_learns` and `uninformed`. The answers were drafted from scenes 1 to 11 (`$B/draft-checks.json`, sha256
+  491f5250…).
+- GPT-6 Astra checked them blind (`$B/verify.cjs`, `codex exec` at `high`, read-only, no web search). One session a
+  scenario read scenes 1 to 11 and the questions, not the drafts, and answered each, saying whether it is answerable and
+  unambiguous; a second session would have judged only a disagreement. Astra agreed on all 21 and flagged none, so no
+  judge ran: 2 of the 4 sessions allowed, 38,101 input and 1,452 output tokens (`hospital` 19,862 and 905, `assault`
+  18,239 and 547). `$B/verified-checks.json` is the draft byte for byte. The main session put the checks into the pack
+  with the owner's permission (`assault/scenario.json` 2fb45661…, `hospital` 32567421…), and eval.md says so since
+  75d69a1.
+
+The runs. `eval boundary` asked the checks over copies of step 1's twelve replays, from the state each saved, in
+`plain` (the memory alone) and in `full` (scenes 1 to 11 as text), one request a scenario and run, no judge. Run N
+reads the memory of step 1's run N. Without thinking both models ran at b7ea72c, from about 09:02 to 09:07 UTC, over
+the draft; with thinking Gemma alone ran at 87faddd, this change rebased onto the main branch's `RECALL_THINKING`, from
+about 09:39 to 09:45, over the verified copy. `$B/dry-run.sh` holds the command, with the copies under `$B/dry-run/`
+and `$B/thinking/`:
+
+```
+[RECALL_THINKING=true] npm run eval -- boundary --model <model> --resume <copy of a probe directory> --mode plain|full --pack ~/simple-story-chat-eval --scenarios <scenario> --boundary $B/verified-checks.json
+```
+
+`RECALL_THINKING` gives a request to OpenRouter or llama.cpp its reasoning parameter and one to OpenAI none, so
+`gpt-5.4-mini` has no thinking side, and none was run.
+
+Correct answers of 11 on `hospital` and of 10 on `assault`:
+
+| Reader, text | `hospital`, runs 1 · 2 · 3 | Mean | `assault`, runs 1 · 2 · 3 | Mean |
+| --- | --- | --- | --- | --- |
+| Gemma, the memory alone, thinking off | 5 · 5 · 6 | 5.3 | 8 · 10 · 9 | 9.0 |
+| Gemma, the memory alone, thinking on | 11 · 11 · 10 | 10.7 | 9 · 10 · 10 | 9.7 |
+| Gemma, scenes 1 to 11, off | 6 · 7 · 6 | 6.3 | 8 · 8 · 8 | 8.0 |
+| Gemma, scenes 1 to 11, on | 9 · 10 · 9 | 9.3 | 10 · 10 · 10 | 10.0 |
+| `gpt-5.4-mini`, the memory alone, off | 4 · 4 · 1 | 3.0 | 7 · 7 · 9 | 7.7 |
+| `gpt-5.4-mini`, scenes 1 to 11, off | 1 · 3 · 0 | 1.3 | 7 · 10 · 7 | 8.0 |
+
+- Thinking over the memory alone, Gemma answered 61 of 63. Both misses are the memory's own: `polina_learned` in run 3
+  of `hospital`, 4 minutes early, where that memory kept the reading without its clock time, and `river_stock` in run 1
+  of `assault`, where that memory's running totals are wrong. Run 3's totals are wrong too, and there the thinking
+  reader answered right.
+- Without thinking Gemma missed 20 answers over the same memories, and 18 of them were right with thinking: those were
+  the reader's. In `hospital` it missed `river_left`, `garden_cells`, `river_stretchers`, `boat_spare` and
+  `polina_learned` in every run and `door_clock` in two. For `river_left`, `garden_cells` and `boat_spare` the expected
+  number stands in each memory (`readingMisses`), and `river_left` and `garden_cells` got the same wrong number in all
+  three runs.
+- mini missed 24 answers of 33 on `hospital` and 7 of 30 on `assault`, among them `key_holder` with the same wrong name
+  in all three runs, though its run 2 memory names the holder explicitly. Without a thinking side its reader's misses
+  cannot be told from its memory's.
+- Scenes 1 to 11 as text scored about as the memory did: 6.3 and 8.0 against 5.3 and 9.0 without thinking, 9.3 and
+  10.0 against 10.7 and 9.7 with. With thinking the ceiling missed `garden_cells` by one in runs 1 and 2,
+  `polina_learned` 11 minutes early in runs 1 and 3 and `door_clock` 11 minutes late in run 3, the same 11 minutes as
+  step 3's ceiling. mini's run 3 of `hospital` over the scenes answered `unknown` to 10 of the 11.
+
+Reasoning tokens a request with thinking: over the memory alone 1207 · 1330 · 1432 on `hospital` and 1362 · 494 · 643
+on `assault`, over scenes 1 to 11 1195 · 1127 · 1511 and 471 · 527 · 479, against 2718 to 3221 for step 3's
+end-of-story `hospital` recall.
+
+The cost of step 2, by the providers' usage. `openrouter-paid`: 24 requests of Gemma and 191,680 tokens, 28,890 over
+the memory alone and 58,012 over scenes 1 to 11 without thinking, 38,497 and 66,281 with. The ledger's day went from
+800,032 to 886,934 over the runs without thinking and from 1,027,336 to 1,132,114 over the thinking ones.
+`openai-small`: 12 requests of mini and 91,776 tokens, 33,912 and 57,864; the ledger's day went from 421,383 to
+513,159. A request took about 4.8k tokens over the memory alone (Gemma; 6.4k thinking, mini 5.7k) and 9.7k over scenes
+1 to 11 (Gemma thinking 11k), within the 150,000 a channel allowed for the runs without thinking and the 300,000 after
+them. Astra's two sessions, above, are not on the ledger.
+
+Conclusion: asked from the memory alone and read by a thinking reader, Gemma's compacted memories of these two
+scenarios keep what the checks ask as of scene 11, all but two answers of 63, and both misses are in the memory text.
+Without thinking the checks measure the reader again, as the end-of-story questions do, so Gemma reads them with
+`RECALL_THINKING=true` ([eval.md](../eval.md)). Gemma's compaction as it stands loses little of what these 21 checks
+ask; they are there to catch a change that loses more. mini's boundary numbers still mix its reader and its memory.
+
+Limitations:
+- Hosted Gemma 4 31B and `gpt-5.4-mini` stand in for the heretic Q6_K on the card
+  ([acceptance](../improve-loop.md#acceptance-on-gpu)).
+- Two scenarios of one pack and three memories a model, all from step 1's replays at 71a159f with `MEMORY_THINKING`
+  off. `sgr`, the other scenarios, the holdout and memories made with thinking were not run.
+- One boundary, the end of scene 11, and the final memory only: what the memories after scenes 7 and 11 held was not
+  asked. 21 checks, several of them keys that nearly always pass.
+- The expected answers are one drafter's, confirmed by one blind reader that found none ambiguous. The audit of what
+  each memory holds is this session's reading, not checked by another model.
+- OpenRouter picks an endpoint for each request, and the log does not say which.
+- Results. Step 1 in `$R`: `<tag>-ceil-N` and `<tag>-mem-N` as `.log`, `.err` and `.meta`, the replays' `.json`, the
+  probes' directories under `$R/tmp/`, `$R/tables.cjs`, which prints step 1's tables, and `$R/usage-*.txt`, the
+  ledger's day. Step 2 in `$B`: `audit.cjs`, `scenes.cjs`, `verify.cjs` and `astra/` (the blind answers and verdicts),
+  both checks files with their `.sha256`, `dry-run.sh`, the copies under `dry-run/` and `thinking/` with the boundary
+  answers in each probe's `report.json`, `logs/`, `tables.cjs` (`node $B/tables.cjs plain|full dry-run|thinking`) and
+  `usage-*.txt`.
+
 <a id='read-thinking-2026-09-28'></a>
 
 ## 2026-09-28 · Opus 5.5 · thinking at the read end, over the same memories, on hosted Gemma 4 31B (measurement)

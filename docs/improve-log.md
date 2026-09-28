@@ -8,6 +8,18 @@ and the main result with its limit. A new step gets its full entry there and its
 accepted**: tried and reverted. **Measurement**: numbers without a decision on a change. **Open**: a decision still
 waits. An open line is unfinished work, not an order to finish it.
 
+- 2026-09-28 · **measurement** · [Memory step 2: checks at the memory's boundary, from the memory alone](knowledge/improve-runs.md#ceiling-boundary-2026-09-28).
+  Step 2 of the memory proposal; no prompt changed. The eval gained `boundary` (87faddd), in the pack since 75d69a1: 11
+  questions of `hospital` and 10 of `assault` asked as of the end of scene 11 from the final memory alone, each answer
+  confirmed blind by GPT-6 Astra. Over step 1's memories hosted Gemma 4 31B answered 5, 5, 6 and 8, 10, 9 without
+  thinking and 11, 11, 10 and 9, 10, 10 with it; of its 63 answers with thinking two missed, both where the memory
+  text itself is wrong or incomplete. `gpt-5.4-mini`, which the switch cannot make think: 4, 4, 1 and 7, 7, 9. Gemma
+  reads the checks with `RECALL_THINKING=true`. Two scenarios, three memories a model, hosted models.
+- 2026-09-28 · **measurement** · [Memory step 1: the reading ceiling against the compacted replay](knowledge/improve-runs.md#ceiling-boundary-2026-09-28).
+  Step 1 of the memory proposal; no change. The same 12 questions over the whole story as text and over the compacted
+  replay, three runs each of hosted Gemma 4 31B and `gpt-5.4-mini` on `hospital` and `assault`: Gemma 3.3 against 4.0
+  and 8.0 against 8.0, mini 1.3 against 0.7 and 8.3 against 8.7. The ceiling lost all 12 keys Gemma's replays lost and
+  12 of mini's 14, so these questions measure the reader, not what compaction drops. Thinking off, two scenarios.
 - 2026-09-28 · **measurement** · [Thinking at the read end, over the same memories](knowledge/improve-runs.md#read-thinking-2026-09-28).
   Step 3 of the memory proposal; no change accepted. The eval's recall asked again over step 1's saved memories of
   hosted Gemma 4 31B, with thinking (`RECALL_THINKING`, `RECALL_FROM`): `hospital` went from 4, 3, 4 to 12, 12, 10 and

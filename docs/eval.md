@@ -64,8 +64,10 @@ request carries scenes 1 to 11 as text, the ceiling of these checks. A failure t
 scored apart, with or without `--judge`: a cell holds them as `boundary`, with its own `readingMisses`, the summary as
 `boundaryScore` by the worst-model rule, and `eval ceiling` prints them beside its answers. Under `RECALL_THINKING=true`
 this recall thinks too and is marked `thinking`, and a run with `RECALL_FROM` asks them over the memories it reads
-again ([the switches](#reader)). `--boundary <file>` reads draft checks kept outside the pack,
-`{ "<scenario>": [[key, question, answer], ...] }`, in place of the pack's own.
+again ([the switches](#reader)). Hosted Gemma 4 31B reads them with `RECALL_THINKING=true`, since without thinking its
+reader misses what its memory holds: over the same memories it answered 5, 5 and 6 of `hospital`'s 11 without and 11,
+11 and 10 with ([the entry](knowledge/improve-runs.md#ceiling-boundary-2026-09-28)). `--boundary <file>` reads draft
+checks kept outside the pack, `{ "<scenario>": [[key, question, answer], ...] }`, in place of the pack's own.
 `npm run eval -- boundary --model <model> --resume <probe directory> --mode plain --pack <pack> --scenarios <name>`
 asks them over a replay that finished without them, from the state it saved, and refuses a mode that did not finish.
 It writes into the probe's `report.json`, so it gets a copy of the directory.
