@@ -13,7 +13,7 @@ import { createLlama } from './llama.ts';
 import { createBackgroundClient } from './background.ts';
 import { compactBranch } from './generation.ts';
 import { member, safeErrorDetails } from './model-error.ts';
-import type { ModelRequest } from './model.ts';
+import type { GenerationResult, ModelRequest, Timings } from './model.ts';
 import { Store } from './store.ts';
 import type { ProbeNode } from './story-probe.ts';
 import { contextParts, makeRequest, normalizeScene } from './prompt.ts';
@@ -32,8 +32,8 @@ export type ModeReport = {
   // Compactions repeated after an invalid memory, as the owner repeats /compact in the bot. Sources and checkpoints are kept.
   compactionRetries?: number;
   answers?: Answered[]; recallUsage?: Usage | null;
-  // Set when the recall thought (RECALL_THINKING).
-  recallThinking?: boolean;
+  // Set when the recall thought (RECALL_THINKING), and when the trap scenes did (SCENE_THINKING).
+  recallThinking?: boolean; sceneThinking?: boolean;
   // The scenario's boundary checks, asked as of the end of scene 11 from the memory alone (in `full`, from scenes 1 to
   // 11 as text), or the code of the failure that left them unanswered; `thinking` is set when that recall thought.
   boundary?: { answers?: Answered[]; usage?: Usage | null; thinking?: boolean; error?: string };
@@ -43,8 +43,10 @@ export type ModeReport = {
   verdicts?: { key: string; expected: string; actual: unknown; pass: boolean }[];
   error?: string; completedAt?: string;
 };
-// `then`: the scene written over the trap's scene, or the code of the failure that left it unwritten.
-type TrapScene = { key: string; text: string; truncated: boolean; then?: { text: string; truncated: boolean } | { error: string } };
+// `then`: the scene written over the trap's scene, or the code of the failure that left it unwritten. A scene keeps the
+// counts of the request that wrote it, the server's timings where it reports them, and `ms`, its time in this process.
+type Written = { text: string; truncated: boolean; usage?: Usage | null; timings?: Timings; ms?: number };
+type TrapScene = Written & { key: string; then?: Written | { error: string } };
 // The report written by this probe; a resumed run trusts what an earlier run wrote.
 // `recallFrom`: the replay whose saved memories this run's recall read again (RECALL_FROM); such a run compacts nothing.
 export type ReplayReport = {
@@ -68,6 +70,14 @@ const RECALL_THINKING_TOKENS = 8192;
 const thinkingSetting = process.env.RECALL_THINKING || 'false';
 if (!['true', 'false'].includes(thinkingSetting)) throw new Error('Invalid RECALL_THINKING');
 const recallThinking = thinkingSetting === 'true';
+// SCENE_THINKING=true lets the trap scenes think, and the scenes written over them, to measure whether reasoning before
+// a scene cuts its continuity and number errors. The reasoning counts against the output limit, which grows by 4096: to
+// 8192 at the bot's default, the most simple-serving's class `internal` takes. Off by default, as in the bot, and then
+// the requests are those of a run without the switch.
+const SCENE_THINKING_TOKENS = 4096;
+const sceneSetting = process.env.SCENE_THINKING || 'false';
+if (!['true', 'false'].includes(sceneSetting)) throw new Error('Invalid SCENE_THINKING');
+const sceneThinking = sceneSetting === 'true';
 // The last scene the memory covers: the replay compacts after scenes 7, 11 and 15 and keeps four as text.
 const BOUNDARY_SCENE = 11;
 const { values } = parseArgs({ options: { source: { type: 'string' }, resume: { type: 'string' },
@@ -86,7 +96,7 @@ type Lab = { samples: number; parallel?: number; only?: string[]; many?: boolean
 const lab: Lab | null = values.lab ? JSON.parse(readFileSync(resolve(values.lab), 'utf8')) : null;
 if (lab && (!Number.isInteger(lab.samples) || lab.samples < 1 || lab.samples > 10 || ![1, 2, 3, 4, 5, 6, 7, 8].includes(lab.parallel ?? 1) || (lab.only !== undefined && !(Array.isArray(lab.only) && lab.only.every(key => typeof key === 'string'))) || !Array.isArray(lab.variants) || !lab.variants.length
     || !lab.variants.every(variant => /^[a-z][a-z0-9-]{0,23}$/.test(variant?.key) && typeof variant.tail === 'string' && variant.tail.length <= 2000))) throw new Error('Invalid --lab file');
-if (!values.source || !Number.isInteger(minutes) || minutes < 1 || minutes > (lab ? 600 : 30)) throw new Error('Use --source synthetic-evidence.json [--resume directory] [--minutes 1..30] [--direct] [--mode plain|sgr|full] [--traps] [--pack directory] [--lab variants.json] [--boundary checks.json]');
+if (!values.source || !Number.isInteger(minutes) || minutes < 1 || minutes > (lab ? 600 : 120)) throw new Error('Use --source synthetic-evidence.json [--resume directory] [--minutes 1..120] [--direct] [--mode plain|sgr|full] [--traps] [--pack directory] [--lab variants.json] [--boundary checks.json]');
 // `full` never compacts: the questions are asked over the whole story. A strong model that fails them there shows
 // that the frozen scenes contradict the fixed answers.
 if (values.mode !== undefined && values.mode !== 'plain' && values.mode !== 'sgr' && values.mode !== 'full') throw new Error('Unknown memory mode');
@@ -114,13 +124,14 @@ const report: ReplayReport = values.resume ? JSON.parse(readFileSync(join(direct
 if (report.sourceHash !== sourceHash || report.model !== config.model || report.scenario !== scenario) throw new Error('Resume mismatch');
 // RECALL_FROM names finished replays of the same frozen scenes by their probe directories, comma-separated. The one of
 // this scenario gives each mode the final state it saved, memories and all, and only the recall is asked again, in a
-// directory of its own: two readers compared over the same memories, with nothing compacted again.
+// directory of its own: two readers compared over the same memories, with nothing compacted again. With --traps every
+// trap scene is written again as well, each where the replay wrote it: two scene writers over the same states.
 const earlier = process.env.RECALL_FROM?.split(',').map(path => resolve(path))
   .map(path => ({ path, report: JSON.parse(readFileSync(join(path, 'report.json'), 'utf8')) as ReplayReport }))
   .filter(run => run.report.scenario === scenario);
-if (earlier && (earlier.length !== 1 || values.resume || values.traps || lab || earlier[0].report.sourceHash !== sourceHash
+if (earlier && (earlier.length !== 1 || values.resume || lab || earlier[0].report.sourceHash !== sourceHash
   || earlier[0].report.model !== config.model || modes.some(mode => !earlier[0].report.modes[mode]?.completedAt))) {
-  throw new Error('RECALL_FROM names one finished replay of this scenario, model and mode, for a new run without --traps or --lab');
+  throw new Error('RECALL_FROM names one finished replay of this scenario, model and mode, for a new run without --lab');
 }
 if (earlier) report.recallFrom = earlier[0].path;
 const deadline = AbortSignal.timeout(minutes * 60000);
@@ -129,9 +140,11 @@ const progress = (data: object) => console.log(JSON.stringify({ at: new Date().t
 const save = () => writeFileSync(join(directory, 'report.json'), JSON.stringify(report, null, 2));
 // Set at the start of each mode, before the store or the provider uses it.
 let current: ModeReport | undefined;
+// `ms`: the time of the attempt that answered.
 const provider = { async generate(request: ModelRequest) {
   for (let attempt = 0; direct && attempt < 20; attempt++) {
-    try { return await direct.generate(request, { signal: deadline }); }
+    const started = Date.now();
+    try { return { ...await direct.generate(request, { signal: deadline }), ms: Date.now() - started }; }
     catch (error) {
       // A dropped connection is retried like a busy upstream; any other failure ends the mode.
       const failure = error as Failure & { transportCode?: string };
@@ -150,7 +163,8 @@ const provider = { async generate(request: ModelRequest) {
     // retries in a moment. Any other retry waits in the bot's queue.
     const state = await client.check({ signal: deadline }) as { gpu: { status: string } };
     if (member(['draining', 'stopping', 'paused'], state.gpu.status)) throw Object.assign(new Error(), { code: 'gpu_paused' });
-    try { return await client.generate(request, { signal: deadline }); }
+    const started = Date.now();
+    try { return { ...await client.generate(request, { signal: deadline }), ms: Date.now() - started }; }
     catch (error) {
       const failure = error as Failure;
       if (!member(['background_preempted', 'background_unavailable'], failure.code)) throw error;
@@ -198,7 +212,17 @@ async function recall(questions: Check[], point: StoryPoint & { input: string })
   });
   return { answers, usage: result.usage };
 }
-progress({ event: 'started', scenario, directory, model: config.model, ...(recallThinking ? { recallThinking } : {}), ...(earlier ? { reread: true } : {}) });
+// A trap scene's request, or that of the scene over it: the bot's own at that point, thinking under SCENE_THINKING.
+function sceneRequest(state: Library, point: StoryPoint & { input: string }) {
+  const request = makeRequest(state, point, config.maxOutputTokens + (sceneThinking ? SCENE_THINKING_TOKENS : 0));
+  if (sceneThinking) request.thinking = true;
+  return request;
+}
+// What a trap scene keeps of the request that wrote it, and the numbers of it that its event prints.
+const measured = ({ usage, timings, ms }: { usage?: Usage | null; timings?: Timings; ms?: number }) =>
+  ({ usage: usage ?? null, ...(timings ? { timings } : {}), ...(ms === undefined ? {} : { ms }) });
+const counted = ({ usage, ms }: Written) => ({ ms, outputTokens: usage?.outputTokens, reasoningTokens: usage?.reasoningTokens ?? undefined });
+progress({ event: 'started', scenario, directory, model: config.model, ...(recallThinking ? { recallThinking } : {}), ...(sceneThinking ? { sceneThinking } : {}), ...(earlier ? { reread: true } : {}) });
 try {
   await (direct ? direct.check?.({ signal: deadline }) : client.check({ signal: deadline }));
   for (const memoryMode of modes) {
@@ -213,7 +237,8 @@ try {
       else { for (const key of Object.keys(state)) delete (state as Record<string, unknown>)[key]; Object.assign(state, emptyLibrary());
         newStory(state, addSeed(state, fixture.seed).id); }
     });
-    const persist = () => { current!.state = store.read('synthetic'); save(); };
+    // A replay read again keeps the state it was given: nothing is committed, and its traps move the head back.
+    const persist = () => { if (!earlier) current!.state = store.read('synthetic'); save(); };
     // The boundary checks ask each value as of the end of scene 11, the last scene the memory covers, from the memory
     // alone: the scenes kept as text are left out, so a miss is the compactions' and not a reading of the later scenes.
     // In `full` the same point is scenes 1 to 11 as text, the ceiling of these checks. A failure here fails these checks
@@ -257,9 +282,9 @@ try {
         const turn = beginJob(copy, trap.input ?? fixture.turns[trap.afterTurn!], 0);
         const story = copy.stories[turn.storyId];
         commitTurn(copy, turn.id, normalizeScene(saved.text, story.nodes[turn.head as string]?.time ?? copy.seeds[story.seedId].startTime));
-        const written = await provider.generate(makeRequest(copy, beginJob(copy, trap.then!.input, 0), config.maxOutputTokens));
-        saved.then = { text: written.text, truncated: written.finishReason !== 'stop' };
-        event = { characters: written.text.length, truncated: saved.then.truncated };
+        const written = await provider.generate(sceneRequest(copy, beginJob(copy, trap.then!.input, 0)));
+        saved.then = { text: written.text, truncated: written.finishReason !== 'stop', ...measured(written) };
+        event = { characters: written.text.length, truncated: saved.then.truncated, ...counted(saved.then) };
       } catch (error) {
         if (deadline.aborted) throw error;
         const code = (error as Failure).code;
@@ -281,11 +306,11 @@ try {
           // share its cache cells.
           const state = store.read('synthetic');
           const variants = [...(lab?.variants ?? [])];
-          let first: { text: string; finishReason: 'stop' | 'length' } | undefined;
+          let first: GenerationResult | undefined;
           const writeNext = async (): Promise<void> => {
             const variant = variants.shift();
             if (!variant) return;
-            const request = makeRequest(state, turn, config.maxOutputTokens);
+            const request = sceneRequest(state, turn);
             const last = request.messages.at(-1)!;
             if (variant.tail) last.content = `${last.content}\n\n${variant.tail}`;
             const written = labClient ? await labClient.generateMany(request, lab!.samples, { signal: deadline })
@@ -302,12 +327,13 @@ try {
           // context error, although each fits alone.
           await Promise.all(Array.from({ length: !lab ? 0 : labClient ? 1 : Math.max(1, Math.floor((lab.parallel ?? 1) / lab.samples)) }, writeNext));
           // A variant with an empty tail is the ordinary request, so its first sample is the trap scene of the report.
-          scene = first ?? await provider.generate(makeRequest(store.read('synthetic'), turn, config.maxOutputTokens));
+          scene = first ?? await provider.generate(sceneRequest(store.read('synthetic'), turn));
         }
         finally { store.mutate('synthetic', state => { state.job = null; }); }
-        const saved: TrapScene = { key: trap.key, text: scene.text, truncated: scene.finishReason !== 'stop' };
+        const saved: TrapScene = { key: trap.key, text: scene.text, truncated: scene.finishReason !== 'stop', ...measured(scene) };
         (current!.traps ??= []).push(saved);
-        persist(); progress({ event: 'trap_scene', mode: memoryMode, characters: scene.text.length, truncated: saved.truncated });
+        if (sceneThinking) current!.sceneThinking = true;
+        persist(); progress({ event: 'trap_scene', mode: memoryMode, characters: scene.text.length, truncated: saved.truncated, ...counted(saved) });
         if (trap.then && !lab && !saved.truncated) await writeThen(trap, saved);
       }
     };
@@ -349,6 +375,22 @@ try {
         commitTurn(state, job.id, scenes[index].text);
       });
       current.through = index + 1; persist();
+    }
+    // Over a replay read again, a trap before the end is written at the point where the replay wrote it: the head at its
+    // scene and the memory of the last compaction up to there, as the replay's checkpoints keep it. All traps come before
+    // the recall here, so that a failed recall leaves them written.
+    if (earlier && values.traps) {
+      const { story, branch } = active(current.state!);
+      const nodes = history(story, branch.head);
+      const at = (head: string | null) => nodes.findIndex(node => node.id === head) + 1;
+      const compactions = Object.values(story.checkpoints).filter(cp => cp.kind === 'compaction').sort((a, b) => at(a.head) - at(b.head));
+      for (const after of [...new Set(fixture.traps.flatMap(trap => trap.afterTurn ?? []))].sort((a, b) => a - b)) {
+        const memory = compactions.findLast(cp => at(cp.head) <= after)?.memory ?? null;
+        store.mutate('synthetic', state => Object.assign(active(state).branch, { head: nodes[after - 1].id, memory }));
+        await writeTraps(after);
+      }
+      store.mutate('synthetic', state => Object.assign(active(state).branch, { head: branch.head, memory: branch.memory }));
+      await writeTraps(undefined);
     }
     const questions = fixture.checks;
     const job = store.mutate('synthetic', state => beginJob(state, recallInput(questions), 0));

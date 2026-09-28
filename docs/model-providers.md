@@ -111,9 +111,10 @@ eval found so far is in [improve-runs.md](knowledge/improve-runs.md#schema-2026-
 <a id='memory-thinking'></a>
 
 `MEMORY_THINKING=true` lets the model think before it answers a compaction, for measuring
-([improve-runs.md](knowledge/improve-runs.md#memory-thinking-2026-09-27)). It is off by default. The scenes never think,
-as a scene streams to the reader and thinking would delay its first word, and the eval's recall thinks only under a
-switch of its own, `RECALL_THINKING` ([eval.md](eval.md#reader)). A compaction's request then carries `thinking`
+([improve-runs.md](knowledge/improve-runs.md#memory-thinking-2026-09-27)). It is off by default. The bot's scenes never
+think, as a scene streams to the reader and thinking would delay its first word; the eval's recall and trap scenes
+think only under switches of their own, `RECALL_THINKING` ([eval.md](eval.md#reader)) and `SCENE_THINKING`
+([eval.md](eval.md#scene-thinking)). A compaction's request then carries `thinking`
 (`local/memory.ts`): OpenRouter gets `reasoning: { enabled: true }`,
 llama.cpp `enable_thinking: true` without `reasoning_effort: 'none'`, and simple-serving `enable_thinking: true`; the
 other adapters send what they always send. The reasoning counts against the output limit, so the limit grows by 12288:

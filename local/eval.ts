@@ -205,7 +205,8 @@ async function replay(spec: string): Promise<Record<string, Record<string, Cell>
     cells[scenario] = {};
     // A probe stops at its first failure, so each mode gets its own run and its own error.
     for (const mode of MODES) {
-      const run = await probe('memory-probe.ts', ['--direct', '--mode', mode, '--minutes', '30', ...(judgeEnv ? ['--traps'] : []), '--source', fixtures[scenario].frozenPath, ...packArgs, ...boundaryArgs], env, spec, { scenario, mode });
+      // --minutes gives a probe longer than its usual 30, as trap scenes that think take (SCENE_THINKING).
+      const run = await probe('memory-probe.ts', ['--direct', '--mode', mode, '--minutes', values.minutes ?? '30', ...(judgeEnv ? ['--traps'] : []), '--source', fixtures[scenario].frozenPath, ...packArgs, ...boundaryArgs], env, spec, { scenario, mode });
       let report: ReplayReport | null = null;
       try { report = JSON.parse(readFileSync(join(run.directory, 'report.json'), 'utf8')); } catch { /* counted as failed below */ }
       const result: ModeReport | undefined = report?.modes[mode];
@@ -737,7 +738,7 @@ if (positionals[0] === 'watch') {
   await write(values.model);
 } else {
   const models = (values.models ?? '').split(',').filter(Boolean);
-  if (!models.length) throw new Error('Use: eval --models <host>:<id>,<host>:<id> [--scenarios a,b] [--mode plain|sgr] [--judge <host>:<id>] [--boundary checks.json] [--out file]');
+  if (!models.length || (values.minutes !== undefined && !/^\d{1,3}$/.test(values.minutes))) throw new Error('Use: eval --models <host>:<id>,<host>:<id> [--scenarios a,b] [--mode plain|sgr] [--judge <host>:<id>] [--boundary checks.json] [--minutes 1..120] [--out file]');
   record({ event: 'run_started', models, scenarios });
   const missing = scenarios.filter(scenario => !existsSync(fixtures[scenario].frozenPath));
   if (missing.length) throw new Error(`No frozen story for ${missing.join(', ')}; run: eval write --model <host>:<id>`);

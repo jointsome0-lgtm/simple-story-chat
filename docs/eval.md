@@ -55,6 +55,20 @@ story keeps neither scene. A `then` scene that fails to be written or judged fai
 checks the next scene against the trap's scene, whatever that scene established, so a refusal kept a scene later
 passes it: one of the two questions passed is not a confirmation that was kept.
 
+<a id='scene-thinking'></a>
+
+`SCENE_THINKING=true` lets every trap scene think, and the `then` scene over it, to measure whether reasoning before a
+scene cuts its continuity and number errors (step O3 of 2026-09-28). The output limit grows by 4096, to 8192 at the
+bot's default, the most simple-serving's class `internal` takes; off, the probe sends the requests of a run without
+the switch, byte for byte. With `--judge`, a run with `RECALL_FROM` also writes every trap scene again, each at the
+point where the replay wrote it: after its scene, with the memory of the last compaction up to there, as the replay's
+checkpoints keep it. There all traps come before the recall, so a failed recall leaves them written. Scenes with and
+without thinking then come from the same states, and the recall and the boundary checks are asked again over them, as
+in any `RECALL_FROM` run. A trap scene keeps the counts of its request, the timings simple-serving and llama.cpp
+report, and `ms`, its time in the probe; its `trap_scene` event prints `ms`, `outputTokens` and, from OpenRouter,
+`reasoningTokens`. Thinking scenes take longer than the usual 30 minutes of a replay's probe, and `--minutes` (up to
+120) gives each probe more.
+
 A scenario may also carry `boundary`: checks in the shape of the memory questions, answered as of the end of scene 11,
 the last scene the replay's memory covers (step 2 of the memory proposal, 2026-09-28). The pack's `assault` carries 10
 and its `hospital` 11, each answer checked blind by GPT-6 Astra against the scenes. After the memory questions the
