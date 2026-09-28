@@ -361,7 +361,7 @@ function halt(comfy: Comfy) {
   if (comfy.end?.aborted) throw Object.assign(new Error('out_of_time'), { code: 'out_of_time' });
 }
 
-const call = async (comfy: Comfy, path: string, init?: RequestInit) => {
+export const call = async (comfy: Comfy, path: string, init?: RequestInit) => {
   halt(comfy);
   const response = await fetch(comfy.baseUrl + path, { ...init, signal: any(AbortSignal.timeout(comfy.timeoutMs), comfy.signal, comfy.end) });
   if (!response.ok) throw Object.assign(new Error('comfy_http_error'), { code: 'comfy_http_error', httpStatus: response.status });
@@ -412,7 +412,7 @@ const mergeStats = (into: Memory, seen: Stats, during: boolean) => {
   }
 };
 
-const post = (comfy: Comfy, path: string, body?: object) => call(comfy, path, { method: 'POST',
+export const post = (comfy: Comfy, path: string, body?: object) => call(comfy, path, { method: 'POST',
   headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}) });
 
 // What `drawOne` leaves running once it has the picture or has failed: the delete of the job's record and the samples
@@ -538,7 +538,7 @@ const PLACE_MS = 2000;
 // drawn now, and is interrupted and waited for like any other. One in neither list was taken out by the delete, or
 // is over and has its record, and there is nothing to wait for. The interrupt goes either way, since it can stop no
 // other job, and it is all that can stop this one on a card that did not answer the queue.
-async function stopJob(comfy: Comfy, promptId: string, pollMs: number): Promise<boolean> {
+export async function stopJob(comfy: Comfy, promptId: string, pollMs: number): Promise<boolean> {
   await post(comfy, '/queue', { delete: [promptId] }).catch(() => undefined);
   const queue = await readQueue(comfy);
   await post(comfy, '/interrupt', { prompt_id: promptId }).catch(() => undefined);

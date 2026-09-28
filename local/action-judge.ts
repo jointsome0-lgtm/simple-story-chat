@@ -244,12 +244,12 @@ export function projectionOf(checklist: Checklist): Projection {
     items: checklist.items.map(item => ({ id: item.id, kind: item.kind, ...(item.kind === 'relation' ? { essential: item.essential === true, ...withWhat(item) } : {}) })),
     contradictions: checklist.contradictions.length };
 }
-const shown = (checklist: Checklist): ShownChecklist => ({ participants: checklist.participants,
+export const shown = (checklist: Checklist): ShownChecklist => ({ participants: checklist.participants,
   items: checklist.items.map(({ essential: _essential, ...item }) => item) });
 
 // ---- The bundles ----
 
-type SheetLine = { entry: string; name: string; details?: string; look: string; outfit: string; proportions?: Record<string, string> };
+export type SheetLine = { entry: string; name: string; details?: string; look: string; outfit: string; proportions?: Record<string, string> };
 export type ChecklistInput = { scene: string; target: { contact: string; participants: string[]; count?: SharpPeople }; sheet: SheetLine[] };
 export type TextInput = { scene: string; sheet: SheetLine[]; checklist: ShownChecklist; shot: string; prompts: { id: string; text: string }[];
   portraits: { entry: string; facing: Facing; front?: string; view?: string; turn?: Turn }[] };
@@ -290,7 +290,7 @@ export function proportionsOf(look: string): Record<string, string> {
 // The text session also gets each person's details, which their front was drawn from (image-portraits.ts
 // `portraitText`), so that it can check the skin, the face and the marks with their sides that a look leaves out; the
 // checklist and the pictures keep the look, which is what the frames were given, and the pictures its proportions.
-const sheetLines = (sheet: Character[], extra?: 'details' | 'proportions'): SheetLine[] => sheet.map((one, at) => {
+export const sheetLines = (sheet: Character[], extra?: 'details' | 'proportions'): SheetLine[] => sheet.map((one, at) => {
   const proportions = extra === 'proportions' ? proportionsOf(one.look) : {};
   return { entry: entryId(at), name: one.name, ...extra === 'details' && one.details?.trim() ? { details: one.details } : {}, look: one.look,
     outfit: one.outfit ?? '', ...Object.keys(proportions).length ? { proportions } : {} };

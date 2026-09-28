@@ -57,7 +57,7 @@ type Failure = { code?: string };
 const report = (value: object) => console.log(JSON.stringify(value)); // counts and keys only, never a field of a description
 
 // "openrouter:google/gemma-4-31b-it", or SIMPLE_CHAT_* in the environment when --model is not given.
-function modelEnv(spec: string | undefined, keys: Env): Env {
+export function modelEnv(spec: string | undefined, keys: Env): Env {
   if (!spec) return Object.fromEntries(Object.entries(process.env).filter(([name]) => name.startsWith('SIMPLE_CHAT_')));
   const [host, model] = [spec.slice(0, spec.indexOf(':')), spec.slice(spec.indexOf(':') + 1)];
   if (!Object.hasOwn(HOSTS, host) || !model) throw new Error('Name a model as <host>:<id>, with host openrouter, openai, cerebras, groq or mistral');
