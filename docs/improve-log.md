@@ -8,6 +8,13 @@ and the main result with its limit. A new step gets its full entry there and its
 accepted**: tried and reverted. **Measurement**: numbers without a decision on a change. **Open**: a decision still
 waits. An open line is unfinished work, not an order to finish it.
 
+- 2026-09-28 · **measurement** · [Thinking at the read end, over the same memories](knowledge/improve-runs.md#read-thinking-2026-09-28).
+  Step 3 of the memory proposal; no change accepted. The eval's recall asked again over step 1's saved memories of
+  hosted Gemma 4 31B, with thinking (`RECALL_THINKING`, `RECALL_FROM`): `hospital` went from 4, 3, 4 to 12, 12, 10 and
+  `assault` from 8, 9, 8 to 12, 12, 12, far past the predicted +3 and +2, while the same reread without thinking at
+  the thinking request's limit scored as before. Thinking over the whole story: 8, 7, 8 and 11, 12, 12. OpenRouter did
+  not apply a reasoning cap; a `hospital` recall reasoned 2718 to 3221 tokens in 93 to 110 s against 7 to 8 s. Hosted
+  Gemma, three memories, questions and not scenes; scene thinking on the card is the owner's call.
 - 2026-09-28 · **measurement** · [L2: a compatible claim about an unshown past, confirmed and kept](knowledge/improve-runs.md#l2-2026-09-28).
   One trap in set `open`, frozen after GPT-6 Astra's review: the narrator should confirm a compatible claim about a
   shared past that no scene shows and keep to it a scene later. One run a model on `assault`: no model of the main

@@ -28,9 +28,9 @@ probe takes the one of its scenario, starts from the final state it saved, memor
 in a directory of its own whose report names the one it read (`recallFrom`). Nothing is compacted again, so two
 readers are compared over the same memories. Where the provider counts reasoning tokens apart, as OpenRouter does, the
 usage keeps that count as `reasoningTokens`. On 2026-09-28 hosted Gemma 4 31B, thinking over the same memories,
-answered 12, 12 and 10 of `hospital`'s 12 questions where it answered 4, 3 and 4 without thinking, and OpenRouter's
-`reasoning.max_tokens` did not cap its reasoning, so the switch has no cap
-([the entry](knowledge/improve-runs.md#read-thinking-2026-09-28)).
+answered 12, 12 and 10 of `hospital`'s 12 questions and all of `assault`'s three times, where without thinking it
+answered 4, 3 and 4 and 8, 9 and 8. OpenRouter's `reasoning.max_tokens` did not cap its reasoning, so the switch has no
+cap ([the entry](knowledge/improve-runs.md#read-thinking-2026-09-28)).
 
 With `--judge openai:gpt-5.4`, after the memory questions each model writes one scene for each trap move of
 `examples/scene-traps.ts`, and the judge answers fixed yes/no questions (`local/scene-judge.ts`). The result is

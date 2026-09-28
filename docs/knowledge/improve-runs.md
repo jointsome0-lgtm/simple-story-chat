@@ -11,6 +11,157 @@ line per decision. A new step gets its full entry here, on top, and its line the
 Paths to result directories say where the numbers came from at the time. They do not promise that the files still
 exist or that you may read them.
 
+<a id='read-thinking-2026-09-28'></a>
+
+## 2026-09-28 · Opus 5.5 · thinking at the read end, over the same memories, on hosted Gemma 4 31B (measurement)
+
+Not a step of the loop: step 3 of the memory proposal of 2026-09-28
+(`~/simple-story-chat-runs/2026-09-28/memory-next/proposal.md`, outside the repository), a measurement that accepts no
+change. The owner had asked that day whether the bot thinks at all, even a little. It does not: scenes and frames are
+written with thinking off, and `MEMORY_THINKING` is off. The proposal read the losses on `hospital` and `assault` as
+the reader's: most lost keys change last in scenes 12 to 16, which the replay never compacts, the memories hold the
+parts, and a reader that does not think adds them up wrong. [Thinking while compacting](#memory-thinking-2026-09-27)
+had moved nothing. The question: does the same reader, thinking, answer what it missed, over the very memories it
+missed it from? The proposal predicted +3 questions on `hospital` and +2 on `assault`, as the cheap first answer,
+without a card.
+
+The switches, in eval code only ([eval.md](../eval.md#reader)). `RECALL_THINKING=true` gives the recall's request
+`thinking`, which OpenRouter gets as `reasoning: { enabled: true }`, and 8192 more output tokens, 16384 in all.
+`RECALL_FROM` names finished replays: each probe takes its scenario's, starts from the final state that replay saved,
+the memories and the 16 scenes, and asks only the recall again, in a directory of its own. Nothing is compacted. The
+usage keeps OpenRouter's count of reasoning tokens as `reasoningTokens`. With neither switch set every request is what
+it was: the bodies of a plain request, a recall with its schema and a thinking compaction through OpenRouter, OpenAI,
+Mistral and llama.cpp were compared with 71a159f's, 12 of 12 equal, and no test was added or changed. A dry run against
+a fake server sent the same messages with thinking off, on and in the control below, and the rereads without thinking
+had step 1's input to the token: 9100, 8894 and 8942 on `hospital`, 7267, 7194 and 7080 on `assault` (with thinking,
+two fewer each, as OpenRouter counts them).
+
+The memories are step 1's, the reading ceiling of the same morning, under
+`~/simple-story-chat-runs/2026-09-28/memory-ceiling/`: its three compacted replays of Gemma, `gemma-mem-1` to `-3`, and
+its three ceilings without thinking, `gemma-ceil-1` to `-3`, all run at 71a159f between 08:00 and 08:05 UTC. Run N of
+every reread here reads the memories of step 1's run N.
+
+Commands. The eval ran from the main tree at 71a159f, with the `.env.eval` and the ledger it has and this branch's
+worktree has not, and a Node resolve hook, `$R/redirect.mjs`, swapped only `local/memory-probe.ts` for this branch's,
+whose own imports then resolve in the branch. `$R/run.sh` holds the commands, one `TMPDIR` a run, with
+`R=~/simple-story-chat-runs/2026-09-28/read-thinking`, `S=~/simple-story-chat-runs/2026-09-28/memory-ceiling/tmp` and
+N = 1, 2, 3:
+
+```
+export NODE_OPTIONS=--import=$R/redirect.mjs
+RECALL_THINKING=false|true RECALL_FROM=$S/gemma-mem-N/simple-chat-memory-hospital-…,$S/gemma-mem-N/simple-chat-memory-assault-… TMPDIR=$R/tmp/reread-<side>-N npm run eval -- --pack ~/simple-story-chat-eval --scenarios hospital,assault --mode plain --models openrouter:google/gemma-4-31b-it --out $R/reread-<side>-N.json
+RECALL_THINKING=true TMPDIR=$R/tmp/ceil-on-N npm run eval -- ceiling --model openrouter:google/gemma-4-31b-it --scenarios hospital,assault --pack ~/simple-story-chat-eval
+```
+
+Run 1 of each side ran at 08:40 UTC as the smoke, runs 2 and 3 of both sides at once at 08:46, and the three ceilings
+at once at 08:48, all with the probe of 9d79868, whose request under `RECALL_THINKING=true` is abcb86f's. Every run
+finished at its first attempt, with no failure, retry or `budget_exceeded`.
+
+The cap. The proposal wanted a side that thinks at most about 512 tokens, if the channel can limit it. Under
+`RECALL_THINKING=512`, 9d79868 sent OpenRouter `reasoning: { max_tokens: 512 }`; one run over run 1's memories, at
+08:43, reasoned 3122 tokens on `hospital` and 667 on `assault`, as much as without a limit, and answered 12 and 12.
+OpenRouter did not apply the limit to this model, so there is no limited side, and abcb86f took the number out of the
+switch. `reasoning.effort` was not tried.
+
+The control. The larger limit is part of the thinking request, and at 16384 OpenRouter can no longer send it to the
+endpoints that stop at 8192 output tokens, so the two sides could have run on different endpoints. A knob added for the
+control and removed after it (337788f, b03c156) asked the recall without thinking at 16384: three runs at 08:58 UTC
+over the same memories.
+
+Memory, mode `plain`, no judge, correct answers of 12:
+
+| Side | `hospital`, runs 1 · 2 · 3 | Mean | `assault`, runs 1 · 2 · 3 | Mean |
+| --- | --- | --- | --- | --- |
+| Step 1, compacted replay, thinking off | 4 · 4 · 4 | 4.0 | 8 · 8 · 8 | 8.0 |
+| Reread of those memories, off | 4 · 3 · 4 | 3.7 | 8 · 9 · 8 | 8.3 |
+| Reread, off at 16384 (the control) | 4 · 4 · 3 | 3.7 | 8 · 9 · 8 | 8.3 |
+| Reread, on | 12 · 12 · 10 | 11.3 | 12 · 12 · 12 | 12.0 |
+| Reread, on with the cap not applied, run 1's memories | 12 | | 12 | |
+| Step 1, ceiling (the whole story), off | 4 · 3 · 3 | 3.3 | 8 · 8 · 8 | 8.0 |
+| Ceiling, on | 8 · 7 · 8 | 7.7 | 11 · 12 · 12 | 11.7 |
+
+Per key, the runs of 3 that answered it right:
+
+| Key | Step 1, compacted, off | Reread, off | Control | Reread, on | Step 1, ceiling, off | Ceiling, on |
+| --- | --- | --- | --- | --- | --- | --- |
+| `hospital` `river_left` | 0 | 0 | 0 | 3 | 0 | 2 |
+| `garden_cells` | 0 | 0 | 0 | 3 | 0 | 2 |
+| `river_stretchers` | 1 | 1 | 0 | 3 | 1 | 1 |
+| `boat_spare` | 0 | 0 | 0 | 3 | 0 | 3 |
+| `bridge_limit` | 2 | 1 | 2 | 3 | 0 | 3 |
+| `next_departure` | 0 | 0 | 0 | 3 | 0 | 0 |
+| `origin_evacuated` | 0 | 0 | 0 | 2 | 0 | 3 |
+| `polina_learned` | 0 | 0 | 0 | 2 | 0 | 0 |
+| `boris_learned` | 0 | 0 | 0 | 3 | 0 | 0 |
+| `assault` `river_barriers` | 0 | 0 | 0 | 3 | 0 | 3 |
+| `road_barriers` | 0 | 0 | 0 | 3 | 0 | 2 |
+| `tunnel_barriers` | 0 | 0 | 0 | 3 | 0 | 3 |
+| `river_stock` | 0 | 1 | 1 | 3 | 0 | 3 |
+
+The other keys, `current_route`, `key_holder` and `uninformed` of `hospital` and the other eight of `assault`, were
+right in every run of every side.
+
+- Without thinking the same input gave different wrong sums from run to run: `garden_cells` 3, 7 and 5 too many in
+  step 1 and 4, 4 and 7 reread, `boat_spare` 3, 4 and 5 too few in step 1 and 4, 1 and 5 reread. The time keys missed
+  the same way each time: `next_departure` `unknown` in all six runs, `polina_learned` 4 minutes early in all six,
+  `boris_learned` 7 minutes late in five and `unknown` once.
+- With thinking over the memories every answer was right but two, both in run 3 of `hospital`: `origin_evacuated` one
+  short, and `polina_learned` 4 minutes early, the answer the reader without thinking gave.
+- `boat_spare` and `road_barriers` stand nowhere in the memory or in the scenes kept as text (`stated: none` for all
+  three memories), so they can only be added up while reading; with thinking both were right in every run.
+- The ceiling with thinking had `hospital`'s three time keys 11 minutes off in every run, `next_departure` and
+  `polina_learned` early and `boris_learned` late, all three of which the reader got right from the memories; it missed
+  `river_left`, `garden_cells` and `river_stretchers` by one or two in one or two runs, and `assault`'s `road_barriers`
+  once, by three. Why the whole story reads worse than the memories here was not looked into.
+
+Reasoning and time. One recall request asks all 12 questions of a scenario, and the seconds are the probe's, from its
+start to the answer, over OpenRouter:
+
+| | `hospital` | `assault` |
+| --- | --- | --- |
+| Reasoning tokens a request, reread on, runs 1 · 2 · 3 | 3221 · 2743 · 2718 | 656 · 808 · 752 |
+| The same, ceiling on | 2143 · 1823 · 2038 | 713 · 646 · 636 |
+| Output tokens a request, reread off; on | 321; 3757–4491 | 162–326; 1239–1573 |
+| Seconds a recall, reread off; on | 7–8; 93–110 | 5–9; 32–49 |
+| Seconds a recall, ceiling off; on | 6–15; 76–114 | 6–9; 42–44 |
+
+Over the six thinking rereads a request reasoned 1763 tokens at the median and 3221 at most, about 147 and 268 a
+question. A limit of 512 a request, had it held, would have left `hospital` a fifth or a sixth of the reasoning it used
+and `assault` about two thirds; what that does to the answers is not measured.
+
+The cost, as this measurement's own requests by the provider's usage: 26 requests and 278,573 tokens of the 500,000
+allowed. The rereads without thinking took 6 and 50,254, with it 6 and 65,001, the cap's run 2 and 21,926, the ceilings
+with thinking 6 and 90,974, and the control 6 and 50,418. No reservation stayed unsettled. At $0.08 to $0.14 a million
+in and $0.30 to $0.40 out, that is about $0.03 to $0.05. The ledger's `openrouter-paid` day stood at 73 requests and
+443,184 tokens before the smoke and at 126 and 800,032 after the control, 27 and 78,275 of them other agents'.
+
+Conclusion: the prediction holds, by far. Over the same memories thinking took `hospital` from 4, 3, 4 to 12, 12, 10
+and `assault` from 8, 9, 8 to 12, 12, 12, run by run +8, +9 and +6 and +4, +3 and +4, each far beyond Gemma's spread of
+one question, and the control without thinking at the same limit stayed where the reread without thinking was. On these
+two scenarios Gemma's compacted memories, with the scenes kept as text, hold what the twelve questions need, and the
+losses of its memory `score` are its reader's, as the proposal read them. Without thinking the whole story helped no
+more than the memories (3.3 on `hospital` against 3.7 and 4.0); with thinking the memories were the better text there
+(11.3 against 7.7). The price here is 12 to 14 times the recall's output tokens on `hospital` and 4 to 10 on `assault`,
+run by run, and 93 to 110 s for a `hospital` recall against 7 to 8 s. The bot writes scenes and frames without thinking
+as before, and `RECALL_THINKING` is an eval switch, off by default. By the proposal, this result makes O3, a scene
+that thinks on the card, the next question, and O3 would need scene, walk and latency tests; whether to run them is
+the owner's call.
+
+Limitations:
+- Hosted Gemma 4 31B stands in for the heretic Q6_K on the card
+  ([acceptance](../improve-loop.md#acceptance-on-gpu)), and nobody has seen that model think under the pinned
+  llama.cpp. Only a card run, on the owner's word, can say this of the bot's model.
+- The recall is the eval's list of questions after the story, all twelve in one request with a schema, not a scene. A
+  scene that thinks has to count while it writes, and its first word waits for the thinking; neither was measured.
+- Three memories of each scenario, two scenarios, one pack, and the same three memories for every reread side. `sgr`,
+  the other scenarios and the holdout were not run, and other memories could hold less than these.
+- OpenRouter picks an endpoint for each request, and the log does not say which. The control rules out the change of
+  the endpoint pool at 16384, not that a thinking request goes to other endpoints than one without thinking.
+- The cap was not applied, so how little thinking keeps the gain is not known.
+- Results: `$R/reread-off-N`, `$R/reread-on-N`, `$R/reread-room-N` (the control) and `$R/reread-512-1` as `.json`,
+  `.log` and `.meta`; `$R/ceil-on-N.log` and `.meta`; the probes' directories under `$R/tmp/`; `$R/tables.cjs`, which
+  prints these tables from the probes' reports; and `$R/usage.txt`, the ledger's day at each stage.
+
 <a id='l2-2026-09-28'></a>
 
 ## 2026-09-28 · Opus 5.5 · L2: a compatible claim about an unshown past, confirmed and kept (measurement)
