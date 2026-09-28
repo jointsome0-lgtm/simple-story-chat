@@ -56,7 +56,8 @@ checks the next scene against the trap's scene, whatever that scene established,
 passes it: one of the two questions passed is not a confirmation that was kept.
 
 A scenario may also carry `boundary`: checks in the shape of the memory questions, answered as of the end of scene 11,
-the last scene the replay's memory covers (step 2 of the memory proposal, 2026-09-28). After the memory questions the
+the last scene the replay's memory covers (step 2 of the memory proposal, 2026-09-28). The pack's `assault` carries 10
+and its `hospital` 11, each answer checked blind by GPT-6 Astra against the scenes. After the memory questions the
 probe asks them in a request of its own at scene 11, with that scene's time: the seed, the memory and the questions,
 without the scenes kept as text, so a miss is the compactions' and not a reading of the later scenes. In `full` the same
 request carries scenes 1 to 11 as text, the ceiling of these checks. A failure there fails these checks alone. They are
