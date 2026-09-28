@@ -341,18 +341,18 @@ export const ru = {
     // waits for them and the one that removes them all, the wait's title and note, how many the set holds already, the
     // button that ends the wait, the message that counts them as they come (the reasons are local/model-error.ts
     // `POSE_SET_REFUSALS`), the card's lines and the question before they go. `min`, `max` and `fileMegabytes` are
-    // REFERENCE_SIDES and REFERENCE_BYTES in local/reference.ts, 2.5 is REFERENCE_SIDES.ratio, and `pictures`,
+    // REFERENCE_SIDES and REFERENCE_BYTES in local/reference.ts, and `pictures`,
     // `megabytes` and `readerMegabytes` are POSE_SET_PICTURES, POSE_SET_BYTES and POSE_SET_READER_BYTES in
     // local/pose-set.ts, as are the numbers of the reasons. The half hour is POSE_SET_WAIT_MS there.
     poseSet: '🗂 Картинки поз',
     poseSetDrop: '🗑 Убрать картинки поз',
     poseSetTitle: (person: string, story: string) => `🗂 Картинки поз: ${person} · ${story}`,
-    poseSetNote: (min: number, max: number, fileMegabytes: number, pictures: number, megabytes: number, readerMegabytes: number) => `Пришли картинки этого персонажа в разных позах: по одной или альбомами, фотографиями или файлами PNG, JPEG или WebP, до ${fileMegabytes} МБ каждая; короткая сторона от ${min} пикселей, длинная до ${max} и не больше чем в 2,5 раза длиннее короткой. Только рисунки: фотографии реальных людей присылать нельзя. Архивы бот не берёт. Бот удалит из файлов метаданные и сохранит до ${pictures} картинок и ${megabytes} МБ на персонажа, а всего у тебя — до ${readerMegabytes} МБ. Каждую картинку подпишет маленькая модель на компьютере бота: поза, сторона к зрителю и охват (весь рост, по пояс или голова и плечи). Ни картинки, ни подписи не уходят в сторонние сервисы. По подписям бот разложит картинки по позам, и каждый кадр возьмёт одну: ту, что ближе всего к тому, как персонаж в нём показан. Когда пришлёшь все, нажми «✅ Готово». Бот ждёт полчаса после последней картинки; выйти можно любой кнопкой или командой /cancel.`,
+    poseSetNote: (min: number, max: number, fileMegabytes: number, pictures: number, megabytes: number, readerMegabytes: number) => `Пришли картинки этого персонажа в разных позах: по одной или альбомами, фотографиями или файлами PNG, JPEG или WebP, до ${fileMegabytes} МБ каждая; короткая сторона от ${min} пикселей, длинная до ${max}. Только рисунки: фотографии реальных людей присылать нельзя. Архивы бот не берёт. Бот удалит из файлов метаданные и сохранит до ${pictures} картинок и ${megabytes} МБ на персонажа, а всего у тебя — до ${readerMegabytes} МБ. Каждую картинку подпишет маленькая модель на компьютере бота: поза, сторона к зрителю и охват (весь рост, по пояс или голова и плечи). Ни картинки, ни подписи не уходят в сторонние сервисы. По подписям бот разложит картинки по позам, и каждый кадр возьмёт одну: ту, что ближе всего к тому, как персонаж в нём показан. Когда пришлёшь все, нажми «✅ Готово». Бот ждёт полчаса после последней картинки; выйти можно любой кнопкой или командой /cancel.`,
     poseSetHeld: (n: number) => `В наборе уже ${count(n, 'картинка', 'картинки', 'картинок')}; новые добавятся к ним.`,
     poseSetDone: '✅ Готово',
     poseSetKept: (n: number) => `Принято: ${n}.`,
     poseSetRefused: (reasons: { reason: string; count: number }[]) => `Не принято: ${reasons.reduce((sum, one) => sum + one.count, 0)} (${reasons.map(one => `${one.reason}: ${one.count}`).join(', ')}).`,
-    poseSetReasons: { type: 'не картинка', broken: 'не читается', small: 'слишком мала', huge: 'слишком велика', shape: 'слишком вытянута',
+    poseSetReasons: { type: 'не картинка', broken: 'не читается', small: 'слишком мала', huge: 'слишком велика',
       too_large: 'тяжелее 10 МБ', incomplete: 'не загрузилась', archive: 'архив', full: 'сверх 100 на персонажа',
       person_bytes: 'сверх 300 МБ на персонажа', reader_bytes: 'сверх 600 МБ у тебя' },
     poseSetHolds: (n: number, max: number) => `В наборе ${n} из ${max}.`,

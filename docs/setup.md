@@ -142,9 +142,10 @@ library. What it was chosen by, and its limits, are in [the measurement](knowled
 
 The limits: 100 pictures and 300 MB a person, 600 MB a reader, and each picture as a picture of the reader's own
 ([references](telegram-ui.md#references)): a drawing, PNG, JPEG or WebP, at most 10 MB, the shorter side at least 320
-pixels, the longer at most 4096 and 2.5 times the shorter, with its metadata stripped. Frames take the chosen picture
-with the experiment's instruction unchanged, which tells the picture model to take identity alone from a reference; what
-a fitting pose does to the pictures has not been measured.
+pixels and the longer at most 4096, with its metadata stripped; one more drawn out than 2.5 to 1 is padded with grey on
+the card, as a reader's own portrait is. Frames take the chosen picture with the experiment's instruction unchanged,
+which tells the picture model to take identity alone from a reference; what a fitting pose does to the pictures has not
+been measured.
 
 ### Backup and restore
 
