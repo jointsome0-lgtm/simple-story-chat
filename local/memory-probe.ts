@@ -62,6 +62,9 @@ const RECALL_THINKING_TOKENS = 8192;
 const thinkingSetting = process.env.RECALL_THINKING || 'false';
 if (!['true', 'false'].includes(thinkingSetting)) throw new Error('Invalid RECALL_THINKING');
 const recallThinking = thinkingSetting === 'true';
+// A control for one measurement, removed after it: RECALL_ROOM=true gives a recall that does not think the thinking
+// recall's output limit, so that OpenRouter picks among the same endpoints for both.
+const recallRoom = process.env.RECALL_ROOM === 'true';
 const { values } = parseArgs({ options: { source: { type: 'string' }, resume: { type: 'string' },
   minutes: { type: 'string', default: '15' }, direct: { type: 'boolean', default: false }, mode: { type: 'string' },
   traps: { type: 'boolean', default: false }, pack: { type: 'string' }, lab: { type: 'string' } } });
@@ -154,7 +157,7 @@ const provider = { async generate(request: ModelRequest) {
   throw Object.assign(new Error(), { code: 'retry_limit' });
 } };
 const store = new Store(':memory:');
-progress({ event: 'started', scenario, directory, model: config.model, ...(recallThinking ? { recallThinking } : {}), ...(earlier ? { reread: true } : {}) });
+progress({ event: 'started', scenario, directory, model: config.model, ...(recallThinking ? { recallThinking } : {}), ...(recallRoom ? { recallRoom } : {}), ...(earlier ? { reread: true } : {}) });
 try {
   await (direct ? direct.check?.({ signal: deadline }) : client.check({ signal: deadline }));
   for (const memoryMode of modes) {
@@ -285,7 +288,7 @@ try {
     // The answer is a short JSON, but a model that reasons in text before its structured answer needs the room for
     // that text: through the Claude CLI the cap is the run's whole output, and a run that exceeds it ends as an error
     // rather than a truncation. At 1024 that was every Haiku recall and every CLI reader of `hospital` (log, 09-22).
-    const request = makeRequest(store.read('synthetic'), job, RECALL_OUTPUT_TOKENS + (recallThinking ? RECALL_THINKING_TOKENS : 0));
+    const request = makeRequest(store.read('synthetic'), job, RECALL_OUTPUT_TOKENS + (recallThinking || recallRoom ? RECALL_THINKING_TOKENS : 0));
     request.system = 'Ответь на проверочные вопросы только по переданной истории и её памяти. Соблюдай заданный формат, не достраивай неизвестное.';
     request.purpose = 'memory';
     if (recallThinking) request.thinking = true;
