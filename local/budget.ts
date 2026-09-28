@@ -11,9 +11,11 @@ export type Budget = {
   begin(estimatedTokens: number): { settle(actualTokens: number): void };
 };
 
-// The models OpenAI's shared-traffic offer covers, as of 2026-09-18. Any other model there is billed.
-const OPENAI_LARGE = ['gpt-5.4', 'gpt-5.2', 'gpt-5.1', 'gpt-5', 'gpt-4.1', 'gpt-4o', 'o1', 'o3'];
-const OPENAI_SMALL = ['gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-mini', 'gpt-5-nano', 'gpt-4.1-mini', 'gpt-4.1-nano', 'gpt-4o-mini', 'o3-mini', 'o4-mini'];
+// The models OpenAI's shared-traffic offer covers, as of 2026-09-28. Any other model there is billed.
+const OPENAI_LARGE = ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4', 'gpt-5.2', 'gpt-5.1',
+  'gpt-5', 'gpt-4.1', 'gpt-4o', 'o1', 'o3'];
+const OPENAI_SMALL = ['gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-mini', 'gpt-5-nano',
+  'gpt-4.1-mini', 'gpt-4.1-nano', 'gpt-4o-mini', 'o4-mini'];
 // Defaults stay a tenth under the free allowance: 1000 requests, 2.5M tokens and 250K tokens a day.
 // A billed channel is closed until its cap is set by hand.
 const DEFAULTS: { [channel: string]: Caps } = {
