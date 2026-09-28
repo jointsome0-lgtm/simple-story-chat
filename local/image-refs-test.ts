@@ -58,7 +58,8 @@ export const TEXTS_SHA256 = 'd0678be9753c496fc3ad754ad5124a0add622b8298a3f744f6c
 export const INDEX_FILE = 'cells.json';
 // As the figure test prices: the run's first job pays the compile, the first job of each other group a shape of its
 // own. A socket that did not open is waited out this long, once.
-const COLD_MS = 45000, SHAPE_MS = 15000, RETRY_PAUSE_MS = 3000;
+export const COLD_MS = 45000, SHAPE_MS = 15000;
+const RETRY_PAUSE_MS = 3000;
 // The picture card's rate on 2026-09-27 (52996413, an RTX 5090, $0.605 an hour) and the minutes from the rental to the
 // first picture (the weights, the cu130 environment and the server's start), for what `estimate` says the card costs.
 const RATE = 0.605, BOOTSTRAP_MINUTES = 20;

@@ -76,6 +76,11 @@ export type FakeComfyOptions = {
   // A job with ModelAttentionBackend at the kitchen's attention: its sampler's time, and whether the node says the
   // attention is unavailable and falls back to PyTorch's (comfy_extras/nodes_model_advanced.py:404-408).
   attentionJobMs?: number; attentionFallback?: boolean;
+  // A TextGenerate node (comfy_extras/nodes_textgen.py at 73c9bad4), as the prompt probe's rewrites use one: how long
+  // it takes, interrupted as a sampler is, and what it answers from its prompt and inputs, an empty text unless said.
+  // `failJobs` fails it as it fails a sampler. A PreviewAny after it shows the text in the job's record, as
+  // comfy_extras/nodes_preview_any.py does.
+  textMs?: number; generate?: (prompt: string, inputs: Record<string, unknown>) => string;
 };
 // A request as the server saw it, for a test to assert on the order of things: the job it concerns, when there is one.
 export type FakeCall = { method: string; path: string; id?: string };
@@ -84,10 +89,11 @@ export type FakeCall = { method: string; path: string; id?: string };
 // rectangle an ImageCrop between the loader and the scale node cuts (`null` without one). `images`: each picture a
 // saving node wrote, with its size. `sampler`: the type of the node the latent is sampled in; `model`: the types of the
 // nodes the model passes on its way there, from the sampler's model input, or its guider's, back to the loader, such as
-// a TorchCompileModel's or a LoRA's. The fake runs each as it runs every node, as nothing.
+// a TorchCompileModel's or a LoRA's. The fake runs each as it runs every node, as nothing. `generated`: the TextGenerate
+// nodes that answered, a count and never their text.
 export type FakeJob = { references: number; width: number; height: number; cached: number; outcome: 'success' | 'error' | 'interrupted';
   slots: { slot: number; file: string; scaled: { width: number; height: number } | null; cropped: { x: number; y: number; width: number; height: number } | null }[];
-  images: { node: string; width: number; height: number }[]; sampler: string | null; model: string[] } & MaskedJob;
+  images: { node: string; width: number; height: number }[]; sampler: string | null; model: string[]; generated: number } & MaskedJob;
 
 // A mask the pinned mask nodes make (comfy_extras/nodes_mask.py at 73c9bad4), computed as they compute it: SolidMask
 // fills, MaskComposite adds, subtracts or multiplies its source into its destination at x, y and clamps the whole to
@@ -337,12 +343,29 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
     record('execution_start', { timestamp: Date.now() });
     record('execution_cached', { nodes: cached, timestamp: Date.now() });
     dropAt('start', job.number);
-    const outputs: Record<string, { images: { filename: string; subfolder: string; type: string }[] }> = {};
+    const outputs: Record<string, { images?: { filename: string; subfolder: string; type: string }[]; text?: string[] }> = {};
     let outcome: FakeJob['outcome'] = 'success';
     const ran: string[] = [];
+    const texts = new Map<string, string>();
     for (const id of order.filter(one => !cached.includes(one))) {
       const type = graph[id].class_type;
       tell(job, 'executing', { node: id, display_node: id });
+      if (type === 'TextGenerate') {
+        if (options.failJobs?.includes(job.number)) {
+          outcome = 'error';
+          record('execution_error', { node_id: id, node_type: type, executed: ran, exception_message: 'synthetic failure', exception_type: 'RuntimeError',
+            traceback: [], current_inputs: {}, current_outputs: {}, timestamp: Date.now() });
+          break;
+        }
+        // Stopped by `/interrupt` as a sampler is: the pinned generation loop checks for it at every token.
+        const took = await delay(options.textMs ?? 0, true, { signal: job.stop.signal }).catch(() => false);
+        if (!took) {
+          outcome = 'interrupted';
+          record('execution_interrupted', { node_id: id, node_type: type, executed: ran, timestamp: Date.now() });
+          break;
+        }
+        texts.set(id, options.generate?.(String(graph[id].inputs.prompt ?? ''), graph[id].inputs) ?? '');
+      }
       if (samples(graph[id])) {
         const oom = options.oomAtReferences !== undefined && references >= options.oomAtReferences;
         if (oom || options.failJobs?.includes(job.number)) {
@@ -376,12 +399,18 @@ export async function startFakeComfy(initial: FakeComfyOptions = {}) {
         outputs[id] = { images: [file] };
         tell(job, 'executed', { node: id, display_node: id, output: outputs[id] });
       }
+      if (type === 'PreviewAny') {
+        const from = Array.isArray(graph[id].inputs.source) ? String(graph[id].inputs.source[0]) : '';
+        outputs[id] = { text: [texts.get(from) ?? 'None'] };
+        tell(job, 'executed', { node: id, display_node: id, output: outputs[id] });
+      }
     }
     if (outcome === 'success') record('execution_success', { timestamp: Date.now() });
     history.set(job.id, { prompt: [job.place, job.id, {}, {}, []], outputs,
       status: { status_str: outcome === 'success' ? 'success' : 'error', completed: outcome === 'success', messages }, meta: {} });
     say(`Prompt executed in ${((performance.now() - began) / 1000).toFixed(2)} seconds`);
-    jobs.push({ references, width, height, cached: cached.length, outcome, slots, images, sampler: sampler?.class_type ?? null, model, ...masked });
+    jobs.push({ references, width, height, cached: cached.length, outcome, slots, images, sampler: sampler?.class_type ?? null, model, generated: texts.size,
+      ...masked });
     // The record is written before the socket hears the job is over (main.py), and a delete sent then finds it.
     tell(job, 'executing', { node: null });
   }

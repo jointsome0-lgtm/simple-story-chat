@@ -36,6 +36,11 @@ qwen="${SIMPLE_CHAT_IMAGE_QWEN:-false}"
 viggle="${SIMPLE_CHAT_IMAGE_VIGGLE:-false}"
 [[ "$viggle" = true || "$viggle" = false ]] || { echo 'Use SIMPLE_CHAT_IMAGE_VIGGLE=true or false.' >&2; exit 1; }
 [[ "$viggle" = false || "$qwen" != false ]] || { echo 'Viggle'\''s LoRA is for Qwen-Image 2.1: set SIMPLE_CHAT_IMAGE_QWEN too.' >&2; exit 1; }
+# Qwen's text-to-image prompt enhancer (docs/action-experiment.md#prompt-arms), for the prompt arms probe alone: off by
+# default, and only beside Qwen. One more text encoder, 9.47 GB, which the bot never loads.
+qwen_pe="${SIMPLE_CHAT_IMAGE_QWEN_PE:-false}"
+[[ "$qwen_pe" = true || "$qwen_pe" = false ]] || { echo 'Use SIMPLE_CHAT_IMAGE_QWEN_PE=true or false.' >&2; exit 1; }
+[[ "$qwen_pe" = false || "$qwen" != false ]] || { echo 'The prompt enhancer is Qwen-Image 2.1'\''s: set SIMPLE_CHAT_IMAGE_QWEN too.' >&2; exit 1; }
 # Which torch this run installs (docs/gpu.md#cu130): cu128, the default, into ComfyUI/.venv, or cu130 into
 # ComfyUI/.venv-cu130, for comfy-kitchen's CUDA backend: the bot's card installs cu130 alone (docs/gpu.md#bot-card), and
 # the experiments keep cu128. A cu130 run leaves the default environment as it is, so it can run in the background
@@ -132,6 +137,9 @@ if [[ "$qwen" != false ]]; then
   add_record "$(hf_url "$IMAGE_QWEN_REPO" "$IMAGE_QWEN_REVISION" "$IMAGE_QWEN_VAE_PATH")" \
     "$models_dir/vae/$IMAGE_QWEN_VAE_FILE" "$IMAGE_QWEN_VAE_SHA256" "$IMAGE_QWEN_VAE_BYTES" none
 fi
+# The enhancer, verified as the weights are and named in image-verified.txt, which the probe reads before it rewrites.
+[[ "$qwen_pe" = false ]] || add_record "$(hf_url "$IMAGE_QWEN_REPO" "$IMAGE_QWEN_REVISION" "$IMAGE_QWEN_PE_T2I_PATH")" \
+  "$models_dir/text_encoders/$IMAGE_QWEN_PE_T2I_FILE" "$IMAGE_QWEN_PE_T2I_SHA256" "$IMAGE_QWEN_PE_T2I_BYTES" none
 # Viggle's LoRA, and its node, which is code the server runs: each fetched at the pinned revision and verified as the
 # weights are, before it is given its name. image-serve.sh loads the node only when asked to.
 if [[ "$viggle" = true ]]; then
@@ -210,6 +218,7 @@ if [[ "$dry_run" = true ]]; then
   [[ "$qwen" = only ]] || echo "The graph would load $IMAGE_MODEL_FILE, $encoder_file and $vae_file; --print-workflow prints it."
   [[ "$qwen" = false ]] || echo "Qwen is on: $IMAGE_QWEN_WORKFLOW and $IMAGE_QWEN_EDIT_WORKFLOW would load $IMAGE_QWEN_MODEL_FILE, $IMAGE_QWEN_ENCODER_FILE and $IMAGE_QWEN_VAE_FILE."
   [[ "$viggle" = false ]] || echo "Viggle is on: its LoRA into models/loras and $IMAGE_VIGGLE_NODE_FILE into custom_nodes, which image-serve.sh loads with SIMPLE_CHAT_IMAGE_VIGGLE=true."
+  [[ "$qwen_pe" = false ]] || echo "The prompt enhancer is on: $IMAGE_QWEN_PE_T2I_FILE into models/text_encoders, for the prompt arms probe."
   [[ "$torch_line" = cu128 ]] || echo "Torch is $torch_line: ${torch_pins[*]} into $venv; the default environment, if the box has one, stays as it is."
   exit 0
 fi
@@ -440,3 +449,4 @@ else
   [[ "$qwen" = false ]] || echo "Qwen is on: $gpu_dir/$IMAGE_QWEN_WORKFLOW draws frames, $gpu_dir/$IMAGE_QWEN_EDIT_WORKFLOW takes reference portraits."
 fi
 [[ "$viggle" = false ]] || echo "Viggle's LoRA and node are verified; a server started with SIMPLE_CHAT_IMAGE_VIGGLE=true loads the node, for its graphs alone."
+[[ "$qwen_pe" = false ]] || echo "The prompt enhancer is verified; the prompt arms probe loads it through CLIPLoader, and the bot never does."
