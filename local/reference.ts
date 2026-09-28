@@ -24,11 +24,11 @@ import { texts } from './text.ts';
 export const REFERENCE_BYTES = 10 * 1024 * 1024;
 // A picture's sides, in pixels. The card takes a reference at about 352x640 whatever its shape
 // (local/picture-references.ts `referenceScale`), so the shorter side of at least `min` enlarges a square one and a half
-// times at most. The longer side of at most `max` keeps it within what Telegram takes as a photo. And the longer side
-// is at most `ratio` times the shorter: a person fills too little of a picture more drawn out than that, and the sides
-// scaled to multiples of 32 would bend its shape by more than a few hundredths. A picture outside these is refused, never
-// cut or stretched to fit.
-export const REFERENCE_SIDES = { min: 320, max: 4096, ratio: 2.5 };
+// times at most. The longer side of at most `max` keeps it within what Telegram takes as a photo. A picture outside these
+// is refused, never cut or stretched to fit. One whose longer side is over 2.5 times the shorter was refused too, as its
+// sides scaled to multiples of 32 would bend its shape by more than a few hundredths; since the owner's decision of
+// 2026-09-28 the card pads it to 2.5 with grey instead (local/picture-references.ts `referencePad`).
+export const REFERENCE_SIDES = { min: 320, max: 4096 };
 // The wait for a picture, from the press of its button.
 export const REFERENCE_WAIT_MS = 30 * 60 * 1000;
 // A caption's most characters: a few words of English, to match a frame by.
@@ -46,7 +46,7 @@ const EXTENSIONS = { png: 'png', jpeg: 'jpg', webp: 'webp' } as const;
 // The refusals of a picture, by the key of their message in the interface catalogs (local/text/), where the bot finds
 // its translation, and by their code in a log row.
 export const REFUSAL_CODES = { referenceType: 'type', referenceBroken: 'broken', referenceSmall: 'small', referenceHuge: 'huge',
-  referenceShape: 'shape', referenceTooLarge: 'too_large', referenceIncomplete: 'incomplete', referenceArchive: 'archive' } as const;
+  referenceTooLarge: 'too_large', referenceIncomplete: 'incomplete', referenceArchive: 'archive' } as const;
 export type PictureRefusal = keyof typeof REFUSAL_CODES;
 const refusal = (key: PictureRefusal) => new UserError(texts('ru').errors[key], key);
 
@@ -74,11 +74,10 @@ export function strippedReference(bytes: Uint8Array): ReferencePicture {
   let picture: Picture;
   // A file cut short, or lying about its lengths, is broken, whatever the reading tripped on.
   try { picture = { png, jpeg, webp }[format](bytes); } catch (error) { throw error instanceof UserError ? error : refusal('referenceBroken'); }
-  const { min, max, ratio } = REFERENCE_SIDES;
+  const { min, max } = REFERENCE_SIDES;
   const across = Math.min(picture.width, picture.height), along = Math.max(picture.width, picture.height);
   if (across < min) throw refusal('referenceSmall');
   if (along > max) throw refusal('referenceHuge');
-  if (along > across * ratio) throw refusal('referenceShape');
   return { ...picture, strippedBytes: Math.max(0, bytes.length - picture.bytes.length) };
 }
 

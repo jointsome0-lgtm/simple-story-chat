@@ -223,7 +223,9 @@ const promptKey = (node: Graph[string], role: 'positive' | 'negative') => {
 // that names a file in the server's input directory, which is what `--references` uploads. A slot may reach its loader
 // through one node that takes an image and hands one on, a scale node (the action run's references, at a size of their
 // own: docs/action-experiment.md#portraits-and-views): `scale` is that node, and the file is named on the loader behind it.
-export type Slot = { node: string; key: string; loader: string; scale?: string };
+// The bot's scale node of a picture more drawn out than the card takes has a pad node between it and its loader, `pad`
+// (local/picture-references.ts `referenceGraph`).
+export type Slot = { node: string; key: string; loader: string; scale?: string; pad?: string };
 export function referenceSlots(graph: Graph): Slot[] {
   const found: (Slot & { order: number })[] = [];
   for (const [node, { inputs }] of Object.entries(graph)) {
@@ -233,8 +235,11 @@ export function referenceSlots(graph: Graph): Slot[] {
       if (!slot || !linked || !graph[linked] || !('image' in graph[linked].inputs)) continue;
       const through = graph[linked].inputs.image;
       const behind = Array.isArray(through) ? String(through[0]) : null;
+      const pad = behind !== null && graph[behind]?.class_type === 'ImagePadForOutpaint' ? graph[behind].inputs.image : null;
+      const beyond = Array.isArray(pad) ? String(pad[0]) : null;
       if (behind === null) found.push({ node, key, order: Number(slot[1]), loader: linked });
       else if (graph[behind] && typeof graph[behind].inputs.image === 'string') found.push({ node, key, order: Number(slot[1]), loader: behind, scale: linked });
+      else if (beyond !== null && graph[beyond] && typeof graph[beyond].inputs.image === 'string') found.push({ node, key, order: Number(slot[1]), loader: beyond, scale: linked, pad: behind });
     }
   }
   return found.sort((a, b) => a.order - b.order).map(({ order, ...slot }) => slot);
@@ -326,8 +331,9 @@ export function applyToWorkflow(graph: Graph, values: WorkflowValues): Graph {
       else {
         delete filled[slot.node].inputs[slot.key];
         delete filled[slot.loader];
-        // The whole chain of a slot this frame does not use: a scale node left behind would read a loader that is gone.
+        // The whole chain of a slot this frame does not use: a scale or pad node left behind would read a loader that is gone.
         if (slot.scale) delete filled[slot.scale];
+        if (slot.pad) delete filled[slot.pad];
       }
     });
   }

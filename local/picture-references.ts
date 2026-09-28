@@ -89,12 +89,31 @@ export function referenceGraph(base: Graph, references: number | Size[]): Graph 
   encoder.inputs.vae = [vae[0], 0];
   encoder.inputs.resolution = 0;
   for (let slot = 1; slot <= count; slot++) {
-    const image = add({ class_type: 'LoadImage', inputs: { image: '' } });
+    let image = add({ class_type: 'LoadImage', inputs: { image: '' } }), size = sizes[slot - 1];
+    const pad = referencePad(size);
+    if (pad) {
+      image = add({ class_type: 'ImagePadForOutpaint', inputs: { image, ...pad, feathering: 0 } });
+      size = { width: size.width + pad.left + pad.right, height: size.height + pad.top + pad.bottom };
+    }
     encoder.inputs[`images.image_${slot}`] = add({ class_type: 'ImageScale', inputs: {
-      image, upscale_method: 'area', ...referenceScale(sizes[slot - 1]), crop: 'disabled',
+      image, upscale_method: 'area', ...referenceScale(size), crop: 'disabled',
     } });
   }
   return graph;
+}
+
+// A picture more drawn out than REFERENCE_RATIO, which the bot refused until the owner's decision of 2026-09-28, is
+// padded to that shape on the card before it is scaled: grey along both of its long sides, half of what is missing on
+// each. ImagePadForOutpaint (nodes.py at 73c9bad4) fills what it adds with 0.5; its feathering only shapes the mask,
+// which this graph drops, by a Python loop over every pixel, so it is 0. The server checks the node's sides against
+// their min and max alone, not their step of 8 (execution.py). A picture within the ratio gets no pad node, and its
+// graph is the one it always was.
+const REFERENCE_RATIO = 2.5;
+function referencePad({ width, height }: Size) {
+  const missing = Math.ceil(Math.max(width, height) / REFERENCE_RATIO) - Math.min(width, height);
+  if (missing <= 0) return undefined;
+  const before = Math.floor(missing / 2), after = missing - before;
+  return width < height ? { left: before, top: 0, right: after, bottom: 0 } : { left: 0, top: before, right: 0, bottom: after };
 }
 
 // The size a reference is scaled to before the encoder, which at resolution 0 takes a picture at its own size in

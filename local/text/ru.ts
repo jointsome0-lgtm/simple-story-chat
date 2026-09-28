@@ -330,11 +330,11 @@ export const ru = {
     // A portrait of the reader's own in place of the drawn one (local/reference.ts), for a reader in the reference
     // experiment: the button on the card, the wait for it, the line under the wait for a person who has a portrait, and
     // the card's line once it is kept. `width` and `height` are its size in pixels; `min`, `max` and `megabytes` are
-    // REFERENCE_SIDES and REFERENCE_BYTES there, and 2.5 is REFERENCE_SIDES.ratio. Once it is kept, the reader gets
+    // REFERENCE_SIDES and REFERENCE_BYTES there. Once it is kept, the reader gets
     // `kept` and `retention` above.
     ownPortrait: '📎 Свой портрет',
     ownPortraitTitle: (person: string, story: string) => `📎 Свой портрет: ${person} · ${story}`,
-    ownPortraitNote: (min: number, max: number, megabytes: number) => `Пришли картинку этого персонажа фотографией или файлом PNG, JPEG или WebP, до ${megabytes} МБ: короткая сторона от ${min} пикселей, длинная до ${max} и не больше чем в 2,5 раза длиннее короткой. Бот не обрезает и не растягивает картинку. Только рисунок: фотографию реального человека присылать нельзя. Бот удалит из файла метаданные (место, камеру, подписи) и сохранит картинку как портрет персонажа: кадры будут брать её так же, как нарисованный портрет. Бот ждёт полчаса; выйти без изменений можно кнопкой «↩️» или командой /cancel.`,
+    ownPortraitNote: (min: number, max: number, megabytes: number) => `Пришли картинку этого персонажа фотографией или файлом PNG, JPEG или WebP, до ${megabytes} МБ: короткая сторона от ${min} пикселей, длинная до ${max}. Бот не обрезает и не растягивает картинку. Только рисунок: фотографию реального человека присылать нельзя. Бот удалит из файла метаданные (место, камеру, подписи) и сохранит картинку как портрет персонажа: кадры будут брать её так же, как нарисованный портрет. Бот ждёт полчаса; выйти без изменений можно кнопкой «↩️» или командой /cancel.`,
     ownPortraitReplaces: 'Новая картинка заменит сохранённый портрет. Если потом нарисуешь и оставишь портрет, он снова займёт это место.',
     ownPortraitKept: (width: number, height: number) => `🖼 Портрет сохранён: твоя картинка, ${width}×${height}. Кадры берут её так же, как нарисованный портрет.`,
     // A person's pictures in many poses (local/pose-set.ts), for a reader in SIMPLE_CHAT_POSE_SET_USERS: the button that
@@ -902,7 +902,6 @@ export const ru = {
     referenceBroken: 'Не получилось разобрать картинку: файл повреждён или записан так, как бот не читает. Пересохрани её и пришли снова.',
     referenceSmall: 'Картинка слишком маленькая: короткая сторона должна быть не меньше 320 пикселей. Пришли побольше.',
     referenceHuge: 'Картинка слишком большая: длинная сторона должна быть не больше 4096 пикселей. Пришли поменьше.',
-    referenceShape: 'Картинка слишком вытянута: длинная сторона может быть не больше чем в 2,5 раза длиннее короткой. Бот её не обрезает и не растягивает; обрежь её ближе к персонажу и пришли снова.',
     referenceTooLarge: 'Файл слишком большой: картинка может весить до 10 МБ. Пришли поменьше.',
     referenceIncomplete: 'Не удалось получить картинку целиком. Ничего не изменилось; пришли её ещё раз.',
     referenceArchive: 'Это архив, а нужна одна картинка: фотография или файл PNG, JPEG или WebP.',

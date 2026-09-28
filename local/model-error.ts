@@ -42,9 +42,9 @@ const REFERENCE_SENT = ['photo', 'document'] as const;
 const REFERENCE_FORMATS = ['png', 'jpeg', 'webp'] as const;
 const REFERENCE_PLACES = POSES;
 // Why such a picture was refused (local/reference.ts `REFUSAL_CODES`): not a PNG, JPEG or WebP, or not one the bot
-// reads; its shorter side too short, its longer side too long, or the two too far apart; its bytes over the limit;
-// its download cut short; or an archive where a picture was awaited.
-const REFERENCE_REFUSALS = ['type', 'broken', 'small', 'huge', 'shape', 'too_large', 'incomplete', 'archive'] as const;
+// reads; its shorter side too short or its longer side too long; its bytes over the limit; its download cut short; or
+// an archive where a picture was awaited. Rows before 2026-09-28 may also say `shape`, the two sides too far apart.
+const REFERENCE_REFUSALS = ['type', 'broken', 'small', 'huge', 'too_large', 'incomplete', 'archive'] as const;
 // Why a picture of a pose set was not kept (local/pose-set.ts): a refusal of a picture of the reader's own, or the set
 // full, or its bytes or all the reader's sets' over their limits.
 export const POSE_SET_REFUSALS = [...REFERENCE_REFUSALS, 'full', 'person_bytes', 'reader_bytes'] as const;
