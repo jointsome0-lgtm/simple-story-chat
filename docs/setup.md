@@ -43,6 +43,7 @@ The variables go in `.env`, and [.env.example](../.env.example) is the starting 
 | `SIMPLE_CHAT_IMAGE_STYLE` | Optional: one line, the [picture style](telegram-ui.md#picture-styles) of a reader who has not chosen another; by default the line the [six steps](illustrations-plan.md#description-steps) were measured with |
 | `SIMPLE_CHAT_IMAGE_WAIT_SECONDS` | Optional: how long one picture may take, 180 by default (5 to 1800). A picture that outlives it is stopped on the card; the story is not affected either way |
 | `SIMPLE_CHAT_SHEET_VERSION_USERS` | Optional: numeric Telegram IDs separated by commas, all of them from `SIMPLE_CHAT_IMAGE_USERS`. **Empty by default.** Their frames name the lasting changes the story makes to a person's look, which then hold from that scene on down its line, and they may write a person's text «only from this moment» ([along the story](telegram-ui.md#along-the-story)). Everybody else's frames are as before |
+| `SIMPLE_CHAT_POSE_SET_USERS` | Optional: numeric Telegram IDs separated by commas, all of them from `SIMPLE_CHAT_IMAGE_REFERENCE_USERS`. **Empty by default.** They may give a person up to 100 pictures, which a small model on this computer sorts by pose, and each frame takes the one that fits ([pose sets](#pose-sets)). Everybody else's frames are as before |
 
 ### Model settings
 
@@ -97,10 +98,47 @@ upload used by experiments is never used here. See [the retention rules](gpu.md#
 was acknowledged. Neither row contains a name, path, hash, portrait or prompt. A failed cleanup leaves the sweeper's
 ten-minute cap in force.
 
+<a id='pose-sets'></a>
+
+#### Pose sets
+
+`SIMPLE_CHAT_POSE_SET_USERS` gives readers of the reference experiment pose sets ([what a reader gets](telegram-ui.md#pose-set)):
+up to 100 pictures of a person, sent at once, captioned by pose on this computer and sorted into six groups at most, of
+which each frame takes the one whose pose fits. Every listed ID must be in `SIMPLE_CHAT_IMAGE_REFERENCE_USERS`, the
+owner's too. A set works only while `SIMPLE_CHAT_IMAGE_REFERENCES=true` and `SIMPLE_CHAT_PROVIDER` is `llama-cpp` or
+`simple-serving`, since the captions go into each frame's request and no hosted API is to see them; otherwise a reader's
+sets stay and can be removed, and frames do not take them. With the list empty nothing changes for anybody.
+
+The captioner runs beside the bot, on this computer's CPU, and the bot starts and ends it itself. Install it once:
+
+```sh
+bash captioner/setup.sh
+```
+
+It makes a CPU-only Python environment in `captioner/.venv` (Python 3.14, torch 2.14.0, transformers 5.17.0, Pillow
+12.3.0, all pinned) and downloads openjev 0.8B (`AlexWortega/openjev` at revision
+`a298f274886c4676c42f1a4262401b6aa9653e6d`, MIT) into `models/pose-captioner`: six files, 1.73 GB, each checked
+against its SHA256 before it is kept. It needs uv and about 3.5 GB of disk with the environment. Without it the pictures
+are kept and wait uncaptioned, the bot logs `pose_captioner_failed` with `captioner_unavailable` and tries again every
+ten minutes, and frames take nobody's set until their pictures are captioned; nothing else is affected.
+
+The captioner reads each picture from the reader's directory beside the database and answers with three labels and a
+number; it opens no connection, gets none of the bot's environment, and runs niced on four threads. It takes about 4 s
+of the CPU a picture, once, and about 4 GB of memory while it runs (5.7 GB at its peak as it loads), and ends a minute
+after the last picture. It runs here rather than on the picture card: the pictures and their captions never leave this
+computer, no card is rented or woken for them, the card's memory stays ComfyUI's, and the bot itself gets no image
+library. What it was chosen by, and its limits, are in [the measurement](knowledge/pose-captioner-2026-09-28.md).
+
+The limits: 100 pictures and 300 MB a person, 600 MB a reader, and each picture as a picture of the reader's own
+([references](telegram-ui.md#references)): a drawing, PNG, JPEG or WebP, at most 10 MB, the shorter side at least 320
+pixels, the longer at most 4096 and 2.5 times the shorter, with its metadata stripped. Frames take the chosen picture
+with the experiment's instruction unchanged, which tells the picture model to take identity alone from a reference; what
+a fitting pose does to the pictures has not been measured.
+
 ### Backup and restore
 
 The database is the file at `SIMPLE_CHAT_DB_PATH`. The portraits readers keep lie beside it in `<path>.portraits/`, and only the database says whose each one is: a backup takes both, copied while the bot is stopped, so that no portrait is kept or swept in between.
-A picture a reader sends as a person's own portrait lies there too, in the format it came in and stripped of its metadata on its way in, and is kept and swept as a portrait is: while the sheet or a recipe refers to it, and no longer.
+A picture a reader sends as a person's own portrait lies there too, in the format it came in and stripped of its metadata on its way in, and is kept and swept as a portrait is: while the sheet or a recipe refers to it, and no longer. So do the pictures of a [pose set](#pose-sets), up to 600 MB a reader.
 Restore both from the same backup, also while the bot is stopped: at startup the bot deletes every portrait file that
 its library does not refer to (`sweepPortraits` in `local/store.ts`).
 

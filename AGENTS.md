@@ -81,6 +81,7 @@ applies there.
 | `lib/library.ts`| Pure story-library logic: the library's types and the operations on it. |
 | `examples/`     | Synthetic seeds and eval scenarios. Safe to read and to send to models. |
 | `gpu/`          | Renting a card and setting up llama.cpp or ComfyUI on it ([docs/gpu.md](docs/gpu.md), [docs/llama-cpp.md](docs/llama-cpp.md)). |
+| `captioner/`    | The pose captioner the bot runs on this computer's CPU for pose sets, and its setup ([docs/setup.md](docs/setup.md#pose-sets)). |
 | `docs/`         | Working instructions and the research notes that the README lists. |
 | `docs/knowledge/` | Dated measurements, checks and the full records of past steps. |
 | `data/`, `backups/`, `exports/`, `logs/`, `.env*` | Local state, gitignored. See Privacy above. |
