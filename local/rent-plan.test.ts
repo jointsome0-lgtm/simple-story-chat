@@ -332,17 +332,26 @@ test('an answer that is not certain is never taken for the outcome, of a rental,
       'GET 0s, PUT 0s guard 10800s', uncertain('no instance named')],
     ['a create request that never came back', { STUB_PUT: 'reject' }, ['--gpus', '2'], 1, ['candidates', 'attempt_uncertain'],
       'GET 0s, PUT 0s guard 10800s', uncertain('no answer')],
-    // Before a rental of an hour, the dry run prices each offer for all of it: $0.921 and $0.971 an hour over
-    // 1 h 20 min 20 s, and $0.16 of traffic.
+    // Before a rental of an hour, the dry run prices each offer for all of it, rounded up to the cent: $0.921 and
+    // $0.971 an hour over 1 h 20 min 20 s, and $0.16 of traffic.
     ['the dry run of an hour', { SIMPLE_CHAT_RENT_DRY_RUN: '1' }, ['--gpus', '2', '--hours', '1'], 0, ['candidates', 'would_try', 'would_try'],
       'GET 0s', ({ label, events: [candidates, ...tried] }) => assert.deepEqual([candidates.sessionHours, ...tried.map(one => [one.id, one.session])],
-        [1.34, ['first', 1.39], ['second', 1.46]], label)],
+        [1.34, ['first', 1.4], ['second', 1.47]], label)],
+    // A rent held to its quote tries no dearer offer, whatever the search returns; one that no offer is within rents
+    // nothing; a quote that is not a sum of dollars is refused before anything is asked.
+    ['a dry run held to a quote', { SIMPLE_CHAT_RENT_DRY_RUN: '1' }, ['--gpus', '2', '--hours', '1', '--max-session', '1.46'], 0,
+      ['candidates', 'would_try'], 'GET 0s', ({ label, events: [candidates, tried] }) => assert.deepEqual([candidates.droppedForSession, tried.id],
+        [1, 'first'], label)],
+    ['a rent that no offer is within', { STUB_PUT: 'contract' }, ['--gpus', '2', '--hours', '1', '--max-session', '1.39'], 1,
+      ['candidates', 'none_within_max_session'], 'GET 0s'],
+    ...['', '0', '1.5x', '1.234'].map((quote): Row => [`a quote of '${quote}'`, { STUB_PUT: 'contract' }, ['--hours', '1', '--max-session', quote], 1,
+      ['bad_arguments'], '']),
     // An answer that names its instance ends the loop, with the operator's own deadline: the guard's hour and the
     // quarter of an hour the box is given to start, counted from before the request that created the machine, never
     // from its answer, which took fifty seconds here.
     ['an answer that names its instance', { STUB_PUT: 'contract' }, ['--gpus', '2', '--hours', '1'], 0, ['candidates', 'rented'],
       'GET 0s, PUT 0s guard 3600s', ({ label, events: [, rented] }, before) => {
-        assert.deepEqual([rented.offer, rented.instance], ['first', 123], label);
+        assert.deepEqual([rented.offer, rented.instance, rented.session], ['first', 123, 1.4], label);
         assert.ok(rented.destroyBy >= before + 3600 + BOOT_SECONDS && rented.destroyBy <= Date.now() / 1000 + 3600 + BOOT_SECONDS, label);
       }],
     // The other end of a rental, by its ID and the account's key alone. Nothing is asked without an ID, or of one that

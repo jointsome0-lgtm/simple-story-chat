@@ -16,7 +16,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BOOT_SECONDS, MAX_DPH_BY_GPUS, ONSTART_MAX_BYTES, REQUEST_MS, chooseOffers, createBody, destroyInstance, emptyReason,
-  instanceState, offerQuery, redactedBody, rentPlan, sshRoute, startInstance } from '../local/rent-plan.ts';
+  instanceState, offerQuery, redactedBody, rentPlan, sessionCost, sshRoute, startInstance } from '../local/rent-plan.ts';
 
 const ATTEMPTS = 4;
 // Every request carries a deadline. A search that never answers would hang with the owner watching; a create
@@ -96,8 +96,10 @@ const rest = args.filter(argument => argument !== '--print-body');
 // `--hours 1|2|3` is when trial-onstart.sh's guard deletes the machine, three hours unless a session asks for less;
 // the guard never extends it, and ends it sooner when told to (docs/identity-experiment.md#termination,
 // "we're done"). A session that gives its hours is priced by them (`rentPlan`), and `--qwen only` prices a picture
-// machine by Qwen's files alone, which is what SIMPLE_CHAT_IMAGE_QWEN=only pulls.
-const options = { '--gpus': '1', '--lane': 'both', '--avoid-host': '', '--hours': '', '--qwen': '' };
+// machine by Qwen's files alone, which is what SIMPLE_CHAT_IMAGE_QWEN=only pulls. `--max-session DOLLARS` holds a rent
+// to the quote its budget was checked against: an offer whose session (below) costs more is not tried, whatever the
+// search returns by then.
+const options = { '--gpus': '1', '--lane': 'both', '--avoid-host': '', '--hours': '', '--qwen': '', '--max-session': null };
 let known = rest.length % 2 === 0;
 for (let at = 0; known && at < rest.length; at += 2) {
   if (Object.hasOwn(options, rest[at])) options[rest[at]] = rest[at + 1]; else known = false;
@@ -105,7 +107,9 @@ for (let at = 0; known && at < rest.length; at += 2) {
 const gpus = Number(options['--gpus']), lane = options['--lane'], hours = Number(options['--hours'] || 3);
 const avoidHosts = options['--avoid-host'] === '' ? [] : options['--avoid-host'].split(',');
 if (!avoidHosts.every(host => /^[1-9]\d*$/.test(host)) || !/^[123]?$/.test(options['--hours'])
-  || !/^(only)?$/.test(options['--qwen'])) known = false;
+  || !/^(only)?$/.test(options['--qwen'])
+  || (options['--max-session'] !== null && !(/^\d+(\.\d{1,2})?$/.test(options['--max-session']) && Number(options['--max-session']) > 0))) known = false;
+const maxSession = options['--max-session'] === null ? null : Number(options['--max-session']);
 let plan = null;
 try {
   if (known && MAX_DPH_BY_GPUS[gpus]) {
@@ -114,14 +118,14 @@ try {
 } catch { /* reported below */ }
 if (!plan) {
   console.log(JSON.stringify({ event: 'bad_arguments', usage: 'rent.mjs [--gpus 1|2] [--lane both|text|pictures|small] [--avoid-host ID[,ID...]] '
-    + '[--hours 1|2|3] [--qwen only] [--print-body] | --show ID | --start ID | --destroy ID' }));
+    + '[--hours 1|2|3] [--qwen only] [--max-session DOLLARS] [--print-body] | --show ID | --start ID | --destroy ID' }));
   process.exit(1);
 }
 // --print-body is reviewed before a rental, so it must not need the API key to be exported.
 if (!key && !printBody) { console.log(JSON.stringify({ event: 'no_key' })); process.exit(1); }
 // The hours the session is priced by, and what an offer costs over them, the hours and the traffic together.
 const sessionHours = Math.round(plan.sessionHours * 100) / 100;
-const session = offer => Math.round((offer.hour * plan.sessionHours + offer.download) * 100) / 100;
+const session = offer => sessionCost(offer, plan);
 
 // The key is read before --print-body prints anything, because the body carries it. A key that has not been made
 // yet is an ordinary outcome of this script, not a crash: --print-body is run on a machine where nothing is set up.
@@ -168,18 +172,21 @@ if (offers === null) { console.log(JSON.stringify({ event: 'search_failed', stat
 const choice = chooseOffers(offers, plan);
 const { offered, withinPrice, droppedForUnknownPrice, droppedForCountry, droppedForFewCores,
   droppedForProxyOnly, droppedForRam } = choice;
-const candidates = choice.candidates.filter(offer => !avoidHosts.includes(String(offer.host)));
-const droppedForHost = choice.candidates.length - candidates.length;
+const avoided = choice.candidates.filter(offer => !avoidHosts.includes(String(offer.host)));
+const droppedForHost = choice.candidates.length - avoided.length;
+const candidates = maxSession === null ? avoided : avoided.filter(offer => session(offer) <= maxSession);
+const droppedForSession = avoided.length - candidates.length;
 // A rule that drops offers says so: silence would read as "nothing was excluded". The counts are a chain -- what
 // the search returned, what the price left, then each later rule -- and `chosen` is what is left to try, which is
 // not `withinPrice`: the price is only the first rule of four.
 console.log(JSON.stringify({ event: 'candidates', offered, withinPrice, chosen: candidates.length,
   maxHour: plan.maxHour, gpus: plan.gpus, lane: plan.lane, sessionHours, droppedForUnknownPrice, droppedForCountry, droppedForFewCores, droppedForProxyOnly,
-  minDirectPorts: plan.minDirectPorts, droppedForRam, minRamGb: plan.minRamGb, droppedForHost, avoidHost: avoidHosts.join(',') || null }));
+  minDirectPorts: plan.minDirectPorts, droppedForRam, minRamGb: plan.minRamGb, droppedForHost, avoidHost: avoidHosts.join(',') || null,
+  droppedForSession, maxSession }));
 // Which rule emptied the list, so that a session lost to an empty search, to cores, to ports or to RAM is not read
 // as a price to raise.
 if (!candidates.length) {
-  console.log(JSON.stringify({ event: choice.candidates.length ? 'only_the_avoided_host' : emptyReason(choice) }));
+  console.log(JSON.stringify({ event: avoided.length ? 'none_within_max_session' : choice.candidates.length ? 'only_the_avoided_host' : emptyReason(choice) }));
   process.exit(1);
 }
 
@@ -219,7 +226,7 @@ for (const offer of candidates.slice(0, ATTEMPTS)) {
   // Whatever the box says, the rental's termination begins then at the latest (docs/identity-experiment.md#one-hour).
   if (rented) {
     console.log(JSON.stringify({ event: 'rented', ...machine, instance: parsed.new_contract, reason: null,
-      destroyBy: Math.floor(asked / 1000) + hours * 3600 + BOOT_SECONDS }));
+      destroyBy: Math.floor(asked / 1000) + hours * 3600 + BOOT_SECONDS, session: session(offer) }));
     process.exit(0);
   }
   // A refusal is a status outside 2xx or Vast's own `success: false`, and only a refusal is safe to answer by

@@ -185,6 +185,12 @@ export type Choice = {
   droppedForFewCores: number; droppedForProxyOnly: number; droppedForRam: number;
 };
 
+// What an offer costs over the session's hours with its traffic, in dollars rounded up to the cent: the sum a dry run
+// quotes and `--max-session` holds a rent to, so that no rounding lets a dearer offer through.
+export function sessionCost(offer: { hour: number; download: number }, plan: RentPlan): number {
+  return Math.ceil((offer.hour * plan.sessionHours + offer.download) * 100 - 1e-9) / 100;
+}
+
 // Every rule that drops offers reports how many it dropped, and each rule is its own step: a rule folded into
 // another one has no count and cannot be named as the reason the list is empty. An unknown core count or container
 // RAM is not a reason to drop an offer, only a known-too-small one is.
