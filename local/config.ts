@@ -221,12 +221,15 @@ export function imageConfig(env: Env, directory: string, allowedUsers: Set<strin
   // Pose sets (local/pose-set.ts) are a part of the reference experiment, so a reader outside it is a typo too. Their
   // captioner is the one captioner/setup.sh installs beside the bot, on this computer: its interpreter, its script and
   // its weights, found where that script puts them, and a picture that waits for it while they are missing waits on.
+  // That is the tree this code is in, not `directory`, which holds the .env and the data: the live bot runs in the main
+  // tree while its code, and so its captioner, comes from a worktree of its own.
   const poseSetUsers = new Set((env.SIMPLE_CHAT_POSE_SET_USERS || '').split(',').map(one => one.trim()).filter(Boolean));
   for (const user of poseSetUsers) if (!referenceUsers.has(user)) {
     throw new Error('Every SIMPLE_CHAT_POSE_SET_USERS entry must be one of SIMPLE_CHAT_IMAGE_REFERENCE_USERS');
   }
-  const captioner = poseSetUsers.size ? { python: resolve(directory, 'captioner/.venv/bin/python'), script: resolve(directory, 'captioner/caption.py'),
-    model: resolve(directory, 'models/pose-captioner'), threads: 4 } : undefined;
+  const root = resolve(import.meta.dirname, '..');
+  const captioner = poseSetUsers.size ? { python: resolve(root, 'captioner/.venv/bin/python'), script: resolve(root, 'captioner/caption.py'),
+    model: resolve(root, 'models/pose-captioner'), threads: 4 } : undefined;
   // One HTTP request of the picture lane is a submit, a poll or a download through the tunnel, never the drawing
   // itself: it may be short even when a picture may take minutes.
   return { url: url.origin, workflow: resolve(directory, workflow), checkpoint, style, users,

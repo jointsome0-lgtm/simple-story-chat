@@ -109,11 +109,16 @@ owner's too. A set works only while `SIMPLE_CHAT_IMAGE_REFERENCES=true` and `SIM
 `simple-serving`, since the captions go into each frame's request and no hosted API is to see them; otherwise a reader's
 sets stay and can be removed, and frames do not take them. With the list empty nothing changes for anybody.
 
-The captioner runs beside the bot, on this computer's CPU, and the bot starts and ends it itself. Install it once:
+The captioner runs beside the bot, on this computer's CPU, and the bot starts and ends it itself. Install it once, in
+the tree the bot's code runs from:
 
 ```sh
 bash captioner/setup.sh
 ```
+
+The bot looks for `captioner/.venv`, `captioner/caption.py` and `models/pose-captioner` beside its own `local/`, not in
+the directory it is started in, which holds `.env` and the data: a bot started in the main tree with its code from a
+worktree finds the captioner the worktree has.
 
 It makes a CPU-only Python environment in `captioner/.venv` (Python 3.14, torch 2.14.0, transformers 5.17.0, Pillow
 12.3.0, all pinned) and downloads openjev 0.8B (`AlexWortega/openjev` at revision
