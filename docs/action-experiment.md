@@ -3464,11 +3464,14 @@ reader's turn goes first.
   never past 3 minutes before the card's end, whichever comes first, with its own deadline a minute before that and a
   hard stop at it: $0.28 at most. Each story is kept as far as it got; failed or cut comparisons are left out. It
   stops itself on `budget_exceeded` or `unauthorized`, and `card/probe.jsonl` shows each `failed`. Six Astra sessions
-  judge it after the card. **It runs only if** the story-bible session's rehearsals against simple-serving's
-  development gateway pass first, within 45 minutes: the gateway's queue full, a cancellation in the middle of a
-  request, and the JSON paths of the compaction and the sheet. They were running when this was written; that session
-  sends its final command once they pass, and this paragraph then says so. Otherwise the text card runs T1 and T2
-  alone and ends, and the runbook below works either way.
+  judge it after the card. **It runs because** the story-bible session's rehearsals against simple-serving's
+  development launcher passed first, from 15:12 to 15:36 UTC on 2026-09-28, with a fake engine answering in JSON: the
+  JSON paths whole (9 stories of 9 with their compactions and sheets), the deadline's abort in the middle of a request
+  and the resume after it (9 of 9), and the gateway's queue full (429 `queue_full` asked again until the load ended,
+  then every story whole). The runbook's line is that session's final command, `--max-minutes 30` included, with the
+  hard stop around it and its `--deadline` a minute before the stop, so that its own stop and save come first. At
+  about 6 to 7 minutes an arm alone on the gateway, the cap may cut `with`'s last stories, which are left out of the
+  judging.
 
 **What the gateway takes.** The card's gateway runs two internal calls at a time with eight waiting (simple-serving's
 provisional limits, which the card keeps) and answers one more with `queue_full`, which the bot's adapter reports as
@@ -3495,8 +3498,9 @@ bootstrap refuses to start unless its downloads and 13 GiB more are free, 38 GiB
 a fresh box nor the cu130 environment's size has been read on a card. Short, it would refuse at its start, and a
 second bootstrap without the enhancer would cost P2 its PE and PT. The 40 GB more cost $0.01 to $0.05 an hour at the
 $0.207 to $0.87 a GB-month hosts have charged, and the rent dry run then prices the lane's default 36.5 GB of
-download, nearer the 31.8 than `--qwen only`'s 22.3. Without PE and PT the card goes back to `--qwen only`. The card
-check prints the disk, so the next rental knows.
+download, nearer the 31.8 than `--qwen only`'s 22.3. Without PE and PT the card goes back to `--qwen only`. The main
+session accepted the 100 GB on 2026-09-28, for the next Astra check to read, and the card check prints the disk, so the
+next rental knows.
 
 Both jobs go without `front`, one job at a time, so a reader's picture goes before the next cell. P1 starts as soon
 as the check passes, P2 as soon as P1 ends, whatever the text card is doing: neither needs a text model or waits for
@@ -3589,7 +3593,7 @@ arms probe against the same fake and its judge against stand-ins for codex; the 
 development gateway with its fake engine, 292 answers parsed with `lasting_changes` first in all 146 of `with`
 (`sheet-versions/rehearse.sh`, which is run again on the day); the runbook's helpers against stand-ins and a dry-run
 destroy (`tester-stand/rehearse-ends.sh`, below); and a `dress` session of fifteen pictures with a real Astra judge
-([the stand's dry run](#tester-stand)). T3 goes on its own rehearsals, as above. On the day: Astra's reading of this
+([the stand's dry run](#tester-stand)). T3's rehearsals passed, as above. On the day: Astra's reading of this
 plan again; the dry runs again on the commits that run the jobs; and the rent dry runs, which the runbook reads for
 the rule on money. No inhibitor keeps this machine awake: GNOME's idle suspend is off on mains power, and the PC has
 no battery and no lid. It slept from 11:14 to 12:18 UTC on 2026-09-28, which was no idle suspend, so the owner is
@@ -3754,12 +3758,13 @@ alive text && {
   wait; }
 node "$runs/tester-stand/card-probe.mts" --summary --out "$runs/tester-stand/card" | tail -n 1    # T1's criteria
 node "$runs/sheet-versions/run.mts" --summary --out "$runs/sheet-versions/card"    # T2's counts and criteria
-# T3 only if its paragraph above says its rehearsals passed; else straight to the end. Once T1 and T2 have ended, for
-# 30 minutes or to 3 minutes before the card's end, whichever comes first, with its own deadline a minute sooner:
+# T3, the story-bible session's final command, once T1 and T2 have ended: killed after 30 minutes or 3 minutes before
+# the card's end, whichever comes first, with its own deadline a minute sooner. card/probe.jsonl shows each
+# `"failed":true` and the `end` row; the same command resumes.
 t3=$(( $(date +%s) + 1800 )); (( t3 <= end_text - 180 )) || t3=$(( end_text - 180 ))
 alive text && (cd "$runs/bible/probe" && upto "$t3" 20 node run.mts --root /home/jo/work/simple-chat --out ./card \
   --model serving:gemma-4-31b-heretic-nvfp4 --arms without,rule,with --scenes 12 --compact-after 7,11 --parallel 3 \
-  --deadline "$(date -u -d @$(( t3 - 60 )) +%FT%TZ)" > t3.log 2>&1; echo "T3 exit $?")
+  --max-minutes 30 --deadline "$(date -u -d @$(( t3 - 60 )) +%FT%TZ)" > t3.log 2>&1; echo "T3 exit $?")
 # The text card's end, as soon as its queue is empty:
 calm 8080; echo "calm $?"    # then Ctrl+C in terminal 2: the live bot's scenes are off the card
 stop_card text
@@ -3823,9 +3828,5 @@ on branch `tester-stand`, which is rebased onto openai-compatible-provider and n
 and the places, the views and the versions wait for their probe's criteria. Once the clothes are on for the tester, the
 tester's own case of a person left naked is the tester's to check.
 
-**Still open** before the rental:
-
-- T3's rehearsals and its final command, from the story-bible session. Without them the text card runs T1 and T2 alone.
-- The disk: 100 GB stands in for a measurement nobody has made. The card check's `df` settles it for the next rental.
-- T3 runs from ~/work/simple-chat's working tree, so whatever lands there before the rental is what it runs: the dry
-  runs on the day are for that.
+T3 runs from ~/work/simple-chat's working tree, so nothing is merged there before the cards: the main session merges
+tester-stand after them, and the dry runs on the day check what is there.
