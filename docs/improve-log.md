@@ -8,6 +8,13 @@ and the main result with its limit. A new step gets its full entry there and its
 accepted**: tried and reverted. **Measurement**: numbers without a decision on a change. **Open**: a decision still
 waits. An open line is unfinished work, not an order to finish it.
 
+- 2026-09-28 · **measurement** · [L2: a compatible claim about an unshown past, confirmed and kept](knowledge/improve-runs.md#l2-2026-09-28).
+  One trap in set `open`, frozen after GPT-6 Astra's review: the narrator should confirm a compatible claim about a
+  shared past that no scene shows and keep to it a scene later. One run a model on `assault`: no model of the main
+  group confirmed it, each refused and kept refusing (1/2). mini and Haiku also refuse a past the record contradicts;
+  Gemma accepts that one. The heretic on the card did as Gemma in four runs over two builds, and route A's three runs
+  of `hospital` and the lighthouse walks put it at or below Gemma. One trap, one run a model; no prompt changed, and a
+  rule for the open past would go to the owner first.
 - 2026-09-27 · **not accepted** · [L1: the reference stamp as the last scene's opening, in lastMessage](knowledge/improve-runs.md#l1-2026-09-27).
   `lastMessage` said that the stamp is the last scene's opening and that a new scene begins no earlier than what that
   scene completed. Three `hospital` replays and three lighthouse walks a side on the main group: the target, a scene

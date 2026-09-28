@@ -11,6 +11,215 @@ line per decision. A new step gets its full entry here, on top, and its line the
 Paths to result directories say where the numbers came from at the time. They do not promise that the files still
 exist or that you may read them.
 
+<a id='l2-2026-09-28'></a>
+
+## 2026-09-28 · Opus 5.5 · L2: a compatible claim about an unshown past, confirmed and kept (measurement)
+
+Eval-building under the owner's lift of 2026-09-21 ([the lift](../improve-loop.md#frozen-boundaries)), the last step of
+the plan for story consistency, and no longer a change. [O2](#o2-2026-09-27) left the open-world past without a scored
+test, since the narrator's rule does not decide it, and the owner chose on 2026-09-27: «Я думаю в eval мы проверяем да.
+В боте наверное пока ограничение не ставим же?» ("I think in the eval we check for yes. In the bot we probably set no
+restriction for now, right?"). So the eval expects the narrator to confirm a compatible claim about a shared past that
+no scene shows, and the story to keep to it a scene later. The plan's L2 clause, a narrator rule, was dropped, and no
+prompt changed. If a model of the main group fails, its numbers go to the owner, and so does any prompt change.
+
+What was built.
+- The scoring (938e0b7). A trap may carry `set: 'open'`, which `eval.ts` scores apart as `sceneOpen` in a cell and
+  `sceneScoreOpen` in the summary, by the worst-model rule; the judge's `judged` event counts it in `openPassed` and
+  `openTotal`, and `eval-stats` leaves it out of its legacy instrument. Such a trap may carry `then`: the probe saves the
+  trap's scene, commits it in a copy of the story as the bot commits a scene, begins the next job there from the `then`
+  input, and the same model writes the next scene; the judge answers the `then` questions with both inputs and both
+  scenes before it. The replayed story keeps neither scene, so no other trap sees them.
+- The trap (8f7beac), `open_unrecorded_request` in the local pack's `assault`, after the last frozen scene (08:00):
+  «08:01. Ян по трубе докладывает Неле, что пересчитал запасные фонари на складе, как она велела ему в 06:52, и просит
+  отметить её поручение в журнале.» ("08:01. By tube, Ян reports to Неля that he has counted the spare lanterns at the
+  warehouse, as she told him at 06:52, and asks her to log her instruction.") No scene shows or rules out that
+  instruction: at 06:48 Неля asked Ян about the stock by the warehouse tube, and at 06:56 she spoke to Рута by another.
+  `open_request_confirmed` (yes) asks whether the scene presents the instruction as actually given. Then the model
+  writes the next scene from «Неля пересказывает Дане доклад Яна о пересчёте запасных фонарей и упомянутом в нём
+  поручении.» ("Неля retells to Дана Ян's report about counting the spare lanterns and the instruction it mentions."),
+  and `open_request_kept` (yes) asks whether that scene keeps what the previous one established about the instruction,
+  whether it was given, by whom and when; the scene must touch the instruction, and compatible additions are allowed.
+  The pack is not pushed.
+
+How it was made. An Opus 5.5 agent drafted the trap, O2's dropped `o2_unrecorded_request` with the owner's expectation,
+and checked its premises against the seed and the 16 frozen scenes. It chose spare lanterns over the empty boxes of O2's
+version, which carry the ampoules: the ampoules are the scenario's tracked resource, whose accounting rules could give a
+narrator a reason of its own to doubt the claim, so that a refusal would not show that the model treats the unrecorded
+as false. GPT-6 Astra (`codex exec` at `high`, read-only, a bundle with the scenario, the narrator's request, the judge
+and the code) reviewed the trap and the code from 20:17 to 20:20 UTC on 2026-09-27 and answered «freeze with the listed
+changes». It kept the premise, the facts and the first question, accepted the lanterns, and corrected the audit:
+lanterns also appear in scene 16, and none of the three mentions excludes spares at the warehouse. It accepted the
+second question as a check of consistency apart from confirmation, so that a model that refuses the claim and keeps
+refusing it fails the first question and passes the second, «provided `sceneOpen = 1/2` is never described as successful
+confirmation followed by retention». It rewrote the `then` input, which no longer names a tube, since Дана and Неля are
+both at headquarters, and the second question, which now needs the scene to touch the instruction; both stand word for
+word. Its three code findings were applied before the freeze: a failure to write the `then` scene, or of the judge's
+call on it, fails its own question only, where it would have cost the mode's other traps their verdicts; a resumed probe
+writes a missing `then` scene over the saved one; and `then` is accepted in set open only. On the pair with the older
+`invented_knowledge`, a claim the record contradicts, it warned: «A failure on the new trap alone cannot establish that
+the model universally treats unrecorded events as false. Keep the pair and interpret the actual scenes alongside their
+scores.»
+
+Before the freeze, a dry run went through `eval.ts`, the probe, `createModel` and `codex.ts` with a stand-in `codex`
+first on PATH, so that no request left the computer, on a scratch copy of the pack with two more open traps that failed
+on purpose. The continuation request held the trap's input, then its scene, then the `then` input, and no other trap's
+scene; the failed continuation and the failed judge call each failed one question and nothing else; and a resumed
+probe wrote only the missing continuation. `npm test` (298 passed, 3 skipped), `npm run check` and `git diff --check`
+passed.
+
+The calibration, one run a model, from 8f7beac on 2026-09-28, 00:05:28 to 00:16:54 UTC. A script waited for 00:05 and
+started only after checking that the pack's `assault` was the frozen file and that nothing under `local/`, `lib/` or
+`examples/` differed from 8f7beac. With `R=~/simple-story-chat-runs/2026-09-27/l2`:
+
+```
+TMPDIR=$R/tmp/calib-1 npm run eval -- --pack ~/simple-story-chat-eval --scenarios assault --mode plain --models openrouter:google/gemma-4-31b-it,openai:gpt-5.4-mini,claude:claude-haiku-4-5-20251001 --judge claude:claude-opus-5-5 --out $R/calib-1.json
+```
+
+Every cell finished, with no retry and no failed call. Memory · older scene traps · set o2 · set open:
+
+| Model | `assault` |
+| --- | --- |
+| Gemma 4 31B | 9/12 · 11/12 · 7/7 · 1/2 |
+| `gpt-5.4-mini` | 8/12 · 11/12 · 7/7 · 1/2 |
+| Haiku 4.5 | 10/12 · 12/12 · 7/7 · 1/2 |
+
+No model confirmed the claim. Each failed `open_request_confirmed` and passed `open_request_kept`, which by Astra's
+condition is not a confirmation kept. In every scene Неля says she gave no such instruction and does not log it:
+Gemma's and mini's first find no entry in her log, and Haiku's recalls another order at 06:52. In Gemma's and
+Haiku's, Ян then allows that he mixed it up or counted on his own; in mini's, Неля offers to log the count as done
+without an order. Every next scene retells the refusal. The pair
+Astra asked to read with the trap tells two behaviours apart. mini and Haiku also rejected `invented_knowledge`, in
+which Глеб reminds Неля of an early discussion of the collapse that the record contradicts, so both refuse an
+unrecorded past whether the record allows it or not. Gemma accepted that discussion (`prior_discussion_accepted`
+failed, as in O2) and still refused the compatible instruction, so its answers do not follow the record: it accepts
+a past the record contradicts and refuses one the record allows.
+
+The other misses. Older traps: Gemma `prior_discussion_accepted`, mini `one_tunnel_barrier`. Memory: Gemma
+`river_barriers` (stated in memory and misread), `road_barriers` and `tunnel_barriers`; mini `road_barriers`,
+`tunnel_barriers`, `river_stock` and `ruta_learns`; Haiku `road_barriers` and `river_stock`. Not scored: mini's `then`
+scene carries the trap scene's own stamp, 08:01.
+
+Cost, from `npm run eval -- usage` before and after, the day's first use: openrouter-paid 145,389 tokens and
+openai-small 168,051, 21 requests each. Haiku and the judge ran on the Claude subscription.
+
+Conclusion: a measurement. The owner's expected behaviour is met by no model of the main group: each refuses the
+compatible claim and keeps the refusal a scene later, so every model scores 1/2 and `sceneScoreOpen` is 0.5. mini and
+Haiku read the past as closed; Gemma refuses this claim and accepts a contradicted one. The narrator's prompt does not
+state the policy (O2's gap), and no prompt changed. A rule that makes the narrator confirm a compatible past is a
+prompt change, which goes to the owner first; this calibration is its baseline.
+
+Side measurements on the card's model, apart from the calibration. On 2026-09-27 the owner asked whether the tester's
+model, the heretic, behaves like the Gemma arm on the traps, so that the loop's results carry over to it. Two
+measurements on two cards answer it. Neither used paid tokens: a card is billed by the minute, and the judges ran on
+their subscriptions.
+
+The first is one run on the card's model through llama.cpp. `gemma-4-31b-heretic-q6k` ran on llama-server on the
+rented card, with one slot and 65,536 tokens of context, shared with the live tester's bot. The run used `assault` in
+`plain` with the traps, from 8f7beac, 21:01 to 21:11 UTC, through the `llama-cpp` provider and `createModel` with the
+bot's defaults. Opus 5.5 judged it as in the calibration, from 21:14 to 21:15. `memory-probe.ts` and `scene-judge.ts`
+ran directly from an empty directory, with the arguments and the model environment that `eval.ts` gives them, and a
+pass-through on this computer timed every call. The card was destroyed on the owner's word right after, so nothing else
+ran on it.
+
+| One run, 2026-09-27 | Memory | Older scene traps | Set o2 | Set open |
+| --- | --- | --- | --- | --- |
+| The card's model, llama.cpp | 8/12 | 11/12 | 7/7 | 0/2 |
+| Hosted Gemma 4 31B in [O2](#o2-2026-09-27) | 10/12 | 11/12 | 7/7 | (1/2 in the calibration above) |
+
+The card's model lost `river_barriers`, `road_barriers`, `tunnel_barriers` and `river_stock`, the four that hosted Gemma
+lost in runs 1 and 3 of [L3](#l3-2026-09-27)'s baseline and that the same build lost on
+[2026-09-22](#scenarios-2026-09-22). `river_barriers` stood in its memory and was misread at recall. Its one older miss,
+`prior_discussion_accepted`, is hosted Gemma's in O2 and in the calibration. It refused the open trap's claim. Неля
+finds nothing in the log, recalls being busy at 06:52, asks Ян whether it was really her and logs nothing. In the
+`then` scene Дана will not log it, and the narration says the instruction did not exist. The judge also failed
+`open_request_kept`, without a reason.
+
+Time on the card, from the pass-through:
+- 17 scene calls, 16 traps and one `then`, took 6.0 to 14.1 s each, median 8.6 s.
+- The scenes wrote 240 to 515 tokens at 49.5 tokens a second.
+- Uncached prompts of 3,189 to 6,618 tokens ran at 1,720 to 2,002 tokens a second.
+- The three compactions took 17.0, 30.8 and 20.6 s, and the recall 10.6 s.
+- Every completed call took at most 0.9 s beyond the server's own prompt and generation time, about the tunnel's round
+  trip, so none waited behind the tester's.
+- These prompts stayed under 7,200 tokens; a long live story's are larger.
+
+One call timed out:
+- Request 20 in the pass-through's log was the first attempt's scene of `mid_wagon_schedule`, after turn 14, with
+  `max_tokens` 4096.
+- Its token count, request 19, answered at 21:03:40 in 1.2 s.
+- Request 20 has no line: the pass-through logs a request when it ends, and the probe closed this one at 21:08:39, at
+  the provider's 300 s counted from the token count.
+- The next line is the second attempt's health check at 21:08:39.
+- The resumed call, request 24 at 21:08:41, found 7,104 of its 7,109 prompt tokens in the server's cache. No earlier
+  completed call of the run reached a prefix that long, so the server had processed request 20's prompt. The resumed
+  call wrote the scene in 11.2 s.
+- A runaway to 4096 tokens at 49.5 tokens a second takes 83 s, 87 s with the prompt, well inside the five minutes. So a
+  runaway does not explain the timeout, and the cause is unknown.
+- The probe resumed from its saved report. `eval.ts` does not resume a probe and would have scored this cell 0/12 with
+  no scene judged.
+
+The second, on the owner's word of the same night, to keep the next card busy, is the heretic through route A,
+`serving:heretic` ([our own card](../eval.md#own-card)): simple-serving 940471a in front of vLLM 0.30.0 with
+`gemma-4-31b-heretic-nvfp4`, MTP 3, an fp8 KV cache of 151,300 tokens and dense prefix retention. The tester had moved
+to this card, and our calls went as class `internal`, which the gateway serves after the readers'. It ran what the
+calibration and L1 measure for one model, three runs each: replays of `assault` and `hospital` judged by Opus 5.5, and
+walks of the lighthouse trunk judged by Opus 5.5, Fable 5.1 and GPT-6 Astra at `high`, each walk on its own copy of
+the pack. From 8f7beac on 2026-09-27, with `D=~/simple-story-chat-runs/2026-09-28/serving`: `assault` run 1 from 23:24:32
+to 23:27:57 UTC, runs 2 and 3 at once from 23:34:22 to 23:41:20, then the three `hospital` replays and the three walks
+at once, until 23:51:30.
+
+```
+TMPDIR=$D/tmp/<run> npm run eval -- --pack ~/simple-story-chat-eval --scenarios assault|hospital --mode plain --models serving:heretic --judge claude:claude-opus-5-5 --out $D/<run>.json
+TMPDIR=$D/tmp/walk-N npm run eval -- walk-nodes --pack $D/pack-walk-N --scenarios lighthouse --models serving:heretic --judges claude:claude-opus-5-5,claude:claude-fable-5-1,codex:gpt-6-astra@high --branches 0 --no-grow --max-path-tokens 6200 --out $D/walk-N/walk-nodes.json
+```
+
+No call failed: 18 compactions and 6 recalls parsed at the first attempt, with no retry, and 99 trap scenes and 24
+walk scenes came back whole; every walk node was decided by all three judges. The whitespace that the card's frame
+descriptions run into did not appear in these structured calls.
+
+| Route A, runs 1 · 2 · 3 | Memory | Older scene traps | Set o2 | Set open | Walk, consistent of 8 |
+| --- | --- | --- | --- | --- | --- |
+| `assault` | 8, 8, 8 | 8, 9, 11 | 7, 7, 7 | 1, 1, 1 | |
+| `hospital` | 3, 2, 2 | 8, 6, 8 | 6, 6, 6 | | |
+| lighthouse | | | | | 2, 2, 0 |
+
+Beside the main group. On `assault` the calibration above gave Gemma, mini and Haiku 9, 8 and 10 for memory, 11, 11
+and 12 for the older traps, 7/7 on set o2 and 1/2 on set open. On `hospital` and the walks,
+[L1](#l1-2026-09-27)'s baseline gave, as memory · older traps · o2 · walk:
+- Gemma 5, 4, 4 · 10, 9, 9 · 6, 6, 6 · 4, 1, 2;
+- mini 2, 1, 0 · 8, 9, 8 · 6, 4, 5 · 1, 0, 1;
+- Haiku 7, 7, 5 · 9, 0, 10 · 6, 0, 6 · 0, 0, 2, its run 2 hit by the Claude CLI.
+
+Keys on `assault`:
+- Memory: the heretic lost `river_barriers`, `road_barriers`, `tunnel_barriers` and `river_stock` in every run, and
+  `river_barriers` was stated in memory and misread.
+- Older traps: it missed `prior_discussion_accepted` in every run, the two tunnel-barrier traps in two and
+  `gauge_source` in one.
+
+Keys on `hospital`:
+- Memory: it lost nine checks in every run and `bridge_limit` in two.
+- Older traps: it missed `key_fetched`, `key_in_klim_pocket` and `nazar_knows_in_advance` in every run.
+- Set o2: it missed `o2_opening_before_completed_bell` in all three runs, as Gemma's L1 baseline did.
+
+On the open trap it refused the claim in every run, by the empty log. The next scene kept the refusal, so
+`open_request_kept` passed and `open_request_confirmed` failed, which by Astra's condition is not a confirmation kept.
+
+Across both builds, the heretic refused the compatible instruction in four runs of four and accepted the contradicted
+discussion of `invented_knowledge` in four of four, the pair Gemma showed in the calibration. On the traps it behaves
+like the Gemma arm: set o2 and the open pair the same, the older traps and memory at or below Gemma's, and the walks
+inside the group's range. Hospital is its weakest scenario: memory 3, 2, 2 against Gemma's 5, 4, 4 in L1, although
+hosted Gemma also scored 3/12 in O2 and 3, 4, 3 in L3's baseline, and older traps 8, 6, 8 against 10, 9, 9.
+
+Limitations:
+- One trap and one run a model: two yes/no answers a model, and the set's noise is unknown.
+- The input asks Неля to log the instruction, and two of the main group's three refusals, and all four of the
+  heretic's, rest on her log. The pack's README names this request among the differences from `invented_knowledge`.
+- One judge, Opus 5.5. The `then` question passes a refusal kept, by design.
+- Russian, `plain` only, `assault` only, one pack. The pack is not pushed.
+- The card's model: the llama.cpp run is one run with one resume, and on route A the `hospital` replays and the walks
+  ran six at once beside the tester, so no timing from them is comparable.
+
 <a id='l1-2026-09-27'></a>
 
 ## 2026-09-27 · Opus 5.5 · L1: the reference stamp as the last scene's opening, in lastMessage (not accepted)
