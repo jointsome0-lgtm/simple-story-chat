@@ -31,7 +31,7 @@ export type GpuInfo = {
 // `references`: the reader is in the reference experiment (local/picture.ts `referencesFor`), so a person's card offers
 // to send a portrait of their own; anybody else is shown the card as if they could not.
 // `versions`: the reader has versions of the sheet (local/picture.ts `versionsFor`), so the wait for a person's text
-// offers to write it «only from this moment».
+// offers to write it «only from this moment», and a person's card says where such an edit holds.
 export type RenderDetails = {
   modelInfo?: ModelInfo | null; gpuInfo?: GpuInfo | null; contextStats?: ContextStats | null; pictures?: boolean; standardStyle?: string;
   textTokens?: (text: string) => number | null;
@@ -569,7 +569,7 @@ function characterScreen(state: State, storyId: string | undefined, rawIndex: st
     ...changes ? [c.changes, changes, ''] : [], ...changed ? [c.along(changed), ''] : [],
     c.look, person.look, c.lookSize(...size(person.look)), whose, '',
     ...clothes ? [clothesTitle, clothes, c.clothesSize(...size(clothes))] : [c.noClothes], c.clothesNote, '',
-    c.sizeNote, '', c.scope, portrait === null ? null : '', portrait, source, frames, pov === null ? null : '', pov], [
+    c.sizeNote, '', details.versions ? c.scopeVersions : c.scope, portrait === null ? null : '', portrait, source, frames, pov === null ? null : '', pov], [
     [btn(c.editDetails, `details-edit:${personRef(story, person)}`)],
     [btn(c.edit, `look-edit:${personRef(story, person)}`)],
     [btn(c.profile, `view:profile:${personRef(story, person)}`)],
@@ -603,7 +603,7 @@ function sheetInputScreen(state: State, input: 'look' | 'details', details: Rend
   // For a reader who has versions of the sheet, where the text lands (local/picture-versions.ts `landEdit`): the whole
   // story, where it takes the place of what they wrote «only from this moment», or, as they chose here, the scene they
   // stood at then and those after it. The text shown now is the one it replaces: the sheet's, or the person's at that
-  // scene. A scene another line goes on from offers the whole story alone, and says why.
+  // scene. A scene another line goes on from, or another branch stands at, offers the whole story alone, and says why.
   const scope = details.versions ? editableFrom(state, story.id) : undefined;
   const from = details.versions && ui?.from !== undefined && Object.hasOwn(story.nodes, ui.from) ? ui.from : undefined;
   const shown = from === undefined ? person : { ...sheetAt(story, from)[person.index] ?? person, index: person.index };

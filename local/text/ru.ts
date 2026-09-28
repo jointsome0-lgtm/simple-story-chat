@@ -253,6 +253,9 @@ export const ru = {
     clothesNote: 'Одежду меняет сама история, и картинки берут её из сцен. Поправить её можно кнопкой «📋 Профиль целиком».',
     sizeNote: 'Числа относятся к каждому тексту отдельно. В промпт также входят описание сцены и стиль; точный размер указан под картинкой. Само описание модель картинок не читает: портрет по обычному промпту рисуется по его пересказу по-английски. Весь промпт портрета, с одеждой, фоном и позой, свёрнут под ним с числом токенов, и его можно поправить.',
     scope: 'Правка внешности действует на следующие картинки всех веток этой истории. Текст истории, память и уже нарисованные картинки не меняются, а картинка, которая рисуется сейчас, может выйти по-старому.',
+    // `scope` for a reader who has versions of the sheet (local/picture-versions.ts), whose edit may instead hold only
+    // from the scene they make it at: in that scene and every scene after it, whatever branch goes on from there.
+    scopeVersions: 'Правка внешности действует на следующие картинки всех веток этой истории, а сделанная «только с этого момента» — на картинки сцены, где ты её делаешь, и всех сцен после неё. Текст истории, память и уже нарисованные картинки не меняются, а картинка, которая рисуется сейчас, может выйти по-старому.',
     // What a portrait is drawn from: `details` is true for the English retelling of the description, false for the short
     // look of a person not retold yet.
     portraitNone: (details: boolean) => `🖼 Портрета пока нет. Портрет рисует лицо и фигуру в полный рост по ${details ? 'пересказу описания' : 'короткой внешности'}, так проще подобрать референс.`,
@@ -301,12 +304,13 @@ export const ru = {
     // true) or a description: where the text lands. For the whole story, the default: the lasting changes the story makes
     // lie over a description from their scenes on, and the edit replaces the `n` texts of the person's the reader wrote
     // «only from this moment». Or only from the scene the reader stands at, on the branch `branch` (common.quote), and
-    // in every scene after it. At a scene another branch goes on from, the whole story alone, and why. The two buttons
-    // switch between them; the first names what the second of these lines calls «только с этого момента».
+    // in every scene after it, on the branches continued later from it or from a later scene as well. At a scene another
+    // branch goes on from or stands at, the whole story alone, and why. The two buttons switch between them; the first
+    // names what the second of these lines calls «только с этого момента».
     scopeAll: (look: boolean): string => look ? '🌐 Это правка для всей истории, на всех ветках.'
       : '🌐 Это правка для всей истории, на всех ветках: таким персонаж будет с её начала, а постоянные перемены, которые история делает по ходу (стрижка, шрам), лягут поверх описания с тех сцен, где случились.',
     scopeReplaces: (n: number) => `Она заменит и твои правки «только с этого момента» (их ${n}).`,
-    scopeHere: (branch: string, look: boolean) => `📍 Это правка только с этого момента: со сцены ветки ${branch}, где ты сейчас, и во всех сценах после неё. Раньше этой сцены и на других ветках персонаж останется прежним.${look ? '' : ' Постоянные перемены, которые история сделает дальше, лягут поверх описания.'}`,
+    scopeHere: (branch: string, look: boolean) => `📍 Это правка только с этого момента: со сцены ветки ${branch}, где ты сейчас, и во всех сценах после неё. Её получат и ветки, которые потом пойдут от этой сцены или от более поздней. Раньше этой сцены и на остальных ветках персонаж останется прежним.${look ? '' : ' Постоянные перемены, которые история сделает дальше, лягут поверх описания.'}`,
     scopeShared: '📍 Правку «только с этого момента» здесь не сделать: от этой сцены идёт и другая ветка, и правка задела бы её. Кнопка появится после следующей сцены.',
     scopeHereButton: '📍 Только с этого момента',
     scopeAllButton: '🌐 Для всей истории',

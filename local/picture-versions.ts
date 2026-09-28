@@ -241,13 +241,19 @@ export function laterRequest(request: ModelRequest, later: Map<number, string[]>
 }
 
 // Where an edit «only from this moment» of the story `storyId` would land for its reader: the scene they stand at
-// (`sceneOf`). At a scene another line of the story goes on from, as right after going back to a checkpoint, a version
-// would hold on that line's later scenes too, so there it is `shared` and not offered, until the reader's next scene.
+// (`sceneOf`). A version there holds on every line that goes through that scene. So where another line already goes on
+// from it, as right after going back to a checkpoint, or another branch stands at it, as right after continuing from
+// the checkpoint of the reader's own scene (a fork's new branch starts at the checkpoint's scene, lib/library.ts
+// `fork`), the edit would reach that line's later scenes too: there it is `shared` and not offered, until the reader's
+// next scene. A checkpoint alone does not make it shared, since every scene keeps one (local/turn.ts): a branch the
+// reader starts from that scene or a later one after the edit starts with the edit, and the wait says so.
 export function editableFrom(state: Partial<Library>, storyId: string): { scene: string; shared: boolean } | undefined {
   const scene = sceneOf(state, storyId);
   const story = scene && state.stories && Object.hasOwn(state.stories, storyId) ? state.stories[storyId] : undefined;
   if (!scene || !story || !Object.hasOwn(story.nodes ?? {}, scene)) return undefined;
-  return { scene, shared: Object.values(story.nodes).some(node => node?.parent === scene) };
+  const shared = Object.values(story.nodes).some(node => node?.parent === scene)
+    || Object.entries(story.branches ?? {}).some(([branchId, branch]) => branchId !== state.active?.branchId && branch?.head === scene);
+  return { scene, shared };
 }
 
 // How many scenes of the story hold a text the reader wrote «only from this moment» for the person `name`: those an
