@@ -53,7 +53,7 @@ import type { CardPlace, Comfy, Graph, Steps } from './image-batch.ts';
 import { etaText, left, moved, waited } from './eta.ts';
 import type { Durations } from './eta.ts';
 import { STYLE, askJson, assemblePrompt, frameRequest, inWords, matchSheet, olderSheet, retellRequest, retoldOf, sheetOf, sheetRequest } from './illustrate.ts';
-import type { Character, Description, Excerpt } from './illustrate.ts';
+import type { Assembled, Character, Description, Excerpt } from './illustrate.ts';
 import { PORTRAIT_CLOTHES, PORTRAIT_STYLE, portraitPrompt, portraitText } from './image-portraits.ts';
 import type { ErrorDetails, Log } from './model-error.ts';
 import { errorCode, safeErrorDetails } from './model-error.ts';
@@ -62,7 +62,8 @@ import { styleChoice, styleLine } from './picture-style.ts';
 import type { StyleChoice } from './picture-style.ts';
 import { REFERENCE_VERSION, frameReferences, pinReferences, readReference, referenceGraph, referencePrompt, temporaryReferences } from './picture-references.ts';
 import { pictureSize } from './reference.ts';
-import { povRequest, seenBy, viewerOf } from './picture-pov.ts';
+import { partlyInView, povRequest, seenBy, viewerOf } from './picture-pov.ts';
+import { clothesRequest } from './picture-clothes.ts';
 import { addChanges, changesRequest, countVersions, descriptionOf, lastingChangesOf, laterRequest, ownDescription, personHere, personKey,
   sceneOf, sheetAt, staleAt } from './picture-versions.ts';
 import { createProgress } from './progress.ts';
@@ -498,6 +499,13 @@ export function createIllustrator(config: ImageConfig, deps: {
   // changes the story makes, and they may write a person's text «only from this moment». Versions a story already has
   // are drawn for everybody.
   const versionsFor = (userId: string) => config.users.has(userId) && !!config.versionUsers?.has(userId);
+  // The tester's two frame changes of 2026-09-28, each for its own readers: a frame seen through a person's eyes places
+  // the others against the camera (SIMPLE_CHAT_POV_PLACE_USERS), and of those readers some send no reference picture for
+  // a person only partly in view (SIMPLE_CHAT_POV_PARTIAL_USERS); a frame names what each person wears and what of them is
+  // bare, and says it before the reference wording (SIMPLE_CHAT_CLOTHES_USERS). Without them every request is as it was.
+  const placeFor = (userId: string) => config.users.has(userId) && !!config.placeUsers?.has(userId);
+  const partialFor = (userId: string) => placeFor(userId) && !!config.partialUsers?.has(userId);
+  const clothesFor = (userId: string) => config.users.has(userId) && !!config.clothesUsers?.has(userId);
 
   // The frame of each reader's latest described scene, in memory only and only until the next one: a sample of a
   // style is drawn from it without asking the language model again. Never stored and never logged.
@@ -583,8 +591,9 @@ export function createIllustrator(config: ImageConfig, deps: {
       // the viewer's apart. Each becomes a version at this scene, retold before this frame is drawn, so that the frame
       // of the scene with the haircut already has it. Without them the request is as it was.
       const named = versions ? sheet.filter(one => one !== viewer) : [];
-      const asked = changesRequest(request, named);
-      const answer = (await askJson(model, trusted(model, viewer ? povRequest(asked, viewer) : asked, anchor), { signal })).value;
+      const changing = changesRequest(request, named);
+      const asked = clothesFor(userId) ? clothesRequest(changing) : changing;
+      const answer = (await askJson(model, trusted(model, viewer ? povRequest(asked, viewer, placeFor(userId)) : asked, anchor), { signal })).value;
       if (!versions) return answer as unknown as Description;
       const { lasting_changes: changes, ...plain } = answer;
       const found = lastingChangesOf(changes, named.map(one => one.name));
@@ -602,7 +611,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       return plain as unknown as Description;
     }, sharesPrefix ? { holder: userId, sharesPrefix, work: 'description' } : { holder: userId, work: 'description' });
     const viewer = viewerOf(story, sheet);
-    const viewed = viewer && seenBy(description, viewer, sheet);
+    const viewed = viewer && seenBy(description, viewer, sheet, placeFor(userId));
     // What the sheet's people wear in this frame is what the next picture below this scene starts from. Somebody whose
     // clothes at this scene changed while the frame was being described, as a reader's profile sent back changes them
     // (local/profile.ts), keeps the new ones: the frame started from those before.
@@ -616,7 +625,10 @@ export function createIllustrator(config: ImageConfig, deps: {
     const pov = viewed ? viewed.seen : undefined;
     const frame = viewed ? viewed.description : description;
     frames.set(userId, { storyId, nodeId, description: frame, sheet, viewer: viewer?.name, pov });
-    return { description: frame, sheet, clothesChanged: worn.changed, pov, lastingChanges };
+    // For a reader whose frames place the people, how many of the others had a place and how many were partly in view.
+    const places = viewed && viewed.seen && placeFor(userId)
+      ? { povPlaced: viewed.placed, povPartly: (frame.people ?? []).filter(partlyInView).length } : undefined;
+    return { description: frame, sheet, clothesChanged: worn.changed, pov, lastingChanges, places };
   }
 
   // The size of a prompt that ends with the style `line`: its characters, and, with a tokenizer, its tokens and how
@@ -735,21 +747,28 @@ export function createIllustrator(config: ImageConfig, deps: {
   async function drawFrame(userId: string, storyId: string, frame: { description: Description; sheet: Character[] },
     line: string, signal: AbortSignal, log: Log, savedRecipe?: PictureRecipe, status?: Watching) {
     const plain = assemblePrompt(frame.description, frame.sheet, line);
-    let assembled = plain;
+    let assembled: Assembled & { clothesStated?: number } = plain;
     // After a graph or checkpoint change, a sample uses today's recipe and portraits, as a new frame does.
     const saved = savedRecipe && savedRecipe.graph === graphId && savedRecipe.checkpoint === config.checkpoint ? savedRecipe : undefined;
     const recipe = saved ?? recipeOf(storyId);
     let reason: ReferenceReason = referenceGate(userId) ?? (saved ? 'legacy' : 'no_portrait');
+    // How many people partly in view were left without their picture, for a reader of SIMPLE_CHAT_POV_PARTIAL_USERS.
+    let leftOut: number | undefined;
     if (!referenceGate(userId)) {
       const story = store.read(userId).stories[storyId];
       if (!story) throw sceneGone();
-      const bound = saved ? saved.references?.portraits ?? [] : frameReferences(story, frame.description);
+      // Such a reader's frame seen through someone's eyes binds nobody only partly in view at the frame's edge: a
+      // portrait pulls its person's whole figure into the frame. A saved recipe already binds whom its frame bound.
+      const partial = !saved && partialFor(userId);
+      const bound = saved ? saved.references?.portraits ?? [] : frameReferences(story, !partial ? frame.description
+        : { ...frame.description, people: (frame.description.people ?? []).filter(one => !partlyInView(one)) });
+      if (partial) leftOut = frameReferences(story, frame.description).length - bound.length;
       if (bound.length) {
         reason = 'unsupported_graph';
         if (referenceGraph(graph, bound.length)) {
           try {
             if (!saved) recipe.references = pinReferences(store, userId, bound);
-            assembled = referencePrompt(frame, bound, line);
+            assembled = referencePrompt(frame, bound, line, clothesFor(userId));
           } catch { reason = 'unavailable'; }
         }
       }
@@ -764,7 +783,11 @@ export function createIllustrator(config: ImageConfig, deps: {
     };
     try {
       const drawn = await draw(userId, recipe, assembled.prompt, signal, log, { fallbackPrompt: plain.prompt, reason, status });
-      return { assembled: drawn.referenceCount ? assembled : plain, recipe: drawn.recipe, drawn, releasePortraits };
+      const used: Assembled & { clothesStated?: number } = drawn.referenceCount ? assembled : plain;
+      // The row's words for what the tester's changes did to this picture, where a reader has them.
+      const changed = { ...leftOut === undefined ? {} : { referencesLeftOut: leftOut },
+        ...used.clothesStated === undefined ? {} : { clothesStated: used.clothesStated } };
+      return { assembled: used, recipe: drawn.recipe, drawn, releasePortraits, changed };
     } catch (error) { releasePortraits(); throw error; }
   }
 
@@ -907,7 +930,8 @@ export function createIllustrator(config: ImageConfig, deps: {
         await status.clear();
         return;
       }
-      let frame: { description: Description; sheet: Character[]; clothesChanged: number; pov?: boolean; lastingChanges?: number };
+      let frame: { description: Description; sheet: Character[]; clothesChanged: number; pov?: boolean; lastingChanges?: number;
+        places?: { povPlaced: number; povPartly: number } };
       try { frame = await describeFrame(userId, storyId, nodeId, branchId, signal, log, true); }
       finally { release?.(); described(); }
       describeMs = Math.max(0, now() - describeStarted);
@@ -937,7 +961,7 @@ export function createIllustrator(config: ImageConfig, deps: {
         ...status.waited(), imageSteps: steps, pictureAttention: drawn.pictureAttention, photoMs, photoBytes: drawn.bytes.length,
         namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook, clothesChanged: frame.clothesChanged,
         pictureStyle, ...pov === undefined ? {} : { pov }, ...frame.lastingChanges === undefined ? {} : { lastingChanges: frame.lastingChanges },
-        ...size, ...elapsed() });
+        ...frame.places, ...result.changed, ...size, ...elapsed() });
     } catch (error) {
       const code = errorCode(error);
       const cancelled = signal.aborted || code === 'cancelled' || code === 'scene_gone';
@@ -1037,7 +1061,7 @@ export function createIllustrator(config: ImageConfig, deps: {
             log('picture_sample', undefined, { outcome: 'ready', cancelled: signal.aborted, frameReused, describeMs,
               imageQueueMs: drawn.queueMs, imageMs: drawn.totalMs, ...status.waited(), imageSteps: steps,
               pictureAttention: drawn.pictureAttention, namesStripped: assembled.namesStripped,
-              withoutLook: assembled.withoutLook, pictureStyle, stylesAsked, ...frame.pov === undefined ? {} : { pov: frame.pov }, ...size });
+              withoutLook: assembled.withoutLook, pictureStyle, stylesAsked, ...frame.pov === undefined ? {} : { pov: frame.pov }, ...result.changed, ...size });
           } finally { result.releasePortraits(); }
           // The styles after the first are drawn from the frame already in hand.
           frameReused = true;

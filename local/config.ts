@@ -25,6 +25,11 @@ export type ImageConfig = {
   // The readers who have versions of a story's sheet (local/picture-versions.ts): their frames name the lasting changes
   // the story makes to a person's look, and they may write a person's text «only from this moment». Nobody by default.
   versionUsers?: Set<string>;
+  // The tester's two complaints of 2026-09-28, each for these readers alone and nobody by default: a frame seen through a
+  // person's eyes places everybody else against the camera (`placeUsers`, local/picture-pov.ts), and of those readers
+  // `partialUsers` send no reference picture for a person only partly in view; a frame names what each person wears and
+  // what of them is bare, and says it before the reference wording (`clothesUsers`, local/picture-clothes.ts).
+  placeUsers?: Set<string>; partialUsers?: Set<string>; clothesUsers?: Set<string>;
 };
 export type Config = ModelConfig & { gpu: GpuConfig | undefined; images: ImageConfig | undefined; token: string; allowedUsers: Set<string>; ownerId: string; dbPath: string };
 // The agent interface (docs/agent-interface.md#privacy-a-separate-library): its own library file, and the bot's model
@@ -155,6 +160,9 @@ export function gpuConfig(env: Env, provider: string): GpuConfig | undefined {
 //   SIMPLE_CHAT_IMAGE_STYLE=...                               # optional; the measured style line is the default
 //   SIMPLE_CHAT_IMAGE_WAIT_SECONDS=180                        # optional; how long one picture may take
 //   SIMPLE_CHAT_SHEET_VERSION_USERS=123456789                 # optional; readers whose people change along the story
+//   SIMPLE_CHAT_POV_PLACE_USERS=123456789                     # optional; a first-person frame places the others
+//   SIMPLE_CHAT_POV_PARTIAL_USERS=123456789                   # optional, of those; no reference for a person partly in view
+//   SIMPLE_CHAT_CLOTHES_USERS=123456789                       # optional; a frame says what each person wears and bares
 //
 // Without SIMPLE_CHAT_IMAGE_URL nothing is described and nothing is drawn: no second model call, no status line.
 // The graphs in gpu/ end in a node that saves the picture into ComfyUI's own output directory, where nothing of
@@ -214,10 +222,21 @@ export function imageConfig(env: Env, directory: string, allowedUsers: Set<strin
   for (const user of versionUsers) if (!users.has(user)) {
     throw new Error('Every SIMPLE_CHAT_SHEET_VERSION_USERS entry must be one of SIMPLE_CHAT_IMAGE_USERS');
   }
+  // The tester's two frame changes, read as the versions: a stray ID is a typo, and a person only partly in view is known
+  // only to a frame that places the people.
+  const readers = (name: string, within: Set<string>, withinName: string) => {
+    const set = new Set((env[name] || '').split(',').map(one => one.trim()).filter(Boolean));
+    for (const user of set) if (!within.has(user)) throw new Error(`Every ${name} entry must be one of ${withinName}`);
+    return set;
+  };
+  const placeUsers = readers('SIMPLE_CHAT_POV_PLACE_USERS', users, 'SIMPLE_CHAT_IMAGE_USERS');
+  const partialUsers = readers('SIMPLE_CHAT_POV_PARTIAL_USERS', placeUsers, 'SIMPLE_CHAT_POV_PLACE_USERS');
+  const clothesUsers = readers('SIMPLE_CHAT_CLOTHES_USERS', users, 'SIMPLE_CHAT_IMAGE_USERS');
   // One HTTP request of the picture lane is a submit, a poll or a download through the tunnel, never the drawing
   // itself: it may be short even when a picture may take minutes.
   return { url: url.origin, workflow: resolve(directory, workflow), checkpoint, style, users,
-    waitMs: seconds * 1000, timeoutMs: Math.min(60000, seconds * 1000), references: references === 'true', referenceUsers, versionUsers };
+    waitMs: seconds * 1000, timeoutMs: Math.min(60000, seconds * 1000), references: references === 'true', referenceUsers, versionUsers,
+    placeUsers, partialUsers, clothesUsers };
 }
 
 // A hosted API or a consumer Codex account may log requests and train on them. By default they serve synthetic probes

@@ -129,7 +129,11 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   // Versions of people's looks along a story (local/picture-versions.ts): how many lasting changes a frame found and
   // wrote, how many people one write gave a version, how many versions the story holds after it, and how many of the
   // reader's «only from this moment» an edit for the whole story took the place of.
-  'lastingChanges', 'versionPeople', 'storyVersions', 'versionsCleared'] as const;
+  'lastingChanges', 'versionPeople', 'storyVersions', 'versionsCleared',
+  // The tester's two frame changes of 2026-09-28 (local/picture-pov.ts, local/picture-clothes.ts): how many people of a
+  // frame seen through someone's eyes had a place against the camera and how many were only partly in view, how many of
+  // those were left without their reference picture, and how many people's clothes came before the reference wording.
+  'povPlaced', 'povPartly', 'referencesLeftOut', 'clothesStated'] as const;
 
 export type ErrorDetails = {
   httpStatus?: number; phase?: typeof PHASES[number]; operation?: typeof OPERATIONS[number];

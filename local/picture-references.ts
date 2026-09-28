@@ -9,6 +9,7 @@ import type { Comfy, Graph } from './image-batch.ts';
 import { assemblePrompt, matchSheet } from './illustrate.ts';
 import type { Character, Description } from './illustrate.ts';
 import type { Log } from './model-error.ts';
+import { clothesStatement } from './picture-clothes.ts';
 import { imageFormat } from './reference.ts';
 import type { Store } from './store.ts';
 
@@ -35,7 +36,9 @@ export function frameFile(person: NonNullable<Story['sheet']>[number]) {
   return poseReference(person, 'front')?.file;
 }
 
-export function referencePrompt(frame: { description: Description; sheet: Character[] }, bound: Bound[], line: string) {
+// With `clothes` (a reader of SIMPLE_CHAT_CLOTHES_USERS), what each bound person wears in the scene comes before the
+// words on what the pictures are for (local/picture-clothes.ts), and `clothesStated` counts them.
+export function referencePrompt(frame: { description: Description; sheet: Character[] }, bound: Bound[], line: string, clothes = false) {
   const tag = (name: string | null, look: string) => {
     const slot = bound.findIndex(one => one.name === name);
     return slot < 0 ? look : `The person from image ${slot + 1}, ${look}`;
@@ -47,13 +50,15 @@ export function referencePrompt(frame: { description: Description; sheet: Charac
   const assembled = assemblePrompt(description, sheet, line);
   // ROLE's medium first and identity-only instruction, with the full look left in every clause as in W.
   // The chosen style also stays last, including a reader's own wording. An empty style adds no medium of ours.
-  const opening = `${line ? `${line} ` : ''}Create a brand-new scene${line ? ' in this medium and style' : ''}. `
+  const worn = clothes ? clothesStatement(frame, bound) : undefined;
+  const opening = `${line ? `${line} ` : ''}Create a brand-new scene${line ? ' in this medium and style' : ''}. ` + (worn?.text ?? '')
     + 'Use the reference images only as identity sources for the people identified below by image number. '
     + 'Keep each referenced person\'s face, hair, skin, age, body proportions and relative body volumes. '
     + 'Do not slim down, enlarge, age or idealize them. Take nothing else from the references: '
     + 'do not copy their rendering, backdrop, lighting, clothes, standing poses or framing. '
     + 'Use the scene\'s clothes, actions, poses, places, light and relative heights described below. ';
-  return { ...assembled, prompt: opening + assembled.prompt };
+  return { ...assembled, prompt: opening + assembled.prompt,
+    ...worn ? { namesStripped: assembled.namesStripped + worn.namesStripped, clothesStated: worn.stated } : {} };
 }
 
 type Size = { width: number; height: number };

@@ -435,6 +435,70 @@ in is drawn as usual. The code is `local/picture-pov.ts`.
   frame with two references, as the tester's was, whether the card's Gemma follows the rule on the pier and the
   workbench, and a reflection that looks like the viewer.
 
+<a id='pov-places'></a>
+
+#### Where the others are
+
+The tester, 2026-09-28: «к тебе с двух сторон прижались девушки, а по картинке показывают что они напротив тебя, а мы
+по сути лишь их часть должны видеть боковым зрением». The rule above says what the camera shows and not where the
+others are, so a person pressed against the viewer's side is drawn where people usually stand, facing the camera, and
+their kept portrait, a whole figure facing the viewer, probably pulls the same way. Two switches, each for the readers
+named in it alone ([setup](setup.md)), in `local/picture-pov.ts` and `local/picture.ts`:
+
+- **Places** (`SIMPLE_CHAT_POV_PLACE_USERS`): `povRequest` gives each person of `people` two fields right after `who`:
+  `place`, in English, which side of the frame they are at (the left edge, the right edge, the middle), how close
+  (pressed against the camera's side, within arm's reach, a few steps away, far off) and which of their parts are in
+  view and which the frame's edge cuts off; and `in_view`, `whole` or `partly`. Its rule, after the viewer's, says
+  that whoever is pressed against the viewer or sits close beside them, walks beside them, stands at their shoulder or
+  leans in from behind is at the frame's edge on their side and seen only in part, as from the corner of the eye; that
+  only somebody really in front of the viewer is in the middle; and that somebody wholly behind the viewer is not in
+  `people`. The fields come right after `who` and never last: a field added last to a person ran away into whitespace
+  on the card's Gemma in 42 answers of 124 on 2026-09-28, and in none of 124 right after `who`. The answer's limit
+  grows by 150 tokens more. `seenBy` puts each `place` first in that person's state, which the assembly writes after
+  their look and clothes and before their action: «…, wearing a blue linen dress, pressed close at the left edge of the
+  frame, only her shoulder, arm and the side of her face in view, the rest cut off by the frame's edge, laughing: leans
+  her shoulder against the camera». A frame without the viewer drops both fields and is an ordinary frame.
+- **No picture for somebody partly in view** (`SIMPLE_CHAT_POV_PARTIAL_USERS`, whose readers must be in the first
+  list): a person whose `in_view` is `partly` is drawn from the words alone, and the others keep their references. A
+  sample or a variant binds whom its frame's recipe bound. It is a switch of its own so that [the tester
+  stand](action-experiment.md#tester-stand) can tell what the places do from what leaving the picture out does.
+- **Rows:** a `picture` row of a frame seen through the eyes carries `povPlaced`, the others with a place, and
+  `povPartly`, those partly in view; the `picture` and `picture_sample` rows of a reader of the second list carry
+  `referencesLeftOut`, how many people went without their picture (0 in any frame where nobody was partly in view).
+
+<a id='what-they-wear'></a>
+
+### What they wear
+
+The tester, 2026-09-28: «если персонаж голый, то он и должен быть голым, если он в одежде, то он и должен быть в
+одежде, а не в бодди из референса». Every kept portrait wears the bot's dark grey suit ([a portrait's own
+prompt](#portrait-prompt)). The frame's rule asks for a phrase of clothes that begins with wearing and says nothing of
+bare skin, and a frame with references gives the scene's clothes only in each person's clause, after the reference
+wording and the look. For the readers named in `SIMPLE_CHAT_CLOTHES_USERS` alone ([setup](setup.md)), in
+`local/picture-clothes.ts`:
+
+- **The frame's rule:** its sentence on `clothes` becomes the action experiment's change 8 word for word ([the variant
+  frame](action-experiment.md#variant)): bare skin named outright («wearing only rolled-up linen trousers,
+  bare-chested and barefoot») and nothing bared that the scene does not bare. The schema stays as it is, and the
+  sentence is replaced at the call, since `local/illustrate.ts` is pinned (`textPins` in `local/action-text.ts`).
+- **Before the reference wording:** a frame with reference pictures says what each referenced person wears in this
+  scene, in the order of the pictures, right after «Create a brand-new scene…» and before «Use the reference images
+  only…»: «The person from image 3 in this scene: wearing only rolled-up canvas trousers, bare-chested and barefoot.»
+  These are the clothes the assembly gives the person, the frame's or else the sheet's outfit, through the same nets
+  for names and ages, and the person's clause keeps them too. A frame without references changes by the rule alone.
+- **Row:** the `picture` and `picture_sample` rows of such a frame carry `clothesStated`, how many people's clothes
+  came before the reference wording.
+
+With the three lists empty, and with them naming only another reader, every model request, prompt, graph (apart from
+ComfyUI's per-job nonce and the random names of the uploads), recipe, upload, Telegram call and row is 71a159f's: a
+dry run with a fake model, a fake ComfyUI that takes uploads and a fake Telegram on 2026-09-28 over a story of three
+people with kept portraits gave the same for an ordinary frame with three references, a frame seen through one of them
+with a second pressed against the viewer's side and a third in front, its style sample, a frame the viewer is not in
+and a variant. With each list and all three on, it passed 14 checks: the fields, their order and the rule in the
+request; the places in the prompt; who is bound; the clothes before the reference wording; the counts in the rows;
+nothing of the story in them. Whether the image model then draws the others at the edges and the bare skin bare is
+[the tester stand](action-experiment.md#tester-stand)'s question, not yet drawn.
+
 <a id='along-the-story'></a>
 
 ### Along the story
