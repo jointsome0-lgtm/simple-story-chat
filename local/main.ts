@@ -98,7 +98,7 @@ try {
     model: { model: config.model, provider: config.provider, contextTokens: config.contextTokens },
     promptTokens: counter(encoderTokens), textTokens: counter(textTokens) }) : undefined;
   if (config.images) log('pictures_configured');
-  bot = createBot({ store, api, provider, gpu, illustrator, providerName: config.provider, readSeedFile: createSeedFileReader(config.token, api),
+  bot = createBot({ store, api, provider, gpu, illustrator, captioner: config.images?.captioner, providerName: config.provider, readSeedFile: createSeedFileReader(config.token, api),
     readPicture: createPictureReader(config.token, api), render, scenePrefix, sceneKeyboard,
     allowedUsers: config.allowedUsers, ownerId: config.ownerId, maxOutputTokens: config.maxOutputTokens,
     contextTokens: config.contextTokens, compactAtTokens: config.compactAtTokens,

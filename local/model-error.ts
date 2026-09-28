@@ -1,5 +1,5 @@
 // Provider errors are safe codes, never raw HTTP/CLI output or story text.
-import { POSES } from '../lib/library.ts';
+import { FRAMING_LABELS, POSE_LABELS, POSES, SIDE_LABELS } from '../lib/library.ts';
 
 const PHASES = ['count_input', 'generate', 'health', 'gpu_read', 'gpu_write', 'ssh_wait', 'ssh_connect', 'ssh_tunnel'] as const;
 const OPERATIONS = ['compact', 'scene'] as const;
@@ -45,6 +45,11 @@ const REFERENCE_PLACES = POSES;
 // reads; its shorter side too short, its longer side too long, or the two too far apart; its bytes over the limit;
 // its download cut short; or an archive where a picture was awaited.
 const REFERENCE_REFUSALS = ['type', 'broken', 'small', 'huge', 'shape', 'too_large', 'incomplete', 'archive'] as const;
+// Why a picture of a pose set was not kept (local/pose-set.ts): a refusal of a picture of the reader's own, or the set
+// full, or its bytes or all the reader's sets' over their limits. A caption of one is its three labels, which say how a
+// person is drawn and nothing of who they are.
+export const POSE_SET_REFUSALS = [...REFERENCE_REFUSALS, 'full', 'person_bytes', 'reader_bytes'] as const;
+export type PoseSetRefusal = typeof POSE_SET_REFUSALS[number];
 // A person's whole profile that a reader sent back (local/profile.ts, local/bot.ts `profileSent`): how much of it the
 // message it was copied from showed, all of it, all but the portrait's prompt, or all but that and the description;
 // where new clothes went, into the scene the story stands at or into the sheet; and why a text was refused: the person
@@ -129,7 +134,11 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   // Versions of people's looks along a story (local/picture-versions.ts): how many lasting changes a frame found and
   // wrote, how many people one write gave a version, how many versions the story holds after it, and how many of the
   // reader's «only from this moment» an edit for the whole story took the place of.
-  'lastingChanges', 'versionPeople', 'storyVersions', 'versionsCleared'] as const;
+  'lastingChanges', 'versionPeople', 'storyVersions', 'versionsCleared',
+  // Pose sets (local/pose-set.ts): how many pictures a person's set holds after one was kept, or went with it; how many
+  // one wait kept and refused; and in a frame, how many people of the sheet had groups to choose from and how many of
+  // them the frame chose one for.
+  'poseSetCount', 'poseSetKept', 'poseSetRefused', 'poseSetPeople', 'poseViewsPicked'] as const;
 
 export type ErrorDetails = {
   httpStatus?: number; phase?: typeof PHASES[number]; operation?: typeof OPERATIONS[number];
@@ -164,6 +173,9 @@ export type ErrorDetails = {
   profileRefusal?: typeof PROFILE_REFUSALS[number];
   // A version of a person's look along the story: who wrote it and which text it holds.
   versionSource?: typeof VERSION_SOURCES[number]; versionField?: typeof VERSION_FIELDS[number];
+  // A picture of a pose set: why it was refused, or the labels of its caption.
+  poseSetRefusal?: typeof POSE_SET_REFUSALS[number]; captionPose?: typeof POSE_LABELS[number]; captionSide?: typeof SIDE_LABELS[number];
+  captionFraming?: typeof FRAMING_LABELS[number];
   // A failed Claude CLI run: how it ended and whether the CLI itself called the result an error.
   cliResult?: typeof CLI_RESULTS[number]; cliError?: boolean; stopReason?: typeof STOP_REASONS[number];
 } & { [Key in typeof COUNTS[number]]?: number };
@@ -218,6 +230,10 @@ export function safeErrorDetails(value: unknown = {}): ErrorDetails {
   if (member(PROFILE_REFUSALS, input?.profileRefusal)) result.profileRefusal = input.profileRefusal;
   if (member(VERSION_SOURCES, input?.versionSource)) result.versionSource = input.versionSource;
   if (member(VERSION_FIELDS, input?.versionField)) result.versionField = input.versionField;
+  if (member(POSE_SET_REFUSALS, input?.poseSetRefusal)) result.poseSetRefusal = input.poseSetRefusal;
+  if (member(POSE_LABELS, input?.captionPose)) result.captionPose = input.captionPose;
+  if (member(SIDE_LABELS, input?.captionSide)) result.captionSide = input.captionSide;
+  if (member(FRAMING_LABELS, input?.captionFraming)) result.captionFraming = input.captionFraming;
   if (member(CLI_RESULTS, input?.cliResult)) result.cliResult = input.cliResult;
   if (typeof input?.cliError === 'boolean') result.cliError = input.cliError;
   if (member(STOP_REASONS, input?.stopReason)) result.stopReason = input.stopReason;

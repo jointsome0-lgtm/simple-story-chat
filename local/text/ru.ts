@@ -337,6 +337,36 @@ export const ru = {
     ownPortraitNote: (min: number, max: number, megabytes: number) => `Пришли картинку этого персонажа фотографией или файлом PNG, JPEG или WebP, до ${megabytes} МБ: короткая сторона от ${min} пикселей, длинная до ${max} и не больше чем в 2,5 раза длиннее короткой. Бот не обрезает и не растягивает картинку. Только рисунок: фотографию реального человека присылать нельзя. Бот удалит из файла метаданные (место, камеру, подписи) и сохранит картинку как портрет персонажа: кадры будут брать её так же, как нарисованный портрет. Бот ждёт полчаса; выйти без изменений можно кнопкой «↩️» или командой /cancel.`,
     ownPortraitReplaces: 'Новая картинка заменит сохранённый портрет. Если потом нарисуешь и оставишь портрет, он снова займёт это место.',
     ownPortraitKept: (width: number, height: number) => `🖼 Портрет сохранён: твоя картинка, ${width}×${height}. Кадры берут её так же, как нарисованный портрет.`,
+    // A person's pictures in many poses (local/pose-set.ts), for a reader in SIMPLE_CHAT_POSE_SET_USERS: the button that
+    // waits for them and the one that removes them all, the wait's title and note, how many the set holds already, the
+    // button that ends the wait, the message that counts them as they come (the reasons are local/model-error.ts
+    // `POSE_SET_REFUSALS`), the card's lines and the question before they go. `min`, `max` and `fileMegabytes` are
+    // REFERENCE_SIDES and REFERENCE_BYTES in local/reference.ts, 2.5 is REFERENCE_SIDES.ratio, and `pictures`,
+    // `megabytes` and `readerMegabytes` are POSE_SET_PICTURES, POSE_SET_BYTES and POSE_SET_READER_BYTES in
+    // local/pose-set.ts, as are the numbers of the reasons. The half hour is POSE_SET_WAIT_MS there.
+    poseSet: '🗂 Картинки поз',
+    poseSetDrop: '🗑 Убрать картинки поз',
+    poseSetTitle: (person: string, story: string) => `🗂 Картинки поз: ${person} · ${story}`,
+    poseSetNote: (min: number, max: number, fileMegabytes: number, pictures: number, megabytes: number, readerMegabytes: number) => `Пришли картинки этого персонажа в разных позах: по одной или альбомами, фотографиями или файлами PNG, JPEG или WebP, до ${fileMegabytes} МБ каждая; короткая сторона от ${min} пикселей, длинная до ${max} и не больше чем в 2,5 раза длиннее короткой. Только рисунки: фотографии реальных людей присылать нельзя. Архивы бот не берёт. Бот удалит из файлов метаданные и сохранит до ${pictures} картинок и ${megabytes} МБ на персонажа, а всего у тебя — до ${readerMegabytes} МБ. Каждую картинку подпишет маленькая модель на компьютере бота: поза, сторона к зрителю и охват (весь рост, по пояс или голова и плечи). Ни картинки, ни подписи не уходят в сторонние сервисы. По подписям бот разложит картинки по позам, и каждый кадр возьмёт одну: ту, что ближе всего к тому, как персонаж в нём показан. Когда пришлёшь все, нажми «✅ Готово». Бот ждёт полчаса после последней картинки; выйти можно любой кнопкой или командой /cancel.`,
+    poseSetHeld: (n: number) => `В наборе уже ${count(n, 'картинка', 'картинки', 'картинок')}; новые добавятся к ним.`,
+    poseSetDone: '✅ Готово',
+    poseSetKept: (n: number) => `Принято: ${n}.`,
+    poseSetRefused: (reasons: { reason: string; count: number }[]) => `Не принято: ${reasons.reduce((sum, one) => sum + one.count, 0)} (${reasons.map(one => `${one.reason}: ${one.count}`).join(', ')}).`,
+    poseSetReasons: { type: 'не картинка', broken: 'не читается', small: 'слишком мала', huge: 'слишком велика', shape: 'слишком вытянута',
+      too_large: 'тяжелее 10 МБ', incomplete: 'не загрузилась', archive: 'архив', full: 'сверх 100 на персонажа',
+      person_bytes: 'сверх 300 МБ на персонажа', reader_bytes: 'сверх 600 МБ у тебя' },
+    poseSetHolds: (n: number, max: number) => `В наборе ${n} из ${max}.`,
+    poseSetMore: 'Присылай ещё или нажми «✅ Готово».',
+    poseSetEnded: 'Готово. Модель подпишет картинки в фоне; как они разложены по позам, покажет карточка персонажа.',
+    poseSetLine: (n: number, max: number, megabytes: number) => `🗂 Картинки поз: ${n} из ${max}, ${megabytes} МБ.`,
+    poseSetCaptions: (pending: number, failed: number) => [pending ? `Ждут подписи: ${pending}.` : '', failed ? `Не удалось подписать: ${failed}, в кадры они не попадут.` : ''].filter(Boolean).join(' '),
+    poseSetGroups: (groups: { name: string; count: number }[]) => `По позам: ${groups.map(one => `${one.name} ${one.count}`).join(', ')}.`,
+    poseGroupNames: { front: 'спереди', 'three-quarter': 'вполоборота', profile: 'в профиль', back: 'спиной', sitting: 'сидя', walking: 'в движении' },
+    poseSetFrames: 'Каждый кадр берёт одну из них: ту, что ближе всего к тому, как персонаж в нём показан; если ни одна не подходит — вид спереди.',
+    poseSetUnused: 'Кадры их сейчас не берут.',
+    poseSetDropTitle: (person: string, story: string) => `🗑 Убрать картинки поз: ${person} · ${story}`,
+    poseSetDropNote: (n: number) => `В наборе ${count(n, 'картинка', 'картинки', 'картинок')}; бот удалит весь набор. Те, с которыми уже нарисованы кадры, останутся на диске, пока нужны для вариантов этих кадров. Вернуть набор можно, только прислав картинки снова.`,
+    poseSetDropConfirm: '🗑 Да, убрать все',
     // The whole profile of the person as one block to copy, edit and send back (local/profile.ts): the button on the card
     // and the title of the message.
     profile: '📋 Профиль целиком',
@@ -879,6 +909,12 @@ export const ru = {
     referenceExpired: 'Бот уже не ждёт картинку: прошло больше получаса. Открой персонажа и нажми кнопку снова.',
     referenceGone: 'Этого персонажа уже нет в истории, картинка не сохранена. Открой /menu.',
     referenceChanged: 'Пока картинка загружалась, ожидание сменилось, и она не сохранена. Пришли её снова.',
+    // A pose set (local/pose-set.ts). The half hour is POSE_SET_WAIT_MS there, and the button characters.poseSet.
+    poseSetOff: 'Картинки поз тебе сейчас недоступны. Открой /menu.',
+    poseSetNeedsPictures: 'Жду картинки: присылай их фотографиями или файлами PNG, JPEG или WebP, а когда закончишь, нажми «✅ Готово». Выйти можно любой кнопкой или командой /cancel.',
+    poseSetExpired: 'Бот уже не ждёт картинки: после последней прошло больше получаса. Открой персонажа и нажми «🗂 Картинки поз» снова.',
+    poseSetGone: 'Этого персонажа уже нет в истории, картинка не сохранена. Открой /menu.',
+    poseSetChanged: 'Пока картинка загружалась, ожидание сменилось, и она не сохранена. Пришли её снова.',
   },
 
   // Names the bot gives to branches and checkpoints it creates. They are stored with the story and keep the language

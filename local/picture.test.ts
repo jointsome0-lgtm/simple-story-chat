@@ -1183,16 +1183,20 @@ test('a portrait whose story is deleted while it is drawn is not sent, and a del
   store.writePortrait('1', bytes);
   assert.deepEqual([store.sweepPortraits('1'), readdirSync(mine)], [1, []], 'after a write');
   const file = store.writePortrait('1', bytes);
+  // A picture of a pose set (local/pose-set.ts) is kept as a portrait is: a reader's 80 would otherwise go at once.
+  const posed = store.writePortrait('1', bytes, 'webp');
   store.mutate('1', state => {
     const { story } = newStory(state, addSeed(state, seedText).id);
-    story.sheet = [{ name: 'Элин', look: 'lean', outfit: '', portrait: keptOf('lean', file) }];
+    story.sheet = [{ name: 'Элин', look: 'lean', outfit: '', portrait: keptOf('lean', file),
+      poseSet: [{ file: posed, format: 'webp', width: 400, height: 600, bytes: bytes.length, at: 1 }] }];
   });
   store.writePortrait('1', bytes);
   store.close();
   store = new Store(path);
   t.after(() => store.close());
   store.recover();
-  assert.deepEqual([store.portraits('1'), readdirSync(mine), store.sweepPortraits('2')], [mine, [file], 0], 'at start; a reader with no portraits has no directory');
+  assert.deepEqual([store.portraits('1'), readdirSync(mine).sort(), store.sweepPortraits('2')], [mine, [file, posed].sort(), 0],
+    'at start; a reader with no portraits has no directory');
   const memory = new Store(':memory:');
   assert.equal(memory.sweepPortraits('1'), 0);
   assert.throws(() => memory.writePortrait('1', bytes), /database file/);

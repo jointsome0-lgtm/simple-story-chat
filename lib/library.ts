@@ -69,6 +69,21 @@ export const isPose = (value: unknown): value is Pose => (POSES as readonly unkn
 // the poses are drawn, and every picture sent is pinned.
 export type OwnReference = { source: 'own'; file: string; format: 'png' | 'jpeg' | 'webp'; width: number; height: number;
   at: number; pinned: boolean; caption?: string };
+// The labels a captioner on this computer gives each picture of a pose set (local/pose-set.ts), one of each list: how
+// the person holds themselves, the side they turn to the viewer, with left and right the sides of the picture they
+// face, and how much of them the picture shows. English, as captions are.
+export const POSE_LABELS = ['standing', 'sitting', 'walking', 'lying', 'kneeling', 'crouching'] as const;
+export const SIDE_LABELS = ['front', 'three-quarter left', 'three-quarter right', 'profile left', 'profile right', 'back'] as const;
+export const FRAMING_LABELS = ['full body', 'half body', 'head and shoulders'] as const;
+// A caption: the three labels, and how sure the captioner was of the least sure of them, from 0 to 1.
+export type PoseCaption = { pose: typeof POSE_LABELS[number]; side: typeof SIDE_LABELS[number]; framing: typeof FRAMING_LABELS[number];
+  confidence: number };
+// One of many pictures of a person that a reader in the pose-set experiment sent (local/pose-set.ts; the tester,
+// 2026-09-28, has about 80 of one character), kept as a picture of their own is (`OwnReference`): its file, format, size
+// in pixels and bytes, and when it came. `caption` comes later, from the captioner, and `failed` counts the captioner's
+// attempts that gave none. A frame takes one picture of the set per person, the one its pose calls for.
+export type PoseSetPicture = { file: string; format: OwnReference['format']; width: number; height: number; bytes: number; at: number;
+  caption?: PoseCaption; failed?: number };
 export type Story = {
   id: string; seedId: string; title: string; branches: Record<string, Branch>; checkpoints: Record<string, Checkpoint>;
   nodes: Record<string, SceneNode>; memories: Record<string, MemoryVersion>;
@@ -86,7 +101,8 @@ export type Story = {
   // reader's, and the look was compressed from them. That rewrite keeps what the reader wrote and the portrait they kept
   // (local/picture.ts `rewrittenSheet`), and their references with it.
   // A reader in the reference experiment may send a picture of a person of their own (docs/telegram-ui.md#references),
-  // which is kept in a pose (`poses`); the front's stands over the portrait.
+  // which is kept in a pose (`poses`); the front's stands over the portrait. One in the pose-set experiment may send
+  // many (`poseSet`), which frames choose from by pose (docs/telegram-ui.md#pose-set).
   // `portraitPrompt` is the whole prompt the reader wrote for this person's portraits, from the one folded under a
   // portrait (docs/telegram-ui.md#portrait-prompt): every portrait of them is drawn from it word for word until they
   // drop it, and without it from the bot's own (local/image-portraits.ts `portraitPrompt`).
@@ -95,7 +111,7 @@ export type Story = {
   // its own line (local/picture-versions.ts `sheetAt`); the portrait and the references stay here, one per person.
   sheet?: { name: string; description?: string; changes?: string; details?: string; look: string; outfit?: string;
     descriptionEdited?: boolean; edited?: boolean; lookPending?: boolean; detailsEdited?: boolean; portrait?: KeptPortrait;
-    poses?: Partial<Record<Pose, OwnReference>>; portraitPrompt?: string }[];
+    poses?: Partial<Record<Pose, OwnReference>>; portraitPrompt?: string; poseSet?: PoseSetPicture[] }[];
   // The person of the sheet, by name, whose eyes the frames of this story are seen through (the owner, 2026-09-27;
   // local/picture-pov.ts). At most one; without it, or while that person is not in the scene or not on the sheet, a
   // frame is drawn as usual. Only the local bot writes it, from the characters' card.
@@ -124,6 +140,11 @@ export type LookInput = { input: 'look' | 'details'; storyId: string; name: stri
 // their next photo or file is that, if it comes within half an hour of `at`, when the wait began. The person is the one
 // whose card they opened, by story and name.
 export type ReferenceInput = { input: 'reference'; storyId: string; name: string; pose: Pose; at: number; confirm?: undefined };
+// A reader in the pose-set experiment sending many pictures of one person of a story's sheet (local/pose-set.ts): every
+// photo or file that comes within half an hour of `last`, when the last picture came, or of `at`, when the wait began,
+// joins the person's pose set, until a button or a command ends the wait. The person is the one whose card they opened,
+// by story and name.
+export type PoseSetInput = { input: 'pose-set'; storyId: string; name: string; at: number; last?: number; confirm?: undefined };
 // A reader writing the whole prompt of a portrait of one person of a story's sheet (local/picture.ts `portrait`): their
 // next text message is that prompt, which the person keeps as theirs, and a variant of the portrait whose note they
 // pressed is drawn from it with that portrait's `seed`, while the graph and the checkpoint are still the ones its
@@ -156,7 +177,8 @@ export type Language = 'ru' | 'en' | 'zh' | 'ko' | 'ja';
 export type Library = {
   version: 1; seq: number; seeds: Record<string, Seed>; stories: Record<string, Story>;
   active: { storyId: string; branchId: string } | null; job: Job | null;
-  ui: SeedDraft | DeleteConfirmation | StyleInput | PromptInput | LookInput | ReferenceInput | PortraitPromptInput | ProfileInput | null; seen: number[];
+  ui: SeedDraft | DeleteConfirmation | StyleInput | PromptInput | LookInput | ReferenceInput | PoseSetInput | PortraitPromptInput | ProfileInput | null;
+  seen: number[];
   interrupted?: boolean; language?: Language;
   // The look of this reader's pictures: a preset's key or the id of one of their own styles, and those styles. Only
   // the local bot reads them (local/picture-style.ts), and only for a reader it draws for; without a choice the bot's
@@ -390,7 +412,8 @@ type SheetEntry = NonNullable<Story['sheet']>[number];
 export function poseReference(person: SheetEntry, pose: Pose): OwnReference | KeptPortrait | undefined {
   return person.poses?.[pose] ?? (pose === 'front' ? person.portrait : undefined);
 }
-// Every file a person's references hold, which the store keeps while the sheet refers to them (local/store.ts).
+// Every file a person's references hold, their pose set's among them, which the store keeps while the sheet refers to
+// them (local/store.ts).
 export function referenceFiles(person: SheetEntry): string[] {
-  return [person.portrait, ...Object.values(person.poses ?? {})].flatMap(one => one?.file ? [one.file] : []);
+  return [person.portrait, ...Object.values(person.poses ?? {}), ...person.poseSet ?? []].flatMap(one => one?.file ? [one.file] : []);
 }

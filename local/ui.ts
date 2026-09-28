@@ -9,6 +9,9 @@ import { STYLE } from './illustrate.ts';
 import { portraitFromDetails, portraitText } from './image-portraits.ts';
 import { DESCRIPTION_CHARS, LOOK_CHARS, descriptionOf, ownDescription, ownPortraitPrompt, personAt, personTag, wornAt } from './picture.ts';
 import { REFERENCE_BYTES, REFERENCE_SIDES } from './reference.ts';
+import { POSE_SET_BYTES, POSE_SET_PICTURES, POSE_SET_READER_BYTES, poseGroups, poseSetState } from './pose-set.ts';
+import { POSE_SET_REFUSALS } from './model-error.ts';
+import type { PoseSetRefusal } from './model-error.ts';
 import { seesThrough } from './picture-pov.ts';
 import { editableFrom, ownVersions, sceneOf, sheetAt, versionsOf } from './picture-versions.ts';
 import { CHANGES_CHARS, CLOTHES_CHARS, DETAILS_CHARS, fieldsMask, maskFields, profileBlock, profileHash, profileOf, roundTrips } from './profile.ts';
@@ -32,11 +35,15 @@ export type GpuInfo = {
 // to send a portrait of their own; anybody else is shown the card as if they could not.
 // `versions`: the reader has versions of the sheet (local/picture.ts `versionsFor`), so the wait for a person's text
 // offers to write it «only from this moment».
+// `poseSet`: the reader has pose sets (local/picture.ts `poseSetFor`), so a person's card offers to send one and says
+// that frames take it; a set a person has is shown, with the button that removes it, whatever this says. `poseTally`:
+// the pictures of a set counted as they come (local/bot.ts), for the message that counts them.
 export type RenderDetails = {
   modelInfo?: ModelInfo | null; gpuInfo?: GpuInfo | null; contextStats?: ContextStats | null; pictures?: boolean; standardStyle?: string;
   textTokens?: (text: string) => number | null;
-  retainsPortraits?: boolean; references?: boolean; versions?: boolean;
+  retainsPortraits?: boolean; references?: boolean; versions?: boolean; poseSet?: boolean; poseTally?: PoseTally;
 };
+export type PoseTally = { storyId: string; name: string; at: number; kept: number; refused: Partial<Record<PoseSetRefusal, number>>; done: boolean };
 // State is read defensively (docs/telegram-ui.md#renderer), so any library field may be missing.
 type State = Partial<Library>;
 type Row = (InlineButton | null)[];
@@ -138,6 +145,11 @@ function screen(state: State, route: string, details: RenderDetails) {
     case 'portrait-prompt-input': return portraitPromptInputScreen(state, details);
     // Only while the reader is to send a picture of a person of their own (local/reference.ts), as for a look.
     case 'reference-input': return referenceInputScreen(state, details);
+    // Only while the reader is to send the pictures of a pose set (local/pose-set.ts), as for a look; the message that
+    // counts them as they come; and the question before a set is removed.
+    case 'pose-set-input': return poseSetInputScreen(state, details);
+    case 'pose-set-status': return poseSetStatus(state, details);
+    case 'pose-set-drop': return poseSetDropScreen(state, args[0], args[1], args[2], details);
     // A person's whole profile to copy and send back (local/profile.ts); the same with a line on top when the one the
     // reader edited had changed since (local/bot.ts); the wait for it, as for a look; and what a profile sent back changed.
     case 'profile': return profileScreen(state, args[0], args[1], args[2]);
@@ -564,18 +576,29 @@ function characterScreen(state: State, storyId: string | undefined, rawIndex: st
   const viewer = seesThrough(story, person.name);
   const other = people(story).find(one => seesThrough(story, one.name));
   const pov = !details.pictures ? null : viewer ? c.povNote : other ? c.povOther(line(other.name, 60)) : null;
+  // A set of the person's pictures in many poses (local/pose-set.ts): how many and how heavy, those still without a
+  // caption, how the captioned ones were sorted, and whether frames take them now.
+  const set = person.poseSet?.length ? poseSetState(person) : undefined;
+  const groups = set ? poseGroups(person) : [];
+  const poses = !set ? [] : ['', c.poseSetLine(set.count, POSE_SET_PICTURES, megabytes(set.bytes)),
+    ...set.pending || set.failed ? [c.poseSetCaptions(set.pending, set.failed)] : [],
+    ...groups.length ? [c.poseSetGroups(groups.map(one => ({ name: c.poseGroupNames[one.group], count: one.count })))] : [],
+    details.poseSet && details.pictures ? c.poseSetFrames : c.poseSetUnused];
   const result = payload([c.cardTitle(line(person.name, 60), storyName(state, story)), '',
     ...described ? [descriptionTitle, described, c.descriptionSize([...described].length), ''] : [],
     ...changes ? [c.changes, changes, ''] : [], ...changed ? [c.along(changed), ''] : [],
     c.look, person.look, c.lookSize(...size(person.look)), whose, '',
     ...clothes ? [clothesTitle, clothes, c.clothesSize(...size(clothes))] : [c.noClothes], c.clothesNote, '',
-    c.sizeNote, '', c.scope, portrait === null ? null : '', portrait, source, frames, pov === null ? null : '', pov], [
+    c.sizeNote, '', c.scope, portrait === null ? null : '', portrait, source, frames, ...poses,
+    pov === null ? null : '', pov], [
     [btn(c.editDetails, `details-edit:${personRef(story, person)}`)],
     [btn(c.edit, `look-edit:${personRef(story, person)}`)],
     [btn(c.profile, `view:profile:${personRef(story, person)}`)],
     details.pictures ? [btn(c.portrait, `portrait:${personRef(story, person)}`),
       details.references ? btn(c.ownPortrait, `ref-send:${personRef(story, person)}:front`) : null] : null,
     details.pictures && prompt !== undefined ? [btn(c.defaultPrompt, `portrait-default:${personRef(story, person)}`)] : null,
+    (details.pictures && details.poseSet) || set ? [details.pictures && details.poseSet ? btn(c.poseSet, `pose-set:${personRef(story, person)}`) : null,
+      set ? btn(c.poseSetDrop, `pose-set-drop:${personRef(story, person)}`) : null] : null,
     details.pictures ? [btn(viewer ? c.povOff : c.povOn, `${viewer ? 'pov-off' : 'pov'}:${personRef(story, person)}`)] : null,
     [btn(c.back, `view:characters:${story.id}`)],
   ]);
@@ -707,6 +730,55 @@ function referenceInputScreen(state: State, details: RenderDetails) {
   return payload([c.ownPortraitTitle(line(person.name, 60), storyName(state, story)), '',
     c.ownPortraitNote(min, max, REFERENCE_BYTES / 1024 / 1024), ...person.portrait || person.poses?.front ? ['', c.ownPortraitReplaces] : []],
     [[btn(c.backToCard, `view:character:${personRef(story, person)}`)]]);
+}
+
+// Waiting for the pictures of the pose set of the person `state.ui` names (local/pose-set.ts), one by one or in albums,
+// until the reader says they are done. Without the wait, or for a reader without pose sets, this is the menu, as for a
+// look.
+function poseSetInputScreen(state: State, details: RenderDetails) {
+  const t = texts(state.language);
+  const c = t.characters;
+  const ui = state.ui?.input === 'pose-set' ? state.ui : null;
+  const story = own(state.stories, ui?.storyId);
+  const person = story && people(story).find(one => one.name === ui?.name);
+  if (!story || !person || !details.poseSet) return home(state, null, details.modelInfo, gpuFor(details), details.pictures === true);
+  const { min, max } = REFERENCE_SIDES;
+  const held = person.poseSet?.length ?? 0;
+  return payload([c.poseSetTitle(line(person.name, 60), storyName(state, story)), '',
+    c.poseSetNote(min, max, REFERENCE_BYTES / 1024 / 1024, POSE_SET_PICTURES, POSE_SET_BYTES / 1024 / 1024, POSE_SET_READER_BYTES / 1024 / 1024),
+    ...held ? ['', c.poseSetHeld(held)] : []],
+    [[btn(c.poseSetDone, `pose-set-done:${personRef(story, person)}`)], [btn(c.backToCard, `view:character:${personRef(story, person)}`)]]);
+}
+
+// The message that counts the pictures of a pose set as they come (local/bot.ts): those kept, those refused and why,
+// and how many the set holds now, with «✅ Готово» under it until the reader is done.
+function poseSetStatus(state: State, details: RenderDetails) {
+  const t = texts(state.language);
+  const c = t.characters;
+  const tally = details.poseTally;
+  const story = own(state.stories, tally?.storyId);
+  const person = story && people(story).find(one => one.name === tally?.name);
+  if (!tally || !story || !person) return payload([c.poseSetTitle(line(tally?.name ?? '', 60), '…'), '', c.poseSetKept(tally?.kept ?? 0)], []);
+  const refused = POSE_SET_REFUSALS.flatMap(reason => tally.refused[reason] ? [{ reason: c.poseSetReasons[reason], count: tally.refused[reason]! }] : []);
+  const ref = personRef(story, person);
+  return payload([c.poseSetTitle(line(person.name, 60), storyName(state, story)), '', c.poseSetKept(tally.kept),
+    ...refused.length ? [c.poseSetRefused(refused)] : [], c.poseSetHolds(person.poseSet?.length ?? 0, POSE_SET_PICTURES), '',
+    tally.done ? c.poseSetEnded : c.poseSetMore],
+    [tally.done ? [btn(c.backToCard, `view:character:${ref}`)] : [btn(c.poseSetDone, `pose-set-done:${ref}`)]]);
+}
+
+// Before every picture of a person's pose set goes: how many, and that frames already drawn with them keep them.
+function poseSetDropScreen(state: State, storyId: string | undefined, rawIndex: string | undefined, tag: string | undefined,
+  details: RenderDetails) {
+  const t = texts(state.language);
+  const c = t.characters;
+  const story = own(state.stories, storyId);
+  const person = story && personAt(story, rawIndex, tag);
+  if (!story || !person) return stale(t, t.story.notFound);
+  const ref = personRef(story, person);
+  if (!person.poseSet?.length) return characterScreen(state, story.id, rawIndex, tag, details);
+  return payload([c.poseSetDropTitle(line(person.name, 60), storyName(state, story)), '', c.poseSetDropNote(person.poseSet.length)],
+    [[btn(c.poseSetDropConfirm, `pose-set-dropped:${ref}`)], [btn(c.backToCard, `view:character:${ref}`)]]);
 }
 
 // Waiting for the whole prompt of the portraits of the person `state.ui` names (local/bot.ts), which the reader copies
@@ -1253,6 +1325,9 @@ function clip(value: unknown, max: number) {
 function line(value: unknown, max = 40) {
   return clip(String(value ?? '').replace(/\s+/g, ' ').trim(), max);
 }
+
+// Bytes as whole megabytes, a started one counted.
+const megabytes = (bytes: number) => Math.ceil(bytes / 1024 / 1024);
 
 function quote(t: Messages, value: unknown, max = 40) {
   return t.format.quote(line(value, max) || t.format.untitled);

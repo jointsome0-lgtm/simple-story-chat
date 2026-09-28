@@ -63,6 +63,8 @@ import type { StyleChoice } from './picture-style.ts';
 import { REFERENCE_VERSION, frameReferences, pinReferences, readReference, referenceGraph, referencePrompt, temporaryReferences } from './picture-references.ts';
 import { pictureSize } from './reference.ts';
 import { povRequest, seenBy, viewerOf } from './picture-pov.ts';
+import { poseGroups, poseRequest, viewsOf } from './pose-set.ts';
+import type { PoseGroup, Viewed } from './pose-set.ts';
 import { addChanges, changesRequest, countVersions, descriptionOf, lastingChangesOf, laterRequest, ownDescription, personHere, personKey,
   sceneOf, sheetAt, staleAt } from './picture-versions.ts';
 import { createProgress } from './progress.ts';
@@ -217,7 +219,7 @@ export function rewrittenSheet(before: SheetEntry[], written: Character[]): Shee
     return { ...one, ...mine && ownDescription(mine) ? { description: descriptionOf(mine), descriptionEdited: true } : {},
       ...mine?.edited ? { look: mine.look, edited: true } : {}, ...mine?.portrait ? { portrait: mine.portrait } : {},
       ...mine?.poses ? { poses: mine.poses } : {}, ...mine && ownPortraitPrompt(mine) ? { portraitPrompt: mine.portraitPrompt } : {},
-      lookPending: true };
+      ...mine?.poseSet ? { poseSet: mine.poseSet } : {}, lookPending: true };
   });
   const names = new Set(written.map(one => personKey(one.name)));
   return [...kept, ...before.filter(one => (one.edited || ownDescription(one) || referenceFiles(one).length || ownPortraitPrompt(one))
@@ -498,12 +500,20 @@ export function createIllustrator(config: ImageConfig, deps: {
   // changes the story makes, and they may write a person's text «only from this moment». Versions a story already has
   // are drawn for everybody.
   const versionsFor = (userId: string) => config.users.has(userId) && !!config.versionUsers?.has(userId);
+  // Whether a reader has pose sets (config SIMPLE_CHAT_POSE_SET_USERS, local/pose-set.ts): they may send a person's
+  // pictures by the dozen, and their frames choose one of them by pose. Only while the reader is in the reference
+  // experiment, whose frames take references at all (`referenceGate`, below), and while the story model runs on this
+  // computer or on our card: the captions go into each frame's description, and no hosted API is to see them.
+  const ownModel = deps.model?.provider === 'llama-cpp' || deps.model?.provider === 'simple-serving';
+  const poseSetFor = (userId: string) => ownModel && !referenceGate(userId) && !!config.poseSetUsers?.has(userId);
 
   // The frame of each reader's latest described scene, in memory only and only until the next one: a sample of a
   // style is drawn from it without asking the language model again. Never stored and never logged.
   // `viewer` is the person the frame was seen through, if the story had one then (local/picture-pov.ts), and `pov`
   // whether it was.
-  const frames = new Map<string, { storyId: string; nodeId: string; description: Description; sheet: Character[]; viewer?: string; pov?: boolean }>();
+  // `views` is the group of their pose set each person's pose called for, for a reader with pose sets (local/pose-set.ts).
+  const frames = new Map<string, { storyId: string; nodeId: string; description: Description; sheet: Character[]; viewer?: string; pov?: boolean;
+    views?: Record<string, PoseGroup> }>();
   // The portrait each reader was shown last, for its keep button (`keepPortrait`), with the text it was drawn from as
   // `look` (`portraitText`), empty for one drawn from the reader's own prompt (`own`), and the whole `prompt`: in memory
   // only, one per reader, until the next one, the keep, a delivery that failed, or PORTRAIT_HELD_MS. That one timer is
@@ -543,6 +553,10 @@ export function createIllustrator(config: ImageConfig, deps: {
     // How many lasting changes this frame found in the story, for a reader who has versions of the sheet.
     const versions = versionsFor(userId);
     let lastingChanges = versions ? 0 : undefined;
+    // For a reader with pose sets: the group each person's pose called for, and how many people of the frame's sheet had
+    // groups to choose from (local/pose-set.ts).
+    let views: Record<string, PoseGroup> | undefined;
+    let poseSetPeople: number | undefined;
     // Both calls continue the request the scene itself was written from, so right after the scene they belong in the
     // slot where that prefix is cached and nowhere else: `sharesPrefix` is the scheduler's word for it, and it also
     // ends this turn the moment its own reader asks for the next scene (local/scheduler.ts).
@@ -584,7 +598,18 @@ export function createIllustrator(config: ImageConfig, deps: {
       // of the scene with the haircut already has it. Without them the request is as it was.
       const named = versions ? sheet.filter(one => one !== viewer) : [];
       const asked = changesRequest(request, named);
-      const answer = (await askJson(model, trusted(model, viewer ? povRequest(asked, viewer) : asked, anchor), { signal })).value;
+      // For a reader with pose sets, each person of the sheet with a captioned set, the viewer's apart, whose body the
+      // frame does not show, names the group of it that fits how the frame shows them, right after `who`: added last, so
+      // that it stands before any other field that goes there. Without them the request is as it was.
+      const current = poseSetFor(userId) ? store.read(userId).stories[storyId] : undefined;
+      const viewed: Viewed[] = current ? sheet.filter(one => one !== viewer).flatMap(one => {
+        const groups = poseGroups(current.sheet?.find(other => other.name === one.name) ?? {});
+        return groups.length ? [{ name: one.name, groups }] : [];
+      }) : [];
+      const reply = (await askJson(model, trusted(model, poseRequest(viewer ? povRequest(asked, viewer) : asked, viewed), anchor), { signal })).value;
+      const picked = viewed.length ? viewsOf(reply, viewed) : { answer: reply, views: {} };
+      const answer = picked.answer;
+      if (current) { views = picked.views; poseSetPeople = viewed.length; }
       if (!versions) return answer as unknown as Description;
       const { lasting_changes: changes, ...plain } = answer;
       const found = lastingChangesOf(changes, named.map(one => one.name));
@@ -615,8 +640,8 @@ export function createIllustrator(config: ImageConfig, deps: {
     });
     const pov = viewed ? viewed.seen : undefined;
     const frame = viewed ? viewed.description : description;
-    frames.set(userId, { storyId, nodeId, description: frame, sheet, viewer: viewer?.name, pov });
-    return { description: frame, sheet, clothesChanged: worn.changed, pov, lastingChanges };
+    frames.set(userId, { storyId, nodeId, description: frame, sheet, viewer: viewer?.name, pov, ...views ? { views } : {} });
+    return { description: frame, sheet, clothesChanged: worn.changed, pov, lastingChanges, views, poseSetPeople };
   }
 
   // The size of a prompt that ends with the style `line`: its characters, and, with a tokenizer, its tokens and how
@@ -732,7 +757,7 @@ export function createIllustrator(config: ImageConfig, deps: {
 
   // One frame on the picture card with the story's seed. A sample reuses a compatible scene recipe, including the
   // original portrait inputs, and changes the style at the end and, for references, at the opening too.
-  async function drawFrame(userId: string, storyId: string, frame: { description: Description; sheet: Character[] },
+  async function drawFrame(userId: string, storyId: string, frame: { description: Description; sheet: Character[]; views?: Record<string, PoseGroup> },
     line: string, signal: AbortSignal, log: Log, savedRecipe?: PictureRecipe, status?: Watching) {
     const plain = assemblePrompt(frame.description, frame.sheet, line);
     let assembled = plain;
@@ -743,7 +768,7 @@ export function createIllustrator(config: ImageConfig, deps: {
     if (!referenceGate(userId)) {
       const story = store.read(userId).stories[storyId];
       if (!story) throw sceneGone();
-      const bound = saved ? saved.references?.portraits ?? [] : frameReferences(story, frame.description);
+      const bound = saved ? saved.references?.portraits ?? [] : frameReferences(story, frame.description, frame.views);
       if (bound.length) {
         reason = 'unsupported_graph';
         if (referenceGraph(graph, bound.length)) {
@@ -907,7 +932,8 @@ export function createIllustrator(config: ImageConfig, deps: {
         await status.clear();
         return;
       }
-      let frame: { description: Description; sheet: Character[]; clothesChanged: number; pov?: boolean; lastingChanges?: number };
+      let frame: { description: Description; sheet: Character[]; clothesChanged: number; pov?: boolean; lastingChanges?: number;
+        views?: Record<string, PoseGroup>; poseSetPeople?: number };
       try { frame = await describeFrame(userId, storyId, nodeId, branchId, signal, log, true); }
       finally { release?.(); described(); }
       describeMs = Math.max(0, now() - describeStarted);
@@ -937,6 +963,7 @@ export function createIllustrator(config: ImageConfig, deps: {
         ...status.waited(), imageSteps: steps, pictureAttention: drawn.pictureAttention, photoMs, photoBytes: drawn.bytes.length,
         namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook, clothesChanged: frame.clothesChanged,
         pictureStyle, ...pov === undefined ? {} : { pov }, ...frame.lastingChanges === undefined ? {} : { lastingChanges: frame.lastingChanges },
+        ...frame.views ? { poseSetPeople: frame.poseSetPeople, poseViewsPicked: Object.keys(frame.views).length } : {},
         ...size, ...elapsed() });
     } catch (error) {
       const code = errorCode(error);
@@ -1010,7 +1037,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       let describeMs = 0;
       let pictureStyle = styles[0].pictureStyle;
       try {
-        let frame: { description: Description; sheet: Character[]; pov?: boolean } | undefined = frameReused ? kept : undefined;
+        let frame: { description: Description; sheet: Character[]; pov?: boolean; views?: Record<string, PoseGroup> } | undefined = frameReused ? kept : undefined;
         if (!frame) {
           let release: (() => void) | undefined;
           try { release = request.hold?.(); }
@@ -1236,6 +1263,10 @@ export function createIllustrator(config: ImageConfig, deps: {
     // Whether a reader has versions of the sheet (`versionsFor`): their wait for a person's text offers «only from this
     // moment» (local/ui.ts).
     versionsFor(userId: string) { return versionsFor(userId); },
+
+    // Whether a reader has pose sets (`poseSetFor`): a person's card offers to send pictures by the dozen, and frames
+    // choose one of them by pose (local/pose-set.ts).
+    poseSetFor(userId: string) { return poseSetFor(userId); },
 
     // Lets a kept portrait go, once the write that refers to its file is committed (local/bot.ts). One whose write was
     // rolled back is still held, so the same button keeps it again.

@@ -31,5 +31,7 @@ coverage/
 measurements/
 models/
 *.gguf
+# The pose captioner's environment (captioner/setup.sh); its weights go to models/.
+captioner/.venv/
 # Vocabularies written by `npm run tokenizers` (docs/tokenizers.md)
 tokenizers/

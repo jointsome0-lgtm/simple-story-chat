@@ -9,6 +9,8 @@ import type { Comfy, Graph } from './image-batch.ts';
 import { assemblePrompt, matchSheet } from './illustrate.ts';
 import type { Character, Description } from './illustrate.ts';
 import type { Log } from './model-error.ts';
+import { poseGroups } from './pose-set.ts';
+import type { PoseGroup } from './pose-set.ts';
 import { imageFormat } from './reference.ts';
 import type { Store } from './store.ts';
 
@@ -17,13 +19,18 @@ type Bound = { name: string; file: string };
 
 // Unlike the old experiment's binding, a missing portrait does not stop later people from getting theirs.
 // Every bound clause names its image explicitly, so image order need not be person order.
-export function frameReferences(story: Story, description: Description): Bound[] {
+// `views`, for a reader with pose sets (local/pose-set.ts), is the group of the set each person's pose called for: its
+// picture is then the person's one reference, and a person whose pose called for none has their front, the reader's
+// own before the bot's: the picture sent for it, else the set's front, else the portrait they kept.
+export function frameReferences(story: Story, description: Description, views?: Record<string, PoseGroup>): Bound[] {
   const sheet = story.sheet ?? [], names = sheet.map(one => one.name);
   const bound: Bound[] = [];
   for (const person of description.people ?? []) {
     const name = matchSheet(person.who ?? '', names);
     const one = sheet.find(other => other.name === name);
-    const file = one && frameFile(one);
+    const groups = one && views ? poseGroups(one) : [];
+    const picked = name !== null && views && Object.hasOwn(views, name) ? groups.find(group => group.group === views[name]) : undefined;
+    const file = one && (picked?.file ?? one.poses?.front?.file ?? groups.find(group => group.group === 'front')?.file ?? frameFile(one));
     if (name !== null && file && !bound.some(other => other.name === name)) bound.push({ name, file });
   }
   return bound;
