@@ -3462,16 +3462,18 @@ reader's turn goes first.
   they can retire the sheet for these cases if the heretic keeps the backstory after compaction without it, or pick
   the candidate for a larger study. So it starts only once T1 and T2 have ended, and runs for 30 minutes at most and
   never past 3 minutes before the card's end, whichever comes first, with its own deadline a minute before that and a
-  hard stop at it: $0.28 at most. Each story is kept as far as it got; failed or cut comparisons are left out. It
-  stops itself on `budget_exceeded` or `unauthorized`, and `card/probe.jsonl` shows each `failed`. Six Astra sessions
-  judge it after the card. **It runs because** the story-bible session's rehearsals against simple-serving's
-  development launcher passed first, from 15:12 to 15:36 UTC on 2026-09-28, with a fake engine answering in JSON: the
-  JSON paths whole (9 stories of 9 with their compactions and sheets), the deadline's abort in the middle of a request
-  and the resume after it (9 of 9), and the gateway's queue full (429 `queue_full` asked again until the load ended,
-  then every story whole). The runbook's line is that session's final command, `--max-minutes 30` included, with the
-  hard stop around it and its `--deadline` a minute before the stop, so that its own stop and save come first. At
-  about 6 to 7 minutes an arm alone on the gateway, the cap may cut `with`'s last stories, which are left out of the
-  judging.
+  hard stop at it: $0.28 at most. Each story is kept as far as it got; failed or cut comparisons are left out. It stops
+  itself on `budget_exceeded` or `unauthorized`, and `card/probe.jsonl` shows each `failed`. Six Astra sessions judge it
+  after the card is deleted; `judge.mts` takes only whole 12-scene stories, and a seed only with two whole arms or more.
+  **It runs because** the story-bible session's rehearsals against simple-serving's development launcher passed first,
+  from 15:12 to 15:36 UTC on 2026-09-28, with a fake engine answering in JSON: the JSON paths whole (9 stories of 9 with
+  their compactions and sheets, 164 gateway requests, all answered 200), the deadline's abort in the middle of a request
+  and the resume after it (9 of 9, no scene written twice), and the gateway's queue full (429 `queue_full` asked again
+  every 20 seconds until the load ended, then every story whole). A call starts only if one and a half times the median
+  of its kind's successful calls fits before the deadline. The runbook's line is that session's final command,
+  `--max-minutes 30` included, run only on a two-hour card, with the hard stop around it and its `--deadline` a minute
+  before the stop, so that its own stop and save come first. At about 6 to 7 minutes an arm alone on the gateway, the
+  cap may cut `with`'s last stories.
 
 **What the gateway takes.** The card's gateway runs two internal calls at a time with eight waiting (simple-serving's
 provisional limits, which the card keeps) and answers one more with `queue_full`, which the bot's adapter reports as
@@ -3578,9 +3580,9 @@ take `--hours 2`. Else, if they fit with the text card's at `--hours 1`, the tex
 seconds, $0.81 at $0.55 and $0.91 at $0.63, and both cards $2.47 to $2.55 at $0.63. Else nothing is rented and the owner
 is asked. Once the text card is rented, its own session, from what `rented` printed, and the picture card's, from a dry
 run just then, must fit together before the picture card is rented. With `--hours 1` the text card's jobs end by about
-46 minutes after its rental: T1 and T2 fit, unless T2 runs away as far as it can and the card's end cuts it, and T3,
-which needs 20 minutes, does not begin. An hour is short for the picture card's queue, and for a bootstrap as slow as
-round one's cards had, 30 minutes, so it always takes `--hours 2`.
+46 minutes after its rental: T1 and T2 fit, unless T2 runs away as far as it can and the card's end cuts it, and T3 does
+not begin, since the runbook starts it only on a two-hour card. An hour is short for the picture card's queue, and for a
+bootstrap as slow as round one's cards had, 30 minutes, so it always takes `--hours 2`.
 
 **Back on this machine**: P1's 0.53 to 0.68 GB of pictures and P2's 0.17 to 0.22 GB while they draw, 0.7 to 0.9 GB, and
 after the cards their bundles, about as much again for P1 and 0.2 GB for P2; the main session agreed to them on
@@ -3726,7 +3728,7 @@ timeout 120 ssh -o ConnectTimeout=10 simple-chat-vast true    # each card's firs
 timeout 120 ssh -o ConnectTimeout=10 simple-chat-vast-pictures true
 # Each card's end for its work, from its guard. A card whose guard cannot be read is ended here, and nothing starts on it.
 end_text=$(end_of simple-chat-vast "$BY1" text); end=$(end_of simple-chat-vast-pictures "$BY2" pictures); echo "$end_text $end"
-declare -p ID1 ID2 BY1 BY2 end_text end bot > "$runs/tester-stand/rental.env"    # for terminal 4, which starts now
+declare -p ID1 ID2 BY1 BY2 end_text end bot hours > "$runs/tester-stand/rental.env"    # for terminal 4, which starts now
 
 # The text card, in simple-serving's checkout at next-card (gpu.md#serving-card). A card ended here: Ctrl+C in
 # terminal 2 as well.
@@ -3758,13 +3760,14 @@ alive text && {
   wait; }
 node "$runs/tester-stand/card-probe.mts" --summary --out "$runs/tester-stand/card" | tail -n 1    # T1's criteria
 node "$runs/sheet-versions/run.mts" --summary --out "$runs/sheet-versions/card"    # T2's counts and criteria
-# T3, the story-bible session's final command, once T1 and T2 have ended: killed after 30 minutes or 3 minutes before
-# the card's end, whichever comes first, with its own deadline a minute sooner. card/probe.jsonl shows each
-# `"failed":true` and the `end` row; the same command resumes.
+# T3, the story-bible session's final command, only on a two-hour card and once T1 and T2 have ended: killed after 30
+# minutes or 3 minutes before the card's end, whichever comes first, with its own deadline a minute sooner.
+# card/probe.jsonl shows each `"failed":true` and the `end` row; the same command resumes.
 t3=$(( $(date +%s) + 1800 )); (( t3 <= end_text - 180 )) || t3=$(( end_text - 180 ))
-alive text && (cd "$runs/bible/probe" && upto "$t3" 20 node run.mts --root /home/jo/work/simple-chat --out ./card \
-  --model serving:gemma-4-31b-heretic-nvfp4 --arms without,rule,with --scenes 12 --compact-after 7,11 --parallel 3 \
-  --max-minutes 30 --deadline "$(date -u -d @$(( t3 - 60 )) +%FT%TZ)" > t3.log 2>&1; echo "T3 exit $?")
+(( hours == 2 )) && alive text && (cd "$runs/bible/probe" && upto "$t3" 20 node run.mts \
+  --root /home/jo/work/simple-chat --out ./card --model serving:gemma-4-31b-heretic-nvfp4 --arms without,rule,with \
+  --scenes 12 --compact-after 7,11 --parallel 3 --max-minutes 30 --deadline "$(date -u -d @$(( t3 - 60 )) +%FT%TZ)" \
+  > t3.log 2>&1; echo "T3 exit $?")
 # The text card's end, as soon as its queue is empty:
 calm 8080; echo "calm $?"    # then Ctrl+C in terminal 2: the live bot's scenes are off the card
 stop_card text
