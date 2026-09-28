@@ -8,6 +8,14 @@ and the main result with its limit. A new step gets its full entry there and its
 accepted**: tried and reverted. **Measurement**: numbers without a decision on a change. **Open**: a decision still
 waits. An open line is unfinished work, not an order to finish it.
 
+- 2026-09-28 · **measurement** · [O3, phase 1: trap scenes that think, over the same states](knowledge/improve-runs.md#scene-thinking-2026-09-28).
+  O3 of the memory proposal, which the owner approved; no change. The eval gained `SCENE_THINKING` (45400b2), and with
+  `RECALL_FROM` and `--judge` it writes the trap scenes again over a saved replay. Over step 1's `gemma-mem-1` states
+  hosted Gemma 4 31B passed 58 of 76 trap questions without thinking and 59 with it: the older traps 21 and 19 of 24, o2
+  21 and 23 of 26, open 16 and 17 of 26 (P 4 and 5 of 13); the one count trap that flipped went wrong with thinking. A
+  thinking scene on `hospital` and `assault` reasoned 621 and 498 tokens at the median and 2678 at most, and took 38.7
+  and 38.1 s at the median against 8.0 and 12.5. One run an arm, hosted Gemma; the card job for the tester's model is
+  prepared and not run.
 - 2026-09-28 · **measurement** · [Memory step 2: checks at the memory's boundary, from the memory alone](knowledge/improve-runs.md#ceiling-boundary-2026-09-28).
   Step 2 of the memory proposal; no prompt changed. The eval gained `boundary` (87faddd), in the pack since 75d69a1: 11
   questions of `hospital` and 10 of `assault` asked as of the end of scene 11 from the final memory alone, each answer

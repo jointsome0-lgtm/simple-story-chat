@@ -11,6 +11,142 @@ line per decision. A new step gets its full entry here, on top, and its line the
 Paths to result directories say where the numbers came from at the time. They do not promise that the files still
 exist or that you may read them.
 
+<a id='scene-thinking-2026-09-28'></a>
+
+## 2026-09-28 · Opus 5.5 · O3, phase 1: trap scenes that think, on hosted Gemma 4 31B (measurement)
+
+Not a step of the loop: phase 1 of O3 of the memory proposal of 2026-09-28
+(`~/simple-story-chat-runs/2026-09-28/memory-next/proposal.md`, outside the repository), which the owner approved the
+same day, a measurement that accepts no change. [Thinking at the read end](#read-thinking-2026-09-28) had taken the
+recall from 3.7 and 8.3 to 11.3 and 12 of 12, and the bot's scenes never think. The question: does thinking before a
+scene cut the scene's continuity and number errors, and what does it cost a scene in reasoning tokens and seconds?
+Phase 1 asks it of hosted Gemma 4 31B over the pack's traps on both scenarios. Phase 2, a job for the next text card
+that asks it of the tester's model, is prepared and not run (below).
+
+The switch, in eval code only ([eval.md](../eval.md#scene-thinking), 45400b2). `SCENE_THINKING=true` gives every trap
+scene, and the `then` scene over it, `thinking`, which OpenRouter gets as `reasoning: { enabled: true }`, and 4096 more
+output tokens, 8192 in all. With `RECALL_FROM` and `--judge` the probe writes every trap scene again over a finished
+replay, each where the replay wrote it, with the memory of the last compaction up to there, and then asks the recall
+and the boundary checks, so both arms write from the same states. A dry run against a fake llama.cpp server over a
+synthetic pack, repeated just before the screen: with the switch unset, 25 of 25 bodies were equal to 87faddd's byte
+for byte; written again over that replay with the switch off, 22 of 22 bodies equalled the replay's own, the other
+three being its compactions; with the switch on, the same 22 differed only in `max_tokens` (4096 to 8192) and the
+thinking fields; after the rewrite the final state equalled the replay's. No test was added.
+
+The states are step 1's compacted replays `gemma-mem-1` (`~/simple-story-chat-runs/2026-09-28/memory-ceiling/tmp/`,
+71a159f, 08:00 UTC), one state a scenario for both arms. The pack has 26 traps a scenario (fc1eb5f): 12 questions of
+the older set, 11 of o2 and 12 of open on `hospital`, and 12, 15 and 14 on `assault`. An open trap asks `confirmed` of
+its scene and `kept` of the `then` scene over it.
+
+Commands. As in [step 3](#read-thinking-2026-09-28), the eval ran from the main tree at dd18b59, with its `.env.eval`
+and ledger, and a Node resolve hook, `$R/redirect.mjs`, swapped `local/memory-probe.ts` for this branch's, at 45400b2.
+The hook also gave the probe 120 minutes in place of the 30 the main tree's eval passes (the branch's eval takes
+`--minutes`), and gave the thinking arms a request timeout of 900 s in place of 300 s, since endpoints at 7 to 10 tokens
+a second turned up in the first scenes and a long thought there could pass 300 s. No scene came near it; the longest
+took 185 s. The hook also kept `NODE_OPTIONS` from the Claude CLI that the judge starts. `$R/run.sh <scenario> off|on`
+holds the command, one `TMPDIR` a run, with `R=~/simple-story-chat-runs/2026-09-28/scene-thinking` and
+`S=~/simple-story-chat-runs/2026-09-28/memory-ceiling/tmp/gemma-mem-1`:
+
+```
+NODE_OPTIONS=--import=$R/redirect.mjs PROBE_MINUTES=120 [PROBE_TIMEOUT_MS=900000] SCENE_THINKING=false|true RECALL_FROM=$S/simple-chat-memory-<scenario>-… TMPDIR=$R/tmp/<scenario>-<arm> npm run eval -- --pack ~/simple-story-chat-eval --scenarios <scenario> --mode plain --models openrouter:google/gemma-4-31b-it --judge claude:claude-opus-5-5 --out $R/<scenario>-<arm>.json
+```
+
+Both arms without thinking started together at 10:42 UTC. Each scenario's thinking arm started when its arm without
+thinking had finished, at 10:50 and 10:55. Every run finished at its first attempt, with no `budget_exceeded`, 402 or
+403. Two things happened on the way:
+- The judge of `assault` off failed at the Claude CLI after 7 of the arm's 33 scenes (`provider_failed`, `cliError`,
+  stop reason `stop_sequence`, as Haiku's cells had in [L1](#l1-2026-09-27)), which left the scenes unjudged. `npm run
+  eval -- judge --judge claude:claude-opus-5-5 --resume <its probe directory> --mode plain --pack
+  ~/simple-story-chat-eval --scenarios assault` judged them from 10:55 to 10:58. The `sceneScore` of 0 in
+  `$R/assault-off.json` means the scenes had no verdicts.
+- The machine slept from 11:14 to 12:18 UTC with a thinking scene of each arm in flight. The connections failed five
+  minutes after it woke, the probe asked both scenes again after 30 s, as it does after a dropped connection, and the
+  arms went on. One more request of `hospital` on had dropped the same way at 11:03. A scene's `ms` is the time of the
+  attempt that answered.
+
+Numbers, one run an arm, judged by Opus 5.5:
+
+| Scenario, arm | Older traps | o2 | open `confirmed` | open `kept` | P | Recall /12 | Boundary |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `hospital`, off | 10/12 | 9/11 | 2/6 | 6/6 | 2/6 | 4 | 5/11 |
+| `hospital`, on | 10/12 | 9/11 | 3/6 | 6/6 | 3/6 | 3 | 5/11 |
+| `assault`, off | 11/12 | 12/15 | 2/7 | 6/7 | 2/7 | 8 | 8/10 |
+| `assault`, on | 9/12 | 14/15 | 2/7 | 6/7 | 2/7 | 8 | 8/10 |
+
+- The questions that flipped. `hospital`: with thinking `open_attic_confirmed_h` passed, and none passed only
+  without it. `assault`: with thinking `o2_backstory_told`, `o2_fetch_accepted` and `open_shawl_kept` passed; without it
+  `two_tunnel_barriers` and `one_tunnel_barrier` (the two questions of `mid_tunnel_stock`, a count of barriers after
+  scene 10) and `open_water_kept`.
+- Failed in both arms, seven questions on each scenario: on `hospital` `key_fetched`, `order_explained`, both time
+  traps of o2 (`o2_opening_before_completed_bell`, `o2_opening_before_census_talk_h`) and three open claims left
+  unconfirmed; on `assault` `prior_discussion_accepted`, `o2_fetch_corrected` and five open claims left unconfirmed.
+- Both arms asked the recall and the boundary checks without thinking over the same final state, so those requests
+  were the same. `hospital`'s recall still answered 4 in one and 3 in the other (`bridge_limit`): the spread of one
+  reader on one request.
+
+Reasoning and time, a scene of the 32 on `hospital` and the 33 on `assault` (trap scenes and `then` scenes), in the
+probe's seconds over OpenRouter, median and most:
+
+| | `hospital` off | `hospital` on | `assault` off | `assault` on |
+| --- | --- | --- | --- | --- |
+| Seconds a scene | 8.0 · 35.2 | 38.7 · 184.8 | 12.5 · 64.9 | 38.1 · 171.6 |
+| Output tokens a scene, reasoning included | 353 · 584 | 1095 · 2473 | 402 · 567 | 1007 · 3224 |
+| Reasoning tokens a scene | 0 | 621 · 1702 | 0 | 498 · 2678 |
+| Visible text in tokens (output less reasoning) | 353 · 584 | 422 · 882 | 402 · 567 | 472 · 926 |
+| Output tokens a second, median (range) | 41.7 (15–63) | 28.7 (10–85) | 32.8 (7–76) | 28.3 (16–52) |
+| All the arm's scenes, seconds | 296 | 1536 | 664 | 1454 |
+
+With thinking, 11 scenes of `hospital` and 6 of `assault` reasoned more than 1000 tokens, 2 of `assault` more than
+2000, and none was cut at 8192. A thinking scene reasoned 855 tokens on average on `hospital` and 754 on `assault`,
+and its visible text grew by about 70 tokens at the median.
+
+The hosted speed and the card. Hosted Gemma gave about 34 tokens a second: 33 to 42 for the median scene without
+thinking, 28 with it, and 7 to 85 depending on the endpoint OpenRouter picked. So the 26 to 31 s a thinking scene added
+here at the median is mostly its 600 to 740 more output tokens at that speed. What carries over to the card is the
+count, if the heretic reasons as long as Gemma. At the 147 to 157 tokens a second the heretic decoded in the
+compactions of the night of 09-27/28, the median thought would add 4 to 5 s a scene on an idle card and the longest
+here about 18 s. The hosted numbers do not say whether the heretic reasons as long, how long an internal request waits
+behind the tester's reader turns, or how long a reader waits for the first word, which in a thinking scene comes only
+after the whole thought.
+
+The cost, as this screen's own requests by the provider's usage: 138 answered requests and 1,182,202 tokens of the
+1,500,000 allowed, the recall and the boundary checks included: `hospital` 303,644 off and 333,789 on, `assault`
+258,573 and 286,196. The three requests cut by a dropped connection got no usage; their reservations, about 16,000
+tokens each, stay in the ledger unsettled. At $0.08 to $0.14 a million tokens in and $0.30 to $0.40 out that is about
+$0.12 to $0.19. The ledger's `openrouter-paid` day stood at 239 requests and 1,345,358 tokens at 10:42:51 UTC and at
+449 and 2,740,178 at 12:35:43, other agents' requests included. The judge ran through the Claude CLI and spent no
+channel tokens.
+
+Conclusion: no gain. Over the same states, thinking before a scene moved 7 of 76 questions and gained one net: 58 to 59,
+the older traps 21 to 19 of 24, o2 21 to 23 of 26, open 16 to 17 of 26, P 4 to 5 of 13. The one count trap that flipped
+(`mid_tunnel_stock`) went wrong with thinking. The errors both arms made stayed: both of o2's time traps on `hospital`,
+the open claims left unconfirmed (3 of 6 and 5 of 7) and four continuity questions. No set moved by more than two
+questions. Gemma's older traps on `hospital` scored 10, 9 and 9 in the three baseline replays of [L1](#l1-2026-09-27),
+and here the same recall request, asked twice, moved by one. The price, at the median: 2.5 to 3 times the output tokens
+a scene and 3 to 5 times its seconds hosted, while an arm's tokens grew by about 10 %, since the input dominates. The
+bot's scenes do not think, as before, and `SCENE_THINKING` stays an eval switch, off by default.
+
+Phase 2, prepared only. `~/simple-story-chat-runs/2026-09-28/scene-thinking/card/job.mts` writes the same traps on the
+tester's model through simple-serving, off and then on, every request of class `internal`, with `--minutes` as its
+deadline. `notes.txt` beside it holds the question, the gain, the minutes (about 20 on an idle card and about 55 with
+the tester at it at phase 1's reasoning, `--minutes 75` as the bound) and its dry run against simple-serving's own
+gateway with a fake engine. In that dry run the gateway took no thinking budget: a `thinking_budget` in
+`chat_template_kwargs`, `reasoning`, `reasoning_effort` and `thinking_token_budget` were each answered with 400
+`unsupported_field`, and `max_tokens`, the one bound, counts the thought and the text together. After this screen the
+job would bring the price on the card, and a gain only if the heretic answers otherwise than Gemma; it goes through the
+card plan and GPT-6 Astra's review, not straight to a rental.
+
+Limitations:
+- One run an arm, one state a scenario, one judge (Opus 5.5), judging once. Seven flips in 76 questions is about the
+  size of the noise, not a measure of it.
+- Hosted Gemma 4 31B stands in for the heretic on the card ([acceptance](../improve-loop.md#acceptance-on-gpu)).
+- OpenRouter picks an endpoint for each request, and the log does not say which. The seconds mix endpoints at 7 to 85
+  tokens a second, and a thinking request may go to other endpoints than one without thinking.
+- The traps test continuity at fixed points. The walk, longer stories and `sgr` memory were not run.
+- Results: `$R/<scenario>-<arm>` as `.json`, `.log` and `.meta` (`assault-off-judge.*` for the second judging); the
+  probes' directories under `$R/tmp/`; `$R/tables.mts` and `$R/extra.cjs`, which print these numbers from the probes'
+  reports, with their output in `$R/tables.txt`; and `$R/usage.txt`, the ledger at each stage.
+
 <a id='ceiling-boundary-2026-09-28'></a>
 
 ## 2026-09-28 · Opus 5.5 · memory steps 1 and 2: the reading ceiling, and checks at the memory's boundary (measurement)

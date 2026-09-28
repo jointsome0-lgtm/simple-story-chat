@@ -67,7 +67,9 @@ without thinking then come from the same states, and the recall and the boundary
 in any `RECALL_FROM` run. A trap scene keeps the counts of its request, the timings simple-serving and llama.cpp
 report, and `ms`, its time in the probe; its `trap_scene` event prints `ms`, `outputTokens` and, from OpenRouter,
 `reasoningTokens`. Thinking scenes take longer than the usual 30 minutes of a replay's probe, and `--minutes` (up to
-120) gives each probe more.
+120) gives each probe more. On 2026-09-28 hosted Gemma 4 31B, over the same states of both scenarios, passed 58 of the
+76 trap questions without thinking and 59 with it, while a thinking scene took, at the median, 2.5 to 3 times the output
+tokens and 3 to 5 times the seconds ([the entry](knowledge/improve-runs.md#scene-thinking-2026-09-28)).
 
 A scenario may also carry `boundary`: checks in the shape of the memory questions, answered as of the end of scene 11,
 the last scene the replay's memory covers (step 2 of the memory proposal, 2026-09-28). The pack's `assault` carries 10
