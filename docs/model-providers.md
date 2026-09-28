@@ -114,7 +114,8 @@ eval found so far is in [improve-runs.md](knowledge/improve-runs.md#schema-2026-
 ([improve-runs.md](knowledge/improve-runs.md#memory-thinking-2026-09-27)). It is off by default. The scenes never think,
 as a scene streams to the reader and thinking would delay its first word, and the eval's recall thinks only under a
 switch of its own, `RECALL_THINKING` ([eval.md](eval.md#reader)). A compaction's request then carries `thinking`
-(`local/memory.ts`): OpenRouter gets `reasoning: { enabled: true }`, llama.cpp `enable_thinking: true` without `reasoning_effort: 'none'`, and simple-serving `enable_thinking: true`; the
+(`local/memory.ts`): OpenRouter gets `reasoning: { enabled: true }`,
+llama.cpp `enable_thinking: true` without `reasoning_effort: 'none'`, and simple-serving `enable_thinking: true`; the
 other adapters send what they always send. The reasoning counts against the output limit, so the limit grows by 12288:
 16384 for `plain` and its repair, 20480 for `sgr`, and the context must leave that much room. Each reasoning token
 comes as an event of its own, so llama.cpp, simple-serving and OpenRouter let such a stream grow to 2,000,000 bytes for
