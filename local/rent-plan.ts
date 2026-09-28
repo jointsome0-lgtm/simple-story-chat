@@ -100,19 +100,22 @@ const MIN_DIRECT_PORTS = 2;
 
 export type RentPlan = {
   lane: Lane; gpus: number; maxHour: number; diskGb: number; minRamGb: number; minDirectPorts: number;
-  sessionHours: number; sessionBytes: number; uploadBytes: number; image: string; preferredHost: number | null;
+  sessionHours: number; sessionBytes: number; uploadBytes: number; trafficFactor: number; image: string; preferredHost: number | null;
   blockedCountries: string[];
 };
 
-// `uploadGb` is what a session brings back from the machine, priced at the host's outbound rate.
-export function rentPlan({ gpus = 1, lane = 'both', preferredHost = PREFERRED_HOST, hours, qwenOnly = false, uploadGb = 0 }:
-  { gpus?: number; lane?: Lane; preferredHost?: number | null; hours?: number; qwenOnly?: boolean; uploadGb?: number } = {}): RentPlan {
+// `uploadGb` is what a session brings back from the machine, priced at the host's outbound rate. `trafficFactor` prices
+// that many times the traffic expected both ways, so that a quote holds traffic above the estimate too: 2 is every
+// download begun again from the start once.
+export function rentPlan({ gpus = 1, lane = 'both', preferredHost = PREFERRED_HOST, hours, qwenOnly = false, uploadGb = 0, trafficFactor = 1 }:
+  { gpus?: number; lane?: Lane; preferredHost?: number | null; hours?: number; qwenOnly?: boolean; uploadGb?: number; trafficFactor?: number } = {}): RentPlan {
   const maxDph = lane === 'small' ? SMALL_MAX_DPH : MAX_DPH_BY_GPUS[gpus];
   if (maxDph === undefined) throw new Error(`no approved price ceiling for ${gpus} GPUs`);
   if (!Object.hasOwn(LANES, lane)) throw new Error(`no such lane: ${lane}`);
   // One lane is one card: a second card on a machine that runs one server is paid for and idle.
   if (lane !== 'both' && gpus !== 1) throw new Error('a machine for one lane has one card');
   if (qwenOnly && lane !== 'pictures') throw new Error('only a picture machine pulls Qwen alone');
+  if (!(Number.isInteger(trafficFactor) && trafficFactor >= 1 && trafficFactor <= 10)) throw new Error('a traffic factor is a whole number from 1 to 10');
   const { bytes } = LANES[lane];
   const diskGb = qwenOnly ? QWEN_ONLY_DISK_GB : LANES[lane].diskGb;
   const maxHour = Math.round((maxDph + STORAGE_PER_GB_MONTH * diskGb / 730) * 1000) / 1000;
@@ -122,7 +125,7 @@ export function rentPlan({ gpus = 1, lane = 'both', preferredHost = PREFERRED_HO
     minDirectPorts: MIN_DIRECT_PORTS,
     sessionHours: hours === undefined ? SESSION_HOURS : hours + (BOOT_SECONDS + DONE_SECONDS + DESTROY_SECONDS) / 3600,
     // Qwen's files and torch's five gigabytes, the only wheels the picture lane pulls.
-    sessionBytes: qwenOnly ? QWEN_BYTES + 5000000000 : bytes, uploadBytes: Math.round(uploadGb * 1e9), image: IMAGE, preferredHost,
+    sessionBytes: qwenOnly ? QWEN_BYTES + 5000000000 : bytes, uploadBytes: Math.round(uploadGb * 1e9), trafficFactor, image: IMAGE, preferredHost,
     blockedCountries: BLOCKED_COUNTRIES,
   };
 }
@@ -170,8 +173,8 @@ export function describeOffer(offer: RawOffer, plan: RentPlan): Offer {
   // counts only for a session that brings something back.
   const exact = {
     hour: price(offer.dph_total) + price(offer.storage_cost) * plan.diskGb / 730,
-    download: price(offer.inet_down_cost) * (plan.sessionBytes / 1e12) * 1000,
-    upload: plan.uploadBytes ? price(offer.inet_up_cost) * (plan.uploadBytes / 1e12) * 1000 : 0,
+    download: price(offer.inet_down_cost) * (plan.sessionBytes / 1e12) * 1000 * plan.trafficFactor,
+    upload: plan.uploadBytes ? price(offer.inet_up_cost) * (plan.uploadBytes / 1e12) * 1000 * plan.trafficFactor : 0,
   };
   return {
     id: offer.id, host: offer.host_id, gpu: offer.gpu_name, geo: offer.geolocation, driver: offer.driver_version,
@@ -291,19 +294,67 @@ export function instanceState(id: string, status: number, body: unknown): Instan
   return { state: 'present', status, actual: word(actual), intended: word(intended) };
 }
 
-// After a create whose answer named no instance, the account's list (`GET /instances/?owner=me`) says whether it made
-// one: the instance carrying the label the request gave it, else those on the offer's host that started from the
-// request on, `asked` in epoch seconds less two for the clocks. Their IDs, or null for a list that cannot be read,
-// which says nothing either way.
-export function adoptable(status: number, body: unknown, label: string, host: unknown, asked: number): string[] | null {
-  const list = status === 200 && typeof body === 'object' && body !== null && 'instances' in body ? body.instances : undefined;
-  if (!Array.isArray(list)) return null;
-  const records = list.filter((record): record is Record<string, unknown> => typeof record === 'object' && record !== null
-    && /^[1-9]\d{0,11}$/.test(String((record as { id?: unknown }).id)));
+// After a create whose answer named no instance, the account's list says whether it made one. It is Vast's v1 list,
+// `GET /api/v1/instances/`: the v0 one answered 410 `deprecated_endpoint` on 2026-09-28. One page of it as Vast's
+// reference (docs.vast.ai/api-reference/instances/show-instances) and vast-cli's `Instance` (vastai/data/instance.py
+// at 3173215) describe it: `success`, `instances`, `instances_found` (this page's count), `total_instances` (all the
+// pages') and `next_token`, null on the last page; of each instance its `id`, an integer, `label`, a string or null,
+// `host_id`, an integer or null, and `start_date`, epoch seconds or null. Any other shape is null, which says nothing
+// either way: a list that cannot be read is never taken for one without the instance.
+export type Listed = { id: string; label: string | null; host: number | null; started: number | null };
+export type ListPage = { records: Listed[]; next: string | null; total: number };
+export function listPage(status: number, body: unknown): ListPage | null {
+  if (status !== 200 || typeof body !== 'object' || body === null) return null;
+  const { success, instances, instances_found: found, total_instances: total, next_token: next } = body as Record<string, unknown>;
+  if (success !== true || !Array.isArray(instances) || found !== instances.length
+    || !(typeof total === 'number' && Number.isSafeInteger(total) && total >= instances.length)
+    || !(next === null || (typeof next === 'string' && next.length > 0 && next.length <= 2048))) return null;
+  const records: Listed[] = [];
+  for (const item of instances as unknown[]) {
+    if (typeof item !== 'object' || item === null) return null;
+    const { id, label, host_id: host, start_date: started } = item as Record<string, unknown>;
+    if (!(typeof id === 'number' && Number.isSafeInteger(id) && id > 0) || !(label === null || typeof label === 'string')
+      || !(host === null || (typeof host === 'number' && Number.isSafeInteger(host)))
+      || !(started === null || (typeof started === 'number' && Number.isFinite(started)))) return null;
+    records.push({ id: String(id), label, host, started });
+  }
+  return { records, next, total };
+}
+
+// The whole list, page after page, as vast-cli's `show instances` reads it: each page asked `after_token` the one before
+// gave as `next_token`, until that is null. `get` fetches the page after the token it is given, null for the first,
+// and is the caller's. The pages must come to the total each of them states, with no ID twice, within LIST_PAGES pages
+// of 25; else null, as for a page that cannot be read.
+export const LIST_PAGES = 8;
+export async function readList(get: (after: string | null) => Promise<{ status: number; body: unknown }>): Promise<Listed[] | null> {
+  const records: Listed[] = [];
+  let after: string | null = null, total: number | null = null;
+  for (let page = 0; page < LIST_PAGES; page++) {
+    const { status, body } = await get(after);
+    const read = listPage(status, body);
+    if (!read || (total !== null && read.total !== total)) return null;
+    total = read.total;
+    records.push(...read.records);
+    if (read.next === null) return records.length === total && new Set(records.map(record => record.id)).size === total ? records : null;
+    if (read.next === after) return null;
+    after = read.next;
+  }
+  return null;
+}
+
+// Which of the listed instances a create made: those carrying the label its request gave them, else the unlabelled one
+// on the offer's host that started from the request on, `asked` in epoch seconds less two for the clocks, in case Vast
+// did not keep the label. An unlabelled instance whose host is not stated, or one on the offer's host whose start is
+// not, could be it, and so could each of two such starts: null then, as for a list that cannot be read. An instance
+// with another label is another rental's.
+export function createdBy(records: Listed[], label: string, host: unknown, asked: number): string[] | null {
   const labelled = records.filter(record => record.label === label);
-  const started = records.filter(record => String(record.host_id) === String(host)
-    && typeof record.start_date === 'number' && record.start_date >= asked - 2);
-  return (labelled.length ? labelled : started).map(record => String(record.id));
+  if (labelled.length) return labelled.map(record => record.id);
+  const here = records.filter(record => (record.label === null || record.label === '')
+    && (record.host === null || String(record.host) === String(host)));
+  if (here.some(record => record.host === null || record.started === null)) return null;
+  const started = here.filter(record => (record.started as number) >= asked - 2);
+  return started.length > 1 ? null : started.map(record => record.id);
 }
 
 // Where ssh reaches the instance, from the same read, so that the operator needs nothing from the console: the host

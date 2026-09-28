@@ -2,7 +2,7 @@ import test from 'node:test';
 import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -153,12 +153,14 @@ test('each rule counts the offers it drops and names itself when it empties the 
 });
 
 // A canned Vast. It answers the search from STUB_OFFERS, the create request as STUB_PUT asks, a read of the account's
-// list with the next of STUB_LIST, a read of an instance with the next state of STUB_READS (the last one repeats), a delete with STUB_DELETE's status and a start with
-// success. Its time is virtual: a pause takes none of the real kind and moves both clocks on by its length, and
-// the answer that creates the machine takes fifty seconds. Every request is written to STUB_LOG with the second it was
-// sent at and the bound its signal was given, a create request with the seconds its body gives the guard, and a start
-// with the state its body asks for. `fetch` is replaced before gpu/rent.mjs is loaded, so no request below leaves this
-// machine. The record of a present instance carries its address, with a newline after it, and its ports.
+// v1 list with the next of STUB_LIST, the v0 list with the 410 Vast gave it on 2026-09-28, a read of an instance with
+// the next state of STUB_READS (the last one repeats), a delete with STUB_DELETE's status and a start with success.
+// Its time is virtual: a pause takes none of the real kind and moves both clocks on by its length, and the answer that
+// creates the machine takes fifty seconds. Every request is written to STUB_LOG with the second it was sent at and the
+// bound its signal was given, a create request with the seconds its body gives the guard, a start with the state its
+// body asks for, and a page of the list with the token it asked after. `fetch` is replaced before gpu/rent.mjs is
+// loaded, so no request below leaves this machine. The record of a present instance carries its address, with a
+// newline after it, and its ports. A list's instance carries the label of the create request, or of STUB_LABEL.
 const STUB = `import { appendFileSync } from 'node:fs';
 const reads = (process.env.STUB_READS ?? '').split(',');
 const answers = { present: [200, { instances: { id: 123, actual_status: 'running', intended_status: 'running',
@@ -166,12 +168,31 @@ const answers = { present: [200, { instances: { id: 123, actual_status: 'running
   gone: [200, { instances: null }], missing: [404, {}], failing: [500, {}], empty: [200, {}], other: [200, { instances: { id: 124 } }],
   stopped: [200, { instances: { id: 123, actual_status: 'exited', intended_status: 'stopped' } }] };
 const lists = (process.env.STUB_LIST ?? 'none').split(',');
-let label = null;
-const listed = { none: () => [200, { instances: [] }], failing: () => [502, {}],
-  labelled: () => [200, { instances: [{ id: 125, label, host_id: 7, start_date: null }] }],
-  started: () => [200, { instances: [{ id: 126, label: null, host_id: 7, start_date: Date.now() / 1000 }] }],
-  others: () => [200, { instances: [{ id: 127, label: null, host_id: 7, start_date: Date.now() / 1000 - 600 },
-    { id: 128, label: 'another', host_id: 8, start_date: Date.now() / 1000 }] }] };
+let label = process.env.STUB_LABEL ?? null, mode = lists[0];
+// One page as Vast's reference gives it: its instances, and what the page says of them.
+const page = (instances, fields = {}) => [200, { success: true, instances, instances_found: instances.length, total_instances: instances.length,
+  label_counts: {}, next_token: null, ...fields }];
+const ours = () => ({ id: 125, label, host_id: 7, start_date: null });
+const others = Array.from({ length: 25 }, (_, at) => ({ id: 200 + at, label: 'another', host_id: 8, start_date: Date.now() / 1000 - 600 }));
+const listed = { none: () => page([]), failing: () => [502, {}],
+  labelled: () => page([ours()]),
+  started: () => page([{ id: 126, label: null, host_id: 7, start_date: Date.now() / 1000 }]),
+  // None of them the create's: one unlabelled on its host started ten minutes before it, one unlabelled on another
+  // host and two of another rental's label, on another host and on its own, each started at the create.
+  others: () => page([{ id: 127, label: null, host_id: 7, start_date: Date.now() / 1000 - 600 },
+    { id: 128, label: 'another', host_id: 8, start_date: Date.now() / 1000 }, { id: 129, label: null, host_id: 8, start_date: Date.now() / 1000 },
+    { id: 130, label: 'another', host_id: 7, start_date: Date.now() / 1000 }]),
+  // Ours on the second page of two, which only the first page's token reaches.
+  paged: after => after === null ? page(others, { total_instances: 26, next_token: 'tok1' })
+    : after === 'tok1' ? page([ours()], { total_instances: 26 }) : [400, { success: false, error: 'invalid_token' }],
+  // Each of these holds ours by its label, and each is not the list Vast describes, so none can say what the create made.
+  stringid: () => page([{ ...ours(), id: '125' }]), nosuccess: () => page([ours()], { success: undefined }),
+  miscount: () => page([ours()], { instances_found: 2 }), short: () => page([ours()], { total_instances: 2 }),
+  nolabel: () => page([{ id: 126, host_id: 7, start_date: Date.now() / 1000 }]),
+  // An unlabelled instance on the offer's host whose start is not stated could be the create's.
+  unstarted: () => page([{ id: 126, label: null, host_id: 7, start_date: null }]),
+  // Two that carry the create's label.
+  twice: () => page([ours(), { ...ours(), id: 131 }]) };
 let skew = 0;
 const later = globalThis.setTimeout, wall = Date.now, monotonic = performance.now.bind(performance);
 globalThis.setTimeout = (next, ms = 0, ...rest) => { skew += ms; return later(next, 0, ...rest); };
@@ -181,16 +202,22 @@ const timeout = AbortSignal.timeout.bind(AbortSignal);
 let bound = 0;
 AbortSignal.timeout = ms => { bound = ms; return timeout(ms); };
 globalThis.fetch = async (url, init = {}) => {
-  const path = new URL(url).pathname, method = init.method ?? 'GET';
+  const { pathname: path, searchParams } = new URL(url), method = init.method ?? 'GET', after = searchParams.get('after_token');
   const start = method === 'PUT' && path.includes('/instances/');
   const sent = start ? ' ' + JSON.parse(init.body).state
-    : method === 'PUT' ? ' guard ' + /SIMPLE_CHAT_TRIAL_SECONDS=(\\d+)/.exec(JSON.parse(init.body).onstart)?.[1] + 's' : '';
+    : method === 'PUT' ? ' guard ' + /SIMPLE_CHAT_TRIAL_SECONDS=(\\d+)/.exec(JSON.parse(init.body).onstart)?.[1] + 's'
+    : after === null ? '' : ' after ' + after;
   appendFileSync(process.env.STUB_LOG, method + ' ' + Math.round(skew / 1000) + 's ' + bound + 'ms ' + path + sent + '\\n');
   if (path.includes('/bundles/')) return new Response(process.env.STUB_OFFERS, { status: 200 });
   if (method === 'DELETE') return new Response('{"success":true}', { status: Number(process.env.STUB_DELETE ?? 200) });
   if (start) return new Response('{"success":true}');
   if (method === 'GET' && path === '/api/v0/instances/') {
-    const [status, body] = listed[lists.length > 1 ? lists.shift() : lists[0]]();
+    return new Response('{"success":false,"error":"deprecated_endpoint","msg":"/api/v0/instances/ is deprecated. Use /api/v1/instances/ instead."}', { status: 410 });
+  }
+  if (method === 'GET' && path === '/api/v1/instances/') {
+    const orderedById = searchParams.get('order_by') === '[{"col":"id","dir":"asc"}]' && searchParams.get('limit') === '25';
+    if (after === null) mode = lists.length > 1 ? lists.shift() : lists[0];
+    const [status, body] = orderedById ? listed[mode](after) : [400, { error: 'invalid_request' }];
     return new Response(JSON.stringify(body), { status });
   }
   if (method === 'GET') {
@@ -337,21 +364,43 @@ test('an answer that is not certain is never taken for the outcome, of a rental,
   }
 
   // A 2xx body the script cannot read, a request that never came back and a 5xx: after each an instance may be
-  // billing, so the account's list is read for it, four times ten seconds apart. The one found, by the label the
-  // request gave it or on its host from the request on, is the rental, with the deadline of any other; none found,
-  // and the money stops there and the owner is told where to look, instead of a second machine being rented on top of
-  // the first. Only a 4xx that says what it refused tries the next offer. Both offers passed every rule, and the line
-  // the owner reads says so.
+  // billing, so the account's v1 list is read for it, every page, four times ten seconds apart. The one found, by the
+  // label the request gave it or on its host from the request on, is the rental, with the deadline counted from before
+  // its request, not from the look that found it. None found, or a list that cannot be read or cannot tell, and the
+  // create stays unresolved (exit 3): the money stops there and the owner is told where to look, instead of a second
+  // machine being rented on top of the first. A list is read only in the shape Vast describes; any other says nothing,
+  // even one that holds the label. Only a 4xx that says what it refused tries the next offer. Both offers passed every
+  // rule, and the line the owner reads says so.
   const looked = 'GET 0s, PUT 0s guard 10800s, GET 0s, GET 10s, GET 20s, GET 30s';
-  const uncertain = (reason: string, listed: number): Row[6] => ({ label, events: [candidates, attempt] }) => {
-    assert.deepEqual([candidates.offered, candidates.chosen, attempt.offer, attempt.reason, attempt.listed, attempt.found],
-      [2, 2, 'first', reason, listed, []], label);
+  // The moment of the request, from the label that carries it, and the deadline from that moment.
+  const asked = (label: string) => Number(/^simple-chat-both-(\d{13})$/.exec(label)?.[1]) / 1000;
+  const counted = (event: { label: string; destroyBy: number }, before: number, hours: number) =>
+    asked(event.label) >= before && event.destroyBy === Math.floor(asked(event.label)) + hours * 3600 + BOOT_SECONDS;
+  const uncertain = (reason: string, listed: number): Row[6] => ({ label, events: [candidates, attempt] }, before) => {
+    assert.deepEqual([candidates.offered, candidates.chosen, attempt.offer, attempt.reason, attempt.listed, attempt.found, attempt.pending],
+      [2, 2, 'first', reason, listed, [], null], label);
+    assert.ok(counted(attempt, before, 3), label);
     assert.match(attempt.check, /vast\.ai/, label);
   };
   const adopted = (instance: number): Row[6] => ({ label, events: [, rented] }, before) => {
     assert.deepEqual([rented.offer, rented.instance, rented.adopted, rented.session], ['first', instance, true, 3.24], label);
-    assert.ok(rented.destroyBy >= before + 10800 + BOOT_SECONDS && rented.destroyBy <= Date.now() / 1000 + 10800 + BOOT_SECONDS, label);
+    assert.ok(counted(rented, before, 3), label);
   };
+  // With `--pending DIR` each create has its record there from before its request: one not known to have made nothing
+  // keeps it for the runbook's sweeper, a refused one leaves none, and a rented one keeps it until the runbook's
+  // watchdog holds the card. A record that cannot be written rents nothing.
+  const home = canned(t), place = (name: string) => { const dir = join(home, name); mkdirSync(dir); return dir; };
+  const [kept, refused, rentedHere] = [place('kept'), place('refused'), place('rented')];
+  const recorded = (dir: string) => ({ label, events }: Run) => {
+    const { label: made, destroyBy } = events.at(-1), file = join(dir, `pending-${made}`);
+    assert.deepEqual([readdirSync(dir), readFileSync(file, 'utf8'), statSync(file).mode & 0o777],
+      [[`pending-${made}`], `${made} 7 ${destroyBy}\n`, 0o600], label);
+  };
+  // The sweeper's look: the whole list, and what the create of a label on a host made, by the label or by host and time.
+  const sought = `simple-chat-text-${Date.now()}`;
+  const found = (instances: number[]): Row[6] => ({ label, events: [listed] }) =>
+    assert.deepEqual([listed.label, listed.found], [sought, instances], label);
+  const malformed = ['stringid', 'nosuccess', 'miscount', 'short', 'nolabel', 'unstarted'];
   // A read every ten seconds from the first to `last`, and after the read of each second in `sends` a delete, or the
   // request that `send` writes.
   const reads = (last: number, sends: number[] = [], send = (second: number) => `DELETE ${second}s`) =>
@@ -359,22 +408,50 @@ test('an answer that is not certain is never taken for the outcome, of a rental,
       .flatMap(second => sends.includes(second) ? [`GET ${second}s`, send(second)] : [`GET ${second}s`]).join(', ');
   const resumes = (second: number) => `PUT ${second}s running`;
   const told = ({ label, events }: Run) => assert.match(events.at(-1).tell, /owner/, label);
-  runs(canned(t), [
-    ['a 2xx body that names no instance', { STUB_PUT: 'unrecognised' }, ['--gpus', '2'], 1, ['candidates', 'attempt_uncertain'],
+  runs(home, [
+    ['a 2xx body that names no instance', { STUB_PUT: 'unrecognised' }, ['--gpus', '2'], 3, ['candidates', 'attempt_uncertain'],
       looked, uncertain('no instance named', 4)],
-    ['a create request that never came back', { STUB_PUT: 'reject' }, ['--gpus', '2'], 1, ['candidates', 'attempt_uncertain'],
+    ['a create request that never came back', { STUB_PUT: 'reject' }, ['--gpus', '2'], 3, ['candidates', 'attempt_uncertain'],
       looked, uncertain('no answer', 4)],
-    ['a 5xx', { STUB_PUT: 'server' }, ['--gpus', '2'], 1, ['candidates', 'attempt_uncertain'], looked, uncertain('status 502', 4)],
-    ['a list that cannot be read', { STUB_PUT: 'reject', STUB_LIST: 'failing' }, ['--gpus', '2'], 1, ['candidates', 'attempt_uncertain'],
+    ['a 5xx', { STUB_PUT: 'server' }, ['--gpus', '2'], 3, ['candidates', 'attempt_uncertain'], looked, uncertain('status 502', 4)],
+    ['a list that cannot be read', { STUB_PUT: 'reject', STUB_LIST: 'failing' }, ['--gpus', '2'], 3, ['candidates', 'attempt_uncertain'],
       looked, uncertain('no answer', 0)],
-    ['a list of one started before the request and one on another host', { STUB_PUT: 'server', STUB_LIST: 'others' }, ['--gpus', '2'], 1,
+    ['a list of one started before the request and one on another host', { STUB_PUT: 'server', STUB_LIST: 'others' }, ['--gpus', '2'], 3,
       ['candidates', 'attempt_uncertain'], looked, uncertain('status 502', 4)],
+    ...malformed.map((list): Row => [`a list in another shape (${list})`, { STUB_PUT: 'server', STUB_LIST: list }, ['--gpus', '2'], 3,
+      ['candidates', 'attempt_uncertain'], looked, uncertain('status 502', 0)]),
     ['its instance by its label, at the second look', { STUB_PUT: 'reject', STUB_LIST: 'none,labelled' }, ['--gpus', '2', '--hours', '3'], 0,
       ['candidates', 'rented'], 'GET 0s, PUT 0s guard 10800s, GET 0s, GET 10s', adopted(125)],
     ['its instance by its host and time', { STUB_PUT: 'server', STUB_LIST: 'started' }, ['--gpus', '2', '--hours', '3'], 0,
       ['candidates', 'rented'], 'GET 0s, PUT 0s guard 10800s, GET 0s', adopted(126)],
+    ['its instance on the list\'s second page', { STUB_PUT: 'server', STUB_LIST: 'paged' }, ['--gpus', '2', '--hours', '3'], 0,
+      ['candidates', 'rented'], 'GET 0s, PUT 0s guard 10800s, GET 0s, GET 1s after tok1', adopted(125)],
+    // Two that carry its label cannot both be the rental: neither is adopted, and both are named for the sweeper.
+    ['two instances by its label', { STUB_PUT: 'server', STUB_LIST: 'twice' }, ['--gpus', '2'], 3, ['candidates', 'attempt_uncertain'],
+      'GET 0s, PUT 0s guard 10800s, GET 0s', ({ label, events: [, attempt] }) => assert.deepEqual([attempt.listed, attempt.found], [1, [125, 131]], label)],
     ['a clear refusal, and the next offer', { STUB_PUT: 'refuse' }, ['--gpus', '2'], 1,
       ['candidates', 'attempt_failed', 'attempt_failed', 'all_attempts_failed'], 'GET 0s, PUT 0s guard 10800s, PUT 0s guard 10800s'],
+    ['an uncertain create\'s record', { STUB_PUT: 'server', STUB_LIST: 'others' }, ['--gpus', '2', '--pending', kept], 3,
+      ['candidates', 'attempt_uncertain'], looked, run => {
+        recorded(kept)(run);
+        assert.equal(run.events[1].pending, join(kept, `pending-${run.events[1].label}`), run.label);
+      }],
+    ['refusals leave no record', { STUB_PUT: 'refuse' }, ['--gpus', '2', '--pending', refused], 1,
+      ['candidates', 'attempt_failed', 'attempt_failed', 'all_attempts_failed'], 'GET 0s, PUT 0s guard 10800s, PUT 0s guard 10800s',
+      ({ label }) => assert.deepEqual(readdirSync(refused), [], label)],
+    ['a rented card\'s record, for its watchdog', { STUB_PUT: 'contract' }, ['--gpus', '2', '--hours', '1', '--pending', rentedHere], 0,
+      ['candidates', 'rented'], 'GET 0s, PUT 0s guard 3600s', recorded(rentedHere)],
+    ['a record that cannot be written', { STUB_PUT: 'contract' }, ['--gpus', '2', '--pending', join(home, 'nowhere')], 1,
+      ['candidates', 'pending_unwritable'], 'GET 0s'],
+    ['a record in a relative place', { STUB_PUT: 'contract' }, ['--gpus', '2', '--pending', 'kept'], 1, ['bad_arguments'], ''],
+    ['--find in a list without it', { STUB_LABEL: sought }, ['--find', sought, '7'], 0, ['listed'], 'GET 0s', found([])],
+    ['--find on the list\'s second page', { STUB_LIST: 'paged', STUB_LABEL: sought }, ['--find', sought, '7'], 0, ['listed'],
+      'GET 0s, GET 1s after tok1', found([125])],
+    ['--find by host and time', { STUB_LIST: 'started', STUB_LABEL: sought }, ['--find', sought, '7'], 0, ['listed'], 'GET 0s', found([126])],
+    ['--find in a list that cannot be read', { STUB_LIST: 'failing', STUB_LABEL: sought }, ['--find', sought, '7'], 1, ['list_unclear'], 'GET 0s'],
+    ...malformed.map((list): Row => [`--find in a list in another shape (${list})`, { STUB_LIST: list, STUB_LABEL: sought }, ['--find', sought, '7'], 1,
+      ['list_unclear'], 'GET 0s']),
+    ['--find of a label no create gives', {}, ['--find', 'simple-chat-text', '7'], 1, ['bad_arguments'], ''],
     // Before a rental of an hour, the dry run prices each offer for all of it, rounded up to the cent: $0.921 and
     // $0.971 an hour over 1 h 20 min 20 s, and $0.16 of traffic.
     ['the dry run of an hour', { SIMPLE_CHAT_RENT_DRY_RUN: '1' }, ['--gpus', '2', '--hours', '1'], 0, ['candidates', 'would_try', 'would_try'],
@@ -394,6 +471,14 @@ test('an answer that is not certain is never taken for the outcome, of a rental,
       ['candidates', 'would_try', 'would_try'], 'GET 0s', ({ label, events: [candidates, ...tried] }) => assert.deepEqual(
         [candidates.uploadGb, ...tried.map(one => [one.upload, one.session, one.exact])], [2, [0.01, 1.41, undefined], [0.01, 1.48, undefined]], label)],
     ...['', '-1', '1e3', '0.0001'].map((gb): Row => [`an upload of '${gb}'`, { STUB_PUT: 'contract' }, ['--hours', '1', '--upload-gb', gb], 1,
+      ['bad_arguments'], '']),
+    // A quote that holds traffic above the estimate: twice the downloads and twice what comes back, $0.33 and $0.02
+    // where once is $0.16 and $0.01.
+    ['a dry run that prices the traffic twice', { SIMPLE_CHAT_RENT_DRY_RUN: '1' },
+      ['--gpus', '2', '--hours', '1', '--upload-gb', '2', '--traffic-factor', '2'], 0, ['candidates', 'would_try', 'would_try'], 'GET 0s',
+      ({ label, events: [candidates, ...tried] }) => assert.deepEqual([candidates.trafficFactor, ...tried.map(one => [one.download, one.upload, one.session])],
+        [2, [0.33, 0.02, 1.59], [0.33, 0.02, 1.65]], label)],
+    ...['0', '11', '1.5', ''].map((factor): Row => [`a traffic factor of '${factor}'`, { STUB_PUT: 'contract' }, ['--hours', '1', '--traffic-factor', factor], 1,
       ['bad_arguments'], '']),
     // An answer that names its instance ends the loop, with the operator's own deadline: the guard's hour and the
     // quarter of an hour the box is given to start, counted from before the request that created the machine, never

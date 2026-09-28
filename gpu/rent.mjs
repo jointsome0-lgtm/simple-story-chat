@@ -7,16 +7,17 @@
 // --print-body first -- that names the offers it would take, at their present prices, and the exact request that
 // takes one, which is what the owner is agreeing to, and it spends nothing. Renting is theirs to approve; this script
 // only carries it out.
-// `--show ID`, `--start ID` and `--destroy ID` are the other end of a rental, below. The API key, the public key and the
-// onstart script are never printed.
+// `--show ID`, `--start ID` and `--destroy ID` are the other end of a rental, and `--find LABEL HOST` looks for what a
+// create not known to have made nothing made, below. The API key, the public key and the onstart script are never
+// printed.
 //
 // What to ask for and what an offer costs is in local/rent-plan.ts, with tests; this file does the fetching.
-import { readFile } from 'node:fs/promises';
+import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BOOT_SECONDS, MAX_DPH_BY_GPUS, ONSTART_MAX_BYTES, REQUEST_MS, adoptable, chooseOffers, createBody, destroyInstance, emptyReason,
-  instanceState, offerQuery, redactedBody, rentPlan, sessionCost, sshRoute, startInstance } from '../local/rent-plan.ts';
+import { BOOT_SECONDS, MAX_DPH_BY_GPUS, ONSTART_MAX_BYTES, REQUEST_MS, chooseOffers, createBody, createdBy, destroyInstance, emptyReason,
+  instanceState, offerQuery, readList, redactedBody, rentPlan, sessionCost, sshRoute, startInstance } from '../local/rent-plan.ts';
 
 const ATTEMPTS = 4;
 // After a create whose answer named no instance: four reads of the account's list, ten seconds apart.
@@ -30,6 +31,40 @@ const args = process.argv.slice(2);
 const key = process.env.SIMPLE_CHAT_VAST_API_KEY?.trim();
 const headers = { Authorization: `Bearer ${key}`, Accept: 'application/json' };
 const dryRun = process.env.SIMPLE_CHAT_RENT_DRY_RUN === '1';
+
+// One page of the account's instances, as `readList` in local/rent-plan.ts asks for it: Vast's v1 list, 25 a page, the
+// most it gives, in the order of their IDs, as vast-cli asks for them. A page after the first waits a second and a
+// tenth first, since Vast refuses requests to one endpoint more often than once a second (429, "threshold=1.0").
+// `status: 0` is no answer, and the body is never printed.
+const page = async after => {
+  if (after !== null) await new Promise(done => setTimeout(done, 1100));
+  const query = `limit=25&order_by=${encodeURIComponent(JSON.stringify([{ col: 'id', dir: 'asc' }]))}`
+    + (after === null ? '' : `&after_token=${encodeURIComponent(after)}`);
+  try {
+    const response = await fetch(`https://console.vast.ai/api/v1/instances/?${query}`, { headers, signal: AbortSignal.timeout(REQUEST_MS) });
+    return { status: response.status, body: await response.json().catch(() => null) };
+  } catch { return { status: 0, body: null }; }
+};
+// A create's label is `simple-chat-LANE-MS`, MS the moment before its request in epoch milliseconds (below).
+const LABEL = /^simple-chat-(both|text|pictures|small)-([1-9]\d{12})$/;
+
+// `--find LABEL HOST` reads the account's list once through and names what the create of that label on that host made
+// (`createdBy`), for the runbook's sweeper of a create not known to have made nothing: `listed` with the IDs, none
+// if the list holds none of it, or `list_unclear` if the list cannot be read or cannot tell. It only reads, dry run
+// or not.
+if (args[0] === '--find') {
+  const [, label, host] = args;
+  if (args.length !== 3 || !LABEL.test(label) || !/^[1-9]\d{0,11}$/.test(host)) {
+    console.log(JSON.stringify({ event: 'bad_arguments', usage: 'rent.mjs --find LABEL HOST, as `attempt_uncertain` printed them' }));
+    process.exit(1);
+  }
+  if (!key) { console.log(JSON.stringify({ event: 'no_key' })); process.exit(1); }
+  const records = await readList(page);
+  const found = records && createdBy(records, label, host, Number(LABEL.exec(label)[2]) / 1000);
+  console.log(JSON.stringify(found ? { event: 'listed', label, found: found.map(Number), instances: records.length }
+    : { event: 'list_unclear', label, reason: records ? 'cannot tell' : 'unreadable' }));
+  process.exit(found ? 0 : 1);
+}
 
 // `--show ID` and `--destroy ID` reach one rental with the account's key and nothing on the machine: not its ssh, not
 // the key Vast gave the container, not its guard (trial-onstart.sh), any of which may be what failed. They end every
@@ -101,8 +136,11 @@ const rest = args.filter(argument => argument !== '--print-body');
 // machine by Qwen's files alone, which is what SIMPLE_CHAT_IMAGE_QWEN=only pulls. `--max-session DOLLARS` holds a rent
 // to the quote its budget was checked against: an offer whose session (below) costs more is not tried, whatever the
 // search returns by then. `--upload-gb GB` is what the session brings back from the machine, which each offer's
-// session prices at its host's outbound rate; a quote and its rent give the same.
-const options = { '--gpus': '1', '--lane': 'both', '--avoid-host': '', '--hours': '', '--qwen': '', '--max-session': null, '--upload-gb': '0' };
+// session prices at its host's outbound rate; a quote and its rent give the same. `--traffic-factor N` prices N times
+// the traffic expected both ways, for a download begun again. `--pending DIR` keeps a record of each create in DIR
+// from before its request (below).
+const options = { '--gpus': '1', '--lane': 'both', '--avoid-host': '', '--hours': '', '--qwen': '', '--max-session': null, '--upload-gb': '0',
+  '--traffic-factor': '1', '--pending': '' };
 let known = rest.length % 2 === 0;
 for (let at = 0; known && at < rest.length; at += 2) {
   if (Object.hasOwn(options, rest[at])) options[rest[at]] = rest[at + 1]; else known = false;
@@ -112,18 +150,21 @@ const avoidHosts = options['--avoid-host'] === '' ? [] : options['--avoid-host']
 if (!avoidHosts.every(host => /^[1-9]\d*$/.test(host)) || !/^[123]?$/.test(options['--hours'])
   || !/^(only)?$/.test(options['--qwen'])
   || (options['--max-session'] !== null && !(/^\d+(\.\d{1,2})?$/.test(options['--max-session']) && Number(options['--max-session']) > 0))
-  || !/^\d+(\.\d{1,3})?$/.test(options['--upload-gb'])) known = false;
+  || !/^\d+(\.\d{1,3})?$/.test(options['--upload-gb']) || !/^([1-9]|10)$/.test(options['--traffic-factor'])
+  || (options['--pending'] !== '' && !options['--pending'].startsWith('/'))) known = false;
 const maxSession = options['--max-session'] === null ? null : Number(options['--max-session']);
+const pending = options['--pending'] || null;
 let plan = null;
 try {
   if (known && MAX_DPH_BY_GPUS[gpus]) {
     plan = rentPlan({ gpus, lane, ...(options['--hours'] ? { hours } : {}), qwenOnly: options['--qwen'] === 'only',
-      uploadGb: Number(options['--upload-gb']) });
+      uploadGb: Number(options['--upload-gb']), trafficFactor: Number(options['--traffic-factor']) });
   }
 } catch { /* reported below */ }
 if (!plan) {
   console.log(JSON.stringify({ event: 'bad_arguments', usage: 'rent.mjs [--gpus 1|2] [--lane both|text|pictures|small] [--avoid-host ID[,ID...]] '
-    + '[--hours 1|2|3] [--qwen only] [--max-session DOLLARS] [--upload-gb GB] [--print-body] | --show ID | --start ID | --destroy ID' }));
+    + '[--hours 1|2|3] [--qwen only] [--max-session DOLLARS] [--upload-gb GB] [--traffic-factor 1-10] [--pending DIR] [--print-body] '
+    + '| --show ID | --start ID | --destroy ID | --find LABEL HOST' }));
   process.exit(1);
 }
 // --print-body is reviewed before a rental, so it must not need the API key to be exported.
@@ -187,7 +228,7 @@ const droppedForSession = avoided.length - candidates.length;
 console.log(JSON.stringify({ event: 'candidates', offered, withinPrice, chosen: candidates.length,
   maxHour: plan.maxHour, gpus: plan.gpus, lane: plan.lane, sessionHours, droppedForUnknownPrice, droppedForCountry, droppedForFewCores, droppedForProxyOnly,
   minDirectPorts: plan.minDirectPorts, droppedForRam, minRamGb: plan.minRamGb, droppedForHost, avoidHost: avoidHosts.join(',') || null,
-  droppedForSession, maxSession, uploadGb: plan.uploadBytes / 1e9 }));
+  droppedForSession, maxSession, uploadGb: plan.uploadBytes / 1e9, trafficFactor: plan.trafficFactor }));
 // Which rule emptied the list, so that a session lost to an empty search, to cores, to ports or to RAM is not read
 // as a price to raise.
 if (!candidates.length) {
@@ -204,17 +245,45 @@ if (dryRun || printBody) {
   process.exit(0);
 }
 
+// With `--pending DIR`, each create has a record there from before its request, `LABEL HOST DESTROYBY` in
+// DIR/pending-LABEL, written whole or not at all, so that a create this script cannot resolve, or does not outlive, is
+// found by the runbook's sweeper (`--find` above). Only a refusal, which made nothing, removes it here; the runbook
+// removes a rented card's once the card's watchdog holds, and one not known to have made nothing stays for the sweeper.
+// A record that cannot be written stops the rent before its request.
+const record = async (label, host, destroyBy) => {
+  const file = join(pending, `pending-${label}`), draft = join(pending, `.pending-${label}`);
+  await writeFile(draft, `${label} ${host} ${destroyBy}\n`, { mode: 0o600 });
+  await rename(draft, file);
+  return file;
+};
+
 for (const offer of candidates.slice(0, ATTEMPTS)) {
   const machine = {
     offer: offer.id, host: offer.host, gpu: offer.gpu, geo: offer.geo, hour: offer.hour, download: offer.download, upload: offer.upload,
     driver: offer.driver, cpus: offer.cpus, ramGb: offer.ramGb, inetDownMbps: offer.inetDownMbps,
     reliability: offer.reliability, directPorts: offer.directPorts,
   };
+  // A machine whose host is not a number could not be looked for on its host after an uncertain answer.
+  if (!/^[1-9]\d{0,11}$/.test(String(offer.host))) {
+    console.log(JSON.stringify({ event: 'attempt_failed', ...machine, instance: null, reason: 'no host id' }));
+    continue;
+  }
   let status = 0, parsed = null;
   // The moment before the request that may create the machine: none of it exists before, so a deadline counted from
-  // here is never late, however long the answer takes (`destroyBy` below). The label, this request's own, finds the
-  // machine in the account's list if the answer does not name it.
+  // here is never late, however long the answer takes. The label, this request's own, finds the machine in the
+  // account's list if the answer does not name it. `destroyBy` is the operator's own deadline on this machine's clock,
+  // in epoch seconds: the guard's hours and the quarter of an hour allowed for the box to start. Whatever the box says,
+  // the rental's termination begins then at the latest (docs/identity-experiment.md#one-hour), and a machine found in
+  // the list after an uncertain answer keeps it, since it was asked for at the same moment.
   const asked = Date.now(), label = `simple-chat-${plan.lane}-${asked}`;
+  const destroyBy = Math.floor(asked / 1000) + hours * 3600 + BOOT_SECONDS;
+  let file = null;
+  if (pending) {
+    try { file = await record(label, offer.host, destroyBy); } catch {
+      console.log(JSON.stringify({ event: 'pending_unwritable', ...machine, instance: null }));
+      process.exit(1);
+    }
+  }
   try {
     const response = await fetch(`https://console.vast.ai/api/v0/asks/${offer.id}/`, {
       method: 'PUT',
@@ -227,43 +296,37 @@ for (const offer of candidates.slice(0, ATTEMPTS)) {
     try { parsed = JSON.parse(text); } catch { /* status alone describes a non-JSON body */ }
   } catch { /* status stays 0: the request may have reached Vast all the same */ }
   const rented = status >= 200 && status < 300 && parsed?.success !== false && parsed?.new_contract;
-  // `destroyBy` is the operator's own deadline on this machine's clock, in epoch seconds, counted from just before the
-  // request that created the machine: the guard's hours and the quarter of an hour allowed for the box to start.
-  // Whatever the box says, the rental's termination begins then at the latest (docs/identity-experiment.md#one-hour).
-  const destroyBy = Math.floor(asked / 1000) + hours * 3600 + BOOT_SECONDS;
   if (rented) {
-    console.log(JSON.stringify({ event: 'rented', ...machine, instance: parsed.new_contract, reason: null, destroyBy, session: session(offer) }));
+    console.log(JSON.stringify({ event: 'rented', ...machine, instance: parsed.new_contract, reason: null, label, destroyBy, session: session(offer) }));
     process.exit(0);
   }
   // A refusal is a 4xx whose body says what was refused, and only a refusal is safe to answer by renting the next
   // offer. Anything else -- no answer at all, a 5xx, or an answer that names no contract -- may have created an
   // instance that is billing now, and a second PUT would leave it running unwatched. So the account's list is read for
-  // it (`adoptable`), and the one instance found is this rental, printed as `rented` so that its watchdog starts like
-  // any other's. None found, or more than one, and nothing more is rented: the owner looks.
+  // it (`readList`, `createdBy`), and the one instance found is this rental, printed as `rented` so that its watchdog
+  // starts like any other's. None found, more than one, or a list that cannot be read or cannot tell, and the create
+  // stays unresolved: nothing more is rented, the owner looks, and the runbook's sweeper takes its record (exit 3).
   const refused = status >= 400 && status < 500 && typeof parsed === 'object' && parsed !== null
     && (typeof parsed.error === 'string' || typeof parsed.msg === 'string' || parsed.success === false);
   if (!refused) {
     let found = null, listed = 0;
     for (let look = 0; look < LOOKS && !found?.length; look++) {
       if (look) await new Promise(done => setTimeout(done, LOOK_MS));
-      let list = { status: 0, body: null };
-      try {
-        const response = await fetch('https://console.vast.ai/api/v0/instances/?owner=me', { headers, signal: AbortSignal.timeout(REQUEST_MS) });
-        list = { status: response.status, body: await response.json().catch(() => null) };
-      } catch { /* no answer: this look says nothing */ }
-      const seen = adoptable(list.status, list.body, label, offer.host, asked / 1000);
+      const records = await readList(page);
+      const seen = records && createdBy(records, label, offer.host, asked / 1000);
       if (seen) { listed++; found = seen; }
     }
     if (found?.length === 1) {
       console.log(JSON.stringify({ event: 'rented', ...machine, instance: Number(found[0]), reason: null, adopted: true, status,
-        destroyBy, session: session(offer) }));
+        label, destroyBy, session: session(offer) }));
       process.exit(0);
     }
     console.log(JSON.stringify({ event: 'attempt_uncertain', ...machine, status,
       reason: status === 0 ? 'no answer' : status >= 200 && status < 300 ? 'no instance named' : `status ${status}`,
-      listed, found: found ?? [], check: 'the instance list on console.vast.ai' }));
-    process.exit(1);
+      listed, found: (found ?? []).map(Number), label, destroyBy, pending: file, check: 'the instance list on console.vast.ai' }));
+    process.exit(3);
   }
+  if (file) await rm(file, { force: true }).catch(() => undefined);
   console.log(JSON.stringify({ event: 'attempt_failed', ...machine, instance: null,
     reason: typeof parsed?.msg === 'string' && parsed.msg.length <= 200 ? parsed.msg : `status ${status}` }));
 }
