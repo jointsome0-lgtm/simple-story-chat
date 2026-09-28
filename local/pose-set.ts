@@ -28,10 +28,10 @@ import type { Store } from './store.ts';
 type SheetEntry = NonNullable<Story['sheet']>[number];
 
 // The most pictures one person's set holds, and the most bytes, and the most bytes of every set of one reader's
-// together: about 80 drawings of a character fit a set with room to spare, and two such characters a reader's disk.
-export const POSE_SET_PICTURES = 100;
-export const POSE_SET_BYTES = 300 * 1024 * 1024;
-export const POSE_SET_READER_BYTES = 600 * 1024 * 1024;
+// together, as the owner set them on 2026-09-29 for the tester's 50 and more drawings of a character.
+export const POSE_SET_PICTURES = 200;
+export const POSE_SET_BYTES = 600 * 1024 * 1024;
+export const POSE_SET_READER_BYTES = 1024 * 1024 * 1024;
 // The wait for the next picture, from the press of the button or the last picture that came.
 export const POSE_SET_WAIT_MS = 30 * 60 * 1000;
 
