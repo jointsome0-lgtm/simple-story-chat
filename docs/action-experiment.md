@@ -3184,7 +3184,7 @@ the enhancer beside the cu130 install.
 On 2026-09-28 the owner passed on two complaints of the tester's. A frame seen through the reader's eyes: «к тебе с
 двух сторон прижались девушки, а по картинке показывают что они напротив тебя, а мы по сути лишь их часть должны
 видеть боковым зрением». Clothes: «если персонаж голый, то он и должен быть голым, если он в одежде, то он и должен
-быть в одежде, а не в бодди из референса». 1a84d3d answers each with a change to the frame behind a list of readers
+быть в одежде, а не в бодди из референса». bc6db2b answers each with a change to the frame behind a list of readers
 that is empty by default ([where the others are](telegram-ui.md#pov-places), [what they
 wear](telegram-ui.md#what-they-wear)). This stand, the fifth refs stand, asks whether Qwen then draws what the changes
 ask, on the bot's picture path, before any reader gets them. The owner approved preparing it («Да можешь готовить»);
@@ -3386,7 +3386,9 @@ not back are left out. So each job says what it asks, what the answer can bring 
 minutes and dollars, what it brings back to this machine, and whether it can be dropped, and in each queue the cheap
 ones with a likely gain come first. Money is reckoned at $0.55 an hour a card, near what the rent dry runs of
 2026-09-28 found ($0.498 to $0.63), with each card's download on top, which made most of the spread between offers
-before ([prices](knowledge/gpu-measurements.md#costs-and-downloads)). The Vast account held $5.09 that day.
+before ([prices](knowledge/gpu-measurements.md#costs-and-downloads)). The day's $3 counts from the owner's message at
+09:28 UTC on 2026-09-28. No card had been rented since when this was written, the Vast account held $5.09, and the
+rental was meant for that evening.
 
 **Round two** is not on it: it ran whole on 2026-09-27, its texts from 05:45 to 06:16 UTC, its 445 cells drawn from
 06:46 to 08:01, judged and reported by 09:50. A round three needs the owner's decision and [the runbook](#runbook)'s
@@ -3395,8 +3397,11 @@ move of the round before.
 **The text card**, simple-serving with the heretic's NVFP4 ([as gpu.md has it](gpu.md#serving-card)). Its preparation
 takes about 18 minutes, as on 2026-09-27: running after 2.3, first ready at 14.4, then the pair started again for the
 bigger cache, `up` and the smoke. That is $0.17, with a download of about $0.07. Every job is class `internal`, so a
-reader's turn goes first. T1, T2 and T3 start together once the smoke has passed, T3 so that it runs beside the
-picture card's longest job, and T4 once T1 has ended.
+reader's turn goes first, and the card's gateway runs two internal calls at a time with eight waiting (simple-serving's
+provisional limits, which the card keeps): jobs side by side share those two places and do not add to them. So T1 and
+T2, one call at a time each, start together once the smoke has passed; T4 once T1 has ended; T3, three stories
+abreast, once T1 and T4 have ended, beside T2's end; and T5, if Astra backs it, once T3 has ended, alone, since it
+times its scenes.
 
 - **T1, [the card probe](#tester-stand)**, 80 calls: 5 to 12 minutes (a frame took 2.5 to 3.7 s on the card on
   2026-09-28, a runaway about 7.5), $0.05 to $0.11; under 1 MB back. Does the heretic write the frames of the new
@@ -3408,30 +3413,51 @@ picture card's longest job, and T4 once T1 has ended.
   calls: 12 to 15 minutes, 30 with runaways, $0.11 to $0.28; under 1 MB back. Does the new field run the heretic away,
   and does it name only lasting changes? `SIMPLE_CHAT_SHEET_VERSION_USERS`, live with an empty list since 02:14 UTC on
   2026-09-28, goes on for the tester only after it. Not to be dropped.
-- **T3, the story-bible probe**: about 20 minutes, $0.18; under 5 MB back, the synthetic stories' libraries and
-  counts. On the tester's model, does the narrator use a seed's backstory unprompted in twelve-scene stories past
-  compaction, and does the rule or the sheet change that? It answers the tester's complaint that a seed's backstory is
-  ignored until somebody mentions it. The script is ~/simple-story-chat-runs/2026-09-28/bible/probe/run.mts; its
-  command, and its dry run with `--model fake`, come from the story-bible work. Dropped if Astra does not back it.
+- **T3, the story bible's card probe**, twelve-scene stories on three synthetic seeds, compacted after scenes 7 and 11:
+  93 calls in two arms, without the hidden sheet and with it, about 13 minutes and $0.12; or 135 calls, about 20
+  minutes and $0.18, if the hosted screen of the `rule` arm adds it as a third. Under 1 MB back, the stories' libraries
+  and counts. On the tester's model, does the narrator stop using a seed's backstory after compactions without the
+  sheet, and does the sheet raise it? It answers the tester's complaint that a seed's backstory is ignored until
+  somebody mentions it, which did not reproduce on hosted Gemma. The minutes come from the scene and compaction times
+  of three walks abreast on the card's gateway on the night of 2026-09-27/28. `--deadline +25` stops it cleanly, each
+  story kept as far as it got; with a third arm it starts once T2 has ended too, so that the deadline holds all three.
+  Six Astra sessions judge it after the card. Dropped if Astra does not back it.
 - **T4, the heretic's reading ceiling**, step 1 of the memory proposal, which hosted Gemma and mini ran on 2026-09-28:
-  three runs, a few minutes beside T2 and T3, so no minute of the card's own; under 1 MB back. How much of a whole
-  story does the tester's model read back? Nothing for the bot at once, only where the memory work goes next. The
-  first to drop.
-- **T5, a place for O3's card half**, scenes written with thinking on the card's model: only on the owner's yes, which
-  has not been asked, and not written into this queue. Were it to run, it would come after T1 to T4: about 20 minutes
-  on an idle card and 55 with the tester at it, $0.18 to $0.51.
+  three runs, a few minutes in T1's place beside T2, so no minute of the card's own; under 1 MB back. How much of a
+  whole story does the tester's model read back? Nothing for the bot at once, only where the memory work goes next.
+  The first to drop.
+- **T5, O3's card half**: the pack's trap scenes of both scenarios written again on the heretic without thinking and
+  with it, 139 calls, about 20 minutes on an idle card and 55 with the tester at it, $0.18 to $0.50, and at most the
+  75 of its `--minutes` ($0.69); a few MB back, the probes' directories, which Opus 5.5 judges after the card. Does
+  thinking before a scene cut the heretic's continuity and number errors, and how many seconds does it add to a scene
+  on the card the readers use? Likely to drop: hosted O3 found no gain, 58 against 59 of 76 trap questions
+  ([the entry](knowledge/improve-runs.md#scene-thinking-2026-09-28)), so the job can bring the price on the card, and
+  a gain only if the heretic answers otherwise than hosted Gemma. Astra decides.
 
-The text card's work is the longest of T1 to T3, 20 to 30 minutes, and the card is on for 41 to 51: $0.38 to $0.47,
-and $0.45 to $0.54 with the download. Step 5 of the memory proposal, production-sized compactions, is not written, so
-it is not on the queue.
+The text card is on for 41 to 56 minutes: 41 to 53 with T3's two arms, T2's runaways included, and 53 to 56 with three,
+71 if T2 also runs away as far as it can. That is $0.38 to $0.51, and $0.45 to $0.58 with the download, $0.72 at most.
+T5 adds its 20 to 55 minutes, to the card's end at most. Step 5 of the memory proposal, production-sized compactions,
+is not written, so it is not on the queue.
 
 **The picture card**, the bot's card on cu130 ([as gpu.md has it](gpu.md#bot-card)), with P2's prompt enhancer
 ([gpu.md](gpu.md#qwen-pe)): 9.47 GB more to fetch, 4.2 minutes at 300 Mbit/s. Its preparation, the check passed after
-12 minutes on 2026-09-27, is about 16 with it: $0.15. The rent dry run prices the download of Qwen's files at $0.06 to
-$0.12, and the enhancer's, which it does not count, makes that $0.09 to $0.17. Both jobs go without `front`, one job at
-a time, so a reader's picture goes before the next cell. P1 starts as soon as the check passes, P2 as soon as P1 ends.
-P1 goes first although P2 costs about as much: its gain is the likelier, as both of its changes are built and wait
-only for its verdict, and P2's rewrites want the gap that the text card's end leaves.
+12 minutes on 2026-09-27, is about 16 with it: $0.15. The card pulls 31.8 GB, Qwen's 17.3, the enhancer's 9.47 and
+torch's 5: $0.09 to $0.17 at the traffic prices of 2026-09-28's rent dry runs, which priced Qwen's and torch's 22.3 GB
+at $0.06 to $0.12.
+
+Its disk is the picture lane's 100 GB, rented without `--qwen only` and its 60. Nobody has seen 60 GB hold the
+enhancer. Round two's 60 GB card held Qwen with two torch environments, so the files would likely fit, but the
+bootstrap refuses to start unless its downloads and 13 GiB more are free, 38 GiB here, and neither the image's share of
+a fresh box nor the cu130 environment's size has been read on a card. Short, it would refuse at its start, and a
+second bootstrap without the enhancer would cost P2 its PE and PT. The 40 GB more cost $0.01 to $0.05 an hour at the
+$0.207 to $0.87 a GB-month hosts have charged, and the rent dry run then prices the lane's default 36.5 GB of
+download, nearer the 31.8 than `--qwen only`'s 22.3. Without PE and PT the card goes back to `--qwen only`. The card
+check prints the disk, so the next rental knows.
+
+Both jobs go without `front`, one job at a time, so a reader's picture goes before the next cell. P1 starts as soon
+as the check passes, P2 as soon as P1 ends. P1 goes first although P2 costs about as much: its gain is the likelier,
+as both of its changes are built and wait only for its verdict, and P2's rewrites want the gap that the text card's
+end leaves.
 
 - **P1, [the tester stand](#tester-stand)**, 372 cells: 34 minutes at the refs stands' times, $0.31. Its `--until`
   leaves P2 its 40 minutes before the card's end, which gives P1 about 61 at most ($0.56); what it has not drawn by
@@ -3450,10 +3476,10 @@ only for its verdict, and P2's rewrites want the gap that the text card's end le
   PE and PT hold a reader's picture up for a whole rewrite, 20 to 60 s as seeded and 240 s at most, and are for a gap
   in which the tester is not drawing: P2 begins about when the text card goes, and with no text card no reader's frame
   comes. Droppable from its end: PT first, which the probe drops by itself when its slot runs short, then A+ and PE.
-  Dropping all of it takes the enhancer off the bootstrap.
+  Without PE and PT the enhancer comes off the bootstrap.
 
-The picture card is on for about 84 minutes: $0.77, and $0.86 to $0.94 with the download. At most it is on until its
-end, about 120 minutes after the rental: $1.10, and $1.27 with the download.
+The picture card is on for about 84 minutes: $0.77, and $0.88 to $1.01 with the disk and the download. At most it is
+on until its end, about 120 minutes after the rental: $1.10, and $1.37 with them.
 
 **The order**, in minutes from the rental. The text card is rented first and the picture card right after, on another
 host:
@@ -3462,9 +3488,9 @@ host:
 | --- | --- | --- |
 | 0 to 12 | running after 2.3, prepared by 11.5 (2026-09-27) | the bootstrap: Qwen's 17.3 GB, the enhancer's 9.47 GB, cu130 |
 | 12 to 18 | first ready at 14.4, the pair again, `up`: the bot's scenes on the card; the smoke | the server and the check, about 16; the tunnel: the bot's pictures on the card; P1 starts |
-| 18 to 45 | T1, T2 and T3 together, T4 after T1 | P1 |
-| 41 to 51 | the queue empty: the bot's requests end, `up` stops, the card is deleted | P1, until about 50 |
-| 50 to 90 | | P2 in its slot |
+| 18 to 34 | T1 and T2, T4 after T1, T3 after T1 and T4 | P1 |
+| 41 to 56 | T3 ends, the queue is empty: the bot's requests end, `up` stops, the card is deleted; or T5 starts, if Astra backs it | P1, until about 50 |
+| 50 to 90 | T5, the card deleted at 61 to 111 | P2 in its slot |
 | about 90 | | the queue empty: the bot's requests end, the tunnel stops, the card is deleted |
 
 At worst P1 draws until 40 minutes before the picture card's end, about 77 minutes after the rental, and P2 has the
@@ -3479,35 +3505,36 @@ with Ctrl+C when idle and started with gpu.md's exports, as the runbook has them
 frame and a portrait from a synthetic seed of examples/ in the owner's own chat, goes once both cards answer, if the
 owner is at hand.
 
-**The money**, at $0.55 an hour:
+**The money**, at $0.55 an hour, the picture card's 40 GB of extra disk apart:
 
 | | minutes | the hours | downloads | in all |
 | --- | --- | --- | --- | --- |
-| the text card: preparation, T1 to T4, the end | 41 to 51 | $0.38 to $0.47 | $0.07 | $0.45 to $0.54 |
-| the picture card: preparation, P1, P2, the end | 84, 120 at most | $0.77 to $1.10 | $0.09 to $0.17 | $0.86 to $1.27 |
-| both | | | | $1.31 to $1.81 |
-| both, with T5 on the owner's yes | | | | $1.49 to $2.32 |
-| both ends failing, each card billed to its guard | 140 each | $2.57 | $0.16 to $0.24 | $2.73 to $2.81 |
+| the text card: preparation, T1 to T4, the end | 41 to 56, 71 at most | $0.38 to $0.51, $0.65 | $0.07 | $0.45 to $0.58, $0.72 at most |
+| the picture card: preparation, P1, P2, the end | 84, 120 at most | $0.79 to $1.20 with the disk | $0.09 to $0.17 | $0.88 to $1.37 |
+| both | | | | $1.33 to $1.95, $2.09 at most |
+| both, with T5 if Astra backs it | | | | $1.51 to $2.46, $2.51 at most |
+| both ends failing, each card billed to its guard | 140 each | $2.60 to $2.68 | $0.16 to $0.24 | $2.76 to $2.92 |
 
 Both cards take `--hours 2`: the guard deletes a card that many hours after its container starts, which was 2.3
 minutes after the rental on 2026-09-27. An hour is short for the picture card's queue, and for a bootstrap as slow as
 round one's cards had, 30 minutes. The rent dry run prices each session at 2 hours 20 minutes 20 seconds, what a card
-bills if its end fails. What the day has spent already counts against its $3. Where what is left would not
-hold a failed end, the text card takes `--hours 1`, whose 57 minutes hold T1 to T4 (41 to 51) and not T5, and bills
-$0.74 if its end fails.
+bills if its end fails, its download included. If its two sessions come to more than what is left of the day's $3,
+all of it if nothing has been spent since 09:28 UTC, the text card takes `--hours 1`: its 57 minutes hold T1 to T4
+with T3's two arms (41 to 53) and not T5, and it bills $0.74 if its end fails.
 
-**Back on this machine**: about 0.7 to 0.9 GB of pictures while P1 and P2 draw, and as much again in their bundles
-after the cards, each job over 100 MB, so agreed before the rental; the text card's jobs bring back under 10 MB in
-all. 15 GB were free on 2026-09-28.
+**Back on this machine**: P1's 0.53 to 0.68 GB of pictures while it draws and as much again in its bundles after the
+card, within the 1.5 GB agreed for them on 2026-09-28; P2's 0.17 to 0.22 GB of pictures and about 0.2 GB of bundles,
+which that agreement does not cover; and under 10 MB from the text card's jobs. 15 GB were free on 2026-09-28.
 
-**Before the rental.** Everything the cards run has been dry-run without a card, as the first rule asks: the stand
-and its `run.sh` against local/fake-comfy.ts, the card probe against a fake gateway, the prompt arms probe against the
-same fake and its judge against stand-ins for codex, the versions probe against simple-serving's gateway at
-`next-card` with its fake engine (292 answers, all parsed; without the exports below it stops at `serving_required`),
-and T4 on hosted models; T3's dry run comes with its command. On the day: Astra's reading of the queues; the dry runs
-again on the commits that run the jobs; the rent dry runs; and this machine kept awake. On 2026-09-28 it slept from
-11:14 to 12:18 UTC during a review; asleep, it keeps the tunnels, the bot and the drawing down while both cards bill,
-and the timeouts here do not count the time asleep.
+**Before the rental.** Everything the cards run has been dry-run without a card, as the first rule asks: the stand and
+its `run.sh` against local/fake-comfy.ts, the card probe against a fake gateway, the prompt arms probe against the same
+fake and its judge against stand-ins for codex, the versions probe against simple-serving's gateway at `next-card` with
+its fake engine (292 answers, all parsed; without the exports below it stops at `serving_required`), T3 against
+simple-serving's development gateway (`bible/probe/rehearsal`), T4 on hosted models, and T5 against simple-serving's
+gateway with a fake engine (`scene-thinking/card/dry`). On the day: Astra's reading of the queues; the dry runs again on
+the commits that run the jobs; the rent dry runs; and this machine kept awake. On 2026-09-28 it slept from 11:14 to
+12:18 UTC during a review; asleep, it keeps the tunnels, the bot and the drawing down while both cards bill, and the
+timeouts here do not count the time asleep.
 
 **The runbook.** Every ssh has a limit: `on` gives each its seconds, and the two that last the session, `up` and
 `gpu/tunnel.sh`, give each dial ten seconds and notice a connection gone quiet after 15 s x 3. `HOST1`, `ID1`, `ID2`
@@ -3515,23 +3542,26 @@ and the two `DESTROY_BY` come from `rented`.
 
 ```sh
 # The day of the rental. First a fresh GPT-6 Astra session at xhigh reads this section and says which jobs can bring a
-# gain worth their minutes; the ones it does not back are left out, and without P2 the bootstrap drops
-# SIMPLE_CHAT_IMAGE_QWEN_PE. Then the dry runs, each on the commit that runs its job: in the tester-stand checkout,
+# gain worth their minutes; the ones it does not back are left out, and without PE and PT the bootstrap drops
+# SIMPLE_CHAT_IMAGE_QWEN_PE and the picture card is rented with --qwen only. Then the dry runs, each on the commit that
+# runs its job: in the tester-stand checkout,
 npm run image:refs-tester -- dry-run --out ~/simple-story-chat-runs/2026-09-28/refs-stand-5 \
   --frames ~/simple-story-chat-runs/2026-09-28/tester-stand/frames.json \
   --first ~/simple-story-chat-runs/2026-09-27/refs-stand --third ~/simple-story-chat-runs/2026-09-28/refs-stand-3    # steps 0 to 17
 node ~/simple-story-chat-runs/2026-09-28/tester-stand/card-probe.mts --rehearse --out "$(mktemp -d)"
-# and in ~/work/simple-chat, whose branch has the prompt arms probe (da96d26) and the enhancer's opt-in in gpu/:
+# and in ~/work/simple-chat, whose branch has the prompt arms probe (da96d26) and the gpu/ the picture card gets:
 npm run image:prompt-arms -- dry-run --run ~/simple-story-chat-runs/2026-09-28/prompt-arms    # steps 0 to 11
 npm run image:prompt-arms-judge -- dry-run    # steps 1 to 7
 SIMPLE_CHAT_RENT_DRY_RUN=1 npm run gpu:rent -- --lane text --hours 2    # each offer's `session`
-SIMPLE_CHAT_RENT_DRY_RUN=1 npm run gpu:rent -- --lane pictures --qwen only --hours 2    # without the enhancer's 9.47 GB
+SIMPLE_CHAT_RENT_DRY_RUN=1 npm run gpu:rent -- --lane pictures --hours 2    # 100 GB, priced by the lane's 36.5 GB
+# If the sessions of the two offers they put first come to more than what is left of the day's $3, the text card
+# takes --hours 1.
 # This machine stays awake until both destroys are read back, in a terminal of its own:
 systemd-inhibit --what=sleep:idle:handle-lid-switch --who=simple-chat --why='rented cards' sleep infinity
 on() { local host=$1 limit=$2; shift 2
   timeout "$limit" ssh -T -o ConnectTimeout=10 -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "$host" "$@"; }
 npm run gpu:rent -- --lane text --hours 2    # `rented`: ID1, its host HOST1, destroyBy
-npm run gpu:rent -- --lane pictures --qwen only --hours 2 --avoid-host HOST1    # ID2, destroyBy
+npm run gpu:rent -- --lane pictures --hours 2 --avoid-host HOST1    # ID2, destroyBy
 npm run gpu:rent -- --show ID1; npm run gpu:rent -- --show ID2    # ssh.direct as simple-chat-vast and simple-chat-vast-pictures
 timeout 120 ssh -o ConnectTimeout=10 simple-chat-vast true    # each card's first ssh verifies its host key
 timeout 120 ssh -o ConnectTimeout=10 simple-chat-vast-pictures true
@@ -3564,7 +3594,7 @@ on simple-chat-vast-pictures 30 'grep -c qwen3.5_9b_qwen_image_2.1_pe_t2i /works
 on simple-chat-vast-pictures 30 'SIMPLE_CHAT_IMAGE_TORCH=cu130 SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 SIMPLE_CHAT_IMAGE_TRITON=1 setsid -f nohup flock -n /root/.simple-chat-comfy.lock bash /workspace/simple-chat/gpu/image-serve.sh </dev/null >/dev/null 2>&1'
 bash gpu/tunnel.sh --pictures-only simple-chat-vast-pictures    # a terminal of its own: from here the live bot's pictures are on the card
 timeout 600 bash -c 'until curl -sf -m 5 -o /dev/null http://127.0.0.1:8188/system_stats; do sleep 5; done'
-on simple-chat-vast-pictures 30 'd=/workspace/simple-chat-gpu/ComfyUI; test -f $d/.venv-cu130/simple-chat-ready && test ! -e $d/.venv && echo cu130 alone; du -sh $d/.venv-cu130; df -h /workspace | tail -1'
+on simple-chat-vast-pictures 30 'd=/workspace/simple-chat-gpu/ComfyUI; test -f $d/.venv-cu130/simple-chat-ready && test ! -e $d/.venv && echo cu130 alone; du -sh $d/.venv-cu130; df -h /workspace | tail -1'    # the disk, for the next rental
 curl -s -m 10 http://127.0.0.1:8188/system_stats | grep -o '"pytorch_version": *"[^"]*"'    # 2.11.0+cu130
 curl -s -m 10 http://127.0.0.1:8188/system_stats | grep -c -- '--enable-triton-backend'    # 1
 curl -s -m 10 http://127.0.0.1:8188/object_info/ModelAttentionBackend | grep -c '"comfy kitchen attention"'    # 1
@@ -3580,13 +3610,20 @@ export SIMPLE_CHAT_PROVIDER=simple-serving SIMPLE_CHAT_BASE_URL=http://127.0.0.1
 export SIMPLE_CHAT_API_KEY="$(node -p 'require(process.argv[1]).client_key' ~/.config/simple-serving/config.json)"
 
 # The text card's jobs, in ~/work/simple-chat with those settings, each in a terminal of its own once the smoke has
-# passed: T1, T2 and T3 together, T4 once T1 has ended.
+# passed. T1 and T2 together, one call at a time each, the two places the gateway gives internal calls:
 timeout 1500 node --env-file=.env.gpu ~/simple-story-chat-runs/2026-09-28/tester-stand/card-probe.mts --out ~/simple-story-chat-runs/2026-09-28/tester-stand/card    # T1
 timeout 2700 node --env-file=.env.gpu ~/simple-story-chat-runs/2026-09-28/sheet-versions/run.mts --root "$PWD" --out ~/simple-story-chat-runs/2026-09-28/sheet-versions/card    # T2
-# T3: ~/simple-story-chat-runs/2026-09-28/bible/probe/run.mts as the story-bible work gives it, with
-# --model serving:gemma-4-31b-heretic-nvfp4 and a --deadline before the card's end, $(date -u -d @"$end_text" +%FT%TZ).
+# T4 once T1 has ended:
 for n in 1 2 3; do env -u RECALL_THINKING bash ~/simple-story-chat-runs/2026-09-28/memory-ceiling/run.sh ceil heretic serving:gemma-4-31b-heretic-nvfp4 $n; done    # T4
 node ~/simple-story-chat-runs/2026-09-28/tester-stand/card-probe.mts --summary --out ~/simple-story-chat-runs/2026-09-28/tester-stand/card
+# T3 once T1 and T4 have ended, or with a third arm (--arms without,rule,with) once T2 has ended too; its deadline is
+# 25 minutes on, or the card's end if that comes first:
+dl=+25; (( $(date +%s) + 1500 <= end_text )) || dl=$(date -u -d @"$end_text" +%FT%TZ)
+(cd ~/simple-story-chat-runs/2026-09-28/bible/probe && node run.mts --root /home/jo/work/simple-chat --out ./card --model serving:heretic --arms without,with --deadline "$dl")    # T3
+# T5, only if Astra backs it, once T3 has ended, alone on the card, for 75 minutes or what is left before its end
+# (the job refuses fewer than 10):
+left=$(( (end_text - $(date +%s)) / 60 - 3 ))
+(cd ~/simple-story-chat-runs/2026-09-28/scene-thinking/card && node job.mts --root /home/jo/work/simple-chat --out ~/simple-story-chat-runs/2026-09-28/scene-thinking-card --minutes $(( left < 75 ? left : 75 )))    # T5
 
 # The picture card's jobs, each in a terminal of its own. P1 as soon as the check has passed, until 40 minutes before
 # the card's end, so that P2 keeps its slot:
@@ -3620,12 +3657,25 @@ that fails its check is ended at once, and the text card's jobs go on. `run.sh` 
 
 **After the cards**, with no card: the stand's bundles, judging and score, about 44 minutes of Astra; the prompt arms
 probe's checks, bundles, 28 judging sessions and score ([its judging](#prompt-arms-judging)); the card probe's
-`--summary`; the versions probe's counts; T3's and T4's by their own notes.
+`--summary`; the versions probe's counts; T3's six Astra sessions; T4's by its own notes; and T5's, if it ran, judged
+by Opus 5.5 as its notes say.
 
-**Left to the owner**: anything beyond the day's $3; T5; a round three of the action measurement; and whether the
+**Left to the owner**: anything beyond the day's $3; a round three of the action measurement; and whether the
 tester gets any of the new switches, whose lists stay empty meanwhile, since the verdicts come only after the cards.
 The places (`SIMPLE_CHAT_POV_PLACE_USERS`, and `SIMPLE_CHAT_POV_PARTIAL_USERS` within it) and the clothes
-(`SIMPLE_CHAT_CLOTHES_USERS`) need the bot run from a checkout with 1a84d3d and the sentence on nothing on, which are
-on branch `tester-stand` alone; the versions (`SIMPLE_CHAT_SHEET_VERSION_USERS`) are on the main branch already. Each
-list stays within `SIMPLE_CHAT_IMAGE_USERS`, and the places, the views and the versions wait for their probe to show no
-runaway. Once the clothes are on for the tester, the tester's own case of a person left naked is the tester's to check.
+(`SIMPLE_CHAT_CLOTHES_USERS`) need the bot run from a checkout with bc6db2b and the sentence on nothing on (3607668),
+on branch `tester-stand`, which is rebased onto openai-compatible-provider and not merged; the versions
+(`SIMPLE_CHAT_SHEET_VERSION_USERS`) are on the main branch already. Each list stays within `SIMPLE_CHAT_IMAGE_USERS`,
+and the places, the views and the versions wait for their probe to show no runaway. Once the clothes are on for the
+tester, the tester's own case of a person left naked is the tester's to check.
+
+**Still open** before the rental:
+
+- The stand's additions since its Astra review, C-towel, RW and CW, rules 7 and 8 and the sentence on nothing on,
+  have not been reviewed. The queue's reviewer reads them here; their judging questions can still change before any
+  session runs, since the judging comes after the card.
+- The disk: 100 GB stands in for a measurement nobody has made. The card check's `df` settles it for the next rental.
+- P2's pictures and bundles, about 0.4 GB, need their own agreement to come back to this machine.
+- T3 and T5 run from ~/work/simple-chat's working tree, so whatever lands there before the rental is what they run:
+  the dry runs on the day are for that. T5's notes name a checkout, `simple-chat-scene-thinking`, that no longer
+  exists; the runbook gives it ~/work/simple-chat, which has had SCENE_THINKING since 45400b2.

@@ -1,6 +1,6 @@
 // The tester stand, the fifth refs stand (docs/action-experiment.md#tester-stand): the tester's two complaints about
 // pictures of 2026-09-28 as the clean stories of examples/tester-stand.ts, drawn on the next picture card with the
-// frame changes of 1a84d3d on and off, the clothes rule with its sentence on nothing on, and the clothes stories with
+// frame changes of bc6db2b on and off, the clothes rule with its sentence on nothing on, and the clothes stories with
 // the reference on and off. build-texts.ts in ~/simple-story-chat-runs/2026-09-28/tester-stand writes the
 // stand's texts.json and judge-questions.json from the frozen frames beside it; this file pins the frames and the
 // texts, and local/image-refs-judge.ts the question file, by which it judges the pictures after the card.
