@@ -955,7 +955,10 @@ longer by the reader's own people wait for the next.
 sheet and the frame continue the scene's own request, so a server with a prefix cache pays for their instructions
 alone. The retelling carries no story, so on a llama.cpp server with one slot the frame after it reads the story's
 prefix once more: one more prefill of the story for each sheet written. A reader's edit costs no prefill of the
-story, since it runs apart from the frames.
+story, since it runs apart from the frames. For a reader with versions of the sheet
+([along the story](telegram-ui.md#along-the-story)), a frame that names a lasting change is followed by one more
+retelling, and so by that prefill once more, on the scenes with a change alone; a description the reader writes for
+the whole story on a line that has versions costs one more retelling of them, at once or before the line's next frame.
 
 **The card** ([telegram-ui.md](telegram-ui.md#characters)) edits the description and counts it in characters alone,
 shows the changes under it, and gives the look and the clothes their tokens as before. The details are folded under
@@ -975,12 +978,16 @@ description, which comes first.
   measured: round one's were 15 to 25 words, and in a frame of four, where each look comes before its person's action
   (`assemblePrompt`), a longer one may crowd the action out. The card gives no hint of it.
 - A lasting change the story makes after the sheet was written reaches the sheet only when the sheet is written anew,
-  which happens to an older sheet and never by itself. A cheap way, not built: the frame, which reads each new scene
-  anyway, could name a lasting change of a person on the sheet in a field of its own, and the bot would then write the
-  sheet anew before the next frame.
+  which happens to an older sheet and never by itself. For a reader with versions of the sheet (2026-09-28) the frame,
+  which reads each new scene anyway, names such a change in a field of its own, and it holds from that scene on down
+  its line alone ([along the story](telegram-ui.md#along-the-story)).
 - The reader's description wins over a change the story makes later: a braid the reader described stays after the
-  story cuts it, until the reader writes the description again.
-- A sheet is the story's, not a branch's: a change taken from one branch reaches the pictures of every branch.
+  story cuts it, until the reader writes the description again. For a reader with versions, a change a frame names
+  wins over the description in force above it, since it is later, and the braid goes from that scene on.
+- A sheet is the story's, not a branch's: a change taken from one branch reaches the pictures of every branch. So is
+  it for a reader with versions, whose sheet is still written once from the history of the story's first illustrated
+  scene, on whatever line that was; only the changes named after it, and what they write «only from this moment», hold
+  on one line.
 - Whether the graded words reach a picture as grades, and whether two people alike stay apart in one frame, is the
   card test's to show ([below](#figure-card-test)).
 

@@ -45,6 +45,11 @@ const REFERENCE_PLACES = POSES;
 // reads; its shorter side too short, its longer side too long, or the two too far apart; its bytes over the limit;
 // its download cut short; or an archive where a picture was awaited.
 const REFERENCE_REFUSALS = ['type', 'broken', 'small', 'huge', 'shape', 'too_large', 'incomplete', 'archive'] as const;
+// A version of a person's look along the story (local/picture-versions.ts): whether the story wrote it, from a lasting
+// change a frame named, or the reader, «only from this moment», and which of the person's texts it holds. The change,
+// the description and the look stay out, as the person's name does.
+const VERSION_SOURCES = ['story', 'reader'] as const;
+const VERSION_FIELDS = ['change', 'description', 'look'] as const;
 // Why the model's last message ended, as the API names it, for the row of a failed Claude CLI run: `max_tokens` there
 // means the run's output cap was hit, which the CLI reports as an error rather than a truncation.
 export const STOP_REASONS = ['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'refusal', 'other'] as const;
@@ -108,7 +113,11 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   'retellPeople', 'retoldPeople', 'descriptionCharacters', 'lookWords', 'referenceCount', 'referenceAttempted',
   // A picture a reader sent of a person (local/reference.ts): its bytes as it came, those its metadata took, which were
   // stripped, and its size in pixels.
-  'referenceBytes', 'strippedBytes', 'referenceWidth', 'referenceHeight'] as const;
+  'referenceBytes', 'strippedBytes', 'referenceWidth', 'referenceHeight',
+  // Versions of people's looks along a story (local/picture-versions.ts): how many lasting changes a frame found and
+  // wrote, how many people one write gave a version, how many versions the story holds after it, and how many of the
+  // reader's «only from this moment» an edit for the whole story took the place of.
+  'lastingChanges', 'versionPeople', 'storyVersions', 'versionsCleared'] as const;
 
 export type ErrorDetails = {
   httpStatus?: number; phase?: typeof PHASES[number]; operation?: typeof OPERATIONS[number];
@@ -135,6 +144,8 @@ export type ErrorDetails = {
   pov?: boolean;
   // A sheet written in place of an older one that still had the clothes in its appearance lines.
   sheetRewritten?: boolean;
+  // A version of a person's look along the story: who wrote it and which text it holds.
+  versionSource?: typeof VERSION_SOURCES[number]; versionField?: typeof VERSION_FIELDS[number];
   // A failed Claude CLI run: how it ended and whether the CLI itself called the result an error.
   cliResult?: typeof CLI_RESULTS[number]; cliError?: boolean; stopReason?: typeof STOP_REASONS[number];
 } & { [Key in typeof COUNTS[number]]?: number };
@@ -181,6 +192,8 @@ export function safeErrorDetails(value: unknown = {}): ErrorDetails {
   if (typeof input?.ownPrompt === 'boolean') result.ownPrompt = input.ownPrompt;
   if (typeof input?.pov === 'boolean') result.pov = input.pov;
   if (typeof input?.sheetRewritten === 'boolean') result.sheetRewritten = input.sheetRewritten;
+  if (member(VERSION_SOURCES, input?.versionSource)) result.versionSource = input.versionSource;
+  if (member(VERSION_FIELDS, input?.versionField)) result.versionField = input.versionField;
   if (member(CLI_RESULTS, input?.cliResult)) result.cliResult = input.cliResult;
   if (typeof input?.cliError === 'boolean') result.cliError = input.cliError;
   if (member(STOP_REASONS, input?.stopReason)) result.stopReason = input.stopReason;

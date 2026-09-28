@@ -17,7 +17,7 @@ import { LIMIT, render, renderContext, scenePrefix, sceneKeyboard } from './ui.t
 const CYRILLIC = /[Ѐ-ӿ]/;
 
 // Every callback the bot acts on (local/bot.ts); it answers any other as a stale button.
-const ACTION = /^(view:.+|new-seed|save-seed:[^:]+|start:[^:]+|use:[^:]+:[^:]+|fork:[^:]+:[^:]+|remove-seed:[^:]+|remove-branch:[^:]+:[^:]+|continue|cancel|last|compact|gpu:start|gpu:pause|lang:[a-z]{2}|style:[a-z0-9]+|style-new|style-edit:y\d+|remove-style:y\d+|style-sample:[a-z0-9]+|style-samples|look-edit:[^:]+:\d+:[0-9a-f]{8}|details-edit:[^:]+:\d+:[0-9a-f]{8}|portrait:[^:]+:\d+:[0-9a-f]{8}|pov(?:-off)?:[^:]+:\d+:[0-9a-f]{8}|portrait-default:[^:]+:\d+:[0-9a-f]{8}|portrait-keep:[0-9a-f]+)$/;
+const ACTION = /^(view:.+|new-seed|save-seed:[^:]+|start:[^:]+|use:[^:]+:[^:]+|fork:[^:]+:[^:]+|remove-seed:[^:]+|remove-branch:[^:]+:[^:]+|continue|cancel|last|compact|gpu:start|gpu:pause|lang:[a-z]{2}|style:[a-z0-9]+|style-new|style-edit:y\d+|remove-style:y\d+|style-sample:[a-z0-9]+|style-samples|look-edit:[^:]+:\d+:[0-9a-f]{8}|details-edit:[^:]+:\d+:[0-9a-f]{8}|portrait:[^:]+:\d+:[0-9a-f]{8}|pov(?:-off)?:[^:]+:\d+:[0-9a-f]{8}|portrait-default:[^:]+:\d+:[0-9a-f]{8}|portrait-keep:[0-9a-f]+|edit-scope:(?:here|all))$/;
 const config = { model: 'synthetic-model', provider: 'llama-cpp', maxOutputTokens: 4096, contextTokens: 65536, compactAtTokens: 54000, keepScenes: 4 };
 
 function node(id: string, parent: string | null, time: string, body: string, input = 'Look around'): SceneNode {

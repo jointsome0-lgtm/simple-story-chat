@@ -42,6 +42,7 @@ The variables go in `.env`, and [.env.example](../.env.example) is the starting 
 | `SIMPLE_CHAT_IMAGE_USERS` | Numeric Telegram IDs separated by commas, all of them from `SIMPLE_CHAT_ALLOWED_USER_IDS`. **Empty by default: nobody gets pictures.** Everybody else reads exactly as before, and their scenes never reach the picture card |
 | `SIMPLE_CHAT_IMAGE_STYLE` | Optional: one line, the [picture style](telegram-ui.md#picture-styles) of a reader who has not chosen another; by default the line the [six steps](illustrations-plan.md#description-steps) were measured with |
 | `SIMPLE_CHAT_IMAGE_WAIT_SECONDS` | Optional: how long one picture may take, 180 by default (5 to 1800). A picture that outlives it is stopped on the card; the story is not affected either way |
+| `SIMPLE_CHAT_SHEET_VERSION_USERS` | Optional: numeric Telegram IDs separated by commas, all of them from `SIMPLE_CHAT_IMAGE_USERS`. **Empty by default.** Their frames name the lasting changes the story makes to a person's look, which then hold from that scene on down its line, and they may write a person's text «only from this moment» ([along the story](telegram-ui.md#along-the-story)). Everybody else's frames are as before |
 
 ### Model settings
 

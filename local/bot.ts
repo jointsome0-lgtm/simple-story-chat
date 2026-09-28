@@ -23,6 +23,7 @@ import type { GpuController } from './gpu.ts';
 import type { Illustrator, PictureRequest, PortraitRequest, SampleRequest, VariantRequest } from './picture.ts';
 import { DESCRIPTION_CHARS, LOOK_CHARS, ownPortraitPrompt, personAt, personTag } from './picture.ts';
 import { seesThrough } from './picture-pov.ts';
+import { countVersions, editableFrom, landEdit, personHere } from './picture-versions.ts';
 import { portraitText } from './image-portraits.ts';
 import type { ErrorDetails, Log } from './model-error.ts';
 import { errorCode, member, safeErrorDetails, unavailable } from './model-error.ts';
@@ -88,7 +89,8 @@ type Plan = {
   // The person of a story's sheet whose description this write keeps, for their details and look to be retold from it
   // and their card shown (`retold`).
   retell?: { storyId: string; name: string };
-  // A row for the log once the write is committed: what a picture a reader sent became.
+  // A row for the log once the write is committed: what a picture a reader sent became, or where a person's text the
+  // reader wrote landed (local/picture-versions.ts).
   logged?: { event: string; details: ErrorDetails };
 };
 // One reader's turn, for as long as it can still be cancelled. What it leaves behind — a picture being stopped on
@@ -134,7 +136,8 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
   // line, and the counter of a text's tokens for the characters' card, and whether they may send a portrait of their
   // own (local/ui.ts `RenderDetails`).
   const pictureInfoOf = (userId: string) => ({ pictures: illustrator?.enabledFor(userId) ?? false,
-    standardStyle: illustrator?.standardStyle, textTokens: illustrator?.textTokens, references: illustrator?.referencesFor(userId) ?? false });
+    standardStyle: illustrator?.standardStyle, textTokens: illustrator?.textTokens, references: illustrator?.referencesFor(userId) ?? false,
+    versions: illustrator?.versionsFor(userId) ?? false });
   const requireGpu = (t: Messages) => {
     if (!gpu) return;
     try { gpu.assertReady(); }
@@ -183,7 +186,9 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     // Writing a picture style, a look, details or the prompt of a variant or of a portrait, and the wait for a picture,
     // end with any button or command, an unknown command included, so that no later message is kept as one by surprise
     // (/last, /model or /typo would otherwise leave the next move to be taken for one).
-    if ((action || text?.startsWith('/')) && member(['style', 'look', 'details', 'prompt', 'portrait-prompt', 'reference'], state.ui?.input)) state.ui = null;
+    // Choosing where a look or a description lands is part of writing it (`edit-scope`, below).
+    const scoping = action?.startsWith('edit-scope:') && member(['look', 'details'], state.ui?.input);
+    if (((action && !scoping) || text?.startsWith('/')) && member(['style', 'look', 'details', 'prompt', 'portrait-prompt', 'reference'], state.ui?.input)) state.ui = null;
     if (!action && !fileInput) {
       const command = text?.split(/[\s@]/)[0];
       const current = state.active;
@@ -370,7 +375,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       // not yet retold has no text to be drawn from, and a portrait of nobody in particular would spend the picture card
       // for nothing.
       const prompt = ownPortraitPrompt(person);
-      if (prompt === undefined && !portraitText(person).trim()) throw refuse(t, 'portraitPending');
+      if (prompt === undefined && !portraitText(personHere(state, storyId, person.index) ?? person).trim()) throw refuse(t, 'portraitPending');
       // Names the portrait for its keep button, so that a button of an earlier one never keeps this one.
       const candidate = randomBytes(4).toString('hex');
       return { portrait: { storyId, name: person.name, candidate, status: t.characters.drawing, ...prompt === undefined ? {} : { prompt },
@@ -427,34 +432,53 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     }
     // While a picture is awaited, text is no move in the story either; a button or a command leaves (above).
     if (state.ui?.input === 'reference' && !action) throw refuse(t, 'referenceNeedsPicture');
+    // Where the look or the description being written lands, for a reader who has versions of the sheet
+    // (local/picture-versions.ts): the whole story, as always, or «only from this moment», the scene the reader stands at
+    // now, kept in the wait. It is chosen on the wait itself, before the text is sent, so that the text is taken as it
+    // comes, in one message as ever, and the bot never holds it while asking. A scene another line goes on from is
+    // not offered (`editableFrom`).
+    if (action === 'edit-scope:here' || action === 'edit-scope:all') {
+      const wait = state.ui?.input === 'look' || state.ui?.input === 'details' ? state.ui : undefined;
+      if (!wait || !pictureInfo.versions) throw refuse(t, 'staleButton');
+      const { from, ...whole } = wait;
+      const at = editableFrom(state, wait.storyId);
+      if (action === 'edit-scope:here' && (!at || at.shared)) throw refuse(t, 'staleButton');
+      state.ui = action === 'edit-scope:here' && at ? { ...whole, from: at.scene } : whole;
+      return { screen: render(state, `${wait.input}-input`, pictureInfo) };
+    }
     // While a look or a description is being written, text is that text. A look is one line, whatever the lines it was
     // sent in; a description keeps its lines, since a table of measurements is lines (the owner, 2026-09-27), with the
     // spaces at their ends and the blank lines past one cut. The person is looked for again by name, since the story
     // may be gone or its sheet written anew in the meantime.
     if ((state.ui?.input === 'look' || state.ui?.input === 'details') && !action) {
-      const { input, storyId, name } = state.ui;
+      const { input, storyId, name, from } = state.ui;
       const look = input === 'look';
       const written = look ? (text ?? '').replace(/\s+/g, ' ').trim()
         : (text ?? '').replace(/\r\n?/g, '\n').split('\n').map(one => one.trimEnd()).join('\n').replace(/\n{3,}/g, '\n\n').trim();
       if (!written) throw refuse(t, look ? 'lookNeedsText' : 'detailsNeedsText');
       if ([...written].length > (look ? LOOK_CHARS : DESCRIPTION_CHARS)) throw refuse(t, look ? 'lookTooLong' : 'detailsTooLong');
       state.ui = null;
-      const sheet = state.stories[storyId]?.sheet ?? [];
-      const index = sheet.findIndex(one => one.name === name);
-      if (index < 0) throw refuse(t, look ? 'lookGone' : 'detailsGone');
+      const story = state.stories[storyId];
+      const index = story?.sheet?.findIndex(one => one.name === name) ?? -1;
+      if (!story || index < 0) throw refuse(t, look ? 'lookGone' : 'detailsGone');
+      // «Only from this moment» needs the reader's versions still, and the scene it was chosen at.
+      if (from !== undefined && (!pictureInfo.versions || !Object.hasOwn(story.nodes, from))) throw refuse(t, 'staleButton');
       // The owner's design of 2026-09-27 (docs/illustrations-plan.md#three-layers): the description is the person's
       // text, which wins over the one the sheet took from the story, and the details a portrait is drawn from and the
       // look the frames take are retold from it (local/picture.ts `retell`). A look the reader writes overrides that one
       // in the frames alone, and details still to be retold stay so; a description replaces the reader's look as well,
       // and both are retold from it once this write is committed. Until then a portrait is drawn from the details retold
-      // before, while details the reader wrote before that day, which no retelling ever read, go.
-      if (look) {
-        sheet[index] = { ...sheet[index], look: written, edited: true };
-        return { screen: render(state, `character:${storyId}:${index}:${personTag(name)}`, pictureInfo) };
-      }
-      const { edited, detailsEdited, details, ...person } = sheet[index];
-      sheet[index] = { ...person, ...!detailsEdited && details ? { details } : {}, description: written, descriptionEdited: true, lookPending: true };
-      return { retell: { storyId, name } };
+      // before, while details the reader wrote before that day, which no retelling ever read, go. Where it lands, the
+      // whole story or a version from the scene `from` on, is local/picture-versions.ts `landEdit`'s to say.
+      const landed = landEdit(story, name, look ? { look: written } : { description: written }, from);
+      if (!landed) throw refuse(t, look ? 'lookGone' : 'detailsGone');
+      const versionField = look ? 'look' : 'description';
+      const logged = from !== undefined
+        ? { event: 'sheet_version_written', details: { versionSource: 'reader', versionField, versionPeople: 1, storyVersions: countVersions(story) } } as const
+        : landed.cleared ? { event: 'sheet_versions_cleared', details: { versionField, versionsCleared: landed.cleared, storyVersions: countVersions(story) } } as const
+        : undefined;
+      if (look) return { screen: render(state, `character:${storyId}:${index}:${personTag(name)}`, pictureInfo), ...logged ? { logged } : {} };
+      return { retell: { storyId, name }, ...logged ? { logged } : {} };
     }
     if (action === 'last') return { savedText: last(state) };
     if (action === 'new-seed') {
