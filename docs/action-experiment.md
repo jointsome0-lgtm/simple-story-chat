@@ -2900,3 +2900,279 @@ draws nothing, no `front` in any submit, one job at a time, and no prompt outsid
 fit the card's memory beside a frame; how much of the draft the edit keeps at each level; whether a view drawn at
 720x1280 on the action graph turns as asked, above all in profile; and how long a stand's job waits behind the
 tester's.
+
+<a id='prompt-arms'></a>
+
+## The prompt arms probe
+
+On 2026-09-28 the tester, through the owner: «мы явно не выжимаем картинку, мы же промпт для картинки можем лучше
+делать, а не просто кодом». [image-prompt-arms.ts](../local/image-prompt-arms.ts) prepares the question for the next
+picture card, without a card: does a prompt a model writes whole beat the one code assembles today? What the probe can
+answer is narrower, in the review's words below: it compares the frozen C0 and G prompt-production recipes on the
+selected scenes under fixed rendering settings. It is a probe of its own: round two's pins do not move, and
+[illustrate.ts](../local/illustrate.ts) is as it was.
+
+- **Scenes**: the twelve clean scenes of round two whose checklist names an essential contact (`SCENES`): bandage,
+  beach, cheer, demon, giants, guard, gulliver, gym, jellyfish, lineout, monkeys and rescue. They have two to four
+  participants each and 49 essential relations: 23 between participants, 26 with a thing, none with the subject's own
+  body. Seeds 7 and 11. Every frame is drawn on the bot's picture path (cu130, the Triton backend, the kitchen's
+  attention) at 1280x704, 25 euler steps at CFG 1, with no reference.
+- **C0**: today's assembly (`assemblePrompt` in illustrate.ts) from the bot's own frame description of the scene.
+- **G**: the whole English prompt, written by the same model from the same scene under G's instruction (below). Code
+  only takes names and ages out and adds the style line, as the bot does to its fields.
+- **PE**: C0 rewritten on the card by Qwen-Image 2.1's text-to-image prompt enhancer without thinking, as ComfyUI's
+  template runs it ([below](#prompt-arms-pe)).
+- **PT**: the same with thinking, as the enhancer's model card runs it.
+- **A+**: round two's variant prompt as round two drew it. Round two's heretic wrote it, where hosted Gemma 4 31B
+  wrote C0 and G, so A+ differs from C0 in model, quantization and instruction at once and says nothing of any one of
+  them. In round one A+'s pictures showed 10 contact points more than A's, and C's, with portraits, 18 fewer than
+  A+'s ([the measurements](knowledge/action-measurements.md)).
+
+At most 120 frames, 24 an arm, and 24 rewrites.
+
+**G's instruction** (`gInstruction`) is Russian and asks for an English prompt. It is appended to the scene's own
+request as the bot's frame request is, in the bot's words where it says the same thing. It asks for one moment: the
+main action at the instant it happens, with the state of people and things at that instant. The first sentence is the
+action: who acts on whom or on what, with which part of the body, on which part of the other or which thing, and where
+they are relative to each other and in the frame. Then a sentence a participant, each named by their place in the
+action and never by name: a person on the sheet begins with their look line whole and word for word; what each wears
+comes as a phrase beginning with "wearing", bare skin named plainly and nothing bared that the scene keeps covered;
+then the pose, the gaze, what they hold and what they touch with what. Every contact of the action stays in the frame:
+the edge does not cut a limb where it touches, a contact may be hidden behind another participant where the scene
+stands them so, and fine contacts with things (a blade in a gap, fingers on a button), readable text and screens are
+hidden by the angle. Then the shot, the place, the objects and the light. Nothing is handed to another participant or
+added; no names, digits or style words; 120 to 300 words, the people listed in order. The sheet's looks and the
+clothes before the scene are listed in it. A version that had the model list every contact of the moment before the
+prompt (v2 below) did no better by the checks and was not frozen.
+
+**The hosted trial**, 2026-09-28 from 12:22 UTC on openrouter-paid (`openrouter:google/gemma-4-31b-it`), after
+`npm run eval -- usage`: 36 of the lead's 40 requests, 12 for C0 and 24 for G under two versions of the instruction,
+every one answered at its first attempt, 117,772 tokens in and 13,582 out. The checks are code (`checks`) and read
+words, not pictures: whether each sheet look of the checklist's participants is in the prompt whole; which essential
+contacts it names, by word groups per relation, calibrated on round two's A and A+ prompts against Astra's text
+answers there (the same for 49 and 47 of the 49); and whether the first sentence names one.
+
+| | looks kept | essential contacts named | scenes with all | action in the first sentence | words | Qwen tokens |
+| --- | --- | --- | --- | --- | --- | --- |
+| C0 | 38 of 38 | 34 of 49 | 2 | 1 of 12 | 172 to 308 | 232 to 412 |
+| G | 38 of 38 | 34 of 49 | 2 | 11 of 12 | 187 to 253 | 238 to 341 |
+| G v2, contacts listed first | 38 of 38 | 33 of 49 | 2 | 8 of 12 | 181 to 253 | 234 to 336 |
+| A+, round two's | 37 of 38 | 37 of 49 | 4 | 1 of 12 | 211 to 350 | 272 to 462 |
+| A, round two's | 38 of 38 | 33 of 49 | 2 | 0 of 12 | 163 to 312 | 220 to 422 |
+
+No prompt keeps a digit, a letter outside the Latin script or a sheet name, and every one ends with the style line.
+G puts the action first and keeps every look, and names no more contacts than C0: whether its pictures show more is
+the card's question.
+
+**The frozen texts.** `freeze` wrote `frozen.json` from those answers: C0 and G for each scene under the instructions'
+hashes (the bot's frame request f2a867a4…, G's 0ab03469…), and round two's A+. image-prompt-arms.ts pins its sha256,
+`bc2745a57cb35670da52dd7c09670809879b9b99e0bc4fc402f714c9b0488378`, and the card refuses any other. The texts are
+synthetic and stay beside the run, in `~/simple-story-chat-runs/2026-09-28/prompt-arms`, not in the repository.
+
+<a id='prompt-arms-pe'></a>
+
+**The enhancer.** Comfy-Org/Qwen-Image-2.1 at the revision Qwen is pinned to (ace0edeb) holds two Qwen3.5 9B prompt
+enhancers. The text-to-image one, `text_encoders/qwen3.5_9b_qwen_image_2.1_pe_t2i.int8_convrot.safetensors`,
+9,471,072,252 bytes, sha256 `9182abae56fe05459840a86d22abd21f972061c92fce032630af680c8c5178d3` (the tree API's
+`lfs.oid`), is pinned in [image-manifest.env](../gpu/image-manifest.env) and fetched only with
+`SIMPLE_CHAT_IMAGE_QWEN_PE=true` ([gpu.md](gpu.md#qwen-pe)). Its model card, Qwen/Qwen-Image-2.1-PE-T2I at f3ed7985,
+ships the system prompt (10,045 bytes, sha256 a77c9a06…), which asks for one JSON object with `rewritten_prompt` and
+`wh_ratio`. It is the Qwen Research License's text, so `pe-prompt` fetches it into the run's `pe/` and checks it; it
+is never kept in the repository or sent to a judge. ComfyUI's template (workflow_templates'
+`image_qwen_image_2_1_t2i.json`) has the rewriting branch, off by default: CLIPLoader (node 473, type
+`stable_diffusion`), TextGenerate (471) and PreviewAny (472), feeding the prompt when its switch is on. The probe's
+graph is that branch, with these differences:
+
+- the whole chat goes in as the prompt, laid out as Qwen3.5's own template lays it out, with `use_default_template`
+  on: the template passes the system prompt through an input the pinned TextGenerate does not have;
+- the model card's system prompt, where the template wraps the same text with a plain paragraph for an answer;
+- repetition penalty 1.0, as the model card samples, not 1.05; temperature 1, top-p 0.95 and top-k 20 as both;
+- one seed, 20260928, for every rewrite;
+- at most 1536 new tokens without thinking and 4096 with it, not 16256;
+- the assistant's turn opening with an empty thought without thinking, and an open one with it.
+
+**Parsing**, fixed before the card: the answer after the last `</think>` is the JSON object, alone or in one fenced
+block. Only `rewritten_prompt` goes to the image model; `wh_ratio` is recorded, and the canvas stays 1280x704.
+Anything else is the enhancer's failure, by code: `pe_failed` (the job failed), `pe_timeout`, `pe_truncated` (a
+thought that never closed), `pe_unparsed` and `pe_empty`. A rewrite cut by the card's end or a lost server is not
+reached, not failed. The records of the rewrites (`pe/fast.json` and `pe/think.json`: each text or code, its time and
+its thought's length) with each stand's `texts.json` and `cells.json` are the private manifest the review asked for:
+the exact text each frame was drawn from, with its seed, graph, canvas and CFG. A rewrite's job record is deleted from
+`/history` once read, since it holds the chat.
+
+**Memory and time.** The int8 image model is 7.26 GB, its int8 encoder 9.35, the VAE 0.68 and the enhancer 9.47:
+26.76 GB of the card's 32. They fit side by side with about 5 GB left for the work, which ComfyUI's memory management
+may free by unloading one of them; the estimate counts a 20 s swap each way at each pass anyway. A frame takes about
+6.5 s warm on the bot's path. A rewrite is seeded at 20 s without thinking and 60 s with it (unmeasured), waited for
+90 and 240 s at most, and the first of a pass gets 60 s more for the load. So a scene takes about 33 s without
+thinking (16.5 s a picture) and 73 s with it (36.5 s a picture).
+
+**The card**, as the review asked (its change 9): every C0 and G frame first, 48 of them; then each other arm as a
+schedule of its own, all twelve scenes at both seeds, in this order: PE (12 rewrites without thinking, then its
+frames), A+ (24 frames), PT (12 rewrites with thinking, then its frames). A schedule begins only while the time left
+covers its budget at the admission prices: a frame's warm time with a quarter more and 3 s, each rewrite's seeded
+time the same way, the load and a first job. `schedules.json` records each as begun or omitted, with the time it
+needed and had. A resume goes on with a begun schedule and weighs an omitted one again, and the thinking pass is
+priced up by as much as the card's own rewrites without thinking ran over their seed. `estimate`:
+
+| | frames | rewrites | expected minutes | budget |
+| --- | --- | --- | --- | --- |
+| C0 and G | 48 | | 5.6 | 9.7 |
+| PE | 24 | 12 | 7.3 | 11.3 |
+| A+ | 24 | | 2.6 | 4.7 |
+| PT | 24 | 12 | 15.3 | 21.3 |
+| all | 120 | 24 | 30.8 | 47 |
+
+In a slot of 40 minutes a card at the seeded times draws all of it, and one running slow drops PT first. The frames go
+through [image-refs-test.ts](../local/image-refs-test.ts)'s stands, with its prices, `cells.json` and pages: `core`
+for C0, G and A+, `fast` for PE and `think` for PT, each with the card's record. Every job goes without `front`, one at
+a time, so a tester's frame waits for the job being drawn: about 7 s behind a frame, but a whole rewrite behind a
+rewrite (20 to 60 s as seeded, 90 or 240 s at most) and then a reload of the image model if the enhancer took its
+place. PE and PT are for a gap in which the tester is not drawing.
+
+<a id='prompt-arms-judging'></a>
+
+**Judging.** [image-prompt-arms-judge.ts](../local/image-prompt-arms-judge.ts) judges the pictures blind, as round two
+judged its own ([judging](#judging)), with what the review changed. For each scene and seed one fresh `codex exec` of
+GPT-6 Astra (gpt-6-astra at high, read-only, through action-judge.ts's `runAttempt`) is shown the scene, the sheet with
+the proportions its looks name, round two's checklist of the scene without which relations are essential, and that
+seed's picture of every arm. The pictures carry names drawn at random (`pic-` and eight random hex digits) in an order
+drawn at random; `judge/keys/` keeps both, with which arm drew which, and an arm whose picture is another's byte for
+byte is shown once. No session sees a prompt, an arm or a hash. Each picture is checked against the sha256 and size
+its cell recorded, and for text chunks, before it is bundled. 24 sessions and 4 repeats: the scenes round two repeats
+(guard, jellyfish, demon and bandage) again at seed 7, under fresh names in a fresh order, for the judge's agreement
+with itself. Three run at a time; the queue stops after two failures of codex itself in a row, or once more than a
+tenth of the sessions have had an attempt without valid answers. A session without valid answers gets one fresh Astra
+session: both attempts are kept, the first valid answer counts, and a second without one is a missing judgment, not a
+failed picture.
+
+The task is round two's `pictures` with each participant found first (present, absent or unsure, and where on the
+picture), whether anyone beyond the checklist is there, and the review's rules in its own words. The schema is built
+from each bundle's `input.json` and holds an answer to exactly its pictures, participants, items and proportions. The
+pins are the task's and the schema's sha256, round two's judge, effort, attached size and proportion words, the frozen
+texts' hash and the sessions; one directory holds one set.
+
+**The scores** (`score`, into `judge/score.json` and the owner's `score.md`, in Russian):
+
+- `visible_essential_relations`: the essential relations answered yes over all of them, no and unsure counting
+  nothing, with the no and unsure shares beside it, and apart again between participants, with the subject's own body
+  and with a thing (the twelve scenes have none of the second kind);
+- `all_visible`, the pictures with every essential relation seen, and `complete`, those with every participant of the
+  checklist answered present;
+- mixups and anatomy errors counted where confirmed (yes) and, apart, where not ruled out, which is round two's
+  conservative reading (anything but no);
+- looks over the checklist's participants with a sheet entry: present and yes, and as an upper bound present and yes
+  or unsure;
+- gazes, faces, clothes, reflections and scale by kind, the proportions and the people beyond the checklist, in no
+  clause.
+
+Each case, an arm's scene at a seed, ends one way: judged; drawn and not judged; the enhancer's text unusable; the
+frame failed; not reached; or its schedule never begun.
+
+**The clauses**, fixed on 2026-09-28 before any picture was drawn and changed by the review. G against C0 is the one
+primary comparison; PE, PT and A+ against C0 are exploratory. Every difference is the mean over scenes of each scene's
+difference, a scene's value being the mean over the seeds where both arms have a case. An arm passes when:
+
+1. its `visible_essential_relations` gains 0.10 or more over C0, over 8 scenes or more, and the lower end of the 90%
+   interval from 10,000 resamples of whole scenes, arms and seeds together (action-report.ts `interval`), is above 0.
+   A gain under 0.10 fails; a lower end at 0 or below is undecided, not proof of no benefit;
+2. it has no fewer pictures than C0 with every essential relation visible, and no fewer with every participant;
+3. it has no more pictures with a mixup, and at most max(1, n/10) more with an anatomy error among the n judged in
+   both, each counted as confirmed and with unsure counted in;
+4. its `looks` is not below C0's by more than 0.05, conservatively and at the upper bound;
+5. its own `visible_essential_relations` is 0.50 or more.
+
+A safeguard whose two readings disagree is unresolved and leaves the arm undecided, unless another clause fails
+outright. PE and PT are held to the relations over every case their schedule planned, an unusable text counting as a
+picture that shows none, with the count of usable texts beside it; their comparison over the pictures they did draw is
+a diagnostic with no verdict. An arm whose schedule was never begun or not finished is undecided, not failed, and so
+is every arm while a C0 or G frame was not reached; no scene is dropped after the fact. A pass says that the arm improves visible essential relations under these
+safeguards, on these twelve scenes with these frozen prompts, and nothing about being closer to the scene as a whole.
+Beside the clauses: each repeat's agreement with its first session by family (who is who, essential relations, other
+items, uncertainty, each picture's safeguards), and each arm's essential contacts by whether code found them named in
+its prompt and whether Astra saw them, which describes what went together and is not a cause.
+
+**Visible contact is what the product needs**: a contact the picture does not show is unsure, never inferred from the
+story, and counts as not shown. G's frozen instruction allows a contact to be hidden behind another participant and
+asks for fine contacts with things to be hidden by the angle, which is one more reason the relations with things are
+reported apart; none was removed after the pictures. An experiment that isolates how the prompt is written would drop
+that request and hold both writers to the same visibility. That needs new prompts and a new freeze, and this run does
+not answer it.
+
+**The review.** Before the card GPT-6 Astra (gpt-6-astra at high, read-only, 2026-09-28 from 12:45 to 12:48 UTC) read
+a packet built by 435b726's `review`: the probe's design, tasks, layout and clauses, with two blinded samples, round
+two's pictures of bandage at seed 7 and rescue at seed 11 by arms A, A+ and C, each judged first in a session of its
+own as the probe's will be. Three sessions of the lead's six, all answered at the first attempt. The verdict was
+`freeze_with_changes`, with eleven changes, all applied in the next commit:
+
+1. **Task**: the review's rules appended in its words. Identity comes from appearance and clothing, never from the
+   expected action, is not carried between pictures, and is assigned one to one or unsure. An item whose participant
+   is absent is no; one whose identity or contact cannot be resolved is unsure. A hidden limb is no anatomy error by
+   itself, and only the checklist's moment counts.
+2. **Bundle**: each participant is `{status, location}`, with `extra_participants`; the schema is generated from
+   `input.json` and checks exact coverage; prompts, arms and essential flags stay outside the sessions.
+3. **Scores**: `visible_essential_relations` as above with its no and unsure shares; `complete`; the looks
+   denominator; confirmed and unsure-only mixups and anatomy, the conservative rates kept under their own names.
+4. **Scores**: a scene-state checklist (the final moment, who does what, objects' states, clothes, what may not be
+   added), frozen before the drawing, with a safeguard of its own; or, without it, every claim of being closer to the
+   scene replaced by improved visible essential relations under the safeguards. It was not made: it would be a new
+   instrument, derived from each scene's text and frozen before the card, with no session left to review it. So the
+   claim is the narrower one, and gazes, faces, clothes, reflections, scale and the people beyond the checklist are
+   reported by kind.
+5. **Layout**: the paragraph on visible contact above.
+6. **Clauses**: G against C0 primary and the rest exploratory; the interval requirement; undecided rather than a
+   loss; the twelve scenes and the frozen prompts.
+7. **Clauses**: the two readings of each safeguard, unresolved when they disagree; differences as the mean of paired
+   scene differences over seed-averaged scenes.
+8. **Arms**: the claim worded as in this section's first paragraph; A+ a combined variant; PE and PT enhancer
+   pipelines; named against shown a descriptive association.
+9. **Arms**: C0 and G reserved, then schedules with budgets; the enhancer's failures, a frame's failures and an
+   omission kept apart; the operational score and the usable texts; an unfinished schedule undecided.
+10. **Other**: the parsing above, fixed and dry-run before the card, and the private manifest.
+11. **Blinding**: random names and order, kept private and drawn afresh for the repeats; agreement by family; one
+    fresh retry.
+
+One reading is this commit's: change 7 makes the verdict of an arm with an unresolved safeguard undecided, and the
+scores still fail an arm whose other clause fails whatever the unsure answers say, since no reading of the unresolved
+safeguard could make it pass.
+
+**The trial**, 2026-09-28 from 13:29 to 13:32 UTC: the same two samples under the task and schema the review left
+(`trial`). Two sessions, 59 and 157 s, both answered at the first attempt and valid under the new schema, and every
+participant answered present was given a place. Against the review's sessions of the same pictures under round two's
+task: presence the same in 16 of 18 answers, essential relations in 18 of 21, mixups in 17 of 18, anatomy in 6 of 6
+and the other items in 14 of 18. Five of the lead's six sessions are used before the card.
+
+**Dry runs.** `image:prompt-arms -- dry-run`: the plan and the estimate; the run's frozen texts and system prompt
+against their pins; all 24 rewrite graphs read back; the refusals before anything is sent (a card record without the
+enhancer's line, other frozen texts, another system prompt, a server on cu128, a server without the enhancer); five
+seconds left drawing nothing; two and a half minutes drawing C0, G and A+ and omitting PE and PT; the whole card
+against [fake-comfy.ts](../local/fake-comfy.ts) with made-up rewrites that fail every way the parse knows, 134 jobs in
+order, each rewrite's record deleted and each frame drawn from its own text; a resume that sends nothing; the pages;
+one job at a time; and no prompt, thought or rewrite outside the texts, the records and the pages.
+`image:prompt-arms-judge -- dry-run`: a picture other than its cell's and one with metadata refused; 28 bundles, blind,
+the repeats renamed; the sessions judged by a stand-in for codex that refuses once, the refused session on its second
+attempt with both kept; the scores with the enhancer's failures, a failed frame and an unfinished PT, then with A+
+omitted; the trial's two sessions; and no scene's words beyond the bundles and the sessions. It reads round two's
+scenes, so it runs from the main checkout, where round two's directory is, or with `--round2`.
+
+```sh
+npm run image:prompt-arms -- estimate
+npm run image:prompt-arms -- dry-run --run ~/simple-story-chat-runs/2026-09-28/prompt-arms    # steps 0 to 11
+npm run image:prompt-arms-judge -- dry-run    # steps 1 to 7
+# On a card bootstrapped as the bot's card with SIMPLE_CHAT_IMAGE_QWEN_PE=true beside SIMPLE_CHAT_IMAGE_QWEN
+# (gpu.md#qwen-pe), served and tunnelled as the bot's, "$end" five minutes before the slot's end:
+ssh simple-chat-vast cat /workspace/simple-chat-gpu/image-verified.txt > ~/simple-story-chat-runs/2026-09-28/prompt-arms/card.txt
+npm run image:prompt-arms -- card --run ~/simple-story-chat-runs/2026-09-28/prompt-arms --until "$end"    # card_done
+npm run image:prompt-arms -- page --run ~/simple-story-chat-runs/2026-09-28/prompt-arms
+# After the card, with no card:
+npm run image:prompt-arms -- checks --run ~/simple-story-chat-runs/2026-09-28/prompt-arms    # PE's and PT's texts too
+npm run image:prompt-arms-judge -- bundles --run ~/simple-story-chat-runs/2026-09-28/prompt-arms
+npm run image:prompt-arms-judge -- judge --run ~/simple-story-chat-runs/2026-09-28/prompt-arms    # 28 sessions
+npm run image:prompt-arms-judge -- score --run ~/simple-story-chat-runs/2026-09-28/prompt-arms    # judge/score.md
+```
+
+**Not verified without the card**: whether the enhancer runs beside the image model and its encoder on the 32 GB
+card, or ComfyUI swaps them, and what a swap takes; a rewrite's time with and without thinking; whether the enhancer,
+given the whole chat through TextGenerate, answers the JSON its system prompt asks for, and how often its thought runs
+past 4096 tokens; how long a tester's frame waits behind a rewrite; and whether a Qwen-only box's 60 GB of disk holds
+the enhancer beside the cu130 install.

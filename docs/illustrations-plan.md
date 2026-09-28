@@ -254,6 +254,10 @@ and the place just before or after the action — and code refuses frames that d
 this is the model or its distilled 8-step variant: the same three prompts through `krea-2-large` cost $0.18, and
 on a rented card `Krea-2-Raw` can be set against `Krea-2-Turbo`.
 
+On 2026-09-28 the tester asked the question again for Qwen-Image 2.1 on the bot's card: does a prompt a model writes
+whole beat the one code assembles? [The prompt arms probe](action-experiment.md#prompt-arms) is prepared for the next
+card.
+
 <a id='step-5'></a>
 
 ## Step 5, the larger hosted model, 2026-09-21

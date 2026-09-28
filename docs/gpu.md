@@ -414,6 +414,25 @@ The default download is unchanged, and [rent-plan.ts](../local/rent-plan.ts) pri
 18 s at 300 Mbit/s to a session that asks for it. Its licence was not read here: the owner allowed it as a test, on the
 terms Qwen-Image 2.1 itself is [accepted](#image-licences) for.
 
+<a id='qwen-pe'></a>
+
+### Qwen's prompt enhancer, opt-in
+
+`SIMPLE_CHAT_IMAGE_QWEN_PE=true`, beside `SIMPLE_CHAT_IMAGE_QWEN`, fetches one more file for the
+[prompt arms probe](action-experiment.md#prompt-arms): Qwen-Image 2.1's text-to-image prompt enhancer, a Qwen3.5 9B,
+`text_encoders/qwen3.5_9b_qwen_image_2.1_pe_t2i.int8_convrot.safetensors` (9.47 GB) from the repository and revision
+[image-manifest.env](../gpu/image-manifest.env) pins for Qwen, checked by its SHA256 like the weights and named in
+`image-verified.txt`. The probe reads that record before it rewrites anything and asks `/object_info` whether
+`CLIPLoader` offers the file. The server loads it only when the probe's graph names it; the bot never does.
+
+```sh
+SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_TORCH=cu130 SIMPLE_CHAT_IMAGE_QWEN_PE=true bash /workspace/simple-chat/gpu/image-bootstrap.sh --dry-run   # names the file
+```
+
+The server starts as the bot's card's, with no option of its own. The default download is unchanged: the file adds
+4.2 minutes at 300 Mbit/s to a session that asks for it, and 9.47 GB of disk. It is in Qwen's own repository, under its
+licence, and is used on the terms Qwen-Image 2.1 is [accepted](#image-licences) for: a test.
+
 ### What the card keeps of a picture
 
 A picture of a reader's scene passes through three places on the card, and each is emptied without a restart:
