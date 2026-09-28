@@ -164,12 +164,15 @@ export const LOOK_CHARS = 400;
 // words), a story's title of 18 and no portrait kept, the card in English has room for 2052 characters of it with no
 // changes, and for 1856 with changes of 150, about the 20 words the sheet's token limit counts them at; in Russian for
 // 2154 and 1964. The reference experiment's line on how frames take the portrait leaves 1868 and 1672 in English, 1989
-// and 1801 in Russian, and a portrait prompt of the reader's own 65 to 140 fewer. The wait for the description has room
-// for 3197 in English. A longer card, a reader's look of 400 beside long changes above all, or one with characters
-// outside the Basic Multilingual Plane, which a message counts twice, loses its last lines to the clip (`payload` in
-// local/ui.ts), those on the point of view and the portrait first, never the description kept, which comes first. The
-// sheet's own are 150 words at most, which a synthetic Russian one with a table of measurements takes about 1135
-// characters for.
+// and 1801 in Russian, and a portrait prompt of the reader's own 65 to 140 fewer. Since 2026-09-28 the card's two lines
+// on clothes, which name the whole profile and what the next pictures start from, leave 21 to 28 fewer in English and
+// 22 to 40 fewer in Russian, and changes of 300, which a profile sent back may write (local/profile.ts), 150 fewer than
+// changes of 150. The wait for the description has room for 3197 in English. A longer card, a reader's look of 400
+// beside long changes above all, or one with characters outside the Basic Multilingual Plane, which a message counts
+// twice, loses its last lines to the clip (`payload` in local/ui.ts), those on the point of view and the portrait first,
+// never the description kept, which comes first: with every field at its limit, the description, the look and the
+// clothes stay whole. The sheet's own are 150 words at most, which a synthetic Russian one with a table of measurements
+// takes about 1135 characters for.
 export const DESCRIPTION_CHARS = 1800;
 
 // A person of a sheet is their name, apart from spaces and case. One the model renames is somebody new, and what the
@@ -515,11 +518,15 @@ export function createIllustrator(config: ImageConfig, deps: {
     }, sharesPrefix ? { holder: userId, sharesPrefix, work: 'description' } : { holder: userId, work: 'description' });
     const viewer = viewerOf(story, sheet);
     const viewed = viewer && seenBy(description, viewer, sheet);
-    // What the sheet's people wear in this frame is what the next picture below this scene starts from.
+    // What the sheet's people wear in this frame is what the next picture below this scene starts from. Somebody whose
+    // clothes at this scene changed while the frame was being described, as a reader's profile sent back changes them
+    // (local/profile.ts), keeps the new ones: the frame started from those before.
+    const before = story.nodes[nodeId]?.clothes ?? {};
     const worn = clothesOf(viewed ? viewed.dressed : description, sheet);
     if (Object.keys(worn.clothes).length) store.mutate(userId, saved => {
       const node = saved.stories[storyId]?.nodes[nodeId];
-      if (node) node.clothes = { ...node.clothes, ...worn.clothes };
+      const kept = Object.entries(worn.clothes).filter(([name]) => node?.clothes?.[name] === before[name]);
+      if (node && kept.length) node.clothes = { ...node.clothes, ...Object.fromEntries(kept) };
     });
     const pov = viewed ? viewed.seen : undefined;
     const frame = viewed ? viewed.description : description;

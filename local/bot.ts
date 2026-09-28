@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { UserError, id, active, addSeed, newStory, fork, beginJob,
   deleteSeed, deleteBranch, forgetLostPictures, context, jobTarget, setLanguage, isPose } from '../lib/library.ts';
-import type { Job, Library, ReferenceInput, SceneNode } from '../lib/library.ts';
+import type { Job, Library, ProfileInput, ReferenceInput, SceneNode } from '../lib/library.ts';
 import { storyNarration } from './prompt.ts';
 import { createChat } from './telegram.ts';
 import type { Chat, InlineKeyboard, Screen, TelegramApi } from './telegram.ts';
@@ -24,6 +24,8 @@ import type { Illustrator, PictureRequest, PortraitRequest, SampleRequest, Varia
 import { DESCRIPTION_CHARS, LOOK_CHARS, ownPortraitPrompt, personAt, personTag } from './picture.ts';
 import { seesThrough } from './picture-pov.ts';
 import { portraitText } from './image-portraits.ts';
+import { MAY_BE_EMPTY, PROFILE_CHARS, applyProfile, fieldsMask, maskFields, parseProfile, profileHash, profileOf } from './profile.ts';
+import type { ProfileField } from './profile.ts';
 import type { ErrorDetails, Log } from './model-error.ts';
 import { errorCode, member, safeErrorDetails, unavailable } from './model-error.ts';
 import { REFERENCE_WAIT_MS, REFUSAL_CODES, captionOf, keepReference } from './reference.ts';
@@ -88,7 +90,7 @@ type Plan = {
   // The person of a story's sheet whose description this write keeps, for their details and look to be retold from it
   // and their card shown (`retold`).
   retell?: { storyId: string; name: string };
-  // A row for the log once the write is committed: what a picture a reader sent became.
+  // A row for the log once the write is committed: what a picture a reader sent became, or a profile they sent back.
   logged?: { event: string; details: ErrorDetails };
 };
 // One reader's turn, for as long as it can still be cancelled. What it leaves behind — a picture being stopped on
@@ -180,10 +182,10 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     if (fileInput && (state.ui?.input !== 'seed' || state.ui.draftId !== fileInput.draftId)) throw refuse(t, 'draftChanged');
     if (upload) return keptUpload(state, update, upload, t, pictureInfo);
     const text = fileInput ? fileInput.text : messageText(update.message);
-    // Writing a picture style, a look, details or the prompt of a variant or of a portrait, and the wait for a picture,
-    // end with any button or command, an unknown command included, so that no later message is kept as one by surprise
-    // (/last, /model or /typo would otherwise leave the next move to be taken for one).
-    if ((action || text?.startsWith('/')) && member(['style', 'look', 'details', 'prompt', 'portrait-prompt', 'reference'], state.ui?.input)) state.ui = null;
+    // Writing a picture style, a look, details or the prompt of a variant or of a portrait, sending a profile back, and the
+    // wait for a picture, end with any button or command, an unknown command included, so that no later message is kept
+    // as one by surprise (/last, /model or /typo would otherwise leave the next move to be taken for one).
+    if ((action || text?.startsWith('/')) && member(['style', 'look', 'details', 'prompt', 'portrait-prompt', 'reference', 'profile'], state.ui?.input)) state.ui = null;
     if (!action && !fileInput) {
       const command = text?.split(/[\s@]/)[0];
       const current = state.active;
@@ -376,12 +378,30 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       return { portrait: { storyId, name: person.name, candidate, status: t.characters.drawing, ...prompt === undefined ? {} : { prompt },
         caption: render(state, `portrait:${storyId}:${index}:${tag}:${candidate}`, pictureInfo) } };
     }
+    // A person's whole profile, from the button under it (local/profile.ts): the next text message is that profile sent
+    // back (`profileSent`). The button names the person as the card's do, the fields its message showed and a hash of
+    // their text, which must still be the person's: the button of a profile that has changed since, or of a sheet the
+    // next picture writes anew, shows the profile as it is now instead, and waits for nothing.
+    if (action?.startsWith('profile-edit:')) {
+      const [, storyId, index, tag, mask, hash] = action.split(':');
+      const story = ID.story.test(storyId) ? state.stories[storyId] : undefined;
+      const person = personAt(story, index, tag);
+      const fields = maskFields(mask);
+      if (!story || !person || !fields || !/^[0-9a-f]{8}$/.test(hash ?? '')) throw refuse(t, 'staleButton');
+      const profile = profileOf(state, story, person);
+      if (profile.older || profileHash(person.name, profile, fields) !== hash) return { screen: render(state, `profile-changed:${storyId}:${index}:${tag}`, pictureInfo) };
+      state.ui = { input: 'profile', storyId, name: person.name, fields: mask, hash };
+      return { screen: render(state, 'profile-input', pictureInfo) };
+    }
+    if (state.ui?.input === 'profile' && !action) return profileSent(state, state.ui, text, t, pictureInfo);
     // The whole prompt of a person's portraits, from the note under one of them (local/picture.ts `portrait`), as a
     // scene's picture has its variant: the button waits for it, and the next text message is that prompt, which the
     // person keeps as theirs (`portraitPrompt`) and a variant of the portrait whose note it was is drawn from, as it
     // came, with that portrait's seed. The button names the person as the card's do, the seed, and a tag of the graph
     // and the checkpoint it was drawn with, which must still be the bot's, when it is pressed and when the prompt
-    // arrives. A prompt that cannot be drawn leaves the wait open for the next try, as a variant's does.
+    // arrives. A prompt that cannot be drawn leaves the wait open for the next try, as a variant's does, and so does one
+    // that arrives while another portrait or a sample is being drawn (`sampling`): the variant could not be drawn then,
+    // and the prompt is not kept without it, where it would have been the person's for the next portrait unseen.
     if (action?.startsWith('portrait-edit:')) {
       const [, storyId, index, tag, seed, recipe] = action.split(':');
       if (!pictureInfo.pictures || !illustrator) throw refuse(t, 'portraitOff');
@@ -396,12 +416,13 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       state.ui = null;
       if (!pictureInfo.pictures || !illustrator) throw refuse(t, 'portraitOff');
       if (!illustrator.portraitVariant(wait.recipe)) throw refuse(t, 'variantChanged');
-      const again = (key: 'promptNeedsText' | 'promptTooLong') => { state.ui = wait; return refuse(t, key); };
+      const again = (key: 'promptNeedsText' | 'promptTooLong' | 'portraitPromptInFlight') => { state.ui = wait; return refuse(t, key); };
       if (!text?.trim()) throw again('promptNeedsText');
       if ([...text].length > PROMPT_CHARS) throw again('promptTooLong');
       const sheet = state.stories[wait.storyId]?.sheet ?? [];
       const index = sheet.findIndex(one => one.name === wait.name);
       if (index < 0) throw refuse(t, 'portraitPromptGone');
+      if (sampling.has(String(update.message?.from?.id))) throw again('portraitPromptInFlight');
       sheet[index].portraitPrompt = text;
       const candidate = randomBytes(4).toString('hex');
       return { portrait: { storyId: wait.storyId, name: wait.name, candidate, status: t.characters.drawing, prompt: text, seed: wait.seed,
@@ -516,6 +537,61 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     state.interrupted = false;
     const job = beginTurn(state, input, Date.now());
     return { job };
+  }
+
+  // A profile sent back while one is awaited (`profile-edit`), inside the library write. It is taken whole or not at all:
+  // it has to read (local/profile.ts `parseProfile`), with the person's name and the fields its message showed, and
+  // each field it changed has to be within its limit and not emptied, where the field may not be; anything else is
+  // refused with what to fix, and the wait stays for the next try. A person gone meanwhile, or a profile that has
+  // changed since its message was sent, ends the wait: the second is shown as it is now, since the fields sent back
+  // unchanged would otherwise write what it said then over what it says now. Only the fields whose text differs are
+  // written (`applyProfile`), and the person is retold where that says so. One row says which fields changed, with
+  // their sizes and the whole text's, or why the text was refused; never a word of it.
+  function profileSent(state: Library, wait: ProfileInput, text: string | undefined, t: Messages, pictureInfo: RenderDetails): Plan {
+    const c = t.characters;
+    const characters = [...text ?? ''].length;
+    const refused = (screen: Screen, profileRefusal: NonNullable<ErrorDetails['profileRefusal']>): Plan =>
+      ({ screen, logged: { event: 'profile_refused', details: { profileRefusal, profileCharacters: characters } } });
+    const story = state.stories[wait.storyId];
+    const index = story?.sheet?.findIndex(one => one.name === wait.name) ?? -1;
+    const fields = maskFields(wait.fields);
+    if (!story || index < 0 || !fields) {
+      state.ui = null;
+      return refused({ text: t.errors.profileGone }, 'gone');
+    }
+    const person = story.sheet![index];
+    const profile = profileOf(state, story, person);
+    if (profile.older || profileHash(person.name, profile, fields) !== wait.hash) {
+      state.ui = null;
+      return refused(render(state, `profile-changed:${story.id}:${index}:${personTag(person.name)}`, pictureInfo), 'changed');
+    }
+    if (!text?.trim()) return refused({ text: t.errors.profileNeedsText }, 'no_text');
+    const parsed = parseProfile(text, person.name, fields);
+    if (parsed.refusal) {
+      return refused({ text: parsed.refusal === 'name' ? c.profileName(person.name.replace(/\s+/g, ' ').trim())
+        : parsed.refusal === 'heading' ? c.profileHeading(parsed.heading ?? '')
+        : t.errors[parsed.refusal === 'incomplete' ? 'profileIncomplete' : parsed.refusal === 'sections' ? 'profileSections' : 'profileOutside'] },
+      parsed.refusal);
+    }
+    const changed: Partial<Record<ProfileField, string>> = {};
+    for (const field of fields) if (parsed.values[field] !== profile.values[field]) changed[field] = parsed.values[field];
+    for (const [field, value] of Object.entries(changed) as [ProfileField, string][]) {
+      if (!value && !MAY_BE_EMPTY.includes(field)) return refused({ text: c.profileEmpty(c.profileHeadings[field]) }, 'empty');
+      if ([...value].length > PROFILE_CHARS[field]) return refused({ text: c.profileLong(c.profileHeadings[field], PROFILE_CHARS[field]) }, 'too_long');
+    }
+    state.ui = null;
+    const retell = applyProfile(story, index, profile, changed);
+    const has = (field: ProfileField) => changed[field] !== undefined;
+    const size = (field: ProfileField) => has(field) ? [...changed[field]!].length : undefined;
+    return { screen: render(state, `profile-saved:${story.id}:${index}:${personTag(person.name)}:${fieldsMask(Object.keys(changed) as ProfileField[])}`, pictureInfo),
+      ...retell ? { retell: { storyId: story.id, name: person.name } } : {},
+      logged: { event: 'profile_edited', details: { outcome: Object.keys(changed).length ? 'ready' : 'skipped',
+        profileFit: !fields.includes('description') ? 'no_description' : profile.present.length > fields.length ? 'no_prompt' : 'whole',
+        profileDescription: has('description'), profileChanges: has('changes'), profileDetails: has('details'), profileLook: has('look'),
+        profileClothes: has('clothes'), profilePrompt: has('prompt'), profileRetell: retell,
+        ...has('clothes') ? { profileClothesAt: profile.clothesAt === null ? 'sheet' : 'scene' } : {}, profileCharacters: characters,
+        descriptionCharacters: size('description'), changesCharacters: size('changes'), detailsCharacters: size('details'),
+        lookCharacters: size('look'), clothesCharacters: size('clothes'), promptCharacters: size('prompt') } } };
   }
 
   // Reads a picture a reader sent while the bot waited for one (local/reference.ts), before the library write, as a seed

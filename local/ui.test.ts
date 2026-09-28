@@ -166,8 +166,8 @@ test('each state offers only the actions it allows: the scene keyboard, compacti
     ['characters before the first picture', (state => (screen => [screen.text, callbacks(screen), state.stories.h2.sheet])(render(state, 'characters:h2', on)))(fixture()),
       [`${t.characters.title(STORY)}\n\n${t.characters.none}`, ['view:story:h2', 'view:home'], undefined]],
     ['characters of a sheet', callbacks(render(drawn(), 'characters:h2', on)), [`view:character:${mira}`, `view:character:${oleg}`, 'view:story:h2', 'view:home']],
-    ['a card with pictures', preAndButtons(render(drawn(), `character:${mira}`, on)), [[LOOK, 'a yellow raincoat'], [`details-edit:${mira}`, `look-edit:${mira}`, `portrait:${mira}`, `pov:${mira}`, 'view:characters:h2']]],
-    ['a card without pictures', callbacks(render(drawn(), `character:${mira}`)), [`details-edit:${mira}`, `look-edit:${mira}`, 'view:characters:h2']],
+    ['a card with pictures', preAndButtons(render(drawn(), `character:${mira}`, on)), [[LOOK, 'a yellow raincoat'], [`details-edit:${mira}`, `look-edit:${mira}`, `view:profile:${mira}`, `portrait:${mira}`, `pov:${mira}`, 'view:characters:h2']]],
+    ['a card without pictures', callbacks(render(drawn(), `character:${mira}`)), [`details-edit:${mira}`, `look-edit:${mira}`, `view:profile:${mira}`, 'view:characters:h2']],
     // Somebody not on the sheet, or a button of one whose place another person took since, is the list, never a card.
     ...['character:h2:7', 'character:h2:x', 'character:h2:0', 'character:h2:0:00000000', `character:h2:1:${personTag('Мира')}`].map((route): Row =>
       [`a stale person: ${route}`, callbacks(render(drawn(), route, on)), callbacks(render(drawn(), 'characters:h2', on))]),

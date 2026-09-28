@@ -23,7 +23,9 @@ export type SceneNode = {
   usage?: Usage | null; requestContext?: RequestStamp; streamResultMismatch?: boolean;
   modelInfo?: { provider: string; model: string }; messageId?: number;
   // What each person of the story's sheet wore in this scene's picture, by their sheet name: the clothes the next
-  // picture of this line of the story starts from (local/picture.ts). Only the local bot writes it.
+  // picture of this line of the story starts from (local/picture.ts). A reader who changes a person's clothes in the
+  // person's whole profile while this scene is the head of the branch being played writes them here too
+  // (local/profile.ts). Only the local bot writes it.
   clothes?: Record<string, string>;
   // How this scene's own picture was drawn, all but its prompt: a variant of it is drawn with the same, for as long
   // as the scene is kept (local/picture.ts `variant`). Only the local bot writes it.
@@ -112,6 +114,12 @@ export type ReferenceInput = { input: 'reference'; storyId: string; name: string
 // pressed is drawn from it with that portrait's `seed`, while the graph and the checkpoint are still the ones its
 // `recipe` tag names. The person is the one the note was under, by story and name.
 export type PortraitPromptInput = { input: 'portrait-prompt'; storyId: string; name: string; seed: number; recipe: string; confirm?: undefined };
+// A reader sending back the whole profile of one person of a story's sheet (local/profile.ts): their next text message
+// is that profile, edited. `fields` names the fields of the message they copied it from, as a hexadecimal mask, and
+// `hash` is a hash of the person's name, of where new clothes would go and of those fields' text there
+// (`profileHash`), which must still be the person's when the profile arrives. The text itself is not kept here. The
+// person is the one whose profile it was, by story and name.
+export type ProfileInput = { input: 'profile'; storyId: string; name: string; fields: string; hash: string; confirm?: undefined };
 // One of the reader's own picture styles: the name on its button and the line that ends the prompt.
 export type OwnStyle = { id: string; name: string; line: string };
 // How a picture was drawn, all but its prompt (local/picture.ts): its seed, a hash of the graph, the checkpoint's file
@@ -133,7 +141,7 @@ export type Language = 'ru' | 'en' | 'zh' | 'ko' | 'ja';
 export type Library = {
   version: 1; seq: number; seeds: Record<string, Seed>; stories: Record<string, Story>;
   active: { storyId: string; branchId: string } | null; job: Job | null;
-  ui: SeedDraft | DeleteConfirmation | StyleInput | PromptInput | LookInput | ReferenceInput | PortraitPromptInput | null; seen: number[];
+  ui: SeedDraft | DeleteConfirmation | StyleInput | PromptInput | LookInput | ReferenceInput | PortraitPromptInput | ProfileInput | null; seen: number[];
   interrupted?: boolean; language?: Language;
   // The look of this reader's pictures: a preset's key or the id of one of their own styles, and those styles. Only
   // the local bot reads them (local/picture-style.ts), and only for a reader it draws for; without a choice the bot's
