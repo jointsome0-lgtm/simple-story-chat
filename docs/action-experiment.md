@@ -3390,17 +3390,17 @@ tester's picture.
 ## The next rental: a queue for each card
 
 Written on 2026-09-28 for the next rental; nothing is rented. [The owner's rules](gpu.md#while-the-cards-are-paid-for)
-hold, with the two of that day. A card runs for the work and not for the tester, who may use the bot while it is on,
-and it is deleted as soon as its queue is empty, whatever the tester is doing, once the requests in flight have ended.
-At most $3 a day goes on rentals, downloads included, within which the main session rents without asking once a fresh
-GPT-6 Astra session at `xhigh` has read the queues below and backed the jobs worth their minutes; the ones it does
-not back are left out. So each job says what it asks, what the answer can bring to the bot the tester uses, its
-minutes and dollars, what it brings back to this machine and what counts as a pass, and in each queue the cheap ones
-with a likely gain come first. Money is reckoned at $0.55 an hour a card, near what the rent dry runs of 2026-09-28
-found ($0.498 to $0.63), with each card's download on top, which made most of the spread between offers before
-([prices](knowledge/gpu-measurements.md#costs-and-downloads)). The day's $3 counts from the owner's message at 09:28
-UTC on 2026-09-28. No card had been rented since when this was written, the Vast account held $5.09, and the rental
-was meant for that evening.
+hold, with the two of that day. A card runs for the work and not for the tester, who may use the bot while it is on, and
+it is deleted as soon as its queue is empty, whatever the tester is doing, once the requests in flight have ended. At
+most $3 a day goes on rentals, downloads included; on 2026-09-28 the owner raised that day's cap to $4. Within it the
+main session rents without asking once a fresh GPT-6 Astra session at `xhigh` has read the queues below and backed the
+jobs worth their minutes; the ones it does not back are left out. So each job says what it asks, what the answer can
+bring to the bot the tester uses, its minutes and dollars, what it brings back to this machine and what counts as a
+pass, and in each queue the cheap ones with a likely gain come first. Money is reckoned at $0.55 an hour a card, near
+what the rent dry runs of 2026-09-28 found ($0.498 to $0.63), with each card's download on top, which made most of the
+spread between offers before ([prices](knowledge/gpu-measurements.md#costs-and-downloads)). The day's $4 counts from the
+owner's message at 09:28 UTC on 2026-09-28. No card had been rented since when this was written, the Vast account held
+$5.09, and the rental was meant for that evening.
 
 **Astra's reading.** A fresh GPT-6 Astra session at `xhigh` read the queues, the stand's changes since its review and
 the runbook from 14:39 to 14:45 UTC on 2026-09-28. It backed T1, T2, P1 and P2 and both cards, «after the shutdown
@@ -3574,23 +3574,24 @@ goes once both cards answer, if the owner is at hand.
 
 Both ends failing is what a card bills until its watchdog's destroy has ended: 2 hours 20 minutes 20 seconds, the
 session the rent dry run prices. At the $0.63 an hour of the dearest offer the dry runs of 2026-09-28 found, it comes to
-$3.11 to $3.19, over the day's $3. So **the rule on money**, which the runbook applies as code: the rent takes offers
-whose sessions keep both cards within what is left of the day's $3 together. The rent dry run gives each offer it would
-try its `session`, the offer's hour with its disk over the session, and its traffic, rounded up to the cent; `most`
-takes the dearest of the offers, four at most, that the rent would try with the same arguments, and a dry run it cannot
-read is `none`. Each choice is weighed at its worst, both ends failing, since that is the session the quotes price. If
-the text card's at `--hours 2` and the picture card's fit, both cards take `--hours 2`. Else, if they fit with the text
-card's at `--hours 1`, the text card takes that: 1 hour 20 minutes 20 seconds, $0.81 at $0.55 and $0.91 at $0.63, and
-both cards $2.47 to $2.55 at $0.63. Else nothing is rented and the owner is asked, as when any quote is not a sum of
-dollars. Each rent is held to its quote: `--max-session` makes the rent script try no offer whose session costs more,
-whatever the search returns by then. That option is in the tester-stand checkout's gpu/rent.mjs, which the runbook calls
-for it, with the account's key from ~/work/simple-chat/.env.gpu; its destroy is `destroyInstance` in local/rent-plan.ts
-there, and each card's own guard is gpu/trial-onstart.sh. Once the text card is rented, its own session, from what
-`rented` printed, and the picture card's, from a dry run just then that leaves out the text card's host as the picture
-card's rent does, must fit together before the picture card is rented. With `--hours 1` the text card's jobs end by
-about 46 minutes after its rental: T1 and T2 fit, unless T2 runs away as far as it can and the card's end cuts it, and
-T3 does not begin, since the runbook starts it only on a two-hour card. An hour is short for the picture card's queue,
-and for a bootstrap as slow as round one's cards had, 30 minutes, so it always takes `--hours 2`.
+$3.11 to $3.19: over an ordinary day's $3, within the $4 of 2026-09-28, so at that price both cards take `--hours 2` and
+T3 keeps its place. So **the rule on money**, which the runbook applies as code: the rent takes offers whose sessions
+keep both cards within what is left of the day's cap together. The rent dry run gives each offer it would try its
+`session`, the offer's hour with its disk over the session, and its traffic, rounded up to the cent; `most` takes the
+dearest of the offers, four at most, that the rent would try with the same arguments, and a dry run it cannot read is
+`none`. Each choice is weighed at its worst, both ends failing, since that is the session the quotes price. If the text
+card's at `--hours 2` and the picture card's fit, both cards take `--hours 2`. Else, if they fit with the text card's at
+`--hours 1`, the text card takes that: 1 hour 20 minutes 20 seconds, $0.81 at $0.55 and $0.91 at $0.63, and both cards
+$2.47 to $2.55 at $0.63. Else nothing is rented and the owner is asked, as when any quote is not a sum of dollars. Each
+rent is held to its quote: `--max-session` makes the rent script try no offer whose session costs more, whatever the
+search returns by then. That option is in the tester-stand checkout's gpu/rent.mjs, which the runbook calls for it, with
+the account's key from ~/work/simple-chat/.env.gpu; its destroy is `destroyInstance` in local/rent-plan.ts there, and
+each card's own guard is gpu/trial-onstart.sh. Once the text card is rented, its own session, from what `rented`
+printed, and the picture card's, from a dry run just then that leaves out the text card's host as the picture card's
+rent does, must fit together before the picture card is rented. With `--hours 1` the text card's jobs end by about 46
+minutes after its rental: T1 and T2 fit, unless T2 runs away as far as it can and the card's end cuts it, and T3 does
+not begin, since the runbook starts it only on a two-hour card. An hour is short for the picture card's queue, and for a
+bootstrap as slow as round one's cards had, 30 minutes, so it always takes `--hours 2`.
 
 **Back on this machine**: P1's 0.53 to 0.68 GB of pictures and P2's 0.17 to 0.22 GB while they draw, 0.7 to 0.9 GB, and
 after the cards their bundles, about as much again for P1 and 0.2 GB for P2; the main session agreed to them on
@@ -3619,7 +3620,7 @@ reaches no host of that name (no ssh alias, no DNS or mDNS name), so whether min
 known from here.
 
 **The ends, rehearsed** on 2026-09-28 by `rehearse-ends.sh` in ~/simple-story-chat-runs/2026-09-28/tester-stand, which
-reads the helpers and the runbook's lines from this page and runs them with no card and nothing paid: 116 checks, all
+reads the helpers and the runbook's lines from this page and runs them with no card and nothing paid: 117 checks, all
 passed, on the page of the commit that says so. `end_of` on a guard whose read failed, came back empty, was no number or
 was later than `destroyBy`, and with no `destroyBy`, gave no end, marked the card stopped, said we're done and destroyed
 that card and not the other; on a good guard it gave the guard less 960 s and touched nothing. `gone` destroyed twice
@@ -3635,21 +3636,22 @@ back 0 within 10 s once idle, and 1 after its ten minutes on a clock run fast wh
 on a queue not JSON and on a queue down. `ready_text` saw a stand-in `status` ready at its third look and gave up on one
 never ready; `upto` began nothing with too few minutes or no end, and killed its job at the end; the runbook's own lines
 put T3's stop 30 minutes on, or 3 minutes before a nearer end, where 20 minutes are too few to begin; its rule on money
-chose 2, 1 and 0 hours as it should, with no offers too, and 0 whenever a quote was empty or no number; `most` gave the
-dearest session, passed the rent its arguments, and gave `none` for no offers and for a dry run it could not read;
-`rented` gave its four fields with the session rounded up, held the rent to its quote, rented nothing without a quote
-and gave nothing on an uncertain answer. The rents' own lines held the text card to the quote of its hours and the
-picture card to a fresh quote of the offers its rent would try, and rented no picture card on a quote empty, `none` or
-too dear. The rent script this page calls, asked with no key, took a quote and refused an empty one. One `end_of` and
-the watchdog went to Vast, each through the rent script's dry run on instance 52079556, deleted on 2026-09-22, which
-read it once as gone and deleted nothing; the watchdog, started from a shell that had exited and sent SIGHUP as a closed
-terminal would, fired at its time, holding this machine awake until then and not after; one started for a card already
-read back gone ended at once, asked nothing and held nothing. Nine changes to the helpers each failed one to fifteen
-checks: calm's ten minutes made longer, an unread queue taken as idle, one destroy instead of two, an `end_of` that does
-not end the card, no bot taken as idle, a reserve of 300 s, a watchdog without its HUP trap, an `upto` that does not
-kill, and T3's stop at the card's end. Five more after the second review failed one to four checks each: a deadline for
-each of `gone`'s tries, a step with a bare limit, quotes read as numbers whatever they are, `most` without the rent's
-arguments and `rented` without its quote.
+chose 2, 1 and 0 hours as it should, with no offers too, and 0 whenever a quote was empty or no number, and with this
+page's own `left`, $4, gave both cards 2 hours at the worst case of $0.63 an hour; `most` gave the dearest session,
+passed the rent its arguments, and gave `none` for no offers and for a dry run it could not read; `rented` gave its four
+fields with the session rounded up, held the rent to its quote, rented nothing without a quote and gave nothing on an
+uncertain answer. The rents' own lines held the text card to the quote of its hours and the picture card to a fresh
+quote of the offers its rent would try, and rented no picture card on a quote empty, `none` or too dear. The rent script
+this page calls, asked with no key, took a quote and refused an empty one. One `end_of` and the watchdog went to Vast,
+each through the rent script's dry run on instance 52079556, deleted on 2026-09-22, which read it once as gone and
+deleted nothing; the watchdog, started from a shell that had exited and sent SIGHUP as a closed terminal would, fired at
+its time, holding this machine awake until then and not after; one started for a card already read back gone ended at
+once, asked nothing and held nothing. Nine changes to the helpers each failed one to fifteen checks: calm's ten minutes
+made longer, an unread queue taken as idle, one destroy instead of two, an `end_of` that does not end the card, no bot
+taken as idle, a reserve of 300 s, a watchdog without its HUP trap, an `upto` that does not kill, and T3's stop at the
+card's end. Five more after the second review failed one to four checks each: a deadline for each of `gone`'s tries, a
+step with a bare limit, quotes read as numbers whatever they are, `most` without the rent's arguments and `rented`
+without its quote.
 
 **The runbook.** Terminal 1 rents and runs the text card, terminal 2 holds its `up`, terminal 4 runs the picture card
 and terminal 5 holds its tunnel. The helpers go into terminals 1 and 4 first, from the block between their markers.
@@ -3753,10 +3755,11 @@ rented() { local out; [[ ${3-} =~ ^[0-9]+(\.[0-9]{1,2})?$ ]] || { echo "no quote
 
 # Terminal 1, in ~/work/simple-chat. The live bots' processes, for `calm`: two pids, the -0928 checkout's and the other's.
 bot=$(pgrep -f '^[^ ]*node /home/jo/work/simple-chat-live(-0928)?/local/main\.ts$' | paste -sd '|'); echo "$bot"
-# The rule on money. `left` is what is left of the day's $3, all of it if nothing has been spent on cards since 09:28 UTC.
+# The rule on money. `left` is what is left of the day's $4, the owner's cap for 2026-09-28, all of it if nothing has been
+# spent on cards since 09:28 UTC.
 # A quote is the dearest session of the offers a rent would try: the card's hours and the 20 minutes 20 seconds after
 # them, what it costs if both its ends fail. Any quote that is not a sum rents nothing, and each rent is held to its own.
-left=3.00
+left=4.00
 t2=$(most text 2) t1=$(most text 1) p2=$(most pictures 2); echo "text $t2 for 2 hours, $t1 for 1; pictures $p2"
 hours=$(node -e 'const q = process.argv.slice(1).map(v => /^\d+(\.\d+)?$/.test(v) ? Number(v) : NaN), [l, a, b, p] = q; console.log(!q.every(v => v > 0) ? 0 : a + p <= l ? 2 : b + p <= l ? 1 : 0)' "$left" "$t2" "$t1" "$p2")
 echo "the text card: --hours $hours"    # 0: nothing is rented, and the owner is asked
@@ -3868,7 +3871,7 @@ probe's checks, bundles, 28 judging sessions and score ([its judging](#prompt-ar
 `criteria`, which decide their switches as above; T3's six Astra sessions, if it ran; and the watchdogs' logs, each
 with the card read back gone.
 
-**Left to the owner**: anything beyond the day's $3; a round three of the action measurement; T4 and T5, which Astra
+**Left to the owner**: anything beyond the day's $4; a round three of the action measurement; T4 and T5, which Astra
 dropped, and O3's card half would need the owner's yes besides; and whether the tester gets any of the new switches,
 whose lists stay empty meanwhile, since the verdicts come only after the cards. The places
 (`SIMPLE_CHAT_POV_PLACE_USERS`, and `SIMPLE_CHAT_POV_PARTIAL_USERS` within it) and the clothes
