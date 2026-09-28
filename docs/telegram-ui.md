@@ -218,9 +218,11 @@ draws nothing.
   2026-09-27 shows its details in the description's place until the next picture
   writes it again. A card over the bot's 4000 characters, which keep headroom under Telegram's 4096, loses its last
   lines, those on the point of view and the portrait first: a description of 1800 fits beside the rest but for a
-  reader's look of 400 beside long changes, or in the reference experiment beside changes of 150 or a portrait prompt
-  of the reader's own (`DESCRIPTION_CHARS` in `local/picture.ts`).
-  - The clothes are the story's and are only shown. For the story being played they are the ones the nearest picture up the active branch dressed the person in, and the card names the branch (`wornAt`). Otherwise, and before any picture dressed them, they are the sheet's own, which the story's pictures started from.
+  reader's look of 400 beside long changes, up to the 300 a [profile sent back](#profile) may write, or in the
+  reference experiment beside changes of 150 or a portrait prompt of the reader's own (`DESCRIPTION_CHARS` in
+  `local/picture.ts`). With every field at its limit the description, the look and the clothes still stay whole.
+  - The clothes are the story's, and the card has no button for them: they change in the [whole profile](#profile). For the story being played they are the ones the next pictures of the active branch start from, those the nearest picture up the branch dressed the person in or the reader wrote there, and the card names the branch (`wornAt`). Otherwise, and before any picture dressed them, they are the sheet's own, which the story's pictures started from.
+  - «📋 Профиль целиком» ("Whole profile", `view:profile:<storyId>:<index>:<tag>`) sends every field of the person in one block to copy, edit and send back ([the whole profile](#profile)).
   - «✏️ Изменить описание» ("Edit the description", `details-edit:<storyId>:<index>:<tag>`) makes the next text
     message the description, in any language and form, up to 1800 characters (`DESCRIPTION_CHARS`). Its lines are
     kept, since a table of measurements is lines, with the spaces at their ends and the blank lines past one cut.
@@ -249,6 +251,80 @@ draws nothing.
   - Under the photo are «🔄 Ещё вариант» ("Another version", the same prompt with a new seed), «✅ Оставить» ("Keep", `portrait-keep:<candidate>`) and the way back to the card. The bot holds the photo it showed in memory for 30 minutes, one per reader, under the id the keep button carries, and with a single timer that knows the id alone. A newer portrait takes its place, so an older button keeps nothing, and neither does one of the bot's own prompt pressed after the text it was drawn from changed. One drawn from the reader's own prompt read no text of the person, and is kept while the person is on the sheet. A kept portrait is let go once its write is committed; if that write is rolled back, the same button keeps it again.
   - Keeping writes exactly that photo, stripped like every picture, as a PNG beside the database: `<db>.portraits/<directory>/<random>.png`. The directory is named by an HMAC of the reader's ID under a key kept in the database; directories are 0700, files 0600. The sheet refers to the file (`portrait`: its name, the recipe it was drawn with as a scene keeps its picture's, its canvas included, the text it was drawn from as `look`, the details or the look, the clothes and style of its prompt, and the whole prompt as `prompt`; one drawn from the reader's own prompt has `ownPrompt: true` and an empty look, clothes and style, whatever it says of them being in `prompt`) and never carries the picture. One kept before portraits showed their whole prompt has no `prompt`. The new file is written before the write that refers to it, and a rollback of that write deletes it again. A file nobody refers to (the one replaced, a deleted story's, or one whose write a stopped process never made) is swept once a write commits, and at start. A reader without a directory has no portraits; a directory that cannot be read is logged as `portraits_unswept` with its errno in lower case (`enotdir`), never the message, which names the path.
   - Kept portraits enter frames only for the owner and explicitly admitted testers when the [reference experiment](setup.md#pictures) is enabled. Other readers' pictures do not use them. For those who do, the card of a person with a drawn portrait kept, or none yet, says that the frames are told to take only the face and figure from it and not to copy its clothes, which may still show through and can be changed in its prompt. Once the text it was drawn from changes, as the retelling of a new description changes it, the card says the portrait is of the earlier look, and nothing is redrawn. The experiment still uses that kept portrait until the reader replaces it. A sheet written again keeps the portrait, and the person with it. Frame recipes retain the portrait files they used, even after replacement, so variants and redraws use the same inputs. The keep confirmation tells experiment readers that a replaced portrait stays on disk while pictures drawn from it still need it for variants; other readers see the ordinary confirmation. Deleting the seed or the story takes its portraits out of the chat and off the disk once no remaining recipe or drawing uses them.
+
+<a id='profile'></a>
+
+### The whole profile
+
+The owner, 2026-09-28: «почему при нажатии персонажа нельзя добавить текущий профиль в сообщение маркдаун…». A tester
+still could not edit a person whole: the changes and the clothes had no edit at all, and every other field its own
+button and wait. The code is `local/profile.ts`.
+
+- **Show:** «📋 Профиль целиком» ("Whole profile", `view:profile:<storyId>:<index>:<tag>`) on the card sends one
+  message: its title, and the profile in one `pre` block to copy with a tap, in a simple Markdown shape. `# <name>`
+  comes first, then a `## <heading>` and the text of each field: the description, the lasting changes, the English
+  details for the portrait, the short look, the clothes, and the portrait's own prompt where the person has one ([a
+  portrait's own prompt](#portrait-prompt)). `# Конец профиля` ("End of profile") comes last. The headings are in the
+  reader's language. Each field is as the card has it: the description with its lines and the others on one line, the
+  clothes of the branch being played (`wornAt`), and details a reader wrote before 2026-09-27 as the description they
+  stood for, beside empty details.
+- **Fit:** the profile is one message or none, never clipped. Over the bot's 4000 characters it leaves out the prompt,
+  with a line saying that a portrait drawn from it brings it in its note, to edit there; then the description too,
+  with a line pointing to the card's own button; and at last it shows no block, only a line pointing to the card.
+  Every field at its limit (a name of 60, a description of 1800, changes of 300, details of 1500, a look of 400,
+  clothes of 300 and a prompt of 4000) leaves the other four, in 3241 characters in Russian, 3200 in English and 2879
+  to 2964 in Chinese, Korean and Japanese. With a name and a story title of 60 each, the six fields fit whole while
+  they hold 3496 characters together in Russian, 3520 in English and 3651 to 3698 in the other three. A message counts
+  a character outside the Basic Multilingual Plane twice, and a profile of those at every limit shows no block.
+- **Edit:** under the block is «✏️ Изменить профиль» ("Edit the profile",
+  `profile-edit:<storyId>:<index>:<tag>:<fields>:<hash>`, 44 bytes with a story id of seven characters and an index of
+  two). `<fields>` names the fields the message showed, as a hexadecimal mask, and `<hash>` is the first 8 hex digits
+  of a SHA-256 of the name, of where new clothes would go and of the text of those fields. It sets
+  `ui = {input:'profile', storyId, name, fields, hash}` and says what may change, each field's limit, where the clothes go
+  and how to leave. The next text message is the profile sent back, never a move, and any button or command, an
+  unknown one included, leaves without a change. The button of a profile that has changed since its message, as a
+  retelling or a new picture's clothes change it, shows the profile as it is now and waits for nothing. A sheet older
+  than the three layers, which the story's next picture writes anew without the changes, details and clothes written
+  into it, is only shown, with a line saying so, and so is a profile a field of which has a line that starts with `#`,
+  which could not come back as it went.
+- **Reading it back:** the text is taken whole or not at all. Blank lines around it aside, its first line must be `#`
+  and the person's name, apart from spaces and case, and its last the end line. Telegram splits a message over 4096
+  characters, and then one part lacks the end line and the other the name, so both are refused. Between them come the
+  fields the message showed, each once, under their headings in any of the five languages, case and a colon at the end
+  aside, with nothing above the first. A line that starts with `#` and a space is a heading, and one the bot does not
+  know is refused with the line quoted. The description and the prompt keep their lines, with the spaces at their ends
+  and the blank lines past one cut, as the card's wait for a description has them, and the other fields are one line
+  each. A refusal says what to fix, and the bot keeps waiting.
+- **Saving:** only a field whose text differs from the person's is written, exactly as it came, within its limit: the
+  description 1800 (`DESCRIPTION_CHARS`), the changes 300, the details 1500, the look 400 (`LOOK_CHARS`), the clothes
+  300 and the prompt 4000 (`PROMPT_CHARS`). Only the changes and the prompt may be emptied, and an emptied prompt
+  drops the reader's own, so that portraits are the bot's again. A field over its limit, or emptied where it may not
+  be, is refused and nothing is written. The name cannot be changed. The answer names the fields that changed, or says
+  nothing did, with the ways to the profile and to the card. A person gone from the sheet meanwhile, or a profile that
+  has changed since its message (the hash), ends the wait with nothing written; the second shows the profile as it is
+  now, since the fields sent back unchanged would otherwise write what it said then over what it says now.
+- **Retelling:** a new description or new changes are retold into the details and the look as a description written on
+  the card is, with the same status line and the card after it, unless the same message wrote new details: those are
+  the reader's, nothing retells over them, and a retelling still to come for the person goes (`lookPending`), so that
+  one already asked finds it gone and writes nothing. A new look in the same message is the reader's (`edited`), which
+  the retelling keeps. A new description or new changes without a new look replace a look the reader wrote before, as
+  on the card. New details or a new look alone retell nothing.
+- **Clothes:** edited clothes go into the scene at the head of the branch being played (its node's `clothes`), which
+  the next pictures of the branch start from (`wornAt`) until a frame dresses the person otherwise. A branch that
+  splits off at an earlier scene never walks through that one and keeps its own; one that goes on from that very
+  scene, forked there before or after, starts from the reader's where no picture of its own dressed the person since.
+  A frame of that scene being described meanwhile leaves the reader's clothes as they are and writes its own only for
+  the others (`describeFrame`). For a story not being played, or a branch with no scene yet, they are the sheet's own
+  `outfit`, which the story's pictures start from where no scene dressed the person otherwise. The wait says which of
+  the two it is.
+- **Rows:** `profile_edited` has the outcome (`ready`, or `skipped` when nothing changed), a boolean per field
+  (`profileDescription`, `profileChanges`, `profileDetails`, `profileLook`, `profileClothes`, `profilePrompt`),
+  whether the person is retold (`profileRetell`), how much of the profile the message showed (`profileFit`: `whole`,
+  `no_prompt` or `no_description`), where new clothes went (`profileClothesAt`: `scene` or `sheet`), and the
+  characters of the whole text (`profileCharacters`) and of each field it changed (`descriptionCharacters`,
+  `changesCharacters`, `detailsCharacters`, `lookCharacters`, `clothesCharacters`, `promptCharacters`).
+  `profile_refused` has the reason (`profileRefusal`: `gone`, `changed`, `no_text`, `incomplete`, `name`, `heading`,
+  `sections`, `outside`, `empty` or `too_long`) and the characters of the text. Neither has a word of the profile.
 
 <a id='portrait-prompt'></a>
 
@@ -487,3 +563,6 @@ fact, `waitMs` in the model queue or `imageQueueMs` on the card ([the bot log](g
   would not always hold ([Characters](#characters)).
 - `new-seed` also returns `entities: [{type:'pre', …}]` around the example, so it can be copied with a tap and needs
   no parse_mode escaping. If the backend only forwards `text` and `reply_markup`, the screen still works.
+- A person's whole profile is one message or none, never clipped: over 4000 characters it leaves out the prompt, then
+  the description, and a profile sent back over 4096 arrives in parts, each of which is refused
+  ([the whole profile](#profile)).
