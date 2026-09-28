@@ -49,7 +49,14 @@ A change to the narrator's rule is made in the catalog, not only in `local/promp
 
 Who does the work: Opus agents, paired with the local model, for the bulk; Fable and GPT-6 Astra only at the steps that
 decide something — a design, a review of core code, a verdict on pictures — because they cost much more.
-Opus agents are started at `max` reasoning effort, always; GPT-6 sessions at `high`.
+Opus agents are started at `medium` reasoning effort for routine work (searches over code and logs, review packets,
+running ready scripts) and at `high` for code and for anything that touches card money or private data; the main
+session stays at `max`; GPT-6 sessions at `high`. The owner set these levels on 2026-09-28 in place of `max` for every
+agent: on Artificial Analysis's index that day, Opus 5.5 at `max` cost 3.3 times as much per task as at `high` for 4
+more points (58 against 54), and `high` cost 1.4 times `medium` for 3 more. The agent types are `routine` and
+`important` in the owner's `~/.claude/agents/`. Sonnet 5.5 is not used: on that index it scored below Opus 5.5 at every
+effort, a cheaper Opus effort matched or beat its `max`, `xhigh` and `medium`, and the owner's plan has no separate
+limit for it.
 
 - `examples/memory-checks.ts`, `examples/scene-traps.ts`, `examples/*-probe.ts`, `examples/frozen/` — questions, answers, scenarios and frozen scenes. Describe an error in a check to the owner; do not fix it yourself.
 - `local/eval.ts`, `local/scene-judge.ts`, `local/scenarios.ts`, `local/pack-hf.ts`, `local/budget.ts`, the judge model, the limit values in `.env.eval` — the eval and the safety guard.

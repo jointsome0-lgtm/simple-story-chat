@@ -10,9 +10,10 @@ If the owner asks you to improve prompts or memory, follow [docs/improve-loop.md
 change, what may not, how one step is measured with [`npm run eval`](docs/eval.md), and when to stop. Past steps are
 in [docs/improve-log.md](docs/improve-log.md).
 
-When you delegate: Opus subagents run at `max` reasoning effort, GPT-6 (codex) sessions at `high`; Fable and GPT-6
-Astra, not Sol or Luna, are kept for the steps that decide something. The owner's rule, 2026-09-21, with Astra named
-on 2026-09-28; details in the same document.
+When you delegate: Opus subagents run at `medium` reasoning effort for routine work and at `high` for code and for
+anything that touches card money or private data, while the main session stays at `max`; GPT-6 (codex) sessions at
+`high`; Fable and GPT-6 Astra, not Sol or Luna, are kept for the steps that decide something. The owner's rules of
+2026-09-21 and 2026-09-28; details in the same document.
 
 ## What this project is
 
