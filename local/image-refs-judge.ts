@@ -660,9 +660,10 @@ export const readRecord = (dir: string) => readJson<JudgingRecord>(recordFile(di
 
 // A stand-in for codex that answers every session with a valid form chosen at random from the schema, every picture
 // clean, and the first attempt of the second session with no block at all, as a refusal would: no request leaves the
-// computer.
+// computer. A field that may be null is null or its other type by turns (the prompt arms probe's places).
 const sampleOf = (schema: Schema, random: () => number, name = ''): unknown => name === 'clean' ? 'yes'
   : schema.enum ? schema.enum[Math.floor(random() * schema.enum.length)]
+    : Array.isArray(schema.type) ? (random() < 0.5 ? null : sampleOf({ ...schema, type: schema.type.find(type => type !== 'null') }, random, name))
     : schema.type === 'integer' ? Math.floor(random() * 4)
       : schema.type === 'array' ? Array.from({ length: Math.floor(random() * 3) }, () => sampleOf(schema.items!, random))
         : schema.type === 'string' ? 'a stand-in'

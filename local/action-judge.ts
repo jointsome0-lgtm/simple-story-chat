@@ -58,9 +58,9 @@ export const modelsFor = (story: string) => isSharp(story) ? [JUDGE.model, JUDGE
 
 // The task texts, pinned by their hashes. None names an arm, shows a prompt of a picture it judges, or states a
 // hypothesis or a threshold.
-const ENDING = 'Рассуждай сколько нужно. В конце ответа дай ровно один блок ```json, который в точности подходит под schema.json из этой папки: только id из input.json и значения из перечислений схемы, без лишних полей и без пропусков.';
+export const ENDING = 'Рассуждай сколько нужно. В конце ответа дай ровно один блок ```json, который в точности подходит под schema.json из этой папки: только id из input.json и значения из перечислений схемы, без лишних полей и без пропусков.';
 // The checklist as sessions 2 and 3 are shown it.
-const SHOWN = 'checklist — список проверки момента: участники (id p…, у каждого handle и entry из листа или null) и пункты: отношения (r…: между двумя участниками; участника со своим телом, где object тот же, что subject; или участника с предметом сцены, где вместо object стоит thing), взгляды (g…), лица (f…), одежда (c…), отражения (m…: в отражении участника тот же человек в той же позе), масштаб (s…)';
+export const SHOWN = 'checklist — список проверки момента: участники (id p…, у каждого handle и entry из листа или null) и пункты: отношения (r…: между двумя участниками; участника со своим телом, где object тот же, что subject; или участника с предметом сцены, где вместо object стоит thing), взгляды (g…), лица (f…), одежда (c…), отражения (m…: в отражении участника тот же человек в той же позе), масштаб (s…)';
 export const TASKS: Record<Exclude<SessionKind, 'repeat'>, string> = {
   checklist: `Ты составляешь список проверки к сцене из интерактивной истории. Картинок ещё нет: работай только с текстом.
 
