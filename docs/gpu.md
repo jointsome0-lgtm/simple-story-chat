@@ -45,7 +45,7 @@ Vast bills every minute whether the cards draw or wait. The owner's rules since 
 
 1. Rent when the work for the cards is ready. Write and dry-run every experiment script before the rental. A dry run needs no card. It assembles the prompts and counts their tokens.
 2. Keep the cards busy while they run. Code, tests and commits that the cards do not need go to a subagent in its own worktree, so the agent feeding the cards never stops to do them.
-3. Watch the idle time. When the cards have stood idle for more than 10 minutes and no work for them is ready, tell the owner and offer to delete them.
+3. Rent for the work, not for the tester (the owner, 2026-09-28). The tester may use the bot while a card is on, but no card is rented or kept on to wait for the tester. When no work for the cards is ready, delete them and tell the owner.
 
 ## SSH access
 
