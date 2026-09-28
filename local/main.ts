@@ -131,6 +131,9 @@ try {
   const failure = error as Failure;
   log('startup_failed', failure.code || (/^[a-z_]+$/.test(failure.message) ? failure.message : undefined));
   process.exitCode = 1;
+  // A bot made before the failure may have started work of its own, as the pose sets' captioner (local/bot.ts): it ends
+  // before the store it writes to closes, and no process of it keeps this one from exiting to be started again.
+  await bot?.stop().catch(() => {});
 } finally {
   clearInterval(gpuTimer);
   await background?.close();
