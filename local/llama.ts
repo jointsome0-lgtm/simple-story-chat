@@ -15,7 +15,8 @@ type Models = { data?: { id?: unknown }[] | null };
 type Props = { default_generation_settings?: { n_ctx?: unknown } | null; total_slots?: unknown };
 type StreamEvent = {
   error?: unknown; model?: unknown; choices?: unknown;
-  usage?: { prompt_tokens?: unknown; completion_tokens?: unknown; prompt_tokens_details?: { cached_tokens?: unknown } | null };
+  usage?: { prompt_tokens?: unknown; completion_tokens?: unknown; prompt_tokens_details?: { cached_tokens?: unknown } | null;
+    completion_tokens_details?: { reasoning_tokens?: unknown } | null };
   timings?: unknown;
 };
 // llama-server's field for each of our timing names. Durations come as fractional milliseconds.
@@ -108,7 +109,8 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
   const mistral = hosted && new URL(baseUrl).hostname === 'api.mistral.ai';
   // The bot's own server runs without thinking. Left on, a free reasoning model spends the whole output limit
   // of a memory request on reasoning and answers nothing. This is OpenRouter's switch for every model it hosts.
-  // A compaction under the thinking switch asks for it, with a limit that has room for it (local/memory.ts).
+  // A compaction under the thinking switch asks for it, with a limit that has room for it (local/memory.ts), and so
+  // does the eval's recall under RECALL_THINKING, which may also cap the reasoning (local/memory-probe.ts).
   const openrouter = hosted && new URL(baseUrl).hostname === 'openrouter.ai';
   const headers = { 'Content-Type': 'application/json',
     ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}) };
@@ -120,7 +122,8 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
     messages: messagesFor(request),
     [openai ? 'max_completion_tokens' : 'max_tokens']: request.maxOutputTokens, stream: true,
     ...(mistral ? {} : { stream_options: { include_usage: true } }),
-    ...(openrouter ? { reasoning: { enabled: request.thinking === true } } : {}),
+    ...(openrouter ? { reasoning: request.thinking === true && request.thinkingTokens ? { max_tokens: request.thinkingTokens }
+      : { enabled: request.thinking === true } } : {}),
     ...(openai ? {} : { temperature: request.purpose === 'memory' ? 0.2 : config.temperature ?? 0.8 }),
     ...(request.outputSchema ? { response_format: { type: 'json_schema', json_schema: { name: 'reply', strict: true,
       schema: openai ? withoutLengths(request.outputSchema) : request.outputSchema } },
@@ -256,6 +259,8 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
         let outputTokens: number | null = null;
         let cachedInputTokens: number | null = null;
         let reasoningCharacters = 0;
+        // How many of the output tokens a hosted API counted as reasoning, where it says (OpenRouter does).
+        let reasoningTokens: number | null = null;
         let timings: Timings | undefined;
         let measured = counted;
         for await (const data of events(response.body, streamLimit(request))) {
@@ -272,6 +277,7 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
             else if (reported !== null && reported !== inputTokens) throw new ModelError('unexpected_context');
             outputTokens = count(event.usage.completion_tokens);
             cachedInputTokens = count(event.usage.prompt_tokens_details?.cached_tokens);
+            if (hosted) reasoningTokens = count(event.usage.completion_tokens_details?.reasoning_tokens);
           }
           timings = timingsOf(event.timings) ?? timings;
           if (event.choices.length > 1) throw new ModelError('invalid_stream');
@@ -305,7 +311,7 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
         if (!measured) throw new ModelError('usage_unavailable');
         if (inputTokens > limit) throw new ModelError('context_limit');
         return { text, finishReason, usage: { inputTokens, outputTokens, cachedInputTokens, reasoningCharacters,
-          totalTokens: outputTokens === null ? null : inputTokens + outputTokens },
+          ...(reasoningTokens === null ? {} : { reasoningTokens }), totalTokens: outputTokens === null ? null : inputTokens + outputTokens },
           // The slot a pool named goes with the timings: which cache the request met is half of what `cacheTokens` says.
           ...(timings ? { timings: !hosted && slot !== undefined ? { ...timings, slot } : timings } : {}) };
       });

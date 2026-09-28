@@ -19,6 +19,16 @@ through `story:probe`, continuing from the last saved scene on `rate_limited`; t
 [improve-loop.md](improve-loop.md#frozen-boundaries) allows. `MEMORY_THINKING=true` in the command's environment lets
 the replay's compactions think, and nothing else ([model-providers.md](model-providers.md#memory-thinking)).
 
+<a id='reader'></a>
+
+Two more switches in the environment measure the reader apart from its memory. `RECALL_THINKING=true` lets the recall
+think, and `RECALL_THINKING=<n>` also asks the provider to stop the reasoning at n tokens, which only OpenRouter is
+sent, as `reasoning.max_tokens`; either way the recall's output limit grows from 8192 to 16384. With `ceiling` the
+reader then thinks over the whole story. `RECALL_FROM=<probe directory>[,<probe directory>]` names finished replays of
+the same frozen scenes and model: each probe takes the one of its scenario, starts from the final state it saved,
+memories and all, and asks only the recall, in a directory of its own whose report names the one it read
+(`recallFrom`). Nothing is compacted again, so two readers are compared over the same memories.
+
 With `--judge openai:gpt-5.4`, after the memory questions each model writes one scene for each trap move of
 `examples/scene-traps.ts`, and the judge answers fixed yes/no questions (`local/scene-judge.ts`). The result is
 `sceneScore` next to `score`. `npm run eval -- judge --judge <model> --resume <probe directory> --mode plain` judges

@@ -29,6 +29,8 @@ export type ModeReport = {
   // `stated` is set for a numeric answer of two digits or more: whether the number stands in the memory message or in
   // the scenes kept as text. A sum stated nowhere had to be added at recall; a stated one that failed is a reading miss.
   answers?: { key: string; expected: string; actual: unknown; pass: boolean; stated?: 'memory' | 'scenes' | 'none' }[]; recallUsage?: Usage | null;
+  // RECALL_THINKING as the recall had it: `true`, or the cap on its reasoning.
+  recallThinking?: true | number;
   // With --traps: one scene per continuity trap, each written from the same final state and never committed.
   // local/scene-judge.ts adds the verdicts.
   traps?: TrapScene[];
@@ -38,8 +40,9 @@ export type ModeReport = {
 // `then`: the scene written over the trap's scene, or the code of the failure that left it unwritten.
 type TrapScene = { key: string; text: string; truncated: boolean; then?: { text: string; truncated: boolean } | { error: string } };
 // The report written by this probe; a resumed run trusts what an earlier run wrote.
+// `recallFrom`: the replay whose saved memories this run's recall read again (RECALL_FROM); such a run compacts nothing.
 export type ReplayReport = {
-  scenario: string; sourceHash: string; model: string; startedAt: string; scope: string;
+  scenario: string; sourceHash: string; model: string; startedAt: string; scope: string; recallFrom?: string;
   modes: { plain?: ModeReport; sgr?: ModeReport; full?: ModeReport }; completedAt?: string;
 };
 // Evidence written by story-probe.ts; only its scenario, seed and scene inputs are checked.
@@ -51,6 +54,14 @@ type Failure = { code?: string };
 
 process.umask(0o077);
 const RECALL_OUTPUT_TOKENS = 8192;
+// RECALL_THINKING lets the recall think, so that the reader is measured apart from its memory: `true`, or the most
+// tokens it may reason where the provider takes a limit (OpenRouter's `reasoning.max_tokens`). The reasoning counts
+// against the output limit, which grows to 16384, the limit the thinking compactions of 2026-09-27 had. Off by
+// default, as the scenes are. No SIMPLE_CHAT_ prefix, as MEMORY_THINKING has none: the eval passes none to its probes.
+const RECALL_THINKING_TOKENS = 8192;
+const thinkingSetting = process.env.RECALL_THINKING || 'false';
+if (!/^(true|false|[1-9]\d{0,3})$/.test(thinkingSetting) || Number(thinkingSetting) > RECALL_THINKING_TOKENS) throw new Error('Invalid RECALL_THINKING');
+const recallThinking = thinkingSetting === 'false' ? undefined : thinkingSetting === 'true' ? true : Number(thinkingSetting);
 const { values } = parseArgs({ options: { source: { type: 'string' }, resume: { type: 'string' },
   minutes: { type: 'string', default: '15' }, direct: { type: 'boolean', default: false }, mode: { type: 'string' },
   traps: { type: 'boolean', default: false }, pack: { type: 'string' }, lab: { type: 'string' } } });
@@ -93,6 +104,17 @@ const report: ReplayReport = values.resume ? JSON.parse(readFileSync(join(direct
   : { scenario, sourceHash, model: config.model, startedAt: new Date().toISOString(),
     scope: 'Paired replay of identical frozen synthetic scenes, three compactions, four retained scenes; not a 44K quality test.', modes: {} };
 if (report.sourceHash !== sourceHash || report.model !== config.model || report.scenario !== scenario) throw new Error('Resume mismatch');
+// RECALL_FROM names finished replays of the same frozen scenes by their probe directories, comma-separated. The one of
+// this scenario gives each mode the final state it saved, memories and all, and only the recall is asked again, in a
+// directory of its own: two readers compared over the same memories, with nothing compacted again.
+const earlier = process.env.RECALL_FROM?.split(',').map(path => resolve(path))
+  .map(path => ({ path, report: JSON.parse(readFileSync(join(path, 'report.json'), 'utf8')) as ReplayReport }))
+  .filter(run => run.report.scenario === scenario);
+if (earlier && (earlier.length !== 1 || values.resume || values.traps || lab || earlier[0].report.sourceHash !== sourceHash
+  || earlier[0].report.model !== config.model || modes.some(mode => !earlier[0].report.modes[mode]?.completedAt))) {
+  throw new Error('RECALL_FROM names one finished replay of this scenario, model and mode, for a new run without --traps or --lab');
+}
+if (earlier) report.recallFrom = earlier[0].path;
 const deadline = AbortSignal.timeout(minutes * 60000);
 // Each line has its time, so a compaction here can be matched with the bot log and the GPU snapshots.
 const progress = (data: object) => console.log(JSON.stringify({ at: new Date().toISOString(), ...data }));
@@ -132,11 +154,12 @@ const provider = { async generate(request: ModelRequest) {
   throw Object.assign(new Error(), { code: 'retry_limit' });
 } };
 const store = new Store(':memory:');
-progress({ event: 'started', scenario, directory, model: config.model });
+progress({ event: 'started', scenario, directory, model: config.model, ...(recallThinking ? { recallThinking } : {}), ...(earlier ? { reread: true } : {}) });
 try {
   await (direct ? direct.check?.({ signal: deadline }) : client.check({ signal: deadline }));
   for (const memoryMode of modes) {
-    current = report.modes[memoryMode] ??= { preemptions: 0, compactions: [], through: 0 };
+    const saved = earlier?.[0].report.modes[memoryMode];
+    current = report.modes[memoryMode] ??= { preemptions: 0, compactions: [], through: saved?.through ?? 0, ...(saved ? { state: saved.state } : {}) };
     if (current.completedAt) continue;
     delete current.error;
     store.mutate('synthetic', state => {
@@ -262,9 +285,11 @@ try {
     // The answer is a short JSON, but a model that reasons in text before its structured answer needs the room for
     // that text: through the Claude CLI the cap is the run's whole output, and a run that exceeds it ends as an error
     // rather than a truncation. At 1024 that was every Haiku recall and every CLI reader of `hospital` (log, 09-22).
-    const request = makeRequest(store.read('synthetic'), job, RECALL_OUTPUT_TOKENS);
+    const request = makeRequest(store.read('synthetic'), job, RECALL_OUTPUT_TOKENS + (recallThinking ? RECALL_THINKING_TOKENS : 0));
     request.system = 'Ответь на проверочные вопросы только по переданной истории и её памяти. Соблюдай заданный формат, не достраивай неизвестное.';
     request.purpose = 'memory';
+    if (recallThinking) request.thinking = true;
+    if (typeof recallThinking === 'number') request.thinkingTokens = recallThinking;
     request.outputSchema = { type: 'object', required: ['answers'], additionalProperties: false, properties: { answers: {
       type: 'array', minItems: questions.length, maxItems: questions.length, items: { type: 'object', required: ['key', 'value'], additionalProperties: false,
         properties: { key: { type: 'string', enum: questions.map(q => q[0]) }, value: { type: 'string' } } } } } };
@@ -288,6 +313,7 @@ try {
       return { key, expected, actual, pass: typeof actual === 'string' && actual.trim() === expected, ...stated };
     });
     current.recallUsage = result.usage;
+    if (recallThinking) current.recallThinking = recallThinking;
     store.mutate('synthetic', state => { state.job = null; });
     await writeTraps(undefined);
     current.completedAt = new Date().toISOString();

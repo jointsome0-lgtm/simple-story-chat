@@ -9,7 +9,7 @@ export type Fact = { kind: string; at: string; text: string; source: string[] };
 /** Token counts reported by a provider; null marks a count it did not report. */
 export type Usage = {
   inputTokens: number | null; outputTokens: number | null; totalTokens: number | null;
-  cachedInputTokens?: number | null; reasoningCharacters?: number | null;
+  cachedInputTokens?: number | null; reasoningCharacters?: number | null; reasoningTokens?: number | null;
 };
 export type RequestStamp = { model: string; memory: string | null; provider: string; inputBytes: number; systemHash: string };
 export type MemoryVersion = {
