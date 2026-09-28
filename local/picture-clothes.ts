@@ -3,7 +3,8 @@
 // одежде, а не в бодди из референса»). Two things change, both at the call, never in local/illustrate.ts, whose request
 // builders the action experiment pins by hash (local/action-text.ts `textPins`):
 //   - the frame's rule for `clothes` takes the words of that experiment's change 8 (local/action-text.ts), which name
-//     bare skin outright, in place of its own sentence; the schema does not change;
+//     bare skin outright, in place of its own sentence, and one sentence more for a person with nothing on; the
+//     schema does not change;
 //   - a frame with reference pictures says what each referenced person wears before it says what the pictures are for
 //     (local/picture-references.ts `referencePrompt`), so that the image model reads the scene's clothes before the
 //     portrait in its dark grey suit, where today they come only in the person's clause after the look.
@@ -14,14 +15,20 @@ import type { ModelRequest } from './model.ts';
 // The bot's sentence for `clothes` (local/illustrate.ts), and change 8's for it, word for word.
 const OWN = 'clothes — во что он одет В ЭТОТ МОМЕНТ, по-английски, фразой, которая начинается с wearing.';
 const BARE = `${OWN} Открытое тело называй прямо: если торс, ноги или ступни ничем не закрыты, так и напиши ("wearing only rolled-up linen trousers, bare-chested and barefoot"). Не открывай того, что сцена не открывает.`;
+// The tester, 2026-09-28: a person the story leaves naked is drawn in the clothes of their profile. An empty `clothes`
+// gives the person the outfit they wore before this scene: in this picture (local/illustrate.ts `assemblePrompt`, and
+// `clothesStatement` below), and in the next ones, since the frame then records no clothes for them (local/picture.ts
+// `clothesOf`) and the next frame starts from the last it did (`wornAt`). So nothing on is said, never left out.
+const NOTHING = 'Если на человеке совсем ничего нет, так и напиши: wearing nothing. Не оставляй clothes пустым: пустое поле вернёт человеку ту одежду, что была на нём до этой сцены.';
+const RULE = `${BARE} ${NOTHING}`;
 
-// The frame's request with change 8's sentence in place of the bot's, or after the instruction should the bot's ever not
-// stand in it exactly once.
+// The frame's request with change 8's sentence and the one on nothing on in place of the bot's, or after the
+// instruction should the bot's ever not stand in it exactly once.
 export function clothesRequest(request: ModelRequest): ModelRequest {
   const last = request.messages.at(-1)!;
   const at = last.content.indexOf(OWN);
-  const content = at >= 0 && last.content.indexOf(OWN, at + 1) < 0 ? last.content.slice(0, at) + BARE + last.content.slice(at + OWN.length)
-    : `${last.content}\n- ${BARE}`;
+  const content = at >= 0 && last.content.indexOf(OWN, at + 1) < 0 ? last.content.slice(0, at) + RULE + last.content.slice(at + OWN.length)
+    : `${last.content}\n- ${RULE}`;
   return { ...request, messages: [...request.messages.slice(0, -1), { ...last, content }] };
 }
 

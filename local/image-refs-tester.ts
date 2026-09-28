@@ -1,6 +1,7 @@
 // The tester stand, the fifth refs stand (docs/action-experiment.md#tester-stand): the tester's two complaints about
 // pictures of 2026-09-28 as the clean stories of examples/tester-stand.ts, drawn on the next picture card with the
-// frame changes of 1a84d3d on and off. build-texts.ts in ~/simple-story-chat-runs/2026-09-28/tester-stand writes the
+// frame changes of 1a84d3d on and off, the clothes rule with its sentence on nothing on, and the clothes stories with
+// the reference on and off. build-texts.ts in ~/simple-story-chat-runs/2026-09-28/tester-stand writes the
 // stand's texts.json and judge-questions.json from the frozen frames beside it; this file pins the frames and the
 // texts, and local/image-refs-judge.ts the question file, by which it judges the pictures after the card.
 //   estimate  the cells, the minutes at the refs stands' times and at the admission prices, the picture card's dollars
@@ -75,7 +76,7 @@ export function excerptOf(one: TesterCase) {
 // ---- The frames and their prompts ----
 
 // How a frame is asked: as the bot asks it today, with each person's place in a POV frame (SIMPLE_CHAT_POV_PLACE_USERS),
-// or with change 8's rule for the clothes (SIMPLE_CHAT_CLOTHES_USERS).
+// or with change 8's rule for the clothes and the sentence on nothing on (SIMPLE_CHAT_CLOTHES_USERS).
 export type Variant = 'today' | 'place' | 'clothes';
 export const VARIANTS: Record<TesterCase['family'], Variant[]> = { pov: ['today', 'place'], clothes: ['today', 'clothes'] };
 const viewerIn = (sheet: Character[]) => sheet.find(one => one.name === VIEWER.name)!;
@@ -89,12 +90,13 @@ export function caseRequest(one: TesterCase, variant: Variant): ModelRequest {
 
 // The arms. POV: R, today's frame with every person's front; P, the frame with places and every front; PN, the same
 // frame without the front of anybody only partly in view (SIMPLE_CHAT_POV_PARTIAL_USERS). Clothes: R, today's frame
-// with every front; C, change 8's rule and what each referenced person wears said before the reference wording; CF,
+// with every front; C, the clothes rule and what each referenced person wears said before the reference wording; CF,
 // C's words with the top 720x400 of each front, as the refs backlog's FC takes it: the head, the shoulders and some of
-// the suit, not the face alone.
-export type Arm = 'R' | 'P' | 'PN' | 'C' | 'CF';
-export const ARMS: Record<TesterCase['family'], Arm[]> = { pov: ['R', 'P', 'PN'], clothes: ['R', 'C', 'CF'] };
-export const variantOf = (family: TesterCase['family'], arm: Arm): Variant => (arm === 'R' ? 'today' : family === 'pov' ? 'place' : 'clothes');
+// the suit, not the face alone; RW and CW, R's and C's frames with no reference at all, as the bot draws a frame that
+// binds nobody: the reference off, against the suit its portrait wears.
+export type Arm = 'R' | 'P' | 'PN' | 'C' | 'CF' | 'RW' | 'CW';
+export const ARMS: Record<TesterCase['family'], Arm[]> = { pov: ['R', 'P', 'PN'], clothes: ['R', 'C', 'CF', 'RW', 'CW'] };
+export const variantOf = (family: TesterCase['family'], arm: Arm): Variant => (arm === 'R' || arm === 'RW' ? 'today' : family === 'pov' ? 'place' : 'clothes');
 // `text` with `what` replaced, where it stands exactly once.
 const once = (text: string, what: string, by: string) => {
   if (text.split(what).length !== 2) throw new Error('the reference wording to replace is not there exactly once');
@@ -110,15 +112,16 @@ export const faceWording = (prompt: string) => once(once(once(prompt, 'identity 
 
 // A frame's prompt for an arm from the model's answer to its variant's request, as the bot assembles it: a POV answer
 // turned into a description by `seenBy`, the people of the sheet with a front bound in the order of the frame's people
-// (local/picture-references.ts `frameReferences`), PN's without those only partly in view, and the reader style VN. A
-// frame that binds nobody is the bot's plain prompt. `bound`: whose front each picture slot takes.
+// (local/picture-references.ts `frameReferences`), PN's without those only partly in view, RW's and CW's with nobody,
+// and the reader style VN. A frame that binds nobody is the bot's plain prompt. `bound`: whose front each picture slot
+// takes.
 export function framePrompt(one: TesterCase, arm: Arm, answer: Record<string, unknown>): { prompt: string; bound: Who[]; partly: number } {
   const sheet = sheetOf(one), names = sheet.map(person => person.name);
   const description = one.family === 'pov' ? seenBy(answer as unknown as Description, viewerIn(sheet), sheet, arm !== 'R').description
     : answer as unknown as Description;
   const people = description.people ?? [], partly = people.filter(partlyInView).length;
   const bound: Who[] = [];
-  for (const person of arm === 'PN' ? people.filter(other => !partlyInView(other)) : people) {
+  for (const person of arm === 'RW' || arm === 'CW' ? [] : arm === 'PN' ? people.filter(other => !partlyInView(other)) : people) {
     const name = matchSheet(person.who ?? '', names), who = WHO.find(letter => PEOPLE[letter].name === name);
     if (who && !bound.includes(who)) bound.push(who);
   }
@@ -133,30 +136,33 @@ export function framePrompt(one: TesterCase, arm: Arm, answer: Record<string, un
 // The frames each arm is drawn from: ~/simple-story-chat-runs/2026-09-28/tester-stand/frames.json as write-frames.mts
 // froze it, three answers of the hosted Gemma 4 31B to each story's request of each variant; and texts.json, which
 // build-texts.ts beside it wrote from them into the stand's directory. Both byte for byte.
-export const FRAMES_SHA256 = '707ce6a0e03c611c58c5c1371f5a12ca196bda5eaedd18c63f9165afb051f82b';
-export const TEXTS_SHA256_5 = '10e76a41cde5cd08e18072c184bb0bc3c9f2dbafc5f325e56954e0dda87a55ff';
+export const FRAMES_SHA256 = '069ebf232811961925ed7480ce7ab941582da6644cde0b6cfef880a8eb08bc74';
+export const TEXTS_SHA256_5 = 'fe5be57310bab3dfb0c5034139952e272bd18a13ed801bcb74004b9b5e95715f';
 export const SEEDS_5 = [71, 73, 79, 83];
 export const ANSWERS = [1, 2, 3];
 // Whose front each arm's frames take, in slot order: the people of the frozen frames who have one, in the order of the
 // frame's people, the same in all three answers of a story. PN takes nobody's where each of them is only partly in
-// view; in V-face nobody is, so PN is P there and is not drawn again.
+// view; in V-face nobody is, so PN is P there and is not drawn again. RW and CW take nobody's.
 export const BOUND: Record<CaseId, Partial<Record<Arm, Who[]>>> = {
   'V-squeeze': { R: ['L', 'T'], P: ['L', 'T'], PN: [] }, 'V-walk': { R: ['H'], P: ['H'], PN: [] }, 'V-behind': { R: ['B'], P: ['B'], PN: [] },
-  'V-face': { R: ['H'], P: ['H'] }, 'C-bare': { R: ['B', 'T'], C: ['B', 'T'], CF: ['B', 'T'] }, 'C-outfit': { R: ['H'], C: ['H'], CF: ['H'] },
-  'C-swim': { R: ['L'], C: ['L'], CF: ['L'] } };
+  'V-face': { R: ['H'], P: ['H'] }, 'C-bare': { R: ['B', 'T'], C: ['B', 'T'], CF: ['B', 'T'], RW: [], CW: [] },
+  'C-outfit': { R: ['H'], C: ['H'], CF: ['H'], RW: [], CW: [] }, 'C-swim': { R: ['L'], C: ['L'], CF: ['L'], RW: [], CW: [] },
+  'C-towel': { R: ['T'], C: ['T'], CF: ['T'], RW: [], CW: [] } };
 export const armsOf = (id: CaseId) => ARMS[caseOf(id).family].filter(arm => BOUND[id][arm] !== undefined);
 export const cellKey5 = (id: CaseId, arm: Arm, answer: number, seed: number) => frameKey(`${arm}-${id}-a${answer}`, undefined, seed);
 // A cell of the stand by its key: its story, arm, answer and seed.
 export type Cell5 = { key: string; case: CaseId; arm: Arm; answer: number; seed: number };
 // Seed by seed, so that a card that ends early leaves whole comparisons: every story, answer and arm at the first seed,
 // then at the next. Every picture a cell takes is a front another stand drew, H's and L's the first stand's, B's and
-// T's the third's, at 352x640, or its top 720x400 in CF.
+// T's the third's, at 352x640, or its top 720x400 in CF. A frame that takes none is drawn on the bot's plain graph
+// (gpu/image-workflow-qwen.json), as the bot draws a frame that binds nobody (local/picture.ts `drawFrame`), and the
+// rest on the action graph, which is the bot's with its references.
 function planOf5(): { plan: Planned[]; cells: Cell5[] } {
   const plan: Planned[] = [], cells: Cell5[] = [];
   for (const seed of SEEDS_5) for (const one of CASES) for (const answer of ANSWERS) for (const arm of armsOf(one.id)) {
-    const key = cellKey5(one.id, arm, answer, seed);
-    plan.push(cellOf({ key, id: `${arm}-${one.id}-a${answer}`, arm, kind: 'frame', seed, graph: 'action', canvas: FRAME_CANVAS, cfg: 1, negative: 'none',
-      refs: BOUND[one.id][arm]!.map(who => ({ from: FRONTS[who], how: arm === 'CF' ? 'crop' : 's352' })) }));
+    const key = cellKey5(one.id, arm, answer, seed), refs = BOUND[one.id][arm]!.map(who => ({ from: FRONTS[who], how: arm === 'CF' ? 'crop' as const : 's352' as const }));
+    plan.push(cellOf({ key, id: `${arm}-${one.id}-a${answer}`, arm, kind: 'frame', seed, graph: refs.length ? 'action' : 'front', canvas: FRAME_CANVAS, cfg: 1,
+      negative: 'none', refs }));
     cells.push({ key, case: one.id, arm, answer, seed });
   }
   return { plan, cells };
@@ -169,10 +175,11 @@ export const CELLS_5 = new Map(PLAN_5.cells.map(one => [one.key, one]));
 
 const CASE_WORDS: Record<CaseId, string> = { 'V-squeeze': 'скамейка на пирсе, двое прижались с боков', 'V-walk': 'набережная, Мара у левого плеча',
   'V-behind': 'кафе, Бруно наклонился сзади через правое плечо', 'V-face': 'ужин, Мара напротив (контроль)', 'C-bare': 'мостки, Бруно после купания, Тесса одета',
-  'C-outfit': 'утро у домика, Мара в красном свитере', 'C-swim': 'пляж, Лина в жёлтом купальнике' };
+  'C-outfit': 'утро у домика, Мара в красном свитере', 'C-swim': 'пляж, Лина в жёлтом купальнике', 'C-towel': 'крыльцо бани, Тесса в полотенце' };
 const ARM_WORDS: Record<Arm, string> = { R: 'R: кадр бота сегодня, фронты 352x640', P: 'P: места в кадре (SIMPLE_CHAT_POV_PLACE_USERS), все фронты',
   PN: 'PN: места в кадре и без фронта тех, кто виден частью (SIMPLE_CHAT_POV_PARTIAL_USERS)', C: 'C: правило одежды и одежда каждого перед референсами (SIMPLE_CHAT_CLOTHES_USERS)',
-  CF: 'CF: слова C, верх фронта 720x400 (голова, плечи и часть костюма)' };
+  CF: 'CF: слова C, верх фронта 720x400 (голова, плечи и часть костюма)', RW: 'RW: кадр R без референсов, на обычном графе бота',
+  CW: 'CW: кадр C без референсов, на обычном графе бота' };
 const SECTIONS_5: Section[] = CASES.map(one => ({ title: `${one.id}: ${CASE_WORDS[one.id]}`,
   note: `${armsOf(one.id).map(arm => ARM_WORDS[arm]).join('. ')}. Три ответа модели кадра на каждый вариант запроса (a1, a2, a3).`
     + (one.id === 'V-face' ? ' PN здесь совпадает с P: никто не виден частью.' : ''),
@@ -180,13 +187,14 @@ const SECTIONS_5: Section[] = CASES.map(one => ({ title: `${one.id}: ${CASE_WORD
   rows: SEEDS_5.map(seed => ({ label: `сид ${seed}`, keys: armsOf(one.id).flatMap(arm => ANSWERS.map(answer => cellKey5(one.id, arm, answer, seed))) })) }));
 export const STAND_5: Stand = { plan: PLANNED_5, title: 'Стенд тестера: POV и одежда', sections: SECTIONS_5, date: '2026-09-28', others: PLANNED_3, pinEach: true, cards: true,
   intro: 'Две жалобы тестера от 2026-09-28 на синтетических историях examples/tester-stand.ts, кадры написаны заранее хостинговой Gemma 4 31B. Рисуется по одному '
-    + 'заданию и без front, так что кадр тестера ждёт не дольше одной ячейки. Путь бота: cu130, Triton, внимание кухни, 25 шагов euler, CFG 1. Люди: H и L первого '
-    + 'стенда, B и T третьего; Артём, глазами которого видны POV-кадры, без портрета. Сиды 71, 73, 79 и 83.' };
+    + 'заданию и без front, так что кадр тестера ждёт не дольше одной ячейки. Путь бота: cu130, Triton, внимание кухни, 25 шагов euler, CFG 1; кадр без '
+    + 'референсов на обычном графе бота. Люди: H и L первого стенда, B и T третьего; Артём, глазами которого видны POV-кадры, без портрета. Сиды 71, 73, 79 и 83.' };
 
 // ---- The prices ----
 
 // A cell's warm time: the medians of the refs stands' cells on the RTX 5090s of 2026-09-27 and 2026-09-28, the slower
-// card's where both drew a group: a frame from words 5028 ms, with one front at 352x640 5324 (27 cells), with two 5844,
+// card's where both drew a group: a frame from words 5028 ms, on the plain graph too, where a front of about as many
+// pixels took 5.0 s on the second stand's card; with one front at 352x640 5324 (27 cells), with two 5844,
 // with two faces 7167; one face, drawn three times on the faster card at 5031, is priced at 6000. The first job's compile
 // and each group's first job come on top, as local/image-refs-backlog.ts prices them.
 const TONIGHT_MS_5: Partial<Record<Group, number>> = { words: 5028, ref1: 5324, ref2: 5844, crop: 6000, crop2: 7167 };
@@ -232,15 +240,16 @@ export async function drawTester(options: TesterOptions) {
 
 // ---- The dry run ----
 
-type Frozen = { case: CaseId; variant: Variant; answer: number; value: Record<string, unknown> };
+type Frozen = { case: CaseId; variant: Variant; answer: number; request: string; value: Record<string, unknown> };
 const QUESTIONS_FILE = 'judge-questions.json';
 // The runs of the stand and of the two it takes fronts from, under the runs' root as the question file names them.
 const RUN_1 = join('2026-09-27', 'refs-stand'), RUN_3 = join('2026-09-28', 'refs-stand-3'), RUN_5 = join('2026-09-28', 'refs-stand-5');
 
 // The whole stand without a card, in `dir`, from the stand's directory `stand` (its texts.json and judge-questions.json),
 // the frozen frames at `framesFile` and the runs of the first and third stands, which it only reads. First the plan,
-// the real texts' pin and tokens, each prompt as the bot assembles it for its arm from the frozen frames, every graph
-// built from them and read back, and the fronts the stand takes, held by those runs as they recorded them. Then, laid
+// the real texts' pin and tokens, each frozen answer to the request the stand asks today, each prompt as the bot
+// assembles it for its arm from the frozen frames, every graph built from them and read back, and the fronts the stand
+// takes, held by those runs as they recorded them. Then, laid
 // out as the runs' root is, the four fronts drawn by local/fake-comfy.ts started as the bot's card in runs of their own
 // and the stand from marked copies of the texts: the page before the card; texts other than the pinned, a card record
 // missing, a --first that is not there or holds no fronts, a --third drawn from other weights, a front changed on disk
@@ -296,9 +305,10 @@ export async function dryRunTester(dir: string, stand: string, framesFile: strin
     const order = SEEDS_5.flatMap(seed => CASES.flatMap(one => ANSWERS.flatMap(answer => armsOf(one.id).map(arm => cellKey5(one.id, arm, answer, seed)))));
     const bound = PLANNED_5.every(one => same(one.refs, BOUND[meta(one).case][meta(one).arm]!.map(who => ({ from: FRONTS[who], how: meta(one).arm === 'CF' ? 'crop' : 's352' })))
       && one.refs.every(ref => BY_KEY.has(ref.from) || byKey3.has(ref.from)) && one.canvas.width === FRAME_CANVAS.width && one.canvas.height === FRAME_CANVAS.height);
-    expect(PLANNED_5.length === 240 && new Set(PLANNED_5.map(one => one.key)).size === 240 && same(PLANNED_5.map(one => one.key), order) && bound
-      && same(estimate.arms, { R: 84, P: 48, PN: 36, C: 36, CF: 36 }) && !PLANNED_5.some(one => BY_KEY.has(one.key) || byKey3.has(one.key)),
-    '240 cells seed by seed, each taking the fronts its frames bind from the first and third stands');
+    const graphs = PLANNED_5.every(one => one.graph === (one.refs.length ? 'action' : 'front'));
+    expect(PLANNED_5.length === 372 && new Set(PLANNED_5.map(one => one.key)).size === 372 && same(PLANNED_5.map(one => one.key), order) && bound && graphs
+      && same(estimate.arms, { R: 96, P: 48, PN: 36, C: 48, CF: 48, RW: 48, CW: 48 }) && !PLANNED_5.some(one => BY_KEY.has(one.key) || byKey3.has(one.key)),
+    '372 cells seed by seed, each taking the fronts its frames bind from the first and third stands, and those that take none on the plain graph');
 
     const real = inputsOf(textsFile, pinned, PLANNED_5), tokens = tokenReport(real.texts, tokenizers, PLANNED_5, PLANNED_3);
     say('1 the real texts (sha256 pinned): tokens, the prompt as the encoder takes it with its references, the canvas and each reference at the encoder:');
@@ -318,6 +328,8 @@ export async function dryRunTester(dir: string, stand: string, framesFile: strin
       return found.length === 1 ? found[0].value : undefined;
     };
     const textOf = (one: Planned) => real.texts.cells.get(one.key)!.prompt;
+    // Each frozen answer is to the request the stand asks of its story and variant today, the clothes rule's included.
+    const asked = frozen.every(one => one.request === sha256(JSON.stringify(caseRequest(caseOf(one.case), one.variant))));
     const remade = PLANNED_5.filter(one => {
       const cell = meta(one), story = caseOf(cell.case), answer = answerOf(cell.case, variantOf(story.family, cell.arm), cell.answer);
       const made = answer && framePrompt(story, cell.arm, answer);
@@ -336,12 +348,12 @@ export async function dryRunTester(dir: string, stand: string, framesFile: strin
         && (count > 0 || !/\bimages?\b/.test(prompt));
     });
     const distinct = new Set(PLANNED_5.map(textOf)).size;
-    say(`2 the texts against the frozen frames (sha256 pinned ${frozen.length > 0}, ${frozen.length} answers): ${remade} of ${PLANNED_5.length} prompts the bot's own for their `
+    say(`2 the texts against the frozen frames (sha256 pinned ${frozen.length > 0}, ${frozen.length} answers, each to today's request ${asked}): ${remade} of ${PLANNED_5.length} prompts the bot's own for their `
       + `arm and answer, binding the fronts the plan takes; one prompt an arm, story and answer across the seeds ${[...ids.values()].every(set => set.size === 1)}, `
       + `${distinct} in all; each ending with the reader style, the first-person clause in the POV stories alone, the clothes before the references in C and CF `
       + `alone, the faces in CF alone, no name and never the viewer's look ${worded}; the references named by image number as each binds them, none in a frame `
       + `from words ${numbered}`);
-    expect(frozen.length === 42 && remade === PLANNED_5.length && [...ids.values()].every(set => set.size === 1) && distinct === 60 && worded && numbered,
+    expect(frozen.length === 48 && asked && remade === PLANNED_5.length && [...ids.values()].every(set => set.size === 1) && distinct === 93 && worded && numbered,
       'the texts as the bot words each arm');
 
     // Every graph from the real texts, each picture named as an upload would be, read back independently; and the
@@ -398,7 +410,7 @@ export async function dryRunTester(dir: string, stand: string, framesFile: strin
     const pageKeys = (sections: Section[]) => sections.flatMap(section => section.rows.flatMap(row => row.keys.filter((one): one is string => one !== undefined))).sort();
     const before = readFileSync(join(out, 'index.html'), 'utf8');
     say(`5 the page before the card: ${figures(before)} figures, ${folded(before)} prompts folded`);
-    expect(figures(before) === 240 && folded(before) === 240 && same(pageKeys(STAND_5.sections), PLANNED_5.map(one => one.key).sort()),
+    expect(figures(before) === 372 && folded(before) === 372 && same(pageKeys(STAND_5.sections), PLANNED_5.map(one => one.key).sort()),
       'the page before the card shows every cell once, with its prompt');
 
     const events: { event?: string; key?: string }[] = [];
@@ -486,7 +498,7 @@ export async function dryRunTester(dir: string, stand: string, framesFile: strin
     say(`11 card B takes over: ${takeover.error ?? takeover.stopped ?? 'done'}, ${fakeB.jobs.length} jobs, ${fakeB.uploads.length} uploads for the four fronts; a start after `
       + `it: ${fakeB.jobs.length - onB} more jobs; drawn ${countsOf(index).drawn}, each once in the plan's order ${same([...drawnA, ...drawnB], order)}; `
       + `sessions ${index.sessions?.length}, each cell on its card ${carded}`);
-    expect(!takeover.error && !takeover.stopped && !again.error && !again.stopped && onB === 231 && fakeB.jobs.length === onB && countsOf(index).drawn === 240
+    expect(!takeover.error && !takeover.stopped && !again.error && !again.stopped && onB === 363 && fakeB.jobs.length === onB && countsOf(index).drawn === 372
       && same([...drawnA, ...drawnB], order) && Object.values(FRONTS).every(from => fakeB.uploads.includes(uploadName(from))) && fakeB.uploads.length === 4 && carded,
     'card B draws the rest, every front uploaded to it again');
 
@@ -509,7 +521,8 @@ export async function dryRunTester(dir: string, stand: string, framesFile: strin
       const right = graph !== undefined && same(buildJob(setup, one, text, refNames), graph) && cellRight(graph, one, text, refNames, setup) && job?.outcome === 'success'
         && job.sampler === 'KSampler' && job.start === null && job.noiseMask === null && !job.composites.length
         && same(job.slots, one.refs.map((ref, s) => ({ slot: s + 1, file: refNames[s], scaled: ref.how === 's352' ? SCALED : null, cropped: ref.how === 'crop' ? CROP : null })))
-        && same(job.model, ['ModelAttentionBackend', 'QwenImage21Cache', 'UNETLoader']) && same(job.images, [{ node: '9', ...FRAME_CANVAS }])
+        && same(job.model, one.graph === 'front' ? ['ModelAttentionBackend', 'UNETLoader'] : ['ModelAttentionBackend', 'QwenImage21Cache', 'UNETLoader'])
+        && same(job.images, [{ node: one.graph === 'front' ? '8' : '9', ...FRAME_CANVAS }])
         && cell?.status === 'drawn' && cell.file === one.file && cell.width === FRAME_CANVAS.width && cell.height === FRAME_CANVAS.height && cell.fallback === 0
         && existsSync(join(out, one.file)) && same(cell.references ?? [], one.refs.map(ref => sha256(readFileSync(pathOf(ref.from)))));
       if (!right) wrong.push(from);
@@ -521,7 +534,7 @@ export async function dryRunTester(dir: string, stand: string, framesFile: strin
         + `${(one.change * 100).toFixed(1)} %`);
     }
     const sizes = Object.fromEntries(['s352', 'crop'].map(how => [how, [...new Set([...seen.values()].filter(one => one.how === how).map(one => sizeText(one.encoder)))]]));
-    expect(!wrong.length && drawnA.length + drawnB.length === 240 && same(sizes, { s352: ['352x640'], crop: ['704x384'] }) && [...seen.values()].every(one => one.change <= 0.05),
+    expect(!wrong.length && drawnA.length + drawnB.length === 372 && same(sizes, { s352: ['352x640'], crop: ['704x384'] }) && [...seen.values()].every(one => one.change <= 0.05),
       'every job sends its own graph with the fronts it takes, each reaching the encoder at its size');
 
     const fronted = bodies.filter(one => 'front' in one.body || Object.keys(one.body).some(name => !['prompt', 'client_id', 'prompt_id'].includes(name))).length;
@@ -534,10 +547,10 @@ export async function dryRunTester(dir: string, stand: string, framesFile: strin
     const modes = mode(out) === 0o700 && mode(join(out, INDEX_FILE)) === 0o600 && mode(join(out, 'index.html')) === 0o600 && mode(join(out, 'frames')) === 0o700
       && PLANNED_5.every(one => mode(join(out, one.file)) === 0o600);
     const dashes = /[–—]/.test(after.replace(/<pre>[\s\S]*?<\/pre>/g, '')), named = after.includes(CARD_A) && after.includes(CARD_B);
-    say(`14 the page: ${figures(after)} figures, every picture linked where it lies ${links.length === 240 && links.every(link => existsSync(resolve(out, link)))}; dashes in `
+    say(`14 the page: ${figures(after)} figures, every picture linked where it lies ${links.length === 372 && links.every(link => existsSync(resolve(out, link)))}; dashes in `
       + `its own words ${dashes}; both cards named ${named}; directories 700 and files 600: ${modes}`);
-    expect(figures(after) === 240 && links.length === 240 && links.every(link => existsSync(resolve(out, link))) && !dashes && named && modes
-      && after.includes('Нарисовано 240 из 240') && after.includes('Triton включён') && !after.includes('не нарисовано'),
+    expect(figures(after) === 372 && links.length === 372 && links.every(link => existsSync(resolve(out, link))) && !dashes && named && modes
+      && after.includes('Нарисовано 372 из 372') && after.includes('Triton включён') && !after.includes('не нарисовано'),
     'the page links every picture and names both cards, in words without dashes');
 
     // The judging as it goes after the card, from the stand's real texts and question file.
@@ -557,7 +570,7 @@ export async function dryRunTester(dir: string, stand: string, framesFile: strin
     say(`15 the bundles: ${bundled.built} built of ${bundled.sessions}, skipped ${bundled.skipped}, missing ${bundled.missing.length}, ${checked} fronts checked `
       + `against the hash their cell took; each key the session's cells and fronts ${keyed}; a key, a front, a run or a story named in ${leaks.hits.length} of `
       + `${leaks.files} bundle files, unread ${leaks.unread.length}`);
-    expect(bundled.built === 28 && bundled.skipped === 0 && !bundled.missing.length && checked === 264 && keyed && !leaks.hits.length && !leaks.unread.length,
+    expect(bundled.built === 32 && bundled.skipped === 0 && !bundled.missing.length && checked === 300 && keyed && !leaks.hits.length && !leaks.unread.length,
       'every session bundled blind, from the pictures the cells recorded');
     const scratch = join(dry, 'judged');
     mkdirSync(scratch, { recursive: true, mode: 0o700 });
@@ -570,7 +583,7 @@ export async function dryRunTester(dir: string, stand: string, framesFile: strin
       + `${got.judged}; ${got.decisions} rules, ${['yes', 'no', 'undecided'].map(verdict => `${verdict} ${verdicts.filter(one => one.verdict === verdict).length}`).join(', ')}, `
       + `for a picture not judged ${gaps}; score.md ${existsSync(join(got.dir ?? scratch, 'score.md'))}; about ${judged.expectedMinutes} minutes at ${judged.perSession} a session, `
       + `${judged.parallel} at a time`);
-    expect(same(got.states, { answered: 28 }) && got.refusals === 1 && got.fallback === 1 && got.judged === 240 && got.decisions === 6 && verdicts.length === 6 && !gaps,
+    expect(same(got.states, { answered: 32 }) && got.refusals === 1 && got.fallback === 1 && got.judged === 372 && got.decisions === 8 && verdicts.length === 8 && !gaps,
       'every session answered, the refused one by the fallback, and every rule read from judged pictures');
 
     say('16 refusals before a bundle is built:');
@@ -589,7 +602,7 @@ export async function dryRunTester(dir: string, stand: string, framesFile: strin
     writeFileSync(firstFile, firstBytes, { mode: 0o600 });
     const kept = judge.writeBundles(out);
     say(`   built again: ${kept.kept} kept, ${kept.built} built`);
-    expect(kept.kept === 28 && kept.built === 0, 'the bundles written once');
+    expect(kept.kept === 32 && kept.built === 0, 'the bundles written once');
 
     // The prompts' word is in the texts and on the pages, and nowhere else; the fake's word is nowhere.
     const text = output.text(), wordForms = markerForms(word), marks = markerForms(marker);

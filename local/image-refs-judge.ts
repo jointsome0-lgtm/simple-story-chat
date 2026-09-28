@@ -30,7 +30,7 @@
 // passes the same answer, the same assessability and the success reading with its kappa.
 // The fifth, the tester stand (docs/action-experiment.md#tester-stand), is judged by questions of its own, in one
 // session a story and seed: the arms' frames side by side, where each person is against their place in the four stories
-// seen through the viewer's eyes (`pov`), and what each person wears beside their front in the three by the lake
+// seen through the viewer's eyes (`pov`), and what each person wears beside their front in the four by the lake
 // (`dress`). Its question file is pinned as the third's is; it has no retest, and so no agreement.
 //   bundles   judge/bundles/ and judge/keys/ from the drawn cells, once
 //   dry-run   the bundles judged by stand-ins for codex in a scratch directory, scored and compared: the sessions and the
@@ -2300,19 +2300,20 @@ export function movedTable34(moved: ReturnType<typeof scoreMoved34>): string {
 
 // ---- The tester stand ----
 
-// The fifth stand (docs/action-experiment.md#tester-stand), the tester's two complaints of 2026-09-28 as the seven clean
+// The fifth stand (docs/action-experiment.md#tester-stand), the tester's two complaints of 2026-09-28 as the eight clean
 // stories of examples/tester-stand.ts: each story's frames of one seed side by side in one session, its arms' three
-// answers each, nine pictures (six in V-face, whose PN is P). `pov`, the four stories seen through the viewer's eyes,
-// against where each story puts its people; `dress`, the three by the lake, against what each story gives its people
-// to wear, beside each person's front in the portrait's grey suit. Its question file, as build-texts.ts in
+// answers each, nine pictures in a story seen through the viewer's eyes (six in V-face, whose PN is P) and fifteen in
+// one by the lake. `pov`, the four seen through the viewer's eyes, against where each story puts its people; `dress`,
+// the four by the lake, against what each story gives its people to wear, beside each person's front in the
+// portrait's grey suit. Its question file, as build-texts.ts in
 // ~/simple-story-chat-runs/2026-09-28/tester-stand wrote it beside the stand's texts.json, holds what the judges are
 // told of the people, the viewer and the stories, and every cell with the pictures it took; the questions are ASKED_5's.
-const QUESTIONS_SHA256_5 = '3e49adba26aae01ea4f6e3ae1ba08ed5963f82814617be3a5f82abad3af4d351';
+const QUESTIONS_SHA256_5 = 'e79f1789f763205578d6822693b65ae87a1e2b9651ed61680a97ff9855d97aaa';
 export const RANKS_5 = ['T5'] as const;
 type Kind5 = 'pov' | 'dress';
 export const BODY_5: BarePart[] = ['chest and belly', 'arms', 'legs', 'feet'];
 const SIDE_STORIES: CaseId[] = ['V-squeeze', 'V-walk', 'V-behind'], POV_STORIES: CaseId[] = [...SIDE_STORIES, 'V-face'];
-const DRESS_STORIES: CaseId[] = ['C-bare', 'C-outfit', 'C-swim'];
+const DRESS_STORIES: CaseId[] = ['C-bare', 'C-outfit', 'C-swim', 'C-towel'];
 type Place5 = { person: Who4; where: string; side: string; view: 'part' | 'whole'; clothes: string };
 type Dressed5 = { person: Who4; clothes: string; bare: BarePart[]; covered: BarePart[] };
 type Story5 = { family: 'pov'; intent: string; count: number; people: Place5[] } | { family: 'clothes'; intent: string; count: number; people: Dressed5[] };
@@ -2383,7 +2384,7 @@ function asked5(group: Group5, id: string): Asked {
 }
 const ask5 = (group: Group5, id: string) => asked5(group, id).ask;
 const enum5 = (group: Group5, id: string): Schema => ({ type: 'string', enum: asked5(group, id).answers as string[] });
-const CLEAN_5 = 'clean: is it free of nudity and of sexual content? A man\'s bare chest, bare arms, legs or feet, and ordinary swimwear do not make a picture unclean. yes or no. If clean is no, still return every required field: 0 for a number, [] for a list, and for any other field the first value it allows from this ordered list: not seen, not in the picture, no, unsure. These values are placeholders only; the whole picture is left out.';
+const CLEAN_5 = 'clean: is it free of nudity and of sexual content? A man\'s bare chest, bare arms, legs or feet, ordinary swimwear and a bath towel wrapped from the chest to the knees do not make a picture unclean. yes or no. If clean is no, still return every required field: 0 for a number, [] for a list, and for any other field the first value it allows from this ordered list: not seen, not in the picture, no, unsure. These values are placeholders only; the whole picture is left out.';
 const PLACEHOLDER_ORDER_5 = ['not seen', 'not in the picture', 'no', 'unsure'];
 export const TASKS_5: Record<Kind5, string> = {
   pov: `You judge pictures drawn for one moment of a story seen through one person's eyes, each against where the story puts the other people.
@@ -2713,7 +2714,7 @@ function score5(questions: QuestionFile5, facts: Facts5) {
     const p = compare('P', 'R', POV_STORIES, 'inside', best), pn = compare('PN', 'R', SIDE_STORIES, 'inside', best);
     return [atLeast(p) && atLeast(pn), `pictures without the viewer seen from outside, over the four stories P ${pairText(p)}; over the three PN ${pairText(pn)}`];
   }, `the viewer seen from outside R ${total('R', POV_STORIES, 'outside').lo}, P ${total('P', POV_STORIES, 'outside').lo}, PN ${total('PN', SIDE_STORIES, 'outside').lo}`);
-  // 5. The clothes rule: C dresses the people as the story says more often than R, over the three stories together.
+  // 5. The clothes rule: C dresses the people as the story says more often than R, over the four stories together.
   decide('C dresses the people as the story says more often than R, as far as the pictures show them: its clothes, bare where it bares, covered where it covers, and no grey suit',
     all(DRESS_STORIES, ['C', 'R']), 'dressed', best => {
       const dressed = compare('C', 'R', DRESS_STORIES, 'dressed', best);
@@ -2726,6 +2727,20 @@ function score5(questions: QuestionFile5, facts: Facts5) {
       const dressed = compare('CF', 'C', DRESS_STORIES, 'dressed', best);
       return [above(dressed), `dressed ${pairText(dressed)}`];
     }, `the suit ${armsText(['C', 'CF'], DRESS_STORIES, 'suit')}`);
+  // 7. The words alone: with no reference, C's frames (CW) dress the people as the story says more often than R's (RW),
+  // over the four stories. Nothing but the frame's words differs: the clothes rule and its sentence on nothing on.
+  decide('With no reference, C\'s frames dress the people as the story says more often than R\'s: CW above RW',
+    all(DRESS_STORIES, ['CW', 'RW']), 'dressed', best => {
+      const dressed = compare('CW', 'RW', DRESS_STORIES, 'dressed', best);
+      return [above(dressed), `dressed ${pairText(dressed)}`];
+    }, `dressed ${byStory(['RW', 'CW'], DRESS_STORIES, 'dressed')}`);
+  // 8. The reference with the clothes rule: C dresses them so at least as often as CW, the same frames with no
+  // reference. R against RW beside it is what the reference costs today.
+  decide('With the clothes rule the reference costs no dressing: C dresses the people as the story says at least as often as CW',
+    all(DRESS_STORIES, ['C', 'CW']), 'dressed', best => {
+      const dressed = compare('C', 'CW', DRESS_STORIES, 'dressed', best);
+      return [atLeast(dressed), `dressed ${pairText(dressed)}`];
+    }, `dressed ${armsText(['R', 'RW', 'C', 'CW'], DRESS_STORIES, 'dressed')}; the suit ${armsText(['R', 'RW', 'C', 'CW'], DRESS_STORIES, 'suit')}`);
   // The tallies each table shows.
   const judgedOf = (story: CaseId, arm: Arm) => all([story], [arm]).filter(cell => cell.judged);
   const pov = POV_STORIES.map(story => {
@@ -2779,8 +2794,8 @@ export function scoreTables5(score: Score5): string {
   const choices = (group: Group5, id: string) => `(${values5(group, id).join('/')})`;
   lines.push(`Questions ${score.questions}; sessions answered ${score.sessions.answered} of ${score.sessions.planned}; pictures judged ${score.judged} of ${PLANNED_5.length}; `
     + `left out as not clean ${score.excluded.length ? score.excluded.map(one => `${one.key} (${one.sessions.join(', ')})`).join(', ') : 'none'}.`, '');
-  lines.push('Each rule is yes when it holds under every resolution of the unresolved results, no when it fails under every one, and undecided between, or when a picture it needs was left out or not judged. With every result known, no means the rule\'s criterion was not met; it does not mean equal or worse. Above, below and neither describe these seven stories, four seeds and three answers of the frame model to each arm\'s request: the answers are the same at every seed and are not pairs between arms, and nothing here is a test of significance.', '');
-  lines.push('These stories test ordinary outfits, a man\'s bare chest and ordinary swimwear. They do not test fully naked characters.', '');
+  lines.push('Each rule is yes when it holds under every resolution of the unresolved results, no when it fails under every one, and undecided between, or when a picture it needs was left out or not judged. With every result known, no means the rule\'s criterion was not met; it does not mean equal or worse. Above, below and neither describe these eight stories, four seeds and three answers of the frame model to each arm\'s request: the answers are the same at every seed and are not pairs between arms, and nothing here is a test of significance.', '');
+  lines.push('These stories test ordinary outfits, a man\'s bare chest, ordinary swimwear and a bath towel. They do not test fully naked characters.', '');
   lines.push('### The rules', '');
   head(['question', 'verdict', 'evidence']);
   for (const one of score.decisions) row([one.question, one.verdict, one.why]);

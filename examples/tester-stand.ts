@@ -3,17 +3,18 @@
 // девушки, а по картинке показывают что они напротив тебя, а мы по сути лишь их часть должны видеть боковым зрением»:
 // four stories seen through Артём's eyes, where people are pressed against both his shoulders on a bench, walk at his
 // shoulder, lean in from behind, or, as the control, sit facing him. (2) «если персонаж голый, то он и должен быть
-// голым, если он в одежде, то он и должен быть в одежде, а не в бодди из референса»: three stories by a lake, a man
-// bare-chested after a swim beside a woman who stays dressed, a woman in named everyday clothes, and a woman in a
-// swimsuit. The people are the refs stands' H, L, B and T (their details and looks word for word, so that their kept
-// fronts in the grey suit are their portraits); Артём, the viewer, keeps none. Each story is its seed and the
-// narrator's answers, the last one the scene a frame is described from, with what the people wear before it as the
-// bot would start the frame (local/picture.ts `wornAt`), and what a blind judge is told the picture should show.
-// Nothing here is adult: a man's bare chest after a swim and a one-piece swimsuit on a beach are all it bares.
+// голым, если он в одежде, то он и должен быть в одежде, а не в бодди из референса»: four stories by a lake, a man
+// bare-chested after a swim beside a woman who stays dressed, a woman in named everyday clothes, a woman in a
+// swimsuit, and a woman in a bath towel after the sauna, her own clothes left inside. The people are the refs stands'
+// H, L, B and T (their details and looks word for word, so that their kept fronts in the grey suit are their
+// portraits); Артём, the viewer, keeps none. Each story is its seed and the narrator's answers, the last one the scene
+// a frame is described from, with what the people wear before it as the bot would start the frame (local/picture.ts
+// `wornAt`), and what a blind judge is told the picture should show. Nothing here is adult: a man's bare chest after a
+// swim, a one-piece swimsuit on a beach and a bath towel from the chest to the knees are all it bares.
 
 export type Who = 'H' | 'L' | 'B' | 'T';
 export type Family = 'pov' | 'clothes';
-export type CaseId = 'V-squeeze' | 'V-walk' | 'V-behind' | 'V-face' | 'C-bare' | 'C-outfit' | 'C-swim';
+export type CaseId = 'V-squeeze' | 'V-walk' | 'V-behind' | 'V-face' | 'C-bare' | 'C-outfit' | 'C-swim' | 'C-towel';
 export type Person = { name: string; description: string; details: string; look: string };
 
 // The refs stands' people (~/simple-story-chat-runs/2026-09-28/refs-backlog/build-texts.ts): details and looks as the
@@ -112,6 +113,12 @@ export const CASES: TesterCase[] = [
     { input: 'Лина идёт плавать.', time: '2026-07-22 11:15', text: 'Лина снимает сарафан, шляпу и сандалии и остаётся в ярко-жёлтом слитном купальнике. Босиком она заходит в воду по колено, оборачивается к берегу и машет рукой, щурясь от солнца. Сарафан и шляпа лежат на полотенце.' }],
     intent: 'A tall young woman with a golden ponytail stands knee-deep in a forest lake by a sandy beach, turned back toward the shore and waving, squinting in the sun. Her white sundress and straw hat lie on a striped towel on the sand.',
     dressed: [{ who: 'L', clothes: 'a bright yellow one-piece swimsuit, barefoot', bare: ['arms', 'legs', 'feet'], covered: ['chest and belly'] }] },
+  { id: 'C-towel', family: 'clothes', seed: 'lake', outfits: { H: WORN.H, L: WORN.L, B: WORN.B, T: WORN.T }, turns: [
+    { time: '2026-07-23 18:00', text: 'К вечеру баня на берегу натоплена. Тесса в горчичном кардигане поверх белой футболки, чёрной юбке до колен и чёрных балетках приходит к бане с полотенцем, раздевается в предбаннике, складывает одежду на лавку и закрывает за собой дверь парилки.' },
+    { input: 'Тесса выходит из бани.', time: '2026-07-23 18:40', text: 'Через полчаса Тесса выходит на крыльцо бани, раскрасневшаяся, завёрнутая в большое белое банное полотенце от груди до колен, босиком. Мокрые чёрные волосы прилипли ко лбу, круглые очки запотели. Кардиган, футболка, юбка и балетки так и лежат сложенными на лавке в предбаннике. Она садится на деревянную ступеньку, вытягивает ноги и пьёт холодную воду из кружки, глядя на озеро.' }],
+    intent: 'A short young woman in round glasses, flushed after the sauna, sits on the wooden step of a lakeside sauna in the evening, wrapped in a large white bath towel from her chest to her knees, barefoot, drinking cold water from a mug and looking at the lake.',
+    dressed: [{ who: 'T', clothes: 'only a large white bath towel wrapped from the chest to the knees: bare shoulders and arms, barefoot', bare: ['arms', 'feet'],
+      covered: ['chest and belly'] }] },
 ];
 // The viewer's own clothes in the four POV stories, and how a judge would know him should he be drawn from outside.
 export const VIEWER_OUTFIT = WORN.viewer;

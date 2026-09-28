@@ -479,8 +479,13 @@ wording and the look. For the readers named in `SIMPLE_CHAT_CLOTHES_USERS` alone
 
 - **The frame's rule:** its sentence on `clothes` becomes the action experiment's change 8 word for word ([the variant
   frame](action-experiment.md#variant)): bare skin named outright («wearing only rolled-up linen trousers,
-  bare-chested and barefoot») and nothing bared that the scene does not bare. The schema stays as it is, and the
-  sentence is replaced at the call, since `local/illustrate.ts` is pinned (`textPins` in `local/action-text.ts`).
+  bare-chested and barefoot») and nothing bared that the scene does not bare. One sentence follows it, since the
+  tester also saw a person the story leaves naked drawn in the clothes of their profile: a person with nothing on is
+  «wearing nothing», and `clothes` is never left empty. An empty `clothes` gives the person the outfit they wore before
+  the scene, in this picture (`assemblePrompt`, and the words before the references below) and in the next ones, since
+  the frame then records no clothes for them (`clothesOf` and `wornAt` in `local/picture.ts`). The schema stays as it
+  is, and the sentences are replaced at the call, since `local/illustrate.ts` is pinned (`textPins` in
+  `local/action-text.ts`).
 - **Before the reference wording:** a frame with reference pictures says what each referenced person wears in this
   scene, in the order of the pictures, right after «Create a brand-new scene…» and before «Use the reference images
   only…»: «The person from image 3 in this scene: wearing only rolled-up canvas trousers, bare-chested and barefoot.»
@@ -496,8 +501,9 @@ people with kept portraits gave the same for an ordinary frame with three refere
 with a second pressed against the viewer's side and a third in front, its style sample, a frame the viewer is not in
 and a variant. With each list and all three on, it passed 14 checks: the fields, their order and the rule in the
 request; the places in the prompt; who is bound; the clothes before the reference wording; the counts in the rows;
-nothing of the story in them. Whether the image model then draws the others at the edges and the bare skin bare is
-[the tester stand](action-experiment.md#tester-stand)'s question, not yet drawn.
+nothing of the story in them. The sentence on nothing on came after that dry run. Whether the image model then draws
+the others at the edges and the bare skin bare is [the tester stand](action-experiment.md#tester-stand)'s question, not
+yet drawn.
 
 <a id='along-the-story'></a>
 

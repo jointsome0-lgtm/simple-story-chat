@@ -119,8 +119,8 @@ and the gateway's refusal of a `min_p` that vLLM refuses while it drafts. Its te
 `npm run test:serving` against it. Within the day's $3 the main session rents without asking, once a fresh Astra
 session has backed the queue ([rule 4](#while-the-cards-are-paid-for)); a card past the cap needs the owner's «да».
 A card's trial guard deletes it at most three hours after its first start (`--hours`), so a longer session is a
-second rental with its own preparation. The next rental's order, both
-cards once for the tester's complaints of 2026-09-28, is in [action-experiment.md](action-experiment.md#tester-rental).
+second rental with its own preparation. The next rental's two queues, one for each card, are in
+[action-experiment.md](action-experiment.md#tester-rental).
 
 **The text card**, prepared as round two's text card was on 2026-09-27. `HOST` is its alias in `~/.ssh/config`, and
 `git archive` and the `uv run` lines run in simple-serving's checkout at `next-card`:
