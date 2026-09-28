@@ -28,6 +28,10 @@
 // queue also stops once more than a tenth of their planned sessions have had an attempt fail or refuse, and their
 // agreement is Astra's retest of every session: completion and clean first, then over the pictures eligible in both
 // passes the same answer, the same assessability and the success reading with its kappa.
+// The fifth, the tester stand (docs/action-experiment.md#tester-stand), is judged by questions of its own, in one
+// session a story and seed: the arms' frames side by side, where each person is against their place in the four stories
+// seen through the viewer's eyes (`pov`), and what each person wears beside their front in the three by the lake
+// (`dress`). Its question file is pinned as the third's is; it has no retest, and so no agreement.
 //   bundles   judge/bundles/ and judge/keys/ from the drawn cells, once
 //   dry-run   the bundles judged by stand-ins for codex in a scratch directory, scored and compared: the sessions and the
 //             expected time (--jobs FILE for a whole night's plan)
@@ -55,6 +59,10 @@ import { safeError } from './image-action.ts';
 import { CROP as GRAPH_CROP, SEEDS, SHEET_PEOPLE, frameKey, frontKey, sheetKey, viewKey } from './image-refs-test.ts';
 import type { Scene } from './image-refs-test.ts';
 import { FRONTS, SEEDS_3, SEEDS_4, TEXTS_SHA256_3, TEXTS_SHA256_4, viewId, viewKeyOf } from './image-refs-backlog.ts';
+import { ANSWERS, CELLS_5, PLANNED_5, SEEDS_5, TEXTS_SHA256_5, armsOf, cellKey5 } from './image-refs-tester.ts';
+import type { Arm } from './image-refs-tester.ts';
+import { CASES } from '../examples/tester-stand.ts';
+import type { BarePart, CaseId } from '../examples/tester-stand.ts';
 
 const sha256 = (value: string | Uint8Array) => createHash('sha256').update(value).digest('hex');
 const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
@@ -63,7 +71,7 @@ const JUDGE_TEXTS_SHA256 = '6460753f52b88bc31ec52d269c4a257d6a932bc08e3b07baabdf
 const STAND_TEXTS_SHA256 = 'd0678be9753c496fc3ad754ad5124a0add622b8298a3f744f6c71f0da2728f61';
 const STAND_2_TEXTS_SHA256 = '9a5ee1a68c05970bed86088e982a0c64df99827712db10af13143fcddfa3cfe3';
 export const judgeDirOf = (run: string) => join(resolve(run), 'judge');
-export type StandId = 1 | 2 | 3 | 4;
+export type StandId = 1 | 2 | 3 | 4 | 5;
 type Stand12 = 1 | 2;
 type Stand34 = 3 | 4;
 // Which stand a run is, by its texts.
@@ -73,6 +81,7 @@ export function standOf(run: string): StandId {
   if (hash === STAND_2_TEXTS_SHA256) return 2;
   if (hash === TEXTS_SHA256_3) return 3;
   if (hash === TEXTS_SHA256_4) return 4;
+  if (hash === TEXTS_SHA256_5) return 5;
   throw new Refusal(`${file} is not the texts any refs stand drew from`);
 }
 
@@ -110,14 +119,15 @@ export const RANKS_2 = ['S2'] as const;
 // stand's one, its views.
 export const RANKS_3 = ['F3', 'K3', 'S3'] as const;
 export const RANKS_4 = ['V4'] as const;
-type Rank = typeof RANKS[number] | typeof RANKS_2[number] | typeof RANKS_3[number] | typeof RANKS_4[number];
-export const ranksOf = (stand: StandId): readonly string[] => (stand === 1 ? RANKS : stand === 2 ? RANKS_2 : stand === 3 ? RANKS_3 : RANKS_4);
+type Rank = typeof RANKS[number] | typeof RANKS_2[number] | typeof RANKS_3[number] | typeof RANKS_4[number] | typeof RANKS_5[number];
+export const ranksOf = (stand: StandId): readonly string[] => (stand === 1 ? RANKS : stand === 2 ? RANKS_2 : stand === 3 ? RANKS_3 : stand === 4 ? RANKS_4 : RANKS_5);
 export const SEEDS_2 = [21, 23, 29, 31, 37, 41];
 // In the order of the tester's complaints: the negative at CFG 2, the look, the clothes.
 export const CELLS_2 = ['R-L0', 'R-L0-NEG', 'W-L0', 'W-L0-NEG', 'R-L1', 'W-L1', 'FV-L0', 'FC-L0'];
 type Kind12 = 'frames' | 'identity' | 'fronts' | 'sheet' | 'turns';
 // The third stand adds `draft`; its `frames`, `identity` and `fronts` and the fourth stand's `turns` ask their own tasks.
-export type Kind = Kind12 | 'draft';
+// The fifth has `pov` and `dress`.
+export type Kind = Kind12 | 'draft' | Kind5;
 // A picture a session judges: its cell, the style it was asked for, the person a front shows, and for a turned
 // picture the turn and the reference it was made from.
 type Shown = { key: string; style?: Style; person?: Who; turn?: string; reference?: string; sheet?: string };
@@ -191,7 +201,8 @@ export function sessionPlan(stand: Stand12 = 1): SessionPlan[] {
 export type Planned = { name: string; kind: Kind; rank: string };
 export const plannedSessions = (stand: StandId): Planned[] => (stand === 1 || stand === 2
   ? sessionPlan(stand).map(one => ({ name: one.name, kind: one.kind, rank: one.comparison.rank }))
-  : sessionPlan34(stand).map(one => ({ name: one.name, kind: one.kind, rank: one.rank })));
+  : stand === 5 ? sessionPlan5().map(one => ({ name: one.name, kind: one.kind, rank: one.rank }))
+    : sessionPlan34(stand).map(one => ({ name: one.name, kind: one.kind, rank: one.rank })));
 
 // ---- The tasks ----
 
@@ -402,6 +413,7 @@ function drawn(run: string, cells: Record<string, StandCell>, key: string): { by
 export function writeBundles(run: string, log: (event: object) => void = () => undefined, from?: string) {
   const which = standOf(run);
   if (which === 3 || which === 4) return writeBundles34(run, which, log);
+  if (which === 5) return writeBundles5(run, log);
   const texts = readTexts(run), dir = judgeDirOf(run), stand = which;
   const cells = (readJson<{ cells: Record<string, StandCell> }>(join(resolve(run), 'cells.json')) ?? { cells: {} }).cells;
   if (stand === 2) {
@@ -717,6 +729,11 @@ export async function dryJudge(jobs: Job[], scratch: string, minutes: number, pa
         const score = scoreStand(job.run, dir);
         writeFileSync(join(dir, 'score.md'), scoreTables(score), { mode: 0o600 });
         out.push({ stand, model: record.model, dir, ...counts, decisions: score.decisions.length, undecided: score.decisions.filter(one => one.verdict === 'undecided').length });
+      } else if (stand === 5) {
+        const score = scoreStand5(job.run, dir);
+        writeFileSync(join(dir, 'score.md'), scoreTables5(score), { mode: 0o600 });
+        out.push({ stand, model: record.model, dir, ...counts, judged: score.judged, decisions: score.decisions.length,
+          undecided: score.decisions.filter(one => one.verdict === 'undecided').length });
       } else if (stand === 3 || stand === 4) {
         const score = scoreStand34(job.run, dir);
         writeFileSync(join(dir, 'score.md'), scoreTables34(score), { mode: 0o600 });
@@ -729,6 +746,10 @@ export async function dryJudge(jobs: Job[], scratch: string, minutes: number, pa
       }
     } else {
       const first = dirs.get(judgeDirOf(job.run)), firstRecord = first ? readRecord(first) : undefined;
+      if (stand === 5) {
+        out.push({ stand, model: record.model, dir, ...counts });
+        continue;
+      }
       if (stand === 3 || stand === 4) {
         const agreement = first && firstRecord ? agreementOf34(job.run, first, dir) : undefined;
         if (agreement && firstRecord) writeFileSync(join(dir, 'agreement.md'), agreementTable34(agreement, firstRecord, record), { mode: 0o600 });
@@ -1455,7 +1476,7 @@ const FIND_34 = 'first find them by the place the scene gives them, independentl
 const WORDS_34 = `people: each person's id, name, words, and their build part by part (parts: ${PARTS_4.join(', ')}; "${NOT_SAID}" where the words say nothing of that part)`;
 const FRONT_34 = 'standing alone, full length from the front, on a plain grey backdrop, in the portrait\'s clothes';
 const BUILD_RULE_34 = `For every build answer: ${REVIEWED_34.instructions.build} ${REVIEWED_34.instructions.height}`;
-export const TASKS_34: Record<Exclude<Kind, 'sheet'>, string> = {
+export const TASKS_34: Record<Exclude<Kind, 'sheet' | Kind5>, string> = {
   frames: `You judge pictures drawn for one scene of a story, each against the scene's words.
 
 input.json holds:
@@ -1571,7 +1592,8 @@ The pictures may be compared with one another.
 
 ${ENDING_34}`,
 };
-const taskOf = (stand: StandId, kind: Kind) => (stand === 3 || stand === 4 ? TASKS_34[kind as Exclude<Kind, 'sheet'>] : TASKS[kind as Kind12]);
+const taskOf = (stand: StandId, kind: Kind) => (stand === 5 ? TASKS_5[kind as Kind5] : stand === 3 || stand === 4 ? TASKS_34[kind as Exclude<Kind, 'sheet' | Kind5>]
+  : TASKS[kind as Kind12]);
 
 const INT: Schema = { type: 'integer' };
 const enumOf = (group: Group34, id: string): Schema => ({ type: 'string', enum: answersOf(group, id) });
@@ -1625,7 +1647,7 @@ export function judgePins34(): Record<string, string> {
     ...Object.fromEntries(Object.entries(schemas).map(([kind, schema]) => [`schema.${kind}`, sha256(JSON.stringify(schema))])) };
 }
 export const questionsPin34 = () => sha256(JSON.stringify(judgePins34()));
-const pinOf = (stand: StandId) => (stand === 3 || stand === 4 ? questionsPin34() : questionsPin());
+const pinOf = (stand: StandId) => (stand === 5 ? questionsPin5() : stand === 3 || stand === 4 ? questionsPin34() : questionsPin());
 
 // A picture of any run the stands drew from, by its run as the question file names it (under the runs' root) and its
 // key: the very file that run's cells.json records, checked against the sha256 and size recorded there, without any
@@ -2276,6 +2298,533 @@ export function movedTable34(moved: ReturnType<typeof scoreMoved34>): string {
   return lines.join('\n') + '\n';
 }
 
+// ---- The tester stand ----
+
+// The fifth stand (docs/action-experiment.md#tester-stand), the tester's two complaints of 2026-09-28 as the seven clean
+// stories of examples/tester-stand.ts: each story's frames of one seed side by side in one session, its arms' three
+// answers each, nine pictures (six in V-face, whose PN is P). `pov`, the four stories seen through the viewer's eyes,
+// against where each story puts its people; `dress`, the three by the lake, against what each story gives its people
+// to wear, beside each person's front in the portrait's grey suit. Its question file, as build-texts.ts in
+// ~/simple-story-chat-runs/2026-09-28/tester-stand wrote it beside the stand's texts.json, holds what the judges are
+// told of the people, the viewer and the stories, and every cell with the pictures it took; the questions are ASKED_5's.
+const QUESTIONS_SHA256_5 = '3e49adba26aae01ea4f6e3ae1ba08ed5963f82814617be3a5f82abad3af4d351';
+export const RANKS_5 = ['T5'] as const;
+type Kind5 = 'pov' | 'dress';
+export const BODY_5: BarePart[] = ['chest and belly', 'arms', 'legs', 'feet'];
+const SIDE_STORIES: CaseId[] = ['V-squeeze', 'V-walk', 'V-behind'], POV_STORIES: CaseId[] = [...SIDE_STORIES, 'V-face'];
+const DRESS_STORIES: CaseId[] = ['C-bare', 'C-outfit', 'C-swim'];
+type Place5 = { person: Who4; where: string; side: string; view: 'part' | 'whole'; clothes: string };
+type Dressed5 = { person: Who4; clothes: string; bare: BarePart[]; covered: BarePart[] };
+type Story5 = { family: 'pov'; intent: string; count: number; people: Place5[] } | { family: 'clothes'; intent: string; count: number; people: Dressed5[] };
+type QCell5 = { key: string; case: CaseId; arm: Arm; answer: number; seed: number; file: string; references: QRef[] };
+type QuestionFile5 = { stand: string; portraitClothes: string; people: Record<Who4, { id: string; name: string; look: string; front: { key: string; run: string } }>;
+  viewer: { name: string; seen: string }; cases: Record<CaseId, Story5>; cells: QCell5[] };
+// The stand's question file, only as the pin has it.
+export function readQuestions5(run: string): QuestionFile5 {
+  if (standOf(run) !== 5) throw new Refusal('only the tester stand is judged from this question file');
+  const file = join(resolve(run), 'judge-questions.json');
+  if (!existsSync(file)) throw new Refusal(`${file} is missing: build-texts.ts writes it beside the stand's texts.json`);
+  const bytes = readFileSync(file);
+  if (sha256(bytes) !== QUESTIONS_SHA256_5) throw new Refusal(`${file} is not the question file image-refs-judge.ts pins; nothing is judged from it`);
+  return JSON.parse(bytes.toString('utf8')) as QuestionFile5;
+}
+
+// The questions, each in the words the tasks ask it, with the answers it allows, as the one GPT-6 Astra review of
+// 2026-09-28 left them (docs/action-experiment.md#tester-stand): `side`, `in_view` and `facing` with firm boundaries and
+// `both edges`; `found` with one figure for one person and position never a sign of who it is; `as_placed` with
+// `unsure`; `clothes` with `not seen`, the suit's patch of grey, and `body` over what can be inspected, with `mixed`;
+// and anatomy with the malformed limb its question names. The third and fourth stands' anatomy stays as it was.
+const ANATOMY_ITEMS_5 = [...ANATOMY_ITEMS, 'malformed limb or finger'];
+const ANATOMY_ASK_5 = `${ANATOMY_ASK} Use malformed limb or finger for a clearly malformed visible limb or digit that is not described by the extra/missing, impossible-joint or impossible-length categories.`;
+const ANATOMY_LIST_5: Schema = { type: 'array', items: { type: 'string', enum: ANATOMY_ITEMS_5 } };
+const ONE_FIGURE_5 = 'Identify people independently in each picture. Do not assign the same visible figure or body fragment to more than one person. If several figures fit equally well, or a fragment lacks distinguishing features, answer unsure. For the remaining fields, use the strongest candidate by visible identity cues; break an exact tie by choosing the leftmost candidate. Those answers remain conditional on an unsure identification.';
+export const ASKED_5 = {
+  instructions: {
+    pov: 'The picture is the viewer\'s own view: the camera is the viewer\'s eyes, and the picture\'s left and right are the viewer\'s. The viewer may see parts of their own body from their own eyes; any other sight of the viewer is a figure seen from outside. Tell who is who by looks and clothes (hair, build, glasses, beard, what they wear), never by where they are: where they are is what you judge.',
+    dress: 'Find each person by their looks (face, hair, build, glasses, beard), which their front shows. The fronts show who each person is, not what they should wear here. Judge only what the picture shows: do not guess at clothing hidden by something else, or at skin under clothing.',
+    absentPov: 'If nothing of the person shows: found no, side and in_view not in the picture, facing not seen and as_placed not in the picture.',
+    absentDress: 'If nobody in the picture is the person: found no, clothes no, suit not seen and every part of body not seen.',
+  },
+  pov: [
+    { id: 'viewer', ask: 'Does the viewer show in the picture? not in the picture: nothing of them shows; own body only: only parts of their own body as they would see them from their own eyes, such as hands, forearms, knees or feet, or the edge of a shoulder or of their chest; seen from outside: the viewer drawn as someone else would see them, whole or in part (their face, the back of their head, their body from outside); unsure.',
+      answers: ['not in the picture', 'own body only', 'seen from outside', 'unsure'] },
+    { id: 'others', ask: 'Is anyone in the picture besides the story\'s people and the viewer? no; far off: only small figures in the distance; yes: someone nearer, taking part in the moment or close to the viewer.',
+      answers: ['no', 'far off', 'yes'] },
+    { id: 'anatomy', ask: `${ANATOMY_ASK_5} The viewer's own hands and arms count too.`, answers: 'a list, or none', values: ANATOMY_ITEMS_5 },
+    { id: 'found', each: 'person', ask: `Is this person in the picture, whole or in part? yes: you can tell by their looks or clothes that a figure, or a part of one, is them; unsure: a figure or a part of one could be them, but you cannot tell; no: nothing of them shows. ${ONE_FIGURE_5} Distinctive clothing may establish identity even when no face is visible. Expected position alone may not establish identity. Do not select a candidate because their position better matches the story.`,
+      answers: ['yes', 'unsure', 'no'] },
+    { id: 'side', each: 'person', ask: 'Where in the picture is this person? left edge: the picture\'s left border cuts through their body; right edge: the right border cuts through their body; both edges: both the left and the right border cut through them. Edge categories take precedence over left, middle and right. Otherwise left, middle or right: the third of the picture\'s width that holds most of what shows of them; if two thirds contain equal amounts of their visible body, use the third containing the horizontal midpoint of their visible extent. not in the picture.',
+      answers: ['left edge', 'left', 'middle', 'right', 'right edge', 'both edges', 'not in the picture'] },
+    { id: 'in_view', each: 'person', ask: 'How much of this person is visible? most: more than half of their head and more than half of their torso from shoulders to waist are visible; part: anything less, including a head and shoulder, an isolated limb, or a torso without most of the head; not in the picture: nothing of them is visible. Count only visible anatomy, not anatomy inferred behind objects or beyond the crop. Ignore the direction their head faces.',
+      answers: ['most', 'part', 'not in the picture'] },
+    { id: 'facing', each: 'person', ask: 'Which way is the torso turned relative to the camera? Estimate the direction the chest faces: toward the viewer if it is within 45 degrees of facing the camera; side-on if it is more than 45 but less than 135 degrees away; away if it is at least 135 degrees away. not seen: too little torso is visible to estimate its direction. Judge the torso independently of the head. Orientation does not establish whether someone is beside, behind or opposite the viewer.',
+      answers: ['toward the viewer', 'side-on', 'away', 'not seen'] },
+    { id: 'as_placed', each: 'person', ask: 'Does the visible scene establish the person\'s stated relationship to the viewer? yes: the required beside, behind or across relationship, side, closeness and amount in view are supported by visible evidence. partly: the required beside, behind or across relationship is supported, but the side, closeness or framing contradicts the stated place. no: visible evidence contradicts the required beside, behind or across relationship. unsure: the person may be correctly placed, but the visible evidence cannot establish the relationship. not in the picture: nothing of the person is visible. A border crop alone does not establish that someone is beside or behind the viewer. A turned head alone does not establish that someone is opposite the viewer. An arm entering from beside the camera and reaching over the foreground may support a behind-the-shoulder placement even when its owner\'s torso is hidden.',
+      answers: ['yes', 'partly', 'no', 'unsure', 'not in the picture'] },
+  ] as Asked[],
+  dress: [
+    { id: 'count', ask: 'How many people are in the picture? Count everyone, whole or in part.', answers: 'a number' },
+    { id: 'anatomy', ask: ANATOMY_ASK_5, answers: 'a list, or none', values: ANATOMY_ITEMS_5 },
+    { id: 'found', each: 'person', ask: `Is this person in the picture? yes: you can tell by their looks that a figure is them; unsure: a figure could be them, but you cannot tell; no: nobody in the picture is them. ${ONE_FIGURE_5}`,
+      answers: ['yes', 'unsure', 'no'] },
+    { id: 'clothes', each: 'person', ask: 'Does the inspectable outfit match the story, including its required bare skin? yes: at least one diagnostic garment or required bare region is inspectable, and everything inspectable agrees with the specified garment types, colours and coverage. partly: some diagnostic requirements match and others visibly contradict the story. no: the inspectable outfit is different altogether, or none of its diagnostic requirements match. not seen: there is insufficient diagnostic evidence to assess the outfit. A face alone or a generic sleeve is insufficient. Hidden garments do not count as either matches or mismatches. Required bare regions, such as a bare chest, are part of this assessment.',
+      answers: ['yes', 'partly', 'no', 'not seen'] },
+    { id: 'suit', each: 'person', ask: 'Is clothing visibly identifiable as the front\'s dark grey one-piece athletic suit? yes: the suit is visibly present as the person\'s main outfit; partly: a recognizable portion of it replaces or shows beneath the story\'s clothes; no: no recognizable portion is visible; not seen: the relevant clothing cannot be inspected. Matching colour, ordinary dark shoes or grey trousers alone do not establish the presence of the suit, and a swimsuit the story gives is the suit only if it is the front\'s. Do not infer clothing beneath opaque garments. An isolated patch of grey fabric that could belong to several garments is not enough to identify the suit. Use not seen when no diagnostic clothing area can be inspected. Use no when the inspectable clothing provides no recognizable evidence of the suit. Neither answer establishes what is hidden beneath other garments.',
+      answers: ['no', 'partly', 'yes', 'not seen'] },
+    { id: 'body', each: 'person and part', ask: 'For each part of their body, judge only the portion of it that can be inspected. bare: the inspectable portion is bare skin; covered: it is covered by clothing; mixed: substantial areas of both bare skin and clothing are visible within the part; not seen: no portion can be inspected well enough to classify. Ignore small openings at ordinary necklines, cuffs and garment edges when deciding mixed. A sleeve ending partway along an arm, or a skirt ending partway along a leg, creates mixed coverage when both sides of that boundary are visible. For feet, bare means visibly without footwear; covered means visibly wearing footwear, including flat shoes with an open instep; mixed means visible feet have different footwear states. Clothing counts as coverage, not occlusion. Water, furniture, other people and the pose may prevent inspection. If skin or clothing is clearly visible through water, classify that visible portion; otherwise it is not seen. A result for a partly visible part describes only its inspectable portion. The parts: chest and belly, the front of the torso from the collarbones to the waist; arms, from the shoulders to the wrists, without the hands; legs, from the hips to the ankles, without the feet; feet. Combine the visible portions of both arms, both legs or both feet.',
+      answers: ['bare', 'covered', 'mixed', 'not seen'], parts: BODY_5 },
+  ] as Asked[],
+};
+type Group5 = 'pov' | 'dress';
+function asked5(group: Group5, id: string): Asked {
+  const one = ASKED_5[group].find(question => question.id === id);
+  if (!one) throw new Error(`no question ${group}.${id}`);
+  return one;
+}
+const ask5 = (group: Group5, id: string) => asked5(group, id).ask;
+const enum5 = (group: Group5, id: string): Schema => ({ type: 'string', enum: asked5(group, id).answers as string[] });
+const CLEAN_5 = 'clean: is it free of nudity and of sexual content? A man\'s bare chest, bare arms, legs or feet, and ordinary swimwear do not make a picture unclean. yes or no. If clean is no, still return every required field: 0 for a number, [] for a list, and for any other field the first value it allows from this ordered list: not seen, not in the picture, no, unsure. These values are placeholders only; the whole picture is left out.';
+const PLACEHOLDER_ORDER_5 = ['not seen', 'not in the picture', 'no', 'unsure'];
+export const TASKS_5: Record<Kind5, string> = {
+  pov: `You judge pictures drawn for one moment of a story seen through one person's eyes, each against where the story puts the other people.
+
+input.json holds:
+- story: what the picture should show;
+- viewer: the person through whose eyes the picture is seen: their name, and how anyone else would see them (seen);
+- people: each other person of the story with their id, name, looks, the clothes they wear, and their place: where the story puts them against the viewer;
+- pictures: the pictures' file names.
+The pictures are in this folder and attached in the order input.json lists them.
+
+${ASKED_5.instructions.pov}
+
+For each picture:
+1. ${CLEAN_5}
+2. viewer: ${ask5('pov', 'viewer')}
+3. others: ${ask5('pov', 'others')}
+4. anatomy: ${ask5('pov', 'anatomy')} Name each error by the value form.json lists for it.
+5. For each person of the story:
+   - found: ${ask5('pov', 'found')}
+   - side: ${ask5('pov', 'side')}
+   - in_view: ${ask5('pov', 'in_view')}
+   - facing: ${ask5('pov', 'facing')}
+   - as_placed: ${ask5('pov', 'as_placed')}
+   ${ASKED_5.instructions.absentPov}
+The pictures may be compared with one another.
+
+${ENDING_34}`,
+  dress: `You judge pictures drawn for one moment of a story, each against what the story gives each person to wear.
+
+input.json holds:
+- story: what the picture should show;
+- people: each person of the story with their id, name, looks, and the clothes the story gives them at this moment;
+- fronts: each person's front picture: its file name and the id of the person it shows, ${FRONT_34};
+- portrait_clothes: the portrait's clothes, which every front shows;
+- pictures: the pictures' file names.
+Everything is in this folder and attached: the pictures in the order input.json lists them, then the fronts in theirs.
+
+${ASKED_5.instructions.dress}
+
+For each picture:
+1. ${CLEAN_5}
+2. count: ${ask5('dress', 'count')} A whole number.
+3. anatomy: ${ask5('dress', 'anatomy')} Name each error by the value form.json lists for it.
+4. For each person of the story:
+   - found: ${ask5('dress', 'found')}
+   - clothes: ${ask5('dress', 'clothes')}
+   - suit: ${ask5('dress', 'suit')}
+   - body: ${ask5('dress', 'body')}
+   ${ASKED_5.instructions.absentDress}
+The pictures may be compared with one another.
+
+${ENDING_34}`,
+};
+const pov5Schema = (names: string[], ids: string[]): Schema => strict({ pictures: each(names, strict({ clean: YN, viewer: enum5('pov', 'viewer'),
+  others: enum5('pov', 'others'), anatomy: ANATOMY_LIST_5, people: each(ids, strict({ found: enum5('pov', 'found'), side: enum5('pov', 'side'),
+    in_view: enum5('pov', 'in_view'), facing: enum5('pov', 'facing'), as_placed: enum5('pov', 'as_placed') })) })) });
+const dress5Schema = (names: string[], ids: string[]): Schema => strict({ pictures: each(names, strict({ clean: YN, count: INT, anatomy: ANATOMY_LIST_5,
+  people: each(ids, strict({ found: enum5('dress', 'found'), clothes: enum5('dress', 'clothes'), suit: enum5('dress', 'suit'),
+    body: each(BODY_5, enum5('dress', 'body')) })) })) });
+// Answers that use every value each field allows, as the review asked before the questions are frozen: the n-th set
+// gives each field its n-th value, or its last, so that the sets together use them all.
+function exercised5(schema: Schema): unknown[] {
+  const most = (one: Schema): number => Math.max(one.enum?.length ?? 1, ...(one.items ? [most(one.items)] : []), ...Object.values(one.properties ?? {}).map(most));
+  const pick = (one: Schema, n: number): unknown => one.enum ? one.enum[Math.min(n, one.enum.length - 1)] : one.type === 'integer' ? n
+    : one.type === 'array' ? [pick(one.items!, n)] : Object.fromEntries(Object.entries(one.properties ?? {}).map(([key, value]) => [key, pick(value, n)]));
+  return Array.from({ length: most(schema) }, (_, n) => pick(schema, n));
+}
+// The answers a picture that is not clean gets, by CLEAN_5's order.
+function placeholder5(schema: Schema, name = ''): unknown {
+  if (name === 'clean') return 'no';
+  if (schema.enum) return PLACEHOLDER_ORDER_5.find(value => schema.enum!.includes(value));
+  if (schema.type === 'integer') return 0;
+  if (schema.type === 'array') return [];
+  return Object.fromEntries(Object.entries(schema.properties ?? {}).map(([key, value]) => [key, placeholder5(value, key)]));
+}
+// What the fifth stand's questions are pinned to, as judgePins34 is for the third and fourth.
+export function judgePins5(): Record<string, string> {
+  const names = ['pic-0.png'], ids = ['mara', 'lina'];
+  return { effort: JUDGE.effort, texts5: TEXTS_SHA256_5, questions5: QUESTIONS_SHA256_5, asked: sha256(JSON.stringify(ASKED_5)),
+    ...Object.fromEntries(Object.entries(TASKS_5).map(([kind, text]) => [`task.${kind}`, sha256(text)])),
+    'schema.pov': sha256(JSON.stringify(pov5Schema(names, ids))), 'schema.dress': sha256(JSON.stringify(dress5Schema(names, ids))) };
+}
+export const questionsPin5 = () => sha256(JSON.stringify(judgePins5()));
+
+// The sessions in the order they run: seed by seed, so that a cut leaves every story judged at the seeds before it, and
+// each story's cells in the plan's order, which the bundle sorts away.
+export type SessionPlan5 = { name: string; kind: Kind5; rank: 'T5'; story: CaseId; seed: number; cells: string[] };
+export function sessionPlan5(): SessionPlan5[] {
+  const sessions = SEEDS_5.flatMap(seed => CASES.map(one => ({ kind: (one.family === 'pov' ? 'pov' : 'dress') as Kind5, story: one.id, seed,
+    cells: armsOf(one.id).flatMap(arm => ANSWERS.map(answer => cellKey5(one.id, arm, answer, seed))) })));
+  return sessions.map((one, at) => ({ name: `j${String(at + 1).padStart(2, '0')}-${one.kind}`, rank: 'T5' as const, ...one }));
+}
+
+// The fifth stand's bundles, written once, as the third's are: every cell of the question file against the stand's
+// cells.json and every picture it took against the sha256 it recorded in that slot, read from that picture's own run; a
+// cell the stand did not draw leaves its picture out, and a session left with no picture, or a `dress` session without
+// a front it shows, is not built. The pictures and then the fronts go in the order of their names. Each bundle's form,
+// schema and placeholder answers are checked together, with answers that use every value and against the pictures and
+// people of its input, once every question is known to name each answer it allows; the questions are written beside
+// the record.
+function writeBundles5(run: string, log: (event: object) => void) {
+  const questions = readQuestions5(run), dir = judgeDirOf(run), root = resolve(run, '..', '..');
+  const unnamed = [...ASKED_5.pov, ...ASKED_5.dress].filter(one => Array.isArray(one.answers) && one.answers.some(value => !one.ask.includes(value)));
+  if (unnamed.length) throw new Refusal(`the words of ${unnamed.map(one => one.id).join(', ')} do not name every answer they allow`);
+  if (resolve(root, questions.stand) !== resolve(run)) throw new Refusal(`${run} is not where its question file puts the stand under the runs' root`);
+  const cellOf = (key: string, file: string, refs: [number, string, string][]) => [key, CELLS_5.get(key)?.case, CELLS_5.get(key)?.arm, CELLS_5.get(key)?.answer,
+    CELLS_5.get(key)?.seed, file, refs];
+  if (!same5(questions.cells.map(one => [one.key, one.case, one.arm, one.answer, one.seed, one.file, one.references.map(ref => [ref.slot, ref.key, ref.how])]),
+    PLANNED_5.map(one => cellOf(one.key, one.file, one.refs.map((ref, at) => [at + 1, ref.from, ref.how]))))) {
+    throw new Refusal('the question file\'s cells are not the stand\'s, each with the pictures it takes');
+  }
+  const picture = runPictures(root), cells = (readJson<{ cells: Record<string, StandCell> }>(join(resolve(run), 'cells.json')) ?? { cells: {} }).cells;
+  let checked = 0;
+  for (const one of questions.cells) {
+    const cell = cells[one.key];
+    if (cell?.status !== 'drawn') continue;
+    if (cell.file !== one.file || !picture(questions.stand, one.key)) throw new Refusal(`${one.key} is not drawn where the question file says`);
+    const took = cell.references ?? [];
+    if (took.length !== one.references.length) throw new Refusal(`${one.key} took ${took.length} pictures where the question file names ${one.references.length}`);
+    for (const ref of one.references) {
+      if (picture(ref.run, ref.key)?.sha256 !== took[ref.slot - 1]) throw new Refusal(`${one.key}'s picture ${ref.slot} (${ref.key}) is not the one it was drawn with`);
+      checked++;
+    }
+  }
+  const counts = { sessions: 0, built: 0, kept: 0, skipped: 0, missing: [] as string[], checked };
+  for (const sub of ['bundles', 'keys']) mkdirSync(join(dir, sub), { recursive: true, mode: 0o700 });
+  writeJson(join(dir, 'questions.json'), { version: 1, stand: questions.stand, note: 'The questions the tester stand\'s judges are asked, word for word (ASKED_5 in local/image-refs-judge.ts). Synthetic.',
+    ...ASKED_5 });
+  const person = (who: Who4) => questions.people[who];
+  for (const session of sessionPlan5()) {
+    counts.sessions++;
+    if (existsSync(join(dir, 'bundles', session.name))) { counts.kept++; continue; }
+    const story = questions.cases[session.story], missing: string[] = [];
+    const take = (from: string, key: string, prefix: 'pic' | 'ref') => {
+      const file = picture(from, key);
+      if (!file) { missing.push(key); return undefined; }
+      return { name: `${prefix}-${file.sha256.slice(0, 8)}.png`, key, ...file };
+    };
+    const pictures = session.cells.flatMap(key => { const file = take(questions.stand, key, 'pic'); return file ? [file] : []; })
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const cast = story.people.map(one => one.person);
+    const fronts = session.kind === 'dress' ? cast.flatMap(who => { const file = take(person(who).front.run, person(who).front.key, 'ref'); return file ? [{ ...file, person: who }] : []; })
+      .sort((a, b) => a.name.localeCompare(b.name)) : [];
+    const shown = [...pictures, ...fronts];
+    counts.missing.push(...missing.filter(key => !counts.missing.includes(key)));
+    if (!pictures.length || (session.kind === 'dress' && fronts.length !== cast.length) || new Set(shown.map(file => file.name)).size !== shown.length) {
+      counts.skipped++;
+      log({ event: 'bundle_skipped', session: session.name, missing: missing.length });
+      continue;
+    }
+    const ids = cast.map(who => ID_4[who]), names = pictures.map(file => file.name), list = names.map(name => ({ name }));
+    let input: object, schema: Schema;
+    if (story.family === 'pov') {
+      input = { story: story.intent, viewer: { name: questions.viewer.name, seen: questions.viewer.seen }, people: story.people.map(one => ({ id: ID_4[one.person],
+        name: person(one.person).name, looks: person(one.person).look, clothes: one.clothes, place: one.where })), pictures: list };
+      schema = pov5Schema(names, ids);
+    } else {
+      input = { story: story.intent, people: story.people.map(one => ({ id: ID_4[one.person], name: person(one.person).name, looks: person(one.person).look,
+        clothes: one.clothes })), fronts: fronts.map(file => ({ name: file.name, person: ID_4[file.person] })), portrait_clothes: questions.portraitClothes, pictures: list };
+      schema = dress5Schema(names, ids);
+    }
+    const form = formOf34(schema), keyed = Object.values(schema.properties!.pictures.properties!);
+    if (!formFits(form, schema) || !fitsSchema(placeholder5(schema), schema) || !exercised5(schema).every(answers => fitsSchema(answers, schema))
+      || !same5(Object.keys(schema.properties!.pictures.properties!), names) || keyed.some(one => !same5(Object.keys(one.properties!.people.properties!), ids))) {
+      throw new Refusal(`${session.name}'s form, schema, input and answers do not fit together`);
+    }
+    const bundle = join(dir, 'bundles', session.name), task = TASKS_5[session.kind], inputText = JSON.stringify(input, null, 2);
+    mkdirSync(bundle, { recursive: true, mode: 0o700 });
+    writeFileSync(join(bundle, 'TASK.md'), task + '\n', { mode: 0o600 });
+    writeFileSync(join(bundle, 'input.json'), inputText + '\n', { mode: 0o600 });
+    writeJson(join(bundle, 'schema.json'), schema);
+    writeJson(join(bundle, 'form.json'), form);
+    for (const file of shown) writeFileSync(join(bundle, file.name), file.bytes, { mode: 0o600 });
+    const key: SessionKey = { name: session.name, kind: session.kind, group: `${session.story}-s${session.seed}`, rank: session.rank, seed: session.seed,
+      task: sha256(task), schema: sha256(JSON.stringify(schema)), input: sha256(inputText), pictures: pictures.map(file => ({ name: file.name, key: file.key, sha256: file.sha256 })),
+      references: fronts.map(file => ({ name: file.name, key: file.key, sha256: file.sha256, compare: true })), missing };
+    writeJson(keyOf(dir, session.name), key);
+    counts.built++;
+    log({ event: 'bundle_written', session: session.name, pictures: pictures.length, references: fronts.length, missing: missing.length });
+  }
+  return counts;
+}
+const same5 = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
+// ---- The fifth stand's answers ----
+
+type SeenPov5 = { found: string; side: string; in_view: string; facing: string; as_placed: string };
+type Pov5 = { viewer: string; others: string; anatomy: string[]; people: Record<string, SeenPov5> };
+type SeenDress5 = { found: string; clothes: string; suit: string; body: Record<string, string> };
+type Dress5 = { count: number; anatomy: string[]; people: Record<string, SeenDress5> };
+type Facts5 = { pov: Map<string, Pov5>; dress: Map<string, Dress5>; excluded: Map<string, string[]>; sessions: { answered: number; planned: number } };
+// One judging pass's answers, each picture under its cell's key; a picture any session calls not clean is left out of
+// everything scored, with the sessions that called it so.
+function readFacts5(dir: string, keys: string): Facts5 {
+  const facts: Facts5 = { pov: new Map(), dress: new Map(), excluded: new Map(), sessions: { answered: 0, planned: 0 } };
+  const read: { key: SessionKey; pictures: Record<string, Ans> }[] = [];
+  for (const file of existsSync(keys) ? readdirSync(keys).filter(name => name.endsWith('.json')).sort() : []) {
+    const key = JSON.parse(readFileSync(join(keys, file), 'utf8')) as SessionKey;
+    facts.sessions.planned++;
+    const answers = readJson<Ans>(answerOf(dir, key.name));
+    if (!answers) continue;
+    facts.sessions.answered++;
+    const pictures = (answers.pictures ?? {}) as Record<string, Ans>;
+    read.push({ key, pictures });
+    for (const one of key.pictures) if (pictures[one.name]?.clean !== 'yes') facts.excluded.set(one.key, [...(facts.excluded.get(one.key) ?? []), key.name]);
+  }
+  for (const { key, pictures } of read) {
+    for (const one of key.pictures) {
+      if (facts.excluded.has(one.key)) continue;
+      if (key.kind === 'pov') facts.pov.set(one.key, pictures[one.name] as unknown as Pov5);
+      else facts.dress.set(one.key, pictures[one.name] as unknown as Dress5);
+    }
+  }
+  return facts;
+}
+
+// A result under one of the rules' measures, as the review of 2026-09-28 has them: 1, 0, or unresolved (null) when no
+// condition fails but an answer is unsure. `triOf` reads the conditions, each true, false or null for unsure.
+type Tri = 0 | 1 | null;
+const triOf = (conditions: (boolean | null)[]): Tri => (conditions.includes(false) ? 0 : conditions.includes(null) ? null : 1);
+const yesOr = (value: string, unsure: string) => (value === 'yes' ? true : value === unsure ? null : false);
+// A person of a POV story as the rules read them. Placed: found, at the edge of the picture their place gives, only part
+// of them in view, and as placed; in V-face found, in the middle, most of them in view, facing the viewer, and as placed.
+// Opposite, a diagnostic of what the tester saw and no proof of it: someone whose place is beside or behind the viewer,
+// found, most of them in view and facing the viewer; apart, the same of an unsure identity.
+const placedOf = (place: Place5, seen: SeenPov5): Tri => triOf([yesOr(seen.found, 'unsure'), seen.side === place.side,
+  seen.in_view === (place.view === 'part' ? 'part' : 'most'), place.view === 'part' || seen.facing === 'toward the viewer', yesOr(seen.as_placed, 'unsure')]);
+const oppositeOf = (place: Place5, seen: SeenPov5, found = 'yes') => place.view === 'part' && seen.found === found && seen.in_view === 'most'
+  && seen.facing === 'toward the viewer';
+// The viewer not drawn from outside; unresolved when the judge is unsure.
+const insideOf = (viewer: string): Tri => (viewer === 'seen from outside' ? 0 : viewer === 'unsure' ? null : 1);
+// A person of a clothes story dressed as the story says, as far as the picture can be inspected: found, the story's
+// clothes, no grey suit, every part the story bares bare and every one it covers covered. Mixed contradicts both, a part
+// not seen counts neither way, and a part the story neither bares nor covers is not read. Unresolved when nothing fails
+// but found is unsure or the clothes are not seen. It says nothing of what opaque clothing hides.
+const dressedOf = (dress: Dressed5, seen: SeenDress5): Tri => triOf([yesOr(seen.found, 'unsure'), yesOr(seen.clothes, 'not seen'),
+  ['no', 'not seen'].includes(seen.suit), ...dress.bare.map(part => ['bare', 'not seen'].includes(seen.body[part])),
+  ...dress.covered.map(part => ['covered', 'not seen'].includes(seen.body[part]))]);
+const MEASURES_5 = ['placed', 'opposite', 'oppositeUnsure', 'asPlaced', 'outside', 'inside', 'others', 'anatomy', 'dressed', 'suit', 'bare', 'covered', 'countRight'] as const;
+type Measure5 = typeof MEASURES_5[number];
+// A measure as the least and the most it can be: its results of 1, and those with the unresolved ones.
+type Range5 = { lo: number; hi: number };
+type Scored5 = { key: string; story: CaseId; arm: Arm; answer: number; seed: number; judged: boolean; at: Record<Measure5, Range5> };
+const known5 = (n: number): Range5 => ({ lo: n, hi: n });
+const ranged5 = (results: Tri[]): Range5 => ({ lo: results.filter(one => one === 1).length, hi: results.filter(one => one !== 0).length });
+const rangeText5 = (one: Range5) => (one.lo === one.hi ? `${one.lo}` : `${one.lo} to ${one.hi}`);
+const values5 = (group: Group5, id: string) => asked5(group, id).answers as string[];
+
+// Each cell's measures, each arm's tallies per story and person, the placed and dressed counts by answer and seed, and
+// the rules.
+function score5(questions: QuestionFile5, facts: Facts5) {
+  const cells: Scored5[] = questions.cells.map(one => {
+    const story = questions.cases[one.case], pov = facts.pov.get(one.key), dress = facts.dress.get(one.key);
+    const at = Object.fromEntries(MEASURES_5.map(measure => [measure, known5(0)])) as Record<Measure5, Range5>;
+    if (story.family === 'pov' && pov) {
+      const seen = story.people.map(place => ({ place, seen: pov.people[ID_4[place.person]] }));
+      Object.assign(at, { placed: ranged5(seen.map(one => placedOf(one.place, one.seen))), opposite: known5(seen.filter(one => oppositeOf(one.place, one.seen)).length),
+        oppositeUnsure: known5(seen.filter(one => oppositeOf(one.place, one.seen, 'unsure')).length), asPlaced: known5(seen.filter(one => one.seen.as_placed === 'yes').length),
+        outside: known5(pov.viewer === 'seen from outside' ? 1 : 0), inside: ranged5([insideOf(pov.viewer)]), others: known5(pov.others === 'yes' ? 1 : 0),
+        anatomy: known5(pov.anatomy.length ? 1 : 0) });
+    }
+    if (story.family === 'clothes' && dress) {
+      const seen = story.people.map(want => ({ want, seen: dress.people[ID_4[want.person]] }));
+      Object.assign(at, { dressed: ranged5(seen.map(one => dressedOf(one.want, one.seen))), suit: known5(seen.filter(one => ['yes', 'partly'].includes(one.seen.suit)).length),
+        bare: known5(sum(seen.map(one => one.want.bare.filter(part => one.seen.body[part] === 'bare').length))),
+        covered: known5(sum(seen.map(one => one.want.covered.filter(part => one.seen.body[part] === 'covered').length))),
+        countRight: known5(dress.count === story.count ? 1 : 0), anatomy: known5(dress.anatomy.length ? 1 : 0) });
+    }
+    return { key: one.key, story: one.case, arm: one.arm, answer: one.answer, seed: one.seed, judged: story.family === 'pov' ? !!pov : !!dress, at };
+  });
+  const byKey = new Map(cells.map(one => [one.key, one]));
+  const cellAt = (story: CaseId, arm: Arm, answer: number, seed: number) => byKey.get(cellKey5(story, arm, answer, seed))!;
+  const all = (stories: CaseId[], arms: Arm[]) => stories.flatMap(story => arms.flatMap(arm => SEEDS_5.flatMap(seed => ANSWERS.map(answer => cellAt(story, arm, answer, seed)))));
+  // An arm's measure seed by seed over the stories and the three answers, at its least or its most; NaN at a seed where
+  // a picture was not judged.
+  const perSeed = (arm: Arm, stories: CaseId[], measure: Measure5, bound: keyof Range5) => SEEDS_5.map(seed => sum(stories.flatMap(story => ANSWERS.map(answer => {
+    const cell = cellAt(story, arm, answer, seed);
+    return cell.judged ? cell.at[measure][bound] : NaN;
+  }))));
+  const total = (arm: Arm, stories: CaseId[], measure: Measure5): Range5 => {
+    const got = all(stories, [arm]).filter(cell => cell.judged);
+    return { lo: sum(got.map(cell => cell.at[measure].lo)), hi: sum(got.map(cell => cell.at[measure].hi)) };
+  };
+  const slots = (stories: CaseId[]) => sum(stories.map(story => questions.cases[story].people.length)) * SEEDS_5.length * ANSWERS.length;
+  // X against Y at the worst for X, its unresolved results 0 and Y's 1, or at its best, the reverse. Each rule reads its
+  // first arm as X, so it holds under every resolution when it holds at the worst, and fails under every one when it
+  // fails at the best.
+  const compare = (x: Arm, y: Arm, stories: CaseId[], measure: Measure5, best: boolean) => pairwise(perSeed(x, stories, measure, best ? 'hi' : 'lo'),
+    perSeed(y, stories, measure, best ? 'lo' : 'hi'), SEEDS_5.length);
+  const decisions: Decision34[] = [];
+  // A rule is undecided when a picture it needs was left out or not judged; otherwise yes when it holds under every
+  // resolution of the unresolved results, no when it fails under every one, and undecided between.
+  const decide = (question: string, needs: Scored5[], measure: Measure5, verdict: (best: boolean) => [boolean, string], beside = '') => {
+    const gap = needs.filter(cell => !cell.judged).map(cell => cell.key);
+    if (gap.length) { decisions.push({ question, verdict: 'undecided', why: `not judged: ${gap.join(', ')}` }); return; }
+    const open = sum(needs.map(cell => cell.at[measure].hi - cell.at[measure].lo)), [worst, why] = verdict(false), [best, bestWhy] = verdict(true);
+    const read = open ? `${open} result${open === 1 ? '' : 's'} unresolved; each against the first arm, ${why}; each for it, ${bestWhy}` : why;
+    decisions.push({ question, verdict: worst ? 'yes' : best ? 'undecided' : 'no', why: beside ? `${read}; ${beside}` : read });
+  };
+  const byStory = (arms: Arm[], stories: CaseId[], measure: Measure5) => stories.map(story => `${story} ${arms.map(arm => `${arm} ${rangeText5(total(arm, [story], measure))}`)
+    .join(', ')} of ${slots([story])}`).join('; ');
+  const armsText = (arms: Arm[], stories: CaseId[], measure: Measure5) => arms.map(arm => `${arm} ${rangeText5(total(arm, stories, measure))}`).join(', ');
+  // 1. The place: P above R on placed in V-squeeze, the tester's own scene, and over the three stories where people are
+  // beside or behind the viewer.
+  decide('P puts the people beside or behind the viewer at their edge of the picture, only partly in view, more often than R, in V-squeeze and over the three stories',
+    all(SIDE_STORIES, ['P', 'R']), 'placed', best => {
+      const squeeze = compare('P', 'R', ['V-squeeze'], 'placed', best), pooled = compare('P', 'R', SIDE_STORIES, 'placed', best);
+      return [above(squeeze) && above(pooled), `in V-squeeze placed ${pairText(squeeze)}; over the three ${pairText(pooled)}`];
+    }, `placed ${byStory(['R', 'P', 'PN'], SIDE_STORIES, 'placed')}; drawn facing the viewer with most of them in view, a diagnostic only, `
+      + `${armsText(['R', 'P', 'PN'], SIDE_STORIES, 'opposite')}, and of an unsure identity ${armsText(['R', 'P', 'PN'], SIDE_STORIES, 'oppositeUnsure')}`);
+  // 2. Without the fronts of the people only partly in view: PN against P, in the same two comparisons.
+  decide('PN, P without the fronts of the people only partly in view, does so more often than P, in V-squeeze and over the three stories',
+    all(SIDE_STORIES, ['PN', 'P']), 'placed', best => {
+      const squeeze = compare('PN', 'P', ['V-squeeze'], 'placed', best), pooled = compare('PN', 'P', SIDE_STORIES, 'placed', best);
+      return [above(squeeze) && above(pooled), `in V-squeeze placed ${pairText(squeeze)}; over the three ${pairText(pooled)}`];
+    });
+  // 3. The control: in V-face P keeps the person across the table in the middle, most of her in view and facing the
+  // viewer, as R does. A yes holds for these pictures, not for every frontal scene.
+  decide('In V-face, P keeps the person across the table in the middle, most of her in view and facing the viewer, at least as often as R',
+    all(['V-face'], ['P', 'R']), 'placed', best => {
+      const placed = compare('P', 'R', ['V-face'], 'placed', best);
+      return [atLeast(placed), `placed ${pairText(placed)}`];
+    });
+  // 4. The viewer: neither switch draws the viewer from outside more often than R.
+  decide('P and PN draw the viewer from outside no more often than R', all(POV_STORIES, ['P', 'R']).concat(all(SIDE_STORIES, ['PN'])), 'inside', best => {
+    const p = compare('P', 'R', POV_STORIES, 'inside', best), pn = compare('PN', 'R', SIDE_STORIES, 'inside', best);
+    return [atLeast(p) && atLeast(pn), `pictures without the viewer seen from outside, over the four stories P ${pairText(p)}; over the three PN ${pairText(pn)}`];
+  }, `the viewer seen from outside R ${total('R', POV_STORIES, 'outside').lo}, P ${total('P', POV_STORIES, 'outside').lo}, PN ${total('PN', SIDE_STORIES, 'outside').lo}`);
+  // 5. The clothes rule: C dresses the people as the story says more often than R, over the three stories together.
+  decide('C dresses the people as the story says more often than R, as far as the pictures show them: its clothes, bare where it bares, covered where it covers, and no grey suit',
+    all(DRESS_STORIES, ['C', 'R']), 'dressed', best => {
+      const dressed = compare('C', 'R', DRESS_STORIES, 'dressed', best);
+      return [above(dressed), `dressed ${pairText(dressed)}`];
+    }, `dressed ${byStory(['R', 'C', 'CF'], DRESS_STORIES, 'dressed')}; the suit ${armsText(['R', 'C', 'CF'], DRESS_STORIES, 'suit')}; the parts the stories bare `
+      + `shown bare ${armsText(['R', 'C', 'CF'], DRESS_STORIES, 'bare')}`);
+  // 6. The cropped fronts: CF against C.
+  decide('CF, C\'s words with the top 720x400 of each front (head, shoulders and some of the suit) as the reference, dresses them so more often than C',
+    all(DRESS_STORIES, ['CF', 'C']), 'dressed', best => {
+      const dressed = compare('CF', 'C', DRESS_STORIES, 'dressed', best);
+      return [above(dressed), `dressed ${pairText(dressed)}`];
+    }, `the suit ${armsText(['C', 'CF'], DRESS_STORIES, 'suit')}`);
+  // The tallies each table shows.
+  const judgedOf = (story: CaseId, arm: Arm) => all([story], [arm]).filter(cell => cell.judged);
+  const pov = POV_STORIES.map(story => {
+    const one = questions.cases[story] as Extract<Story5, { family: 'pov' }>;
+    return { story, arms: armsOf(story).map(arm => {
+      const got = judgedOf(story, arm), seen = got.map(cell => facts.pov.get(cell.key)!);
+      return { arm, judged: got.length, slots: got.length * one.people.length, opposite: total(arm, [story], 'opposite').lo, oppositeUnsure: total(arm, [story], 'oppositeUnsure').lo,
+        viewer: tally(seen.map(answer => answer.viewer), values5('pov', 'viewer')), others: tally(seen.map(answer => answer.others), values5('pov', 'others')),
+        anatomy: total(arm, [story], 'anatomy').lo,
+        people: one.people.map(place => {
+          const each = seen.map(answer => answer.people[ID_4[place.person]]);
+          return { person: ID_4[place.person], side: place.side, view: place.view, placed: ranged5(each.map(answer => placedOf(place, answer))),
+            found: tally(each.map(answer => answer.found), values5('pov', 'found')), sides: tally(each.map(answer => answer.side), values5('pov', 'side')),
+            inView: tally(each.map(answer => answer.in_view), values5('pov', 'in_view')), facing: tally(each.map(answer => answer.facing), values5('pov', 'facing')),
+            asPlaced: tally(each.map(answer => answer.as_placed), values5('pov', 'as_placed')) };
+        }) };
+    }) };
+  });
+  const dress = DRESS_STORIES.map(story => {
+    const one = questions.cases[story] as Extract<Story5, { family: 'clothes' }>;
+    return { story, arms: armsOf(story).map(arm => {
+      const got = judgedOf(story, arm), seen = got.map(cell => facts.dress.get(cell.key)!);
+      return { arm, judged: got.length, slots: got.length * one.people.length, countRight: total(arm, [story], 'countRight').lo, anatomy: total(arm, [story], 'anatomy').lo,
+        people: one.people.map(want => {
+          const each = seen.map(answer => answer.people[ID_4[want.person]]);
+          return { person: ID_4[want.person], bare: want.bare, covered: want.covered, dressed: ranged5(each.map(answer => dressedOf(want, answer))),
+            found: tally(each.map(answer => answer.found), values5('dress', 'found')), clothes: tally(each.map(answer => answer.clothes), values5('dress', 'clothes')),
+            suit: tally(each.map(answer => answer.suit), values5('dress', 'suit')),
+            body: Object.fromEntries(BODY_5.map(part => [part, tally(each.map(answer => answer.body[part]), values5('dress', 'body'))])) };
+        }) };
+    }) };
+  });
+  // Placed and dressed for each of the frame model's three answers, seed by seed: the arms' answers are not pairs.
+  const byAnswer = [...POV_STORIES.map(story => ({ story, measure: 'placed' as const })), ...DRESS_STORIES.map(story => ({ story, measure: 'dressed' as const }))]
+    .map(({ story, measure }) => ({ story, measure, arms: armsOf(story).map(arm => ({ arm, answers: ANSWERS.map(answer => {
+      const seeds = SEEDS_5.map(seed => cellAt(story, arm, answer, seed)), got = seeds.filter(cell => cell.judged);
+      return { seeds: seeds.map(cell => (cell.judged ? cell.at[measure] : null)), judged: got.length,
+        value: { lo: sum(got.map(cell => cell.at[measure].lo)), hi: sum(got.map(cell => cell.at[measure].hi)) } };
+    }) })) }));
+  return { judged: cells.filter(cell => cell.judged).length, decisions, pov, dress, byAnswer, slots: { side: slots(SIDE_STORIES), dress: slots(DRESS_STORIES) } };
+}
+export function scoreStand5(run: string, dir = judgeDirOf(run)) {
+  const questions = readQuestions5(run), facts = readFacts5(dir, join(judgeDirOf(run), 'keys')), five = score5(questions, facts);
+  return { stand: 5 as const, questions: questionsPin5(), sessions: facts.sessions, excluded: [...facts.excluded].map(([key, sessions]) => ({ key, sessions })), ...five };
+}
+export type Score5 = ReturnType<typeof scoreStand5>;
+export function scoreTables5(score: Score5): string {
+  const lines: string[] = [];
+  const row = (cells: (string | number | undefined)[]) => lines.push(`| ${cells.map(cell => (cell === undefined ? '-' : String(cell))).join(' | ')} |`);
+  const head = (cells: string[]) => { row(cells); row(cells.map(() => '---')); };
+  const choices = (group: Group5, id: string) => `(${values5(group, id).join('/')})`;
+  lines.push(`Questions ${score.questions}; sessions answered ${score.sessions.answered} of ${score.sessions.planned}; pictures judged ${score.judged} of ${PLANNED_5.length}; `
+    + `left out as not clean ${score.excluded.length ? score.excluded.map(one => `${one.key} (${one.sessions.join(', ')})`).join(', ') : 'none'}.`, '');
+  lines.push('Each rule is yes when it holds under every resolution of the unresolved results, no when it fails under every one, and undecided between, or when a picture it needs was left out or not judged. With every result known, no means the rule\'s criterion was not met; it does not mean equal or worse. Above, below and neither describe these seven stories, four seeds and three answers of the frame model to each arm\'s request: the answers are the same at every seed and are not pairs between arms, and nothing here is a test of significance.', '');
+  lines.push('These stories test ordinary outfits, a man\'s bare chest and ordinary swimwear. They do not test fully naked characters.', '');
+  lines.push('### The rules', '');
+  head(['question', 'verdict', 'evidence']);
+  for (const one of score.decisions) row([one.question, one.verdict, one.why]);
+  lines.push('', '### Seen through the viewer\'s eyes', '', 'Placed: found, at the edge of the picture their place gives, only part of them in view, and as placed; in V-face found, in the middle, most of them in view, facing the viewer, and as placed; "a to b" when found or as placed is unsure and nothing else fails. Opposite, a diagnostic and no proof of where they sit: someone whose place is beside or behind the viewer, found, most of them in view and facing the viewer; apart, the same of an unsure identity.', '');
+  head(['story', 'arm', 'pictures', 'person', 'place', 'placed', `side ${choices('pov', 'side')}`, `in view ${choices('pov', 'in_view')}`, `facing ${choices('pov', 'facing')}`,
+    `as placed ${choices('pov', 'as_placed')}`, `found ${choices('pov', 'found')}`]);
+  for (const story of score.pov) {
+    for (const arm of story.arms) {
+      for (const one of arm.people) {
+        row([story.story, arm.arm, arm.judged, one.person, `${one.side}, ${one.view}`, `${rangeText5(one.placed)} of ${arm.judged}`, counts34(one.sides), counts34(one.inView),
+          counts34(one.facing), counts34(one.asPlaced), counts34(one.found)]);
+      }
+    }
+  }
+  lines.push('');
+  head(['story', 'arm', 'pictures', 'opposite', 'opposite, identity unsure', `viewer ${choices('pov', 'viewer')}`, `others ${choices('pov', 'others')}`, 'anatomy errors']);
+  for (const story of score.pov) {
+    for (const arm of story.arms) row([story.story, arm.arm, arm.judged, `${arm.opposite} of ${arm.slots}`, arm.oppositeUnsure, counts34(arm.viewer), counts34(arm.others), arm.anatomy]);
+  }
+  lines.push('', '### Dressed as the story says', '', 'Dressed: found, the story\'s clothes, no grey suit, and every part the story bares bare and every one it covers covered where it can be inspected; mixed contradicts both, not seen counts neither way; "a to b" when found is unsure or the clothes are not seen and nothing else fails. It is what the picture shows, not what opaque clothing hides.', '');
+  head(['story', 'arm', 'pictures', 'person', 'dressed', `clothes ${choices('dress', 'clothes')}`, `suit ${choices('dress', 'suit')}`,
+    ...BODY_5.map(part => `${part} ${choices('dress', 'body')}`), `found ${choices('dress', 'found')}`]);
+  for (const story of score.dress) {
+    for (const arm of story.arms) {
+      for (const one of arm.people) {
+        const mark = (part: BarePart) => `${counts34(one.body[part])}${one.bare.includes(part) ? ' (bare)' : one.covered.includes(part) ? ' (covered)' : ''}`;
+        row([story.story, arm.arm, arm.judged, one.person, `${rangeText5(one.dressed)} of ${arm.judged}`, counts34(one.clothes), counts34(one.suit), ...BODY_5.map(mark),
+          counts34(one.found)]);
+      }
+    }
+  }
+  lines.push('');
+  head(['story', 'arm', 'pictures', 'people counted right', 'anatomy errors']);
+  for (const story of score.dress) for (const arm of story.arms) row([story.story, arm.arm, arm.judged, arm.countRight, arm.anatomy]);
+  lines.push('', '### By the frame model\'s answer', '', `Placed (the POV stories) and dressed (the clothes stories) for each of the three answers each arm was drawn from, at seeds ${SEEDS_5.join(', ')}, then their sum; - where a picture was not judged.`, '');
+  head(['story', 'measure', 'arm', ...ANSWERS.map(answer => `a${answer}`)]);
+  for (const one of score.byAnswer) {
+    for (const arm of one.arms) {
+      row([one.story, one.measure, arm.arm, ...arm.answers.map(answer => `${answer.seeds.map(seed => (seed ? rangeText5(seed) : '-')).join(' / ')} = ${rangeText5(answer.value)}`)]);
+    }
+  }
+  return lines.join('\n') + '\n';
+}
+
 // ---- The command line ----
 
 const print = (value: object) => console.log(JSON.stringify(value));
@@ -2338,6 +2887,7 @@ async function main(args: string[]) {
   } else if (command === 'agreement') {
     if (!values.second) throw new Refusal('Use: agreement --out <dir> --second <the compared judge\'s record directory>');
     const second = resolve(values.second), first = readRecord(judgeDirOf(out)), other = readRecord(second), stand = standOf(out);
+    if (stand === 5) throw new Refusal('the tester stand is judged once, without a retest to compare');
     if (!first || !other) throw new Refusal('both records must exist');
     if (stand === 3 || stand === 4) {
       // Two passes over the same bundles, and the second scored as the judge of record's is, with each count it moved.
@@ -2355,6 +2905,12 @@ async function main(args: string[]) {
     writeFileSync(join(judgeDirOf(out), 'agreement.md'), agreementTable(agreement, first, other), { mode: 0o600 });
     writeJson(join(judgeDirOf(out), 'agreement.json'), agreement);
     print({ event: 'agreement', questions: agreement.length, pairs: agreement.reduce((total, one) => total + one.n, 0) });
+  } else if (standOf(out) === 5) {
+    const score = scoreStand5(out);
+    writeFileSync(join(judgeDirOf(out), 'score.json'), JSON.stringify(score, null, 2) + '\n', { mode: 0o600 });
+    writeFileSync(join(judgeDirOf(out), 'score.md'), scoreTables5(score), { mode: 0o600 });
+    print({ event: 'score', stand: 5, answered: score.sessions.answered, planned: score.sessions.planned, excluded: score.excluded.length, judged: score.judged,
+      verdicts: Object.fromEntries(['yes', 'no', 'undecided'].map(verdict => [verdict, score.decisions.filter(one => one.verdict === verdict).length])) });
   } else if (standOf(out) === 3 || standOf(out) === 4) {
     const score = scoreStand34(out);
     writeFileSync(join(judgeDirOf(out), 'score.json'), JSON.stringify(score, null, 2) + '\n', { mode: 0o600 });

@@ -39,6 +39,7 @@
     "image:refs-backlog": "node local/image-refs-backlog.ts",
     "image:refs-stand-2": "node local/image-refs-stand-2.ts",
     "image:refs-test": "node local/image-refs-test.ts",
+    "image:refs-tester": "node local/image-refs-tester.ts",
     "image:refs-judge": "node local/image-refs-judge.ts",
     "image:prompt-arms": "node local/image-prompt-arms.ts",
     "image:prompt-arms-judge": "node local/image-prompt-arms-judge.ts",

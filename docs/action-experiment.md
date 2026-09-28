@@ -3176,3 +3176,326 @@ card, or ComfyUI swaps them, and what a swap takes; a rewrite's time with and wi
 given the whole chat through TextGenerate, answers the JSON its system prompt asks for, and how often its thought runs
 past 4096 tokens; how long a tester's frame waits behind a rewrite; and whether a Qwen-only box's 60 GB of disk holds
 the enhancer beside the cu130 install.
+
+<a id='tester-stand'></a>
+
+## The tester stand: where the others are and what they wear
+
+On 2026-09-28 the owner passed on two complaints of the tester's. A frame seen through the reader's eyes: «к тебе с
+двух сторон прижались девушки, а по картинке показывают что они напротив тебя, а мы по сути лишь их часть должны
+видеть боковым зрением». Clothes: «если персонаж голый, то он и должен быть голым, если он в одежде, то он и должен
+быть в одежде, а не в бодди из референса». 1a84d3d answers each with a change to the frame behind a list of readers
+that is empty by default ([where the others are](telegram-ui.md#pov-places), [what they
+wear](telegram-ui.md#what-they-wear)). This stand, the fifth refs stand, asks whether Qwen then draws what the changes
+ask, on the bot's picture path, before any reader gets them. The owner approved preparing it («Да можешь готовить»);
+nothing of it has been drawn, and it goes on [the next rental](#tester-rental).
+[image-refs-tester.ts](../local/image-refs-tester.ts) plans, prices, draws and pages it through
+[image-refs-test.ts](../local/image-refs-test.ts), as the refs backlog does.
+
+**The stories** ([examples/tester-stand.ts](../examples/tester-stand.ts)) are synthetic and clean, in Russian, with
+the refs stands' H, L, B and T, whose details and looks are the stands' word for word, so that their fronts of seed 7
+in the grey suit are their portraits. Four are seen through the eyes of Артём, who has no portrait, as a reader's own
+person sends none:
+
+| story | the last scene | where the stand wants each person |
+| --- | --- | --- |
+| V-squeeze | a narrow bench at the end of a pier, Лина pressed against his left shoulder and Тесса against his right | L at the left edge and T at the right, each only partly in view |
+| V-walk | the promenade, Мара at his left shoulder, brushing his sleeve | H at the left edge, partly |
+| V-behind | a café table, Бруно leaning in from behind over his right shoulder to point at the map | B at the right edge, partly: an arm, a hand, at most the side of his face |
+| V-face, the control | dinner, Мара across the narrow table, facing him | H in the middle, most of her in view, facing the viewer |
+
+Three are by a lake, each with what the people wear before its last scene, as the bot would start the frame
+(`wornAt`):
+
+| story | the last scene | what the stand wants |
+| --- | --- | --- |
+| C-bare | Бруно, wet after a swim, in navy swim shorts, beside Тесса, still dressed | B bare on the chest and belly, the arms and the feet; T covered on the same |
+| C-outfit | Мара in a red knitted sweater, blue jeans and white canvas sneakers | H covered on all four parts |
+| C-swim | Лина knee-deep in the water in a bright yellow one-piece swimsuit | L bare on the arms, legs and feet, covered on the chest and belly |
+
+A man's bare chest after a swim and a one-piece swimsuit are all they bare: the stand does not test a naked person,
+and its tables say so.
+
+**The frames** were written before the card by the hosted Gemma 4 31B, the bot's hosted model: three answers to each
+story's request in each of its two variants, as the bot asks it (`caseRequest`), today's and the one with places or
+with change 8's clothes rule. 42 calls on 2026-09-28, each parsed at its first attempt, 211 to 452 tokens out.
+`write-frames.mts` froze them in `frames.json` (sha256 707ce6a0…), and `build-texts.ts` beside it wrote the stand's
+`texts.json` (10e76a41…) and `judge-questions.json` (3e49adba…), in ~/simple-story-chat-runs/2026-09-28/tester-stand
+and refs-stand-5. In all three answers with places every person of the three side stories is `partly` in view, and
+nobody in V-face is.
+
+**The arms**, each prompt as the bot assembles it from the frozen answer of its variant:
+
+- **R**: today's frame with each bound person's front at 352x640 and the bot's reference wording. The floor.
+- **P**: the frame with places (`SIMPLE_CHAT_POV_PLACE_USERS`) and every front.
+- **PN**: P's frame without the front of anybody only partly in view (`SIMPLE_CHAT_POV_PARTIAL_USERS`): in the three
+  side stories the words alone. In V-face PN is P and is not drawn again.
+- **C**: change 8's rule and each referenced person's clothes said before the reference wording
+  (`SIMPLE_CHAT_CLOTHES_USERS`), with every front.
+- **CF**: C's clothes with the top 720x400 of each front, the head, the shoulders and some of the suit, as the refs
+  backlog's FC takes it, and FC's wording: the face from the picture, the build from the words.
+
+240 cells at seeds 71, 73, 79 and 83, 60 a seed: R 84, P 48, PN 36, C 36 and CF 36. Seed by seed, each story's
+answers and arms in turn, so that a card that ends early leaves whole comparisons. H's and L's fronts come from the
+first stand's run of 2026-09-27, B's and T's from the third's of 2026-09-28.
+
+**The price**, at the refs stands' times on the RTX 5090 (a frame from words 5.0 s, with one front 5.3, with two 5.8,
+one face priced at 6.0 and two at 7.2), with the compile and each group's first job: 22.6 minutes, and 51.1 at the
+admission prices, which decide only whether the last cells before `--until` begin. That is $0.19 at the picture
+card's $0.498 an hour, of a card that bills anyway. The prompts are 224 to 564 tokens; a front reaches the encoder as
+880 tokens and a crop as 1056.
+
+**Drawing** is the refs backlog's: one job at a time without `front`, so that a reader's picture waits at most for the
+cell being drawn, about 7 s at the longest (CF with two faces). The run is held to the bot's path, cu130 with the
+Triton backend and the kitchen's attention, and to the texts' pin; each front must be the file its run recorded, and
+is uploaded again to each card; an `--until` during a job stops it and records nothing; a card that goes away ends the
+run with `comfy_unreachable`, and a start on the next card goes on where it stopped. `run.sh` checks the server as the
+bot's card, copies the card's record once and draws, logging keys, codes and times. The drawing writes the stand's
+`index.html` after each cell. The page is the owner's: no Claude session opens it or a picture.
+
+**The judging** is GPT-6 Astra's, blind, after the card, in 28 sessions, one a story and seed: its frames side by side,
+nine pictures (six in V-face), named by their hash and in that order, with the story's intent and each person's looks
+and clothes, and in the POV stories their place. `pov`, 16 sessions, asks of each picture whether the viewer shows
+(not at all, their own body only, or seen from outside), whether anybody else is near, and anatomy; and of each person
+whether they are found, their side (an edge where the picture's border cuts through them, or `both edges`), how much
+of them is in view (`most` is more than half the head and more than half the torso), which way the torso faces (within
+45 degrees of the camera, side-on, away) and whether the scene shows them as placed. `dress`, 12 sessions, has each
+person's front beside the pictures and asks the count and anatomy, and of each person whether they are found, whether
+the outfit that can be inspected is the story's, whether the front's grey suit shows, and each of four parts (chest
+and belly, arms, legs, feet) `bare`, `covered`, `mixed` or `not seen`. A picture that is not clean is left out of
+everything scored.
+
+One fresh Astra session at high effort reviewed the tasks, the layout, the rules and blinded samples: stand-ins from
+earlier stands on this stand's own inputs, since it had no picture yet. It answered «freeze with the listed changes —
+the layout is usable, but the rubric and scoring must distinguish visible success, contradiction and uncertainty before
+judgments are frozen», and its twelve changes are in: firm boundaries for side, view and facing; one figure for one
+person, never told by position; `unsure` for placement; parts judged only where they can be inspected, with `mixed`;
+`not seen` for the clothes, and the suit's patch as `partly`; `dressed` as what can be seen, not what opaque clothes
+hide; the three-valued results below; CF no longer called a face alone; the fronts in the order of their names;
+`malformed limb or finger` in anatomy; and forms, schemas and placeholders checked together with answers that use
+every value. The questions' pin is adf4c310…; the first four stands' pins do not move.
+
+**The rules**, in the order of the complaints. A person is `placed` when found, at the side their place gives, only
+partly in view (in V-face most of her in view and facing the viewer) and shown as placed; `dressed` when found, in the
+story's clothes, without the suit, bare where the story bares and covered where it covers, as far as the picture shows.
+Each such result is 1, 0, or unresolved, where an answer is unsure and nothing fails. X is above Y with a higher sum
+and ahead at more seeds than behind, and at least Y with a sum as high and ahead as often as behind.
+
+1. P above R on `placed`, in V-squeeze and over the three side stories.
+2. PN above P, in the same two.
+3. The control: in V-face, P at least R.
+4. P and PN draw the viewer from outside no more often than R.
+5. C above R on `dressed`, over the three lake stories.
+6. CF above C on `dressed`.
+
+A rule is yes if it holds with every unresolved result counted against its first arm, no if it fails with every one
+counted for it, and undecided between, or where a picture it needs was not judged. Beside the rules, `opposite` counts
+what the tester saw, somebody beside or behind the viewer drawn with most of them in view and facing the camera, as a
+diagnostic. `score.md` gives each story's tallies by arm, and the placed and dressed counts of each of the frame
+model's three answers seed by seed. The stand is judged once, without a retest: about 40 minutes at 4 a session, 3 at
+a time. The queue stops once more than a tenth of its sessions have had an attempt fail or refuse.
+
+```sh
+npm run image:refs-tester -- estimate
+npm run image:refs-tester -- dry-run --out ~/simple-story-chat-runs/2026-09-28/refs-stand-5 \
+  --frames ~/simple-story-chat-runs/2026-09-28/tester-stand/frames.json \
+  --first ~/simple-story-chat-runs/2026-09-27/refs-stand --third ~/simple-story-chat-runs/2026-09-28/refs-stand-3    # steps 0 to 17
+bash ~/simple-story-chat-runs/2026-09-28/refs-stand-5/run.sh "$end"    # on the picture card: exit 0 once all 240 are drawn, 3 at "$end", 1 on an error
+npm run image:refs-tester -- page --out ~/simple-story-chat-runs/2026-09-28/refs-stand-5    # index.html again
+# After the card, without one:
+npm run image:refs-judge -- bundles --out ~/simple-story-chat-runs/2026-09-28/refs-stand-5
+npm run image:refs-judge -- judge --out ~/simple-story-chat-runs/2026-09-28/refs-stand-5 --parallel 3
+npm run image:refs-judge -- score --out ~/simple-story-chat-runs/2026-09-28/refs-stand-5    # judge/score.json and score.md
+```
+
+**The dry run** went as expected on 2026-09-28. It checks the plan, the real texts' pin and tokens, each of the 240
+prompts against what the bot assembles from its frozen answer, and every graph read back, R's, P's and C's the bot's
+`referenceGraph`. Then, against local/fake-comfy.ts as the bot's cards: the refusals before anything is sent (other
+texts, no card record, a `--first` that holds no fronts, a `--third` from other weights, a front changed on disk, a
+server on cu128), five seconds that begin nothing, an `--until` during a job, a card that goes away after 9 cells and
+another that draws the other 231 with the four fronts uploaded again, a start after it that draws nothing, no `front`
+in any of 245 submits and one job at a time. Then the judging against stand-ins for codex: 28 bundles with 264 fronts
+checked against their hashes and nothing in them that names a cell, a front or a story, 240 pictures judged, six
+verdicts; a question file, a picture or a front changed since, refused; and the prompts' made-up word nowhere but the
+texts and the pages. `run.sh` was rehearsed against the fake too.
+
+**The card probe**, on the text card. The heretic writes the bot's frames there, where the stand's came from hosted
+Gemma, and on the card's vLLM a field added last to a person ran away into whitespace in 42 answers of 124 on
+2026-09-28. `card-probe.mts` in ~/simple-story-chat-runs/2026-09-28/tester-stand asks the four POV stories' frames with
+places as the bot asks them, five times each, as internal work: 20 calls, a failed one tried once more. It records
+counts and never an answer: parsed, the finish, tokens, whitespace outside strings, the longest run of whitespace and
+the key before it, and whether each person is listed with the `in_view` the stand expects. `--summary` gives the
+runaways (unparsed, with 100 whitespace characters or more in one run), those cut at the limit and the places right.
+It was rehearsed against a fake gateway.
+
+**Not verified without the card**: the stand's times on these frames; whether Qwen draws a person at the frame's edge
+from these words, and whether the words alone draw the right person where PN sends no picture; whether the heretic
+writes the places as hosted Gemma did, which the card probe answers; how Astra reads real pictures of these stories,
+since the review saw stand-ins; and how long a stand's cell holds up the tester's picture.
+
+<a id='tester-rental'></a>
+
+## The next rental: both cards once, for the tester's complaints
+
+Written on 2026-09-28 for the next rental, which the owner allowed to be prepared («Да можешь готовить»). Nothing is
+rented. [The owner's rules](gpu.md#while-the-cards-are-paid-for) hold, with the two of 2026-09-28: a card is rented
+for the work and not for the tester, who may use the bot while it is on, and it is deleted once no work for it is
+ready; and at most $3 a day goes on rentals, within which the main session rents without asking, once a fresh GPT-6
+Astra session at `xhigh` has read the queue and backed the jobs worth their minutes, cheap ones with a likely gain
+first. Both cards are rented once, together, and each is deleted when its work is done: 30 to 65 minutes a card,
+$0.58 to $1.01 for both before the downloads.
+
+- **The text card**, simple-serving with the heretic's NVFP4 ([as gpu.md has it](gpu.md#serving-card)): the bot, and
+  two probes of the frame's new fields as class `internal`, whose calls wait behind the readers': [the card
+  probe](#tester-stand) of the places, 20 calls, then the sheet versions' probe of `lasting_changes` ([along the
+  story](telegram-ui.md#along-the-story)), 292 calls. The memory work's jobs are optional slots after them.
+- **The picture card**, the bot's card on cu130 ([as gpu.md has it](gpu.md#bot-card)): the bot's pictures, sent with
+  `front`, and in their gaps [the tester stand](#tester-stand)'s 240 cells.
+- **Round two** is not on it: it ran whole on 2026-09-27, its texts from 05:45 to 06:16 UTC, its 445 cells drawn from
+  06:46 to 08:01, judged and reported by 09:50. A round three needs the owner's decision and [the runbook](#runbook)'s
+  move of the round before.
+
+**Before the rental.** Everything the cards run has been dry-run without a card, as the first rule asks: the stand and
+its `run.sh` against local/fake-comfy.ts, the card probe against a fake gateway, the versions probe against
+simple-serving's gateway at `next-card` with its fake engine (292 answers, all parsed; without the exports below it
+stops at `serving_required`), and the memory work's O3 job against simple-serving's own gateway with a fake engine. On
+the day: the stand's dry run again on the commit that draws; Astra's reading of this queue; the rent dry runs; and this
+machine kept awake. On 2026-09-28 it slept from 11:14 to 12:18 UTC during a review; asleep, it keeps the tunnels, the
+bot and the drawing down while both cards bill, and the timeouts here do not count the time asleep.
+
+**The order**, in minutes from each card's rental. The text card is rented first and the picture card right after,
+on another host:
+
+| minutes | the text card | the picture card |
+| --- | --- | --- |
+| 0 to 12 | running after 2.3, prepared by 11.5 (2026-09-27) | the bootstrap: Qwen's 17.3 GB and the cu130 environment |
+| 12 to 15 | its first start, ready at 14.4 | the server and the card check, passed at about 12 (2026-09-27); `run.sh` starts |
+| 15 to 18 | the pair started again (29 to 35 s), `up`, the smoke; the bot, the owner's smoke turn | the bot's smoke frame and portrait, ahead of the stand's cells |
+| 18 to 33, or 48 | the card probe, 1 to 5 minutes, beside the versions probe, 12 to 15, 30 with runaways | the stand, 23 to 51 minutes, done at about 36 to 64 |
+| then | the optional slots Astra backed, or the end | the end |
+
+The picture card does not wait for the text card: the stand needs no text model, so `run.sh` starts as soon as the
+card check passes, and the bot's smoke pictures go ahead of its cells whenever the bot is up. The tester may use the
+bot from its start until each card's work is done; no card waits for the tester. Readers go first on both cards: vLLM
+takes a waiting reader before internal work, and a reader's picture waits at most for the one cell being drawn.
+
+| | minutes | an hour | dollars |
+| --- | --- | --- | --- |
+| the text card: ready, the smoke and the bot, the probes, the end | 30 to 51 | $0.552 | 0.28 to 0.47 |
+| the picture card: ready, the smoke, the stand, the end | 37 to 65 | $0.498 | 0.31 to 0.54 |
+| both | | | 0.58 to 1.01 |
+
+Each offer's download comes on top, which the rent dry run prices into `session`; it made most of the spread before
+([prices](knowledge/gpu-measurements.md#costs-and-downloads)). Both cards take `--hours 2`: the guard deletes a card
+that many hours after its container starts, which was 2.3 minutes after the rental on 2026-09-27, and an hour is short
+for a text card prepared more slowly than that night's, or for the stand at the admission prices after a bootstrap as
+slow as round one's cards had, 30 minutes. `--hours 2` prices each session at 2 hours 20 minutes 20 seconds, what a
+card bills if its end fails: $1.29 for the text card and $1.16 for the picture card, downloads on top. The rent dry
+runs' two sessions, with what the day has spent already, show whether the day's $3 holds even then; where it does not,
+the text card takes `--hours 1`, which its work fits when it is prepared as fast as on 2026-09-27, with 7 to 25
+minutes to spare, and O3's card half does not run.
+
+**Optional, after the probes on the text card**, each only if Astra backs it and the day's $3 allows it, by the
+commands of the work that owns it:
+
+- O3's card half, whether thinking before a scene cuts the heretic's trap errors and what it costs a scene:
+  ~/simple-story-chat-runs/2026-09-28/scene-thinking/card/job.mts, about 20 minutes on an idle card and 55 with the
+  tester at it, $0.18 to $0.51, with `--minutes` the minutes left before `"$end_text"` and 75 at most. Its notes are
+  beside it, and its dry run passed.
+- The heretic's reading ceiling, step 1 of the memory proposal on the card: `eval ceiling` with `--model
+  serving:<label>`, three runs, a few minutes. Without `RECALL_THINKING`, whose 16384 tokens out the gateway refuses.
+- Step 5, production-sized compactions (`--compact-at` in memory-probe.ts, about 160k tokens a side): not written yet,
+  and it goes only if the memory work lands it and dry-runs it before the rental.
+
+**The runbook.** Every ssh has a limit: `on` gives each its seconds, and the two that last the session, `up` and
+`gpu/tunnel.sh`, give each dial ten seconds and notice a connection gone quiet after 15 s x 3. `HOST1`, `ID1`, `ID2`
+and the two `DESTROY_BY` come from `rented`.
+
+```sh
+# The day of the rental, in this checkout. First a fresh GPT-6 Astra session at xhigh reads this section and says which
+# jobs can bring a gain worth their minutes; the ones it does not back are left out.
+npm run image:refs-tester -- dry-run --out ~/simple-story-chat-runs/2026-09-28/refs-stand-5 \
+  --frames ~/simple-story-chat-runs/2026-09-28/tester-stand/frames.json \
+  --first ~/simple-story-chat-runs/2026-09-27/refs-stand --third ~/simple-story-chat-runs/2026-09-28/refs-stand-3
+SIMPLE_CHAT_RENT_DRY_RUN=1 npm run gpu:rent -- --lane text --hours 2    # each offer's `session`; --hours 1 for the day's $3
+SIMPLE_CHAT_RENT_DRY_RUN=1 npm run gpu:rent -- --lane pictures --qwen only --hours 2
+# This machine stays awake until both destroys are read back, in a terminal of its own:
+systemd-inhibit --what=sleep:idle:handle-lid-switch --who=simple-chat --why='rented cards' sleep infinity
+on() { local host=$1 limit=$2; shift 2
+  timeout "$limit" ssh -T -o ConnectTimeout=10 -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "$host" "$@"; }
+npm run gpu:rent -- --lane text --hours 2    # `rented`: ID1, its host HOST1, destroyBy
+npm run gpu:rent -- --lane pictures --qwen only --hours 2 --avoid-host HOST1    # ID2, destroyBy
+npm run gpu:rent -- --show ID1; npm run gpu:rent -- --show ID2    # ssh.direct as simple-chat-vast and simple-chat-vast-pictures
+timeout 120 ssh -o ConnectTimeout=10 simple-chat-vast true    # each card's first ssh verifies its host key
+timeout 120 ssh -o ConnectTimeout=10 simple-chat-vast-pictures true
+# Each card's guard as soon as ssh answers, and its end five minutes before min(guard, destroyBy). A card whose guard
+# fails is ended at once, as below, and nothing is started on it.
+end_of() { local guard
+  guard=$(on "$1" 20 'flock -n -E 75 /root/.simple-chat-trial-guard.lock true; [ $? -eq 75 ] && cat /root/.simple-chat-trial-deadline')
+  [[ $guard =~ ^[1-9][0-9]{0,11}$ ]] && (( guard <= $2 )) && echo $(( (guard < $2 ? guard : $2) - 300 )); }
+end_text=$(end_of simple-chat-vast DESTROY_BY_1); end=$(end_of simple-chat-vast-pictures DESTROY_BY_2); echo "$end_text $end"
+
+# The text card, in simple-serving's checkout at next-card (gpu.md#serving-card).
+git archive next-card | on simple-chat-vast 300 'mkdir -p /workspace/simple-serving && tar -xf - -C /workspace/simple-serving'
+uv run python -m simple_serving.cli keys | on simple-chat-vast 1800 bash /workspace/simple-serving/card/bootstrap.sh    # 9.2 min on 2026-09-27
+timeout 120 uv run python -m simple_serving.cli trial --ssh-host simple-chat-vast
+uv run python -m simple_serving.cli up    # a terminal of its own, until it says ready
+py=/workspace/simple-serving-card/gateway/bin/python
+on simple-chat-vast 300 "cd /workspace/simple-serving && $py -m simple_serving.card --stop && $py -m simple_serving.card"
+uv run python -m simple_serving.cli up    # again, until ready
+on simple-chat-vast 30 "grep -o '\"kv_cache_tokens\": [0-9]*' /workspace/simple-serving-card/logs/card.jsonl | tail -n 1"    # 151300
+mkdir -p logs; set -o pipefail; timeout 600 uv run python -m simple_serving.smoke | tee logs/smoke-text-card.jsonl    # exit 0
+
+# The picture card, in this checkout, beside the text card's preparation (gpu.md#bot-card). The bootstrap runs
+# detached, so that a dropped connection does not end it; then its lock, 40 minutes at most, and its marks.
+on simple-chat-vast-pictures 60 'mkdir -p /workspace/simple-chat/gpu /workspace/simple-chat-gpu'
+tar -cf - -C gpu . | on simple-chat-vast-pictures 120 'tar -xf - -C /workspace/simple-chat/gpu'
+on simple-chat-vast-pictures 30 'SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_TORCH=cu130 setsid -f nohup bash /workspace/simple-chat/gpu/image-bootstrap.sh </dev/null >>/workspace/simple-chat-gpu/bootstrap.log 2>&1'
+sleep 15; timeout 2400 bash -c 'until timeout 20 ssh -o ConnectTimeout=10 -o BatchMode=yes simple-chat-vast-pictures "flock -n /workspace/simple-chat-gpu/image-bootstrap.lock true"; do sleep 10; done'
+on simple-chat-vast-pictures 30 'd=/workspace/simple-chat-gpu; test -s $d/image-verified.txt && test -f $d/ComfyUI/.venv-cu130/simple-chat-ready && echo prepared || tail -n 5 $d/bootstrap.log'
+on simple-chat-vast-pictures 30 'SIMPLE_CHAT_IMAGE_TORCH=cu130 SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 SIMPLE_CHAT_IMAGE_TRITON=1 setsid -f nohup flock -n /root/.simple-chat-comfy.lock bash /workspace/simple-chat/gpu/image-serve.sh </dev/null >/dev/null 2>&1'
+bash gpu/tunnel.sh --pictures-only simple-chat-vast-pictures    # a terminal of its own; it dials again after a drop
+timeout 600 bash -c 'until curl -sf -m 5 -o /dev/null http://127.0.0.1:8188/system_stats; do sleep 5; done'
+on simple-chat-vast-pictures 30 'd=/workspace/simple-chat-gpu/ComfyUI; test -f $d/.venv-cu130/simple-chat-ready && test ! -e $d/.venv && echo cu130 alone; du -sh $d/.venv-cu130; df -h /workspace | tail -1'
+curl -s -m 10 http://127.0.0.1:8188/system_stats | grep -o '"pytorch_version": *"[^"]*"'    # 2.11.0+cu130
+curl -s -m 10 http://127.0.0.1:8188/system_stats | grep -c -- '--enable-triton-backend'    # 1
+curl -s -m 10 http://127.0.0.1:8188/object_info/ModelAttentionBackend | grep -c '"comfy kitchen attention"'    # 1
+bash ~/simple-story-chat-runs/2026-09-28/refs-stand-5/run.sh "$end"    # a terminal of its own
+
+# The bot, in its checkout with the picture settings of setup.md#pictures, once `up` is ready and the picture tunnel
+# answers, with gpu.md's exports:
+export SIMPLE_CHAT_PROVIDER=simple-serving SIMPLE_CHAT_BASE_URL=http://127.0.0.1:8080 \
+  SIMPLE_CHAT_MODEL=gemma-4-31b-heretic-nvfp4 SIMPLE_CHAT_CONTEXT_TOKENS=65536 SIMPLE_CHAT_VAST_INSTANCE_ID=
+export SIMPLE_CHAT_API_KEY="$(node -p 'require(process.argv[1]).client_key' ~/.config/simple-serving/config.json)"
+npm run start:gpu 2>&1 | tee -ai logs/bot-gpu.jsonl
+# The owner's smoke in the owner's own chat, from a synthetic seed of examples/: a scene, its frame and a portrait.
+grep -E '"event":"picture(_portrait)?"' logs/bot-gpu.jsonl | tail -n 2 | grep -c '"pictureAttention":"kitchen"'    # 2
+curl -s -m 10 http://127.0.0.1:8188/internal/logs/raw | grep -o 'is unavailable; using PyTorch attention' | wc -l    # 0
+
+# The probes, in ~/work/simple-chat with the same exports, each in a terminal of its own; `internal` runs both at once.
+timeout 1500 node --env-file=.env.gpu ~/simple-story-chat-runs/2026-09-28/tester-stand/card-probe.mts --out ~/simple-story-chat-runs/2026-09-28/tester-stand/card
+timeout 2700 node --env-file=.env.gpu ~/simple-story-chat-runs/2026-09-28/sheet-versions/run.mts --root "$PWD" --out ~/simple-story-chat-runs/2026-09-28/sheet-versions/card
+node ~/simple-story-chat-runs/2026-09-28/tester-stand/card-probe.mts --summary --out ~/simple-story-chat-runs/2026-09-28/tester-stand/card
+
+# Each card's end, as soon as its work is done or at its end: we're done, then the destroy whatever the ssh did.
+# Anything but destroy_confirmed goes to the owner at once.
+on simple-chat-vast-pictures 20 'date +%s > /root/.simple-chat-trial-deadline'; npm run gpu:rent -- --destroy ID2
+on simple-chat-vast 20 'date +%s > /root/.simple-chat-trial-deadline'; npm run gpu:rent -- --destroy ID1
+```
+
+**While the cards run**, nothing runs on this machine that the cards do not need; code, tests and commits go to a
+subagent in a worktree of its own. A card whose work is done is deleted at once and the owner told, whether or not the
+tester is at the bot. The text card also stops itself after 13 minutes without a call, and `up` ends with it; a
+stopped card still bills its disk and its guard no longer runs, so it too ends with `--destroy`. A text card that
+fails its smoke is ended at once, and the picture card goes on with the stand, which needs no text model. A picture
+card that fails its check is ended at once, and the text card's probes go on.
+
+**After the cards**, with no card: the stand's bundles, judging and score, about 40 minutes of Astra; the card probe's
+`--summary`; the versions probe's counts; and the optional slots' judging by their own notes.
+
+**Left to the owner**: anything beyond the day's $3; a round three of the action measurement; and whether the tester
+gets any of the new switches, whose lists stay empty meanwhile, since the stand's verdict comes only after the card.
+The places (`SIMPLE_CHAT_POV_PLACE_USERS`, and `SIMPLE_CHAT_POV_PARTIAL_USERS` within it) and the clothes
+(`SIMPLE_CHAT_CLOTHES_USERS`) need the bot run from a checkout with 1a84d3d, which is on branch `tester-stand` alone;
+the versions (`SIMPLE_CHAT_SHEET_VERSION_USERS`) are on the main branch already. Each list stays within
+`SIMPLE_CHAT_IMAGE_USERS`, and the places and the versions wait for their probe to show no runaway.

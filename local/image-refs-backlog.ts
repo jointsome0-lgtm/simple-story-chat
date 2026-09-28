@@ -241,7 +241,7 @@ export async function drawBacklog(options: BacklogOptions): Promise<{ ended: 'do
 // ---- The dry run ----
 
 // A graph as the tree of what each node reads, the ids aside.
-function canon(graph: Graph) {
+export function canon(graph: Graph) {
   const seen = new Map<string, string>();
   const of = (id: string): string => {
     if (seen.has(id)) return seen.get(id)!;
