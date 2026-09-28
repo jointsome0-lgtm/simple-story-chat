@@ -55,6 +55,20 @@ story keeps neither scene. A `then` scene that fails to be written or judged fai
 checks the next scene against the trap's scene, whatever that scene established, so a refusal kept a scene later
 passes it: one of the two questions passed is not a confirmation that was kept.
 
+A scenario may also carry `boundary`: checks in the shape of the memory questions, answered as of the end of scene 11,
+the last scene the replay's memory covers (step 2 of the memory proposal, 2026-09-28). After the memory questions the
+probe asks them in a request of its own at scene 11, with that scene's time: the seed, the memory and the questions,
+without the scenes kept as text, so a miss is the compactions' and not a reading of the later scenes. In `full` the same
+request carries scenes 1 to 11 as text, the ceiling of these checks. A failure there fails these checks alone. They are
+scored apart, with or without `--judge`: a cell holds them as `boundary`, with its own `readingMisses`, the summary as
+`boundaryScore` by the worst-model rule, and `eval ceiling` prints them beside its answers. Under `RECALL_THINKING=true`
+this recall thinks too and is marked `thinking`, and a run with `RECALL_FROM` asks them over the memories it reads
+again ([the switches](#reader)). `--boundary <file>` reads draft checks kept outside the pack,
+`{ "<scenario>": [[key, question, answer], ...] }`, in place of the pack's own.
+`npm run eval -- boundary --model <model> --resume <probe directory> --mode plain --pack <pack> --scenarios <name>`
+asks them over a replay that finished without them, from the state it saved, and refuses a mode that did not finish.
+It writes into the probe's `report.json`, so it gets a copy of the directory.
+
 `score` for each mode is the share of correct answers of the worst model, so a change cannot win because of the most
 obedient model. An unfinished mode gives zero answers, and its error code stays in the report. The full report with
 the failed keys goes to `eval.json`, whose path is the last line printed. The checks are fixed, without a judge

@@ -17,20 +17,26 @@ import type { ModelRequest } from './model.ts';
 import { Store } from './store.ts';
 import type { ProbeNode } from './story-probe.ts';
 import { contextParts, makeRequest, normalizeScene } from './prompt.ts';
+import type { StoryPoint } from './prompt.ts';
 import { addSeed, newStory, beginJob, commitTurn, active, context, history, emptyLibrary } from '../lib/library.ts';
 import type { Library, Usage } from '../lib/library.ts';
 import { loadScenario } from './scenarios.ts';
+import type { Check } from './scenarios.ts';
 
+// `stated` is set for a numeric answer of two digits or more: whether the number stands in the memory message or in
+// the scenes kept as text. A sum stated nowhere had to be added at recall; a stated one that failed is a reading miss.
+type Answered = { key: string; expected: string; actual: unknown; pass: boolean; stated?: 'memory' | 'scenes' | 'none' };
 // One memory mode of the replay; `state` is the library saved after the last completed step.
 export type ModeReport = {
   preemptions: number; compactions: { afterTurn: number }[]; through: number; state?: Library;
   // Compactions repeated after an invalid memory, as the owner repeats /compact in the bot. Sources and checkpoints are kept.
   compactionRetries?: number;
-  // `stated` is set for a numeric answer of two digits or more: whether the number stands in the memory message or in
-  // the scenes kept as text. A sum stated nowhere had to be added at recall; a stated one that failed is a reading miss.
-  answers?: { key: string; expected: string; actual: unknown; pass: boolean; stated?: 'memory' | 'scenes' | 'none' }[]; recallUsage?: Usage | null;
+  answers?: Answered[]; recallUsage?: Usage | null;
   // Set when the recall thought (RECALL_THINKING).
   recallThinking?: boolean;
+  // The scenario's boundary checks, asked as of the end of scene 11 from the memory alone (in `full`, from scenes 1 to
+  // 11 as text), or the code of the failure that left them unanswered; `thinking` is set when that recall thought.
+  boundary?: { answers?: Answered[]; usage?: Usage | null; thinking?: boolean; error?: string };
   // With --traps: one scene per continuity trap, each written from the same final state and never committed.
   // local/scene-judge.ts adds the verdicts.
   traps?: TrapScene[];
@@ -62,9 +68,11 @@ const RECALL_THINKING_TOKENS = 8192;
 const thinkingSetting = process.env.RECALL_THINKING || 'false';
 if (!['true', 'false'].includes(thinkingSetting)) throw new Error('Invalid RECALL_THINKING');
 const recallThinking = thinkingSetting === 'true';
+// The last scene the memory covers: the replay compacts after scenes 7, 11 and 15 and keeps four as text.
+const BOUNDARY_SCENE = 11;
 const { values } = parseArgs({ options: { source: { type: 'string' }, resume: { type: 'string' },
   minutes: { type: 'string', default: '15' }, direct: { type: 'boolean', default: false }, mode: { type: 'string' },
-  traps: { type: 'boolean', default: false }, pack: { type: 'string' }, lab: { type: 'string' } } });
+  traps: { type: 'boolean', default: false }, pack: { type: 'string' }, lab: { type: 'string' }, boundary: { type: 'string' } } });
 const minutes = Number(values.minutes);
 // --lab is research, not the meter: every trap scene is written once per variant and sample. A variant is a text added
 // to the end of the last message, so all of them share the prompt prefix and an own GPU pays the prefill once per trap.
@@ -78,7 +86,7 @@ type Lab = { samples: number; parallel?: number; only?: string[]; many?: boolean
 const lab: Lab | null = values.lab ? JSON.parse(readFileSync(resolve(values.lab), 'utf8')) : null;
 if (lab && (!Number.isInteger(lab.samples) || lab.samples < 1 || lab.samples > 10 || ![1, 2, 3, 4, 5, 6, 7, 8].includes(lab.parallel ?? 1) || (lab.only !== undefined && !(Array.isArray(lab.only) && lab.only.every(key => typeof key === 'string'))) || !Array.isArray(lab.variants) || !lab.variants.length
     || !lab.variants.every(variant => /^[a-z][a-z0-9-]{0,23}$/.test(variant?.key) && typeof variant.tail === 'string' && variant.tail.length <= 2000))) throw new Error('Invalid --lab file');
-if (!values.source || !Number.isInteger(minutes) || minutes < 1 || minutes > (lab ? 600 : 30)) throw new Error('Use --source synthetic-evidence.json [--resume directory] [--minutes 1..30] [--direct] [--mode plain|sgr|full] [--traps] [--pack directory] [--lab variants.json]');
+if (!values.source || !Number.isInteger(minutes) || minutes < 1 || minutes > (lab ? 600 : 30)) throw new Error('Use --source synthetic-evidence.json [--resume directory] [--minutes 1..30] [--direct] [--mode plain|sgr|full] [--traps] [--pack directory] [--lab variants.json] [--boundary checks.json]');
 // `full` never compacts: the questions are asked over the whole story. A strong model that fails them there shows
 // that the frozen scenes contradict the fixed answers.
 if (values.mode !== undefined && values.mode !== 'plain' && values.mode !== 'sgr' && values.mode !== 'full') throw new Error('Unknown memory mode');
@@ -88,7 +96,7 @@ const input = readFileSync(resolve(values.source), 'utf8');
 const frozen: Evidence = JSON.parse(input);
 // The loader refuses a name that is not a built-in scenario or a scenario of the pack.
 const scenario = String(frozen.report?.scenario);
-const fixture = await loadScenario(scenario, values.pack);
+const fixture = await loadScenario(scenario, values.pack, values.boundary);
 const source = active(frozen.state);
 if (`${source.seed.title}\n${source.seed.startTime}\n${source.seed.text}` !== fixture.seed) throw new Error('Synthetic seed mismatch');
 const scenes = (history(source.story, source.branch.head) as ProbeNode[]).filter(n => n.probeTurn <= fixture.turns.length);
@@ -154,13 +162,51 @@ const provider = { async generate(request: ModelRequest) {
   throw Object.assign(new Error(), { code: 'retry_limit' });
 } };
 const store = new Store(':memory:');
+const recallInput = (questions: Check[]) => 'Проверка памяти, не продолжай историю. Верни JSON {"answers":[{"key":"ключ", "value":"точный ответ строкой"}]}. Без пояснений и единиц, если вопрос требует число. Неизвестное пометь unknown.\n'
+  + questions.map(([key, question]) => `${key}: ${question}`).join('\n');
+// The questions as the player's message at `point`, in the request the bot would send there. Under RECALL_THINKING the
+// reader thinks, over the memory questions and the boundary checks alike.
+async function recall(questions: Check[], point: StoryPoint & { input: string }) {
+  // The answer is a short JSON, but a model that reasons in text before its structured answer needs the room for
+  // that text: through the Claude CLI the cap is the run's whole output, and a run that exceeds it ends as an error
+  // rather than a truncation. At 1024 that was every Haiku recall and every CLI reader of `hospital` (log, 09-22).
+  const request = makeRequest(store.read('synthetic'), point, RECALL_OUTPUT_TOKENS + (recallThinking ? RECALL_THINKING_TOKENS : 0));
+  request.system = 'Ответь на проверочные вопросы только по переданной истории и её памяти. Соблюдай заданный формат, не достраивай неизвестное.';
+  request.purpose = 'memory';
+  if (recallThinking) request.thinking = true;
+  request.outputSchema = { type: 'object', required: ['answers'], additionalProperties: false, properties: { answers: {
+    type: 'array', minItems: questions.length, maxItems: questions.length, items: { type: 'object', required: ['key', 'value'], additionalProperties: false,
+      properties: { key: { type: 'string', enum: questions.map(q => q[0]) }, value: { type: 'string' } } } } } };
+  const result = await provider.generate(request);
+  if (result.finishReason !== 'stop') throw Object.assign(new Error(), { code: 'truncated_recall' });
+  // A reply that is not a JSON object fails with a TypeError when its answers are read.
+  // Without a JSON mode Haiku wraps the answer in one Markdown code block, as it does for memory; see memory.ts.
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(result.text.trim());
+  const parsed: { answers?: unknown } = JSON.parse(fenced ? fenced[1] : result.text);
+  if (!Array.isArray(parsed.answers) || parsed.answers.length !== questions.length || new Set((parsed.answers as Answer[]).map(a => a.key)).size !== questions.length) {
+    throw Object.assign(new Error(), { code: 'invalid_recall' });
+  }
+  // No model reads this: the number is looked up in the text the recall request carried, digit groups joined.
+  const parts = contextParts(store.read('synthetic'), point);
+  const digits = (messages: { content: string }[]) => messages.map(message => message.content).join('\n').replace(/(?<=\d)[\s\u00a0\u202f](?=\d{3}\b)/g, '');
+  const [inMemory, inScenes] = [digits(parts.memory), digits(parts.tail)];
+  const stands = (text: string, value: string) => new RegExp(`(?<![\\d.,:-])${value}(?![\\d:-])`).test(text);
+  const answers: Answered[] = questions.map(([key, , expected]) => {
+    const actual = (parsed.answers as Answer[]).find(a => a.key === key)?.value;
+    const stated = /^\d{2,}$/.test(expected) ? { stated: stands(inMemory, expected) ? 'memory' as const : stands(inScenes, expected) ? 'scenes' as const : 'none' as const } : {};
+    return { key, expected, actual, pass: typeof actual === 'string' && actual.trim() === expected, ...stated };
+  });
+  return { answers, usage: result.usage };
+}
 progress({ event: 'started', scenario, directory, model: config.model, ...(recallThinking ? { recallThinking } : {}), ...(earlier ? { reread: true } : {}) });
 try {
   await (direct ? direct.check?.({ signal: deadline }) : client.check({ signal: deadline }));
   for (const memoryMode of modes) {
     const saved = earlier?.[0].report.modes[memoryMode];
     current = report.modes[memoryMode] ??= { preemptions: 0, compactions: [], through: saved?.through ?? 0, ...(saved ? { state: saved.state } : {}) };
-    if (current.completedAt) continue;
+    // A mode finished before its scenario had boundary checks is resumed for them alone, over the state it saved.
+    const boundaryOnly = !!current.completedAt && fixture.boundary.length > 0 && !current.boundary?.answers;
+    if (current.completedAt && !boundaryOnly) continue;
     delete current.error;
     store.mutate('synthetic', state => {
       if (current!.state) { Object.assign(state, current!.state); state.job = null; }
@@ -168,6 +214,32 @@ try {
         newStory(state, addSeed(state, fixture.seed).id); }
     });
     const persist = () => { current!.state = store.read('synthetic'); save(); };
+    // The boundary checks ask each value as of the end of scene 11, the last scene the memory covers, from the memory
+    // alone: the scenes kept as text are left out, so a miss is the compactions' and not a reading of the later scenes.
+    // In `full` the same point is scenes 1 to 11 as text, the ceiling of these checks. A failure here fails these checks
+    // alone, as a `then` scene's fails its own questions.
+    const recallBoundary = async () => {
+      if (!fixture.boundary.length || current!.boundary?.answers) return;
+      const { story, branch } = active(store.read('synthetic'));
+      const upTo = history(story, branch.head).slice(0, BOUNDARY_SCENE);
+      let event;
+      try {
+        // A memory that covers other scenes than 1 to 11 would answer for another moment.
+        const covered = context(story, branch).memories.flatMap(memory => memory.covered);
+        if (memoryMode !== 'full' && covered.join() !== upTo.map(node => node.id).join()) throw Object.assign(new Error(), { code: 'boundary_coverage' });
+        const { answers, usage } = await recall(fixture.boundary, { storyId: story.id, head: upTo.at(-1)!.id, memory: branch.memory, input: recallInput(fixture.boundary) });
+        current!.boundary = { answers, usage, ...(recallThinking ? { thinking: true } : {}) };
+        event = { passed: answers.filter(a => a.pass).length, total: answers.length };
+      } catch (error) {
+        if (deadline.aborted) throw error;
+        const code = (error as Failure).code;
+        current!.boundary = { error: /^[a-z_]{1,40}$/.test(code ?? '') ? code! : 'probe_failed' };
+        const errorName = member(['SyntaxError', 'TypeError', 'RangeError'], (error as Error)?.name) ? (error as Error).name : undefined;
+        event = { code: current!.boundary.error, errorName, ...safeErrorDetails(error) };
+      }
+      persist(); progress({ event: 'boundary', mode: memoryMode, ...event });
+    };
+    if (boundaryOnly) { await recallBoundary(); continue; }
     // One uncommitted scene per trap: the real narrator request, as the bot builds it for a player's message.
     // One report per variant and sample, holding only what the judge reads.
     const labScenes: Record<string, NonNullable<ModeReport['traps']>> = {};
@@ -279,41 +351,13 @@ try {
       current.through = index + 1; persist();
     }
     const questions = fixture.checks;
-    const job = store.mutate('synthetic', state => beginJob(state,
-      'Проверка памяти, не продолжай историю. Верни JSON {"answers":[{"key":"ключ", "value":"точный ответ строкой"}]}. Без пояснений и единиц, если вопрос требует число. Неизвестное пометь unknown.\n'
-        + questions.map(([key, question]) => `${key}: ${question}`).join('\n'), 0));
-    // The answer is a short JSON, but a model that reasons in text before its structured answer needs the room for
-    // that text: through the Claude CLI the cap is the run's whole output, and a run that exceeds it ends as an error
-    // rather than a truncation. At 1024 that was every Haiku recall and every CLI reader of `hospital` (log, 09-22).
-    const request = makeRequest(store.read('synthetic'), job, RECALL_OUTPUT_TOKENS + (recallThinking ? RECALL_THINKING_TOKENS : 0));
-    request.system = 'Ответь на проверочные вопросы только по переданной истории и её памяти. Соблюдай заданный формат, не достраивай неизвестное.';
-    request.purpose = 'memory';
-    if (recallThinking) request.thinking = true;
-    request.outputSchema = { type: 'object', required: ['answers'], additionalProperties: false, properties: { answers: {
-      type: 'array', minItems: questions.length, maxItems: questions.length, items: { type: 'object', required: ['key', 'value'], additionalProperties: false,
-        properties: { key: { type: 'string', enum: questions.map(q => q[0]) }, value: { type: 'string' } } } } } };
-    const result = await provider.generate(request);
-    if (result.finishReason !== 'stop') throw Object.assign(new Error(), { code: 'truncated_recall' });
-    // A reply that is not a JSON object fails with a TypeError when its answers are read.
-    // Without a JSON mode Haiku wraps the answer in one Markdown code block, as it does for memory; see memory.ts.
-    const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(result.text.trim());
-    const parsed: { answers?: unknown } = JSON.parse(fenced ? fenced[1] : result.text);
-    if (!Array.isArray(parsed.answers) || parsed.answers.length !== questions.length || new Set((parsed.answers as Answer[]).map(a => a.key)).size !== questions.length) {
-      throw Object.assign(new Error(), { code: 'invalid_recall' });
-    }
-    // No model reads this: the number is looked up in the text the recall request carried, digit groups joined.
-    const parts = contextParts(store.read('synthetic'), job);
-    const digits = (messages: { content: string }[]) => messages.map(message => message.content).join('\n').replace(/(?<=\d)[\s\u00a0\u202f](?=\d{3}\b)/g, '');
-    const [inMemory, inScenes] = [digits(parts.memory), digits(parts.tail)];
-    const stands = (text: string, value: string) => new RegExp(`(?<![\\d.,:-])${value}(?![\\d:-])`).test(text);
-    current.answers = questions.map(([key, , expected]) => {
-      const actual = (parsed.answers as Answer[]).find(a => a.key === key)?.value;
-      const stated = /^\d{2,}$/.test(expected) ? { stated: stands(inMemory, expected) ? 'memory' as const : stands(inScenes, expected) ? 'scenes' as const : 'none' as const } : {};
-      return { key, expected, actual, pass: typeof actual === 'string' && actual.trim() === expected, ...stated };
-    });
-    current.recallUsage = result.usage;
+    const job = store.mutate('synthetic', state => beginJob(state, recallInput(questions), 0));
+    const main = await recall(questions, job);
+    current.answers = main.answers;
+    current.recallUsage = main.usage;
     if (recallThinking) current.recallThinking = true;
     store.mutate('synthetic', state => { state.job = null; });
+    await recallBoundary();
     await writeTraps(undefined);
     current.completedAt = new Date().toISOString();
     store.mutate('synthetic', state => { state.job = null; }); persist();

@@ -23,10 +23,12 @@ import { SERVING, readClientKey } from './action-text.ts';
 type Env = NodeJS.Dict<string>;
 // A cell of the result: one model, one scenario, one memory mode.
 // readingMisses: failed numeric questions whose answer stood in the memory message, so the memory was right and the reading was not.
-type Cell = { passed: number; total: number; error?: string; failedKeys: string[]; readingMisses?: string[]; scene?: Part; sceneO2?: Part; sceneOpen?: Part; compactionRetries?: number };
+type Cell = { passed: number; total: number; error?: string; failedKeys: string[]; readingMisses?: string[]; scene?: Part; sceneO2?: Part; sceneOpen?: Part;
+  boundary?: Part & { readingMisses?: string[]; thinking?: boolean }; compactionRetries?: number };
 // With --judge: the verdicts on the trap scenes this model wrote after the replay. `scene` holds the legacy traps,
 // `sceneO2` those of `set: 'o2'` and `sceneOpen` those of `set: 'open'` (examples/scene-traps.ts), so that the log's
-// older numbers stay comparable.
+// older numbers stay comparable. `boundary` holds the scenario's boundary checks, asked from the memory alone as of
+// scene 11 (local/memory-probe.ts), with or without --judge.
 type Part = { passed: number; total: number; error?: string; failedKeys: string[] };
 // A cell of a walk: one model, one walk scenario, with the panel's verdict on every scene and each judge's own counts.
 // `directory` is the probe's own directory, so that a judge can be added to the panel with `eval walk-judge`.
@@ -52,7 +54,7 @@ const record = (event: object) => { mkdirSync(join(root, 'logs'), { recursive: t
 
 process.umask(0o077);
 const { values, positionals } = parseArgs({ allowPositionals: true, options: { model: { type: 'string' }, models: { type: 'string' },
-  scenarios: { type: 'string' }, pack: { type: 'string' }, out: { type: 'string' }, resume: { type: 'string' }, mode: { type: 'string' },
+  scenarios: { type: 'string' }, pack: { type: 'string' }, boundary: { type: 'string' }, out: { type: 'string' }, resume: { type: 'string' }, mode: { type: 'string' },
   judge: { type: 'string' }, judges: { type: 'string' }, minutes: { type: 'string' }, cross: { type: 'boolean', default: false },
   writers: { type: 'string' }, nodes: { type: 'string' }, rechecks: { type: 'string', default: '2' }, exposures: { type: 'string', default: '8' }, 'max-path-tokens': { type: 'string' }, depth: { type: 'string' }, attempts: { type: 'string', default: '4' }, branches: { type: 'string', default: '4' }, grow: { type: 'boolean', default: true } }, allowNegative: true });
 // --pack names a directory of scenarios kept outside the repository, so the one who improves the prompts never reads
@@ -62,15 +64,18 @@ const pack = values.pack ? resolve(values.pack) : undefined;
 const walking = positionals[0] === 'walk' || positionals[0] === 'walk-judge' || positionals[0] === 'seed-audit' || positionals[0] === 'walk-gold' || positionals[0] === 'walk-nodes'
   || positionals[0] === 'gold-audit' || positionals[0] === 'gold-recheck' || positionals[0] === 'gold-read' || positionals[0] === 'gold-promote' || positionals[0] === 'gold-stats';
 const scenarios = values.scenarios?.split(',') ?? (pack ? (walking ? packWalks(pack) : packScenarios(pack)) : walking ? ['lighthouse'] : ['battle', 'chess', 'dance']);
-// --mode replays one memory mode, for a cheap look at a single failure.
-if (values.mode !== undefined && !ALL_MODES.includes(values.mode as 'plain')) throw new Error('Unknown memory mode');
+// --mode replays one memory mode, for a cheap look at a single failure. `eval boundary` also takes `full`, the ceiling's.
+if (values.mode !== undefined && !ALL_MODES.includes(values.mode as 'plain') && !(positionals[0] === 'boundary' && values.mode === 'full')) throw new Error('Unknown memory mode');
 const MODES = values.mode ? [values.mode as typeof ALL_MODES[number]] : ALL_MODES;
 if (!scenarios.length) throw new Error('Unknown synthetic scenario');
 // The loader throws on a name that is neither built in nor in the pack.
-const fixtures = Object.fromEntries(walking ? [] : await Promise.all(scenarios.map(async name => [name, await loadScenario(name, pack)] as const)));
+// --boundary names a file of draft boundary checks kept outside the pack, which replace the pack's own for the scenarios
+// it names (local/scenarios.ts); the probes read it too.
+const fixtures = Object.fromEntries(walking ? [] : await Promise.all(scenarios.map(async name => [name, await loadScenario(name, pack, values.boundary)] as const)));
 const walks = Object.fromEntries(walking ? await Promise.all(scenarios.map(async name => [name, await loadWalk(name, pack)] as const)) : []);
 const checks = Object.fromEntries(scenarios.map(name => [name, fixtures[name]?.checks ?? []]));
 const packArgs = pack ? ['--pack', pack] : [];
+const boundaryArgs = values.boundary ? ['--boundary', resolve(values.boundary)] : [];
 let keys: Env = {};
 try { keys = parseEnv(readFileSync(join(root, '.env.eval'), 'utf8')); }
 catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('Cannot read .env.eval'); }
@@ -183,6 +188,15 @@ async function write(spec: string) {
   }
 }
 
+// The boundary checks of one mode, scored apart. A mode that failed before them, or their own failure, answers none.
+function boundaryPart(scenario: string, result: ModeReport | undefined, code: string): NonNullable<Cell['boundary']> {
+  const keys = fixtures[scenario].boundary.map(([key]) => key);
+  const answers = result?.boundary?.answers ?? [];
+  return { passed: answers.filter(a => a.pass).length, total: keys.length, failedKeys: keys.filter(key => !answers.some(a => a.key === key && a.pass)),
+    readingMisses: answers.filter(a => !a.pass && a.stated === 'memory').map(a => a.key), ...(result?.boundary?.thinking ? { thinking: true } : {}),
+    ...(result?.boundary?.answers ? {} : { error: result?.boundary?.error ?? result?.error ?? (code || 'probe_failed') }) };
+}
+
 async function replay(spec: string): Promise<Record<string, Record<string, Cell>>> {
   const env = modelEnv(spec);
   const judgeEnv = values.judge ? modelEnv(values.judge) : null;
@@ -191,7 +205,7 @@ async function replay(spec: string): Promise<Record<string, Record<string, Cell>
     cells[scenario] = {};
     // A probe stops at its first failure, so each mode gets its own run and its own error.
     for (const mode of MODES) {
-      const run = await probe('memory-probe.ts', ['--direct', '--mode', mode, '--minutes', '30', ...(judgeEnv ? ['--traps'] : []), '--source', fixtures[scenario].frozenPath, ...packArgs], env, spec, { scenario, mode });
+      const run = await probe('memory-probe.ts', ['--direct', '--mode', mode, '--minutes', '30', ...(judgeEnv ? ['--traps'] : []), '--source', fixtures[scenario].frozenPath, ...packArgs, ...boundaryArgs], env, spec, { scenario, mode });
       let report: ReplayReport | null = null;
       try { report = JSON.parse(readFileSync(join(run.directory, 'report.json'), 'utf8')); } catch { /* counted as failed below */ }
       const result: ModeReport | undefined = report?.modes[mode];
@@ -202,6 +216,7 @@ async function replay(spec: string): Promise<Record<string, Record<string, Cell>
         readingMisses: answers.filter(a => !a.pass && a.stated === 'memory').map(a => a.key),
         ...(result?.completedAt ? {} : { error: result?.error ?? (run.code || 'probe_failed') }),
         ...(result?.compactionRetries ? { compactionRetries: result.compactionRetries } : {}) };
+      if (fixtures[scenario].boundary.length) cells[scenario][mode].boundary = boundaryPart(scenario, result, run.code);
       const questionsOf = (set?: string) => fixtures[scenario].traps.filter(trap => trap.set === set)
         .flatMap(trap => [...trap.questions, ...(trap.then?.questions ?? [])].map(([key]) => key));
       const [legacy, o2, open] = [questionsOf(undefined), questionsOf('o2'), questionsOf('open')];
@@ -258,14 +273,31 @@ if (positionals[0] === 'watch') {
 } else if (positionals[0] === 'ceiling') {
   // The questions over the whole frozen story, without memory. Below the maximum for a strong model, the story
   // itself contradicts the fixed answers and must be written again before it measures anything.
-  if (!values.model) throw new Error('Use: eval ceiling --model <host>:<id> [--scenarios a,b]');
+  // The boundary checks are asked there over scenes 1 to 11 as text.
+  if (!values.model) throw new Error('Use: eval ceiling --model <host>:<id> [--scenarios a,b] [--boundary checks.json]');
   for (const scenario of scenarios) {
-    const run = await probe('memory-probe.ts', ['--direct', '--mode', 'full', '--minutes', '30', '--source', fixtures[scenario].frozenPath, ...packArgs], modelEnv(values.model), values.model, { scenario, mode: 'full' });
-    let answers: NonNullable<ModeReport['answers']> = [];
-    try { answers = (JSON.parse(readFileSync(join(run.directory, 'report.json'), 'utf8')) as ReplayReport).modes.full?.answers ?? []; } catch { /* reported as failed below */ }
+    const run = await probe('memory-probe.ts', ['--direct', '--mode', 'full', '--minutes', '30', '--source', fixtures[scenario].frozenPath, ...packArgs, ...boundaryArgs], modelEnv(values.model), values.model, { scenario, mode: 'full' });
+    let result: ModeReport | undefined;
+    try { result = (JSON.parse(readFileSync(join(run.directory, 'report.json'), 'utf8')) as ReplayReport).modes.full; } catch { /* reported as failed below */ }
+    const answers = result?.answers ?? [];
     console.log(JSON.stringify({ event: 'ceiling', scenario, passed: answers.filter(a => a.pass).length, total: checks[scenario].length,
-      failedKeys: checks[scenario].map(([key]) => key).filter(key => !answers.some(a => a.key === key && a.pass)), error: run.status === 0 ? undefined : run.code || 'probe_failed' }));
+      failedKeys: checks[scenario].map(([key]) => key).filter(key => !answers.some(a => a.key === key && a.pass)), error: run.status === 0 ? undefined : run.code || 'probe_failed',
+      ...(fixtures[scenario].boundary.length ? { boundary: boundaryPart(scenario, result, run.code) } : {}) }));
   }
+} else if (positionals[0] === 'boundary') {
+  // Asks the boundary checks of a replay that finished before its scenario had them, over the state it saved, and prints
+  // them as a cell would hold them. The answers are written into the directory's report.json, so work on a copy of
+  // a directory that is kept as a record. An unfinished mode is refused: resuming it would replay the rest of the story.
+  if (!values.model || !values.resume || !values.mode || scenarios.length !== 1 || !fixtures[scenarios[0]].boundary.length) {
+    throw new Error('Use: eval boundary --model <host>:<id> --resume directory --mode plain|sgr|full --scenarios name [--pack directory] [--boundary checks.json], for a scenario with boundary checks');
+  }
+  const [scenario, directory, mode] = [scenarios[0], resolve(values.resume), values.mode as keyof ReplayReport['modes']];
+  const read = () => (JSON.parse(readFileSync(join(directory, 'report.json'), 'utf8')) as ReplayReport).modes[mode];
+  if (!read()?.completedAt) throw new Error(`The ${mode} mode of this replay has not finished`);
+  const run = await probe('memory-probe.ts', ['--direct', '--mode', mode, '--minutes', '30', '--resume', directory, '--source', fixtures[scenario].frozenPath, ...packArgs, ...boundaryArgs], modelEnv(values.model), values.model, { scenario, mode });
+  let result: ModeReport | undefined;
+  try { result = read(); } catch { /* reported as failed below */ }
+  console.log(JSON.stringify({ event: 'boundary', scenario, mode, ...boundaryPart(scenario, result, run.code) }));
 } else if (positionals[0] === 'judge') {
   // Judges the trap scenes of a finished replay again, to compare judges or question wordings on the same scenes.
   // A scenario of a pack is read from its pack again: without --pack only the repository's own scenarios are found.
@@ -705,7 +737,7 @@ if (positionals[0] === 'watch') {
   await write(values.model);
 } else {
   const models = (values.models ?? '').split(',').filter(Boolean);
-  if (!models.length) throw new Error('Use: eval --models <host>:<id>,<host>:<id> [--scenarios a,b] [--mode plain|sgr] [--judge <host>:<id>] [--out file]');
+  if (!models.length) throw new Error('Use: eval --models <host>:<id>,<host>:<id> [--scenarios a,b] [--mode plain|sgr] [--judge <host>:<id>] [--boundary checks.json] [--out file]');
   record({ event: 'run_started', models, scenarios });
   const missing = scenarios.filter(scenario => !existsSync(fixtures[scenario].frozenPath));
   if (missing.length) throw new Error(`No frozen story for ${missing.join(', ')}; run: eval write --model <host>:<id>`);
@@ -717,12 +749,13 @@ if (positionals[0] === 'watch') {
   };
   // The worst model decides, so a change cannot win by pleasing the most obedient one.
   const score = Object.fromEntries(MODES.map(mode => [mode, Math.min(...models.map(spec => rate(spec, mode)))]));
-  // The same rule for the judged trap scenes, the legacy traps and each set apart; null when no chosen scenario has them.
-  const sceneRate = (spec: string, mode: string, field: 'scene' | 'sceneO2' | 'sceneOpen') => {
+  // The same rule for the judged trap scenes, the legacy traps and each set apart, and for the boundary checks; null when
+  // no chosen scenario has them.
+  const sceneRate = (spec: string, mode: string, field: 'scene' | 'sceneO2' | 'sceneOpen' | 'boundary') => {
     const parts = scenarios.flatMap(scenario => results[spec][scenario][mode][field] ?? []);
     return parts.length ? parts.reduce((sum, part) => sum + part.passed, 0) / parts.reduce((sum, part) => sum + part.total, 0) : null;
   };
-  const worstScene = (field: 'scene' | 'sceneO2' | 'sceneOpen') => Object.fromEntries(MODES.map(mode => {
+  const worstScene = (field: 'scene' | 'sceneO2' | 'sceneOpen' | 'boundary') => Object.fromEntries(MODES.map(mode => {
     const rates = models.map(spec => sceneRate(spec, mode, field));
     return [mode, rates.some(value => value === null) ? null : Math.min(...rates as number[])];
   }));
@@ -730,10 +763,11 @@ if (positionals[0] === 'watch') {
   const hasSet = (set: string) => values.judge && scenarios.some(name => fixtures[name].traps.some(trap => trap.set === set));
   const sceneScoreO2 = hasSet('o2') ? worstScene('sceneO2') : undefined;
   const sceneScoreOpen = hasSet('open') ? worstScene('sceneOpen') : undefined;
-  const summary = { at: new Date().toISOString(), scenarios, ...(pack ? { pack: true, authors: Object.fromEntries(scenarios.map(name => [name, fixtures[name].authors])) } : {}), score, sceneScore, sceneScoreO2, sceneScoreOpen, judge: values.judge,
+  const boundaryScore = scenarios.some(name => fixtures[name].boundary.length) ? worstScene('boundary') : undefined;
+  const summary = { at: new Date().toISOString(), scenarios, ...(pack ? { pack: true, authors: Object.fromEntries(scenarios.map(name => [name, fixtures[name].authors])) } : {}), score, sceneScore, sceneScoreO2, sceneScoreOpen, boundaryScore, judge: values.judge,
     models: Object.fromEntries(models.map(spec => [spec, { ...Object.fromEntries(MODES.map(mode => [mode, rate(spec, mode)])), cells: results[spec] }])) };
   const out = resolve(values.out ?? join(mkdtempSync(join(tmpdir(), 'simple-chat-eval-')), 'eval.json'));
   writeFileSync(out, JSON.stringify(summary, null, 2));
-  record({ event: 'eval', out, score, sceneScore, sceneScoreO2, sceneScoreOpen });
-  console.log(JSON.stringify({ event: 'eval', out, score, sceneScore, sceneScoreO2, sceneScoreOpen, models: Object.fromEntries(models.map(spec => [spec, Object.fromEntries(MODES.map(mode => [mode, rate(spec, mode)]))])) }));
+  record({ event: 'eval', out, score, sceneScore, sceneScoreO2, sceneScoreOpen, boundaryScore });
+  console.log(JSON.stringify({ event: 'eval', out, score, sceneScore, sceneScoreO2, sceneScoreOpen, boundaryScore, models: Object.fromEntries(models.map(spec => [spec, Object.fromEntries(MODES.map(mode => [mode, rate(spec, mode)]))])) }));
 }

@@ -10,38 +10,47 @@ import { validTime } from '../lib/library.ts';
 
 export type Check = [key: string, question: string, expected: string];
 // `authors` names the models that wrote the scenario and its frozen scenes, for example "fable-5.1" or "gpt-6-astra".
-export type ScenarioPack = { name: string; seed: string; turns: string[]; checks: Check[]; facts: string; traps: Trap[];
+// `boundary` holds checks answered as of the end of scene 11, the last scene the replay's memory covers, from the memory
+// alone (local/memory-probe.ts); a scenario may have none.
+export type ScenarioPack = { name: string; seed: string; turns: string[]; checks: Check[]; boundary: Check[]; facts: string; traps: Trap[];
   authors: string[]; frozenPath: string };
 
 const text = (value: unknown, max: number): value is string => typeof value === 'string' && value.trim().length > 0 && value.length <= max;
+const questions = (list: unknown): list is [string, string, string][] => Array.isArray(list) && list.every(item => Array.isArray(item) && item.length === 3 && item.every(part => text(part, 2000)));
 
 export function packScenarios(pack: string) {
   return readdirSync(resolve(pack), { withFileTypes: true }).filter(entry => entry.isDirectory() && /^[a-z][a-z0-9-]{0,39}$/.test(entry.name)).map(entry => entry.name).sort();
 }
 
 // The replay compacts after scenes 7, 11 and 15, so a pack scenario needs at least 16 turns.
-export async function loadScenario(name: string, pack?: string): Promise<ScenarioPack> {
+// `boundaryFile` holds draft boundary checks kept outside the pack, { "<scenario>": [[key, question, expected], ...] };
+// they replace the scenario's own, and a scenario the file does not name keeps its own.
+export async function loadScenario(name: string, pack?: string, boundaryFile?: string): Promise<ScenarioPack> {
   if (!/^[a-z][a-z0-9-]{0,39}$/.test(name)) throw new Error('Unknown synthetic scenario');
+  const drafts: Record<string, unknown> = boundaryFile ? JSON.parse(readFileSync(resolve(boundaryFile), 'utf8')) : {};
+  const named = Object.hasOwn(drafts, name) ? drafts[name] : undefined;
+  const draft = named === undefined ? undefined : questions(named) && named.length ? named : null;
+  if (draft === null) throw new Error('Invalid boundary checks');
   if (!pack) {
     if (!Object.hasOwn(checks, name)) throw new Error('Unknown synthetic scenario');
     // Every scenario module has the same exports as this one.
     const fixture: typeof import('../examples/battle-probe.ts') = await import(`../examples/${name}-probe.ts`);
-    return { name, seed: fixture.seed, turns: fixture.turns, checks: checks[name as keyof typeof checks] as Check[], facts: traps[name]?.facts ?? '',
+    return { name, seed: fixture.seed, turns: fixture.turns, checks: checks[name as keyof typeof checks] as Check[], boundary: draft ?? [], facts: traps[name]?.facts ?? '',
       traps: traps[name]?.traps ?? [], authors: [], frozenPath: resolve(import.meta.dirname, '..', 'examples', 'frozen', `${name}.json`) };
   }
   const directory = join(resolve(pack), name);
   const data: Partial<ScenarioPack> = JSON.parse(readFileSync(join(directory, 'scenario.json'), 'utf8'));
-  const questions = (list: unknown): list is [string, string, string][] => Array.isArray(list) && list.every(item => Array.isArray(item) && item.length === 3 && item.every(part => text(part, 2000)));
   if (!text(data.seed, 20000) || !Array.isArray(data.turns) || data.turns.length < 16 || !data.turns.every(turn => text(turn, 4000))
-      || !questions(data.checks) || !data.checks.length || !Array.isArray(data.authors) || !data.authors.length || !data.authors.every(author => text(author, 80))
+      || !questions(data.checks) || !data.checks.length || (data.boundary !== undefined && !(questions(data.boundary) && data.boundary.length))
+      || !Array.isArray(data.authors) || !data.authors.length || !data.authors.every(author => text(author, 80))
       || (data.traps?.length && !text(data.facts, 8000)) || !(data.traps ?? []).every(trap => text(trap?.key, 40) && questions(trap.questions)
         && trap.questions.every(question => question[2] === 'yes' || question[2] === 'no')
         && (trap.afterTurn === undefined ? text(trap.input, 4000) : Number.isInteger(trap.afterTurn) && trap.afterTurn > 0 && trap.afterTurn < data.turns!.length)
         && (trap.facts === undefined || text(trap.facts, 8000)) && (trap.set === undefined || trap.set === 'o2' || trap.set === 'open')
         && (trap.then === undefined || (trap.set === 'open' && text(trap.then.input, 4000) && questions(trap.then.questions)
           && trap.then.questions.every(question => question[2] === 'yes' || question[2] === 'no'))))) throw new Error('Invalid scenario.json');
-  return { name, seed: data.seed, turns: data.turns, checks: data.checks, facts: data.facts ?? '', traps: data.traps ?? [], authors: data.authors,
-    frozenPath: join(directory, 'frozen.json') };
+  return { name, seed: data.seed, turns: data.turns, checks: data.checks, boundary: draft ?? data.boundary ?? [], facts: data.facts ?? '', traps: data.traps ?? [],
+    authors: data.authors, frozenPath: join(directory, 'frozen.json') };
 }
 
 // A walk: the model under test writes the story itself from the seed, one scene per step. An empty step is the bot's own
