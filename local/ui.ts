@@ -12,6 +12,8 @@ import { REFERENCE_BYTES, REFERENCE_SIDES } from './reference.ts';
 import { POSE_SET_BYTES, POSE_SET_PICTURES, POSE_SET_READER_BYTES, poseGroups, poseSetState } from './pose-set.ts';
 import { POSE_SET_REFUSALS } from './model-error.ts';
 import type { PoseSetRefusal } from './model-error.ts';
+import { ARCHIVE_BYTES } from './pose-archive.ts';
+import type { ArchiveLabels } from './pose-archive.ts';
 import { seesThrough } from './picture-pov.ts';
 import { editableFrom, ownVersions, sceneOf, sheetAt, versionsOf } from './picture-versions.ts';
 import { CHANGES_CHARS, CLOTHES_CHARS, DETAILS_CHARS, fieldsMask, maskFields, profileBlock, profileHash, profileOf, roundTrips } from './profile.ts';
@@ -37,13 +39,16 @@ export type GpuInfo = {
 // offers to write it «only from this moment».
 // `poseSet`: the reader has pose sets (local/picture.ts `poseSetFor`), so a person's card offers to send one and says
 // that frames take it; a set a person has is shown, with the button that removes it, whatever this says. `poseTally`:
-// the pictures of a set counted as they come (local/bot.ts), for the message that counts them.
+// the pictures of a set counted as they come (local/bot.ts), for the message that counts them: those kept, those of them
+// the reader labeled whole in an archive's labels.csv, those refused by reason, and each labels.csv that came, by the
+// name of its archive (local/pose-archive.ts `ArchiveLabels`).
 export type RenderDetails = {
   modelInfo?: ModelInfo | null; gpuInfo?: GpuInfo | null; contextStats?: ContextStats | null; pictures?: boolean; standardStyle?: string;
   textTokens?: (text: string) => number | null;
   retainsPortraits?: boolean; references?: boolean; versions?: boolean; poseSet?: boolean; poseTally?: PoseTally;
 };
-export type PoseTally = { storyId: string; name: string; at: number; kept: number; refused: Partial<Record<PoseSetRefusal, number>>; done: boolean };
+export type PoseTally = { storyId: string; name: string; at: number; kept: number; labeled: number; refused: Partial<Record<PoseSetRefusal, number>>;
+  archives: (ArchiveLabels & { archive: string })[]; done: boolean };
 // State is read defensively (docs/telegram-ui.md#renderer), so any library field may be missing.
 type State = Partial<Library>;
 type Row = (InlineButton | null)[];
@@ -745,13 +750,16 @@ function poseSetInputScreen(state: State, details: RenderDetails) {
   const { min, max } = REFERENCE_SIDES;
   const held = person.poseSet?.length ?? 0;
   return payload([c.poseSetTitle(line(person.name, 60), storyName(state, story)), '',
-    c.poseSetNote(min, max, REFERENCE_BYTES / 1024 / 1024, POSE_SET_PICTURES, POSE_SET_BYTES / 1024 / 1024, POSE_SET_READER_BYTES / 1024 / 1024),
+    c.poseSetNote(min, max, REFERENCE_BYTES / 1024 / 1024, POSE_SET_PICTURES, POSE_SET_BYTES / 1024 / 1024, POSE_SET_READER_BYTES / 1024 / 1024,
+      ARCHIVE_BYTES / 1024 / 1024),
     ...held ? ['', c.poseSetHeld(held)] : []],
     [[btn(c.poseSetDone, `pose-set-done:${personRef(story, person)}`)], [btn(c.backToCard, `view:character:${personRef(story, person)}`)]]);
 }
 
 // The message that counts the pictures of a pose set as they come (local/bot.ts): those kept, those refused and why,
-// and how many the set holds now, with «✅ Готово» under it until the reader is done.
+// and how many the set holds now, with «✅ Готово» under it until the reader is done. Once an archive with labels.csv came,
+// how many the reader labeled and how many are left to the captioner, and for each labels.csv the rows that matched no
+// picture or had a value the bot does not know, or that it could not be read.
 function poseSetStatus(state: State, details: RenderDetails) {
   const t = texts(state.language);
   const c = t.characters;
@@ -761,11 +769,18 @@ function poseSetStatus(state: State, details: RenderDetails) {
   if (!tally || !story || !person) return payload([c.poseSetTitle(line(tally?.name ?? '', 60), '…'), '', c.poseSetKept(tally?.kept ?? 0)], []);
   const refused = POSE_SET_REFUSALS.flatMap(reason => tally.refused[reason] ? [{ reason: c.poseSetReasons[reason], count: tally.refused[reason]! }] : []);
   const ref = personRef(story, person);
+  const archives = tally.archives ?? [];
+  const labels = !archives.length ? [] : [c.poseSetLabeled(tally.labeled ?? 0, tally.kept - (tally.labeled ?? 0)),
+    ...archives.flatMap(one => one.unread ? [c.poseSetLabelsUnread(line(one.archive, 40))]
+      : one.unmatched.length || one.unknown.length ? [c.poseSetRows(line(one.archive, 40), rowList(one.unmatched), rowList(one.unknown))] : [])];
   return payload([c.poseSetTitle(line(person.name, 60), storyName(state, story)), '', c.poseSetKept(tally.kept),
-    ...refused.length ? [c.poseSetRefused(refused)] : [], c.poseSetHolds(person.poseSet?.length ?? 0, POSE_SET_PICTURES), '',
+    ...refused.length ? [c.poseSetRefused(refused)] : [], ...labels, c.poseSetHolds(person.poseSet?.length ?? 0, POSE_SET_PICTURES), '',
     tally.done ? c.poseSetEnded : c.poseSetMore],
     [tally.done ? [btn(c.backToCard, `view:character:${ref}`)] : [btn(c.poseSetDone, `pose-set-done:${ref}`)]]);
 }
+
+// Row numbers of labels.csv as a message lists them: the first twenty, and how many more.
+const rowList = (rows: number[]) => rows.length > 20 ? `${rows.slice(0, 20).join(', ')}… (+${rows.length - 20})` : rows.join(', ');
 
 // Before every picture of a person's pose set goes: how many, and that frames already drawn with them keep them.
 function poseSetDropScreen(state: State, storyId: string | undefined, rawIndex: string | undefined, tag: string | undefined,

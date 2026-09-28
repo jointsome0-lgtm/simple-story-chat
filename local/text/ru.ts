@@ -343,11 +343,13 @@ export const ru = {
     // `POSE_SET_REFUSALS`), the card's lines and the question before they go. `min`, `max` and `fileMegabytes` are
     // REFERENCE_SIDES and REFERENCE_BYTES in local/reference.ts, and `pictures`,
     // `megabytes` and `readerMegabytes` are POSE_SET_PICTURES, POSE_SET_BYTES and POSE_SET_READER_BYTES in
-    // local/pose-set.ts, as are the numbers of the reasons. The half hour is POSE_SET_WAIT_MS there.
+    // local/pose-set.ts, as are the numbers of the reasons. The half hour is POSE_SET_WAIT_MS there. `archiveMegabytes`
+    // is ARCHIVE_BYTES in local/pose-archive.ts; labels.csv's columns are its own, and are not translated. The rows of
+    // labels.csv come as a list already, or as the empty string.
     poseSet: '🗂 Картинки поз',
     poseSetDrop: '🗑 Убрать картинки поз',
     poseSetTitle: (person: string, story: string) => `🗂 Картинки поз: ${person} · ${story}`,
-    poseSetNote: (min: number, max: number, fileMegabytes: number, pictures: number, megabytes: number, readerMegabytes: number) => `Пришли картинки этого персонажа в разных позах: по одной или альбомами, фотографиями или файлами PNG, JPEG или WebP, до ${fileMegabytes} МБ каждая; короткая сторона от ${min} пикселей, длинная до ${max}. Только рисунки: фотографии реальных людей присылать нельзя. Архивы бот не берёт. Бот удалит из файлов метаданные и сохранит до ${pictures} картинок и ${megabytes} МБ на персонажа, а всего у тебя — до ${readerMegabytes} МБ. Каждую картинку подпишет маленькая модель на компьютере бота: поза, сторона к зрителю и охват (весь рост, по пояс или голова и плечи). Ни картинки, ни подписи не уходят в сторонние сервисы. По подписям бот разложит картинки по позам, и каждый кадр возьмёт одну: ту, что ближе всего к тому, как персонаж в нём показан. Когда пришлёшь все, нажми «✅ Готово». Бот ждёт полчаса после последней картинки; выйти можно любой кнопкой или командой /cancel.`,
+    poseSetNote: (min: number, max: number, fileMegabytes: number, pictures: number, megabytes: number, readerMegabytes: number, archiveMegabytes: number) => `Пришли картинки этого персонажа в разных позах: по одной или альбомами, фотографиями или файлами PNG, JPEG или WebP, до ${fileMegabytes} МБ каждая; короткая сторона от ${min} пикселей, длинная до ${max}. Только рисунки: фотографии реальных людей присылать нельзя. Можно и архивом ZIP до ${archiveMegabytes} МБ; если положить в него файл labels.csv с колонками file, pose, side, framing и main, бот возьмёт подписи из него, а модель подпишет только то, чего в нём нет. Бот удалит из файлов метаданные и сохранит до ${pictures} картинок и ${megabytes} МБ на персонажа, а всего у тебя — до ${readerMegabytes} МБ. Каждую картинку подпишет маленькая модель на компьютере бота: поза, сторона к зрителю и охват (весь рост, по пояс или голова и плечи). Ни картинки, ни подписи не уходят в сторонние сервисы. По подписям бот разложит картинки по позам, и каждый кадр возьмёт одну: ту, что ближе всего к тому, как персонаж в нём показан. Когда пришлёшь все, нажми «✅ Готово». Бот ждёт полчаса после последней картинки; выйти можно любой кнопкой или командой /cancel.`,
     poseSetHeld: (n: number) => `В наборе уже ${count(n, 'картинка', 'картинки', 'картинок')}; новые добавятся к ним.`,
     poseSetDone: '✅ Готово',
     poseSetKept: (n: number) => `Принято: ${n}.`,
@@ -356,6 +358,9 @@ export const ru = {
       too_large: 'тяжелее 10 МБ', incomplete: 'не загрузилась', archive: 'архив', full: 'сверх 200 на персонажа',
       person_bytes: 'сверх 600 МБ на персонажа', reader_bytes: 'сверх 1024 МБ у тебя' },
     poseSetHolds: (n: number, max: number) => `В наборе ${n} из ${max}.`,
+    poseSetLabeled: (labeled: number, captioner: number) => `Подписаны в labels.csv: ${labeled}; подпишет модель: ${captioner}.`,
+    poseSetRows: (archive: string, unmatched: string, unknown: string) => `labels.csv${archive ? ` в ${archive}` : ''}: ${[unmatched ? `нет картинки для строк ${unmatched}` : '', unknown ? `в строках ${unknown} есть значения, которых бот не знает, — эти поля подпишет модель` : ''].filter(Boolean).join('; ')}.`,
+    poseSetLabelsUnread: (archive: string) => `labels.csv${archive ? ` в ${archive}` : ''} не прочитан: первой строкой в нём нужен заголовок file,pose,side,framing, через запятую или точку с запятой. Картинки из этого архива подпишет модель.`,
     poseSetMore: 'Присылай ещё или нажми «✅ Готово».',
     poseSetEnded: 'Готово. Модель подпишет картинки в фоне; как они разложены по позам, покажет карточка персонажа.',
     poseSetLine: (n: number, max: number, megabytes: number) => `🗂 Картинки поз: ${n} из ${max}, ${megabytes} МБ.`,
@@ -910,10 +915,16 @@ export const ru = {
     referenceChanged: 'Пока картинка загружалась, ожидание сменилось, и она не сохранена. Пришли её снова.',
     // A pose set (local/pose-set.ts). The half hour is POSE_SET_WAIT_MS there, and the button characters.poseSet.
     poseSetOff: 'Картинки поз тебе сейчас недоступны. Открой /menu.',
-    poseSetNeedsPictures: 'Жду картинки: присылай их фотографиями или файлами PNG, JPEG или WebP, а когда закончишь, нажми «✅ Готово». Выйти можно любой кнопкой или командой /cancel.',
+    poseSetNeedsPictures: 'Жду картинки: присылай их фотографиями, файлами PNG, JPEG или WebP или архивом ZIP, а когда закончишь, нажми «✅ Готово». Выйти можно любой кнопкой или командой /cancel.',
     poseSetExpired: 'Бот уже не ждёт картинки: после последней прошло больше получаса. Открой персонажа и нажми «🗂 Картинки поз» снова.',
     poseSetGone: 'Этого персонажа уже нет в истории, картинка не сохранена. Открой /menu.',
     poseSetChanged: 'Пока картинка загружалась, ожидание сменилось, и она не сохранена. Пришли её снова.',
+    // An archive of a pose set refused whole (local/pose-archive.ts). 20 MB is ARCHIVE_BYTES there, and 200 ARCHIVE_FILES.
+    poseArchiveTooLarge: 'Архив тяжелее 20 МБ, а больше бот скачать не может. Разложи картинки на несколько архивов до 20 МБ и пришли их по очереди; labels.csv положи в каждый, со строками его картинок.',
+    poseArchiveIncomplete: 'Не удалось получить архив целиком. Ничего не изменилось; пришли его ещё раз.',
+    poseArchiveFiles: 'В архиве больше 200 файлов, а в набор помещается 200 картинок. Раздели его на несколько архивов.',
+    poseArchiveEncrypted: 'Архив защищён паролем, и бот не может его открыть. Собери его без пароля.',
+    poseArchiveUnread: 'Бот не может открыть этот архив: он повреждён или собран не как обычный ZIP (ZIP64, из нескольких частей, сжат не методом deflate, распаковывается во много раз больше своего веса или хранит пути вне архива). Собери обычный ZIP из самих картинок и labels.csv.',
   },
 
   // Names the bot gives to branches and checkpoints it creates. They are stored with the story and keep the language

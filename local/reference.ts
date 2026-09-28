@@ -219,7 +219,7 @@ function webp(bytes: Uint8Array): Picture {
 
 // Bot API PhotoSize, not validated in advance.
 type PhotoSize = { file_id?: unknown; file_size?: unknown; width?: unknown; height?: unknown };
-const isArchive = (document: TelegramDocument) => /zip/i.test(String(document.mime_type ?? '')) || /\.zip$/i.test(document.file_name ?? '');
+export const isArchive = (document: TelegramDocument) => /zip/i.test(String(document.mime_type ?? '')) || /\.zip$/i.test(document.file_name ?? '');
 
 // Reads the picture a reader sent while the bot waited for one (local/bot.ts): the largest size of a photo, or a file,
 // which is whatever its first bytes say and not what its name or type says. A size Telegram declares over the limit is

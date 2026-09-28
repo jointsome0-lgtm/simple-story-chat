@@ -13,6 +13,7 @@ import { render, scenePrefix, sceneKeyboard } from './ui.ts';
 import { commandSets } from './text.ts';
 import { createSeedFileReader } from './seed-file.ts';
 import { createPictureReader } from './reference.ts';
+import { createPoseArchiveReader } from './pose-archive.ts';
 import { createVast } from './vast.ts';
 import { createGpu, queueOptions } from './gpu.ts';
 import type { GpuController } from './gpu.ts';
@@ -99,7 +100,7 @@ try {
     promptTokens: counter(encoderTokens), textTokens: counter(textTokens) }) : undefined;
   if (config.images) log('pictures_configured');
   bot = createBot({ store, api, provider, gpu, illustrator, captioner: config.images?.captioner, providerName: config.provider, readSeedFile: createSeedFileReader(config.token, api),
-    readPicture: createPictureReader(config.token, api), render, scenePrefix, sceneKeyboard,
+    readPicture: createPictureReader(config.token, api), readArchive: createPoseArchiveReader(config.token, api), render, scenePrefix, sceneKeyboard,
     allowedUsers: config.allowedUsers, ownerId: config.ownerId, maxOutputTokens: config.maxOutputTokens,
     contextTokens: config.contextTokens, compactAtTokens: config.compactAtTokens,
     keepScenes: config.keepScenes, memoryMode: config.memoryMode, repairCoverage: config.repairCoverage, model: config.model, log });

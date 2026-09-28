@@ -27,11 +27,13 @@ import { countVersions, editableFrom, landEdit, personHere } from './picture-ver
 import { portraitText } from './image-portraits.ts';
 import { MAY_BE_EMPTY, PROFILE_CHARS, applyProfile, changedFields, fieldsMask, maskFields, parseProfile, profileHash, profileOf } from './profile.ts';
 import type { ProfileField } from './profile.ts';
-import type { ErrorDetails, Log } from './model-error.ts';
+import type { ArchiveRefusal, ErrorDetails, Log } from './model-error.ts';
 import { errorCode, member, safeErrorDetails, unavailable } from './model-error.ts';
-import { REFERENCE_WAIT_MS, REFUSAL_CODES, captionOf, keepReference } from './reference.ts';
+import { REFERENCE_WAIT_MS, REFUSAL_CODES, captionOf, isArchive, keepReference } from './reference.ts';
 import { POSE_SET_WAIT_MS, createPoseCaptioner, keepPoseSetPicture, poseSetLimit, poseSetState } from './pose-set.ts';
 import type { CaptionerConfig, PoseSetLimit } from './pose-set.ts';
+import { ArchiveError } from './pose-archive.ts';
+import type { ArchiveLabels, PoseArchive } from './pose-archive.ts';
 import type { ReceivedPicture } from './reference.ts';
 import type { GenerationResult, Provider } from './model.ts';
 import { STYLE } from './illustrate.ts';
@@ -54,6 +56,9 @@ export type BotOptions = {
   // The captioner of pose sets on this computer (local/pose-set.ts), for readers the illustrator gives them. Without it a
   // picture of a set waits for its caption.
   captioner?: CaptionerConfig;
+  // A ZIP archive of a pose set (local/pose-archive.ts), read before the library write as a picture is. Without it, an
+  // archive is refused as one.
+  readArchive?: (document: TelegramDocument) => Promise<PoseArchive>;
   render: (state: Library, route: string, details: RenderDetails) => Screen;
   scenePrefix?: (stats: ContextStats | null, provenance: ModelInfo | undefined, lang?: unknown) => string;
   sceneKeyboard: (state: Library) => InlineKeyboard | undefined;
@@ -73,11 +78,16 @@ type FileInput = { draftId: string; text: string; error?: undefined } | { error:
 // as a seed file is: the picture as it will be kept, or the refusal to show instead, beside the wait it answered, which
 // the write must find still standing.
 type Upload = { wait: ReferenceInput; picture?: ReceivedPicture; error?: UserError };
-// The same for a picture of a pose set (local/pose-set.ts), with the refusal's code for the count of refusals.
-type PoseUpload = { wait: PoseSetInput; picture?: ReceivedPicture; refused?: PoseRefusal };
+// The same for a picture of a pose set (local/pose-set.ts), with the refusal's code for the count of refusals; or for
+// an archive of them (local/pose-archive.ts), with its name as the reader's chat shows it, or why it was refused.
+type PoseUpload = { wait: PoseSetInput; picture?: ReceivedPicture; refused?: PoseRefusal;
+  archive?: PoseArchive & { name: string }; archiveRefused?: ArchiveRefusal };
 type PoseRefusal = typeof REFUSAL_CODES[keyof typeof REFUSAL_CODES] | PoseSetLimit;
-// One picture of a pose set kept or refused while a wait for them stands, for the message that counts them.
-type PoseCount = { storyId: string; name: string; at: number; kept: boolean; refused?: PoseRefusal };
+// The pictures of a pose set, one or an archive's, kept or refused while a wait for them stands, for the message that
+// counts them: how many were kept and how many of those the reader labeled whole, why the others were not, and what
+// became of an archive's labels.csv.
+type PoseCount = { storyId: string; name: string; at: number; kept: number; labeled: number; refused: Partial<Record<PoseRefusal, number>>;
+  labels?: ArchiveLabels & { archive: string } };
 // What to do after the library write; handle acts on each field that is set.
 type Plan = {
   screen?: Screen; cancel?: boolean; gpuAction?: string; modelStatus?: boolean;
@@ -124,7 +134,7 @@ const refuse = (t: Messages, key: keyof Messages['errors']) => new UserError(t.e
 const errorText = (t: Messages, error: UserError) =>
   (error.key !== undefined && Object.hasOwn(t.errors, error.key) ? t.errors[error.key as keyof Messages['errors']] : error.message);
 
-export function createBot({ store, api, provider, gpu, illustrator, readSeedFile, readPicture, captioner: captionerConfig, render: renderUi, scenePrefix = () => '', sceneKeyboard, allowedUsers, ownerId = '', maxOutputTokens,
+export function createBot({ store, api, provider, gpu, illustrator, readSeedFile, readPicture, captioner: captionerConfig, readArchive, render: renderUi, scenePrefix = () => '', sceneKeyboard, allowedUsers, ownerId = '', maxOutputTokens,
   contextTokens = 65536, compactAtTokens = 54000, keepScenes = 4, memoryMode = 'plain', repairCoverage = false, model = 'unknown', providerName = 'claude-code', log = () => {} }: BotOptions) {
   const running = new Map<string, Running>();
   // One drawing on request at a time per reader, a sample of a style or a portrait (local/picture.ts `sample`,
@@ -713,9 +723,18 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
 
   // Reads a picture of a pose set as `readUpload` reads one of the reader's own, before the library write: nothing is
   // downloaded for a reader without pose sets or once the wait has lapsed, and a refusal is kept by its code alone, for
-  // the message that counts the pictures, never shown on its own: an album of forty would be forty messages.
+  // the message that counts the pictures, never shown on its own: an album of forty would be forty messages. A ZIP
+  // archive is read whole, every picture in it, and one refused whole says why in a message of its own.
   async function readPoseUpload(userId: string, wait: PoseSetInput, message: NonNullable<Update['message']>): Promise<PoseUpload> {
     if (!illustrator?.poseSetFor(userId) || Date.now() - (wait.last ?? wait.at) > POSE_SET_WAIT_MS) return { wait };
+    if (message.document && isArchive(message.document)) {
+      try {
+        if (!readArchive) throw new Error('archive_reader_unavailable');
+        return { wait, archive: { ...await readArchive(message.document), name: String(message.document.file_name ?? '') } };
+      } catch (error) {
+        return { wait, archiveRefused: error instanceof ArchiveError ? error.code : 'incomplete' };
+      }
+    }
     try {
       if (!readPicture) throw new Error('picture_reader_unavailable');
       return { wait, picture: await readPicture(message) };
@@ -729,7 +748,8 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
   // What a picture of a pose set becomes inside the library write (local/pose-set.ts `keepPoseSetPicture`): nothing
   // unless the wait it answered still stands, with pose sets and within its half hour, and its person is still on the
   // story's sheet, and nothing past the set's or the reader's limits (`poseSetLimit`). It keeps the wait, from its own
-  // time on, and its caption is to come.
+  // time on, and its caption is to come. The pictures of an archive are kept in this one write, each as one sent alone,
+  // with the labels its labels.csv gave them.
   function keptPoseUpload(state: Library, update: Update, upload: PoseUpload, t: Messages, pictureInfo: RenderDetails): Plan {
     const { storyId, name, at } = upload.wait;
     const wait = state.ui?.input === 'pose-set' ? state.ui : undefined;
@@ -741,11 +761,36 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     const sheet = state.stories[storyId]?.sheet ?? [];
     const index = sheet.findIndex(one => one.name === name);
     if (index < 0) { state.ui = null; throw refuse(t, 'poseSetGone'); }
+    const userId = String(update.message?.from?.id);
+    if (upload.archiveRefused) {
+      const refusal = new ArchiveError(upload.archiveRefused);
+      return { screen: { text: errorText(t, refusal) }, logged: { event: 'pose_archive_refused', details: { poseArchiveRefusal: refusal.code } } };
+    }
+    if (upload.archive) {
+      const { pictures, labels, name: archive } = upload.archive;
+      const count: PoseCount = { storyId, name, at, kept: 0, labeled: 0, refused: {}, ...labels.found ? { labels: { ...labels, archive } } : {} };
+      let main = 0;
+      const now = Date.now();
+      for (const one of pictures) {
+        const refused = one.picture ? poseSetLimit(state, sheet[index], one.picture.bytes.length) : one.refused ?? 'incomplete';
+        if (refused) { count.refused[refused] = (count.refused[refused] ?? 0) + 1; continue; }
+        keepPoseSetPicture(store, userId, sheet[index], one.picture!, now, one);
+        count.kept++;
+        if (one.given?.pose && one.given.side && one.given.framing) count.labeled++;
+        if (one.main) main++;
+      }
+      if (count.kept) wait.last = now;
+      return { poseCount: count, captions: count.kept > count.labeled,
+        logged: { event: 'pose_archive_saved', details: { poseSetKept: count.kept, poseSetRefused: pictures.length - count.kept,
+          poseLabeled: count.labeled, poseMain: main, poseLabels: labels.unread ? 'unread' : labels.found ? 'read' : 'none',
+          poseLabelRows: labels.rows, poseRowsUnmatched: labels.unmatched.length, poseRowsUnknown: labels.unknown.length,
+          poseSetCount: poseSetState(sheet[index]).count } } };
+    }
     const picture = upload.picture;
     const refused = picture ? poseSetLimit(state, sheet[index], picture.bytes.length) : upload.refused ?? 'incomplete';
-    const count: PoseCount = { storyId, name, at, kept: !refused, ...refused ? { refused } : {} };
+    const count: PoseCount = { storyId, name, at, kept: refused ? 0 : 1, labeled: 0, refused: refused ? { [refused]: 1 } : {} };
     if (refused || !picture) return { poseCount: count, logged: { event: 'pose_set_refused', details: { poseSetRefusal: refused } } };
-    keepPoseSetPicture(store, String(update.message?.from?.id), sheet[index], picture, Date.now());
+    keepPoseSetPicture(store, userId, sheet[index], picture, Date.now());
     wait.last = Date.now();
     return { poseCount: count, captions: true,
       logged: { event: 'pose_set_saved', details: { referenceSent: picture.sent, referenceFormat: picture.format,
@@ -756,7 +801,8 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
   // The message that counts a reader's pictures while they send a pose set, one per reader and per wait, in memory: the
   // first picture sends it and the next ones edit it, at most every few seconds (local/progress.ts), with «✅ Готово»
   // under it until the reader is done. A restart starts a new one at the next picture.
-  type Counts = { storyId: string; name: string; at: number; kept: number; refused: Partial<Record<PoseRefusal, number>> };
+  type Counts = { storyId: string; name: string; at: number; kept: number; labeled: number; refused: Partial<Record<PoseRefusal, number>>;
+    archives: NonNullable<PoseCount['labels']>[] };
   const tallies = new Map<string, { counts: Counts; progress: ReturnType<typeof createProgress<{ stage: 'receiving' | 'done' }>> }>();
   function counted(userId: string, chat: Chat, count: PoseCount, log: Log) {
     let tally = tallies.get(userId);
@@ -765,14 +811,16 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       tally = undefined;
     }
     if (!tally) {
-      const counts: Counts = { storyId: count.storyId, name: count.name, at: count.at, kept: 0, refused: {} };
+      const counts: Counts = { storyId: count.storyId, name: count.name, at: count.at, kept: 0, labeled: 0, refused: {}, archives: [] };
       const progress = createProgress<{ stage: 'receiving' | 'done' }>({ chat, log, rows: { failed: 'pose_set_status_failed' },
         render: status => render(store.read(userId), 'pose-set-status', { ...pictureInfoOf(userId),
-          poseTally: { ...counts, refused: { ...counts.refused }, done: status.stage === 'done' } }) });
+          poseTally: { ...counts, refused: { ...counts.refused }, archives: [...counts.archives], done: status.stage === 'done' } }) });
       tallies.set(userId, tally = { counts, progress });
     }
-    if (count.kept) tally.counts.kept++;
-    else if (count.refused) tally.counts.refused[count.refused] = (tally.counts.refused[count.refused] ?? 0) + 1;
+    tally.counts.kept += count.kept;
+    tally.counts.labeled += count.labeled;
+    for (const [reason, n] of Object.entries(count.refused) as [PoseRefusal, number][]) tally.counts.refused[reason] = (tally.counts.refused[reason] ?? 0) + n;
+    if (count.labels) tally.counts.archives.push(count.labels);
     tally.progress.update({ stage: 'receiving' });
   }
   async function endTally(userId: string, log: Log) {

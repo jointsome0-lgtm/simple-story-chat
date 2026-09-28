@@ -75,15 +75,20 @@ export type OwnReference = { source: 'own'; file: string; format: 'png' | 'jpeg'
 export const POSE_LABELS = ['standing', 'sitting', 'walking', 'lying', 'kneeling', 'crouching'] as const;
 export const SIDE_LABELS = ['front', 'three-quarter left', 'three-quarter right', 'profile left', 'profile right', 'back'] as const;
 export const FRAMING_LABELS = ['full body', 'half body', 'head and shoulders'] as const;
-// A caption: the three labels, and how sure the captioner was of the least sure of them, from 0 to 1.
+// A caption: the three labels, and how sure the captioner was of the least sure of them, from 0 to 1, or 1 where the
+// reader gave all three.
 export type PoseCaption = { pose: typeof POSE_LABELS[number]; side: typeof SIDE_LABELS[number]; framing: typeof FRAMING_LABELS[number];
   confidence: number };
 // One of many pictures of a person that a reader in the pose-set experiment sent (local/pose-set.ts; the tester,
 // 2026-09-28, has about 80 of one character), kept as a picture of their own is (`OwnReference`): its file, format, size
 // in pixels and bytes, and when it came. `caption` comes later, from the captioner, and `failed` counts the captioner's
-// attempts that gave none. A frame takes one picture of the set per person, the one its pose calls for.
+// attempts that gave none. A frame takes one picture of the set per person, the one its pose calls for. A picture that
+// came in an archive may have labels its reader gave in the archive's labels.csv (local/pose-archive.ts): `given`, the
+// labels of the three they gave, which its caption keeps whatever the captioner says, so that a label of the caption is
+// the reader's where `given` has it and the captioner's where not, and with all three the caption is theirs from the
+// start and the captioner never sees it; and `main`, which puts it first to stand for its group.
 export type PoseSetPicture = { file: string; format: OwnReference['format']; width: number; height: number; bytes: number; at: number;
-  caption?: PoseCaption; failed?: number };
+  caption?: PoseCaption; failed?: number; given?: Partial<Pick<PoseCaption, 'pose' | 'side' | 'framing'>>; main?: true };
 export type Story = {
   id: string; seedId: string; title: string; branches: Record<string, Branch>; checkpoints: Record<string, Checkpoint>;
   nodes: Record<string, SceneNode>; memories: Record<string, MemoryVersion>;

@@ -147,6 +147,32 @@ the card, as a reader's own portrait is. Frames take the chosen picture with the
 which tells the picture model to take identity alone from a reference; what a fitting pose does to the pictures has not
 been measured.
 
+A reader on the list may send a set as a ZIP archive too, of at most 20 MB, the most the Bot API lets a bot download; a
+larger set goes in several archives. It is read in memory, never unpacked on the disk, and every picture in it goes the
+way one sent alone goes, under a name of the bot's own. A plain ZIP of the pictures is what it takes: an archive with a
+password, ZIP64, one in parts, one of more than 200 files, or one whose files would unpack to more than 100 MB together
+is refused whole, with a message that says what to do; a file in it that would unpack to far more than it weighs, which
+no picture does, is refused alone, as not a picture. A `labels.csv` at the archive's root, or in the one folder
+everything is in, gives the pictures their labels, so that the captioner leaves them alone; a label left empty, or one
+the bot does not know, is the captioner's to give. For the tester, a small example:
+
+```csv
+file;pose;side;framing;main
+mira-01.png;стоя;спереди;в полный рост;да
+mira-02.png;standing;three-quarter left;full body;
+poses/mira-03.png;сидя;;по пояс;
+```
+
+Save it as CSV in UTF-8, with commas or semicolons. `file` is the picture's name, or its path from the file's own folder
+where two pictures share a name. `pose` is one of `стоя`, `сидя`, `идёт`, `лёжа`, `на коленях`, `присев` (or `standing`,
+`sitting`, `walking`, `lying`, `kneeling`, `crouching`); `side` one of `спереди`, `вполоборота влево`, `вполоборота
+вправо`, `профиль влево`, `профиль вправо`, `спиной` (`front`, `three-quarter left`, `three-quarter right`, `profile left`,
+`profile right`, `back`), where left and right are the side of the picture the character faces; and `framing` one of `в
+полный рост`, `по пояс`, `по плечи` (`full body`, `half body`, `head and shoulders`). `main` (`да`, `yes` or `1`) marks the
+picture to stand for its pose before the others. The message that counts the pictures says how many came labeled, how
+many the captioner will label, and which rows found no picture or had a value the bot does not know
+([archives](telegram-ui.md#pose-set)).
+
 ### Backup and restore
 
 The database is the file at `SIMPLE_CHAT_DB_PATH`. The portraits readers keep lie beside it in `<path>.portraits/`, and only the database says whose each one is: a backup takes both, copied while the bot is stopped, so that no portrait is kept or swept in between.

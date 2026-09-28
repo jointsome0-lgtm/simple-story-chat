@@ -49,6 +49,12 @@ const REFERENCE_REFUSALS = ['type', 'broken', 'small', 'huge', 'too_large', 'inc
 // full, or its bytes or all the reader's sets' over their limits.
 export const POSE_SET_REFUSALS = [...REFERENCE_REFUSALS, 'full', 'person_bytes', 'reader_bytes'] as const;
 export type PoseSetRefusal = typeof POSE_SET_REFUSALS[number];
+// Why a pose set's ZIP archive was refused as a whole (local/pose-archive.ts): over 20 MB, its download cut short, more
+// files than a set holds, a password, not a ZIP or broken, ZIP64 or parts or a method other than deflate, a bomb, or a
+// path out of it. What labels.csv in one was: none, read, or not read, for want of a header with `file` or broken.
+export const ARCHIVE_REFUSALS = ['too_large', 'incomplete', 'files', 'encrypted', 'broken', 'unsupported', 'bomb', 'unsafe'] as const;
+export type ArchiveRefusal = typeof ARCHIVE_REFUSALS[number];
+const ARCHIVE_LABELS = ['none', 'read', 'unread'] as const;
 // A person's whole profile that a reader sent back (local/profile.ts, local/bot.ts `profileSent`): how much of it the
 // message it was copied from showed, all of it, all but the portrait's prompt, or all but that and the description;
 // where new clothes went, into the scene the story stands at or into the sheet; and why a text was refused: the person
@@ -137,7 +143,11 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   // Pose sets (local/pose-set.ts): how many pictures a person's set holds after one was kept, or went with it; how many
   // one wait kept and refused; and in a frame, how many people of the sheet had groups to choose from and how many of
   // them the frame chose one for.
-  'poseSetCount', 'poseSetKept', 'poseSetRefused', 'poseSetPeople', 'poseViewsPicked'] as const;
+  'poseSetCount', 'poseSetKept', 'poseSetRefused', 'poseSetPeople', 'poseViewsPicked',
+  // A pose set's archive (local/pose-archive.ts): of the pictures it kept, how many had all three labels from its
+  // labels.csv and how many were marked main; and that file's rows, those that matched no picture and those with a value
+  // the bot does not know.
+  'poseLabeled', 'poseMain', 'poseLabelRows', 'poseRowsUnmatched', 'poseRowsUnknown'] as const;
 
 export type ErrorDetails = {
   httpStatus?: number; phase?: typeof PHASES[number]; operation?: typeof OPERATIONS[number];
@@ -172,8 +182,8 @@ export type ErrorDetails = {
   profileRefusal?: typeof PROFILE_REFUSALS[number];
   // A version of a person's look along the story: who wrote it and which text it holds.
   versionSource?: typeof VERSION_SOURCES[number]; versionField?: typeof VERSION_FIELDS[number];
-  // A picture of a pose set: why it was refused.
-  poseSetRefusal?: typeof POSE_SET_REFUSALS[number];
+  // A picture of a pose set: why it was refused; and an archive of one: why it was, and what its labels.csv was.
+  poseSetRefusal?: typeof POSE_SET_REFUSALS[number]; poseArchiveRefusal?: ArchiveRefusal; poseLabels?: typeof ARCHIVE_LABELS[number];
   // A failed Claude CLI run: how it ended and whether the CLI itself called the result an error.
   cliResult?: typeof CLI_RESULTS[number]; cliError?: boolean; stopReason?: typeof STOP_REASONS[number];
 } & { [Key in typeof COUNTS[number]]?: number };
@@ -229,6 +239,8 @@ export function safeErrorDetails(value: unknown = {}): ErrorDetails {
   if (member(VERSION_SOURCES, input?.versionSource)) result.versionSource = input.versionSource;
   if (member(VERSION_FIELDS, input?.versionField)) result.versionField = input.versionField;
   if (member(POSE_SET_REFUSALS, input?.poseSetRefusal)) result.poseSetRefusal = input.poseSetRefusal;
+  if (member(ARCHIVE_REFUSALS, input?.poseArchiveRefusal)) result.poseArchiveRefusal = input.poseArchiveRefusal;
+  if (member(ARCHIVE_LABELS, input?.poseLabels)) result.poseLabels = input.poseLabels;
   if (member(CLI_RESULTS, input?.cliResult)) result.cliResult = input.cliResult;
   if (typeof input?.cliError === 'boolean') result.cliError = input.cliError;
   if (member(STOP_REASONS, input?.stopReason)) result.stopReason = input.stopReason;

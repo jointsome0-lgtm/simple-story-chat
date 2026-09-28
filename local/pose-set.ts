@@ -11,7 +11,8 @@
 // for it, so that a frame chooses among six at most: the frame's description names, right after each person's `who`,
 // the caption of the group that fits how the frame shows them (`poseRequest`), as Gemma was measured to choose on
 // 2026-09-28 (docs/knowledge/view-pick-measurements.md#gemma-card-2026-09-28), and that group's picture is the person's
-// one reference, or their front where no group fits (local/picture-references.ts `frameReferences`).
+// one reference, or their front where no group fits (local/picture-references.ts `frameReferences`). A set may come in a
+// ZIP archive too, whose labels.csv gives the pictures the labels the captioner would (local/pose-archive.ts).
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
@@ -52,9 +53,10 @@ export function captionText(caption: PoseCaption, group: PoseGroup): string {
   return `${caption.framing === 'full body' ? caption.pose : caption.framing}, ${caption.side}`;
 }
 
-// How well a picture stands for its group, the lowest first: a group of a side by a standing person over a kneeling,
-// a crouching and a lying one, then the whole figure over half of it and the head alone, since a reference carries the
-// person's build as well as their face, then the captioner's surest, then the earliest sent.
+// How well a picture stands for its group, the lowest first: one its reader marked main in labels.csv over any other
+// (the owner, 2026-09-29, until the pictures are sorted finer); then a group of a side by a standing person over a
+// kneeling, a crouching and a lying one, then the whole figure over half of it and the head alone, since a reference
+// carries the person's build as well as their face, then the surest caption, then the earliest sent.
 const STANCE: Record<PoseCaption['pose'], number> = { standing: 0, sitting: 0, walking: 0, kneeling: 1, crouching: 2, lying: 3 };
 const FRAMING: Record<PoseCaption['framing'], number> = { 'full body': 0, 'half body': 1, 'head and shoulders': 2 };
 export type Group = { group: PoseGroup; caption: string; file: string; count: number };
@@ -68,7 +70,7 @@ export function poseGroups(person: Pick<SheetEntry, 'poseSet'>): Group[] {
   return POSE_GROUPS.flatMap(group => {
     const list = members.get(group);
     if (!list) return [];
-    const [best] = list.toSorted((one, other) => STANCE[one.caption.pose] - STANCE[other.caption.pose]
+    const [best] = list.toSorted((one, other) => Number(!!other.main) - Number(!!one.main) || STANCE[one.caption.pose] - STANCE[other.caption.pose]
       || FRAMING[one.caption.framing] - FRAMING[other.caption.framing] || other.caption.confidence - one.caption.confidence || one.at - other.at);
     return [{ group, caption: captionText(best.caption, group), file: best.file, count: list.length }];
   });
@@ -92,13 +94,17 @@ export function poseSetLimit(state: Library, person: SheetEntry, bytes: number):
     : readerBytes(state) + bytes > POSE_SET_READER_BYTES ? 'reader_bytes' : undefined;
 }
 
-// Adds a picture to `person`'s set, uncaptioned, inside the library write `person` belongs to: the file is written first
-// and the sheet refers to it once that write commits, and a rollback deletes it (local/store.ts).
+// Adds a picture to `person`'s set inside the library write `person` belongs to: the file is written first and the sheet
+// refers to it once that write commits, and a rollback deletes it (local/store.ts). It is uncaptioned unless its reader
+// gave all three labels in an archive's labels.csv, and keeps those they gave and their mark (lib/library.ts
+// `PoseSetPicture`).
 const EXTENSIONS = { png: 'png', jpeg: 'jpg', webp: 'webp' } as const;
-export function keepPoseSetPicture(store: Store, userId: string, person: SheetEntry, picture: ReferencePicture, at: number) {
+export function keepPoseSetPicture(store: Store, userId: string, person: SheetEntry, picture: ReferencePicture, at: number,
+  { given, main }: Pick<PoseSetPicture, 'given' | 'main'> = {}) {
   const { bytes, format, width, height } = picture;
+  const labeled = given?.pose && given.side && given.framing ? { pose: given.pose, side: given.side, framing: given.framing, confidence: 1 } : undefined;
   person.poseSet = [...person.poseSet ?? [], { file: store.writePortrait(userId, bytes, EXTENSIONS[format]), format, width, height,
-    bytes: bytes.length, at }];
+    bytes: bytes.length, at, ...labeled ? { caption: labeled } : {}, ...given && Object.keys(given).length ? { given } : {}, ...main ? { main } : {} }];
 }
 
 // The pose field of a frame, added here at the call and never in local/illustrate.ts, whose request the action
@@ -232,14 +238,15 @@ export function createPoseCaptioner(config: CaptionerConfig, { store, log, spawn
     return member(POSE_LABELS, one.pose) && member(SIDE_LABELS, one.side) && member(FRAMING_LABELS, one.framing) && confidence !== undefined
       ? { pose: one.pose, side: one.side, framing: one.framing, confidence } : undefined;
   }
-  // Writes what became of one picture into its reader's library, its caption or one more failed try, if the picture is
-  // still in its story and uncaptioned; and says whether it was written, and whether the picture has a try left. The
-  // picture is found by its file, which is its own for good: a sheet written again may spell its person's name anew.
+  // Writes what became of one picture into its reader's library, its caption, with the labels its reader gave in their
+  // place, or one more failed try, if the picture is still in its story and uncaptioned; and says whether it was written,
+  // and whether the picture has a try left. The picture is found by its file, which is its own for good: a sheet written
+  // again may spell its person's name anew.
   function settle(job: Job, caption: PoseCaption | undefined) {
     return store.mutate(job.userId, state => {
       const picture = state.stories[job.storyId]?.sheet?.flatMap(one => one?.poseSet ?? []).find(one => one.file === job.file);
       if (!picture || picture.caption) return { written: false, again: false };
-      if (caption) picture.caption = caption; else picture.failed = (picture.failed ?? 0) + 1;
+      if (caption) picture.caption = { ...caption, ...picture.given }; else picture.failed = (picture.failed ?? 0) + 1;
       return { written: true, again: !caption && (picture.failed ?? 0) < CAPTION_ATTEMPTS };
     });
   }
