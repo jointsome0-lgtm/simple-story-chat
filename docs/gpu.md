@@ -46,6 +46,7 @@ Vast bills every minute whether the cards draw or wait. The owner's rules since 
 1. Rent when the work for the cards is ready. Write and dry-run every experiment script before the rental. A dry run needs no card. It assembles the prompts and counts their tokens.
 2. Keep the cards busy while they run. Code, tests and commits that the cards do not need go to a subagent in its own worktree, so the agent feeding the cards never stops to do them.
 3. Rent for the work, not for the tester (the owner, 2026-09-28). The tester may use the bot while a card is on, but no card is rented or kept on to wait for the tester. When no work for the cards is ready, delete them and tell the owner.
+4. Spend at most $3 a day on rentals (the owner, 2026-09-28). Within that cap the main session rents without asking. Before each rental, a fresh GPT-6 Astra session at `xhigh` reads the queue and says which jobs can bring a gain worth their minutes. Jobs it does not back are dropped. Cheap jobs with a likely gain go before long ones.
 
 ## SSH access
 
