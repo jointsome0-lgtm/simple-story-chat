@@ -17,11 +17,10 @@ export type ChatMessage = { role: 'user' | 'assistant'; content: string };
 // still decides whether the result stands.
 // `thinking`: the model may reason before it answers. Only a compaction under the thinking switch (local/memory.ts) and
 // the eval's recall under RECALL_THINKING (local/memory-probe.ts) ask for it; llama.cpp, simple-serving and OpenRouter
-// send thinking off without it, and other adapters ignore it. `thinkingTokens`: the most it may reason, which only
-// OpenRouter is sent, as `reasoning.max_tokens`.
+// send thinking off without it, and other adapters ignore it.
 export type ModelRequest = {
   system: string; messages: ChatMessage[]; maxOutputTokens: number;
-  purpose?: 'memory'; outputSchema?: object; estimatedInputTokens?: number; trustEstimate?: boolean; thinking?: boolean; thinkingTokens?: number;
+  purpose?: 'memory'; outputSchema?: object; estimatedInputTokens?: number; trustEstimate?: boolean; thinking?: boolean;
 };
 // Whose call a shared model's queue (local/scheduler.ts) runs. `foreground`: a person in Telegram. `agent`: a turn of
 // the agent interface (local/agent-api.ts), real work that fills the GPU while people read and, once started, is not

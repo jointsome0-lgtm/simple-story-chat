@@ -110,7 +110,7 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
   // The bot's own server runs without thinking. Left on, a free reasoning model spends the whole output limit
   // of a memory request on reasoning and answers nothing. This is OpenRouter's switch for every model it hosts.
   // A compaction under the thinking switch asks for it, with a limit that has room for it (local/memory.ts), and so
-  // does the eval's recall under RECALL_THINKING, which may also cap the reasoning (local/memory-probe.ts).
+  // does the eval's recall under RECALL_THINKING (local/memory-probe.ts).
   const openrouter = hosted && new URL(baseUrl).hostname === 'openrouter.ai';
   const headers = { 'Content-Type': 'application/json',
     ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}) };
@@ -122,8 +122,7 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
     messages: messagesFor(request),
     [openai ? 'max_completion_tokens' : 'max_tokens']: request.maxOutputTokens, stream: true,
     ...(mistral ? {} : { stream_options: { include_usage: true } }),
-    ...(openrouter ? { reasoning: request.thinking === true && request.thinkingTokens ? { max_tokens: request.thinkingTokens }
-      : { enabled: request.thinking === true } } : {}),
+    ...(openrouter ? { reasoning: { enabled: request.thinking === true } } : {}),
     ...(openai ? {} : { temperature: request.purpose === 'memory' ? 0.2 : config.temperature ?? 0.8 }),
     ...(request.outputSchema ? { response_format: { type: 'json_schema', json_schema: { name: 'reply', strict: true,
       schema: openai ? withoutLengths(request.outputSchema) : request.outputSchema } },

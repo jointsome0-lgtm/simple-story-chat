@@ -29,8 +29,8 @@ export type ModeReport = {
   // `stated` is set for a numeric answer of two digits or more: whether the number stands in the memory message or in
   // the scenes kept as text. A sum stated nowhere had to be added at recall; a stated one that failed is a reading miss.
   answers?: { key: string; expected: string; actual: unknown; pass: boolean; stated?: 'memory' | 'scenes' | 'none' }[]; recallUsage?: Usage | null;
-  // RECALL_THINKING as the recall had it: `true`, or the cap on its reasoning.
-  recallThinking?: true | number;
+  // Set when the recall thought (RECALL_THINKING).
+  recallThinking?: boolean;
   // With --traps: one scene per continuity trap, each written from the same final state and never committed.
   // local/scene-judge.ts adds the verdicts.
   traps?: TrapScene[];
@@ -54,14 +54,14 @@ type Failure = { code?: string };
 
 process.umask(0o077);
 const RECALL_OUTPUT_TOKENS = 8192;
-// RECALL_THINKING lets the recall think, so that the reader is measured apart from its memory: `true`, or the most
-// tokens it may reason where the provider takes a limit (OpenRouter's `reasoning.max_tokens`). The reasoning counts
-// against the output limit, which grows to 16384, the limit the thinking compactions of 2026-09-27 had. Off by
-// default, as the scenes are. No SIMPLE_CHAT_ prefix, as MEMORY_THINKING has none: the eval passes none to its probes.
+// RECALL_THINKING=true lets the recall think, so that the reader is measured apart from its memory (docs/eval.md#reader).
+// The reasoning counts against the output limit, which grows to 16384, the limit the thinking compactions of 2026-09-27
+// had. Off by default, as the scenes are. No SIMPLE_CHAT_ prefix, as MEMORY_THINKING has none: the eval passes none to
+// its probes.
 const RECALL_THINKING_TOKENS = 8192;
 const thinkingSetting = process.env.RECALL_THINKING || 'false';
-if (!/^(true|false|[1-9]\d{0,3})$/.test(thinkingSetting) || Number(thinkingSetting) > RECALL_THINKING_TOKENS) throw new Error('Invalid RECALL_THINKING');
-const recallThinking = thinkingSetting === 'false' ? undefined : thinkingSetting === 'true' ? true : Number(thinkingSetting);
+if (!['true', 'false'].includes(thinkingSetting)) throw new Error('Invalid RECALL_THINKING');
+const recallThinking = thinkingSetting === 'true';
 const { values } = parseArgs({ options: { source: { type: 'string' }, resume: { type: 'string' },
   minutes: { type: 'string', default: '15' }, direct: { type: 'boolean', default: false }, mode: { type: 'string' },
   traps: { type: 'boolean', default: false }, pack: { type: 'string' }, lab: { type: 'string' } } });
@@ -289,7 +289,6 @@ try {
     request.system = 'Ответь на проверочные вопросы только по переданной истории и её памяти. Соблюдай заданный формат, не достраивай неизвестное.';
     request.purpose = 'memory';
     if (recallThinking) request.thinking = true;
-    if (typeof recallThinking === 'number') request.thinkingTokens = recallThinking;
     request.outputSchema = { type: 'object', required: ['answers'], additionalProperties: false, properties: { answers: {
       type: 'array', minItems: questions.length, maxItems: questions.length, items: { type: 'object', required: ['key', 'value'], additionalProperties: false,
         properties: { key: { type: 'string', enum: questions.map(q => q[0]) }, value: { type: 'string' } } } } } };
@@ -313,7 +312,7 @@ try {
       return { key, expected, actual, pass: typeof actual === 'string' && actual.trim() === expected, ...stated };
     });
     current.recallUsage = result.usage;
-    if (recallThinking) current.recallThinking = recallThinking;
+    if (recallThinking) current.recallThinking = true;
     store.mutate('synthetic', state => { state.job = null; });
     await writeTraps(undefined);
     current.completedAt = new Date().toISOString();
