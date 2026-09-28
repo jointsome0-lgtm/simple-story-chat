@@ -73,13 +73,14 @@ Step 7 reverts this step's own edit and nothing else in the working tree.
 
 A step aimed at the traps of set `open` (a compatible claim about an unshown past, [eval.md](eval.md)) is judged on P:
 the open traps a model passes on both questions, `confirmed` and `kept`, counted per run, with the two questions
-reported apart. P gains when every candidate run beats that model's best baseline run, and falls when the candidate
-mean is below its lowest baseline run. The guards are the older traps, set `o2` and the memory `score`: none may fall
-for any model, since a narrator that confirms every claim would pass every open trap. Full success and semi-success are
-as in step 7, with P in place of `sceneScore`. Each scenario gets its own day and its own baseline, and the step passes
-only if both scenarios do, with the weaker of the two outcomes. The boundary checks are reported and decide nothing. A
-Haiku cell that fails at the Claude CLI gets up to two reruns, since it spends no channel tokens; a hosted model's cell
-gets one. The owner decided this on 2026-09-28: «Ну давай», and on Haiku's reruns «Два раза».
+reported apart. P gains when every candidate run beats that model's best baseline run, and falls when the candidate mean
+is below its lowest baseline run. The guards are the older traps, set `o2` and the memory `score`: none may fall for any
+model, since a narrator that confirms every claim would pass every open trap. Full success is a gain in the worst
+model's P, semi-success a gain in Gemma's own P; a gain in the memory `score` alone accepts nothing here, since the
+memory is a guard. Each scenario gets its own day and its own baseline, and the step passes only if both scenarios do,
+with the weaker of the two outcomes. The boundary checks are reported and decide nothing. A Haiku cell that fails at the
+Claude CLI gets up to two reruns, since it spends no channel tokens; a hosted model's cell gets one. The owner decided
+this on 2026-09-28: «Ну давай», and on Haiku's reruns «Два раза».
 
 The walk (`npm run eval -- walk`, described in [eval.md](eval.md#walk)) is the second measure: the model writes a story from a seed on its own, with the bot's continue signal or the author's intervention at each step, and a panel of judge models reads every scene for contradictions with what came before. Its `score.walk` is the share of scenes the panel found consistent, for the worst model. It is compared the same way as `sceneScore`, and it needs several walks per side: the story differs from run to run.
 
