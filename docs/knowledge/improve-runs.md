@@ -134,7 +134,9 @@ gateway with a fake engine. In that dry run the gateway took no thinking budget:
 `chat_template_kwargs`, `reasoning`, `reasoning_effort` and `thinking_token_budget` were each answered with 400
 `unsupported_field`, and `max_tokens`, the one bound, counts the thought and the text together. After this screen the
 job would bring the price on the card, and a gain only if the heretic answers otherwise than Gemma; it goes through the
-card plan and GPT-6 Astra's review, not straight to a rental.
+card plan and GPT-6 Astra's review, not straight to a rental. That review, on 2026-09-28, dropped it from [the next
+rental](../action-experiment.md#tester-rental): one answer of 76 gained hosted for much more generation, and the owner
+had not been asked.
 
 Limitations:
 - One run an arm, one state a scenario, one judge (Opus 5.5), judging once. Seven flips in 76 questions is about the

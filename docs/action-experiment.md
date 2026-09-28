@@ -3259,7 +3259,10 @@ comes in none, as nobody in these stories has nothing on.
   without (C against CW).
 
 A cell with no front, PN's and every RW and CW, is drawn on the graph the bot draws a frame on when nobody in it is
-bound (gpu/image-workflow-qwen.json); a cell with fronts on the action graph, the bot's `referenceGraph`. 372 cells
+bound (gpu/image-workflow-qwen.json); a cell with fronts on the action graph, the bot's `referenceGraph`. So PN against
+P, and RW and CW against R and C, compare the bot's two pipelines, their graphs, caches and wording included, as a
+reader gets one or the other, and not the fronts alone. At the stand's review PN's cells were on the action graph with
+no picture; 3607668 moved them to the bot's plain graph with RW's and CW's. 372 cells
 at seeds 71, 73, 79 and 83, 93 a seed: R 96, P 48, PN 36, C 48, CF 48, RW 48 and CW 48. Seed by seed, each story's
 answers and arms in turn, so that a card that ends early leaves whole comparisons. H's and L's fronts come from the
 first stand's run of 2026-09-27, B's and T's from the third's of 2026-09-28.
@@ -3287,7 +3290,8 @@ than half the head and more than half the torso), which way the torso faces (wit
 side-on, away) and whether the scene shows them as placed. `dress`, 16 sessions, has each person's front beside the
 pictures and asks the count and anatomy, and of each person whether they are found, whether the outfit that can be
 inspected is the story's, whether the front's grey suit shows, and each of four parts (chest and belly, arms, legs,
-feet) `bare`, `covered`, `mixed` or `not seen`. A picture that is not clean is left out of everything scored.
+feet) `bare`, `covered`, `mixed` or `not seen`. A picture that is not clean is left out of everything scored, and a
+rule that needs it is undecided, as where a picture was not drawn or not judged.
 
 One fresh Astra session at high effort reviewed the tasks, the layout, the rules and blinded samples: stand-ins from
 earlier stands on this stand's own inputs, since it had no picture yet. It answered «freeze with the listed changes —
@@ -3298,11 +3302,13 @@ person, never told by position; `unsure` for placement; parts judged only where 
 hide; the three-valued results below; CF no longer called a face alone; the fronts in the order of their names;
 `malformed limb or finger` in anatomy; and forms, schemas and placeholders checked together with answers that use
 every value. The stand's pin was adf4c310… then. Since the review the stand has grown by C-towel, RW and CW, rules 7
-and 8 and the sentence on nothing on in its frames; `clean` counts a bath towel among what does not make a picture
-unclean, and a `dress` session shows fifteen pictures where it showed nine. The questions put to each picture and
-person (`ASKED_5`) are the reviewed ones word for word. The pin, which covers the texts, the question file, the tasks
-and the schemas, is 6ea626f4… now, and the first four stands' pins do not move. Nobody has reviewed these additions; a
-fresh Astra session can read them before the card.
+and 8 and the sentence on nothing on in its frames; PN's cells went to the plain graph; `clean` counts a bath towel
+among what does not make a picture unclean, and a `dress` session shows fifteen pictures where it showed nine. The
+questions put to each picture and person (`ASKED_5`) are the reviewed ones word for word. The pin, which covers the
+texts, the question file, the tasks and the schemas, is 6ea626f4… now, and the first four stands' pins do not move.
+The queue's Astra reading of 2026-09-28 ([the next rental](#tester-rental)) read these additions in their diff and
+found no fatal scoring regression. Its four points are in the text here: PN's graph and what the arms without fronts
+compare, rule 8, a picture missing or not clean, and a real judge on fifteen pictures, in the dry run below.
 
 **The rules**, in the order of the complaints. A person is `placed` when found, at the side their place gives, only
 partly in view (in V-face most of her in view and facing the viewer) and shown as placed; `dressed` when found, in the
@@ -3317,15 +3323,16 @@ and ahead at more seeds than behind, and at least Y with a sum as high and ahead
 5. C above R on `dressed`, over the four lake stories.
 6. CF above C on `dressed`.
 7. CW above RW on `dressed`: the clothes rule's words alone, with no front.
-8. C at least CW on `dressed`: with the clothes rule the fronts cost no dressing. R's, RW's, C's and CW's totals stand
+8. C at least CW on `dressed`: with the clothes rule the fronts cost no dressing. It says no more than that, a
+   non-loss, and it holds as well where neither arm dresses anybody right, so R's, RW's, C's and CW's totals stand
    beside it, dressed and in the suit.
 
 A rule is yes if it holds with every unresolved result counted against its first arm, no if it fails with every one
-counted for it, and undecided between, or where a picture it needs was not judged. Beside the rules, `opposite` counts
-what the tester saw, somebody beside or behind the viewer drawn with most of them in view and facing the camera, as a
-diagnostic. `score.md` gives each story's tallies by arm, and the placed and dressed counts of each of the frame
-model's three answers seed by seed. The stand is judged once, without a retest: about 44 minutes at 4 a session, 3 at
-a time. The queue stops once more than a tenth of its sessions have had an attempt fail or refuse.
+counted for it, and undecided between, or where a picture it needs is missing, not clean or not judged. Beside the
+rules, `opposite` counts what the tester saw, somebody beside or behind the viewer drawn with most of them in view and
+facing the camera, as a diagnostic. `score.md` gives each story's tallies by arm, and the placed and dressed counts of
+each of the frame model's three answers seed by seed. The stand is judged once, without a retest: about 44 minutes at 4
+a session, 3 at a time. The queue stops once more than a tenth of its sessions have had an attempt fail or refuse.
 
 ```sh
 npm run image:refs-tester -- estimate
@@ -3350,7 +3357,12 @@ the other 363 with the four fronts uploaded again, a start after it that draws n
 submits and one job at a time. Then the judging against stand-ins for codex: 32 bundles with 300 fronts checked
 against their hashes and nothing in their 520 files that names a cell, a front or a story, 372 pictures judged, eight
 verdicts; a question file, a picture or a front changed since, refused; and the prompts' made-up word nowhere but the
-texts and the pages. `run.sh` was rehearsed against the fake too.
+texts and the pages. `run.sh` was rehearsed against the fake too. Then a `dress` session of fifteen pictures with the
+real judge, as Astra's reading asked: `judge/rehearsal-15/rehearse.ts` in refs-stand-5 built a stand-in root with
+C-bare's fifteen cells at seed 71 drawn from the third stand's K-trio frames (eight of seed 43 and seven of seed 47),
+B's and T's fronts beside them, and judged its one session through the stand's own `judgeJobs`. GPT-6 Astra answered it
+at its first attempt in 3.3 minutes on 2026-09-28, every question of each of the fifteen pictures and of both people,
+within the schema. Nobody here read its report or a picture.
 
 **The card probe**, on the text card. The heretic writes the bot's frames there, where the stand's came from hosted
 Gemma, and on the card's vLLM a field added last to a person ran away into whitespace in 42 answers of 124 on
@@ -3370,8 +3382,8 @@ against a fake gateway, with a runaway and a 503 among the answers.
 **Not verified without the card**: the stand's times on these frames; whether Qwen draws a person at the frame's edge
 from these words, and whether the words alone draw the right person where PN sends no picture; whether the heretic
 writes the places, the views and the clothes as hosted Gemma did, which the card probe answers; how Astra reads real
-pictures of these stories, since the review saw stand-ins and nobody has read what came after it; and how long a
-stand's cell holds up the tester's picture.
+pictures of these stories, since the review and the rehearsal saw stand-ins; and how long a stand's cell holds up the
+tester's picture.
 
 <a id='tester-rental'></a>
 
@@ -3383,12 +3395,29 @@ and it is deleted as soon as its queue is empty, whatever the tester is doing, o
 At most $3 a day goes on rentals, downloads included, within which the main session rents without asking once a fresh
 GPT-6 Astra session at `xhigh` has read the queues below and backed the jobs worth their minutes; the ones it does
 not back are left out. So each job says what it asks, what the answer can bring to the bot the tester uses, its
-minutes and dollars, what it brings back to this machine, and whether it can be dropped, and in each queue the cheap
-ones with a likely gain come first. Money is reckoned at $0.55 an hour a card, near what the rent dry runs of
-2026-09-28 found ($0.498 to $0.63), with each card's download on top, which made most of the spread between offers
-before ([prices](knowledge/gpu-measurements.md#costs-and-downloads)). The day's $3 counts from the owner's message at
-09:28 UTC on 2026-09-28. No card had been rented since when this was written, the Vast account held $5.09, and the
-rental was meant for that evening.
+minutes and dollars, what it brings back to this machine and what counts as a pass, and in each queue the cheap ones
+with a likely gain come first. Money is reckoned at $0.55 an hour a card, near what the rent dry runs of 2026-09-28
+found ($0.498 to $0.63), with each card's download on top, which made most of the spread between offers before
+([prices](knowledge/gpu-measurements.md#costs-and-downloads)). The day's $3 counts from the owner's message at 09:28
+UTC on 2026-09-28. No card had been rented since when this was written, the Vast account held $5.09, and the rental
+was meant for that evening.
+
+**Astra's reading.** A fresh GPT-6 Astra session at `xhigh` read the queues, the stand's changes since its review and
+the runbook from 14:39 to 14:45 UTC on 2026-09-28. It backed T1, T2, P1 and P2 and both cards, «after the shutdown
+defects below are fixed and rehearsed», and dropped the rest. T4, the heretic's reading ceiling: no next step was
+named that its answer would change, and there was no baseline of compacted stories on the card's NVFP4 to hold it
+against. T5, O3's card half: hosted O3 had gained one answer of 76 (58 against 59) for much more generation, and the
+owner had not been asked ([the entry](knowledge/improve-runs.md#scene-thinking-2026-09-28)). T3, the story bible's
+probe, for want of a command rehearsed against a gateway; a second session, from 14:50 to 14:53, backed it as a capped
+diagnostic on conditions (T3 below). The defects, each fixed below: a card whose guard could not be read, or whose
+preparation failed, was to be ended by hand, and now `end_of` and each failed step end it as code; the jobs had fixed
+limits, and now each ends by its card's end; `calm` could run 27 minutes, counted an error as idle and had five
+minutes of reserve, and now it has ten minutes by the clock, counts an error as busy and has sixteen; a text card that
+stops itself runs no guard while its disk bills, and now a watchdog on this machine deletes each card at its
+`destroyBy` and every destroy is read back `gone`. Besides: P2 never waits for the text card; T2's rehearsal is run
+again before the card; T1's and T2's criteria are written before their data; four points on [the
+stand](#tester-stand); a real judge on a session of fifteen pictures; and a rule on money, since both ends failing
+at $0.63 an hour come to about $3.19. A fresh Astra session reads this plan again before the rental.
 
 **Round two** is not on it: it ran whole on 2026-09-27, its texts from 05:45 to 06:16 UTC, its 445 cells drawn from
 06:46 to 08:01, judged and reported by 09:50. A round three needs the owner's decision and [the runbook](#runbook)'s
@@ -3397,47 +3426,62 @@ move of the round before.
 **The text card**, simple-serving with the heretic's NVFP4 ([as gpu.md has it](gpu.md#serving-card)). Its preparation
 takes about 18 minutes, as on 2026-09-27: running after 2.3, first ready at 14.4, then the pair started again for the
 bigger cache, `up` and the smoke. That is $0.17, with a download of about $0.07. Every job is class `internal`, so a
-reader's turn goes first, and the card's gateway runs two internal calls at a time with eight waiting (simple-serving's
-provisional limits, which the card keeps): jobs side by side share those two places and do not add to them. So T1 and
-T2, one call at a time each, start together once the smoke has passed; T4 once T1 has ended; T3, three stories
-abreast, once T1 and T4 have ended, beside T2's end; and T5, if Astra backs it, once T3 has ended, alone, since it
-times its scenes.
+reader's turn goes first.
 
 - **T1, [the card probe](#tester-stand)**, 80 calls: 5 to 12 minutes (a frame took 2.5 to 3.7 s on the card on
   2026-09-28, a runaway about 7.5), $0.05 to $0.11; under 1 MB back. Does the heretic write the frames of the new
-  switches without running away? Where does it put the people, and does it name bare skin, or leave `clothes` empty
-  and give a person the outfit of before? The places, the clothes and the pose pick can go on for the tester only
-  where it does not run away, since a runaway is a picture that never comes, and the clothes' counts show whether
-  the rule reaches the frames of the tester's own model at all. Not to be dropped.
+  switches without running away? Where does it put the people, and does it name bare skin, or leave `clothes` empty and
+  give a person the outfit of before? The places, the clothes and the pose pick can go on for the tester only where it
+  does not run away, since a runaway is a picture that never comes, and the clothes' counts show whether the rule
+  reaches the frames of the tester's own model at all. Not to be dropped. **What passes**, written before the card and
+  printed by `--summary` as `criteria`: a family passes when all its 20 answers came and parsed, so none ran away, none
+  was cut at the limit and none was otherwise unparsed. In the lake stories 25 answers are scored, each for one person:
+  15 for a person the story changed (Бруно in C-bare, Лина in C-swim, Тесса in C-towel, five answers each) and 10 for
+  one it left as before (Тесса in C-bare, Мара in C-outfit), in the `clothes` family and in `today` alike. A changed
+  person is right when listed, with `clothes` neither empty nor the outfit of before word for word, and naming the
+  change: bare skin, the swimsuit, the towel. One left as before is right when listed and neither bare, barefoot nor
+  with nothing on; empty `clothes` or the outfit of before keep that outfit, so either is right there. An answer that
+  did not come or parse is wrong for each of its people. `clothes` passes with at least 22 of the 25 right and no fewer
+  than `today`. A family that does not pass keeps its switch off for the tester, whatever P1 finds: `place` the places,
+  `view` the pose pick beside them, `clothes` the clothes rule.
 - **T2, the sheet versions' probe** of `lasting_changes` ([along the story](telegram-ui.md#along-the-story)), 292
   calls: 12 to 15 minutes, 30 with runaways, $0.11 to $0.28; under 1 MB back. Does the new field run the heretic away,
   and does it name only lasting changes? `SIMPLE_CHAT_SHEET_VERSION_USERS`, live with an empty list since 02:14 UTC on
-  2026-09-28, goes on for the tester only after it. Not to be dropped.
-- **T3, the story bible's card probe**, twelve-scene stories on three synthetic seeds, compacted after scenes 7 and 11:
-  93 calls in two arms, without the hidden sheet and with it, about 13 minutes and $0.12; or 135 calls, about 20
-  minutes and $0.18, if the hosted screen of the `rule` arm adds it as a third. Under 1 MB back, the stories' libraries
-  and counts. On the tester's model, does the narrator stop using a seed's backstory after compactions without the
-  sheet, and does the sheet raise it? It answers the tester's complaint that a seed's backstory is ignored until
-  somebody mentions it, which did not reproduce on hosted Gemma. The minutes come from the scene and compaction times
-  of three walks abreast on the card's gateway on the night of 2026-09-27/28. `--deadline +25` stops it cleanly, each
-  story kept as far as it got; with a third arm it starts once T2 has ended too, so that the deadline holds all three.
-  Six Astra sessions judge it after the card. Dropped if Astra does not back it.
-- **T4, the heretic's reading ceiling**, step 1 of the memory proposal, which hosted Gemma and mini ran on 2026-09-28:
-  three runs, a few minutes in T1's place beside T2, so no minute of the card's own; under 1 MB back. How much of a
-  whole story does the tester's model read back? Nothing for the bot at once, only where the memory work goes next.
-  The first to drop.
-- **T5, O3's card half**: the pack's trap scenes of both scenarios written again on the heretic without thinking and
-  with it, 139 calls, about 20 minutes on an idle card and 55 with the tester at it, $0.18 to $0.50, and at most the
-  75 of its `--minutes` ($0.69); a few MB back, the probes' directories, which Opus 5.5 judges after the card. Does
-  thinking before a scene cut the heretic's continuity and number errors, and how many seconds does it add to a scene
-  on the card the readers use? Likely to drop: hosted O3 found no gain, 58 against 59 of 76 trap questions
-  ([the entry](knowledge/improve-runs.md#scene-thinking-2026-09-28)), so the job can bring the price on the card, and
-  a gain only if the heretic answers otherwise than hosted Gemma. Astra decides.
+  2026-09-28, goes on for the tester only after it. Not to be dropped. **What passes**, written before the card and
+  printed by `--summary` as `criteria`: all 146 answers of `with` came and parsed, so none ran away; at most 2 of its
+  124 answers on `cases` name a change, since none of those frames makes a lasting one and every change named there
+  is false; and it is right on `own`, the eleven scenes hosted Gemma was checked on, in at least 20 of 22. Short of
+  any of the three the list stays empty.
+- **T3, the story bible's card probe**, on three synthetic seeds of twelve scenes each, compacted after scenes 7 and
+  11, in three arms, `without` the hidden sheet, `rule` alone and `with` the sheet, `rule` before `with` as Astra
+  asked: 135 calls, about 20 minutes by the story-bible session's count and 23 to 26 by Astra's, since its three
+  stories abreast share the gateway's two places; about 9 MB back, the stories' libraries and counts. On the tester's
+  model, does the narrator stop using a seed's backstory after compactions without the sheet, and does the rule or the
+  sheet keep it? It answers the tester's complaint that a seed's backstory is ignored until somebody mentions it,
+  which did not reproduce on hosted Gemma. Astra backed it as a diagnostic: three seeds cannot decide an adoption, but
+  they can retire the sheet for these cases if the heretic keeps the backstory after compaction without it, or pick
+  the candidate for a larger study. So it starts only once T1 and T2 have ended, and runs for 30 minutes at most and
+  never past 3 minutes before the card's end, whichever comes first, with its own deadline a minute before that and a
+  hard stop at it: $0.28 at most. Each story is kept as far as it got; failed or cut comparisons are left out. It
+  stops itself on `budget_exceeded` or `unauthorized`, and `card/probe.jsonl` shows each `failed`. Six Astra sessions
+  judge it after the card. **It runs only if** the story-bible session's rehearsals against simple-serving's
+  development gateway pass first, within 45 minutes: the gateway's queue full, a cancellation in the middle of a
+  request, and the JSON paths of the compaction and the sheet. They were running when this was written; that session
+  sends its final command once they pass, and this paragraph then says so. Otherwise the text card runs T1 and T2
+  alone and ends, and the runbook below works either way.
 
-The text card is on for 41 to 56 minutes: 41 to 53 with T3's two arms, T2's runaways included, and 53 to 56 with three,
-71 if T2 also runs away as far as it can. That is $0.38 to $0.51, and $0.45 to $0.58 with the download, $0.72 at most.
-T5 adds its 20 to 55 minutes, to the card's end at most. Step 5 of the memory proposal, production-sized compactions,
-is not written, so it is not on the queue.
+**What the gateway takes.** The card's gateway runs two internal calls at a time with eight waiting (simple-serving's
+provisional limits, which the card keeps) and answers one more with `queue_full`, which the bot's adapter reports as
+`rate_limited` and never retries (local/serving.ts). T1 asks one call at a time and a failed one once more after 5 s,
+then records it as failed and goes on; three failures in a row stop it. T2 asks one at a time and records a failure,
+which a rerun does not ask again. T3 walks its three stories abreast, so two of its calls run and one waits, and asks
+a refused, timed-out or unavailable call again every 20 s until its deadline. With T1 and T2 together and T3 after
+both, at most three of the jobs' calls are at the gateway at once, besides the bot's one or two, never near ten: no
+job needs a change for `queue_full`. T1 and T2 together take T2's 12 to 15 minutes, 30 with its runaways, and T3 after
+them at most 30, which Astra put at 23 to 26, so T1 to T3 take about 35 to 45 minutes, 60 at most, where 20 to 30 had
+been guessed. The text card is on for 33 to 36 minutes with T1 and T2 alone, 51 if T2 runs away as far as it can:
+$0.37 to $0.40 with the download, $0.54 at most. With T3 it is on for 56 to 66, 81 at most: $0.58 to $0.68, $0.81 at
+most. Step 5 of the memory proposal, production-sized compactions, is not written, so it is not on the queue.
 
 **The picture card**, the bot's card on cu130 ([as gpu.md has it](gpu.md#bot-card)), with P2's prompt enhancer
 ([gpu.md](gpu.md#qwen-pe)): 9.47 GB more to fetch, 4.2 minutes at 300 Mbit/s. Its preparation, the check passed after
@@ -3455,31 +3499,32 @@ download, nearer the 31.8 than `--qwen only`'s 22.3. Without PE and PT the card 
 check prints the disk, so the next rental knows.
 
 Both jobs go without `front`, one job at a time, so a reader's picture goes before the next cell. P1 starts as soon
-as the check passes, P2 as soon as P1 ends. P1 goes first although P2 costs about as much: its gain is the likelier,
-as both of its changes are built and wait only for its verdict, and P2's rewrites want the gap that the text card's
-end leaves.
+as the check passes, P2 as soon as P1 ends, whatever the text card is doing: neither needs a text model or waits for
+the text card's end. P1 goes first although P2 costs about as much: its gain is the likelier, as both of its changes
+are built and wait only for its verdict.
 
 - **P1, [the tester stand](#tester-stand)**, 372 cells: 34 minutes at the refs stands' times, $0.31. Its `--until`
-  leaves P2 its 40 minutes before the card's end, which gives P1 about 61 at most ($0.56); what it has not drawn by
+  leaves P2 its 40 minutes before the card's end, which gives P1 about 50 at most ($0.46); what it has not drawn by
   then waits for a later card. It brings back 0.53 to 0.68 GB of pictures as it draws (372 at 1.4 to 1.8 MB, the refs
   stands' sizes), and the judge's bundles after the card hold a copy of each, about as much again. Does Qwen draw the
   people beside and behind the viewer at the frame's edge, with their fronts and without (P, PN)? Does it draw the
   story's clothes and bare skin rather than the fronts' grey suit (C, CF), and what do the fronts cost (RW, CW)? The
   answer decides whether the tester gets the places and the clothes: the fixes for both complaints of 2026-09-28, and
-  for a person left naked drawn in the profile's clothes as far as that comes from an empty `clothes` or the suit. Not
-  to be dropped.
+  for a person left naked drawn in the profile's clothes as far as that comes from an empty `clothes` or the suit. What
+  passes is [the stand's rules](#tester-stand), yes, no or undecided. Not to be dropped.
 - **P2, [the prompt arms probe](#prompt-arms)**, 120 frames and 24 rewrites: 30.8 minutes at the seeded times (C0 and
   G 5.6, PE 7.3, A+ 2.6, PT 15.3) in a slot of 40, $0.28 to $0.37, and about $0.08 more for the enhancer's minutes and
   download; 0.17 to 0.22 GB of pictures back, and about 0.2 GB of bundles after. Does a picture prompt the model writes
   whole (G), or today's rewritten by Qwen's enhancer (PE, PT), show more of a scene's essential contacts than today's
   assembly (C0)? If G passes, the bot's frames can become whole prompts: the tester's «мы явно не выжимаем картинку».
-  PE and PT hold a reader's picture up for a whole rewrite, 20 to 60 s as seeded and 240 s at most, and are for a gap
-  in which the tester is not drawing: P2 begins about when the text card goes, and with no text card no reader's frame
-  comes. Droppable from its end: PT first, which the probe drops by itself when its slot runs short, then A+ and PE.
-  Without PE and PT the enhancer comes off the bootstrap.
+  What passes is its own rules, written before its data. PE and PT hold a reader's picture up for a whole rewrite, 20
+  to 60 s as seeded and 240 s at most. P2 starts at about 50 minutes, when the text card has ended without T3 and is
+  in T3 with it, so with T3 a reader's frame can come while a rewrite runs; P2 does not wait for the text card all the
+  same, as Astra asked. Droppable from its end: PT first, which the probe drops by itself when its slot runs short,
+  then A+ and PE. Without PE and PT the enhancer comes off the bootstrap.
 
-The picture card is on for about 84 minutes: $0.77, and $0.88 to $1.01 with the disk and the download. At most it is
-on until its end, about 120 minutes after the rental: $1.10, and $1.37 with them.
+The picture card is on for about 84 minutes: $0.77, and $0.88 to $1.01 with the disk and the download. At most its
+jobs run to its end, about 106 minutes after the rental, and it is deleted by about 122: $1.12, and $1.39 with them.
 
 **The order**, in minutes from the rental. The text card is rented first and the picture card right after, on another
 host:
@@ -3488,194 +3533,299 @@ host:
 | --- | --- | --- |
 | 0 to 12 | running after 2.3, prepared by 11.5 (2026-09-27) | the bootstrap: Qwen's 17.3 GB, the enhancer's 9.47 GB, cu130 |
 | 12 to 18 | first ready at 14.4, the pair again, `up`: the bot's scenes on the card; the smoke | the server and the check, about 16; the tunnel: the bot's pictures on the card; P1 starts |
-| 18 to 34 | T1 and T2, T4 after T1, T3 after T1 and T4 | P1 |
-| 41 to 56 | T3 ends, the queue is empty: the bot's requests end, `up` stops, the card is deleted; or T5 starts, if Astra backs it | P1, until about 50 |
-| 50 to 90 | T5, the card deleted at 61 to 111 | P2 in its slot |
-| about 90 | | the queue empty: the bot's requests end, the tunnel stops, the card is deleted |
+| 18 to 33 | T1 and T2 together, to 48 if T2 runs away | P1 |
+| 33 to 36 | without T3: the queue empty, `calm`, `up` stops, the card deleted | P1 |
+| 33 to 66 | or T3, 30 minutes at most, then the same end | P1 until about 50, then P2 |
+| about 84 | | P2 done: `calm`, the tunnel stops, the card deleted |
 
-At worst P1 draws until 40 minutes before the picture card's end, about 77 minutes after the rental, and P2 has the
-rest, to about 117.
+At worst each card's jobs end at its end, 16 minutes before its guard, about 106 minutes after its rental, and the
+card is deleted by about 122; P1 draws until about 66 and P2 has the rest. If nothing deletes it, the watchdog on this
+machine does at its `destroyBy`, 135 minutes after the rental with `--hours 2`, and the destroy takes 5 minutes at most.
 
 **The switch.** The live bot needs no restart. It runs with no card behind it, as it has since 00:21 UTC on
-2026-09-28, set to simple-serving at 127.0.0.1:8080 and ComfyUI at 127.0.0.1:8188; until those answer, its scenes
-and pictures fail as unavailable. `up` holds the text card's gateway on 8080, and `gpu/tunnel.sh --pictures-only` the
+2026-09-28, set to simple-serving at 127.0.0.1:8080 and ComfyUI at 127.0.0.1:8188; until those answer, its scenes and
+pictures fail as unavailable. `up` holds the text card's gateway on 8080, and `gpu/tunnel.sh --pictures-only` the
 picture card on 8188. Starting each switches the bot to that card, and stopping it switches the bot back, once no
-request of the bot's is in flight there (`calm` in the runbook, ten minutes at most). A bot run otherwise is stopped
-with Ctrl+C when idle and started with gpu.md's exports, as the runbook has them. The owner's smoke turn, a scene, its
-frame and a portrait from a synthetic seed of examples/ in the owner's own chat, goes once both cards answer, if the
-owner is at hand.
+request of the bot's is in flight there (`calm` in the runbook, ten minutes at most by the clock, whose look counts
+anything it cannot read as a request in flight). A second bot runs from ~/work/simple-chat-live and draws pictures too
+(its technical log, `bot-refs-2026-09-27.jsonl`); where it sends them was not read, so `calm` counts its requests as
+well. A bot run otherwise is stopped with Ctrl+C when idle and started with gpu.md's exports, as the runbook has them.
+The owner's smoke turn, a scene, its frame and a portrait from a synthetic seed of examples/ in the owner's own chat,
+goes once both cards answer, if the owner is at hand.
 
-**The money**, at $0.55 an hour, the picture card's 40 GB of extra disk apart:
+**The money**, at $0.55 an hour:
 
 | | minutes | the hours | downloads | in all |
 | --- | --- | --- | --- | --- |
-| the text card: preparation, T1 to T4, the end | 41 to 56, 71 at most | $0.38 to $0.51, $0.65 | $0.07 | $0.45 to $0.58, $0.72 at most |
-| the picture card: preparation, P1, P2, the end | 84, 120 at most | $0.79 to $1.20 with the disk | $0.09 to $0.17 | $0.88 to $1.37 |
-| both | | | | $1.33 to $1.95, $2.09 at most |
-| both, with T5 if Astra backs it | | | | $1.51 to $2.46, $2.51 at most |
-| both ends failing, each card billed to its guard | 140 each | $2.60 to $2.68 | $0.16 to $0.24 | $2.76 to $2.92 |
+| the text card: preparation, T1, T2, the end | 33 to 36, 51 at most | $0.30 to $0.33, $0.47 | $0.07 | $0.37 to $0.40, $0.54 at most |
+| the same with T3 | 56 to 66, 81 at most | $0.51 to $0.61, $0.74 | $0.07 | $0.58 to $0.68, $0.81 at most |
+| the picture card: preparation, P1, P2, the end | 84, 122 at most | $0.79 to $0.84 with the disk, $1.22 | $0.09 to $0.17 | $0.88 to $1.01, $1.39 at most |
+| both, without T3 | | | | $1.25 to $1.41, $1.93 at most |
+| both, with T3 | | | | $1.46 to $1.69, $2.20 at most |
+| both ends failing, each card deleted by its watchdog | 140 each | $2.60 to $2.68 with the disk | $0.16 to $0.24 | $2.76 to $2.92 |
 
-Both cards take `--hours 2`: the guard deletes a card that many hours after its container starts, which was 2.3
-minutes after the rental on 2026-09-27. An hour is short for the picture card's queue, and for a bootstrap as slow as
-round one's cards had, 30 minutes. The rent dry run prices each session at 2 hours 20 minutes 20 seconds, what a card
-bills if its end fails, its download included. If its two sessions come to more than what is left of the day's $3,
-all of it if nothing has been spent since 09:28 UTC, the text card takes `--hours 1`: its 57 minutes hold T1 to T4
-with T3's two arms (41 to 53) and not T5, and it bills $0.74 if its end fails.
+Both ends failing is what a card bills until its watchdog's destroy has ended: 2 hours 20 minutes 20 seconds, the
+session the rent dry run prices. At the $0.63 an hour of the dearest offer the dry runs of 2026-09-28 found, it comes to
+$3.11 to $3.19, over the day's $3. So **the rule on money**, which the runbook applies as code: the rent takes offers
+whose sessions keep both cards within what is left of the day's $3 together. The rent dry run gives each offer it would
+try its `session`, the offer's hour with its disk over the session, and its traffic; `most` takes the dearest of the
+offers, four at most, that the rent would try. If the text card's at `--hours 2` and the picture card's fit, both cards
+take `--hours 2`. Else, if they fit with the text card's at `--hours 1`, the text card takes that: 1 hour 20 minutes 20
+seconds, $0.81 at $0.55 and $0.91 at $0.63, and both cards $2.47 to $2.55 at $0.63. Else nothing is rented and the owner
+is asked. Once the text card is rented, its own session, from what `rented` printed, and the picture card's, from a dry
+run just then, must fit together before the picture card is rented. With `--hours 1` the text card's jobs end by about
+46 minutes after its rental: T1 and T2 fit, unless T2 runs away as far as it can and the card's end cuts it, and T3,
+which needs 20 minutes, does not begin. An hour is short for the picture card's queue, and for a bootstrap as slow as
+round one's cards had, 30 minutes, so it always takes `--hours 2`.
 
-**Back on this machine**: P1's 0.53 to 0.68 GB of pictures while it draws and as much again in its bundles after the
-card, within the 1.5 GB agreed for them on 2026-09-28; P2's 0.17 to 0.22 GB of pictures and about 0.2 GB of bundles,
-which that agreement does not cover; and under 10 MB from the text card's jobs. 15 GB were free on 2026-09-28.
+**Back on this machine**: P1's 0.53 to 0.68 GB of pictures and P2's 0.17 to 0.22 GB while they draw, 0.7 to 0.9 GB, and
+after the cards their bundles, about as much again for P1 and 0.2 GB for P2; the main session agreed to them on
+2026-09-28, with the 5.0 GB of earlier dry runs kept until after the cards. Under 1 MB each from T1 and T2, and about
+9 MB from T3. 15 GB were free on 2026-09-28.
 
 **Before the rental.** Everything the cards run has been dry-run without a card, as the first rule asks: the stand and
-its `run.sh` against local/fake-comfy.ts, the card probe against a fake gateway, the prompt arms probe against the same
-fake and its judge against stand-ins for codex, the versions probe against simple-serving's gateway at `next-card` with
-its fake engine (292 answers, all parsed; without the exports below it stops at `serving_required`), T3 against
-simple-serving's development gateway (`bible/probe/rehearsal`), T4 on hosted models, and T5 against simple-serving's
-gateway with a fake engine (`scene-thinking/card/dry`). On the day: Astra's reading of the queues; the dry runs again on
-the commits that run the jobs; the rent dry runs; and this machine kept awake. On 2026-09-28 it slept from 11:14 to
-12:18 UTC during a review; asleep, it keeps the tunnels, the bot and the drawing down while both cards bill, and the
-timeouts here do not count the time asleep.
+its `run.sh` against local/fake-comfy.ts; the card probe against a fake gateway, its criteria included; the prompt
+arms probe against the same fake and its judge against stand-ins for codex; the versions probe against simple-serving's
+development gateway with its fake engine, 292 answers parsed with `lasting_changes` first in all 146 of `with`
+(`sheet-versions/rehearse.sh`, which is run again on the day); the runbook's helpers against stand-ins and a dry-run
+destroy (`tester-stand/rehearse-ends.sh`, below); and a `dress` session of fifteen pictures with a real Astra judge
+([the stand's dry run](#tester-stand)). T3 goes on its own rehearsals, as above. On the day: Astra's reading of this
+plan again; the dry runs again on the commits that run the jobs; and the rent dry runs, which the runbook reads for
+the rule on money. No inhibitor keeps this machine awake: GNOME's idle suspend is off on mains power, and the PC has
+no battery and no lid. It slept from 11:14 to 12:18 UTC on 2026-09-28, which was no idle suspend, so the owner is
+asked not to suspend it while the cards run. Asleep, it keeps the tunnels, the bots and the drawing down while both
+cards bill; the watchdogs count by the clock and fire as soon as they wake past their time, and each card's guard
+deletes it anyway.
 
-**The runbook.** Every ssh has a limit: `on` gives each its seconds, and the two that last the session, `up` and
-`gpu/tunnel.sh`, give each dial ten seconds and notice a connection gone quiet after 15 s x 3. `HOST1`, `ID1`, `ID2`
-and the two `DESTROY_BY` come from `rented`.
+**The ends, rehearsed** on 2026-09-28 by `rehearse-ends.sh` in ~/simple-story-chat-runs/2026-09-28/tester-stand,
+which reads the helpers from this page between their markers and runs them with no card and nothing paid: 73 checks,
+all passed, in 51 seconds. `end_of` on a guard whose read failed, came back empty, was no number or was later than
+`destroyBy`, and with no `destroyBy`, gave no end, marked the card stopped, said we're done and destroyed that card and
+not the other; on a good guard it gave the guard less 960 s and touched nothing. `gone` destroyed twice where the
+destroy did not read back gone and then told the owner, once on a key that may not delete, and once where it read back
+gone. `busy` found a stand-in bot's connection to a stand-in port, and nothing once it closed or for another pid. It
+counted as busy a ComfyUI queue running, pending, not JSON, without its lists, with strings for them, answering 500,
+down, or 300 KB long and running; an empty queue, 300 KB long as well, as idle; and an empty or malformed `bot` and a
+failed `ss` as busy. `calm` came back 0 within 10 s once idle, and 1 after its ten minutes on a clock run fast while a
+bot stayed connected, with no bot, on a queue not JSON and on a queue down. `ready_text` saw a stand-in `status` ready
+at its third look and gave up on one never ready; `upto` began nothing with too few minutes or no end, and killed its
+job at the end; the runbook's own lines put T3's stop 30 minutes on, or 3 minutes before a nearer end, where 20
+minutes are too few to begin; its rule on money chose 2, 1 and 0 hours as it should, with no offers too; `most` gave
+the dearest session or `none`, and `rented` its four fields or nothing. One `end_of` and the watchdog went to Vast,
+each through the rent script's dry run on instance 52079556, deleted on 2026-09-22, which read it once as gone and
+deleted nothing; the watchdog, started from a shell that had exited and sent SIGHUP as a closed terminal would, fired at
+its time. Nine changes to the helpers each failed one to fifteen checks: calm's ten minutes made longer, an unread
+queue taken as idle, one destroy instead of two, an `end_of` that does not end the card, no bot taken as idle, a
+reserve of 300 s, a watchdog without its HUP trap, an `upto` that does not kill, and T3's stop at the card's end.
+
+**The runbook.** Terminal 1 rents and runs the text card, terminal 2 holds its `up`, terminal 4 runs the picture card
+and terminal 5 holds its tunnel. The helpers go into terminals 1 and 4 first, from the block between their markers.
+Every ssh has a limit: `on` gives each its seconds, and the two that last the session, `up` and `gpu/tunnel.sh`, give
+each dial ten seconds and notice a connection gone quiet after 15 s x 3. A step marked `alive` begins nothing on a
+card that has been ended, and a step that fails ends its card at once with `stop_card`: nothing more starts on it,
+we're done, and the destroy until it reads back gone.
 
 ```sh
-# The day of the rental. First a fresh GPT-6 Astra session at xhigh reads this section and says which jobs can bring a
-# gain worth their minutes; the ones it does not back are left out, and without PE and PT the bootstrap drops
-# SIMPLE_CHAT_IMAGE_QWEN_PE and the picture card is rented with --qwen only. Then the dry runs, each on the commit that
-# runs its job: in the tester-stand checkout,
+# The day of the rental. A fresh GPT-6 Astra session at xhigh has read this section again. Then the dry runs, each on
+# the commit that runs its job: in the tester-stand checkout,
 npm run image:refs-tester -- dry-run --out ~/simple-story-chat-runs/2026-09-28/refs-stand-5 \
   --frames ~/simple-story-chat-runs/2026-09-28/tester-stand/frames.json \
   --first ~/simple-story-chat-runs/2026-09-27/refs-stand --third ~/simple-story-chat-runs/2026-09-28/refs-stand-3    # steps 0 to 17
 node ~/simple-story-chat-runs/2026-09-28/tester-stand/card-probe.mts --rehearse --out "$(mktemp -d)"
+bash ~/simple-story-chat-runs/2026-09-28/tester-stand/rehearse-ends.sh    # the helpers below: "pass":true
 # and in ~/work/simple-chat, whose branch has the prompt arms probe (da96d26) and the gpu/ the picture card gets:
 npm run image:prompt-arms -- dry-run --run ~/simple-story-chat-runs/2026-09-28/prompt-arms    # steps 0 to 11
 npm run image:prompt-arms-judge -- dry-run    # steps 1 to 7
-SIMPLE_CHAT_RENT_DRY_RUN=1 npm run gpu:rent -- --lane text --hours 2    # each offer's `session`
-SIMPLE_CHAT_RENT_DRY_RUN=1 npm run gpu:rent -- --lane pictures --hours 2    # 100 GB, priced by the lane's 36.5 GB
-# If the sessions of the two offers they put first come to more than what is left of the day's $3, the text card
-# takes --hours 1.
-# This machine stays awake until both destroys are read back, in a terminal of its own:
-systemd-inhibit --what=sleep:idle:handle-lid-switch --who=simple-chat --why='rented cards' sleep infinity
+bash ~/simple-story-chat-runs/2026-09-28/sheet-versions/rehearse.sh    # T2 against the development gateway: "pass":true
+
+# ---- The helpers, pasted once into terminals 1 and 4. tester-stand/rehearse-ends.sh reads them from here.
+set -o pipefail
+runs=~/simple-story-chat-runs/2026-09-28
+# One ssh, for at most $2 seconds.
 on() { local host=$1 limit=$2; shift 2
   timeout "$limit" ssh -T -o ConnectTimeout=10 -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "$host" "$@"; }
-npm run gpu:rent -- --lane text --hours 2    # `rented`: ID1, its host HOST1, destroyBy
-npm run gpu:rent -- --lane pictures --hours 2 --avoid-host HOST1    # ID2, destroyBy
-npm run gpu:rent -- --show ID1; npm run gpu:rent -- --show ID2    # ssh.direct as simple-chat-vast and simple-chat-vast-pictures
-timeout 120 ssh -o ConnectTimeout=10 simple-chat-vast true    # each card's first ssh verifies its host key
-timeout 120 ssh -o ConnectTimeout=10 simple-chat-vast-pictures true
-# Each card's guard as soon as ssh answers, and its end five minutes before min(guard, destroyBy). A card whose guard
-# fails is ended at once, as below, and nothing is started on it.
+# The destroy until it reads back gone, twice at most; a key that may not delete is not asked again.
+gone() { local out n
+  for n in 1 2; do
+    out=$(cd ~/work/simple-chat && npm run -s gpu:rent -- --destroy "$1" 2>&1); echo "$out"
+    grep -q '"state":"gone"' <<<"$out" && return 0
+    grep -q '"destroy_refused"' <<<"$out" && break
+  done
+  echo "TELL THE OWNER NOW: instance $1 is not read back gone, may still be billing, and is deleted in the console"; return 1; }
+# A card's end: nothing more starts on it, we're done, and the destroy.
+stop_card() { local host=simple-chat-vast id=${ID1-}
+  [ "$1" = pictures ] && { host=simple-chat-vast-pictures; id=${ID2-}; }
+  touch "$runs/tester-stand/stopped-$1"; [ -n "$id" ] || return 0
+  on "$host" 20 'date +%s > /root/.simple-chat-trial-deadline'; gone "$id"; }
+alive() { [ ! -e "$runs/tester-stand/stopped-$1" ]; }
+# The destroy at $2, destroyBy, by this machine's clock, whatever the card and the terminal do.
+watchdog() { ( trap '' HUP; until (( $(date +%s) >= $2 )); do sleep 15; done; gone "$1" ) </dev/null >>"$runs/tester-stand/watchdog-$3.log" 2>&1 &
+  disown; echo "watchdog of $1 at $(date -u -d @"$2" +%T) UTC"; }
+# The card's end for its work, 16 minutes before its guard: calm's ten, we're done and the destroy's five. A guard
+# that does not hold its lock, cannot be read or is later than destroyBy ends the card at once.
 end_of() { local guard
   guard=$(on "$1" 20 'flock -n -E 75 /root/.simple-chat-trial-guard.lock true; [ $? -eq 75 ] && cat /root/.simple-chat-trial-deadline')
-  [[ $guard =~ ^[1-9][0-9]{0,11}$ ]] && (( guard <= $2 )) && echo $(( (guard < $2 ? guard : $2) - 300 )); }
-end_text=$(end_of simple-chat-vast DESTROY_BY_1); end=$(end_of simple-chat-vast-pictures DESTROY_BY_2); echo "$end_text $end"
+  if [[ $guard =~ ^[1-9][0-9]{0,11}$ && $2 =~ ^[1-9][0-9]{0,11}$ ]] && (( guard <= $2 )); then echo $(( guard - 960 )); return 0; fi
+  echo "no guard read on $1: the card ends now" >&2; stop_card "$3" >&2; return 1; }
+# A job begun only with $2 minutes or more before $1, and killed at $1.
+upto() { local left=$(( ${1:-0} - $(date +%s) )); (( left >= $2 * 60 )) || { echo "not begun: $(( left / 60 )) minutes left" >&2; return 124; }
+  shift 2; timeout "$left" "$@"; }
+# Whether a live bot has a connection to port $1, or with `queue` ComfyUI's queue there is not empty. What cannot be
+# read counts as busy.
+busy() { local seen queue
+  [[ ${bot-} =~ ^[1-9][0-9]*(\|[1-9][0-9]*)*$ ]] || return 0
+  seen=$(ss -tnp) || return 0
+  grep -qE "127\.0\.0\.1:$1 .*pid=($bot)," <<<"$seen" && return 0
+  [ "${2-}" = queue ] || return 1
+  queue=$(curl -sf -m 5 "http://127.0.0.1:$1/queue") || return 0
+  node -e 'let s = ""; process.stdin.on("data", d => s += d).on("end", () => { const q = JSON.parse(s);
+    process.exit(Array.isArray(q.queue_running) && Array.isArray(q.queue_pending) && !q.queue_running.length && !q.queue_pending.length ? 0 : 1); })' <<<"$queue" 2>/dev/null && return 1
+  return 0; }
+# Two looks 6 s apart that find nothing busy: 0, or 1 once ten minutes by the clock are out.
+calm() { local t=$(( $(date +%s) + 580 )) n=0
+  while (( $(date +%s) < t )); do if busy "$@"; then n=0; else n=$(( n + 1 )); fi; (( n >= 2 )) && return 0; sleep 6; done; return 1; }
+# The text card's gateway ready within $1 seconds, as simple-serving's `status` reads it.
+ready_text() { local t=$(( $(date +%s) + $1 )) out
+  while (( $(date +%s) < t )); do
+    out=$(cd /var/tmp/simple-serving-next && timeout 60 uv run python -m simple_serving.cli status 2>/dev/null)
+    grep -q '^gateway: ready;' <<<"$out" && return 0; sleep 15; done; return 1; }
+# The picture card as the bot's: cu130, the Triton backend and the kitchen's attention.
+check_pictures() { local stats attention
+  stats=$(curl -sf -m 10 http://127.0.0.1:8188/system_stats) && attention=$(curl -sf -m 10 http://127.0.0.1:8188/object_info/ModelAttentionBackend) || return 1
+  grep -q '"pytorch_version": *"2.11.0+cu130"' <<<"$stats" && grep -q -- '--enable-triton-backend' <<<"$stats" && grep -q '"comfy kitchen attention"' <<<"$attention"; }
+# The dearest session in dollars of the offers a rent of lane $1 for $2 hours would try, or `none`.
+most() { local out; out=$(cd ~/work/simple-chat && SIMPLE_CHAT_RENT_DRY_RUN=1 npm run -s gpu:rent -- --lane "$1" --hours "$2")
+  node -e 'const x = process.argv[1].split("\n").filter(line => line.includes("\"would_try\"")).map(line => JSON.parse(line).session);
+    console.log(x.length ? Math.max(...x) : "none");' "$out"; }
+# A rent of lane $1 for $2 hours: the instance, its host, destroyBy and its session in dollars as the dry run prices
+# it, or nothing and 1. Everything the rent printed goes to the terminal.
+rented() { local out; out=$(cd ~/work/simple-chat && npm run -s gpu:rent -- --lane "$1" --hours "$2" "${@:3}"); echo "$out" >&2
+  node -e 'const r = process.argv[1].split("\n").filter(line => line.includes("\"event\":\"rented\"")).map(line => JSON.parse(line))[0];
+    if (!r) process.exit(1); console.log(r.instance, r.host, r.destroyBy, Math.round((r.hour * (Number(process.argv[2]) + 1220 / 3600) + r.download) * 100) / 100);' "$out" "$2"; }
+# ---- The end of the helpers.
 
-# The text card, in simple-serving's checkout at next-card (/var/tmp/simple-serving-next; gpu.md#serving-card).
-git archive next-card | on simple-chat-vast 300 'mkdir -p /workspace/simple-serving && tar -xf - -C /workspace/simple-serving'
-uv run python -m simple_serving.cli keys | on simple-chat-vast 1800 bash /workspace/simple-serving/card/bootstrap.sh    # 9.2 min on 2026-09-27
-timeout 120 uv run python -m simple_serving.cli trial --ssh-host simple-chat-vast
-uv run python -m simple_serving.cli up    # a terminal of its own, until it says ready
+# Terminal 1, in ~/work/simple-chat. The live bots' processes, for `calm`: two pids, the -0928 checkout's and the other's.
+bot=$(pgrep -f '^[^ ]*node /home/jo/work/simple-chat-live(-0928)?/local/main\.ts$' | paste -sd '|'); echo "$bot"
+# The rule on money. `left` is what is left of the day's $3, all of it if nothing has been spent on cards since 09:28 UTC.
+left=3.00
+t2=$(most text 2) t1=$(most text 1) p2=$(most pictures 2); echo "text $t2 for 2 hours, $t1 for 1; pictures $p2"
+hours=$(node -e 'const [l, a, b, p] = process.argv.slice(1).map(Number); console.log(a + p <= l ? 2 : b + p <= l ? 1 : 0)' "$left" "$t2" "$t1" "$p2")
+echo "the text card: --hours $hours"    # 0: nothing is rented, and the owner is asked
+# The rents, each card's watchdog at once. Anything but `rented` goes to the owner, `attempt_uncertain` at once.
+rm -f "$runs"/tester-stand/stopped-*
+(( hours )) && read -r ID1 HOST1 BY1 S1 < <(rented text "$hours") && watchdog "$ID1" "$BY1" text
+[ -n "${ID1-}" ] && p2=$(most pictures 2) && node -e 'const [l, s, p] = process.argv.slice(1).map(Number); process.exit(s + p <= l ? 0 : 1)' "$left" "$S1" "$p2" \
+  && read -r ID2 HOST2 BY2 S2 < <(rented pictures 2 --avoid-host "$HOST1") && watchdog "$ID2" "$BY2" pictures
+echo "text ${ID1-} \$${S1-}, pictures ${ID2-} \$${S2-}"
+npm run -s gpu:rent -- --show "$ID1"; npm run -s gpu:rent -- --show "$ID2"    # ssh.direct as simple-chat-vast and simple-chat-vast-pictures
+timeout 120 ssh -o ConnectTimeout=10 simple-chat-vast true    # each card's first ssh verifies its host key
+timeout 120 ssh -o ConnectTimeout=10 simple-chat-vast-pictures true
+# Each card's end for its work, from its guard. A card whose guard cannot be read is ended here, and nothing starts on it.
+end_text=$(end_of simple-chat-vast "$BY1" text); end=$(end_of simple-chat-vast-pictures "$BY2" pictures); echo "$end_text $end"
+declare -p ID1 ID2 BY1 BY2 end_text end bot > "$runs/tester-stand/rental.env"    # for terminal 4, which starts now
+
+# The text card, in simple-serving's checkout at next-card (gpu.md#serving-card). A card ended here: Ctrl+C in
+# terminal 2 as well.
+cd /var/tmp/simple-serving-next
+alive text && { git archive next-card | on simple-chat-vast 300 'mkdir -p /workspace/simple-serving && tar -xf - -C /workspace/simple-serving' \
+  && uv run python -m simple_serving.cli keys | on simple-chat-vast 1800 bash /workspace/simple-serving/card/bootstrap.sh \
+  && timeout 120 uv run python -m simple_serving.cli trial --ssh-host simple-chat-vast || stop_card text; }    # 9.2 min on 2026-09-27
+# Terminal 2, in the same checkout: `uv run python -m simple_serving.cli up`, until it says ready.
+alive text && { ready_text 1200 || stop_card text; }
+# Ctrl+C in terminal 2. A fresh container's first start keeps the smaller cache: the pair again, then `up` again there.
 py=/workspace/simple-serving-card/gateway/bin/python
-on simple-chat-vast 300 "cd /workspace/simple-serving && $py -m simple_serving.card --stop && $py -m simple_serving.card"
-uv run python -m simple_serving.cli up    # again, until ready: from here the live bot's scenes are on the card
+alive text && { on simple-chat-vast 300 "cd /workspace/simple-serving && $py -m simple_serving.card --stop && $py -m simple_serving.card" || stop_card text; }
+alive text && { ready_text 300 || stop_card text; }    # from here the live bot's scenes are on the card
 on simple-chat-vast 30 "grep -o '\"kv_cache_tokens\": [0-9]*' /workspace/simple-serving-card/logs/card.jsonl | tail -n 1"    # 151300
-mkdir -p logs; set -o pipefail; timeout 600 uv run python -m simple_serving.smoke | tee logs/smoke-text-card.jsonl    # exit 0
+mkdir -p logs; alive text && { timeout 600 uv run python -m simple_serving.smoke | tee logs/smoke-text-card.jsonl || stop_card text; }    # exit 0
 
-# The picture card, in ~/work/simple-chat, beside the text card's preparation (gpu.md#bot-card, gpu.md#qwen-pe). The
-# bootstrap runs detached, so that a dropped connection does not end it; then its lock, 40 minutes at most, and its marks.
-on simple-chat-vast-pictures 60 'mkdir -p /workspace/simple-chat/gpu /workspace/simple-chat-gpu'
-tar -cf - -C gpu . | on simple-chat-vast-pictures 120 'tar -xf - -C /workspace/simple-chat/gpu'
-on simple-chat-vast-pictures 30 'SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_TORCH=cu130 SIMPLE_CHAT_IMAGE_QWEN_PE=true setsid -f nohup bash /workspace/simple-chat/gpu/image-bootstrap.sh </dev/null >>/workspace/simple-chat-gpu/bootstrap.log 2>&1'
-sleep 15; timeout 2400 bash -c 'until timeout 20 ssh -o ConnectTimeout=10 -o BatchMode=yes simple-chat-vast-pictures "flock -n /workspace/simple-chat-gpu/image-bootstrap.lock true"; do sleep 10; done'
-on simple-chat-vast-pictures 30 'd=/workspace/simple-chat-gpu; test -s $d/image-verified.txt && test -f $d/ComfyUI/.venv-cu130/simple-chat-ready && echo prepared || tail -n 5 $d/bootstrap.log'
-on simple-chat-vast-pictures 30 'grep -c qwen3.5_9b_qwen_image_2.1_pe_t2i /workspace/simple-chat-gpu/image-verified.txt'    # 1, for P2
-on simple-chat-vast-pictures 30 'SIMPLE_CHAT_IMAGE_TORCH=cu130 SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 SIMPLE_CHAT_IMAGE_TRITON=1 setsid -f nohup flock -n /root/.simple-chat-comfy.lock bash /workspace/simple-chat/gpu/image-serve.sh </dev/null >/dev/null 2>&1'
-bash gpu/tunnel.sh --pictures-only simple-chat-vast-pictures    # a terminal of its own: from here the live bot's pictures are on the card
-timeout 600 bash -c 'until curl -sf -m 5 -o /dev/null http://127.0.0.1:8188/system_stats; do sleep 5; done'
-on simple-chat-vast-pictures 30 'd=/workspace/simple-chat-gpu/ComfyUI; test -f $d/.venv-cu130/simple-chat-ready && test ! -e $d/.venv && echo cu130 alone; du -sh $d/.venv-cu130; df -h /workspace | tail -1'    # the disk, for the next rental
-curl -s -m 10 http://127.0.0.1:8188/system_stats | grep -o '"pytorch_version": *"[^"]*"'    # 2.11.0+cu130
-curl -s -m 10 http://127.0.0.1:8188/system_stats | grep -c -- '--enable-triton-backend'    # 1
-curl -s -m 10 http://127.0.0.1:8188/object_info/ModelAttentionBackend | grep -c '"comfy kitchen attention"'    # 1
-
-# The live bot, in ~/work/simple-chat: its process, for the ends below. After the owner's smoke, if the owner is at hand:
-live=/home/jo/work/simple-chat-live-0928; bot=$(pgrep -f "^[^ ]*node $live/local/main.ts$"); echo "$bot"    # one pid
-grep -E '"event":"picture(_portrait)?"' logs/bot-gpu.jsonl | tail -n 2 | grep -c '"pictureAttention":"kitchen"'    # 2
-curl -s -m 10 http://127.0.0.1:8188/internal/logs/raw | grep -o 'is unavailable; using PyTorch attention' | wc -l    # 0
-# gpu.md's four settings, for the text card's jobs and for a bot started anew, which is then, in its checkout with the
-# picture settings of setup.md#pictures, `npm run start:gpu 2>&1 | tee -ai logs/bot-gpu.jsonl`:
+# The text card's jobs, in ~/work/simple-chat with gpu.md's four settings, which a bot started anew also takes, in
+# its checkout with the picture settings of setup.md#pictures: `npm run start:gpu 2>&1 | tee -ai logs/bot-gpu.jsonl`.
+cd ~/work/simple-chat
 export SIMPLE_CHAT_PROVIDER=simple-serving SIMPLE_CHAT_BASE_URL=http://127.0.0.1:8080 \
   SIMPLE_CHAT_MODEL=gemma-4-31b-heretic-nvfp4 SIMPLE_CHAT_CONTEXT_TOKENS=65536 SIMPLE_CHAT_VAST_INSTANCE_ID=
 export SIMPLE_CHAT_API_KEY="$(node -p 'require(process.argv[1]).client_key' ~/.config/simple-serving/config.json)"
+# T1 and T2 together once the smoke has passed, each begun only with 5 minutes left and killed at the card's end:
+alive text && {
+  (upto "$end_text" 5 node --env-file=.env.gpu "$runs/tester-stand/card-probe.mts" --out "$runs/tester-stand/card" \
+    > "$runs/tester-stand/t1.log" 2>&1; echo "T1 exit $?") &
+  (upto "$end_text" 5 node --env-file=.env.gpu "$runs/sheet-versions/run.mts" --root "$PWD" --out "$runs/sheet-versions/card" \
+    > "$runs/sheet-versions/t2.log" 2>&1; echo "T2 exit $?") &
+  wait; }
+node "$runs/tester-stand/card-probe.mts" --summary --out "$runs/tester-stand/card" | tail -n 1    # T1's criteria
+node "$runs/sheet-versions/run.mts" --summary --out "$runs/sheet-versions/card"    # T2's counts and criteria
+# T3 only if its paragraph above says its rehearsals passed; else straight to the end. Once T1 and T2 have ended, for
+# 30 minutes or to 3 minutes before the card's end, whichever comes first, with its own deadline a minute sooner:
+t3=$(( $(date +%s) + 1800 )); (( t3 <= end_text - 180 )) || t3=$(( end_text - 180 ))
+alive text && (cd "$runs/bible/probe" && upto "$t3" 20 node run.mts --root /home/jo/work/simple-chat --out ./card \
+  --model serving:gemma-4-31b-heretic-nvfp4 --arms without,rule,with --scenes 12 --compact-after 7,11 --parallel 3 \
+  --deadline "$(date -u -d @$(( t3 - 60 )) +%FT%TZ)" > t3.log 2>&1; echo "T3 exit $?")
+# The text card's end, as soon as its queue is empty:
+calm 8080; echo "calm $?"    # then Ctrl+C in terminal 2: the live bot's scenes are off the card
+stop_card text
 
-# The text card's jobs, in ~/work/simple-chat with those settings, each in a terminal of its own once the smoke has
-# passed. T1 and T2 together, one call at a time each, the two places the gateway gives internal calls:
-timeout 1500 node --env-file=.env.gpu ~/simple-story-chat-runs/2026-09-28/tester-stand/card-probe.mts --out ~/simple-story-chat-runs/2026-09-28/tester-stand/card    # T1
-timeout 2700 node --env-file=.env.gpu ~/simple-story-chat-runs/2026-09-28/sheet-versions/run.mts --root "$PWD" --out ~/simple-story-chat-runs/2026-09-28/sheet-versions/card    # T2
-# T4 once T1 has ended:
-for n in 1 2 3; do env -u RECALL_THINKING bash ~/simple-story-chat-runs/2026-09-28/memory-ceiling/run.sh ceil heretic serving:gemma-4-31b-heretic-nvfp4 $n; done    # T4
-node ~/simple-story-chat-runs/2026-09-28/tester-stand/card-probe.mts --summary --out ~/simple-story-chat-runs/2026-09-28/tester-stand/card
-# T3 once T1 and T4 have ended, or with a third arm (--arms without,rule,with) once T2 has ended too; its deadline is
-# 25 minutes on, or the card's end if that comes first:
-dl=+25; (( $(date +%s) + 1500 <= end_text )) || dl=$(date -u -d @"$end_text" +%FT%TZ)
-(cd ~/simple-story-chat-runs/2026-09-28/bible/probe && node run.mts --root /home/jo/work/simple-chat --out ./card --model serving:heretic --arms without,with --deadline "$dl")    # T3
-# T5, only if Astra backs it, once T3 has ended, alone on the card, for 75 minutes or what is left before its end
-# (the job refuses fewer than 10):
-left=$(( (end_text - $(date +%s)) / 60 - 3 ))
-(cd ~/simple-story-chat-runs/2026-09-28/scene-thinking/card && node job.mts --root /home/jo/work/simple-chat --out ~/simple-story-chat-runs/2026-09-28/scene-thinking-card --minutes $(( left < 75 ? left : 75 )))    # T5
-
-# The picture card's jobs, each in a terminal of its own. P1 as soon as the check has passed, until 40 minutes before
-# the card's end, so that P2 keeps its slot:
-bash ~/simple-story-chat-runs/2026-09-28/refs-stand-5/run.sh $(( end - 2400 ))    # exit 0 once all 372 are drawn, 3 at its end
-# P2 once P1 has ended, in ~/work/simple-chat, for 40 minutes or to "$end", whichever comes first:
-on simple-chat-vast-pictures 30 cat /workspace/simple-chat-gpu/image-verified.txt > ~/simple-story-chat-runs/2026-09-28/prompt-arms/card.txt
+# Terminal 4, in ~/work/simple-chat after the helpers: the picture card, beside the text card's preparation
+# (gpu.md#bot-card, gpu.md#qwen-pe). The bootstrap runs detached, so that a dropped connection does not end it.
+source ~/simple-story-chat-runs/2026-09-28/tester-stand/rental.env
+alive pictures && { on simple-chat-vast-pictures 60 'mkdir -p /workspace/simple-chat/gpu /workspace/simple-chat-gpu' \
+  && tar -cf - -C gpu . | on simple-chat-vast-pictures 120 'tar -xf - -C /workspace/simple-chat/gpu' \
+  && on simple-chat-vast-pictures 30 'SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_TORCH=cu130 SIMPLE_CHAT_IMAGE_QWEN_PE=true setsid -f nohup bash /workspace/simple-chat/gpu/image-bootstrap.sh </dev/null >>/workspace/simple-chat-gpu/bootstrap.log 2>&1' \
+  || stop_card pictures; }
+# Its lock, 40 minutes at most, and its marks; else the log's last lines, and the card ends.
+sleep 15; alive pictures && { timeout 2400 bash -c 'until timeout 20 ssh -o ConnectTimeout=10 -o BatchMode=yes simple-chat-vast-pictures "flock -n /workspace/simple-chat-gpu/image-bootstrap.lock true"; do sleep 10; done' \
+  && on simple-chat-vast-pictures 30 'd=/workspace/simple-chat-gpu; test -s $d/image-verified.txt && test -f $d/ComfyUI/.venv-cu130/simple-chat-ready' \
+  || { on simple-chat-vast-pictures 30 'tail -n 5 /workspace/simple-chat-gpu/bootstrap.log'; stop_card pictures; }; }
+on simple-chat-vast-pictures 30 'grep -c qwen3.5_9b_qwen_image_2.1_pe_t2i /workspace/simple-chat-gpu/image-verified.txt'    # 1, for P2
+alive pictures && { on simple-chat-vast-pictures 30 'SIMPLE_CHAT_IMAGE_TORCH=cu130 SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 SIMPLE_CHAT_IMAGE_TRITON=1 setsid -f nohup flock -n /root/.simple-chat-comfy.lock bash /workspace/simple-chat/gpu/image-serve.sh </dev/null >/dev/null 2>&1' || stop_card pictures; }
+# Terminal 5: `bash gpu/tunnel.sh --pictures-only simple-chat-vast-pictures`: from here the live bot's pictures are on
+# the card. The server, then the check; a card ended here: Ctrl+C in terminal 5 as well.
+alive pictures && { timeout 600 bash -c 'until curl -sf -m 5 -o /dev/null http://127.0.0.1:8188/system_stats; do sleep 5; done' && check_pictures || stop_card pictures; }
+on simple-chat-vast-pictures 30 'd=/workspace/simple-chat-gpu/ComfyUI; test -f $d/.venv-cu130/simple-chat-ready && test ! -e $d/.venv && echo cu130 alone; du -sh $d/.venv-cu130; df -h /workspace | tail -1'    # the disk, for the next rental
+# After the owner's smoke, if the owner is at hand:
+grep -E '"event":"picture(_portrait)?"' logs/bot-gpu.jsonl | tail -n 2 | grep -c '"pictureAttention":"kitchen"'    # 2
+curl -s -m 10 http://127.0.0.1:8188/internal/logs/raw | grep -o 'is unavailable; using PyTorch attention' | wc -l    # 0
+# P1 as soon as the check has passed, until 40 minutes before the card's end, so that P2 keeps its slot:
+alive pictures && bash "$runs/refs-stand-5/run.sh" $(( end - 2400 )); echo "P1 exit $?"    # 0 once all 372 are drawn, 3 at its end
+# P2 as soon as P1 has ended, whatever the text card is doing, for 40 minutes or to the card's end:
 slot=$(( $(date +%s) + 2400 )); (( slot < end )) || slot=$end
-npm run image:prompt-arms -- card --run ~/simple-story-chat-runs/2026-09-28/prompt-arms --until "$slot"    # card_done
-npm run image:prompt-arms -- page --run ~/simple-story-chat-runs/2026-09-28/prompt-arms
-
-# Each card's end, as soon as its queue is empty. The requests in flight end first: `calm` waits until the live bot has
-# no connection to the card's port in two looks 6 s apart, and for pictures until ComfyUI's queue is empty, ten minutes
-# at most. Then its tunnel stops, then we're done, then the destroy whatever the ssh did. Each end goes to the owner,
-# and anything but destroy_confirmed at once.
-busy() { ss -tnp | grep "pid=$bot," | grep -q "127\.0\.0\.1:$1 " && return 0; [ "$1" = 8188 ] || return 1
-  curl -sf -m 10 http://127.0.0.1:8188/queue | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const q=JSON.parse(s);process.exit(q.queue_running.length+q.queue_pending.length?0:1)})' 2>/dev/null; }
-calm() { local n=0 i; for i in $(seq 100); do if busy "$1"; then n=0; else n=$((n+1)); fi; (( n >= 2 )) && return 0; sleep 6; done; return 1; }
-calm 8080; echo "calm $?"    # then Ctrl+C in up's terminal: the live bot's scenes are off the card
-on simple-chat-vast 20 'date +%s > /root/.simple-chat-trial-deadline'; npm run gpu:rent -- --destroy ID1
-calm 8188; echo "calm $?"    # then Ctrl+C in the tunnel's terminal: the live bot's pictures are off the card
-on simple-chat-vast-pictures 20 'date +%s > /root/.simple-chat-trial-deadline'; npm run gpu:rent -- --destroy ID2
+alive pictures && on simple-chat-vast-pictures 30 cat /workspace/simple-chat-gpu/image-verified.txt > "$runs/prompt-arms/card.txt" \
+  && npm run image:prompt-arms -- card --run "$runs/prompt-arms" --until "$slot"; echo "P2 exit $?"    # card_done
+npm run image:prompt-arms -- page --run "$runs/prompt-arms"
+# The picture card's end:
+calm 8188 queue; echo "calm $?"    # then Ctrl+C in terminal 5: the live bot's pictures are off the card
+stop_card pictures
 ```
 
 **While the cards run**, nothing runs on this machine that the cards do not need; code, tests and commits go to a
 subagent in a worktree of its own. A card whose queue is empty is deleted at once and the owner told, whether or not
-the tester is at the bot. The text card also stops itself after 13 minutes without a call, and `up` ends with it; a
-stopped card still bills its disk and its guard no longer runs, so it too ends with `--destroy`. A text card that fails
-its smoke is ended at once, and the picture card goes on, since neither P1 nor P2 needs a text model. A picture card
-that fails its check is ended at once, and the text card's jobs go on. `run.sh` draws from the tester-stand checkout;
-`TESTER_TREE` names another that holds this commit.
+the tester is at the bot. Each card has three ends besides its queue's: `stop_card`, which each failed step calls; its
+guard on the card, `--hours` after its container started; and its watchdog here at `destroyBy`, a quarter of an hour
+after that, which logs to `watchdog-text.log` or `watchdog-pictures.log` beside the card probe. The text card also
+stops itself after 13 minutes without a call, and `up` ends with it; a stopped card still bills its disk and its guard
+no longer runs, so it is ended with `stop_card text` as soon as that is seen, and by its watchdog otherwise. A text card
+that fails its preparation or smoke is ended at once, and the picture card goes on, since neither P1 nor P2 needs a
+text model. A picture card that fails its bootstrap or check is ended at once, and the text card's jobs go on. Every
+destroy is read back gone, and one that is not goes to the owner at once, as its message says. `run.sh` draws from
+the tester-stand checkout; `TESTER_TREE` names another that holds this commit.
 
 **After the cards**, with no card: the stand's bundles, judging and score, about 44 minutes of Astra; the prompt arms
-probe's checks, bundles, 28 judging sessions and score ([its judging](#prompt-arms-judging)); the card probe's
-`--summary`; the versions probe's counts; T3's six Astra sessions; T4's by its own notes; and T5's, if it ran, judged
-by Opus 5.5 as its notes say.
+probe's checks, bundles, 28 judging sessions and score ([its judging](#prompt-arms-judging)); T1's and T2's
+`criteria`, which decide their switches as above; T3's six Astra sessions, if it ran; and the watchdogs' logs, each
+with the card read back gone.
 
-**Left to the owner**: anything beyond the day's $3; a round three of the action measurement; and whether the
-tester gets any of the new switches, whose lists stay empty meanwhile, since the verdicts come only after the cards.
-The places (`SIMPLE_CHAT_POV_PLACE_USERS`, and `SIMPLE_CHAT_POV_PARTIAL_USERS` within it) and the clothes
+**Left to the owner**: anything beyond the day's $3; a round three of the action measurement; T4 and T5, which Astra
+dropped, and O3's card half would need the owner's yes besides; and whether the tester gets any of the new switches,
+whose lists stay empty meanwhile, since the verdicts come only after the cards. The places
+(`SIMPLE_CHAT_POV_PLACE_USERS`, and `SIMPLE_CHAT_POV_PARTIAL_USERS` within it) and the clothes
 (`SIMPLE_CHAT_CLOTHES_USERS`) need the bot run from a checkout with bc6db2b and the sentence on nothing on (3607668),
 on branch `tester-stand`, which is rebased onto openai-compatible-provider and not merged; the versions
 (`SIMPLE_CHAT_SHEET_VERSION_USERS`) are on the main branch already. Each list stays within `SIMPLE_CHAT_IMAGE_USERS`,
-and the places, the views and the versions wait for their probe to show no runaway. Once the clothes are on for the
-tester, the tester's own case of a person left naked is the tester's to check.
+and the places, the views and the versions wait for their probe's criteria. Once the clothes are on for the tester, the
+tester's own case of a person left naked is the tester's to check.
 
 **Still open** before the rental:
 
-- The stand's additions since its Astra review, C-towel, RW and CW, rules 7 and 8 and the sentence on nothing on,
-  have not been reviewed. The queue's reviewer reads them here; their judging questions can still change before any
-  session runs, since the judging comes after the card.
+- T3's rehearsals and its final command, from the story-bible session. Without them the text card runs T1 and T2 alone.
 - The disk: 100 GB stands in for a measurement nobody has made. The card check's `df` settles it for the next rental.
-- P2's pictures and bundles, about 0.4 GB, need their own agreement to come back to this machine.
-- T3 and T5 run from ~/work/simple-chat's working tree, so whatever lands there before the rental is what they run:
-  the dry runs on the day are for that. T5's notes name a checkout, `simple-chat-scene-thinking`, that no longer
-  exists; the runbook gives it ~/work/simple-chat, which has had SCENE_THINKING since 45400b2.
+- T3 runs from ~/work/simple-chat's working tree, so whatever lands there before the rental is what it runs: the dry
+  runs on the day are for that.
