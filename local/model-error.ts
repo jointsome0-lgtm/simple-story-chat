@@ -45,6 +45,15 @@ const REFERENCE_PLACES = POSES;
 // reads; its shorter side too short, its longer side too long, or the two too far apart; its bytes over the limit;
 // its download cut short; or an archive where a picture was awaited.
 const REFERENCE_REFUSALS = ['type', 'broken', 'small', 'huge', 'shape', 'too_large', 'incomplete', 'archive'] as const;
+// A person's whole profile that a reader sent back (local/profile.ts, local/bot.ts `profileSent`): how much of it the
+// message it was copied from showed, all of it, all but the portrait's prompt, or all but that and the description;
+// where new clothes went, into the scene the story stands at or into the sheet; and why a text was refused: the person
+// gone, the profile changed since, no text, a text that does not start with the name's line or end with the last line,
+// the name changed, a heading the bot does not know, the fields not those of the message once each, text outside them,
+// a field emptied that may not be, or a field over its limit.
+const PROFILE_FITS = ['whole', 'no_prompt', 'no_description'] as const;
+const PROFILE_CLOTHES = ['scene', 'sheet'] as const;
+const PROFILE_REFUSALS = ['gone', 'changed', 'no_text', 'incomplete', 'name', 'heading', 'sections', 'outside', 'empty', 'too_long'] as const;
 // A version of a person's look along the story (local/picture-versions.ts): whether the story wrote it, from a lasting
 // change a frame named, or the reader, «only from this moment», and which of the person's texts it holds. The change,
 // the description and the look stay out, as the person's name does.
@@ -114,6 +123,9 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   // A picture a reader sent of a person (local/reference.ts): its bytes as it came, those its metadata took, which were
   // stripped, and its size in pixels.
   'referenceBytes', 'strippedBytes', 'referenceWidth', 'referenceHeight',
+  // A profile a reader sent back (local/bot.ts `profileSent`): the characters of the whole text, and of each field it
+  // changed as it was written, the description's in `descriptionCharacters` and the prompt's in `promptCharacters`.
+  'profileCharacters', 'changesCharacters', 'detailsCharacters', 'lookCharacters', 'clothesCharacters',
   // Versions of people's looks along a story (local/picture-versions.ts): how many lasting changes a frame found and
   // wrote, how many people one write gave a version, how many versions the story holds after it, and how many of the
   // reader's «only from this moment» an edit for the whole story took the place of.
@@ -144,6 +156,12 @@ export type ErrorDetails = {
   pov?: boolean;
   // A sheet written in place of an older one that still had the clothes in its appearance lines.
   sheetRewritten?: boolean;
+  // A profile a reader sent back: which of its fields it changed, whether the details and the look are retold from it,
+  // how much of the profile its message showed and where new clothes went, or why it was refused.
+  profileDescription?: boolean; profileChanges?: boolean; profileDetails?: boolean; profileLook?: boolean;
+  profileClothes?: boolean; profilePrompt?: boolean; profileRetell?: boolean;
+  profileFit?: typeof PROFILE_FITS[number]; profileClothesAt?: typeof PROFILE_CLOTHES[number];
+  profileRefusal?: typeof PROFILE_REFUSALS[number];
   // A version of a person's look along the story: who wrote it and which text it holds.
   versionSource?: typeof VERSION_SOURCES[number]; versionField?: typeof VERSION_FIELDS[number];
   // A failed Claude CLI run: how it ended and whether the CLI itself called the result an error.
@@ -192,6 +210,12 @@ export function safeErrorDetails(value: unknown = {}): ErrorDetails {
   if (typeof input?.ownPrompt === 'boolean') result.ownPrompt = input.ownPrompt;
   if (typeof input?.pov === 'boolean') result.pov = input.pov;
   if (typeof input?.sheetRewritten === 'boolean') result.sheetRewritten = input.sheetRewritten;
+  for (const key of ['profileDescription', 'profileChanges', 'profileDetails', 'profileLook', 'profileClothes', 'profilePrompt', 'profileRetell'] as const) {
+    if (typeof input?.[key] === 'boolean') result[key] = input[key];
+  }
+  if (member(PROFILE_FITS, input?.profileFit)) result.profileFit = input.profileFit;
+  if (member(PROFILE_CLOTHES, input?.profileClothesAt)) result.profileClothesAt = input.profileClothesAt;
+  if (member(PROFILE_REFUSALS, input?.profileRefusal)) result.profileRefusal = input.profileRefusal;
   if (member(VERSION_SOURCES, input?.versionSource)) result.versionSource = input.versionSource;
   if (member(VERSION_FIELDS, input?.versionField)) result.versionField = input.versionField;
   if (member(CLI_RESULTS, input?.cliResult)) result.cliResult = input.cliResult;

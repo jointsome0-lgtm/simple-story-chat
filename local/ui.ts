@@ -11,6 +11,8 @@ import { DESCRIPTION_CHARS, LOOK_CHARS, descriptionOf, ownDescription, ownPortra
 import { REFERENCE_BYTES, REFERENCE_SIDES } from './reference.ts';
 import { seesThrough } from './picture-pov.ts';
 import { editableFrom, ownVersions, sceneOf, sheetAt, versionsOf } from './picture-versions.ts';
+import { CHANGES_CHARS, CLOTHES_CHARS, DETAILS_CHARS, fieldsMask, maskFields, profileBlock, profileHash, profileOf, roundTrips } from './profile.ts';
+import type { ProfileField } from './profile.ts';
 import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX, PRESETS, PROMPT_CHARS, lineOf, ownStyle, ownStyles, pickerKeys, presetOf, styleKey } from './picture-style.ts';
 import { LANGS, LANGUAGE_BUTTON, REGISTERED, shownLang, texts } from './text.ts';
 import type { Messages } from './text.ts';
@@ -136,6 +138,12 @@ function screen(state: State, route: string, details: RenderDetails) {
     case 'portrait-prompt-input': return portraitPromptInputScreen(state, details);
     // Only while the reader is to send a picture of a person of their own (local/reference.ts), as for a look.
     case 'reference-input': return referenceInputScreen(state, details);
+    // A person's whole profile to copy and send back (local/profile.ts); the same with a line on top when the one the
+    // reader edited had changed since (local/bot.ts); the wait for it, as for a look; and what a profile sent back changed.
+    case 'profile': return profileScreen(state, args[0], args[1], args[2]);
+    case 'profile-changed': return profileScreen(state, args[0], args[1], args[2], texts(state.language).characters.profileChanged);
+    case 'profile-input': return profileInputScreen(state, details);
+    case 'profile-saved': return profileSaved(state, args[0], args[1], args[2], args[3]);
     case 'seeds': return seedList(state, args[0]);
     case 'seed': return seedScreen(state, args[0], args[1], details.pictures === true);
     case 'story': return storyScreen(state, args[0], args[1], details.pictures === true);
@@ -501,9 +509,11 @@ function charactersScreen(state: State, storyId: string | undefined) {
 // the clothes each have their size as the picture model counts that text alone (never their sum: a prompt takes names
 // and ages out of them, joins them with the scene and adds the style). The card says when the look is the reader's own
 // instead, or not retold yet. Both have a button to write them, the description also for a person who has none yet.
-// The changes and the clothes are the story's to make, so they are only shown: the clothes of the active branch's
-// latest picture for the active story (local/picture.ts `wornAt`), the sheet's own otherwise. A prompt the reader wrote
-// for the person's portraits is said to be theirs, with a button to go back to the bot's own.
+// The changes and the clothes are the story's to make, and the card only shows them: for the active story the clothes
+// the next pictures of the active branch start from, those of its latest picture or those the reader wrote there
+// (local/picture.ts `wornAt`), the sheet's own otherwise. The reader may change them, with every other field, in the
+// whole profile (`profileScreen`). A prompt the reader wrote for the person's portraits is said to be theirs, with a
+// button to go back to the bot's own.
 function characterScreen(state: State, storyId: string | undefined, rawIndex: string | undefined, tag: string | undefined,
   details: RenderDetails) {
   const t = texts(state.language);
@@ -562,6 +572,7 @@ function characterScreen(state: State, storyId: string | undefined, rawIndex: st
     c.sizeNote, '', c.scope, portrait === null ? null : '', portrait, source, frames, pov === null ? null : '', pov], [
     [btn(c.editDetails, `details-edit:${personRef(story, person)}`)],
     [btn(c.edit, `look-edit:${personRef(story, person)}`)],
+    [btn(c.profile, `view:profile:${personRef(story, person)}`)],
     details.pictures ? [btn(c.portrait, `portrait:${personRef(story, person)}`),
       details.references ? btn(c.ownPortrait, `ref-send:${personRef(story, person)}:front`) : null] : null,
     details.pictures && prompt !== undefined ? [btn(c.defaultPrompt, `portrait-default:${personRef(story, person)}`)] : null,
@@ -612,6 +623,75 @@ function sheetInputScreen(state: State, input: 'look' | 'details', details: Rend
   const offset = now ? result.text.lastIndexOf(now) : -1;
   if (offset >= 0) result.entities = [{ type: 'pre', offset, length: now.length }];
   return result;
+}
+
+// A person's whole profile as one block to tap, copy, edit and send back (local/profile.ts): every field, in the
+// reader's language, and «✏️» for the wait that takes it back, whose button carries the fields shown and a hash of their
+// text. It is one message or nothing: one over the bot's 4000 characters leaves out the reader's prompt for the
+// portraits, which the note under a portrait drawn from it has, then the description too, which the card shows and has
+// a button for, and at last shows no block at all, never one clipped. A block that would not read back as it is shown,
+// one of a sheet the next picture writes anew, and one of a person whose look changed along the branch being played,
+// shown as at its last scene (local/profile.ts `versioned`), are shown without the button, with a line on why. `notice`
+// goes on top: the profile the reader edited had changed since.
+function profileScreen(state: State, storyId: string | undefined, rawIndex: string | undefined, tag: string | undefined, notice?: string) {
+  const t = texts(state.language);
+  const c = t.characters;
+  const story = own(state.stories, storyId);
+  if (!story) return stale(t, t.story.notFound);
+  const person = personAt(story, rawIndex, tag);
+  if (!person) return charactersScreen(state, story.id);
+  const ref = personRef(story, person);
+  const profile = profileOf(state, story, person);
+  const title = c.profileTitle(line(person.name, 60), storyName(state, story));
+  const back = [btn(c.backToCard, `view:character:${ref}`)];
+  const fits: ProfileField[][] = [profile.present, profile.present.filter(field => field !== 'prompt'),
+    profile.present.filter(field => field !== 'prompt' && field !== 'description')];
+  for (const [n, fields] of fits.entries()) {
+    if (n && fields.length === fits[n - 1].length) continue;
+    const block = profileBlock(person.name, profile, fields, state.language);
+    const editable = !profile.older && !profile.versioned && roundTrips(block, person.name, profile, fields);
+    const notes = [profile.older ? c.profileOlder : profile.versioned ? c.profileVersions : editable ? null : c.profileUnreadable,
+      profile.present.includes('prompt') && !fields.includes('prompt') ? c.profileNoPrompt : null,
+      fields.includes('description') ? null : c.profileNoDescription].filter(note => note !== null);
+    const lines = [title, ...notice ? ['', notice] : [], ...notes.length ? ['', ...notes] : [], '', block, ...editable ? ['', c.profileHint] : []];
+    if (lines.join('\n').length > LIMIT) continue;
+    const result = payload(lines, [editable ? [btn(c.profileEdit, `profile-edit:${ref}:${fieldsMask(fields)}:${profileHash(person.name, profile, fields)}`)] : null, back]);
+    const offset = result.text.indexOf(block);
+    if (offset >= 0) result.entities = [{ type: 'pre', offset, length: block.length }];
+    return result;
+  }
+  return payload([title, ...notice ? ['', notice] : [], '', c.profileTooLong], [back]);
+}
+
+// Waiting for the profile the reader sends back (local/bot.ts), which they copy from the message above: what it may
+// change and how, the limit of each field, where changed clothes go, and the way out. Without the wait this is the menu,
+// as for a look.
+function profileInputScreen(state: State, details: RenderDetails) {
+  const t = texts(state.language);
+  const c = t.characters;
+  const ui = state.ui?.input === 'profile' ? state.ui : null;
+  const story = own(state.stories, ui?.storyId);
+  const person = story && people(story).find(one => one.name === ui?.name);
+  if (!story || !person) return home(state, null, details.modelInfo, gpuFor(details), details.pictures === true);
+  const branch = profileOf(state, story, person).clothesAt === null ? null : activeRef(state)?.branch;
+  return payload([c.profileEditTitle(line(person.name, 60), storyName(state, story)), '',
+    c.profileEditNote(DESCRIPTION_CHARS, CHANGES_CHARS, DETAILS_CHARS, LOOK_CHARS, CLOTHES_CHARS, PROMPT_CHARS), '',
+    branch ? c.profileClothesBranch(quote(t, branch.name)) : c.profileClothesStart, '', c.profileLeave],
+    [[btn(c.backToCard, `view:character:${personRef(story, person)}`)]]);
+}
+
+// What a profile sent back changed, by the headings of the fields in `mask` (local/profile.ts `fieldsMask`), or that it
+// changed nothing, with the ways to the profile and to the card. A description retold for it follows as the card.
+function profileSaved(state: State, storyId: string | undefined, rawIndex: string | undefined, tag: string | undefined, mask: string | undefined) {
+  const t = texts(state.language);
+  const c = t.characters;
+  const story = own(state.stories, storyId);
+  const person = story && personAt(story, rawIndex, tag);
+  if (!story || !person) return stale(t, t.story.notFound);
+  const fields = maskFields(mask) ?? [];
+  const ref = personRef(story, person);
+  return payload([fields.length ? c.profileSaved(line(person.name, 60), fields.map(field => c.profileHeadings[field]).join(', ')) : c.profileUnchanged],
+    [[btn(c.profile, `view:profile:${ref}`)], [btn(c.backToCard, `view:character:${ref}`)]]);
 }
 
 // Waiting for a picture the reader sends of the person `state.ui` names, to keep as their portrait (local/reference.ts).

@@ -7,6 +7,7 @@ import { renderCompaction } from './compact-view.ts';
 import type { CompactionStatus } from './compact-view.ts';
 import type { GpuStatus } from './gpu.ts';
 import { DESCRIPTION_CHARS, LOOK_CHARS, personTag } from './picture.ts';
+import { CHANGES_CHARS, CLOTHES_CHARS, DETAILS_CHARS } from './profile.ts';
 import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX, PRESETS, PROMPT_CHARS } from './picture-style.ts';
 import type { Screen } from './telegram.ts';
 import { LANGS, LANGUAGE_BUTTON, REGISTERED, commandSets, langFromTelegram, texts } from './text.ts';
@@ -17,7 +18,7 @@ import { LIMIT, render, renderContext, scenePrefix, sceneKeyboard } from './ui.t
 const CYRILLIC = /[Ѐ-ӿ]/;
 
 // Every callback the bot acts on (local/bot.ts); it answers any other as a stale button.
-const ACTION = /^(view:.+|new-seed|save-seed:[^:]+|start:[^:]+|use:[^:]+:[^:]+|fork:[^:]+:[^:]+|remove-seed:[^:]+|remove-branch:[^:]+:[^:]+|continue|cancel|last|compact|gpu:start|gpu:pause|lang:[a-z]{2}|style:[a-z0-9]+|style-new|style-edit:y\d+|remove-style:y\d+|style-sample:[a-z0-9]+|style-samples|look-edit:[^:]+:\d+:[0-9a-f]{8}|details-edit:[^:]+:\d+:[0-9a-f]{8}|portrait:[^:]+:\d+:[0-9a-f]{8}|pov(?:-off)?:[^:]+:\d+:[0-9a-f]{8}|portrait-default:[^:]+:\d+:[0-9a-f]{8}|portrait-keep:[0-9a-f]+|edit-scope:(?:here|all))$/;
+const ACTION = /^(view:.+|new-seed|save-seed:[^:]+|start:[^:]+|use:[^:]+:[^:]+|fork:[^:]+:[^:]+|remove-seed:[^:]+|remove-branch:[^:]+:[^:]+|continue|cancel|last|compact|gpu:start|gpu:pause|lang:[a-z]{2}|style:[a-z0-9]+|style-new|style-edit:y\d+|remove-style:y\d+|style-sample:[a-z0-9]+|style-samples|look-edit:[^:]+:\d+:[0-9a-f]{8}|details-edit:[^:]+:\d+:[0-9a-f]{8}|portrait:[^:]+:\d+:[0-9a-f]{8}|pov(?:-off)?:[^:]+:\d+:[0-9a-f]{8}|portrait-default:[^:]+:\d+:[0-9a-f]{8}|portrait-keep:[0-9a-f]+|profile-edit:[^:]+:\d+:[0-9a-f]{8}:[0-9a-f]{1,2}:[0-9a-f]{8}|edit-scope:(?:here|all))$/;
 const config = { model: 'synthetic-model', provider: 'llama-cpp', maxOutputTokens: 4096, contextTokens: 65536, compactAtTokens: 54000, keepScenes: 4 };
 
 function node(id: string, parent: string | null, time: string, body: string, input = 'Look around'): SceneNode {
@@ -83,6 +84,12 @@ function drawn(lang: Lang | undefined): Library {
   state.stories.h2.nodes.n5.clothes = { Mira: 'wearing a yellow raincoat' };
   return state;
 }
+// The same people on a sheet of today's shape, whose whole profiles can be sent back edited (local/profile.ts).
+function current(lang: Lang | undefined): Library {
+  const state = drawn(lang);
+  state.stories.h2.sheet = SHEET.map(one => ({ outfit: '', changes: '', ...one }));
+  return state;
+}
 // The same, with a portrait kept of the look as it is and one of an earlier look, whose person has a prompt of the
 // reader's own for their portraits.
 function portraits(lang: Lang | undefined): Library {
@@ -121,6 +128,8 @@ function screens(lang: Lang | undefined) {
     ['details edit', { ...drawn(lang), ui: { input: 'details', storyId: 'h2', name: 'Oleg' } }],
     ['portraits', portraits(lang)],
     ['portrait prompt', { ...portraits(lang), ui: { input: 'portrait-prompt', storyId: 'h2', name: 'Oleg', seed: 7, recipe: '0123abcd' } }],
+    ['current sheet', current(lang)],
+    ['profile edit', { ...current(lang), ui: { input: 'profile', storyId: 'h2', name: 'Oleg', fields: '1f', hash: '0123abcd' } }],
   ];
   for (const [name, state] of states) {
     const details = (route: string): RenderDetails => {
@@ -155,7 +164,9 @@ function screens(lang: Lang | undefined) {
       'style-input', 'style:y404', 'delete-style:y404', 'delete-style:y20', 'sample:film', 'sample:standard', 'sample:y20', 'prompt-input', 'portrait-prompt-input',
       'characters:h404', 'character:h404:0', 'character:h2:9', 'look-input', 'details-input',
       `portrait:h2:0:${personTag('Mira')}:0a1b2c3d`, `portrait:h2:1:${personTag('Oleg')}:`, `portrait:h2:1:${personTag('Mira')}:0a1b2c3d`,
-      `portrait:h404:0:${personTag('Mira')}:0a1b2c3d`, 'portrait-kept:h2:1', 'portrait-kept:h2:9');
+      `portrait:h404:0:${personTag('Mira')}:0a1b2c3d`, 'portrait-kept:h2:1', 'portrait-kept:h2:9', 'profile-input', `profile:h404:0:${personTag('Mira')}`,
+      `profile:h2:9:${personTag('Mira')}`, `profile-changed:h2:1:${personTag('Oleg')}`, `profile-saved:h2:1:${personTag('Oleg')}:3f`,
+      `profile-saved:h2:1:${personTag('Oleg')}:0`, `profile-saved:h2:9:${personTag('Oleg')}:3f`);
     offered.set(name, [fromMenu, actions]);
     out.push([`${name}: context without stats`, render(state, 'context')]);
     // The picker of a reader who is not drawn for, and a card with the standard line being one of the presets.
@@ -265,7 +276,10 @@ for (const lang of [undefined, ...REGISTERED]) {
       [t.pictureStyle.inputNote(OWN_STYLE_CHARS, OWN_NAME_CHARS), [OWN_STYLE_CHARS, OWN_NAME_CHARS]], [t.pictureStyle.editNote(OWN_STYLE_CHARS), [OWN_STYLE_CHARS]],
       [t.errors.promptTooLong, [PROMPT_CHARS]], [t.variant.note(PROMPT_CHARS), [PROMPT_CHARS]], [t.characters.promptNote(PROMPT_CHARS), [PROMPT_CHARS]],
       [t.errors.lookTooLong, [LOOK_CHARS]],
-      [t.characters.editNote(LOOK_CHARS), [LOOK_CHARS]], [t.errors.detailsTooLong, [DESCRIPTION_CHARS]], [t.characters.detailsNote(DESCRIPTION_CHARS), [DESCRIPTION_CHARS]]] as const) for (const limit of limits) assert.match(text, new RegExp(`\\b${limit}\\b`), text);
+      [t.characters.editNote(LOOK_CHARS), [LOOK_CHARS]], [t.errors.detailsTooLong, [DESCRIPTION_CHARS]], [t.characters.detailsNote(DESCRIPTION_CHARS), [DESCRIPTION_CHARS]],
+      [t.characters.profileEditNote(DESCRIPTION_CHARS, CHANGES_CHARS, DETAILS_CHARS, LOOK_CHARS, CLOTHES_CHARS, PROMPT_CHARS),
+        [DESCRIPTION_CHARS, CHANGES_CHARS, DETAILS_CHARS, LOOK_CHARS, CLOTHES_CHARS, PROMPT_CHARS]],
+      [t.characters.profileLong(t.characters.profileHeadings.details, DETAILS_CHARS), [DETAILS_CHARS]]] as const) for (const limit of limits) assert.match(text, new RegExp(`\\b${limit}\\b`), text);
     const [name, line, ...rest] = t.pictureStyle.exampleText.split('\n');
     assert.ok(name && [...name].length <= OWN_NAME_CHARS && line && [...line].length <= OWN_STYLE_CHARS && !rest.length && !/[^\x20-\x7e]/.test(line), 'the example style');
     assert.doesNotThrow(() => addSeed(emptyLibrary(), t.newSeed.example), 'the example seed');

@@ -245,11 +245,12 @@ export const ru = {
     // by the reader «only from this moment». The card above shows the person as they are at that scene.
     along: (times: number) => `📜 По ходу истории внешность менялась ${count(times, 'раз', 'раза', 'раз')}: здесь она такая, какой стала к сцене, где ты сейчас.`,
     // `branch` is the quoted name of the branch being played.
-    clothesOfBranch: (branch: string) => `Одежда на последней картинке ветки ${branch}:`,
+    clothesOfBranch: (branch: string) => `Одежда, с которой начнутся следующие картинки ветки ${branch}:`,
     clothesAtStart: 'Одежда, с которой начались картинки этой истории:',
     clothesSize: (tokens: number | null, chars: number) => textSize('Текст одежды', tokens, chars),
     noClothes: 'Одежда пока не записана.',
-    clothesNote: 'Одежду здесь не правят: её меняет сама история, и картинки берут её из сцен.',
+    // `profile` below names the button that opens the whole profile, where the clothes can be changed.
+    clothesNote: 'Одежду меняет сама история, и картинки берут её из сцен. Поправить её можно кнопкой «📋 Профиль целиком».',
     sizeNote: 'Числа относятся к каждому тексту отдельно. В промпт также входят описание сцены и стиль; точный размер указан под картинкой. Само описание модель картинок не читает: портрет по обычному промпту рисуется по его пересказу по-английски. Весь промпт портрета, с одеждой, фоном и позой, свёрнут под ним с числом токенов, и его можно поправить.',
     scope: 'Правка внешности действует на следующие картинки всех веток этой истории. Текст истории, память и уже нарисованные картинки не меняются, а картинка, которая рисуется сейчас, может выйти по-старому.',
     // What a portrait is drawn from: `details` is true for the English retelling of the description, false for the short
@@ -336,6 +337,56 @@ export const ru = {
     ownPortraitNote: (min: number, max: number, megabytes: number) => `Пришли картинку этого персонажа фотографией или файлом PNG, JPEG или WebP, до ${megabytes} МБ: короткая сторона от ${min} пикселей, длинная до ${max} и не больше чем в 2,5 раза длиннее короткой. Бот не обрезает и не растягивает картинку. Только рисунок: фотографию реального человека присылать нельзя. Бот удалит из файла метаданные (место, камеру, подписи) и сохранит картинку как портрет персонажа: кадры будут брать её так же, как нарисованный портрет. Бот ждёт полчаса; выйти без изменений можно кнопкой «↩️» или командой /cancel.`,
     ownPortraitReplaces: 'Новая картинка заменит сохранённый портрет. Если потом нарисуешь и оставишь портрет, он снова займёт это место.',
     ownPortraitKept: (width: number, height: number) => `🖼 Портрет сохранён: твоя картинка, ${width}×${height}. Кадры берут её так же, как нарисованный портрет.`,
+    // The whole profile of the person as one block to copy, edit and send back (local/profile.ts): the button on the card
+    // and the title of the message.
+    profile: '📋 Профиль целиком',
+    profileTitle: (person: string, story: string) => `📋 Профиль: ${person} · ${story}`,
+    // The block's headings, one for each field and one for its last line, `end`. A profile sent back is read by the
+    // headings of every language, so no two fields may share one, in this language or across them.
+    profileHeadings: { description: 'Описание внешности', changes: 'Постоянные перемены', details: 'Детали для портрета, по-английски',
+      look: 'Короткая внешность', clothes: 'Одежда', prompt: 'Промпт портрета', end: 'Конец профиля' },
+    // Under the block when it can be sent back; `profileEdit` is the button.
+    profileHint: 'Нажми на блок, чтобы скопировать его целиком. Чтобы поправить профиль, нажми «✏️ Изменить профиль» и пришли скопированный текст со своими правками.',
+    profileEdit: '✏️ Изменить профиль',
+    // Above the block when the whole profile did not fit one message: the reader's prompt for the person's portraits, and
+    // then also the description, were left out. Nothing fitting at all says profileTooLong instead of any block.
+    profileNoPrompt: 'Твой промпт портрета сюда не поместился. Нарисуй портрет кнопкой «🖼 Портрет» на карточке: промпт придёт в заметке под ним, и там его можно поправить.',
+    profileNoDescription: 'Описание сюда не поместилось вместе с остальным: оно на карточке персонажа, и поправить его можно кнопкой «✏️ Изменить описание».',
+    profileTooLong: 'Профиль целиком не помещается в одно сообщение Telegram, поэтому здесь его не показать. Поля можно посмотреть и поправить на карточке персонажа.',
+    // Above a block that is shown and cannot be sent back: a sheet from before 2026-09-27, which the story's next picture
+    // writes anew, and a field with a line that would be read as a heading.
+    profileOlder: 'Этот список персонажей записан прежней версией бота, и следующая картинка истории запишет его заново, поэтому здесь профиль только показан. Описание и короткую внешность можно поправить на карточке: они сохранятся.',
+    profileUnreadable: 'В одном из полей есть строка, которая начинается с «#», как заголовок, поэтому этот профиль не прочитать обратно, и здесь его не поправить. Поля можно поправить на карточке персонажа.',
+    // Above a block that is shown and cannot be sent back because the person's look changed along the branch being played
+    // (local/profile.ts `versioned`): the profile is the person at its last scene, while a profile sent back would write
+    // for the whole story. The card's own edits, «✏️ Изменить описание» and «✏️ Изменить короткую внешность», offer
+    // «📍 Только с этого момента».
+    profileVersions: '📜 Внешность персонажа менялась по ходу этой ветки, и профиль показан таким, как в сцене, где ты сейчас. Правка профиля целиком легла бы на всю историю, поэтому здесь её нет. Описание и короткую внешность поправь кнопками на карточке: там правку можно сделать и только с этого момента.',
+    // Above the profile as it is now, when the reader pressed the button under one that has changed since, or sent one
+    // back from it.
+    profileChanged: 'Профиль изменился с тех пор, как бот прислал его выше: например, закончился пересказ описания или новая картинка сменила одежду. Ничего не сохранено. Вот он сейчас.',
+    // While the reader sends the profile back. The numbers are each field's limit in characters (local/profile.ts
+    // PROFILE_CHARS); the headings named are profileHeadings.
+    profileEditTitle: (person: string, story: string) => `✏️ Профиль: ${person} · ${story}`,
+    profileEditNote: (description: number, changes: number, details: number, look: number, clothes: number, prompt: number) => `Скопируй блок из сообщения выше, поправь в нём нужное и пришли весь текст одним сообщением. Первую строку с именем, заголовки «##» и последнюю строку «# Конец профиля» не меняй: по ним бот находит поля и видит, что профиль дошёл целиком. Имя поменять нельзя.
+
+Сохранится только то, что ты изменишь, и так, как написано. Пределы: описание — ${description} знаков, постоянные перемены — ${changes}, детали — ${details}, короткая внешность — ${look}, одежда — ${clothes}, промпт — ${prompt}. Пустыми можно оставить только перемены и промпт: без промпта портреты снова рисуются по промпту бота. Telegram делит сообщение длиннее 4096 знаков на части, и такой профиль бот не примет.
+
+Новое описание или новые перемены бот перескажет в детали и короткую внешность, как после правки описания на карточке: пересказ заменит и короткую внешность, написанную тобой раньше. То, что изменено в том же сообщении, останется как написано: с новыми деталями бот ничего не пересказывает, а новую короткую внешность оставляет.`,
+    // The last lines of that wait: where changed clothes go, for the branch being played, named by `branch`, and for a
+    // story not being played; then the way out.
+    profileClothesBranch: (branch: string) => `Одежда: она запишется в последнюю сцену ветки ${branch}, и с неё начнутся следующие картинки, пока сцена её не сменит. Ветки, которые отходят от более ранних сцен, её не получат.`,
+    profileClothesStart: 'Одежда: с неё начинаются картинки этой истории там, где сцены ещё не одели персонажа иначе.',
+    profileLeave: 'Выйти без изменений можно кнопкой «↩️» или командой /cancel.',
+    // Once a profile sent back is saved: `fields` lists the headings of the fields it changed.
+    profileSaved: (person: string, fields: string) => `✅ Профиль сохранён: ${person}. Изменено: ${fields}.`,
+    profileUnchanged: 'Ничего не изменилось: все поля такие же, как были.',
+    // A profile sent back that cannot be taken; the wait stays. `name` is the person's, `heading` the line the bot does
+    // not know, `field` a heading of profileHeadings, and `max` its limit in characters.
+    profileName: (name: string) => `Имя поменять нельзя: первая строка должна остаться «# ${name}». Поправь и пришли снова.`,
+    profileHeading: (heading: string) => `Не знаю такого заголовка: «${heading}». Заголовки полей оставь как в профиле, а строки внутри полей не начинай с «#». Поправь и пришли снова.`,
+    profileEmpty: (field: string) => `Поле «${field}» нельзя оставить пустым. Верни прежний текст или напиши новый и пришли снова.`,
+    profileLong: (field: string, max: number) => `Слишком длинно: в поле «${field}» можно не больше ${max} знаков. Сократи и пришли снова.`,
   },
 
   model: {
@@ -804,6 +855,15 @@ export const ru = {
     portraitStale: 'Этот портрет уже не сохранить: он устарел или внешность с тех пор изменилась. Нарисуй новый.',
     portraitInFlight: 'Уже рисую картинку по твоей просьбе. Портрет можно попросить, когда она придёт.',
     portraitPromptGone: 'Этого персонажа уже нет в истории, промпт не сохранён. Открой /menu.',
+    // A prompt that arrives while another portrait or a sample is being drawn: it is not kept, and the wait for it stays.
+    portraitPromptInFlight: 'Уже рисую картинку по твоей просьбе. Когда она придёт, пришли промпт ещё раз: я его жду, а пока он не сохранён.',
+    // The whole profile sent back (local/profile.ts); the wait stays for all but profileGone. The heading of the last
+    // line is characters.profileHeadings.end.
+    profileNeedsText: 'Пришли профиль текстом, одним сообщением. Выйти без изменений можно кнопкой «↩️» или командой /cancel.',
+    profileIncomplete: 'Это не профиль целиком: первой должна идти строка с именем, «# …», а последней — «# Конец профиля». Telegram делит сообщение длиннее 4096 знаков на части; если профиль длинный, сократи его. Пришли его снова одним сообщением. Выйти без изменений можно кнопкой «↩️» или командой /cancel.',
+    profileSections: 'В профиле должны быть те же поля, что и в сообщении бота, каждое по одному разу. Поправь и пришли снова.',
+    profileOutside: 'Весь текст должен стоять под заголовками полей: между строкой с именем и первым полем ничего быть не должно. Поправь и пришли снова.',
+    profileGone: 'Этого персонажа уже нет в истории, профиль не сохранён. Открой /menu.',
     // A picture of the reader's own (local/reference.ts). The numbers are REFERENCE_SIDES and REFERENCE_BYTES there, and
     // the half hour is REFERENCE_WAIT_MS.
     referencesOff: 'Свои картинки персонажей тебе сейчас недоступны. Открой /menu.',
