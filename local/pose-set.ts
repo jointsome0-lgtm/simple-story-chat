@@ -159,7 +159,7 @@ const IDLE_MS = 60_000;
 const RETRY_MS = 10 * 60_000;
 const CRASHES = 3;
 export type CaptionerConfig = { python: string; script: string; model: string; threads: number };
-type Job = { userId: string; storyId: string; name: string; file: string };
+type Job = { userId: string; storyId: string; file: string };
 type Answer = { id?: unknown; pose?: unknown; side?: unknown; framing?: unknown; confidence?: unknown; error?: unknown; ready?: unknown };
 export function createPoseCaptioner(config: CaptionerConfig, { store, log, spawnProcess = spawn }: {
   store: Store; log: (userId: string) => Log; spawnProcess?: typeof spawn;
@@ -167,6 +167,9 @@ export function createPoseCaptioner(config: CaptionerConfig, { store, log, spawn
   const queue: Job[] = [];
   const queued = new Set<string>();
   let child: { process: ChildProcess; answers: AsyncIterator<string> } | undefined;
+  // The process `end` let go of, until it is gone: the next one starts only then, so that two models never share this
+  // computer's memory, as they would while one still reads a picture it timed out on.
+  let leaving: Promise<void> | undefined;
   let running: Promise<void> | undefined;
   let idle: ReturnType<typeof setTimeout> | undefined;
   let stopped = false;
@@ -184,7 +187,14 @@ export function createPoseCaptioner(config: CaptionerConfig, { store, log, spawn
     // A process that does not leave on its own when its input ends is ended.
     const kill = setTimeout(() => was.process.kill('SIGKILL'), 10_000);
     kill.unref();
-    was.process.once('exit', () => clearTimeout(kill));
+    leaving = new Promise(resolve => {
+      const gone = () => { clearTimeout(kill); clearTimeout(bound); resolve(); };
+      // One that never started, or whose end went unreported, keeps nothing waiting past its kill.
+      const bound = setTimeout(gone, 11_000);
+      bound.unref();
+      if (was.process.pid === undefined || was.process.exitCode !== null || was.process.signalCode !== null) gone();
+      else was.process.once('exit', gone);
+    });
   }
   // The next line of the process's answers, or a failure once it ends or `ms` pass.
   async function answer(ms: number): Promise<Answer> {
@@ -198,6 +208,9 @@ export function createPoseCaptioner(config: CaptionerConfig, { store, log, spawn
     } finally { clearTimeout(timer); }
   }
   async function start() {
+    await leaving;
+    // A stop while the last one left starts none.
+    if (stopped) throw Object.assign(new Error('captioner_stopped'), { code: 'captioner_stopped' });
     const launched = spawnProcess(config.python, [config.script, '--model', config.model, '--threads', String(config.threads)], {
       stdio: ['pipe', 'pipe', 'ignore'],
       env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: process.env.HOME ?? '/nonexistent', LANG: 'C.UTF-8',
@@ -220,10 +233,11 @@ export function createPoseCaptioner(config: CaptionerConfig, { store, log, spawn
       ? { pose: one.pose, side: one.side, framing: one.framing, confidence } : undefined;
   }
   // Writes what became of one picture into its reader's library, its caption or one more failed try, if the picture is
-  // still where it was and uncaptioned; and says whether it was written, and whether the picture has a try left.
+  // still in its story and uncaptioned; and says whether it was written, and whether the picture has a try left. The
+  // picture is found by its file, which is its own for good: a sheet written again may spell its person's name anew.
   function settle(job: Job, caption: PoseCaption | undefined) {
     return store.mutate(job.userId, state => {
-      const picture = state.stories[job.storyId]?.sheet?.find(one => one.name === job.name)?.poseSet?.find(one => one.file === job.file);
+      const picture = state.stories[job.storyId]?.sheet?.flatMap(one => one?.poseSet ?? []).find(one => one.file === job.file);
       if (!picture || picture.caption) return { written: false, again: false };
       if (caption) picture.caption = caption; else picture.failed = (picture.failed ?? 0) + 1;
       return { written: true, again: !caption && (picture.failed ?? 0) < CAPTION_ATTEMPTS };
@@ -252,6 +266,7 @@ export function createPoseCaptioner(config: CaptionerConfig, { store, log, spawn
         if (!child) {
           try { await start(); }
           catch (error) {
+            if (stopped) return;
             row('pose_captioner_failed', errorCode(error) === 'captioner_timeout' ? 'captioner_timeout' : 'captioner_unavailable', { outcome: 'failed' });
             block(job);
             return;
@@ -265,8 +280,10 @@ export function createPoseCaptioner(config: CaptionerConfig, { store, log, spawn
         const caption = valid(got);
         const settled = settle(job, caption);
         again = settled.again;
+        // The row says whether the picture got a caption and how long it took, never the labels: they are what the
+        // reader's picture shows, kept in their library alone.
         if (settled.written) row('pose_captioned', caption ? undefined : 'caption_refused', { outcome: caption ? 'ready' : 'failed',
-          elapsedMs: Date.now() - started, ...caption ? { captionPose: caption.pose, captionSide: caption.side, captionFraming: caption.framing } : {} });
+          elapsedMs: Date.now() - started });
       } catch (error) {
         const code = errorCode(error);
         end();
@@ -304,7 +321,7 @@ export function createPoseCaptioner(config: CaptionerConfig, { store, log, spawn
       if (blocked) { waiting.add(userId); return; }
       const state = store.read(userId);
       for (const story of Object.values(state.stories)) for (const person of story.sheet ?? []) for (const picture of person?.poseSet ?? []) {
-        const job = { userId, storyId: story.id, name: person.name, file: picture.file };
+        const job = { userId, storyId: story.id, file: picture.file };
         if (picture.caption || (picture.failed ?? 0) >= CAPTION_ATTEMPTS || queued.has(key(job)) || !/^[a-f0-9]{32}\.(png|jpg|webp)$/.test(picture.file)) continue;
         queued.add(key(job));
         queue.push(job);

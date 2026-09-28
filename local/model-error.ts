@@ -1,5 +1,5 @@
 // Provider errors are safe codes, never raw HTTP/CLI output or story text.
-import { FRAMING_LABELS, POSE_LABELS, POSES, SIDE_LABELS } from '../lib/library.ts';
+import { POSES } from '../lib/library.ts';
 
 const PHASES = ['count_input', 'generate', 'health', 'gpu_read', 'gpu_write', 'ssh_wait', 'ssh_connect', 'ssh_tunnel'] as const;
 const OPERATIONS = ['compact', 'scene'] as const;
@@ -46,8 +46,7 @@ const REFERENCE_PLACES = POSES;
 // its download cut short; or an archive where a picture was awaited.
 const REFERENCE_REFUSALS = ['type', 'broken', 'small', 'huge', 'shape', 'too_large', 'incomplete', 'archive'] as const;
 // Why a picture of a pose set was not kept (local/pose-set.ts): a refusal of a picture of the reader's own, or the set
-// full, or its bytes or all the reader's sets' over their limits. A caption of one is its three labels, which say how a
-// person is drawn and nothing of who they are.
+// full, or its bytes or all the reader's sets' over their limits.
 export const POSE_SET_REFUSALS = [...REFERENCE_REFUSALS, 'full', 'person_bytes', 'reader_bytes'] as const;
 export type PoseSetRefusal = typeof POSE_SET_REFUSALS[number];
 // A person's whole profile that a reader sent back (local/profile.ts, local/bot.ts `profileSent`): how much of it the
@@ -173,9 +172,8 @@ export type ErrorDetails = {
   profileRefusal?: typeof PROFILE_REFUSALS[number];
   // A version of a person's look along the story: who wrote it and which text it holds.
   versionSource?: typeof VERSION_SOURCES[number]; versionField?: typeof VERSION_FIELDS[number];
-  // A picture of a pose set: why it was refused, or the labels of its caption.
-  poseSetRefusal?: typeof POSE_SET_REFUSALS[number]; captionPose?: typeof POSE_LABELS[number]; captionSide?: typeof SIDE_LABELS[number];
-  captionFraming?: typeof FRAMING_LABELS[number];
+  // A picture of a pose set: why it was refused.
+  poseSetRefusal?: typeof POSE_SET_REFUSALS[number];
   // A failed Claude CLI run: how it ended and whether the CLI itself called the result an error.
   cliResult?: typeof CLI_RESULTS[number]; cliError?: boolean; stopReason?: typeof STOP_REASONS[number];
 } & { [Key in typeof COUNTS[number]]?: number };
@@ -231,9 +229,6 @@ export function safeErrorDetails(value: unknown = {}): ErrorDetails {
   if (member(VERSION_SOURCES, input?.versionSource)) result.versionSource = input.versionSource;
   if (member(VERSION_FIELDS, input?.versionField)) result.versionField = input.versionField;
   if (member(POSE_SET_REFUSALS, input?.poseSetRefusal)) result.poseSetRefusal = input.poseSetRefusal;
-  if (member(POSE_LABELS, input?.captionPose)) result.captionPose = input.captionPose;
-  if (member(SIDE_LABELS, input?.captionSide)) result.captionSide = input.captionSide;
-  if (member(FRAMING_LABELS, input?.captionFraming)) result.captionFraming = input.captionFraming;
   if (member(CLI_RESULTS, input?.cliResult)) result.cliResult = input.cliResult;
   if (typeof input?.cliError === 'boolean') result.cliError = input.cliError;
   if (member(STOP_REASONS, input?.stopReason)) result.stopReason = input.stopReason;
