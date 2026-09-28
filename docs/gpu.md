@@ -116,9 +116,10 @@ each, and a reader waiting in none.
 
 **Before the rental.** simple-serving's branch `next-card` is `mtp-min-p` (8672e62, pushed): phase2 with the drafter
 and the gateway's refusal of a `min_p` that vLLM refuses while it drafts. Its tests pass, and so does
-`npm run test:serving` against it. Each card needs the owner's «да» with its price and its end
-([the rules](#while-the-cards-are-paid-for)). A card's trial guard deletes it at most three hours after its first
-start (`--hours`), so a longer session is a second rental with its own preparation.
+`npm run test:serving` against it. Within the day's $3 the main session rents without asking, once a fresh Astra
+session has backed the queue ([rule 4](#while-the-cards-are-paid-for)); a card past the cap needs the owner's «да».
+A card's trial guard deletes it at most three hours after its first start (`--hours`), so a longer session is a
+second rental with its own preparation.
 
 **The text card**, prepared as round two's text card was on 2026-09-27. `HOST` is its alias in `~/.ssh/config`, and
 `git archive` and the `uv run` lines run in simple-serving's checkout at `next-card`:
