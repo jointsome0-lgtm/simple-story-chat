@@ -15,10 +15,12 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BOOT_SECONDS, MAX_DPH_BY_GPUS, ONSTART_MAX_BYTES, REQUEST_MS, chooseOffers, createBody, destroyInstance, emptyReason,
+import { BOOT_SECONDS, MAX_DPH_BY_GPUS, ONSTART_MAX_BYTES, REQUEST_MS, adoptable, chooseOffers, createBody, destroyInstance, emptyReason,
   instanceState, offerQuery, redactedBody, rentPlan, sessionCost, sshRoute, startInstance } from '../local/rent-plan.ts';
 
 const ATTEMPTS = 4;
+// After a create whose answer named no instance: four reads of the account's list, ten seconds apart.
+const LOOKS = 4, LOOK_MS = 10000;
 // Every request carries a deadline. A search that never answers would hang with the owner watching; a create
 // request that never answers is worse, because the machine it asked for may be billing already.
 const SEARCH_TIMEOUT_MS = 30000;
@@ -98,8 +100,9 @@ const rest = args.filter(argument => argument !== '--print-body');
 // "we're done"). A session that gives its hours is priced by them (`rentPlan`), and `--qwen only` prices a picture
 // machine by Qwen's files alone, which is what SIMPLE_CHAT_IMAGE_QWEN=only pulls. `--max-session DOLLARS` holds a rent
 // to the quote its budget was checked against: an offer whose session (below) costs more is not tried, whatever the
-// search returns by then.
-const options = { '--gpus': '1', '--lane': 'both', '--avoid-host': '', '--hours': '', '--qwen': '', '--max-session': null };
+// search returns by then. `--upload-gb GB` is what the session brings back from the machine, which each offer's
+// session prices at its host's outbound rate; a quote and its rent give the same.
+const options = { '--gpus': '1', '--lane': 'both', '--avoid-host': '', '--hours': '', '--qwen': '', '--max-session': null, '--upload-gb': '0' };
 let known = rest.length % 2 === 0;
 for (let at = 0; known && at < rest.length; at += 2) {
   if (Object.hasOwn(options, rest[at])) options[rest[at]] = rest[at + 1]; else known = false;
@@ -108,17 +111,19 @@ const gpus = Number(options['--gpus']), lane = options['--lane'], hours = Number
 const avoidHosts = options['--avoid-host'] === '' ? [] : options['--avoid-host'].split(',');
 if (!avoidHosts.every(host => /^[1-9]\d*$/.test(host)) || !/^[123]?$/.test(options['--hours'])
   || !/^(only)?$/.test(options['--qwen'])
-  || (options['--max-session'] !== null && !(/^\d+(\.\d{1,2})?$/.test(options['--max-session']) && Number(options['--max-session']) > 0))) known = false;
+  || (options['--max-session'] !== null && !(/^\d+(\.\d{1,2})?$/.test(options['--max-session']) && Number(options['--max-session']) > 0))
+  || !/^\d+(\.\d{1,3})?$/.test(options['--upload-gb'])) known = false;
 const maxSession = options['--max-session'] === null ? null : Number(options['--max-session']);
 let plan = null;
 try {
   if (known && MAX_DPH_BY_GPUS[gpus]) {
-    plan = rentPlan({ gpus, lane, ...(options['--hours'] ? { hours } : {}), qwenOnly: options['--qwen'] === 'only' });
+    plan = rentPlan({ gpus, lane, ...(options['--hours'] ? { hours } : {}), qwenOnly: options['--qwen'] === 'only',
+      uploadGb: Number(options['--upload-gb']) });
   }
 } catch { /* reported below */ }
 if (!plan) {
   console.log(JSON.stringify({ event: 'bad_arguments', usage: 'rent.mjs [--gpus 1|2] [--lane both|text|pictures|small] [--avoid-host ID[,ID...]] '
-    + '[--hours 1|2|3] [--qwen only] [--max-session DOLLARS] [--print-body] | --show ID | --start ID | --destroy ID' }));
+    + '[--hours 1|2|3] [--qwen only] [--max-session DOLLARS] [--upload-gb GB] [--print-body] | --show ID | --start ID | --destroy ID' }));
   process.exit(1);
 }
 // --print-body is reviewed before a rental, so it must not need the API key to be exported.
@@ -182,7 +187,7 @@ const droppedForSession = avoided.length - candidates.length;
 console.log(JSON.stringify({ event: 'candidates', offered, withinPrice, chosen: candidates.length,
   maxHour: plan.maxHour, gpus: plan.gpus, lane: plan.lane, sessionHours, droppedForUnknownPrice, droppedForCountry, droppedForFewCores, droppedForProxyOnly,
   minDirectPorts: plan.minDirectPorts, droppedForRam, minRamGb: plan.minRamGb, droppedForHost, avoidHost: avoidHosts.join(',') || null,
-  droppedForSession, maxSession }));
+  droppedForSession, maxSession, uploadGb: plan.uploadBytes / 1e9 }));
 // Which rule emptied the list, so that a session lost to an empty search, to cores, to ports or to RAM is not read
 // as a price to raise.
 if (!candidates.length) {
@@ -195,25 +200,26 @@ if (!candidates.length) {
 // being asked to approve anyway. `session` is that approval's sum for each: the offer's hour over the session's
 // hours, and its traffic.
 if (dryRun || printBody) {
-  for (const offer of candidates.slice(0, ATTEMPTS)) console.log(JSON.stringify({ event: 'would_try', ...offer, session: session(offer) }));
+  for (const { exact, ...offer } of candidates.slice(0, ATTEMPTS)) console.log(JSON.stringify({ event: 'would_try', ...offer, session: session({ exact }) }));
   process.exit(0);
 }
 
 for (const offer of candidates.slice(0, ATTEMPTS)) {
   const machine = {
-    offer: offer.id, host: offer.host, gpu: offer.gpu, geo: offer.geo, hour: offer.hour, download: offer.download,
+    offer: offer.id, host: offer.host, gpu: offer.gpu, geo: offer.geo, hour: offer.hour, download: offer.download, upload: offer.upload,
     driver: offer.driver, cpus: offer.cpus, ramGb: offer.ramGb, inetDownMbps: offer.inetDownMbps,
     reliability: offer.reliability, directPorts: offer.directPorts,
   };
   let status = 0, parsed = null;
   // The moment before the request that may create the machine: none of it exists before, so a deadline counted from
-  // here is never late, however long the answer takes (`destroyBy` below).
-  const asked = Date.now();
+  // here is never late, however long the answer takes (`destroyBy` below). The label, this request's own, finds the
+  // machine in the account's list if the answer does not name it.
+  const asked = Date.now(), label = `simple-chat-${plan.lane}-${asked}`;
   try {
     const response = await fetch(`https://console.vast.ai/api/v0/asks/${offer.id}/`, {
       method: 'PUT',
       headers: { ...headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...body, label }),
       signal: AbortSignal.timeout(RENT_TIMEOUT_MS),
     });
     status = response.status;
@@ -224,18 +230,38 @@ for (const offer of candidates.slice(0, ATTEMPTS)) {
   // `destroyBy` is the operator's own deadline on this machine's clock, in epoch seconds, counted from just before the
   // request that created the machine: the guard's hours and the quarter of an hour allowed for the box to start.
   // Whatever the box says, the rental's termination begins then at the latest (docs/identity-experiment.md#one-hour).
+  const destroyBy = Math.floor(asked / 1000) + hours * 3600 + BOOT_SECONDS;
   if (rented) {
-    console.log(JSON.stringify({ event: 'rented', ...machine, instance: parsed.new_contract, reason: null,
-      destroyBy: Math.floor(asked / 1000) + hours * 3600 + BOOT_SECONDS, session: session(offer) }));
+    console.log(JSON.stringify({ event: 'rented', ...machine, instance: parsed.new_contract, reason: null, destroyBy, session: session(offer) }));
     process.exit(0);
   }
-  // A refusal is a status outside 2xx or Vast's own `success: false`, and only a refusal is safe to answer by
-  // renting the next offer. Anything else -- no answer at all, or an answer that names no contract -- may have
-  // created an instance that is billing now, and a second PUT would leave it running unwatched.
-  const refused = (status !== 0 && (status < 200 || status >= 300)) || parsed?.success === false;
+  // A refusal is a 4xx whose body says what was refused, and only a refusal is safe to answer by renting the next
+  // offer. Anything else -- no answer at all, a 5xx, or an answer that names no contract -- may have created an
+  // instance that is billing now, and a second PUT would leave it running unwatched. So the account's list is read for
+  // it (`adoptable`), and the one instance found is this rental, printed as `rented` so that its watchdog starts like
+  // any other's. None found, or more than one, and nothing more is rented: the owner looks.
+  const refused = status >= 400 && status < 500 && typeof parsed === 'object' && parsed !== null
+    && (typeof parsed.error === 'string' || typeof parsed.msg === 'string' || parsed.success === false);
   if (!refused) {
+    let found = null, listed = 0;
+    for (let look = 0; look < LOOKS && !found?.length; look++) {
+      if (look) await new Promise(done => setTimeout(done, LOOK_MS));
+      let list = { status: 0, body: null };
+      try {
+        const response = await fetch('https://console.vast.ai/api/v0/instances/?owner=me', { headers, signal: AbortSignal.timeout(REQUEST_MS) });
+        list = { status: response.status, body: await response.json().catch(() => null) };
+      } catch { /* no answer: this look says nothing */ }
+      const seen = adoptable(list.status, list.body, label, offer.host, asked / 1000);
+      if (seen) { listed++; found = seen; }
+    }
+    if (found?.length === 1) {
+      console.log(JSON.stringify({ event: 'rented', ...machine, instance: Number(found[0]), reason: null, adopted: true, status,
+        destroyBy, session: session(offer) }));
+      process.exit(0);
+    }
     console.log(JSON.stringify({ event: 'attempt_uncertain', ...machine, status,
-      reason: status === 0 ? 'no answer' : 'no instance named', check: 'the instance list on console.vast.ai' }));
+      reason: status === 0 ? 'no answer' : status >= 200 && status < 300 ? 'no instance named' : `status ${status}`,
+      listed, found: found ?? [], check: 'the instance list on console.vast.ai' }));
     process.exit(1);
   }
   console.log(JSON.stringify({ event: 'attempt_failed', ...machine, instance: null,

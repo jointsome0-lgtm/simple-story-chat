@@ -100,12 +100,13 @@ const MIN_DIRECT_PORTS = 2;
 
 export type RentPlan = {
   lane: Lane; gpus: number; maxHour: number; diskGb: number; minRamGb: number; minDirectPorts: number;
-  sessionHours: number; sessionBytes: number; image: string; preferredHost: number | null;
+  sessionHours: number; sessionBytes: number; uploadBytes: number; image: string; preferredHost: number | null;
   blockedCountries: string[];
 };
 
-export function rentPlan({ gpus = 1, lane = 'both', preferredHost = PREFERRED_HOST, hours, qwenOnly = false }:
-  { gpus?: number; lane?: Lane; preferredHost?: number | null; hours?: number; qwenOnly?: boolean } = {}): RentPlan {
+// `uploadGb` is what a session brings back from the machine, priced at the host's outbound rate.
+export function rentPlan({ gpus = 1, lane = 'both', preferredHost = PREFERRED_HOST, hours, qwenOnly = false, uploadGb = 0 }:
+  { gpus?: number; lane?: Lane; preferredHost?: number | null; hours?: number; qwenOnly?: boolean; uploadGb?: number } = {}): RentPlan {
   const maxDph = lane === 'small' ? SMALL_MAX_DPH : MAX_DPH_BY_GPUS[gpus];
   if (maxDph === undefined) throw new Error(`no approved price ceiling for ${gpus} GPUs`);
   if (!Object.hasOwn(LANES, lane)) throw new Error(`no such lane: ${lane}`);
@@ -121,7 +122,7 @@ export function rentPlan({ gpus = 1, lane = 'both', preferredHost = PREFERRED_HO
     minDirectPorts: MIN_DIRECT_PORTS,
     sessionHours: hours === undefined ? SESSION_HOURS : hours + (BOOT_SECONDS + DONE_SECONDS + DESTROY_SECONDS) / 3600,
     // Qwen's files and torch's five gigabytes, the only wheels the picture lane pulls.
-    sessionBytes: qwenOnly ? QWEN_BYTES + 5000000000 : bytes, image: IMAGE, preferredHost,
+    sessionBytes: qwenOnly ? QWEN_BYTES + 5000000000 : bytes, uploadBytes: Math.round(uploadGb * 1e9), image: IMAGE, preferredHost,
     blockedCountries: BLOCKED_COUNTRIES,
   };
 }
@@ -148,19 +149,30 @@ export type RawOffer = {
   id?: unknown; host_id?: unknown; gpu_name?: unknown; geolocation?: unknown; driver_version?: unknown;
   direct_port_count?: number | null; cpu_cores_effective?: number | null; cpu_ram?: number | null;
   inet_down?: number | null; reliability2?: number | null;
-  dph_total?: number | null; storage_cost?: number | null; inet_down_cost?: number | null;
+  dph_total?: number | null; storage_cost?: number | null; inet_down_cost?: number | null; inet_up_cost?: number | null;
 };
 export type Offer = {
   id: unknown; host: unknown; gpu: unknown; geo: unknown; driver: unknown; directPorts: number;
   cpus: number | null; ramGb: number | null; inetDownMbps: number; reliability: number;
-  hour: number; download: number;
+  hour: number; download: number; upload: number;
+  // The same three unrounded, which the session's sum is taken from.
+  exact: { hour: number; download: number; upload: number };
 };
 
 const price = (rate: unknown): number => typeof rate === 'number' && Number.isFinite(rate) && rate >= 0 ? rate : NaN;
 
-// `storage_cost` is dollars per GB per month, `inet_down_cost` dollars per GB, so both are priced for this session's
-// disk and this session's downloads rather than for a constant that no longer describes either.
+// `storage_cost` is dollars per GB per month, `inet_down_cost` and `inet_up_cost` dollars per GB, so each is priced for
+// this session's disk, downloads and what it brings back rather than for a constant that no longer describes any.
 export function describeOffer(offer: RawOffer, plan: RentPlan): Offer {
+  // A missing or non-numeric price -- for the machine, for the disk or for the link -- makes the whole offer NaN,
+  // which no ceiling admits and chooseOffers counts. Read as zero, the one offer whose cost is unknown would look
+  // like the cheapest in the list, sort to the front of the queue and be the first thing rented. The outbound price
+  // counts only for a session that brings something back.
+  const exact = {
+    hour: price(offer.dph_total) + price(offer.storage_cost) * plan.diskGb / 730,
+    download: price(offer.inet_down_cost) * (plan.sessionBytes / 1e12) * 1000,
+    upload: plan.uploadBytes ? price(offer.inet_up_cost) * (plan.uploadBytes / 1e12) * 1000 : 0,
+  };
   return {
     id: offer.id, host: offer.host_id, gpu: offer.gpu_name, geo: offer.geolocation, driver: offer.driver_version,
     directPorts: Number(offer.direct_port_count ?? 0),
@@ -172,11 +184,8 @@ export function describeOffer(offer: RawOffer, plan: RentPlan): Offer {
     // is kept below; rounded down, because a floor is a floor.
     ramGb: typeof offer.cpu_ram === 'number' ? Math.floor(offer.cpu_ram / 1000) : null,
     inetDownMbps: Math.round(offer.inet_down ?? 0), reliability: Math.round((offer.reliability2 ?? 0) * 1000) / 1000,
-    // A missing or non-numeric price -- for the machine, for the disk or for the link -- makes the whole offer NaN,
-    // which no ceiling admits and chooseOffers counts. Read as zero, the one offer whose cost is unknown would look
-    // like the cheapest in the list, sort to the front of the queue and be the first thing rented.
-    hour: Math.round((price(offer.dph_total) + price(offer.storage_cost) * plan.diskGb / 730) * 1000) / 1000,
-    download: Math.round(price(offer.inet_down_cost) * (plan.sessionBytes / 1e12) * 1000 * 100) / 100,
+    hour: Math.round(exact.hour * 1000) / 1000, download: Math.round(exact.download * 100) / 100,
+    upload: Math.round(exact.upload * 100) / 100, exact,
   };
 }
 
@@ -185,10 +194,12 @@ export type Choice = {
   droppedForFewCores: number; droppedForProxyOnly: number; droppedForRam: number;
 };
 
-// What an offer costs over the session's hours with its traffic, in dollars rounded up to the cent: the sum a dry run
-// quotes and `--max-session` holds a rent to, so that no rounding lets a dearer offer through.
-export function sessionCost(offer: { hour: number; download: number }, plan: RentPlan): number {
-  return Math.ceil((offer.hour * plan.sessionHours + offer.download) * 100 - 1e-9) / 100;
+// What an offer costs over the session's hours with its traffic both ways, in dollars: the unrounded parts summed and
+// rounded up to the cent once, the sum a dry run quotes and `--max-session` holds a rent to, so that no rounding lets
+// a dearer offer through.
+const exactSession = ({ exact }: Pick<Offer, 'exact'>, plan: RentPlan) => exact.hour * plan.sessionHours + exact.download + exact.upload;
+export function sessionCost(offer: Pick<Offer, 'exact'>, plan: RentPlan): number {
+  return Math.ceil(exactSession(offer, plan) * 100 - 1e-9) / 100;
 }
 
 // Every rule that drops offers reports how many it dropped, and each rule is its own step: a rule folded into
@@ -198,7 +209,7 @@ const countryOf = (geo: unknown) => typeof geo === 'string' ? geo.slice(geo.last
 
 export function chooseOffers(offers: RawOffer[], plan: RentPlan): Choice {
   const described = offers.map(offer => describeOffer(offer, plan));
-  const priced = described.filter(o => Number.isFinite(o.hour) && Number.isFinite(o.download));
+  const priced = described.filter(o => Number.isFinite(o.hour) && Number.isFinite(o.download) && Number.isFinite(o.upload));
   // Before the price, so that `withinPrice` counts machines the session could actually use.
   const reachable = priced.filter(o => !plan.blockedCountries.includes(countryOf(o.geo)));
   const affordable = reachable.filter(o => o.hour <= plan.maxHour);
@@ -207,7 +218,7 @@ export function chooseOffers(offers: RawOffer[], plan: RentPlan): Choice {
   const candidates = withPorts.filter(o => o.ramGb === null || o.ramGb >= plan.minRamGb)
     // The owner's machine first; then cheapest for this session, hours and traffic together.
     .sort((a, b) => Number(b.host === plan.preferredHost) - Number(a.host === plan.preferredHost)
-      || (a.hour * plan.sessionHours + a.download) - (b.hour * plan.sessionHours + b.download));
+      || exactSession(a, plan) - exactSession(b, plan));
   return {
     candidates, offered: described.length, withinPrice: affordable.length,
     droppedForUnknownPrice: described.length - priced.length, droppedForCountry: priced.length - reachable.length,
@@ -278,6 +289,21 @@ export function instanceState(id: string, status: number, body: unknown): Instan
   const word = (value: unknown) => typeof value === 'string' && /^[a-z_]{1,32}$/.test(value) ? value : null;
   const { actual_status: actual, intended_status: intended } = record as { actual_status?: unknown; intended_status?: unknown };
   return { state: 'present', status, actual: word(actual), intended: word(intended) };
+}
+
+// After a create whose answer named no instance, the account's list (`GET /instances/?owner=me`) says whether it made
+// one: the instance carrying the label the request gave it, else those on the offer's host that started from the
+// request on, `asked` in epoch seconds less two for the clocks. Their IDs, or null for a list that cannot be read,
+// which says nothing either way.
+export function adoptable(status: number, body: unknown, label: string, host: unknown, asked: number): string[] | null {
+  const list = status === 200 && typeof body === 'object' && body !== null && 'instances' in body ? body.instances : undefined;
+  if (!Array.isArray(list)) return null;
+  const records = list.filter((record): record is Record<string, unknown> => typeof record === 'object' && record !== null
+    && /^[1-9]\d{0,11}$/.test(String((record as { id?: unknown }).id)));
+  const labelled = records.filter(record => record.label === label);
+  const started = records.filter(record => String(record.host_id) === String(host)
+    && typeof record.start_date === 'number' && record.start_date >= asked - 2);
+  return (labelled.length ? labelled : started).map(record => String(record.id));
 }
 
 // Where ssh reaches the instance, from the same read, so that the operator needs nothing from the console: the host

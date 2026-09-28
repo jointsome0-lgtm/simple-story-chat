@@ -6,7 +6,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { BOOT_SECONDS, DESTROY_SECONDS, chooseOffers, createBody, describeOffer, destroyInstance, emptyReason, instanceState, offerQuery, redactedBody, rentPlan, sshRoute } from './rent-plan.ts';
+import { BOOT_SECONDS, DESTROY_SECONDS, chooseOffers, createBody, describeOffer, destroyInstance, emptyReason, instanceState, offerQuery, redactedBody, rentPlan, sessionCost, sshRoute } from './rent-plan.ts';
 import type { Choice, EmptyReason, RawOffer, RentPlan } from './rent-plan.ts';
 
 const RENT = fileURLToPath(new URL('../gpu/rent.mjs', import.meta.url));
@@ -31,7 +31,7 @@ const QWEN = pinned('image-manifest.env', 'IMAGE_QWEN_MODEL_BYTES', 'IMAGE_QWEN_
 const offer = (fields: RawOffer = {}): RawOffer => ({
   id: 1, host_id: 7, geolocation: 'PL', driver_version: '580.95.05', direct_port_count: 12,
   cpu_cores_effective: 30.72, cpu_ram: 128000, inet_down: 900, reliability2: 0.99,
-  dph_total: 0.9, storage_cost: 0.1, inet_down_cost: 0.0026, ...fields,
+  dph_total: 0.9, storage_cost: 0.1, inet_down_cost: 0.0026, inet_up_cost: 0.005, ...fields,
 });
 
 test('every machine is priced whole, its card, its own disk and its own downloads, and is rented only at a known price under its ceiling', () => {
@@ -90,6 +90,15 @@ test('every machine is priced whole, its card, its own disk and its own download
     assert.deepEqual([candidates.length, withinPrice, droppedForUnknownPrice],
       { rented: [1, 1, 0], over: [0, 0, 0], unknown: [0, 0, 1] }[outcome], label);
   }
+  // What a session brings back is priced at the host's outbound rate, which must then be known, and only then. The
+  // session is summed from unrounded parts and rounded up once: from rounded ones, $0.90 and $0.10, it would be $2.21.
+  const [back, none] = [rentPlan({ lane: 'pictures', hours: 2, uploadGb: 1 }), rentPlan({ lane: 'pictures', hours: 2 })];
+  const unpriced = offer({ dph_total: 0.5, inet_up_cost: undefined });
+  assert.deepEqual([describeOffer(offer({ inet_up_cost: 0.02 }), back).upload, chooseOffers([unpriced], back).droppedForUnknownPrice,
+    chooseOffers([unpriced], none).candidates.length], [0.02, 1, 1], 'what comes back');
+  const [plain, returned] = [{ hour: 0.9004, download: 0.1049, upload: 0 }, { hour: 0.9004, download: 0.1049, upload: 0.02 }];
+  assert.deepEqual([sessionCost({ exact: plain }, rentPlan({ lane: 'text', hours: 2 })), sessionCost({ exact: returned }, rentPlan({ lane: 'text', hours: 2 }))],
+    [2.22, 2.24], 'summed unrounded');
 });
 
 test('each rule counts the offers it drops and names itself when it empties the list, and the rest are tried in order', () => {
@@ -143,8 +152,8 @@ test('each rule counts the offers it drops and names itself when it empties the 
   assert.deepEqual([describeOffer(offer(measured), one).ramGb, describeOffer(offer({ cpu_ram: 256000 }), two).ramGb], [64, 256], 'RAM');
 });
 
-// A canned Vast. It answers the search from STUB_OFFERS, the create request as STUB_PUT asks, a read of an instance
-// with the next state of STUB_READS (the last one repeats), a delete with STUB_DELETE's status and a start with
+// A canned Vast. It answers the search from STUB_OFFERS, the create request as STUB_PUT asks, a read of the account's
+// list with the next of STUB_LIST, a read of an instance with the next state of STUB_READS (the last one repeats), a delete with STUB_DELETE's status and a start with
 // success. Its time is virtual: a pause takes none of the real kind and moves both clocks on by its length, and
 // the answer that creates the machine takes fifty seconds. Every request is written to STUB_LOG with the second it was
 // sent at and the bound its signal was given, a create request with the seconds its body gives the guard, and a start
@@ -156,6 +165,13 @@ const answers = { present: [200, { instances: { id: 123, actual_status: 'running
   public_ipaddr: '203.0.113.7\\n', ports: { '22/tcp': [{ HostIp: '0.0.0.0', HostPort: '41022' }] }, ssh_host: 'ssh5.vast.ai', ssh_port: 36500 } }],
   gone: [200, { instances: null }], missing: [404, {}], failing: [500, {}], empty: [200, {}], other: [200, { instances: { id: 124 } }],
   stopped: [200, { instances: { id: 123, actual_status: 'exited', intended_status: 'stopped' } }] };
+const lists = (process.env.STUB_LIST ?? 'none').split(',');
+let label = null;
+const listed = { none: () => [200, { instances: [] }], failing: () => [502, {}],
+  labelled: () => [200, { instances: [{ id: 125, label, host_id: 7, start_date: null }] }],
+  started: () => [200, { instances: [{ id: 126, label: null, host_id: 7, start_date: Date.now() / 1000 }] }],
+  others: () => [200, { instances: [{ id: 127, label: null, host_id: 7, start_date: Date.now() / 1000 - 600 },
+    { id: 128, label: 'another', host_id: 8, start_date: Date.now() / 1000 }] }] };
 let skew = 0;
 const later = globalThis.setTimeout, wall = Date.now, monotonic = performance.now.bind(performance);
 globalThis.setTimeout = (next, ms = 0, ...rest) => { skew += ms; return later(next, 0, ...rest); };
@@ -173,11 +189,18 @@ globalThis.fetch = async (url, init = {}) => {
   if (path.includes('/bundles/')) return new Response(process.env.STUB_OFFERS, { status: 200 });
   if (method === 'DELETE') return new Response('{"success":true}', { status: Number(process.env.STUB_DELETE ?? 200) });
   if (start) return new Response('{"success":true}');
+  if (method === 'GET' && path === '/api/v0/instances/') {
+    const [status, body] = listed[lists.length > 1 ? lists.shift() : lists[0]]();
+    return new Response(JSON.stringify(body), { status });
+  }
   if (method === 'GET') {
     const [status, body] = answers[reads.length > 1 ? reads.shift() : reads[0]];
     return new Response(JSON.stringify(body), { status });
   }
+  label = JSON.parse(init.body).label;
   if (process.env.STUB_PUT === 'reject') throw new TypeError('fetch failed');
+  if (process.env.STUB_PUT === 'server') return new Response('{"success":false,"error":"server_error"}', { status: 502 });
+  if (process.env.STUB_PUT === 'refuse') return new Response('{"success":false,"error":"no_such_ask","msg":"gone"}', { status: 404 });
   if (process.env.STUB_PUT !== 'contract') return new Response('{"success":true}', { status: 200 });
   skew += 50000;
   return new Response('{"success":true,"new_contract":123}', { status: 200 });
@@ -313,12 +336,21 @@ test('an answer that is not certain is never taken for the outcome, of a rental,
     assert.deepEqual(await clocked(label, readMs, removeMs), ['destroy_unconfirmed', 300, first, sent], label);
   }
 
-  // A 2xx body the script cannot read, and a request that never came back: after either one an instance may be
-  // billing, so the money stops there and the owner is told where to look, instead of a second machine being rented
-  // on top of the first. Both offers passed every rule, and the line the owner reads says so.
-  const uncertain = (reason: string): Row[6] => ({ label, events: [candidates, attempt] }) => {
-    assert.deepEqual([candidates.offered, candidates.chosen, attempt.offer, attempt.reason], [2, 2, 'first', reason], label);
+  // A 2xx body the script cannot read, a request that never came back and a 5xx: after each an instance may be
+  // billing, so the account's list is read for it, four times ten seconds apart. The one found, by the label the
+  // request gave it or on its host from the request on, is the rental, with the deadline of any other; none found,
+  // and the money stops there and the owner is told where to look, instead of a second machine being rented on top of
+  // the first. Only a 4xx that says what it refused tries the next offer. Both offers passed every rule, and the line
+  // the owner reads says so.
+  const looked = 'GET 0s, PUT 0s guard 10800s, GET 0s, GET 10s, GET 20s, GET 30s';
+  const uncertain = (reason: string, listed: number): Row[6] => ({ label, events: [candidates, attempt] }) => {
+    assert.deepEqual([candidates.offered, candidates.chosen, attempt.offer, attempt.reason, attempt.listed, attempt.found],
+      [2, 2, 'first', reason, listed, []], label);
     assert.match(attempt.check, /vast\.ai/, label);
+  };
+  const adopted = (instance: number): Row[6] => ({ label, events: [, rented] }, before) => {
+    assert.deepEqual([rented.offer, rented.instance, rented.adopted, rented.session], ['first', instance, true, 3.24], label);
+    assert.ok(rented.destroyBy >= before + 10800 + BOOT_SECONDS && rented.destroyBy <= Date.now() / 1000 + 10800 + BOOT_SECONDS, label);
   };
   // A read every ten seconds from the first to `last`, and after the read of each second in `sends` a delete, or the
   // request that `send` writes.
@@ -329,9 +361,20 @@ test('an answer that is not certain is never taken for the outcome, of a rental,
   const told = ({ label, events }: Run) => assert.match(events.at(-1).tell, /owner/, label);
   runs(canned(t), [
     ['a 2xx body that names no instance', { STUB_PUT: 'unrecognised' }, ['--gpus', '2'], 1, ['candidates', 'attempt_uncertain'],
-      'GET 0s, PUT 0s guard 10800s', uncertain('no instance named')],
+      looked, uncertain('no instance named', 4)],
     ['a create request that never came back', { STUB_PUT: 'reject' }, ['--gpus', '2'], 1, ['candidates', 'attempt_uncertain'],
-      'GET 0s, PUT 0s guard 10800s', uncertain('no answer')],
+      looked, uncertain('no answer', 4)],
+    ['a 5xx', { STUB_PUT: 'server' }, ['--gpus', '2'], 1, ['candidates', 'attempt_uncertain'], looked, uncertain('status 502', 4)],
+    ['a list that cannot be read', { STUB_PUT: 'reject', STUB_LIST: 'failing' }, ['--gpus', '2'], 1, ['candidates', 'attempt_uncertain'],
+      looked, uncertain('no answer', 0)],
+    ['a list of one started before the request and one on another host', { STUB_PUT: 'server', STUB_LIST: 'others' }, ['--gpus', '2'], 1,
+      ['candidates', 'attempt_uncertain'], looked, uncertain('status 502', 4)],
+    ['its instance by its label, at the second look', { STUB_PUT: 'reject', STUB_LIST: 'none,labelled' }, ['--gpus', '2', '--hours', '3'], 0,
+      ['candidates', 'rented'], 'GET 0s, PUT 0s guard 10800s, GET 0s, GET 10s', adopted(125)],
+    ['its instance by its host and time', { STUB_PUT: 'server', STUB_LIST: 'started' }, ['--gpus', '2', '--hours', '3'], 0,
+      ['candidates', 'rented'], 'GET 0s, PUT 0s guard 10800s, GET 0s', adopted(126)],
+    ['a clear refusal, and the next offer', { STUB_PUT: 'refuse' }, ['--gpus', '2'], 1,
+      ['candidates', 'attempt_failed', 'attempt_failed', 'all_attempts_failed'], 'GET 0s, PUT 0s guard 10800s, PUT 0s guard 10800s'],
     // Before a rental of an hour, the dry run prices each offer for all of it, rounded up to the cent: $0.921 and
     // $0.971 an hour over 1 h 20 min 20 s, and $0.16 of traffic.
     ['the dry run of an hour', { SIMPLE_CHAT_RENT_DRY_RUN: '1' }, ['--gpus', '2', '--hours', '1'], 0, ['candidates', 'would_try', 'would_try'],
@@ -345,6 +388,12 @@ test('an answer that is not certain is never taken for the outcome, of a rental,
     ['a rent that no offer is within', { STUB_PUT: 'contract' }, ['--gpus', '2', '--hours', '1', '--max-session', '1.39'], 1,
       ['candidates', 'none_within_max_session'], 'GET 0s'],
     ...['', '0', '1.5x', '1.234'].map((quote): Row => [`a quote of '${quote}'`, { STUB_PUT: 'contract' }, ['--hours', '1', '--max-session', quote], 1,
+      ['bad_arguments'], '']),
+    // What comes back is priced at each host's outbound rate, here $0.005 a GB, in the quote and in its rent alike.
+    ['a dry run that brings 2 GB back', { SIMPLE_CHAT_RENT_DRY_RUN: '1' }, ['--gpus', '2', '--hours', '1', '--upload-gb', '2'], 0,
+      ['candidates', 'would_try', 'would_try'], 'GET 0s', ({ label, events: [candidates, ...tried] }) => assert.deepEqual(
+        [candidates.uploadGb, ...tried.map(one => [one.upload, one.session, one.exact])], [2, [0.01, 1.41, undefined], [0.01, 1.48, undefined]], label)],
+    ...['', '-1', '1e3', '0.0001'].map((gb): Row => [`an upload of '${gb}'`, { STUB_PUT: 'contract' }, ['--hours', '1', '--upload-gb', gb], 1,
       ['bad_arguments'], '']),
     // An answer that names its instance ends the loop, with the operator's own deadline: the guard's hour and the
     // quarter of an hour the box is given to start, counted from before the request that created the machine, never

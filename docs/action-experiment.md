@@ -3577,26 +3577,33 @@ session the rent dry run prices. At the $0.63 an hour of the dearest offer the d
 $3.11 to $3.19: over an ordinary day's $3, within the $4 of 2026-09-28, so at that price both cards take `--hours 2` and
 T3 keeps its place. So **the rule on money**, which the runbook applies as code: the rent takes offers whose sessions
 keep both cards within what is left of the day's cap together. The rent dry run gives each offer it would try its
-`session`, the offer's hour with its disk over the session, and its traffic, rounded up to the cent; `most` takes the
-dearest of the offers, four at most, that the rent would try with the same arguments, and a dry run it cannot read is
-`none`. Each choice is weighed at its worst, both ends failing, since that is the session the quotes price. If the text
-card's at `--hours 2` and the picture card's fit, both cards take `--hours 2`. Else, if they fit with the text card's at
-`--hours 1`, the text card takes that: 1 hour 20 minutes 20 seconds, $0.81 at $0.55 and $0.91 at $0.63, and both cards
-$2.47 to $2.55 at $0.63. Else nothing is rented and the owner is asked, as when any quote is not a sum of dollars. Each
-rent is held to its quote: `--max-session` makes the rent script try no offer whose session costs more, whatever the
-search returns by then. That option is in the tester-stand checkout's gpu/rent.mjs, which the runbook calls for it, with
-the account's key from ~/work/simple-chat/.env.gpu; its destroy is `destroyInstance` in local/rent-plan.ts there, and
-each card's own guard is gpu/trial-onstart.sh. Once the text card is rented, its own session, from what `rented`
-printed, and the picture card's, from a dry run just then that leaves out the text card's host as the picture card's
-rent does, must fit together before the picture card is rented. With `--hours 1` the text card's jobs end by about 46
-minutes after its rental: T1 and T2 fit, unless T2 runs away as far as it can and the card's end cuts it, and T3 does
-not begin, since the runbook starts it only on a two-hour card. An hour is short for the picture card's queue, and for a
-bootstrap as slow as round one's cards had, 30 minutes, so it always takes `--hours 2`.
+`session`: the offer's hour with its disk over the session, its downloads, and what the runbook brings back from the
+card at its host's outbound price (`up`: 1 GB from the picture card, 0.02 GB from the text card, which the table leaves
+out), the parts summed unrounded and rounded up to the cent once; `most` takes the dearest of the offers, four at most,
+that the rent would try with the same arguments, and a dry run it cannot read is `none`. Each choice is weighed at its
+worst, both ends failing, since that is the session the quotes price. If the text card's at `--hours 2` and the picture
+card's fit, both cards take `--hours 2`. Else, if they fit with the text card's at `--hours 1`, the text card takes
+that: 1 hour 20 minutes 20 seconds, $0.81 at $0.55 and $0.91 at $0.63, and both cards $2.47 to $2.55 at $0.63. Else
+nothing is rented and the owner is asked, as when any quote is not a sum of dollars. Each rent is held to its quote:
+`--max-session` makes the rent script try no offer whose session costs more, whatever the search returns by then. A
+create answered with no instance, by no answer, a 5xx or a 2xx that names none, is no refusal: the rent script reads the
+account's list four times, ten seconds apart, for the instance carrying the label that request gave it, or else one on
+its host that started from the request on, and prints the one it finds as `rented`, so that its watchdog starts like any
+other's. None found, or more than one, and nothing more is rented and the owner looks; only a 4xx that says what it
+refused tries the next offer. `--max-session` and the list are in the tester-stand checkout's gpu/rent.mjs, which the
+runbook calls for them, with the account's key from ~/work/simple-chat/.env.gpu; its destroy is `destroyInstance` in
+local/rent-plan.ts there, and each card's own guard is gpu/trial-onstart.sh. Once the text card is rented, its own
+session, from what `rented` printed, and the picture card's, from a dry run just then that leaves out the text card's
+host as the picture card's rent does, must fit together before the picture card is rented. With `--hours 1` the text
+card's jobs end by about 46 minutes after its rental: T1 and T2 fit, unless T2 runs away as far as it can and the card's
+end cuts it, and T3 does not begin, since the runbook starts it only on a two-hour card. An hour is short for the
+picture card's queue, and for a bootstrap as slow as round one's cards had, 30 minutes, so it always takes `--hours 2`.
 
 **Back on this machine**: P1's 0.53 to 0.68 GB of pictures and P2's 0.17 to 0.22 GB while they draw, 0.7 to 0.9 GB, and
 after the cards their bundles, about as much again for P1 and 0.2 GB for P2; the main session agreed to them on
 2026-09-28, with the 5.0 GB of earlier dry runs kept until after the cards. Under 1 MB each from T1 and T2, and about
-9 MB from T3. 15 GB were free on 2026-09-28.
+9 MB from T3. Each card's quote and rent price what comes back at its host's outbound rate, 1 GB from the picture card
+and 0.02 GB from the text card (`up` in the runbook). 15 GB were free on 2026-09-28.
 
 **Before the rental.** Everything the cards run has been dry-run without a card, as the first rule asks: the stand and
 its `run.sh` against local/fake-comfy.ts; the card probe against a fake gateway, its criteria included, where an answer
@@ -3607,59 +3614,78 @@ limit through the gateway, which failed its criteria (`sheet-versions/rehearse.s
 stand-ins and a dry-run destroy (`tester-stand/rehearse-ends.sh`, below); and a `dress` session of fifteen pictures with
 a real Astra judge ([the stand's dry run](#tester-stand)). T3's rehearsals passed, as above. On the day: Astra's reading
 of this plan again; the dry runs again on the commits that run the jobs, with `tester-stand/rehearse-all.sh`, which runs
-the ends, T1's and T2's rehearsals and the rent script's tests in one run against this page and prints its hash; and the
-rent dry runs, which the runbook reads for the rule on money. Each card's watchdog holds
-`systemd-inhibit --what=sleep:idle` from its rent until its card is read back gone or its own destroy has run, so this
-machine takes neither an idle suspend nor an ordinary suspend request while a card may bill. GNOME's idle suspend is off
-on mains power, and the PC has no battery and no lid, but it slept from 11:14 to 12:18 UTC on 2026-09-28 (14:14 to 15:18
-Moscow time), cause unknown. Asleep, it keeps the tunnels, the bots and the drawing down, and its watchdogs fire only
-once it wakes; a running card's guard deletes it anyway, but a card whose container has stopped runs no guard, and its
-disk bills until a watchdog runs. An inhibitor does not hold against a suspend that ignores inhibitors, so the owner is
-still asked not to suspend the PC while the cards run. No second watchdog runs on the other machine, mini: this machine
-reaches no host of that name (no ssh alias, no DNS or mDNS name), so whether mini has the Vast CLI and the key is not
-known from here.
+the ends, T1's and T2's rehearsals and the rent script's tests in one run against this page and prints its hash and each
+one's whole output; and the rent dry runs, which the runbook reads for the rule on money. Nothing is rented unless an
+inhibitor shows in systemd's list first, and the picture card only once the text card's watchdog shows its own. Each
+card's watchdog holds `systemd-inhibit --what=sleep:idle` from its rent until its card is read back gone: a destroy that
+fails releases nothing, and the watchdog destroys again every minute, writing TELL THE OWNER NOW to its log
+(`watchdog-text.log` and `watchdog-pictures.log` in tester-stand) at each failure. So this machine takes neither an idle
+suspend nor an ordinary suspend request while a card may bill. GNOME's idle suspend is off on mains power, and the PC
+has no battery and no lid, but it slept from 11:14 to 12:18 UTC on 2026-09-28 (14:14 to 15:18 Moscow time), cause
+unknown. Asleep, it keeps the tunnels, the bots and the drawing down, and its watchdogs fire only once it wakes; a
+running card's guard deletes it anyway, but a card whose container has stopped runs no guard, and its disk bills until a
+watchdog runs. An inhibitor does not hold against a suspend that ignores inhibitors, so the owner is still asked not to
+suspend the PC while the cards run. Vast offers no end of its own to set at the rent, as its API reference and CLI read
+on 2026-09-28 show: the create request takes a label and no expiry, duration or end; an instance's end date is the
+host's offer, and an expired instance "may be deleted 48 hours after expiration"; and the scheduled jobs of its CLI
+(`POST /api/v0/commands/schedule_job/`) repeat hourly, daily or weekly, are made there only for a bid change or a cloud
+copy, and are not documented for a delete. So a card's deletions stay its own guard, which a stopped container does not
+run, and this machine's watchdog. No second watchdog runs on the other machine, mini: this machine reaches no host of
+that name (no ssh alias, no DNS or mDNS name), so whether mini has the Vast CLI and the key is not known from here.
 
 **The ends, rehearsed** on 2026-09-28 by `rehearse-ends.sh` in ~/simple-story-chat-runs/2026-09-28/tester-stand, which
-reads the helpers and the runbook's lines from this page and runs them with no card and nothing paid: 117 checks, all
+reads the helpers and the runbook's lines from this page and runs them with no card and nothing paid: 137 checks, all
 passed, on the page of the commit that says so. `end_of` on a guard whose read failed, came back empty, was no number or
-was later than `destroyBy`, and with no `destroyBy`, gave no end, marked the card stopped, said we're done and destroyed
-that card and not the other; on a good guard it gave the guard less 960 s and touched nothing. `gone` destroyed twice
-where the destroy did not read back gone and then told the owner, once on a key that may not delete, and once where it
-read back gone, marking the card gone; both its tries ended by the same second, 290 s after it began, and a try that
-took all of them was not repeated. `by` gave a step its seconds, cut them at the card's end and gave nothing past it;
-the text card's first step as this page has it asked nothing past the card's end and ended the card, and in time gave
-its steps their seconds; and after the ends are known no step on either card has a bare limit. `busy` found a stand-in
-bot's connection to a stand-in port, and nothing once it closed or for another pid. It counted as busy a ComfyUI queue
-running, pending, not JSON, without its lists, with strings for them, answering 500, down, or 300 KB long and running;
-an empty queue, 300 KB long as well, as idle; and an empty or malformed `bot` and a failed `ss` as busy. `calm` came
-back 0 within 10 s once idle, and 1 after its ten minutes on a clock run fast while a bot stayed connected, with no bot,
-on a queue not JSON and on a queue down. `ready_text` saw a stand-in `status` ready at its third look and gave up on one
-never ready; `upto` began nothing with too few minutes or no end, and killed its job at the end; the runbook's own lines
-put T3's stop 30 minutes on, or 3 minutes before a nearer end, where 20 minutes are too few to begin; its rule on money
-chose 2, 1 and 0 hours as it should, with no offers too, and 0 whenever a quote was empty or no number, and with this
-page's own `left`, $4, gave both cards 2 hours at the worst case of $0.63 an hour; `most` gave the dearest session,
-passed the rent its arguments, and gave `none` for no offers and for a dry run it could not read; `rented` gave its four
-fields with the session rounded up, held the rent to its quote, rented nothing without a quote and gave nothing on an
-uncertain answer. The rents' own lines held the text card to the quote of its hours and the picture card to a fresh
-quote of the offers its rent would try, and rented no picture card on a quote empty, `none` or too dear. The rent script
-this page calls, asked with no key, took a quote and refused an empty one. One `end_of` and the watchdog went to Vast,
-each through the rent script's dry run on instance 52079556, deleted on 2026-09-22, which read it once as gone and
-deleted nothing; the watchdog, started from a shell that had exited and sent SIGHUP as a closed terminal would, fired at
-its time, holding this machine awake until then and not after; one started for a card already read back gone ended at
-once, asked nothing and held nothing. Nine changes to the helpers each failed one to fifteen checks: calm's ten minutes
-made longer, an unread queue taken as idle, one destroy instead of two, an `end_of` that does not end the card, no bot
-taken as idle, a reserve of 300 s, a watchdog without its HUP trap, an `upto` that does not kill, and T3's stop at the
-card's end. Five more after the second review failed one to four checks each: a deadline for each of `gone`'s tries, a
-step with a bare limit, quotes read as numbers whatever they are, `most` without the rent's arguments and `rented`
-without its quote.
+was later than `destroyBy`, on a good number whose ssh then failed or ran out, and with no `destroyBy`, gave no end,
+marked the card stopped, said we're done and destroyed that card and not the other; on a good guard it gave the guard
+less 960 s and touched nothing. `gone` destroyed twice where the destroy did not read back gone and then told the owner,
+once on a key that may not delete, and once where it read back gone, marking the card gone; both its tries ended by the
+same second, 290 s after it began, and a try that took all of them was not repeated. `by` gave a step its seconds, cut
+them at the card's end and gave nothing past it; the text card's first step as this page has it asked nothing past the
+card's end and ended the card, and in time gave its steps their seconds; and after the ends are known no step on either
+card has a bare limit. `busy` found a stand-in bot's connection to a stand-in port, and nothing once it closed or for
+another pid. It counted as busy a ComfyUI queue running, pending, not JSON, without its lists, with strings for them,
+answering 500, down, or 300 KB long and running; an empty queue, 300 KB long as well, as idle; and an empty or malformed
+`bot` and a failed `ss` as busy. `calm` came back 0 within 10 s once idle, and 1 after its ten minutes on a clock run
+fast while a bot stayed connected, with no bot, on a queue not JSON and on a queue down. `ready_text` saw a stand-in
+`status` ready at its third look and gave up on one never ready, and on a stand-in clock that only its looks and pauses
+moved, each look taking all it was given, ended at the end of its seconds and not a pause later; `check_pictures` asked
+nothing past its end and cut each read at it; `upto` began nothing with too few minutes or no end, and killed its job at
+the end; the runbook's own lines put T3's stop 30 minutes on, or 3 minutes before a nearer end, where 20 minutes are too
+few to begin; its rule on money chose 2, 1 and 0 hours as it should, with no offers too, and 0 whenever a quote was
+empty or no number, and with this page's own `left`, $4, gave both cards 2 hours at the worst case of $0.63 an hour;
+`most` gave the dearest session, passed the rent its arguments, and gave `none` for no offers and for a dry run it could
+not read; `most` and `rented` gave the rent the same gigabytes to bring back, 1 from the picture card and 0.02 from the
+text card; `rented` gave its four fields, and `none` for a session the rent did not sum, held the rent to its quote,
+rented nothing without a quote and gave nothing on an uncertain answer. The rents' own lines held the text card to the
+quote of its hours and the picture card to a fresh quote of the offers its rent would try, and rented no picture card on
+a quote empty, `none` or too dear, with the text card's watchdog failed or with its session `none`; with no inhibitor in
+systemd's list they rented nothing. The rent script this page calls, asked with no key, took a quote and refused an
+empty one. One `end_of` and the watchdog went to Vast, each through the rent script's dry run on instance 52079556,
+deleted on 2026-09-22, which read it once as gone and deleted nothing; the watchdog, started from a shell that had
+exited and sent SIGHUP as a closed terminal would, fired at its time, holding this machine awake until then and not
+after; one started for a card already read back gone ended at once, asked nothing and held nothing; one whose destroy
+failed told the owner at each failure, destroyed again each minute (a fifth of a second there) and held this machine
+awake until a destroy read back gone, then ended and let it sleep; and one whose inhibitor did not show gave 1 and told
+the owner. `held` saw an inhibitor in the list, and not one that had ended. Nine changes to the helpers each failed one
+to fifteen checks: calm's ten minutes made longer, an unread queue taken as idle, one destroy instead of two, an
+`end_of` that does not end the card, no bot taken as idle, a reserve of 300 s, a watchdog without its HUP trap, an
+`upto` that does not kill, and T3's stop at the card's end. Five more after the second review failed one to four checks
+each: a deadline for each of `gone`'s tries, a step with a bare limit, quotes read as numbers whatever they are, `most`
+without the rent's arguments and `rented` without its quote. Seven more after the third review failed one to six checks
+each: an `end_of` that trusts the number of a failed ssh, a `ready_text` pause past its end, `check_pictures` reading
+ten seconds whatever is left, a watchdog released by a failed destroy, the rents without an inhibitor, the picture card
+rented without the text card's watchdog, and a rent without what comes back. The rent script's own tests, run with them,
+found each of five changes to it: a 5xx taken as a refusal, an instance adopted that started ten minutes before its
+request, one adopted on another host, what comes back left unpriced, and the session summed from rounded parts.
 
 **The runbook.** Terminal 1 rents and runs the text card, terminal 2 holds its `up`, terminal 4 runs the picture card
 and terminal 5 holds its tunnel. The helpers go into terminals 1 and 4 first, from the block between their markers.
 Every ssh has a limit: `on` gives each its seconds, and the two that last the session, `up` and `gpu/tunnel.sh`, give
 each dial ten seconds and notice a connection gone quiet after 15 s x 3. Once a card's end is known, each step on it is
-cut at that end: `by` gives it its seconds, and none past the end. A step marked `alive` begins nothing on a card that
-has been ended, and a step that fails or is cut ends its card at once with `stop_card`: nothing more starts on it, we're
-done, and the destroy until it reads back gone.
+cut at that end: `by` gives it its seconds, and none past the end, and so each look and pause inside `ready_text` and
+`check_pictures`. A step marked `alive` begins nothing on a card that has been ended, and a step that fails or is cut
+ends its card at once with `stop_card`: nothing more starts on it, we're done, and the destroy until it reads back gone.
 
 ```sh
 # The day of the rental. A fresh GPT-6 Astra session at xhigh has read this section again. Then the dry runs, each on
@@ -3677,7 +3703,8 @@ bash ~/simple-story-chat-runs/2026-09-28/tester-stand/rehearse-all.sh    # its l
 set -o pipefail
 runs=~/simple-story-chat-runs/2026-09-28
 # The rent script the runbook calls: the tester-stand checkout's, which holds a rent to its quote (`--max-session`),
-# with the account's key from ~/work/simple-chat/.env.gpu.
+# prices what comes back (`--upload-gb`) and, after an answer that names no instance, reads the account's list for the
+# one it may have made, with the account's key from ~/work/simple-chat/.env.gpu.
 rent=(node "--env-file-if-exists=$HOME/work/simple-chat/.env.gpu" "$HOME/work/simple-chat-tester-stand/gpu/rent.mjs")
 # One ssh, for at most $2 seconds.
 on() { local host=$1 limit=$2; shift 2
@@ -3700,18 +3727,24 @@ stop_card() { local host=simple-chat-vast id=${ID1-}
   touch "$runs/tester-stand/stopped-$1"; [ -n "$id" ] || return 0
   on "$host" 20 'date +%s > /root/.simple-chat-trial-deadline'; gone "$id"; }
 alive() { [ ! -e "$runs/tester-stand/stopped-$1" ]; }
-# The destroy at $2, destroyBy, by this machine's clock, whatever the card and the terminal do. Until then, or until
-# its card is read back gone, it keeps this machine from an idle or an ordinary suspend.
-watchdog() { ( trap '' HUP
-    systemd-inhibit --what=sleep:idle --who="tester rental" --why="watchdog of $1" --mode=block sleep $(( $2 - $(date +%s) + 900 )) & awake=$!
+# Whether an inhibitor giving $1 as its reason is in systemd's list, looked for over five seconds.
+held() { local n; for n in 1 2 3 4 5 6 7 8 9 10; do systemd-inhibit --list --no-pager 2>/dev/null | grep -qF -- "$1" && return 0; sleep 0.5; done; return 1; }
+# The destroy at $2, destroyBy, by this machine's clock, whatever the card and the terminal do, and after a failed one
+# another every minute, each failure told in its log, until the card is read back gone. Until then it keeps this
+# machine from an idle or an ordinary suspend: its inhibitor lives as long as it does. 1, and the owner told, if that
+# inhibitor is not in systemd's list.
+watchdog() { ( trap '' HUP; me=$BASHPID
+    systemd-inhibit --what=sleep:idle --who="tester rental" --why="watchdog of $1" --mode=block tail --pid="$me" -f /dev/null & awake=$!
     until (( $(date +%s) >= $2 )) || [ -e "$runs/tester-stand/gone-$1" ]; do sleep 15; done
-    [ -e "$runs/tester-stand/gone-$1" ] || gone "$1"; kill "$awake" ) </dev/null >>"$runs/tester-stand/watchdog-$3.log" 2>&1 &
-  disown; echo "watchdog of $1 at $(date -u -d @"$2" +%T) UTC"; }
+    until [ -e "$runs/tester-stand/gone-$1" ] || gone "$1"; do sleep 60; done; kill "$awake" ) </dev/null >>"$runs/tester-stand/watchdog-$3.log" 2>&1 &
+  disown; held "watchdog of $1" || [ -e "$runs/tester-stand/gone-$1" ] || { echo "TELL THE OWNER NOW: nothing keeps this machine awake for instance $1"; return 1; }
+  echo "watchdog of $1 at $(date -u -d @"$2" +%T) UTC"; }
 # The card's end for its work, 16 minutes before its guard: calm's ten, we're done and the destroy's five. A guard
-# that does not hold its lock, cannot be read or is later than destroyBy ends the card at once.
+# that does not hold its lock or is later than destroyBy, and a read whose ssh fails or runs out, whatever it printed,
+# end the card at once.
 end_of() { local guard
-  guard=$(on "$1" 20 'flock -n -E 75 /root/.simple-chat-trial-guard.lock true; [ $? -eq 75 ] && cat /root/.simple-chat-trial-deadline')
-  if [[ $guard =~ ^[1-9][0-9]{0,11}$ && $2 =~ ^[1-9][0-9]{0,11}$ ]] && (( guard <= $2 )); then echo $(( guard - 960 )); return 0; fi
+  if guard=$(on "$1" 20 'flock -n -E 75 /root/.simple-chat-trial-guard.lock true; [ $? -eq 75 ] && cat /root/.simple-chat-trial-deadline') \
+    && [[ $guard =~ ^[1-9][0-9]{0,11}$ && $2 =~ ^[1-9][0-9]{0,11}$ ]] && (( guard <= $2 )); then echo $(( guard - 960 )); return 0; fi
   echo "no guard read on $1: the card ends now" >&2; stop_card "$3" >&2; return 1; }
 # A job begun only with $2 minutes or more before $1, and killed at $1.
 upto() { local left=$(( ${1:-0} - $(date +%s) )); (( left >= $2 * 60 )) || { echo "not begun: $(( left / 60 )) minutes left" >&2; return 124; }
@@ -3730,27 +3763,32 @@ busy() { local seen queue
 # Two looks 6 s apart that find nothing busy: 0, or 1 once ten minutes by the clock are out.
 calm() { local t=$(( $(date +%s) + 580 )) n=0
   while (( $(date +%s) < t )); do if busy "$@"; then n=0; else n=$(( n + 1 )); fi; (( n >= 2 )) && return 0; sleep 6; done; return 1; }
-# The text card's gateway ready within $1 seconds, as simple-serving's `status` reads it.
-ready_text() { local t=$(( $(date +%s) + $1 )) out left
-  while left=$(( t - $(date +%s) )); (( left > 0 )); do
-    out=$(cd /var/tmp/simple-serving-next && timeout $(( left < 60 ? left : 60 )) uv run python -m simple_serving.cli status 2>/dev/null)
-    grep -q '^gateway: ready;' <<<"$out" && return 0; sleep 15; done; return 1; }
-# The picture card as the bot's: cu130, the Triton backend and the kitchen's attention.
-check_pictures() { local stats attention
-  stats=$(curl -sf -m 10 http://127.0.0.1:8188/system_stats) && attention=$(curl -sf -m 10 http://127.0.0.1:8188/object_info/ModelAttentionBackend) || return 1
+# The text card's gateway ready within $1 seconds, as simple-serving's `status` reads it; each look and each pause cut
+# by `by` at the end of those seconds.
+ready_text() { local t=$(( $(date +%s) + $1 )) out s
+  while s=$(by "$t" 60); do
+    out=$(cd /var/tmp/simple-serving-next && timeout "$s" uv run python -m simple_serving.cli status 2>/dev/null)
+    grep -q '^gateway: ready;' <<<"$out" && return 0; s=$(by "$t" 15) || break; sleep "$s"; done; return 1; }
+# The picture card as the bot's: cu130, the Triton backend and the kitchen's attention, each read cut by `by` at $1.
+check_pictures() { local stats attention s
+  s=$(by "$1" 10) && stats=$(curl -sf -m "$s" http://127.0.0.1:8188/system_stats) \
+    && s=$(by "$1" 10) && attention=$(curl -sf -m "$s" http://127.0.0.1:8188/object_info/ModelAttentionBackend) || return 1
   grep -q '"pytorch_version": *"2.11.0+cu130"' <<<"$stats" && grep -q -- '--enable-triton-backend' <<<"$stats" && grep -q '"comfy kitchen attention"' <<<"$attention"; }
+# The gigabytes a card of lane $1 sends back ("Back on this machine" above, rounded up), which its quote and its rent
+# both price at its host's outbound rate.
+up() { if [ "$1" = pictures ]; then echo 1; else echo 0.02; fi; }
 # The dearest session in dollars of the offers a rent of lane $1 for $2 hours, with the same further arguments, would
 # try, or `none`, also when the dry run's output cannot be read.
-most() { local out; out=$(SIMPLE_CHAT_RENT_DRY_RUN=1 "${rent[@]}" --lane "$1" --hours "$2" "${@:3}")
+most() { local out; out=$(SIMPLE_CHAT_RENT_DRY_RUN=1 "${rent[@]}" --lane "$1" --hours "$2" --upload-gb "$(up "$1")" "${@:3}")
   node -e 'let x; try { x = process.argv[1].split("\n").filter(line => line.includes("\"would_try\"")).map(line => JSON.parse(line).session); } catch { x = []; }
     console.log(x.length && x.every(v => typeof v === "number" && v > 0) ? Math.max(...x) : "none");' "$out"; }
 # A rent of lane $1 for $2 hours held to $3 dollars, its quote: the instance, its host, destroyBy and its session in
-# dollars rounded up, or nothing and 1. No quote, no rent. Everything the rent printed goes to the terminal.
+# dollars as the rent script summed it, or `none`; or nothing and 1. No quote, no rent. An instance found in the
+# account's list after an uncertain answer is printed as `rented` too. Everything the rent printed goes to the terminal.
 rented() { local out; [[ ${3-} =~ ^[0-9]+(\.[0-9]{1,2})?$ ]] || { echo "no quote: nothing is rented" >&2; return 1; }
-  out=$("${rent[@]}" --lane "$1" --hours "$2" --max-session "$3" "${@:4}"); echo "$out" >&2
+  out=$("${rent[@]}" --lane "$1" --hours "$2" --upload-gb "$(up "$1")" --max-session "$3" "${@:4}"); echo "$out" >&2
   node -e 'const r = process.argv[1].split("\n").filter(line => line.includes("\"event\":\"rented\"")).map(line => JSON.parse(line))[0];
-    if (!r) process.exit(1); const s = Number.isFinite(r.session) ? r.session : Math.ceil((r.hour * (Number(process.argv[2]) + 1220 / 3600) + r.download) * 100 - 1e-9) / 100;
-    console.log(r.instance, r.host, r.destroyBy, s);' "$out" "$2"; }
+    if (!r) process.exit(1); console.log(r.instance, r.host, r.destroyBy, Number.isFinite(r.session) && r.session > 0 ? r.session : "none");' "$out"; }
 # ---- The end of the helpers.
 
 # Terminal 1, in ~/work/simple-chat. The live bots' processes, for `calm`: two pids, the -0928 checkout's and the other's.
@@ -3764,11 +3802,14 @@ t2=$(most text 2) t1=$(most text 1) p2=$(most pictures 2); echo "text $t2 for 2 
 hours=$(node -e 'const q = process.argv.slice(1).map(v => /^\d+(\.\d+)?$/.test(v) ? Number(v) : NaN), [l, a, b, p] = q; console.log(!q.every(v => v > 0) ? 0 : a + p <= l ? 2 : b + p <= l ? 1 : 0)' "$left" "$t2" "$t1" "$p2")
 echo "the text card: --hours $hours"    # 0: nothing is rented, and the owner is asked
 tq=$t2; (( hours == 1 )) && tq=$t1
-# The rents, each card's watchdog at once. Anything but `rented` goes to the owner, `attempt_uncertain` at once. The
-# picture card only if the text card's own session and a fresh quote, of the offers its rent would try, fit together.
-rm -f "$runs"/tester-stand/stopped-* "$runs"/tester-stand/gone-*
-(( hours )) && read -r ID1 HOST1 BY1 S1 < <(rented text "$hours" "$tq") && watchdog "$ID1" "$BY1" text
-[ -n "${ID1-}" ] && p2=$(most pictures 2 --avoid-host "$HOST1") && node -e 'const q = process.argv.slice(1).map(v => /^\d+(\.\d+)?$/.test(v) ? Number(v) : NaN), [l, s, p] = q; process.exit(q.every(v => v > 0) && s + p <= l ? 0 : 1)' "$left" "$S1" "$p2" \
+# The rents, each card's watchdog at once. Anything but `rented` goes to the owner, `attempt_uncertain` at once. None
+# unless an inhibitor shows in systemd's list first: a machine that sleeps ends no card. The picture card only if the
+# text card's watchdog holds this machine awake, and the text card's own session and a fresh quote, of the offers its
+# rent would try, fit together.
+rm -f "$runs"/tester-stand/stopped-* "$runs"/tester-stand/gone-*; watched=
+systemd-inhibit --what=sleep:idle --who="tester rental" --why="before the rents" --mode=block sleep 60 & held "before the rents" || { hours=0; echo "no inhibitor in systemd's list: nothing is rented"; }; kill $! 2>/dev/null
+(( hours )) && read -r ID1 HOST1 BY1 S1 < <(rented text "$hours" "$tq") && watchdog "$ID1" "$BY1" text && watched=1
+[ -n "$watched" ] && p2=$(most pictures 2 --avoid-host "$HOST1") && node -e 'const q = process.argv.slice(1).map(v => /^\d+(\.\d+)?$/.test(v) ? Number(v) : NaN), [l, s, p] = q; process.exit(q.every(v => v > 0) && s + p <= l ? 0 : 1)' "$left" "$S1" "$p2" \
   && read -r ID2 HOST2 BY2 S2 < <(rented pictures 2 "$p2" --avoid-host "$HOST1") && watchdog "$ID2" "$BY2" pictures
 echo "text ${ID1-} \$${S1-}, pictures ${ID2-} \$${S2-}"
 systemd-inhibit --list --no-pager | grep -c 'watchdog of'    # one a card: this machine stays awake until each is read back gone
@@ -3833,12 +3874,12 @@ alive pictures && { s=$(by "$end" 60) && on simple-chat-vast-pictures "$s" 'mkdi
 sleep 15; alive pictures && { s=$(by "$end" 2400) && timeout "$s" bash -c 'until timeout 20 ssh -o ConnectTimeout=10 -o BatchMode=yes simple-chat-vast-pictures "flock -n /workspace/simple-chat-gpu/image-bootstrap.lock true"; do sleep 10; done' \
   && s=$(by "$end" 30) && on simple-chat-vast-pictures "$s" 'd=/workspace/simple-chat-gpu; test -s $d/image-verified.txt && test -f $d/ComfyUI/.venv-cu130/simple-chat-ready' \
   || { s=$(by "$end" 30) && on simple-chat-vast-pictures "$s" 'tail -n 5 /workspace/simple-chat-gpu/bootstrap.log'; stop_card pictures; }; }
-alive pictures && s=$(by "$end" 30) && on simple-chat-vast-pictures "$s" 'grep -c qwen3.5_9b_qwen_image_2.1_pe_t2i /workspace/simple-chat-gpu/image-verified.txt'    # 1, for P2
+alive pictures && { s=$(by "$end" 30) && on simple-chat-vast-pictures "$s" 'grep -c qwen3.5_9b_qwen_image_2.1_pe_t2i /workspace/simple-chat-gpu/image-verified.txt' || stop_card pictures; }    # 1, for P2
 alive pictures && { s=$(by "$end" 30) && on simple-chat-vast-pictures "$s" 'SIMPLE_CHAT_IMAGE_TORCH=cu130 SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 SIMPLE_CHAT_IMAGE_TRITON=1 setsid -f nohup flock -n /root/.simple-chat-comfy.lock bash /workspace/simple-chat/gpu/image-serve.sh </dev/null >/dev/null 2>&1' || stop_card pictures; }
 # Terminal 5: `bash gpu/tunnel.sh --pictures-only simple-chat-vast-pictures`: from here the live bot's pictures are on
 # the card. The server, then the check; a card ended here: Ctrl+C in terminal 5 as well.
-alive pictures && { s=$(by "$end" 600) && timeout "$s" bash -c 'until curl -sf -m 5 -o /dev/null http://127.0.0.1:8188/system_stats; do sleep 5; done' && check_pictures || stop_card pictures; }
-alive pictures && s=$(by "$end" 30) && on simple-chat-vast-pictures "$s" 'd=/workspace/simple-chat-gpu/ComfyUI; test -f $d/.venv-cu130/simple-chat-ready && test ! -e $d/.venv && echo cu130 alone; du -sh $d/.venv-cu130; df -h /workspace | tail -1'    # the disk, for the next rental
+alive pictures && { s=$(by "$end" 600) && timeout "$s" bash -c 'until curl -sf -m 5 -o /dev/null http://127.0.0.1:8188/system_stats; do sleep 5; done' && check_pictures "$end" || stop_card pictures; }
+alive pictures && { s=$(by "$end" 30) && on simple-chat-vast-pictures "$s" 'd=/workspace/simple-chat-gpu/ComfyUI; du -sh $d/.venv-cu130; df -h /workspace | tail -1; test -f $d/.venv-cu130/simple-chat-ready && test ! -e $d/.venv && echo cu130 alone' || stop_card pictures; }    # the disk, for the next rental
 # After the owner's smoke, if the owner is at hand:
 grep -E '"event":"picture(_portrait)?"' logs/bot-gpu.jsonl | tail -n 2 | grep -c '"pictureAttention":"kitchen"'    # 2
 curl -s -m 10 http://127.0.0.1:8188/internal/logs/raw | grep -o 'is unavailable; using PyTorch attention' | wc -l    # 0
@@ -3848,10 +3889,10 @@ alive pictures && bash "$runs/refs-stand-5/run.sh" $(( end - 2400 )); echo "P1 e
 slot=$(( $(date +%s) + 2400 )); (( slot < end )) || slot=$end
 alive pictures && s=$(by "$end" 30) && on simple-chat-vast-pictures "$s" cat /workspace/simple-chat-gpu/image-verified.txt > "$runs/prompt-arms/card.txt" \
   && npm run image:prompt-arms -- card --run "$runs/prompt-arms" --until "$slot"; echo "P2 exit $?"    # card_done
-npm run image:prompt-arms -- page --run "$runs/prompt-arms"
-# The picture card's end:
+# The picture card's end, and then P2's page, from what came back:
 calm 8188 queue; echo "calm $?"    # then Ctrl+C in terminal 5: the live bot's pictures are off the card
 stop_card pictures
+npm run image:prompt-arms -- page --run "$runs/prompt-arms"
 ```
 
 **While the cards run**, nothing runs on this machine that the cards do not need; code, tests and commits go to a
