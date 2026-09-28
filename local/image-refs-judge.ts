@@ -19,6 +19,15 @@
 // its eight cells of one scene and seed side by side, against H's words and table and against H's front, with the
 // view and the crop its cells were drawn from shown for resemblance. Its references are the first stand's pictures,
 // read from that run (--from, by default the directory beside it) and checked against the hashes its cells used.
+// The third and fourth stands (docs/action-experiment.md#refs-judging-34) are judged by the questions of their own
+// judge-questions.json, pinned here in place of judge-texts.json, as a review before their judging changed them: the
+// third stand's eight cells of one scene and seed side by side against the scene (`frames`) and against each person's
+// front and words (`identity`), S's four beside the draft they were edited from (`draft`), and B's and T's fronts
+// (`fronts`); the fourth stand's four views of one person and seed against the front they were drawn from (`turns`).
+// Every picture any of their cells took is read from its own run and checked against the hash the cell recorded. Their
+// queue also stops once more than a tenth of their planned sessions have had an attempt fail or refuse, and their
+// agreement is Astra's retest of every session: completion and clean first, then over the pictures eligible in both
+// passes the same answer, the same assessability and the success reading with its kappa.
 //   bundles   judge/bundles/ and judge/keys/ from the drawn cells, once
 //   dry-run   the bundles judged by stand-ins for codex in a scratch directory, scored and compared: the sessions and the
 //             expected time (--jobs FILE for a whole night's plan)
@@ -43,8 +52,9 @@ import { decodePng } from './image-pilot.ts';
 import { encodePng } from './image-levers.ts';
 import { Refusal } from './action-boundary.ts';
 import { safeError } from './image-action.ts';
-import { SEEDS, SHEET_PEOPLE, frameKey, frontKey, sheetKey, viewKey } from './image-refs-test.ts';
+import { CROP as GRAPH_CROP, SEEDS, SHEET_PEOPLE, frameKey, frontKey, sheetKey, viewKey } from './image-refs-test.ts';
 import type { Scene } from './image-refs-test.ts';
+import { FRONTS, SEEDS_3, SEEDS_4, TEXTS_SHA256_3, TEXTS_SHA256_4, viewId, viewKeyOf } from './image-refs-backlog.ts';
 
 const sha256 = (value: string | Uint8Array) => createHash('sha256').update(value).digest('hex');
 const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
@@ -53,13 +63,17 @@ const JUDGE_TEXTS_SHA256 = '6460753f52b88bc31ec52d269c4a257d6a932bc08e3b07baabdf
 const STAND_TEXTS_SHA256 = 'd0678be9753c496fc3ad754ad5124a0add622b8298a3f744f6c71f0da2728f61';
 const STAND_2_TEXTS_SHA256 = '9a5ee1a68c05970bed86088e982a0c64df99827712db10af13143fcddfa3cfe3';
 export const judgeDirOf = (run: string) => join(resolve(run), 'judge');
-export type StandId = 1 | 2;
+export type StandId = 1 | 2 | 3 | 4;
+type Stand12 = 1 | 2;
+type Stand34 = 3 | 4;
 // Which stand a run is, by its texts.
 export function standOf(run: string): StandId {
   const file = join(resolve(run), 'texts.json'), hash = existsSync(file) ? sha256(readFileSync(file)) : '';
   if (hash === STAND_TEXTS_SHA256) return 1;
   if (hash === STAND_2_TEXTS_SHA256) return 2;
-  throw new Refusal(`${file} is not the texts either refs stand drew from`);
+  if (hash === TEXTS_SHA256_3) return 3;
+  if (hash === TEXTS_SHA256_4) return 4;
+  throw new Refusal(`${file} is not the texts any refs stand drew from`);
 }
 
 // ---- The words the judges are shown ----
@@ -92,12 +106,18 @@ const partsOf = (texts: JudgeTexts, who: Who) => PARTS.filter(part => texts.peop
 export const RANKS = ['A', 'FV', 'B', 'C', 'D'] as const;
 // The second stand's one rank: its cells of one scene and seed side by side, the seeds in the order it drew them.
 export const RANKS_2 = ['S2'] as const;
-type Rank = typeof RANKS[number] | typeof RANKS_2[number];
-export const ranksOf = (stand: StandId): readonly string[] => (stand === 1 ? RANKS : RANKS_2);
+// The third stand's: B's and T's fronts, then each scene and seed's frames, then S's four beside the draft; the fourth
+// stand's one, its views.
+export const RANKS_3 = ['F3', 'K3', 'S3'] as const;
+export const RANKS_4 = ['V4'] as const;
+type Rank = typeof RANKS[number] | typeof RANKS_2[number] | typeof RANKS_3[number] | typeof RANKS_4[number];
+export const ranksOf = (stand: StandId): readonly string[] => (stand === 1 ? RANKS : stand === 2 ? RANKS_2 : stand === 3 ? RANKS_3 : RANKS_4);
 export const SEEDS_2 = [21, 23, 29, 31, 37, 41];
 // In the order of the tester's complaints: the negative at CFG 2, the look, the clothes.
 export const CELLS_2 = ['R-L0', 'R-L0-NEG', 'W-L0', 'W-L0-NEG', 'R-L1', 'W-L1', 'FV-L0', 'FC-L0'];
-export type Kind = 'frames' | 'identity' | 'fronts' | 'sheet' | 'turns';
+type Kind12 = 'frames' | 'identity' | 'fronts' | 'sheet' | 'turns';
+// The third stand adds `draft`; its `frames`, `identity` and `fronts` and the fourth stand's `turns` ask their own tasks.
+export type Kind = Kind12 | 'draft';
 // A picture a session judges: its cell, the style it was asked for, the person a front shows, and for a turned
 // picture the turn and the reference it was made from.
 type Shown = { key: string; style?: Style; person?: Who; turn?: string; reference?: string; sheet?: string };
@@ -110,7 +130,7 @@ const H_FRONT = frontKey('H-PORTRAIT'), L_FRONT = frontKey('L-PORTRAIT'), VN_FRO
 // FC's reference: the top 720x400 of H's VN front at seed 7, as ImageCrop cut it for the encoder.
 export const CROP_KEY = 'crop:H-VN:s7';
 const CROP = { from: VN_FRONT, width: 720, height: 400 };
-export function comparisons(stand: StandId = 1): Comparison[] {
+export function comparisons(stand: Stand12 = 1): Comparison[] {
   const out: Comparison[] = [];
   if (stand === 2) {
     for (const seed of SEEDS_2) for (const scene of ['K-solo', 'P'] as Scene[]) {
@@ -161,12 +181,17 @@ export function comparisons(stand: StandId = 1): Comparison[] {
 }
 // The sessions in the order they run: each comparison of frames twice, the words first. A session's name is a number
 // and its kind, which is what the judge sees of it.
-export type SessionPlan = { name: string; kind: Kind; comparison: Comparison };
-export function sessionPlan(stand: StandId = 1): SessionPlan[] {
+export type SessionPlan = { name: string; kind: Kind12; comparison: Comparison };
+export function sessionPlan(stand: Stand12 = 1): SessionPlan[] {
   const sessions = ranksOf(stand).flatMap(rank => comparisons(stand).filter(one => one.rank === rank))
     .flatMap(comparison => (comparison.kind === 'frames' ? ['frames', 'identity'] as const : [comparison.kind]).map(kind => ({ kind, comparison })));
   return sessions.map((one, at) => ({ name: `j${String(at + 1).padStart(2, '0')}-${one.kind}`, ...one }));
 }
+// Any stand's sessions as the queue takes them: name, kind and rank, in the order they run.
+export type Planned = { name: string; kind: Kind; rank: string };
+export const plannedSessions = (stand: StandId): Planned[] => (stand === 1 || stand === 2
+  ? sessionPlan(stand).map(one => ({ name: one.name, kind: one.kind, rank: one.comparison.rank }))
+  : sessionPlan34(stand).map(one => ({ name: one.name, kind: one.kind, rank: one.rank })));
 
 // ---- The tasks ----
 
@@ -177,7 +202,7 @@ const ANATOMY = 'anatomy: is there an anatomy error: a limb too many or missing,
 const WORDS = 'people: each person\'s words: her looks, and her build part by part in parts, each part with the words that name it and, for one person, the figures of her table of measurements (centimetres; the weight in kilograms)';
 const PART_RULE = 'Judge visible proportions, fullness and shape. Measurements are approximate visual design guidance, not quantities you can verify from pixels. Use matches when the visible criteria agree; too_small or too_large for a clear directional size mismatch; mismatch for a visible non-size mismatch or conflicting size directions; unsure when the visible evidence or target description is insufficient; and not_visible when the required feature is hidden, cropped or unavailable from this viewpoint. Do not infer absolute height or weight without a reliable scale, lateral width from a true profile, or buttock projection from hip circumference alone.';
 const FACING = 'facing: judge only the requested body orientation, from the orientation words in her facing and her place (three-quarters toward one side of the picture, true profile toward one side, turned toward someone). Judge torso and pelvis, not the head alone. A true side profile does not satisfy a three-quarter request, nor a three-quarter view a profile request. Position and figure size do not affect this answer. yes, no or unsure';
-export const TASKS: Record<Kind, string> = {
+export const TASKS: Record<Kind12, string> = {
   frames: `You judge pictures drawn for one scene of a story, each against the words you are given.
 
 input.json holds:
@@ -340,7 +365,7 @@ export const questionsPin = () => sha256(JSON.stringify(judgePins()));
 
 // ---- The bundles ----
 
-type StandCell = { status: string; file?: string; sha256?: string; width?: number; height?: number; references?: string[] };
+type StandCell = { status: string; file?: string; sha256?: string; width?: number; height?: number; references?: string[]; start?: string };
 // Which cell each picture of a session is, and each reference: kept in judge/keys/, never in a bundle.
 export type SessionKey = { name: string; kind: Kind; group: string; rank: Rank; scene?: Scene; seed?: number; task: string; schema: string; input: string;
   pictures: { name: string; key: string; sha256: string }[]; references: { name: string; key: string; sha256: string; compare: boolean }[]; missing: string[] };
@@ -375,7 +400,9 @@ function drawn(run: string, cells: Record<string, StandCell>, key: string): { by
 // key in judge/keys/. A cell the stand did not draw leaves its picture out and is listed as missing; a session left
 // with no picture, or a turned picture without its reference, is not built.
 export function writeBundles(run: string, log: (event: object) => void = () => undefined, from?: string) {
-  const texts = readTexts(run), dir = judgeDirOf(run), stand = standOf(run);
+  const which = standOf(run);
+  if (which === 3 || which === 4) return writeBundles34(run, which, log);
+  const texts = readTexts(run), dir = judgeDirOf(run), stand = which;
   const cells = (readJson<{ cells: Record<string, StandCell> }>(join(resolve(run), 'cells.json')) ?? { cells: {} }).cells;
   if (stand === 2) {
     // The first stand's pictures the second drew from, each one its cells used by its hash.
@@ -468,11 +495,14 @@ export function writeBundles(run: string, log: (event: object) => void = () => u
   return counts;
 }
 // The files a session is shown, attached in the order its input names them: the sheet or the pictures, then the
-// references, then a turned picture's reference.
+// references, then a turned picture's reference; in the third and fourth stands' bundles the pictures, then the draft,
+// then the fronts, or the one front, then the faces cut from the fronts.
 export function attachments(copy: string): string[] {
-  const input = JSON.parse(readFileSync(join(copy, 'input.json'), 'utf8')) as { pictures?: { name: string; reference?: string }[]; references?: { name: string }[]; sheet?: string };
+  const input = JSON.parse(readFileSync(join(copy, 'input.json'), 'utf8')) as { pictures?: { name: string; reference?: string }[]; references?: { name: string }[]; sheet?: string;
+    draft?: string; fronts?: { name: string }[]; front?: string; faces?: { name: string }[] };
   const names = [...(input.sheet ? [input.sheet] : []), ...(input.pictures ?? []).map(one => one.name), ...(input.references ?? []).map(one => one.name),
-    ...(input.pictures ?? []).flatMap(one => (one.reference ? [one.reference] : []))];
+    ...(input.pictures ?? []).flatMap(one => (one.reference ? [one.reference] : [])), ...(input.draft ? [input.draft] : []), ...(input.fronts ?? []).map(one => one.name),
+    ...(input.front ? [input.front] : []), ...(input.faces ?? []).map(one => one.name)];
   return [...new Set(names)].map(name => join(copy, name));
 }
 
@@ -484,8 +514,7 @@ export type SessionRecord = { name: string; kind: Kind; state?: 'answered' | 'fa
 // compared), and the questions' pin.
 export type JudgingRecord = { questions: string; model: string; fallback: string | null; effort: string; sessions: Record<string, SessionRecord>; stopped?: string };
 const recordFile = (dir: string) => join(dir, 'judging.json');
-function openRecord(dir: string, model: string = JUDGE.model, fallback: string | null = JUDGE.fallback): JudgingRecord {
-  const questions = questionsPin();
+function openRecord(dir: string, model: string = JUDGE.model, fallback: string | null = JUDGE.fallback, questions = questionsPin()): JudgingRecord {
   const record = readJson<JudgingRecord>(recordFile(dir)) ?? { questions, model, fallback, effort: JUDGE.effort, sessions: {} };
   if (record.questions !== questions) throw new Refusal(`${recordFile(dir)} was judged under other questions or texts; one record holds one set of pins`);
   if (record.model !== model || record.fallback !== fallback) throw new Refusal(`${recordFile(dir)} holds another judge's sessions`);
@@ -513,8 +542,9 @@ export type JudgeOptions = Job & RunOptions;
 // write one record, with one judge. A new attempt starts only while the attempts in its record and those running stay
 // under its job's `limit`, while it could end by `until` at its deadline, and while no stop rule holds: two attempts in
 // a row in which codex itself failed, or the fallback on more than a quarter of a record's sessions tried, once four
-// have been; either stops every job. Running attempts end as they end; a record is saved after each of its attempts,
-// and a new run resumes it.
+// have been, or, among the third and fourth stands' sessions, attempts that failed or refused in more than a tenth of
+// the sessions planned; any stops every job. Running attempts end as they end; a record is saved after each of its
+// attempts, and a new run resumes it.
 export async function judgeJobs(jobs: Job[], options: RunOptions = {}): Promise<JudgingRecord[]> {
   const log = options.log ?? (() => undefined), records = new Map<string, JudgingRecord>();
   const open = jobs.map((job, index) => {
@@ -523,10 +553,10 @@ export async function judgeJobs(jobs: Job[], options: RunOptions = {}): Promise<
     if (!MODELS.includes(model) || (fallback !== null && !MODELS.includes(fallback))) throw new Refusal('the stand is judged by codex\'s gpt-6-astra and JUDGE\'s fallback only');
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     let record = records.get(dir);
-    if (!record) { record = openRecord(dir, model, fallback); delete record.stopped; records.set(dir, record); }
+    if (!record) { record = openRecord(dir, model, fallback, pinOf(stand)); delete record.stopped; records.set(dir, record); }
     if (record.model !== model || record.fallback !== fallback) throw new Refusal('two jobs that write one record must name one judge');
     const ranks = job.ranks ?? ranksOf(stand);
-    const plan = sessionPlan(stand).filter(one => ranks.includes(one.comparison.rank) && existsSync(join(bundles, one.name)));
+    const plan = plannedSessions(stand).filter(one => ranks.includes(one.rank) && existsSync(join(bundles, one.name)));
     return { index, stand, dir, bundles, model, fallback, plan, limit: job.limit ?? 120, record };
   });
   type Open = typeof open[number];
@@ -534,7 +564,7 @@ export async function judgeJobs(jobs: Job[], options: RunOptions = {}): Promise<
   const running = new Map<string, Open>(), promises = new Map<string, Promise<void>>();
   const inRecord = (job: Open) => sum(Object.values(job.record.sessions).map(one => one.attempts.length))
     + [...running.values()].filter(other => other.record === job.record).length;
-  const ready = (job: Open, one: SessionPlan) => {
+  const ready = (job: Open, one: Planned) => {
     const known = job.record.sessions[one.name];
     return !running.has(`${job.dir}/${one.name}`) && !known?.state && nextModel(known?.attempts ?? [], job.model, job.fallback) !== undefined;
   };
@@ -546,16 +576,19 @@ export async function judgeJobs(jobs: Job[], options: RunOptions = {}): Promise<
       const fallen = tried.filter(one => one.attempts.some(attempt => attempt.model !== record.model)).length;
       if (tried.length >= 4 && fallen > tried.length / 4) return 'fallback_over_a_quarter';
     }
+    const planned34 = [...new Map(open.filter(job => job.stand >= 3).flatMap(job => job.plan.map(one => [`${job.dir}/${one.name}`, { job, one }] as const))).values()];
+    const bad = planned34.filter(({ job, one }) => job.record.sessions[one.name]?.attempts.some(attempt => attempt.code !== 'ok')).length;
+    if (planned34.length && bad > planned34.length / 10) return 'failed_over_a_tenth';
     return undefined;
   };
-  const attempt = async (job: Open, one: SessionPlan) => {
+  const attempt = async (job: Open, one: Planned) => {
     const entry = job.record.sessions[one.name] ??= { name: one.name, kind: one.kind, attempts: [] };
     const now = nextModel(entry.attempts, job.model, job.fallback)!, base = join(job.dir, 'sessions'), name = `${one.name}.${entry.attempts.length + 1}`;
     let read: Read = { code: 'no_report' }, exitCode = -1, ms = 0;
     try {
       const schema = JSON.parse(readFileSync(join(job.bundles, one.name, 'schema.json'), 'utf8')) as Schema;
       ({ read, exitCode, ms } = await runAttempt({ bundle: join(job.bundles, one.name), copy: join(base, name), report: join(base, `${name}.report.md`),
-        events: join(base, `${name}.events.jsonl`), stderr: join(base, `${name}.stderr.log`), model: now, prompt: TASKS[one.kind], images: attachments,
+        events: join(base, `${name}.events.jsonl`), stderr: join(base, `${name}.stderr.log`), model: now, prompt: taskOf(job.stand, one.kind), images: attachments,
         validate: got => (got.code === 'ok' && !fitsSchema(got.value, schema) ? { code: 'schema' } : got), exec: options.exec, codex: options.codex }));
     } catch { /* recorded below as an attempt without a report */ }
     const failed = codexFailed(read);
@@ -578,7 +611,7 @@ export async function judgeJobs(jobs: Job[], options: RunOptions = {}): Promise<
       log({ event: 'judging_stopped', reason: stop });
     }
     while (!stopped && running.size < (options.parallel ?? 3)) {
-      let next: [Open, SessionPlan] | undefined;
+      let next: [Open, Planned] | undefined;
       for (const job of open) {
         const one = job.plan.find(session => ready(job, session));
         if (!one) continue;
@@ -630,7 +663,10 @@ export const readRecord = (dir: string) => readJson<JudgingRecord>(recordFile(di
 // computer.
 const sampleOf = (schema: Schema, random: () => number, name = ''): unknown => name === 'clean' ? 'yes'
   : schema.enum ? schema.enum[Math.floor(random() * schema.enum.length)]
-    : Object.fromEntries(Object.entries(schema.properties ?? {}).map(([key, value]) => [key, sampleOf(value, random, key)]));
+    : schema.type === 'integer' ? Math.floor(random() * 4)
+      : schema.type === 'array' ? Array.from({ length: Math.floor(random() * 3) }, () => sampleOf(schema.items!, random))
+        : schema.type === 'string' ? 'a stand-in'
+          : Object.fromEntries(Object.entries(schema.properties ?? {}).map(([key, value]) => [key, sampleOf(value, random, key)]));
 export function fakeCodex(seed = 1): Exec {
   let state = seed, calls = 0;
   const random = () => { state = (state * 1103515245 + 12345) % 2147483648; return state / 2147483648; };
@@ -671,7 +707,7 @@ export async function dryJudge(jobs: Job[], scratch: string, minutes: number, pa
   let sessions = 0;
   for (const [real, dir] of dirs) {
     const index = moved.findIndex(job => job.dir === dir), job = moved[index], record = records[index], stand = standOf(job.run);
-    const names = [...new Set(moved.filter(one => one.dir === dir).flatMap(one => sessionPlan(stand).filter(session => (one.ranks ?? ranksOf(stand)).includes(session.comparison.rank))
+    const names = [...new Set(moved.filter(one => one.dir === dir).flatMap(one => plannedSessions(stand).filter(session => (one.ranks ?? ranksOf(stand)).includes(session.rank))
       .map(session => session.name)))];
     const counts = judgingCounts(record, names);
     sessions += counts.sessions;
@@ -680,6 +716,11 @@ export async function dryJudge(jobs: Job[], scratch: string, minutes: number, pa
         const score = scoreStand(job.run, dir);
         writeFileSync(join(dir, 'score.md'), scoreTables(score), { mode: 0o600 });
         out.push({ stand, model: record.model, dir, ...counts, decisions: score.decisions.length, undecided: score.decisions.filter(one => one.verdict === 'undecided').length });
+      } else if (stand === 3 || stand === 4) {
+        const score = scoreStand34(job.run, dir);
+        writeFileSync(join(dir, 'score.md'), scoreTables34(score), { mode: 0o600 });
+        out.push({ stand, model: record.model, dir, ...counts, judged: score.judged, decisions: score.decisions.length,
+          undecided: score.decisions.filter(one => one.verdict === 'undecided').length });
       } else {
         const score = scoreStand2(dir);
         writeFileSync(join(dir, 'score.md'), scoreTables2(score), { mode: 0o600 });
@@ -687,6 +728,12 @@ export async function dryJudge(jobs: Job[], scratch: string, minutes: number, pa
       }
     } else {
       const first = dirs.get(judgeDirOf(job.run)), firstRecord = first ? readRecord(first) : undefined;
+      if (stand === 3 || stand === 4) {
+        const agreement = first && firstRecord ? agreementOf34(job.run, first, dir) : undefined;
+        if (agreement && firstRecord) writeFileSync(join(dir, 'agreement.md'), agreementTable34(agreement, firstRecord, record), { mode: 0o600 });
+        out.push({ stand, model: record.model, dir, ...counts, agreementRows: agreement?.rows.length ?? 0 });
+        continue;
+      }
       const agreement = first && firstRecord ? agreementOf(first, dir) : [];
       if (firstRecord) writeFileSync(join(dir, 'agreement.md'), agreementTable(agreement, firstRecord, record), { mode: 0o600 });
       out.push({ stand, model: record.model, dir, ...counts, agreementRows: agreement.length });
@@ -1238,6 +1285,996 @@ export function scoreTables2(score: Score2): string {
   return lines.join('\n') + '\n';
 }
 
+// ---- The third and fourth stands ----
+
+// Their question files as ~/simple-story-chat-runs/2026-09-28/refs-backlog/build-texts.ts wrote them beside each stand's
+// texts.json, byte for byte: the people, the scenes, and the cells with every picture each took. Their questions are
+// asked as the review of 2026-09-28 left them (REVIEWED_34 below).
+const QUESTIONS_SHA256: Record<Stand34, string> = { 3: '29919050ccaf6150e13f639fb1751dbd60a745c5fd77f81fffbe41d8613c2e8b',
+  4: 'e11fa71ea2e4669396d7717d04a05024a8bfba0db2a00d474602edb99bb92405' };
+type Who4 = 'H' | 'L' | 'B' | 'T';
+type Scene34 = 'K-pair' | 'K-trio';
+const WHO_4: Who4[] = ['H', 'L', 'B', 'T'];
+const SCENES_3: Scene34[] = ['K-pair', 'K-trio'];
+export const ID_4: Record<Who4, string> = { H: 'mara', L: 'lina', B: 'bruno', T: 'tessa' };
+export const PARTS_4 = ['overall', 'height', 'shoulders', 'chest', 'waist', 'belly', 'hips', 'arms', 'legs'] as const;
+// The parts a build score counts: all but height, which pictures without a common physical scale cannot show.
+export const SCORED_4: string[] = PARTS_4.filter(part => part !== 'height');
+export const TURNS_4 = ['TQ', 'P', 'BACK', 'SIT'] as const;
+// The third stand's eight cells of one scene and seed, and S's four, which are also judged beside their draft, W's
+// picture of the same scene and seed.
+export const CELLS_3 = ['W', 'R', 'S2-55', 'S3-55', 'S2-80', 'S3-80', 'FC', 'FV'];
+export const S_CELLS = ['S2-55', 'S3-55', 'S2-80', 'S3-80'];
+const NOT_SAID = 'not said';
+
+type QPerson = { name: string; front: { key: string; run: string }; details: string; build: Record<string, string> };
+type QScene = { count: number; people: { person: Who4; place: string; pose: string; action: string; clothes: string }[];
+  touches: { from: Who4; to: Who4; how: string }[]; heights: string };
+type QRef = { slot: number; key: string; run: string; how: string; person?: Who4; draft?: boolean };
+type QCell = { key: string; arm: string; id: string; scene?: Scene34; person?: Who4; turn?: string; seed: number; file: string; references: QRef[];
+  start?: { key: string; denoise: number } };
+type QuestionFile = { stand: string; people: Record<Who4, QPerson>; portraitClothes: string; scenes?: Record<Scene34, QScene>; cells: QCell[];
+  questions: Record<string, (Asked & { expected?: unknown })[]> };
+// A stand's question file, only as the pin has it.
+export function readQuestions(run: string): QuestionFile {
+  const stand = standOf(run);
+  if (stand !== 3 && stand !== 4) throw new Refusal('only the third and fourth stands are judged from a question file');
+  const file = join(resolve(run), 'judge-questions.json');
+  if (!existsSync(file)) throw new Refusal(`${file} is missing: build-texts.ts writes it beside the stand's texts.json`);
+  const bytes = readFileSync(file);
+  if (sha256(bytes) !== QUESTIONS_SHA256[stand]) throw new Refusal(`${file} is not the question file image-refs-judge.ts pins; nothing is judged from it`);
+  return JSON.parse(bytes.toString('utf8')) as QuestionFile;
+}
+
+// ---- The questions, as the review left them ----
+
+// Before any judging, a GPT-6 Astra review (docs/action-experiment.md#refs-judging-34) changed the question files'
+// questions: build against the front apart from build against the words, `different` and `not seen` where a build or a
+// likeness cannot be ordered or seen, height kept but not scored, a person found by place alone, touches by body part,
+// and the asks below. These are the questions as it left them, in the question files' form: the tasks ask them word for
+// word, the schemas allow their answers, and `bundles` writes them beside the record as judge/questions.json.
+export const ANATOMY_ITEMS = ['twisted torso', 'limb or finger too many or missing', 'joint bent the wrong way', 'neck or limb of impossible length', 'bodies merged'];
+export const BODY_PARTS = ['hand', 'arm', 'shoulder', 'head', 'torso', 'hip', 'leg', 'foot', 'other'];
+const ANATOMY_ASK = 'List visible anatomical impossibilities: an implausibly twisted or disconnected torso, an extra or visibly malformed/missing limb or finger, a joint bent impossibly, a neck or limb of impossible length, or merged bodies. Normal torso rotation and foreshortening are not errors. Do not count a body part hidden by another object, another person, the viewpoint or the crop as missing. Use [] when no listed error is visible.';
+const IDENTITY_ASK = 'Compare the visible face, hair, skin, apparent age and identifying marks with the front. Same means the visible facial structure and distinguishing features agree, allowing for viewpoint, expression, lighting and rendering style. Similar means there is a recognizable resemblance with visible differences. Different means the visible features clearly conflict. Not seen means there is insufficient facial detail to distinguish these outcomes. Matching hair, glasses or skin alone is insufficient for same. Do not penalize marks hidden by the view. Use missing when the target person is absent.';
+type Asked = { id: string; each?: string; replaces?: string; ask: string; answers: string | string[]; parts?: readonly string[]; values?: string[] };
+export const REVIEWED_34 = {
+  instructions: {
+    place: 'Treat place as a spatial region, not a requirement that the person perform the correct pose or action. Assign each visible person to at most one scene slot using position alone. A person standing at the bench can occupy the bench slot and then fail the sitting requirement. Do not change assignments to improve likeness scores.',
+    build: 'Judge body proportions rather than pixel size. Less and more describe a clear decrease or increase in the relevant size, width, thickness or length. Use different for a visible shape mismatch that has no single direction, including conflicting changes across dimensions. Use not seen when the relevant feature cannot be compared reliably because of concealment, resolution, clothing, pose, perspective or insufficient information in the reference. An unseen part is not evidence of a smaller or missing body part. Judge overall from the visible distribution of body mass and proportions.',
+    height: 'Height means standing stature, not apparent size in the picture or leg-to-torso proportions. Use not seen unless the pictures provide a reliable common physical scale. Do not infer stature from independently fitted portraits or reconstruct standing height from a seated figure. Judge visible leg and torso proportions in their relevant build fields.',
+    absent: 'For an absent person, use not seen throughout build_front; use not specified for unspecified word targets and not seen otherwise in build_words.',
+    view: 'Judge the sole person, or the largest central person if several are present; count everyone. If nobody is present, use identity missing, every build part not seen, turn no, clothes_kept no, whole_body no and anatomy []. Judge backdrop_kept independently.',
+    front: 'Judge the sole person, or the largest central person if several are present; count everyone. If nobody is present, use every build part not seen, or not specified where the words for the part are "not said", face_hair_skin no, clothes no, whole_body no and anatomy [].',
+  },
+  frame: [
+    { id: 'count', ask: 'How many people are in the picture? Count everyone, whole or in part.', answers: 'a number' },
+    { id: 'identity', each: 'person', ask: IDENTITY_ASK, answers: ['same', 'similar', 'different', 'not seen', 'missing'] },
+    { id: 'build_front', each: 'person and part', replaces: 'build', ask: 'For each part, compare the depicted body with the front alone, allowing for pose, perspective and clothing. Answer same, less, more, different or not seen.',
+      answers: ['same', 'less', 'more', 'different', 'not seen'], parts: PARTS_4 },
+    { id: 'build_words', each: 'person and part', replaces: 'build', ask: 'For each part, compare the depicted body with the words for that part alone. Answer as given, less, more, different, not seen or not specified. Use not specified when the part\'s words are "not said". Do not use the front to supply an unstated requirement.',
+      answers: ['as given', 'less', 'more', 'different', 'not seen', 'not specified'], parts: PARTS_4 },
+    { id: 'heights', ask: 'Are the standing people\'s relative heights as described, allowing for depth and posture? Answer yes when the ordering is clear and correct, no when it is clearly wrong, and not seen when it cannot be established. If a required standing person is absent or seated, answer not seen; record that failure under count or pose.',
+      answers: ['yes', 'no', 'not seen'] },
+    { id: 'reference_clothes', each: 'person', ask: 'Is clothing visibly identifiable as the front\'s dark grey one-piece athletic suit? Answer yes when the suit is visibly present as the person\'s main outfit; partly when a recognizable portion replaces or shows beneath the scene\'s clothes; no when no recognizable portion is visible; and not seen when the relevant clothing cannot be inspected. Matching colour, ordinary dark shoes or grey trousers alone do not establish the presence of the suit. Do not infer clothing beneath opaque garments.',
+      answers: ['no', 'partly', 'yes', 'not seen'] },
+    { id: 'scene_clothes', each: 'person', ask: 'Does the person wear the scene\'s clothes as described?', answers: ['yes', 'partly', 'no'] },
+    { id: 'pose', each: 'person', ask: 'Is the person where the scene puts them, standing or sitting and turned as it says, doing what it says?', answers: ['yes', 'partly', 'no'] },
+    { id: 'anatomy', each: 'person', ask: ANATOMY_ASK, answers: 'a list, or none', values: ANATOMY_ITEMS },
+    { id: 'touches', ask: 'List visible contacts between different people. Give one entry per contacting body part, including separate entries for two hands. Each entry has from, to, with and on. From is the person making the contact; with is their contacting body part; to is the contacted person; on is the contacted body part. Do not also list the same contact in reverse. Exclude contact with clothing worn by the same person, props and furniture. Use [] for no visible interpersonal contact.',
+      answers: 'a list, or none', values: BODY_PARTS },
+  ] as Asked[],
+  S: [
+    { id: 'draft_kept', ask: 'Beside the draft, did this picture keep its composition and poses: the framing, where each person stands or sits, their turn and gesture? Yes means all listed aspects are preserved; partly means some are preserved and some changed; no means the composition and poses are substantially replaced.',
+      answers: ['yes', 'partly', 'no'] },
+    { id: 'figure_moved', each: 'person', ask: 'Compare the person\'s visible body proportions in the edited picture and the draft, using the front as the target. Use only features that can be compared reliably across all three pictures. Answer toward the front when at least one feature moves clearly closer and none moves clearly farther; away from the front for the reverse; mixed when some move closer and others farther; as in the draft when no clear change in body proportions is visible; and not seen when no reliable comparison is possible or the person is absent from either picture. Changes in texture, sharpness, lighting or clothing alone do not establish a change in figure.',
+      answers: ['toward the front', 'as in the draft', 'away from the front', 'mixed', 'not seen'] },
+  ] as Asked[],
+  front: [
+    { id: 'count', ask: 'How many people are in the picture?', answers: 'a number' },
+    { id: 'build', ask: 'For this part of the body, is it as the words give it, less or more? Use not specified when the words for the part are "not said".',
+      answers: ['as given', 'less', 'more', 'different', 'not seen', 'not specified'], parts: PARTS_4 },
+    { id: 'face_hair_skin', ask: 'Are the face, hair, skin and marks as the words give them?', answers: ['yes', 'partly', 'no'] },
+    { id: 'clothes', ask: 'Does the person wear the portrait\'s clothes, and nothing else?', answers: ['yes', 'partly', 'no'] },
+    { id: 'whole_body', ask: 'Is the whole body in frame from head to feet, standing and facing the viewer?', answers: ['yes', 'no'] },
+    { id: 'anatomy', each: 'person', ask: ANATOMY_ASK, answers: 'a list, or none', values: ANATOMY_ITEMS },
+  ] as Asked[],
+  view: [
+    { id: 'count', ask: 'How many people are in the picture?', answers: 'a number' },
+    { id: 'identity', ask: IDENTITY_ASK, answers: ['same', 'similar', 'different', 'not seen', 'missing'] },
+    { id: 'build', ask: 'Against the front, is this part of the body the same, less (thinner, smaller, narrower, shorter) or more (heavier, larger, wider, longer)?',
+      answers: ['same', 'less', 'more', 'different', 'not seen'], parts: PARTS_4 },
+    { id: 'turn', ask: 'Does the person satisfy the complete requested pose? Check standing or sitting, body orientation and picture-relative direction, and any specified support and hand placement. Yes means all requested elements are visibly satisfied. Partly means the requested orientation is substantially present but an angle or another pose detail is wrong. No means the main orientation or standing/sitting state is wrong, or the person is absent. A frontal figure is no for a requested profile, back view or three-quarter turn. Turning the head alone does not satisfy a requested body turn.',
+      answers: ['yes', 'partly', 'no'] },
+    { id: 'clothes_kept', ask: 'Does the person wear the front\'s clothes, and nothing else?', answers: ['yes', 'partly', 'no'] },
+    { id: 'backdrop_kept', ask: 'Is the backdrop the front\'s plain grey, with no scenery? The requested grey sitting block is allowed. Compare backdrop colour and absence of scenery, not exact texture.',
+      answers: ['yes', 'no'] },
+    { id: 'whole_body', ask: 'Is the whole body in frame from head to feet?', answers: ['yes', 'no'] },
+    { id: 'anatomy', each: 'person', ask: ANATOMY_ASK, answers: 'a list, or none', values: ANATOMY_ITEMS },
+  ] as Asked[],
+};
+type Group34 = 'frame' | 'S' | 'front' | 'view';
+function asked(group: Group34, id: string): Asked {
+  const one = REVIEWED_34[group].find(question => question.id === id);
+  if (!one) throw new Error(`no question ${group}.${id}`);
+  return one;
+}
+const ask = (group: Group34, id: string) => asked(group, id).ask;
+const answersOf = (group: Group34, id: string) => asked(group, id).answers as string[];
+const choices = (group: Group34, id: string) => { const values = answersOf(group, id); return `${values.slice(0, -1).join(', ')} or ${values[values.length - 1]}`; };
+// The record beside a stand's judging: the question file's questions as the review left them, each reviewed entry over
+// the pinned one of its id (or the one it replaces), whose other fields the review kept, and the instructions it added.
+function reviewedFile(stand: Stand34, questions: QuestionFile) {
+  const groups: Group34[] = stand === 3 ? ['frame', 'S', 'front'] : ['view'];
+  return { version: 2, stand: questions.stand,
+    note: 'The questions of ../judge-questions.json as the GPT-6 Astra review of 2026-09-28 left them before any judging (judge/review/session/review.report.md in 2026-09-28/refs-stand-3). The judges are asked these, word for word; the other fields of each entry are the pinned file\'s. Synthetic.',
+    instructions: REVIEWED_34.instructions,
+    questions: Object.fromEntries(groups.map(group => [group, REVIEWED_34[group].map(one => {
+      const pinned = (questions.questions[group] ?? []).find(entry => entry.id === (one.replaces ?? one.id));
+      const { ask: _ask, answers: _answers, parts: _parts, values: _values, id: _id, ...kept } = pinned ?? { id: '', ask: '', answers: '' };
+      const { id, ...reviewed } = one;
+      return { id, ...kept, ...reviewed };
+    })])) };
+}
+
+// One comparison: the stand's own cells judged side by side, with a frame's scene and seed, the views' person and seed,
+// and S's draft.
+type Comparison34 = { group: string; rank: Rank; kind: 'fronts' | 'frames' | 'draft' | 'turns'; scene?: Scene34; seed?: number; person?: Who4; cells: string[];
+  draft?: string };
+export function comparisons34(stand: Stand34): Comparison34[] {
+  const out: Comparison34[] = [];
+  if (stand === 4) {
+    for (const seed of SEEDS_4) for (const who of WHO_4) {
+      out.push({ group: `${who}-s${seed}`, rank: 'V4', kind: 'turns', seed, person: who, cells: TURNS_4.map(turn => viewKeyOf(viewId(who, turn), seed)) });
+    }
+    return out;
+  }
+  out.push({ group: 'fronts', rank: 'F3', kind: 'fronts', cells: [FRONTS.B, FRONTS.T] });
+  for (const seed of SEEDS_3) for (const scene of SCENES_3) {
+    out.push({ group: `${scene}-s${seed}`, rank: 'K3', kind: 'frames', scene, seed, cells: CELLS_3.map(id => frameKey(id, scene, seed)) });
+    out.push({ group: `${scene}-s${seed}`, rank: 'S3', kind: 'draft', scene, seed, cells: S_CELLS.map(id => frameKey(id, scene, seed)), draft: frameKey('W', scene, seed) });
+  }
+  return out;
+}
+// The sessions in the order they run, by rank: each comparison of frames twice, against the scene and then against the
+// fronts.
+export type SessionPlan34 = { name: string; kind: Kind; rank: Rank; comparison: Comparison34 };
+export function sessionPlan34(stand: Stand34): SessionPlan34[] {
+  const sessions = ranksOf(stand).flatMap(rank => comparisons34(stand).filter(one => one.rank === rank))
+    .flatMap(comparison => (comparison.kind === 'frames' ? ['frames', 'identity'] as const : [comparison.kind]).map(kind => ({ kind, comparison })));
+  return sessions.map((one, at) => ({ name: `j${String(at + 1).padStart(2, '0')}-${one.kind}`, kind: one.kind, rank: one.comparison.rank, comparison: one.comparison }));
+}
+
+// The tasks: the reviewed questions, each in its words, with the answers it allows.
+const CLEAN_34 = 'clean: is it free of nudity and of sexual content? yes or no. If clean is no, still return every required field: 0 for a number, [] for a list, and for any other field the first value it allows from this ordered list: not seen, missing, no, different, as in the draft. These values are placeholders only; the whole picture is left out.';
+const ENDING_34 = 'Reason as long as you need. End your answer with exactly one ```json block that fits schema.json in this folder: the form in form.json with each value replaced by your answer (one of the values it lists, or a whole number or a list where it asks for one), nothing more and nothing missing.';
+const PLACEHOLDER_ORDER = ['not seen', 'missing', 'no', 'different', 'as in the draft'];
+const anatomy34 = (group: Group34) => `anatomy: ${ask(group, 'anatomy')} Name each error by the value form.json lists for it.`;
+const FIND_34 = 'first find them by the place the scene gives them, independently of any likeness or of what they do';
+const WORDS_34 = `people: each person's id, name, words, and their build part by part (parts: ${PARTS_4.join(', ')}; "${NOT_SAID}" where the words say nothing of that part)`;
+const FRONT_34 = 'standing alone, full length from the front, on a plain grey backdrop, in the portrait\'s clothes';
+const BUILD_RULE_34 = `For every build answer: ${REVIEWED_34.instructions.build} ${REVIEWED_34.instructions.height}`;
+export const TASKS_34: Record<Exclude<Kind, 'sheet'>, string> = {
+  frames: `You judge pictures drawn for one scene of a story, each against the scene's words.
+
+input.json holds:
+- scene: the scene every picture was drawn for: how the heights of its people standing compare (heights), and each person in it with their id, name, place, pose, action and clothes;
+- pictures: the pictures' file names.
+The pictures are in this folder and attached in the order input.json lists them.
+
+${REVIEWED_34.instructions.place}
+
+For each picture:
+1. ${CLEAN_34}
+2. count: ${ask('frame', 'count')} A whole number.
+3. heights: ${ask('frame', 'heights')}
+4. For each person of the scene, ${FIND_34}. Then:
+   - scene_clothes: ${ask('frame', 'scene_clothes')} ${choices('frame', 'scene_clothes')};
+   - pose: ${ask('frame', 'pose')} ${choices('frame', 'pose')};
+   - ${anatomy34('frame')}
+   If the place holds no one: scene_clothes and pose no, and anatomy [].
+5. touches: ${ask('frame', 'touches')} From and to are the ids of the scene's people (someone else for anyone else); with and on are each one of: ${BODY_PARTS.join(', ')}.
+The pictures may be compared with one another.
+
+${ENDING_34}`,
+  identity: `You compare the people in pictures with each person's front picture and words.
+
+input.json holds:
+- ${WORDS_34};
+- fronts: each person's front picture: its file name and the id of the person it shows, ${FRONT_34};
+- faces: the top of each front, cut at full resolution to show the face closer: its file name and the id of the person it shows;
+- clothes: the portrait's clothes, which every front shows;
+- scene: each person of the scene the pictures were drawn for, with their id, name, place and the clothes the scene gives them;
+- pictures: the pictures' file names.
+Everything is in this folder and attached: the pictures in the order input.json lists them, then the fronts in theirs, then the faces in theirs.
+
+${REVIEWED_34.instructions.place}
+
+${BUILD_RULE_34}
+
+For each picture:
+1. ${CLEAN_34}
+2. For each person of the scene, ${FIND_34}. Then:
+   - identity: ${ask('frame', 'identity')} ${choices('frame', 'identity')};
+   - build_front: each part in their parts, on its own: ${ask('frame', 'build_front')}
+   - build_words: each part in their parts, on its own: ${ask('frame', 'build_words')}
+   - reference_clothes: ${ask('frame', 'reference_clothes')} ${choices('frame', 'reference_clothes')}.
+   Keep all nine parts in both build_front and build_words. If the place holds no one, the person is absent: identity missing and reference_clothes no. ${REVIEWED_34.instructions.absent}
+The pictures may be compared with one another.
+
+${ENDING_34}`,
+  draft: `You compare pictures made by editing one draft picture with that draft and with each person's front picture.
+
+input.json holds:
+- draft: the draft's file name: a picture of the scene, from which every picture was made;
+- fronts: each person's front picture: its file name and the id of the person it shows, ${FRONT_34};
+- scene: each person of the scene with their id, name, place and pose;
+- pictures: the pictures' file names.
+Everything is in this folder and attached: the pictures in the order input.json lists them, then the draft, then the fronts in theirs.
+
+${REVIEWED_34.instructions.place}
+
+For each picture:
+1. ${CLEAN_34}
+2. draft_kept: ${ask('S', 'draft_kept')} ${choices('S', 'draft_kept')}.
+3. For each person of the scene, found by the place the scene gives them in the draft and in the picture: figure_moved: ${ask('S', 'figure_moved')} ${choices('S', 'figure_moved')}.
+The pictures may be compared with one another.
+
+${ENDING_34}`,
+  fronts: `You check pictures drawn to show how people look, each against the person's words.
+
+input.json holds:
+- ${WORDS_34};
+- clothes: the portrait's clothes;
+- pictures: the pictures' file names, each with the id of the person it was asked to show, ${FRONT_34}.
+The pictures are in this folder and attached in the order input.json lists them.
+
+${REVIEWED_34.instructions.front}
+
+${BUILD_RULE_34}
+
+For each picture:
+1. ${CLEAN_34}
+2. count: ${ask('front', 'count')} A whole number.
+3. build: each part in the person's parts, on its own: ${ask('front', 'build')} ${choices('front', 'build')}.
+4. face_hair_skin: ${ask('front', 'face_hair_skin')} ${choices('front', 'face_hair_skin')}.
+5. clothes: ${ask('front', 'clothes')} ${choices('front', 'clothes')}.
+6. whole_body: ${ask('front', 'whole_body')} ${choices('front', 'whole_body')}.
+7. ${anatomy34('front')}
+The pictures may be compared with one another.
+
+${ENDING_34}`,
+  turns: `You check pictures that were each made from one front picture of a person, to show the same person turned another way.
+
+input.json holds:
+- front: the front picture's file name: the person ${FRONT_34};
+- clothes: the portrait's clothes;
+- pictures: the pictures' file names, each with the pose it was asked to show (turn).
+Everything is in this folder and attached: the pictures in the order input.json lists them, then the front.
+
+${REVIEWED_34.instructions.view}
+
+${BUILD_RULE_34}
+
+For each picture:
+1. ${CLEAN_34}
+2. count: ${ask('view', 'count')} A whole number.
+3. identity: ${ask('view', 'identity')} ${choices('view', 'identity')}.
+4. build: each part (${PARTS_4.join(', ')}), on its own: ${ask('view', 'build')} ${choices('view', 'build')}.
+5. turn: ${ask('view', 'turn')} ${choices('view', 'turn')}.
+6. clothes_kept: ${ask('view', 'clothes_kept')} ${choices('view', 'clothes_kept')}.
+7. backdrop_kept: ${ask('view', 'backdrop_kept')} ${choices('view', 'backdrop_kept')}.
+8. whole_body: ${ask('view', 'whole_body')} ${choices('view', 'whole_body')}.
+9. ${anatomy34('view')}
+The pictures may be compared with one another.
+
+${ENDING_34}`,
+};
+const taskOf = (stand: StandId, kind: Kind) => (stand === 3 || stand === 4 ? TASKS_34[kind as Exclude<Kind, 'sheet'>] : TASKS[kind as Kind12]);
+
+const INT: Schema = { type: 'integer' };
+const enumOf = (group: Group34, id: string): Schema => ({ type: 'string', enum: answersOf(group, id) });
+const ANATOMY_LIST: Schema = { type: 'array', items: { type: 'string', enum: ANATOMY_ITEMS } };
+const touchesSchema = (ids: string[]): Schema => ({ type: 'array', items: strict({ from: { type: 'string', enum: [...ids, 'someone else'] },
+  to: { type: 'string', enum: [...ids, 'someone else'] }, with: { type: 'string', enum: BODY_PARTS }, on: { type: 'string', enum: BODY_PARTS } }) });
+const frames34Schema = (names: string[], ids: string[]): Schema => strict({ pictures: each(names, strict({ clean: YN, count: INT, heights: enumOf('frame', 'heights'),
+  people: each(ids, strict({ scene_clothes: enumOf('frame', 'scene_clothes'), pose: enumOf('frame', 'pose'), anatomy: ANATOMY_LIST })), touches: touchesSchema(ids) })) });
+const identity34Schema = (names: string[], ids: string[]): Schema => strict({ pictures: each(names, strict({ clean: YN,
+  people: each(ids, strict({ identity: enumOf('frame', 'identity'), build_front: each([...PARTS_4], enumOf('frame', 'build_front')),
+    build_words: each([...PARTS_4], enumOf('frame', 'build_words')), reference_clothes: enumOf('frame', 'reference_clothes') })) })) });
+const draftSchema = (names: string[], ids: string[]): Schema => strict({ pictures: each(names, strict({ clean: YN, draft_kept: enumOf('S', 'draft_kept'),
+  people: each(ids, strict({ figure_moved: enumOf('S', 'figure_moved') })) })) });
+const fronts34Schema = (names: string[]): Schema => strict({ pictures: each(names, strict({ clean: YN, count: INT, build: each([...PARTS_4], enumOf('front', 'build')),
+  face_hair_skin: enumOf('front', 'face_hair_skin'), clothes: enumOf('front', 'clothes'), whole_body: enumOf('front', 'whole_body'), anatomy: ANATOMY_LIST })) });
+const turns34Schema = (names: string[]): Schema => strict({ pictures: each(names, strict({ clean: YN, count: INT, identity: enumOf('view', 'identity'),
+  build: each([...PARTS_4], enumOf('view', 'build')), turn: enumOf('view', 'turn'), clothes_kept: enumOf('view', 'clothes_kept'), backdrop_kept: enumOf('view', 'backdrop_kept'),
+  whole_body: enumOf('view', 'whole_body'), anatomy: ANATOMY_LIST })) });
+// The answers' form: the schema's keys, each value the choices it allows, a whole number or a list.
+const formOf34 = (schema: Schema): unknown => schema.enum ? schema.enum.join(' | ')
+  : schema.type === 'integer' ? 'a whole number'
+    : schema.type === 'array' ? `a list of ${schema.items?.enum ? `any of: ${schema.items.enum.join(' | ')}` : JSON.stringify(formOf34(schema.items!))}; [] for none`
+      : schema.type === 'string' ? 'a few words'
+        : Object.fromEntries(Object.entries(schema.properties ?? {}).map(([name, value]) => [name, formOf34(value)]));
+// The answers a picture that is not clean gets, by the task's fixed order; none if a field allows none of it.
+function placeholderOf(schema: Schema, name = ''): unknown {
+  if (name === 'clean') return 'no';
+  if (schema.enum) return PLACEHOLDER_ORDER.find(value => schema.enum!.includes(value));
+  if (schema.type === 'integer') return 0;
+  if (schema.type === 'array') return [];
+  return Object.fromEntries(Object.entries(schema.properties ?? {}).map(([key, value]) => [key, placeholderOf(value, key)]));
+}
+// A bundle's form, schema and placeholder answers checked together, as the review asked: the form has the schema's
+// keys and lists each field's values, and the placeholders for every picture fit the schema.
+function formFits(form: unknown, schema: Schema): boolean {
+  if (schema.enum) return form === schema.enum.join(' | ');
+  if (schema.type === 'integer' || schema.type === 'array' || schema.type === 'string') return typeof form === 'string';
+  const properties = schema.properties ?? {}, record = form as Record<string, unknown>;
+  return !!form && typeof form === 'object' && Object.keys(record).join() === Object.keys(properties).join()
+    && Object.entries(properties).every(([key, value]) => formFits(record[key], value));
+}
+const bundleFits = (schema: Schema, form: unknown) => formFits(form, schema) && fitsSchema(placeholderOf(schema), schema);
+// What the third and fourth stands' questions are pinned to, as judgePins is for the first two.
+export function judgePins34(): Record<string, string> {
+  const names = ['pic-0.png'], ids = ['mara', 'lina'];
+  const schemas = { frames: frames34Schema(names, ids), identity: identity34Schema(names, ids), draft: draftSchema(names, ids), fronts: fronts34Schema(names),
+    turns: turns34Schema(names) };
+  return { effort: JUDGE.effort, texts3: TEXTS_SHA256_3, texts4: TEXTS_SHA256_4, questions3: QUESTIONS_SHA256[3], questions4: QUESTIONS_SHA256[4],
+    reviewed: sha256(JSON.stringify(REVIEWED_34)),
+    ...Object.fromEntries(Object.entries(TASKS_34).map(([kind, text]) => [`task.${kind}`, sha256(text)])),
+    ...Object.fromEntries(Object.entries(schemas).map(([kind, schema]) => [`schema.${kind}`, sha256(JSON.stringify(schema))])) };
+}
+export const questionsPin34 = () => sha256(JSON.stringify(judgePins34()));
+const pinOf = (stand: StandId) => (stand === 3 || stand === 4 ? questionsPin34() : questionsPin());
+
+// A picture of any run the stands drew from, by its run as the question file names it (under the runs' root) and its
+// key: the very file that run's cells.json records, checked against the sha256 and size recorded there, without any
+// text chunk.
+function runPictures(root: string) {
+  const runs = new Map<string, Record<string, StandCell>>(), seen = new Map<string, { bytes: Uint8Array; sha256: string }>();
+  return (run: string, key: string) => {
+    const id = `${run}/${key}`;
+    if (seen.has(id)) return seen.get(id);
+    let cells = runs.get(run);
+    if (!cells) { cells = (readJson<{ cells: Record<string, StandCell> }>(join(root, run, 'cells.json')) ?? { cells: {} }).cells; runs.set(run, cells); }
+    const cell = cells[key];
+    if (cell?.status !== 'drawn' || !cell.file || !cell.sha256) return undefined;
+    const path = resolve(root, run, cell.file);
+    if (!existsSync(path)) return undefined;
+    const bytes = readFileSync(path), size = pngSize(bytes);
+    if (sha256(bytes) !== cell.sha256 || size.width !== cell.width || size.height !== cell.height) throw new Refusal(`${key} in ${run} is not the file its cells.json recorded; no bundle is built from it`);
+    const file = { bytes: stripPngMetadata(bytes), sha256: cell.sha256 };
+    seen.set(id, file);
+    return file;
+  };
+}
+
+// FC's face: the top of a front as the stand's ImageCrop cut it (CROP in image-refs-test.ts), shown beside the fronts
+// in the identity sessions to show each face closer.
+function faceOf(front: { bytes: Uint8Array }) {
+  const image = decodePng(front.bytes), { x, y, width, height } = GRAPH_CROP;
+  if (!image || image.width < x + width || image.height < y + height || (image.channels !== 3 && image.channels !== 4)) return undefined;
+  const row = image.width * image.channels, pixels = new Uint8Array(width * height * image.channels);
+  for (let at = 0; at < height; at++) pixels.set(image.pixels.subarray((y + at) * row + x * image.channels, (y + at) * row + (x + width) * image.channels), at * width * image.channels);
+  const bytes = encodePng(width, height, pixels, image.channels);
+  return { bytes, sha256: sha256(bytes) };
+}
+
+// The third or fourth stand's bundles, written once. First every cell of the question file against the stand's
+// cells.json: drawn from the file it names, and every picture it took, read from that picture's own run, the one whose
+// sha256 the cell recorded in that slot, its start as well. A cell the stand did not draw leaves its picture out; a
+// session left with no picture, or without a front, face or draft it shows, is not built. Each bundle's form, schema
+// and placeholder answers are checked together, and the reviewed questions are written beside the record.
+function writeBundles34(run: string, stand: Stand34, log: (event: object) => void) {
+  const questions = readQuestions(run), dir = judgeDirOf(run), root = resolve(run, '..', '..');
+  if (resolve(root, questions.stand) !== resolve(run)) throw new Refusal(`${run} is not where its question file puts the stand under the runs' root`);
+  const picture = runPictures(root), cells = (readJson<{ cells: Record<string, StandCell> }>(join(resolve(run), 'cells.json')) ?? { cells: {} }).cells;
+  const byKey = new Map(questions.cells.map(one => [one.key, one]));
+  let checked = 0;
+  for (const one of questions.cells) {
+    const cell = cells[one.key];
+    if (cell?.status !== 'drawn') continue;
+    if (cell.file !== one.file || !picture(questions.stand, one.key)) throw new Refusal(`${one.key} is not drawn where the question file says`);
+    const took = cell.references ?? [];
+    if (took.length !== one.references.length) throw new Refusal(`${one.key} took ${took.length} pictures where the question file names ${one.references.length}`);
+    for (const ref of one.references) {
+      if (picture(ref.run, ref.key)?.sha256 !== took[ref.slot - 1]) throw new Refusal(`${one.key}'s picture ${ref.slot} (${ref.key}) is not the one it was drawn with`);
+      checked++;
+    }
+    if ((one.start ? picture(questions.stand, one.start.key)?.sha256 : undefined) !== cell.start) throw new Refusal(`${one.key}'s start is not the picture it was drawn from`);
+    if (one.start) checked++;
+  }
+  const counts = { sessions: 0, built: 0, kept: 0, skipped: 0, missing: [] as string[], checked };
+  for (const sub of ['bundles', 'keys']) mkdirSync(join(dir, sub), { recursive: true, mode: 0o700 });
+  writeJson(join(dir, 'questions.json'), reviewedFile(stand, questions));
+  const clothes = questions.portraitClothes, nameOf = (who: Who4) => questions.people[who].name;
+  const words = (who: Who4) => ({ id: ID_4[who], name: nameOf(who), words: questions.people[who].details, parts: questions.people[who].build });
+  for (const session of sessionPlan34(stand)) {
+    counts.sessions++;
+    const one = session.comparison;
+    if (existsSync(join(dir, 'bundles', session.name))) { counts.kept++; continue; }
+    const missing: string[] = [];
+    const take = (from: string, key: string, prefix: 'pic' | 'ref') => {
+      const file = picture(from, key);
+      if (!file) { missing.push(key); return undefined; }
+      return { name: `${prefix}-${file.sha256.slice(0, 8)}.png`, key, ...file };
+    };
+    const pictures = one.cells.flatMap(key => { const file = take(questions.stand, key, 'pic'); return file ? [{ ...file, cell: byKey.get(key)! }] : []; })
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const scene = one.scene ? questions.scenes![one.scene] : undefined;
+    const cast: Who4[] = scene ? scene.people.map(person => person.person) : one.kind === 'fronts' ? one.cells.map(key => byKey.get(key)!.person!) : [one.person!];
+    const fronts = session.kind === 'identity' || session.kind === 'draft' || session.kind === 'turns' ? cast.flatMap(who => {
+      const file = take(questions.people[who].front.run, questions.people[who].front.key, 'ref');
+      return file ? [{ ...file, person: who }] : [];
+    }) : [];
+    const faces = session.kind === 'identity' ? fronts.flatMap(front => {
+      const face = faceOf(front);
+      return face ? [{ ...face, name: `ref-${face.sha256.slice(0, 8)}.png`, key: `crop:${front.key}`, person: front.person }] : [];
+    }) : [];
+    const draft = session.kind === 'draft' ? take(questions.stand, one.draft!, 'ref') : undefined;
+    const shown = [...pictures, ...(draft ? [draft] : []), ...fronts, ...faces];
+    counts.missing.push(...missing.filter(key => !counts.missing.includes(key)));
+    const complete = (!['identity', 'draft', 'turns'].includes(session.kind) || fronts.length === cast.length) && (session.kind !== 'draft' || !!draft)
+      && (session.kind !== 'identity' || faces.length === cast.length);
+    if (!pictures.length || !complete || new Set(shown.map(file => file.name)).size !== shown.length) {
+      counts.skipped++;
+      log({ event: 'bundle_skipped', session: session.name, missing: missing.length });
+      continue;
+    }
+    const ids = cast.map(who => ID_4[who]), names = pictures.map(file => file.name), list = names.map(name => ({ name }));
+    const shownFronts = fronts.map(file => ({ name: file.name, person: ID_4[file.person] }));
+    let input: object, schema: Schema;
+    if (session.kind === 'frames') {
+      input = { scene: { heights: scene!.heights.replace(/\b([HLBT])\b/g, (_, who: Who4) => nameOf(who)), people: scene!.people.map(person => ({ id: ID_4[person.person],
+        name: nameOf(person.person), place: person.place, pose: person.pose, action: person.action, clothes: person.clothes })) }, pictures: list };
+      schema = frames34Schema(names, ids);
+    } else if (session.kind === 'identity') {
+      input = { people: cast.map(words), fronts: shownFronts, faces: faces.map(file => ({ name: file.name, person: ID_4[file.person] })), clothes,
+        scene: { people: scene!.people.map(person => ({ id: ID_4[person.person], name: nameOf(person.person), place: person.place, clothes: person.clothes })) }, pictures: list };
+      schema = identity34Schema(names, ids);
+    } else if (session.kind === 'draft') {
+      input = { draft: draft!.name, fronts: shownFronts, scene: { people: scene!.people.map(person => ({ id: ID_4[person.person], name: nameOf(person.person),
+        place: person.place, pose: person.pose })) }, pictures: list };
+      schema = draftSchema(names, ids);
+    } else if (session.kind === 'fronts') {
+      input = { people: cast.map(words), clothes, pictures: pictures.map(file => ({ name: file.name, person: ID_4[file.cell.person!] })) };
+      schema = fronts34Schema(names);
+    } else {
+      input = { front: fronts[0].name, clothes, pictures: pictures.map(file => ({ name: file.name, turn: file.cell.turn! })) };
+      schema = turns34Schema(names);
+    }
+    const form = formOf34(schema);
+    if (!bundleFits(schema, form)) throw new Refusal(`${session.name}'s form, schema and placeholder answers do not fit together`);
+    const bundle = join(dir, 'bundles', session.name), task = taskOf(stand, session.kind), inputText = JSON.stringify(input, null, 2);
+    mkdirSync(bundle, { recursive: true, mode: 0o700 });
+    writeFileSync(join(bundle, 'TASK.md'), task + '\n', { mode: 0o600 });
+    writeFileSync(join(bundle, 'input.json'), inputText + '\n', { mode: 0o600 });
+    writeJson(join(bundle, 'schema.json'), schema);
+    writeJson(join(bundle, 'form.json'), form);
+    for (const file of shown) writeFileSync(join(bundle, file.name), file.bytes, { mode: 0o600 });
+    const key: SessionKey = { name: session.name, kind: session.kind, group: one.group, rank: one.rank, ...(one.scene ? { scene: one.scene } : {}),
+      ...(one.seed === undefined ? {} : { seed: one.seed }), task: sha256(task), schema: sha256(JSON.stringify(schema)), input: sha256(inputText),
+      pictures: pictures.map(file => ({ name: file.name, key: file.key, sha256: file.sha256 })),
+      references: [...(draft ? [{ name: draft.name, key: draft.key, sha256: draft.sha256, compare: false }] : []),
+        ...[...fronts, ...faces].map(file => ({ name: file.name, key: file.key, sha256: file.sha256, compare: true }))], missing };
+    writeJson(keyOf(dir, session.name), key);
+    counts.built++;
+    log({ event: 'bundle_written', session: session.name, pictures: pictures.length, references: shown.length - pictures.length, missing: missing.length });
+  }
+  return counts;
+}
+
+// ---- The third and fourth stands' answers ----
+
+type Touch34 = { from: string; to: string; with: string; on: string };
+type Frame34 = { count: number; heights: string; people: Record<string, { scene_clothes: string; pose: string; anatomy: string[] }>; touches: Touch34[] };
+type Identity34 = { people: Record<string, { identity: string; build_front: Record<string, string>; build_words: Record<string, string>; reference_clothes: string }> };
+type Draft34 = { draft_kept: string; people: Record<string, { figure_moved: string }> };
+type Front34 = { count: number; build: Record<string, string>; face_hair_skin: string; clothes: string; whole_body: string; anatomy: string[] };
+type Turn34 = { count: number; identity: string; build: Record<string, string>; turn: string; clothes_kept: string; backdrop_kept: string; whole_body: string;
+  anatomy: string[] };
+type Facts34 = { frames: Map<string, Frame34>; identity: Map<string, Identity34>; draft: Map<string, Draft34>; fronts: Map<string, Front34>;
+  turns: Map<string, Turn34>; excluded: Map<string, string[]>; sessions: { answered: number; planned: number } };
+// One judging pass's answers, each picture under its cell's key, the keys read from the judge of record's judge/keys.
+// A picture any session of this pass calls not clean is left out of everything this pass scores, with the sessions
+// that called it so.
+function readFacts34(dir: string, keys: string): Facts34 {
+  const facts: Facts34 = { frames: new Map(), identity: new Map(), draft: new Map(), fronts: new Map(), turns: new Map(), excluded: new Map(),
+    sessions: { answered: 0, planned: 0 } };
+  const read: { key: SessionKey; pictures: Record<string, Ans> }[] = [];
+  for (const file of existsSync(keys) ? readdirSync(keys).filter(name => name.endsWith('.json')).sort() : []) {
+    const key = JSON.parse(readFileSync(join(keys, file), 'utf8')) as SessionKey;
+    facts.sessions.planned++;
+    const answers = readJson<Ans>(answerOf(dir, key.name));
+    if (!answers) continue;
+    facts.sessions.answered++;
+    const pictures = (answers.pictures ?? {}) as Record<string, Ans>;
+    read.push({ key, pictures });
+    for (const one of key.pictures) if (pictures[one.name]?.clean !== 'yes') facts.excluded.set(one.key, [...(facts.excluded.get(one.key) ?? []), key.name]);
+  }
+  for (const { key, pictures } of read) {
+    for (const one of key.pictures) {
+      if (facts.excluded.has(one.key)) continue;
+      const got = pictures[one.name] as unknown;
+      if (key.kind === 'frames') facts.frames.set(one.key, got as Frame34);
+      else if (key.kind === 'identity') facts.identity.set(one.key, got as Identity34);
+      else if (key.kind === 'draft') facts.draft.set(one.key, got as Draft34);
+      else if (key.kind === 'fronts') facts.fronts.set(one.key, got as Front34);
+      else facts.turns.set(one.key, got as Turn34);
+    }
+  }
+  return facts;
+}
+const count34 = (values: (string | undefined)[], value: string) => values.filter(one => one === value).length;
+const tally = (values: (string | undefined)[], choices: readonly string[]) => Object.fromEntries(choices.map(choice => [choice, count34(values, choice)]));
+const counts34 = (value: Record<string, number>) => Object.values(value).join('/');
+// The contact the scene's touch is read as, by the review: one entry from Tessa's hand to Bruno's shoulder. Every other
+// entry is an extra, a second hand included.
+const REQUIRED_TOUCHES: Record<Scene34, Touch34[]> = { 'K-pair': [], 'K-trio': [{ from: 'tessa', to: 'bruno', with: 'hand', on: 'shoulder' }] };
+const touchKey = (one: Touch34) => `${one.from}>${one.to}:${one.with}@${one.on}`;
+// A person's word targets: the scored parts their words say something of.
+const targetsOf = (questions: QuestionFile, id: string) => {
+  const who = WHO_4.find(one => ID_4[one] === id)!;
+  return SCORED_4.filter(part => questions.people[who].build[part] !== NOT_SAID);
+};
+
+// One frame of the third stand as the tables and rules read it: each person's answers, and the frame's count, heights
+// and contacts against the scene's.
+type Person3 = { identity?: string; front?: Record<string, string>; words?: Record<string, string>; suit?: string; sceneClothes?: string; pose?: string;
+  anatomy?: number; moved?: string };
+type Cell3 = { key: string; id: string; scene: Scene34; seed: number; judged: boolean; drafted: boolean; count?: number; countRight?: boolean; heights?: string;
+  touchFound?: boolean; touchExtras?: number; draftKept?: string; people: Record<string, Person3> };
+function cell3(facts: Facts34, questions: QuestionFile, id: string, scene: Scene34, seed: number): Cell3 {
+  const key = frameKey(id, scene, seed), frame = facts.frames.get(key), identity = facts.identity.get(key), draft = facts.draft.get(key);
+  const out: Cell3 = { key, id, scene, seed, judged: !!frame && !!identity, drafted: !!draft, people: {} };
+  if (frame) {
+    const listed = frame.touches.map(touchKey), required = REQUIRED_TOUCHES[scene].map(touchKey);
+    const found = required.every(one => listed.includes(one));
+    Object.assign(out, { count: frame.count, countRight: frame.count === questions.scenes![scene].count, heights: frame.heights,
+      touchFound: required.length ? found : undefined, touchExtras: listed.length - (required.length && found ? required.length : 0) });
+  }
+  if (draft) out.draftKept = draft.draft_kept;
+  for (const person of questions.scenes![scene].people) {
+    const who = ID_4[person.person], seen = frame?.people[who], like = identity?.people[who], moved = draft?.people[who];
+    const one: Person3 = {};
+    if (seen) Object.assign(one, { sceneClothes: seen.scene_clothes, pose: seen.pose, anatomy: seen.anatomy.length ? 1 : 0 });
+    if (like) Object.assign(one, { identity: like.identity, front: like.build_front, words: like.build_words, suit: like.reference_clothes });
+    if (moved) one.moved = moved.figure_moved;
+    out.people[who] = one;
+  }
+  return out;
+}
+
+export type Verdict34 = 'yes' | 'no' | 'undecided';
+export type Decision34 = { question: string; verdict: Verdict34; why: string; winner?: string };
+// X against Y on a measure over the seeds both were judged at: the sums, and the seeds at which X is ahead, tied or
+// behind, of the seeds required.
+type Pairwise = { required: number; seeds: number; ahead: number; tied: number; behind: number; x: number; y: number };
+function pairwise(x: number[], y: number[], required: number): Pairwise {
+  const pairs = x.map((value, index) => [value, y[index]]).filter(([a, b]) => Number.isFinite(a) && Number.isFinite(b));
+  const ahead = pairs.filter(([a, b]) => a > b).length, behind = pairs.filter(([a, b]) => a < b).length;
+  return { required, seeds: pairs.length, ahead, tied: pairs.length - ahead - behind, behind, x: sum(pairs.map(([a]) => a)), y: sum(pairs.map(([, b]) => b)) };
+}
+// X is above Y when its sum is higher and it is ahead at more seeds than it is behind; below when the reverse holds;
+// otherwise neither, which does not mean equal. Not below in the stricter sense of rules 2 and 4: a sum at least Y's,
+// and at least as many seeds ahead as behind.
+const above = (one: Pairwise) => one.x > one.y && one.ahead > one.behind;
+const below = (one: Pairwise) => one.x < one.y && one.behind > one.ahead;
+const atLeast = (one: Pairwise) => one.x >= one.y && one.ahead >= one.behind;
+const pairReading = (one: Pairwise) => (above(one) ? 'above' : below(one) ? 'below' : 'neither');
+const pairText = (one: Pairwise) => `${one.x} against ${one.y}, ahead at ${one.ahead}, tied at ${one.tied}, behind at ${one.behind}, `
+  + `${one.seeds} of ${one.required} seeds available: ${pairReading(one)}`;
+const MOVED_34 = ['toward the front', 'as in the draft', 'away from the front', 'mixed', 'not seen'];
+const IDENTITY_VALUES = ['same', 'similar', 'different', 'not seen', 'missing'];
+const FRONT_VALUES = ['same', 'less', 'more', 'different', 'not seen'];
+const WORDS_VALUES = ['as given', 'less', 'more', 'different', 'not seen', 'not specified'];
+const shortOf = (scene: Scene34) => (scene === 'K-pair' ? 'pair' : 'trio');
+
+// The third stand's tallies per arm, scene and person, the rules' readings, the cleanup, and B's and T's fronts.
+function score3(questions: QuestionFile, facts: Facts34) {
+  const cells = SCENES_3.flatMap(scene => CELLS_3.flatMap(id => SEEDS_3.map(seed => cell3(facts, questions, id, scene, seed))));
+  const row = (id: string, scene: Scene34) => SEEDS_3.map(seed => cells.find(one => one.id === id && one.scene === scene && one.seed === seed)!);
+  const idsOf = (scene: Scene34) => questions.scenes![scene].people.map(person => ID_4[person.person]);
+  // Per frame, over the scene's people: identity matches, the people whose identity is `same`; builds, the scored parts
+  // whose build_front is `same`; words, the word targets `as given`. NaN where the frame was not judged.
+  const identityOf = (cell: Cell3) => (cell.judged ? idsOf(cell.scene).filter(who => cell.people[who].identity === 'same').length : NaN);
+  const buildOf = (cell: Cell3) => (cell.judged ? sum(idsOf(cell.scene).map(who => SCORED_4.filter(part => cell.people[who].front?.[part] === 'same').length)) : NaN);
+  const wordsOf = (cell: Cell3) => (cell.judged ? sum(idsOf(cell.scene).map(who => targetsOf(questions, who).filter(part => cell.people[who].words?.[part] === 'as given').length)) : NaN);
+  const suitOf = (cell: Cell3) => (cell.judged ? idsOf(cell.scene).filter(who => ['yes', 'partly'].includes(cell.people[who].suit ?? '')).length : NaN);
+  const clothesOf = (cell: Cell3) => (cell.judged ? idsOf(cell.scene).filter(who => cell.people[who].sceneClothes === 'yes').length : NaN);
+  const anatomyOf = (cell: Cell3) => (cell.judged ? sum(idsOf(cell.scene).map(who => cell.people[who].anatomy)) : NaN);
+  const arms = SCENES_3.flatMap(scene => CELLS_3.map(id => {
+    const all = row(id, scene), got = all.filter(cell => cell.judged), drafted = all.filter(cell => cell.drafted), ids = idsOf(scene);
+    const frontValues = got.flatMap(cell => ids.flatMap(who => SCORED_4.map(part => cell.people[who].front?.[part])));
+    const wordValues = got.flatMap(cell => ids.flatMap(who => targetsOf(questions, who).map(part => cell.people[who].words?.[part])));
+    const front = tally(frontValues, FRONT_VALUES), words = tally(wordValues, WORDS_VALUES);
+    const frontAssessable = frontValues.length - front['not seen'], wordsAssessable = wordValues.length - words['not seen'] - words['not specified'];
+    return { id, scene, judged: got.length, drafted: drafted.length, countRight: got.filter(cell => cell.countRight).length,
+      heights: tally(got.map(cell => cell.heights), answersOf('frame', 'heights')), touchFound: got.filter(cell => cell.touchFound).length,
+      touchExtras: sum(got.map(cell => cell.touchExtras)), identity: sum(got.map(identityOf)), identityOf: got.length * ids.length,
+      build: front.same, buildSlots: frontValues.length, front, frontAssessable, frontFraction: frontAssessable ? front.same / frontAssessable : undefined,
+      words: words['as given'], wordTargets: wordValues.length, wordCounts: words, wordsAssessable, wordsFraction: wordsAssessable ? words['as given'] / wordsAssessable : undefined,
+      suit: sum(got.map(suitOf)), sceneClothes: sum(got.map(clothesOf)), pose: sum(got.map(cell => ids.filter(who => cell.people[who].pose === 'yes').length)),
+      anatomy: got.filter(cell => ids.some(who => cell.people[who].anatomy)).length, draftKept: tally(drafted.map(cell => cell.draftKept), answersOf('S', 'draft_kept')),
+      moved: tally(drafted.flatMap(cell => ids.map(who => cell.people[who].moved)), MOVED_34),
+      people: Object.fromEntries(ids.map(who => {
+        const targets = targetsOf(questions, who);
+        return [who, { identity: tally(got.map(cell => cell.people[who].identity), IDENTITY_VALUES),
+          front: tally(got.flatMap(cell => SCORED_4.map(part => cell.people[who].front?.[part])), FRONT_VALUES),
+          words: tally(got.flatMap(cell => targets.map(part => cell.people[who].words?.[part])), WORDS_VALUES), targets: targets.length * got.length,
+          height: { front: tally(got.map(cell => cell.people[who].front?.height), FRONT_VALUES), words: tally(got.map(cell => cell.people[who].words?.height), WORDS_VALUES) },
+          suit: tally(got.map(cell => cell.people[who].suit), answersOf('frame', 'reference_clothes')),
+          sceneClothes: tally(got.map(cell => cell.people[who].sceneClothes), answersOf('frame', 'scene_clothes')),
+          pose: tally(got.map(cell => cell.people[who].pose), answersOf('frame', 'pose')), anatomy: sum(got.map(cell => cell.people[who].anatomy)),
+          moved: tally(drafted.map(cell => cell.people[who].moved), MOVED_34),
+          parts: Object.fromEntries(SCORED_4.map(part => [part, tally(got.map(cell => cell.people[who].front?.[part]), FRONT_VALUES)])) }];
+      })),
+      perSeed: all.map(cell => ({ seed: cell.seed, identity: identityOf(cell), build: buildOf(cell), words: wordsOf(cell), suit: suitOf(cell), sceneClothes: clothesOf(cell),
+        anatomy: anatomyOf(cell) })) };
+  }));
+  type Arm3 = typeof arms[number];
+  const armOf = (id: string, scene: Scene34) => arms.find(one => one.id === id && one.scene === scene)!;
+  const compare = (x: string, y: string, scene: Scene34, measure: 'identity' | 'build' | 'words') => pairwise(armOf(x, scene).perSeed.map(one => one[measure]),
+    armOf(y, scene).perSeed.map(one => one[measure]), SEEDS_3.length);
+  const matrices = SCENES_3.flatMap(scene => (['identity', 'build'] as const).map(measure => ({ scene, measure,
+    rows: CELLS_3.map(x => ({ x, against: CELLS_3.map(y => (x === y ? undefined : compare(x, y, scene, measure))) })) })));
+  const pairs = SCENES_3.flatMap(scene => CELLS_3.flatMap(x => ['R', 'W'].filter(y => y !== x).map(y => ({ x, y, scene, identity: compare(x, y, scene, 'identity'),
+    build: compare(x, y, scene, 'build'), words: compare(x, y, scene, 'words') }))));
+  const decisions: Decision34[] = [];
+  const decide = (question: string, needs: Cell3[], verdict: () => [boolean, string, string?], drafted: Cell3[] = []) => {
+    const gap = [...needs.filter(cell => !cell.judged), ...drafted.filter(cell => !cell.drafted)].map(cell => cell.key);
+    if (gap.length) { decisions.push({ question, verdict: 'undecided', why: `not judged: ${[...new Set(gap)].join(', ')}` }); return; }
+    const [yes, why, winner] = verdict();
+    decisions.push({ question, verdict: yes ? 'yes' : 'no', why, ...(winner ? { winner } : {}) });
+  };
+  const measureName = { identity: 'confirmed identity matches', build: 'confirmed build matches' } as const;
+  // 1. The best arm on confirmed identity matches and on confirmed build matches, in each scene: the one arm above every
+  // other arm, or no unique best arm.
+  for (const scene of SCENES_3) {
+    for (const measure of ['identity', 'build'] as const) {
+      const winner = CELLS_3.find(x => CELLS_3.every(y => x === y || above(compare(x, y, scene, measure))));
+      const totals = CELLS_3.map(id => `${id} ${armOf(id, scene)[measure]} of ${measure === 'identity' ? armOf(id, scene).identityOf : armOf(id, scene).buildSlots}`).join(', ');
+      decide(`${scene}: the best arm on ${measureName[measure]}, above every other arm`, CELLS_3.flatMap(id => row(id, scene)), () => [!!winner,
+        `${winner ? `${winner} is above every other arm` : 'no unique best arm (the pairwise matrix is in the tables)'}; totals ${totals}`, winner]);
+    }
+  }
+  // 2. S's edit reshapes the figures toward their references at a level: at least 16 of the 30 figure_moved answers
+  // toward the front, and in each scene S2's confirmed builds at least W's with at least as many seeds ahead as behind.
+  for (const level of ['55', '80']) {
+    const id = `S2-${level}`;
+    decide(`S2-${level}: the edit reshapes the figures toward their fronts`, SCENES_3.flatMap(scene => [...row(id, scene), ...row('W', scene)]), () => {
+      const moved = SCENES_3.flatMap(scene => idsOf(scene).flatMap(who => row(id, scene).map(cell => cell.people[who].moved)));
+      const toward = count34(moved, 'toward the front');
+      const builds = SCENES_3.map(scene => ({ scene, build: compare(id, 'W', scene, 'build'), identity: compare(id, 'W', scene, 'identity') }));
+      return [toward >= 16 && builds.every(one => atLeast(one.build)), `figure_moved over both scenes ${counts34(tally(moved, MOVED_34))} (${MOVED_34.join('/')}), `
+        + `${toward} of ${moved.length} toward the front; `
+        + builds.map(one => `${shortOf(one.scene)} builds against W ${pairText(one.build)}; identity matches against W ${pairText(one.identity)}; draft kept `
+          + `${counts34(armOf(id, one.scene).draftKept)}`).join('; ')];
+    }, SCENES_3.flatMap(scene => row(id, scene)));
+  }
+  // 3. What the cleanup changes: S3 against S2 at each level, scene and seed, with no rule deciding. figure_moved sets
+  // each picture against W, not S3 against S2.
+  const cleanup = ['55', '80'].flatMap(level => SCENES_3.map(scene => {
+    const s2 = row(`S2-${level}`, scene), s3 = row(`S3-${level}`, scene);
+    const minus = (measure: (cell: Cell3) => number) => s3.map((cell, at) => measure(cell) - measure(s2[at]));
+    return { level, scene, identity: minus(identityOf), build: minus(buildOf), words: minus(wordsOf), suit: minus(suitOf), sceneClothes: minus(clothesOf),
+      anatomy: minus(anatomyOf), moved: [armOf(`S2-${level}`, scene).moved, armOf(`S3-${level}`, scene).moved],
+      draftKept: [armOf(`S2-${level}`, scene).draftKept, armOf(`S3-${level}`, scene).draftKept] };
+  }));
+  // 4. FC and FV against R, the bot's frame: in each scene, above R on identity matches or on builds, and on each at
+  // least R's total with at least as many seeds ahead as behind.
+  for (const id of ['FC', 'FV']) {
+    decide(`${id} is better than R on the measured identity and build outcomes`, SCENES_3.flatMap(scene => [...row(id, scene), ...row('R', scene)]), () => {
+      const got = SCENES_3.map(scene => ({ scene, identity: compare(id, 'R', scene, 'identity'), build: compare(id, 'R', scene, 'build') }));
+      return [got.every(one => (above(one.identity) || above(one.build)) && atLeast(one.identity) && atLeast(one.build)),
+        got.map(one => `${shortOf(one.scene)} identity matches ${pairText(one.identity)}; builds ${pairText(one.build)}`).join('; ')];
+    });
+  }
+  const fronts = (['B', 'T'] as Who4[]).map(who => {
+    const got = facts.fronts.get(FRONTS[who]);
+    return { person: ID_4[who], judged: !!got, count: got?.count, build: got?.build, parts: got ? tally(PARTS_4.map(part => got.build[part]), answersOf('front', 'build')) : undefined,
+      faceHairSkin: got?.face_hair_skin, clothes: got?.clothes, wholeBody: got?.whole_body, anatomy: got?.anatomy };
+  });
+  const scoreArm = (one: Arm3) => one;
+  return { arms: arms.map(scoreArm), matrices, pairs, cleanup, fronts, decisions, cells };
+}
+
+// The fourth stand's tallies per view over the four seeds and per picture, and whether each turn turns as asked: yes at
+// three of the four seeds or more, and no at none, for every person.
+function score4(facts: Facts34) {
+  const views = WHO_4.flatMap(who => TURNS_4.map(turn => {
+    const id = viewId(who, turn), got = SEEDS_4.map(seed => ({ seed, facts: facts.turns.get(viewKeyOf(id, seed)) }));
+    const judged = got.flatMap(one => (one.facts ? [one.facts] : []));
+    const scored = judged.flatMap(one => SCORED_4.map(part => one.build[part]));
+    return { person: ID_4[who], turn, id, judged: judged.length, turned: tally(judged.map(one => one.turn), answersOf('view', 'turn')),
+      identity: tally(judged.map(one => one.identity), IDENTITY_VALUES), build: tally(scored, FRONT_VALUES), slots: scored.length,
+      height: tally(judged.map(one => one.build.height), FRONT_VALUES), clothes: tally(judged.map(one => one.clothes_kept), answersOf('view', 'clothes_kept')),
+      backdrop: count34(judged.map(one => one.backdrop_kept), 'yes'), wholeBody: count34(judged.map(one => one.whole_body), 'yes'),
+      single: judged.filter(one => one.count === 1).length, anatomy: judged.filter(one => one.anatomy.length).length,
+      pictures: got.map(one => ({ seed: one.seed, turn: one.facts?.turn, identity: one.facts?.identity,
+        build: one.facts ? tally(SCORED_4.map(part => one.facts!.build[part]), FRONT_VALUES) : undefined, height: one.facts?.build.height })),
+      parts: Object.fromEntries(SCORED_4.map(part => [part, tally(judged.map(one => one.build[part]), FRONT_VALUES)])) };
+  }));
+  const decisions: Decision34[] = [];
+  for (const turn of TURNS_4) {
+    const rows = views.filter(one => one.turn === turn);
+    const question = `${turn} turns as asked: yes at three of the four seeds or more, and no at none, for every person`;
+    if (rows.some(one => one.judged < SEEDS_4.length)) decisions.push({ question, verdict: 'undecided', why: `not judged: ${rows.filter(one => one.judged < SEEDS_4.length).map(one => one.id).join(', ')}` });
+    else decisions.push({ question, verdict: rows.every(one => one.turned.yes >= 3 && one.turned.no === 0) ? 'yes' : 'no',
+      why: rows.map(one => `${one.person} yes ${one.turned.yes}, partly ${one.turned.partly}, no ${one.turned.no}`).join('; ') });
+  }
+  return { views, decisions };
+}
+
+export function scoreStand34(run: string, dir = judgeDirOf(run)) {
+  const stand = standOf(run) as Stand34, questions = readQuestions(run), facts = readFacts34(dir, join(judgeDirOf(run), 'keys'));
+  const base = { stand, questions: questionsPin34(), sessions: facts.sessions, excluded: [...facts.excluded].map(([key, sessions]) => ({ key, sessions })) };
+  if (stand === 4) {
+    const four = score4(facts);
+    return { ...base, judged: facts.turns.size, decisions: four.decisions, four, three: undefined };
+  }
+  const three = score3(questions, facts);
+  return { ...base, judged: three.cells.filter(cell => cell.judged).length, decisions: three.decisions, three, four: undefined };
+}
+export type Score34 = ReturnType<typeof scoreStand34>;
+
+const fraction34 = (value: number | undefined) => (value === undefined ? 'unavailable' : `${Math.round(value * 100)}%`);
+export function scoreTables34(score: Score34): string {
+  const lines: string[] = [];
+  const row = (cells: (string | number | undefined)[]) => lines.push(`| ${cells.map(cell => (cell === undefined ? '-' : String(cell))).join(' | ')} |`);
+  const head = (cells: string[]) => { row(cells); row(cells.map(() => '---')); };
+  lines.push(`Questions ${score.questions}; sessions answered ${score.sessions.answered} of ${score.sessions.planned}; judged ${score.judged}; left out as not clean `
+    + `${score.excluded.length ? score.excluded.map(one => `${one.key} (${one.sessions.join(', ')})`).join(', ') : 'none'}.`, '');
+  lines.push('Above, below and neither are descriptive results for these sampled scenes and seeds. Neither does not mean equal, equivalent or non-inferior. People and body parts within a picture are not independent repetitions. No population-level or statistical-significance claim follows from these verdicts.', '');
+  lines.push('### The rules', '');
+  head(['question', 'verdict', 'winner', 'evidence']);
+  for (const one of score.decisions) row([one.question, one.verdict, one.winner, one.why]);
+  lines.push('');
+  if (score.three) {
+    const three = score.three;
+    for (const scene of SCENES_3) {
+      const arms = three.arms.filter(arm => arm.scene === scene);
+      lines.push(`### ${scene}: each arm over the six seeds`, '');
+      head(['arm', 'frames judged', 'identity matches', 'builds: same of scored slots', 'less/more/different/not seen', 'assessable', 'same of assessable',
+        'words: as given of targets', 'less/more/different/not seen/not specified', 'as given of assessable']);
+      for (const one of arms) {
+        row([one.id, one.judged, `${one.identity} of ${one.identityOf}`, `${one.build} of ${one.buildSlots}`,
+          [one.front.less, one.front.more, one.front.different, one.front['not seen']].join('/'), one.frontAssessable, fraction34(one.frontFraction),
+          `${one.words} of ${one.wordTargets}`, [one.wordCounts.less, one.wordCounts.more, one.wordCounts.different, one.wordCounts['not seen'], one.wordCounts['not specified']].join('/'),
+          fraction34(one.wordsFraction)]);
+      }
+      lines.push('', `${scene}, the scene's words (scene fidelity):`, '');
+      head(['arm', 'count right', 'heights yes/no/not seen', 'the required contact', 'extra contacts', 'scene\'s clothes yes', 'pose yes', 'suit yes or partly',
+        'frames with an anatomy error', 'draft kept yes/partly/no', 'figure moved toward/as in the draft/away/mixed/not seen']);
+      for (const one of arms) {
+        row([one.id, one.countRight, counts34(one.heights), scene === 'K-trio' ? one.touchFound : '-', one.touchExtras, one.sceneClothes, one.pose, one.suit, one.anatomy,
+          S_CELLS.includes(one.id) ? counts34(one.draftKept) : '-', S_CELLS.includes(one.id) ? counts34(one.moved) : '-']);
+      }
+      lines.push('');
+      for (const who of Object.keys(arms[0].people)) {
+        lines.push(`${scene}, ${who}:`, '');
+        head(['arm', 'identity same/similar/different/not seen/missing', 'build_front same/less/more/different/not seen', 'build_words as given/less/more/different/not seen/not specified',
+          'word targets', 'height: front / words', 'suit no/partly/yes/not seen', 'scene\'s clothes yes/partly/no', 'pose yes/partly/no', 'anatomy', 'figure moved toward/as in the draft/away/mixed/not seen']);
+        for (const one of arms) {
+          const person = one.people[who];
+          row([one.id, counts34(person.identity), counts34(person.front), counts34(person.words), person.targets, `${counts34(person.height.front)} / ${counts34(person.height.words)}`,
+            counts34(person.suit), counts34(person.sceneClothes), counts34(person.pose), person.anatomy, S_CELLS.includes(one.id) ? counts34(person.moved) : '-']);
+        }
+        lines.push('');
+        head(['build_front: same/less/more/different/not seen', ...CELLS_3]);
+        for (const part of SCORED_4) row([part, ...CELLS_3.map(id => counts34(arms.find(arm => arm.id === id)!.people[who].parts[part]))]);
+        lines.push('');
+      }
+      lines.push(`${scene}, seed by seed (identity matches / builds / words as given):`, '');
+      head(['arm', ...SEEDS_3.map(seed => `s${seed}`)]);
+      for (const one of arms) row([one.id, ...one.perSeed.map(seed => (Number.isNaN(seed.identity) ? '-' : `${seed.identity} / ${seed.build} / ${seed.words}`))]);
+      lines.push('');
+      for (const matrix of three.matrices.filter(one => one.scene === scene)) {
+        lines.push(`${scene}, ${matrix.measure === 'identity' ? 'confirmed identity matches' : 'confirmed build matches'}: the row's arm against the column's`, '');
+        head(['', ...CELLS_3]);
+        for (const one of matrix.rows) row([one.x, ...one.against.map(pair => (pair ? pairReading(pair) : ''))]);
+        lines.push('');
+      }
+    }
+    lines.push('### Each arm against R and W, seed by seed', '');
+    head(['scene', 'arm', 'against', 'identity matches', 'builds', 'words as given']);
+    for (const one of three.pairs) row([one.scene, one.x, one.y, pairText(one.identity), pairText(one.build), pairText(one.words)]);
+    lines.push('', '### The cleanup: S3 minus S2, seed by seed', '',
+      'figure_moved sets each picture against W, the draft, not S3 against its S2.', '');
+    head(['level', 'scene', 'identity matches', 'builds', 'words as given', 'suit yes or partly', 'scene\'s clothes yes', 'people with an anatomy error',
+      'draft kept S2 → S3', 'figure moved S2 → S3 (toward/as in the draft/away/mixed/not seen)']);
+    const signed = (values: number[]) => values.map(value => (Number.isNaN(value) ? '-' : value > 0 ? `+${value}` : String(value))).join(' ');
+    for (const one of three.cleanup) {
+      row([one.level, one.scene, signed(one.identity), signed(one.build), signed(one.words), signed(one.suit), signed(one.sceneClothes), signed(one.anatomy),
+        `${counts34(one.draftKept[0])} → ${counts34(one.draftKept[1])}`, `${counts34(one.moved[0])} → ${counts34(one.moved[1])}`]);
+    }
+    lines.push('', '### B\'s and T\'s fronts, against their words', '',
+      'Unspecified targets and unobservable stature are not failures. These fronts provide no shared physical scale for judging tall versus short.', '');
+    head(['person', 'count', 'as given/less/more/different/not seen/not specified', 'face, hair, skin', 'clothes', 'whole body', 'anatomy', 'parts']);
+    for (const one of three.fronts) {
+      row(one.judged ? [one.person, one.count, counts34(one.parts!), one.faceHairSkin, one.clothes, one.wholeBody, one.anatomy!.join(', ') || 'none',
+        Object.entries(one.build ?? {}).map(([part, value]) => `${part} ${value}`).join(', ')] : [one.person, 'not judged']);
+    }
+  }
+  if (score.four) {
+    lines.push('### Each view over the four seeds', '', 'The turn verdict concerns the requested pose only. A successful turn does not establish preservation of the person; a correct back view cannot establish facial likeness.', '');
+    head(['person', 'turn', 'judged', 'turn yes/partly/no', 'identity same/similar/different/not seen/missing', 'build_front same/less/more/different/not seen (scored parts)',
+      'height', 'clothes kept yes/partly/no', 'backdrop kept', 'whole body', 'one person', 'anatomy']);
+    for (const one of score.four.views) {
+      row([one.person, one.turn, one.judged, counts34(one.turned), counts34(one.identity), `${counts34(one.build)} of ${one.slots}`, counts34(one.height), counts34(one.clothes),
+        one.backdrop, one.wholeBody, one.single, one.anatomy]);
+    }
+    lines.push('', 'Each picture: the turn, the identity and the build, side by side:', '');
+    head(['person', 'turn', ...SEEDS_4.map(seed => `s${seed}: turn, identity, build same/less/more/different/not seen`)]);
+    for (const one of score.four.views) {
+      row([one.person, one.turn, ...one.pictures.map(picture => (picture.turn === undefined ? '-' : `${picture.turn}, ${picture.identity}, ${counts34(picture.build!)}`))]);
+    }
+    lines.push('', 'Parts, each view over the four seeds (same/less/more/different/not seen):', '');
+    head(['person', 'turn', ...SCORED_4]);
+    for (const one of score.four.views) row([one.person, one.turn, ...SCORED_4.map(part => counts34(one.parts[part]))]);
+  }
+  return lines.join('\n') + '\n';
+}
+
+// ---- The third and fourth stands' agreement ----
+
+// Two passes over the same bundles, question by question, as the review asked: schema-valid completion and clean
+// agreement first; then, for pictures clean in both passes only, the same answer (lists compared without regard to
+// order), the same assessability (neither `not seen`, `missing` nor `not specified`), and the success reading (identity
+// same, a part as given or the same, the suit no, the figure toward the front, the count the scene's or one, the
+// contacts the scene's, no anatomy item, and yes elsewhere) where both answers are assessable and the target is
+// specified, with Cohen's kappa on it, undefined when its denominator is zero.
+type Row34 = { family: string; n: number; exact: number; bothAssessable: number; assessability: number; read: number; reading?: number; kappa?: number;
+  firstPositive: number; secondPositive: number; first: Record<string, number>; second: Record<string, number> };
+export type Agreement34 = { completion: { planned: number; first: number; second: number; both: number };
+  clean: { pictures: number; both: number; neither: number; differ: number; eligible: number }; rows: Row34[] };
+const UNASSESSABLE = ['not seen', 'missing', 'not specified'];
+export function agreementOf34(run: string, first: string, second: string): Agreement34 {
+  const questions = readQuestions(run), byKey = new Map(questions.cells.map(cell => [cell.key, cell]));
+  const names = existsSync(join(first, 'keys')) ? readdirSync(join(first, 'keys')).filter(name => name.endsWith('.json')).sort() : [];
+  const completion = { planned: names.length, first: 0, second: 0, both: 0 }, clean = { pictures: 0, both: 0, neither: 0, differ: 0, eligible: 0 };
+  const excluded = new Set([...readFacts34(first, join(first, 'keys')).excluded.keys(), ...readFacts34(second, join(first, 'keys')).excluded.keys()]);
+  const pairs: { family: string; a: string; b: string; assessable: [boolean, boolean]; specified: boolean; read: [boolean, boolean] }[] = [];
+  const normal = (value: unknown) => (Array.isArray(value) ? JSON.stringify(value.map(one => (typeof one === 'string' ? one : touchKey(one as Touch34))).sort()) : String(value));
+  for (const file of names) {
+    const key = readJson<SessionKey>(join(first, 'keys', file)), a = readJson<Ans>(join(first, 'answers', file)), b = readJson<Ans>(join(second, 'answers', file));
+    if (a) completion.first++;
+    if (b) completion.second++;
+    if (!key || !a || !b) continue;
+    completion.both++;
+    const scene = key.scene as Scene34 | undefined, expectedCount = scene ? questions.scenes![scene].count : 1;
+    const expectedTouches = normal(scene ? REQUIRED_TOUCHES[scene] : []);
+    for (const picture of key.pictures) {
+      const x = (a.pictures as Record<string, Ans> | undefined)?.[picture.name], y = (b.pictures as Record<string, Ans> | undefined)?.[picture.name];
+      clean.pictures++;
+      const cx = x?.clean === 'yes', cy = y?.clean === 'yes';
+      if (cx && cy) clean.both++; else if (!cx && !cy) clean.neither++; else clean.differ++;
+      if (!cx || !cy || excluded.has(picture.key)) continue;
+      clean.eligible++;
+      // Each answer by its field, with the person it is about: a person's own, or the front's person.
+      const flat = (answers: Ans) => {
+        const out = new Map<string, { field: string; person?: string; value: unknown }>();
+        const walk = (value: unknown, path: string[], person?: string) => {
+          if (value && typeof value === 'object' && !Array.isArray(value)) {
+            for (const [name, inner] of Object.entries(value as Record<string, unknown>)) {
+              if (name === 'clean') continue;
+              if (path.length === 1 && path[0] === 'people') walk(inner, [], name);
+              else walk(inner, [...path, name], person);
+            }
+          } else out.set(`${person ?? ''}/${path.join('.')}`, { field: path.join('.'), person, value });
+        };
+        walk(answers, []);
+        return out;
+      };
+      const theirs = flat(y!), cellPerson = byKey.get(picture.key)?.person;
+      for (const [id, mine] of flat(x!)) {
+        const other = theirs.get(id);
+        if (!other) continue;
+        const family = `${key.kind}.${mine.field}`, [field, part] = mine.field.split('.');
+        const person = mine.person ?? (cellPerson ? ID_4[cellPerson] : undefined);
+        const specified = !part || !((key.kind === 'identity' && field === 'build_words') || (key.kind === 'fronts' && field === 'build'))
+          || !person || targetsOf(questions, person).includes(part) || (part === 'height' && questions.people[WHO_4.find(one => ID_4[one] === person)!].build.height !== NOT_SAID);
+        const good = (value: unknown) => (field === 'count' ? value === expectedCount : field === 'touches' ? normal(value) === expectedTouches
+          : field === 'anatomy' ? Array.isArray(value) && !value.length : field === 'identity' ? value === 'same'
+            : field === 'build_front' || (key.kind === 'turns' && field === 'build') ? value === 'same'
+              : field === 'build_words' || (key.kind === 'fronts' && field === 'build') ? value === 'as given'
+                : field === 'reference_clothes' ? value === 'no' : field === 'figure_moved' ? value === 'toward the front' : value === 'yes');
+        const assessable = (value: unknown) => !UNASSESSABLE.includes(String(value));
+        pairs.push({ family, a: normal(mine.value), b: normal(other.value), assessable: [assessable(mine.value), assessable(other.value)], specified,
+          read: [good(mine.value), good(other.value)] });
+      }
+    }
+  }
+  const rows = [...new Set(pairs.map(one => one.family))].sort().map(family => {
+    const all = pairs.filter(one => one.family === family), n = all.length;
+    const read = all.filter(one => one.assessable[0] && one.assessable[1] && one.specified), m = read.length;
+    const agree = read.filter(one => one.read[0] === one.read[1]).length;
+    const pa = m ? read.filter(one => one.read[0]).length / m : 0, pb = m ? read.filter(one => one.read[1]).length / m : 0, expected = pa * pb + (1 - pa) * (1 - pb);
+    const categories = (values: string[]) => Object.fromEntries([...new Set(values)].sort().map(value => [value, values.filter(one => one === value).length]));
+    return { family, n, exact: all.filter(one => one.a === one.b).length / n, bothAssessable: all.filter(one => one.assessable[0] && one.assessable[1]).length,
+      assessability: all.filter(one => one.assessable[0] === one.assessable[1]).length / n, read: m, reading: m ? agree / m : undefined,
+      kappa: m && expected < 1 ? (agree / m - expected) / (1 - expected) : undefined, firstPositive: read.filter(one => one.read[0]).length,
+      secondPositive: read.filter(one => one.read[1]).length, first: categories(all.map(one => one.a)), second: categories(all.map(one => one.b)) };
+  });
+  return { completion, clean, rows };
+}
+export function agreementTable34(agreement: Agreement34, first: JudgingRecord, second: JudgingRecord): string {
+  const percent = (value: number | undefined) => (value === undefined ? 'undefined' : `${Math.round(value * 100)}%`);
+  const names = Object.keys(second.sessions).sort();
+  const timing = (record: JudgingRecord) => {
+    const counts = judgingCounts(record, names);
+    return `${record.model}: ${counts.states.answered ?? 0} of ${counts.sessions} sessions answered in ${counts.attempts} attempts, refusals ${counts.refusals}, `
+      + `answers that did not fit ${counts.invalid}, codex failures ${counts.codexFailed}, fallback attempts ${counts.fallback}, median ${counts.medianMs === undefined ? '-' : `${(counts.medianMs / 60000).toFixed(1)} min`} an answered session`;
+  };
+  // Each answer's count, the most frequent first; a list's answers beyond the eighth are summed.
+  const categories = (value: Record<string, number>) => {
+    const sorted = Object.entries(value).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])), rest = sorted.slice(8);
+    return [...sorted.slice(0, 8).map(([name, n]) => `${name.length > 60 ? `${name.slice(0, 57)}...` : name} ${n}`),
+      ...(rest.length ? [`${rest.length} other answers ${sum(rest.map(([, n]) => n))}`] : [])].join('; ');
+  };
+  const { completion, clean } = agreement;
+  return [`First: ${timing(first)}, on the same sessions.`, `Second: ${timing(second)}.`, '',
+    `Schema-valid completion: the first pass ${completion.first} of ${completion.planned} sessions, the second ${completion.second}, both ${completion.both}.`,
+    `Clean, per picture of a session answered in both: ${clean.pictures} pictures, clean in both ${clean.both}, not clean in both ${clean.neither}, clean in one only ${clean.differ}; `
+      + `eligible in both passes (clean here and left out by no session of either pass) ${clean.eligible}.`, '',
+    'Only pictures eligible in both passes enter below. The same answer compares lists without regard to order. Assessable: neither not seen, missing nor not specified. The success reading (identity same, a part as given or the same, the suit no, the figure toward the front, the count the scene\'s or one, the contacts the scene\'s, no anatomy item, and yes elsewhere) is compared only where both answers are assessable and the part\'s words say something. This measures the repeatability of this judge and setup, not its accuracy or agreement between different judges.', '',
+    '| question | pairs | same answer | both assessable | same assessability | pairs read | same reading | kappa | first, read positive | second, read positive | first: answers | second: answers |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    ...agreement.rows.map(one => `| ${one.family} | ${one.n} | ${percent(one.exact)} | ${one.bothAssessable} | ${percent(one.assessability)} | ${one.read} | ${percent(one.reading)} | `
+      + `${one.kappa === undefined ? 'undefined' : one.kappa.toFixed(2)} | ${one.firstPositive} | ${one.secondPositive} | ${categories(one.first)} | ${categories(one.second)} |`)]
+    .join('\n') + '\n';
+}
+
+// How far a second pass moves the score: each rule's verdict and winner, undecided included; per arm and scene the
+// totals the rules read; per person and frame how far the confirmed builds moved and whether identity kept its answer;
+// per view the turns, identity matches and builds.
+export function scoreMoved34(first: Score34, second: Score34) {
+  const verdicts = first.decisions.map(one => {
+    const other = second.decisions.find(decision => decision.question === one.question);
+    return { question: one.question, first: one.verdict + (one.winner ? ` (${one.winner})` : ''), second: other ? other.verdict + (other.winner ? ` (${other.winner})` : '') : 'missing' };
+  });
+  if (first.three && second.three) {
+    const arms = first.three.arms.map(one => {
+      const other = second.three!.arms.find(arm => arm.id === one.id && arm.scene === one.scene)!;
+      return { id: one.id, scene: one.scene, identity: [one.identity, other.identity], build: [one.build, other.build], words: [one.words, other.words], of: [one.identityOf, one.buildSlots] };
+    });
+    const moves: number[] = [], identity: boolean[] = [];
+    for (const cell of first.three.cells) {
+      const other = second.three.cells.find(one => one.key === cell.key);
+      if (!cell.judged || !other?.judged) continue;
+      for (const who of Object.keys(cell.people)) {
+        const same = (person: Person3) => SCORED_4.filter(part => person.front?.[part] === 'same').length;
+        moves.push(Math.abs(same(cell.people[who]) - same(other.people[who])));
+        identity.push(cell.people[who].identity === other.people[who].identity);
+      }
+    }
+    return { verdicts, arms, partMoves: tally(moves.map(value => String(Math.min(value, 3))), ['0', '1', '2', '3']), identitySame: identity.filter(Boolean).length,
+      identityPairs: identity.length, views: undefined };
+  }
+  const views = first.four!.views.map(one => {
+    const other = second.four!.views.find(view => view.id === one.id)!;
+    return { id: one.id, turned: [one.turned.yes, other.turned.yes], same: [one.build.same, other.build.same], identity: [one.identity.same, other.identity.same] };
+  });
+  return { verdicts, arms: undefined, partMoves: undefined, identitySame: undefined, identityPairs: undefined, views };
+}
+export function movedTable34(moved: ReturnType<typeof scoreMoved34>): string {
+  const lines: string[] = [];
+  const row = (cells: (string | number | undefined)[]) => lines.push(`| ${cells.map(cell => (cell === undefined ? '-' : String(cell))).join(' | ')} |`);
+  const head = (cells: string[]) => { row(cells); row(cells.map(() => '---')); };
+  head(['rule', 'first pass', 'second pass']);
+  for (const one of moved.verdicts) row([one.question, one.first, one.second]);
+  lines.push('');
+  if (moved.arms) {
+    lines.push(`Identity kept its answer at ${moved.identitySame} of ${moved.identityPairs} person-frames; the confirmed builds moved per person-frame by 0, 1, 2 and 3 or more: `
+      + `${Object.values(moved.partMoves!).join(', ')}.`, '');
+    head(['arm', 'scene', 'identity matches first → second', 'builds first → second', 'words as given first → second']);
+    for (const one of moved.arms) row([one.id, one.scene, `${one.identity.join(' → ')} of ${one.of[0]}`, `${one.build.join(' → ')} of ${one.of[1]}`, one.words.join(' → ')]);
+  } else {
+    head(['view', 'turn yes first → second', 'build same first → second', 'identity same first → second']);
+    for (const one of moved.views!) row([one.id, one.turned.join(' → '), one.same.join(' → '), one.identity.join(' → ')]);
+  }
+  return lines.join('\n') + '\n';
+}
+
 // ---- The command line ----
 
 const print = (value: object) => console.log(JSON.stringify(value));
@@ -1272,7 +2309,7 @@ async function main(args: string[]) {
   const out = values.out ? resolve(values.out) : '';
   if (command === 'bundles') {
     const counts = writeBundles(out, print, values.from);
-    print({ event: 'bundles', stand: standOf(out), ...counts, missing: counts.missing.length, questions: questionsPin() });
+    print({ event: 'bundles', stand: standOf(out), ...counts, missing: counts.missing.length, questions: pinOf(standOf(out)) });
   } else if (command === 'judge') {
     // `--until` is when no attempt may still be running: an ISO time or epoch seconds. `--limit` counts the attempts
     // in the record, the ones before a resume included. The judge of record writes judge/; a judge only compared
@@ -1299,12 +2336,30 @@ async function main(args: string[]) {
     print({ event: 'dry_run', dir: scratch, ...await dryJudge(values.jobs ? readJobs(values.jobs) : defaultJobs(out), scratch, minutes, 3, print) });
   } else if (command === 'agreement') {
     if (!values.second) throw new Refusal('Use: agreement --out <dir> --second <the compared judge\'s record directory>');
-    const second = resolve(values.second), first = readRecord(judgeDirOf(out)), other = readRecord(second);
+    const second = resolve(values.second), first = readRecord(judgeDirOf(out)), other = readRecord(second), stand = standOf(out);
     if (!first || !other) throw new Refusal('both records must exist');
+    if (stand === 3 || stand === 4) {
+      // Two passes over the same bundles, and the second scored as the judge of record's is, with each count it moved.
+      const agreement = agreementOf34(out, judgeDirOf(out), second), retest = scoreStand34(out, second), moved = scoreMoved34(scoreStand34(out), retest);
+      writeFileSync(join(second, 'score.json'), JSON.stringify(retest, null, 2) + '\n', { mode: 0o600 });
+      writeFileSync(join(second, 'score.md'), scoreTables34(retest), { mode: 0o600 });
+      writeJson(join(judgeDirOf(out), 'retest-moved.json'), moved);
+      writeFileSync(join(judgeDirOf(out), 'retest-moved.md'), movedTable34(moved), { mode: 0o600 });
+      writeFileSync(join(judgeDirOf(out), 'agreement.md'), agreementTable34(agreement, first, other), { mode: 0o600 });
+      writeJson(join(judgeDirOf(out), 'agreement.json'), agreement);
+      print({ event: 'agreement', questions: agreement.rows.length, pairs: agreement.rows.reduce((total, one) => total + one.n, 0), ...agreement.completion });
+      return;
+    }
     const agreement = agreementOf(judgeDirOf(out), second);
     writeFileSync(join(judgeDirOf(out), 'agreement.md'), agreementTable(agreement, first, other), { mode: 0o600 });
     writeJson(join(judgeDirOf(out), 'agreement.json'), agreement);
     print({ event: 'agreement', questions: agreement.length, pairs: agreement.reduce((total, one) => total + one.n, 0) });
+  } else if (standOf(out) === 3 || standOf(out) === 4) {
+    const score = scoreStand34(out);
+    writeFileSync(join(judgeDirOf(out), 'score.json'), JSON.stringify(score, null, 2) + '\n', { mode: 0o600 });
+    writeFileSync(join(judgeDirOf(out), 'score.md'), scoreTables34(score), { mode: 0o600 });
+    print({ event: 'score', stand: score.stand, answered: score.sessions.answered, planned: score.sessions.planned, excluded: score.excluded.length, judged: score.judged,
+      verdicts: Object.fromEntries(['yes', 'no', 'undecided'].map(verdict => [verdict, score.decisions.filter(one => one.verdict === verdict).length])) });
   } else if (standOf(out) === 2) {
     const score = scoreStand2(judgeDirOf(out));
     writeFileSync(join(judgeDirOf(out), 'score.json'), JSON.stringify(score, null, 2) + '\n', { mode: 0o600 });

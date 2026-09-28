@@ -2545,6 +2545,188 @@ whether ROLE's words keep the named medium and leave the reference's pose, light
 the front brings the figure closer or brings the front's standing pose along; whether the crop's face comes through
 without its body.
 
+<a id='refs-judging-34'></a>
+
+**Judging the third and fourth stands** ([the backlog](#refs-backlog)), 2026-09-28. image-refs-judge.ts judges them as
+it judged the first two: blind, by gpt-6-astra at high, each session one fresh `codex exec` in a read-only sandbox
+through `runAttempt`, three at a time in one queue, a refusal once to gpt-6-sol and any other failure once more to
+Astra, with the same stop rules and one more: the queue stops once more than a tenth of the third and fourth stands'
+planned sessions have had an attempt fail or refuse. 53 sessions:
+
+- the third stand's 37: `fronts`, B's and T's fronts against their words; for each scene and seed a `frames` session,
+  the eight cells W, R, S2-55, S3-55, S2-80, S3-80, FC and FV side by side against the scene's words, and an
+  `identity` session, the same eight beside each person's front and the top of it cut as FC cut it, against the front
+  and the words; and a `draft` session, S's four beside their draft (W's picture of the same seed) and the fronts;
+- the fourth stand's 16: a `turns` session for each person and seed, the four views beside their front.
+
+The questions are the question files' (`judge-questions.json`, pinned) as the review below changed them;
+`judge/questions.json` beside each stand's record holds them as the judges are asked them. Each person is found by the
+place the scene gives them before anything else is judged. The pin of the tasks, the schemas, the reviewed questions,
+the texts and question files and the effort is `7d5ba1ebb1f59739c79481bc01137c2b7a2aa0a192ccb20c2925e9fe19bd28cf`; the
+first two stands' `b948c50d…` is unchanged, and their bundles, keys, scores and agreement build again byte for byte.
+Before the bundles were frozen, every picture was checked against the sha256 its cell recorded in each slot and as
+its start (252 checks on the third stand, 64 on the fourth), and every bundle's form, schema and placeholder answers
+were checked together. The largest form, a trio's `identity`, has 488 fields; `runAttempt` caps no output.
+
+**The review.** Before any judging, one fresh GPT-6 Astra session (gpt-6-astra at high, read-only, 00:47 to 00:52
+UTC) read a packet with the five tasks, the layout, the rules, the question files without their cells and blinded
+samples of each kind, 20 pictures attached, and answered «freeze with the listed changes — the layout is sound, but
+build targets, unavailable evidence and non-degradation rules need correction before scoring». Neither stand needed
+to be discarded. Its thirteen changes are in, in its words (`judge/review/session/review.report.md` in the third
+stand's directory):
+
+1. identity's one build answer, against the front and the words at once, splits into `build_front`, against the front
+   alone, which decides, and `build_words`, against the words alone, `not specified` where they say "not said"; all
+   nine parts in both;
+2. every build answer judges proportions, not pixels: `different` for a mismatch with no one direction, `not seen`
+   where a part cannot be compared, which is no evidence of a smaller part; fronts gain `not specified`;
+3. height is standing stature, `not seen` without a common physical scale, which separately framed fronts do not give;
+   it is kept but out of the build score, and frames' `heights` is yes, no or not seen;
+4. identity, in frames and views, compares the visible face, hair, skin, apparent age and marks with the front, with
+   `not seen` for too little facial detail; matching hair, glasses or skin alone is not `same`; "faces" became
+   "identity matches";
+5. `figure_moved` gains `mixed` and `not seen`; texture, sharpness, light or clothing alone is no change of figure;
+   `draft_kept`'s yes, partly and no are defined;
+6. `reference_clothes` asks whether the front's suit is visibly identifiable, with `not seen`, and no guessing under
+   opaque clothes; yes or partly is resemblance, not proof that a reference caused it;
+7. anatomy lists impossibilities only: normal torso rotation and foreshortening are no error, nor a part hidden by an
+   object, another person, the viewpoint or the crop;
+8. `turn` asks for the complete requested pose, sitting, block and hands included: a frontal figure is `no` for a
+   profile, a back view or a three-quarter turn, and a turned head is not a turned body; the sitting block is allowed
+   in `backdrop_kept`;
+9. a place is a region: each person is assigned by position alone, so one standing at the bench holds the bench's
+   place and fails the sitting; a view or a front judges the sole or the largest central person, with fixed answers if
+   nobody is there;
+10. touches are entries of from, to, with and on, one per contacting body part, from a fixed list of parts; in K-trio
+    one entry from Tessa's hand to Bruno's shoulder is the required contact and any other an extra, a second hand too;
+11. builds count confirmed `build_front` `same` over the eight parts other than height, 16 slots a pair frame and 24 a
+    trio frame; less, more, different, not seen and the share of assessable slots are shown apart, and `build_words`
+    apart from them; above, below and neither describe these scenes and seeds only;
+12. the rules below;
+13. exclusions per judging pass, with the sessions that caused them; placeholders enter no score and no agreement; the
+    retest repeats every session, and agreement reports completion and clean first, then exact and assessability
+    agreement apart, and the success reading only where both answers are assessable and the target specified.
+
+The layout stays: every identity judge sees the same fronts and face crops, so FC is not disclosed, and FV's views
+stay out of the bundles; the PNGs carry only IHDR, IDAT and IEND. Its description is corrected: the judged pictures are
+listed and attached in filename order, the reference groups follow in the order input.json and the task give, and
+which cell is which stays outside the bundle.
+
+**The rules.** X is above Y on a measure in a scene when its total over the six seeds is higher and it is ahead at
+more seeds than behind; a missing comparison is no tie, and a picture left out makes the rule's verdict undecided.
+
+1. In each scene, the best arm on confirmed identity matches, and apart from it on confirmed build matches, is the
+   one above every other arm. If none is, there is no unique best arm, and the pairwise matrix is shown.
+2. S's edit reshapes the figures toward their fronts at a level when at least 16 of S2's 30 `figure_moved` answers
+   are toward the front and, in each scene, S2's confirmed builds total at least W's with at least as many seeds ahead
+   as behind.
+3. What the cleanup changes: S3 minus S2, seed by seed, no rule deciding.
+4. FC or FV is better than R, the bot's frame, on the measured identity and build when, in each scene, it is above R
+   on identity matches or on builds and, on each, totals at least R's with at least as many seeds ahead as behind.
+5. A view turns as asked when `turn` is yes at three of the four seeds or more and no at none, for every person.
+   This is about the requested pose only.
+6. B's and T's fronts, against their words, no rule deciding.
+
+**The judging.** On 2026-09-28 from 01:11 to 01:48 UTC the queue judged the 53 sessions, each answered at its first
+attempt: no refusal, no fallback, no failure of codex, no answer that did not fit and no picture called not clean. A
+session took 4.3 minutes at the median for `identity`, 2.3 for `frames`, 0.9 for `draft`, 0.8 for `turns` and 0.5 for
+`fronts`. From 01:48 to 02:25 Astra judged all 53 again, from `judge/retest-jobs.json`, into a second record in each
+stand's `judge/retest/` with no fallback: again each at its first attempt, nothing failed or refused. With the review,
+107 Astra sessions, of the 150 or so allowed.
+
+**The third stand** (its `judge/score.md`): of the eight rules, two hold, none undecided.
+
+- **Builds: R is best in both scenes**, above every other arm: 61 of 96 confirmed build matches in the pair (FC and
+  FV 54, W 34) and 108 of 144 in the trio (FC 102, FV 99, W 80), 76 and 96 % of the slots the judge could assess. The
+  retest keeps it best in the trio but not in the pair (below). W draws Mara thinner than her front in about half of
+  her slots (`less` in 25 of 48 in the pair and 22 in the trio), R in one in each. Against the words alone R has 69 of
+  72 targets as given in the pair and 106 of 120 in the trio, FC 68 and 106, FV 64 and 105, W 59 and 102.
+- **Faces: no unique best arm.** In the pair no frame of any arm has a face `same` as its front: every answer for Mara
+  and Lina is `similar`. In the trio R has 8 of 18, FC 9 and FV 9, W and S none: Bruno 5, 5 and 6 of 6, Tessa 3 of 6
+  each, Mara 0, 1 and 0. FC is above every arm there but FV.
+- **S's edit reshapes no figure, at 0.55 or at 0.8.** All of S2's 30 `figure_moved` answers at each level are `as in
+  the draft`, and so are S3's; `draft_kept` is yes for all 48 of S's pictures. In the frames and identity sessions
+  each of S's four cells got W's answer of the same session, field for field, in all 96 cases. So S2's builds equal
+  W's (34 and 80), and **the cleanup changes nothing the judges measure**: S3 minus S2 is 0 on every measure at every
+  seed. S's pictures are other files than their drafts (the stand's 96 frames have 96 sha256), and the review, which
+  saw one trio's four edits beside their draft, noted changes of texture and contrast; how far the pixels move was
+  not measured, since only the judges look at the pictures.
+- **FC and FV are not better than R.** Both are below R on builds in both scenes (FC 54 against 61 and 102 against
+  108, FV 54 against 61 and 99 against 108). On faces FC is above R in the trio only (9 against 8, ahead at one seed),
+  and FV is above it nowhere. FV put extra people into 3 of its 6 pair frames (4, 3 and 3 people for two).
+- **The scene, apart.** Every other frame has the right count. Every trio frame has Tessa's hand on Bruno's shoulder,
+  9 of 48 with one contact more: her other hand on his shoulder (R at three seeds, FC at one) or her hand on his arm as
+  well (W and S at s43). Poses as the scene says: in the pair W 9, R 11, FC 10 and FV 8 of 12; in the trio W 11, R 7,
+  FC 11 and FV 12 of 18, Bruno `partly` in all 48. No frame resembles the fronts' suit (0 of 96, as on the first
+  stand), and one has an anatomy error (FC's trio at s53).
+- **B's and T's fronts** match their words in the 7 parts the words give and the judge could see, the height `not
+  seen` without a scale; one person, the whole body, the portrait's clothes, no anatomy error; Bruno's face, hair and
+  skin `partly`, Tessa's yes.
+
+The judge's resolution is coarse. It gave the eight pictures of an identity session three or four different answers:
+one for W's and S's five, and one for R's and FC's in 5 of 12 sessions. So its ties between close arms mean only that
+it saw no difference.
+
+**The fourth stand** (its `judge/score.md`): no view turns as asked for every person, so all four rules fail; but
+every `no` is at seed 7, the seed of the fronts the views were drawn from. At 11, 13 and 17 none of the 48 is `no`.
+
+- **TQ**, three-quarters: yes in 15 of 16, all but Bruno at s7.
+- **BACK**: yes in 12 of 16. At s7 all four show their face (turn no, identity `same`); in the 12 turned away the
+  identity is `not seen`, as it should be.
+- **SIT**: yes in 12, partly in 2, no in 2 (Lina and Tessa at s7).
+- **P**, the profile, is the weakest: yes in 7 of 16, partly in 9, Mara partly at all four seeds.
+- **The views keep the person**: identity `same` in 51 of 64 views, `similar` in one, `not seen` in the 12 backs. No
+  part is `less` or `different` in any view, one is `more` (Bruno's arms in profile at s17), and the rest are `same`
+  or `not seen`, which the profiles give most. All 64 keep the backdrop, show the whole body and one person, with no
+  anatomy error; all but Mara's back at s7 (partly) keep the clothes.
+- FV's four views, all of seed 7 (H and L three-quarters, B sitting, T three-quarters), turned as asked.
+
+**Astra against itself** (each stand's `judge/agreement.md` and `judge/retest-moved.md`). Both passes answered every
+session and called every picture clean, and 11 of the 12 rules gave the same verdict. The one that moved is the
+pair's best arm on builds: R in the first pass, none in the second, where R's total is again the highest (68 of 96)
+but FV's 63 is neither above nor below it (FV ahead at 2 seeds, behind at 2). In the trio R stays above every arm (112
+of 144). Every other answer the verdicts read held:
+
+- S got W's answer again in all 96 cases, and every figure `as in the draft`.
+- Faces: the same answer at 94 % of 240 person-frames (kappa 0.68 on `same`); in the trio R 8 then 10 of 18, FC 9 then
+  8, FV 9 and 9; in the pair `similar` for everyone again.
+- Builds against the front are the noisiest answer: the same at 83 % of 1920 part answers, from 62 % for the waist
+  to 95 % for the shoulders, which are mostly `not seen`, and a person's confirmed builds in a frame moved by 0 at 105
+  of 240 person-frames, by 1 at 78, by 2 at 26 and by 3 or more at 31. Against the words, 97 % the same.
+- The views: the same turn at 60 of 64 (kappa 0.85), the same seven `no`, all at s7; identity the same at all 64,
+  build 95 %.
+
+**What it means for the bot.** Of the arms tried, the bot's own frame (R: the fronts at 352x640 with the bot's wording
+and the looks) keeps builds best with two and three people, above every other arm in three of the four scene-passes and
+with the highest total in the fourth, and no arm keeps faces better in both passes. Nothing here asks to change it for
+FC, FV or S. S as drawn is not worth building: at the draft's seed the edit keeps the draft's figures at both levels, so
+the figure still comes from the look words alone, at three times R's time with the cleanup and twice without (the
+medians of each step in the stand's `cells.json`, the draft's among them: 17.8 and 12.3 s against R's 5.8 in the pair,
+21.1 and 14.3 against 6.6 in the trio). FV, the fronts with their views, is no better than R on builds and adds people
+in the pair. Face likeness is the weak point with several people: `same` in none of the pair's 96 person-frames and in
+at most 10 of the trio's 18 slots an arm has. Every view that did not turn is at the fronts' own seed, which suggests
+drawing a view at another seed than its front's; and a profile is only partly one in 9 of 16.
+
+**Not answered:** standing height (no picture gives a common scale), anatomy hidden by clothes or the pose, a face
+from a correct back view, whether FV's hidden views or FC's crop caused what their frames show, and how far S's pixels
+move. Six seeds, two scenes, four people and one judge's eyes: the verdicts describe these pictures and support no
+statistical claim. The seed-7 pattern is one seed; that it comes from sharing the front's seed is a guess to check.
+
+```sh
+node local/image-refs-judge.ts bundles --out ~/simple-story-chat-runs/2026-09-28/refs-stand-3    # 37 built, 252 pictures checked
+node local/image-refs-judge.ts bundles --out ~/simple-story-chat-runs/2026-09-28/refs-stand-4    # 16 built, 64 checked
+node local/image-refs-judge.ts dry-run --jobs ~/simple-story-chat-runs/2026-09-28/refs-stand-3/judge/dry-jobs.json    # both passes' four jobs, stand-ins for codex
+node local/image-refs-judge.ts judge --jobs ~/simple-story-chat-runs/2026-09-28/refs-stand-3/judge/jobs.json
+node local/image-refs-judge.ts judge --jobs ~/simple-story-chat-runs/2026-09-28/refs-stand-3/judge/retest-jobs.json
+node local/image-refs-judge.ts score --out ~/simple-story-chat-runs/2026-09-28/refs-stand-3    # judge/score.md
+node local/image-refs-judge.ts score --out ~/simple-story-chat-runs/2026-09-28/refs-stand-4
+node local/image-refs-judge.ts agreement --out ~/simple-story-chat-runs/2026-09-28/refs-stand-3 --second ~/simple-story-chat-runs/2026-09-28/refs-stand-3/judge/retest
+node local/image-refs-judge.ts agreement --out ~/simple-story-chat-runs/2026-09-28/refs-stand-4 --second ~/simple-story-chat-runs/2026-09-28/refs-stand-4/judge/retest
+```
+
+The dry run judged all 106 sessions with stand-ins, one refusal going to the fallback, scored both stands (8 and 4
+decisions, none undecided) and compared the retests on 42 and 16 questions.
+
 <a id='refs-stand-2'></a>
 
 ## The second refs stand
@@ -2680,6 +2862,7 @@ say "her" and "each woman", with belly among the parts; a comparison per scene a
 S2-55, S3-55, S2-80, S3-80, FC and FV side by side, as the second stand's eight, with the draft shown beside S's; B's
 and T's fronts as a `fronts` session and the views as `turns` against their front; FC's crops cut from each person's
 front; and each picture read from its run and checked against the sha256 in the cell's `references` and `start`.
+A review changed the questions before the judging of 2026-09-28 ([above](#refs-judging-34)).
 
 **The price**, at the times of 2026-09-27 on the RTX 5090, a cell at CFG 1 in 5.5 to 6.1 s:
 
