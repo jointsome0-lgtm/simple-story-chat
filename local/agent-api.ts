@@ -246,6 +246,7 @@ export function createAgentApi({ store, provider, config, userId = 'agent', wait
         const base = { storyId: story.id, branchId: branch.id };
         const turn = operation(make, base);
         const job = beginTurn(state, storyNarration(state, story.id).startStory, now(), turn);
+        job.move = 'narrator';
         return { job, turn };
       });
       if (!begun.job) return begun.response;
@@ -275,7 +276,10 @@ export function createAgentApi({ store, provider, config, userId = 'agent', wait
         const text = input.trim() || (branch.head ? continueInput(state, storyId) : storyNarration(state, storyId).startStory);
         state.active = { storyId, branchId };
         const turn = operation(make, {});
-        return { job: beginTurn(state, text, now(), turn), turn };
+        const job = beginTurn(state, text, now(), turn);
+        // Without input the move is the narrator's, as the bot's «Продолжить» (local/prompt.ts).
+        if (!input.trim()) job.move = 'narrator';
+        return { job, turn };
       });
       if (!begun.job) return begun.response;
       launch(requestId, 'act', begun.job, begun.turn);

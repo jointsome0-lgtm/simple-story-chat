@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { UserError, id, active, addSeed, newStory, fork, beginJob,
-  deleteSeed, deleteBranch, forgetLostPictures, context, jobTarget, setLanguage, isPose } from '../lib/library.ts';
+  deleteSeed, deleteBranch, forgetLostPictures, context, jobTarget, setLanguage, isPace, isPose } from '../lib/library.ts';
 import type { Job, Library, PendingPoseUpload, PoseSetInput, PoseUploadFile, ProfileInput, ReferenceInput, SceneNode } from '../lib/library.ts';
 import { storyNarration } from './prompt.ts';
 import { createChat } from './telegram.ts';
@@ -301,6 +301,16 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         : route.startsWith('delete-branch:') ? { confirm: route.replace('delete-branch:', 'remove-branch:') }
         : route.startsWith('delete-style:') ? { confirm: route.replace('delete-style:', 'remove-style:') } : null;
       return { screen: screen(state, route, pictureInfo) };
+    }
+    // A story's pace (lib/library.ts `Story.pace`). It changes at any moment, also while a scene is being written: only
+    // the scene requests still to be built read it (local/prompt.ts). «Сцена» leaves the story without one.
+    if (action?.startsWith('pace:')) {
+      const [, storyId, pace] = action.split(':');
+      const story = ID.story.test(storyId) ? state.stories[storyId] : undefined;
+      if (!story || !isPace(pace)) throw refuse(t, 'staleButton');
+      if (pace === 'scene') delete story.pace; else story.pace = pace;
+      state.ui = null;
+      return { screen: render(state, `pace:${storyId}`) };
     }
     // The picture style is the reader's own setting (local/picture-style.ts). It changes at any moment, also while a
     // scene is being written, and only the pictures still to come follow it.
@@ -645,6 +655,8 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     state.ui = null;
     state.interrupted = false;
     const job = beginTurn(state, input, Date.now());
+    // The reader wrote nothing, so the move is the narrator's; a story with a pace tells it so (local/prompt.ts).
+    if (verb === 'start' || action === 'continue') job.move = 'narrator';
     return { job };
   }
 

@@ -45,6 +45,31 @@ does the same in every registered language.
 - **Browse:** the seeds, a seed's stories, a story's branches and a branch, 8 to a page. Opening a screen changes
   nothing in the story and generates nothing.
 
+<a id='pace'></a>
+
+### Story pace
+
+The tester asked for it and the owner approved it on 2026-09-29. «⏱ Темп: …» ("Pace") on the menu
+(`view:pace:<storyId>`) picks the pace of the current story (`pace:<storyId>:<moment|scene|chapter>`), kept as
+`Story.pace`:
+
+- «⚡ Миг» ("Moment"): seconds to minutes a turn, in detail and with dialogue, at most 6 paragraphs against the rule's
+  12. The turn ends where the hero has to act.
+- «🎬 Сцена» ("Scene"): the default and the bot as it was. A story without a pace, in an older library too, has it.
+- «🗓 Глава» ("Chapter"): hours to days a turn, told briefly, stopping only at an important fork.
+
+The pace can change at any moment, also while a scene is being written, and counts from the next scene request, so a
+story's first scene is always at «Сцена». Under «Миг» and «Глава» a written message is the hero's move: the narrator
+shows what came of it and how the world answers, and makes no further decision for the hero (the owner's rule of
+2026-09-29). «▶️ Продолжить», /continue, the start of a story and an empty `act` of the agent interface hand the move
+to the narrator (`Job.move = 'narrator'`), which may then move the hero itself, in small steps under «Миг». The pace
+reaches the model as one clause in the story's language (`Narration.pace` in `local/story-text/`), after the
+narrator's rule in the last message. The system prompt, the memory call and every request of «Сцена» stay as they
+were: a dry run with a fake model, with written messages, «Продолжить», /continue, compaction and a fork, showed them
+byte for byte those of 6cf7206. The clauses are not measured yet; their probe is
+~/simple-story-chat-runs/2026-09-29/pace/probe.mts. A scene's header is when the scene starts, so after a «Глава»
+turn the menu's world time and the next request's reference time stay at that turn's start.
+
 <a id='branching'></a>
 
 ### Branches and the story tree

@@ -62,6 +62,12 @@ export type KeptPortrait = PictureRecipe & { source?: 'drawn'; file: string; loo
 export const POSES = ['front', 'three-quarter', 'profile', 'sitting', 'walking'] as const;
 export type Pose = typeof POSES[number];
 export const isPose = (value: unknown): value is Pose => (POSES as readonly unknown[]).includes(value);
+// How much story time a turn covers and when the reader gets the move again (the owner, 2026-09-29): «Миг», seconds
+// to minutes told closely, up to the next point where the hero must act; «Сцена», the default; «Глава», hours to days
+// told briefly, up to the next important fork. A story stores only `moment` or `chapter` (`Story.pace`).
+export const PACES = ['moment', 'scene', 'chapter'] as const;
+export type Pace = typeof PACES[number];
+export const isPace = (value: unknown): value is Pace => (PACES as readonly unknown[]).includes(value);
 // A picture of a person that a reader in the reference experiment sent (local/reference.ts): the name of its file
 // beside the portraits, stripped of its metadata and kept in the format it came in, its size in pixels, and the English
 // caption it came with, if any. Nothing drew it, so it has no recipe. Frames take it as they take a drawn portrait (the
@@ -121,10 +127,16 @@ export type Story = {
   // local/picture-pov.ts). At most one; without it, or while that person is not in the scene or not on the sheet, a
   // frame is drawn as usual. Only the local bot writes it, from the characters' card.
   pov?: string;
+  // The story's pace when it is not «Сцена», which a story without it has (`PACES`). Only the local bot writes it, from
+  // the pace picker of the menu, and only scene requests read it (local/prompt.ts).
+  pace?: Exclude<Pace, 'scene'>;
 };
 export type Job = {
   id: string; storyId: string; branchId: string; head: string | null; memory: string | null; input: string; started: number;
   kind?: 'compact';
+  // The reader wrote nothing: «Продолжить» or the start of the story handed the move to the narrator. Without it the
+  // input is the reader's own message, the hero's move. Only a story with a pace tells the narrator which it is.
+  move?: 'narrator';
 };
 // New drafts always have draftId and parts, but bot.ts and ui.ts also accept a stored draft without them;
 // keep those fallbacks for older or incomplete v1 data.

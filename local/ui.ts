@@ -1,7 +1,7 @@
 // Telegram interface for simple-story-chat: pure functions from a user's library to sendMessage payloads.
 // Plain text only (no parse_mode), inline keyboards, callbacks <= 64 UTF-8 bytes.
 
-import type { Branch, Checkpoint, Library, SceneNode, Story } from '../lib/library.ts';
+import type { Branch, Checkpoint, Library, Pace, SceneNode, Story } from '../lib/library.ts';
 import type { ContextStats } from './context.ts';
 import type { GpuStatus } from './gpu.ts';
 import type { InlineButton, InlineKeyboard, Screen } from './telegram.ts';
@@ -59,6 +59,8 @@ export const LIMIT = 4000; // Telegram allows 4096 characters; keep headroom
 const PAGE = 8;
 const encoder = new TextEncoder();
 const ICON: Record<string, string> = { start: '🌱', fork: '🌿', scene: '🎬', manual: '📌', compaction: '🗜' };
+// The paces in the picker's order (lib/library.ts `PACES`).
+const PACE_ICON: Record<Pace, string> = { moment: '⚡', scene: '🎬', chapter: '🗓' };
 
 // The interface language is state.language (lib/library.ts); functions that get no state take it as `lang`.
 export function render(state?: Library | null, route: string | null = 'home', details: RenderDetails | null = {}): Screen {
@@ -133,6 +135,7 @@ function screen(state: State, route: string, details: RenderDetails) {
     case 'home': return home(state, null, details.modelInfo, gpuFor(details), details.pictures === true);
     case 'model': return modelScreen(texts(state.language), details.modelInfo, gpuFor(details));
     case 'language': return languageScreen(state);
+    case 'pace': return paceScreen(state, args[0]);
     case 'style': return args.length ? styleCard(state, args[0], details) : styleScreen(state, details);
     // Only while the reader is writing a style: otherwise their next message would be taken as a move in the story.
     case 'style-input': return styleInputScreen(state, details);
@@ -208,6 +211,7 @@ function home(state: State, note: string | null, modelInfo: ModelInfo | null | u
     } else if (branch.head) {
       rows.push([btn(t.buttons.lastScene, 'last')]);
     }
+    rows.push([btn(t.pace.button(t.pace.names[paceOf(story)]), `view:pace:${story.id}`)]);
     rows.push([
       btn(t.buttons.checkpoints, `view:checkpoints:${story.id}:${branch.id}:0`),
       btn(t.buttons.branches, `view:story:${story.id}`),
@@ -230,6 +234,21 @@ function languageScreen(state: State) {
   const current = shownLang(state.language);
   return payload([t.language.title, '', t.language.note], [
     ...REGISTERED.map(lang => [btn(`${lang === current ? '✅ ' : ''}${LANGS[lang]}`, `lang:${lang}`)]),
+    [btn(t.buttons.menu, 'view:home')],
+  ]);
+}
+
+// A story's pace (lib/library.ts `Story.pace`), from the menu: what each pace does and who moves the hero, and the three
+// to choose from. A press only stores the choice; the next scene request reads it (local/prompt.ts).
+function paceScreen(state: State, storyId: string | undefined) {
+  const t = texts(state.language);
+  const p = t.pace;
+  const story = own(state.stories, storyId);
+  if (!story) return stale(t, t.story.notFound);
+  const current = paceOf(story);
+  const paces = Object.keys(PACE_ICON) as Pace[];
+  return payload([p.title, `📖 ${storyName(state, story)}`, '', ...paces.map(pace => `${PACE_ICON[pace]} ${p.lines[pace]}`), '', p.move, p.next], [
+    paces.map(pace => btn(`${pace === current ? '✅ ' : ''}${PACE_ICON[pace]} ${p.names[pace]}`, `pace:${story.id}:${pace}`)),
     [btn(t.buttons.menu, 'view:home')],
   ]);
 }
@@ -1280,6 +1299,11 @@ function people(story: Story) {
 // A person as the buttons name them (local/picture.ts `personTag`).
 function personRef(story: Story, person: { name: string; index: number }) {
   return `${story.id}:${person.index}:${personTag(person.name)}`;
+}
+
+// A stored pace that is not one of the others is «Сцена», as a story without one.
+function paceOf(story: Story): Pace {
+  return story.pace === 'moment' || story.pace === 'chapter' ? story.pace : 'scene';
 }
 
 function storyName(state: State, story: Story) {

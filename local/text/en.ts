@@ -109,6 +109,19 @@ export const en: Messages = {
     note: 'This changes only the menus and messages of the bot. The language of a story comes from its seed and from what you write.',
   },
 
+  pace: {
+    button: (name: string) => `⏱ Pace: ${name}`,
+    names: { moment: 'Moment', scene: 'Scene', chapter: 'Chapter' },
+    title: '⏱ Story pace',
+    lines: {
+      moment: 'Moment — seconds to minutes a turn, in close detail and with dialogue. A turn ends where the hero has to act.',
+      scene: 'Scene — the usual pace, with no special instruction to the narrator.',
+      chapter: 'Chapter — hours to days a turn, told briefly. It stops only at an important fork.',
+    },
+    move: 'At the moment and chapter paces your message is the hero’s move: the narrator shows what came of it and leaves the next decision to you. “▶️ Continue” hands the move to the narrator, who then leads the hero on their own.',
+    next: 'The pace applies from the next scene.',
+  },
+
   variant: {
     button: '✏️ Edit the prompt and draw a variant',
     title: '✏️ Your own prompt for the picture',

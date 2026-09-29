@@ -147,6 +147,23 @@ export const ru = {
     note: 'Меняется только язык меню и сообщений бота. Язык историй задают сид и твои сообщения.',
   },
 
+  // A story's pace (lib/library.ts `Story.pace`): the menu's button, which names the current pace, and the picker. Each
+  // name is a button after its emoji: keep it one word.
+  pace: {
+    // `name` is one of `names`.
+    button: (name: string) => `⏱ Темп: ${name}`,
+    names: { moment: 'Миг', scene: 'Сцена', chapter: 'Глава' },
+    title: '⏱ Темп истории',
+    // One line per pace, after its emoji.
+    lines: {
+      moment: 'Миг — секунды и минуты за ход, подробно и с репликами. Ход кончается там, где герою пора действовать.',
+      scene: 'Сцена — обычный темп, без особых указаний рассказчику.',
+      chapter: 'Глава — часы и дни за ход, коротко. Остановка только на важной развилке.',
+    },
+    move: 'При темпе «Миг» или «Глава» твоё сообщение — ход героя: рассказчик покажет, что из него вышло, и следующее решение оставит тебе. «▶️ Продолжить» отдаёт ход рассказчику, и тогда он ведёт героя сам.',
+    next: 'Темп действует со следующей сцены.',
+  },
+
   // A variant of a scene's picture from a prompt the reader writes whole (local/picture.ts `variant`): the button under
   // the picture's folded prompt, the screen while the reader writes, and the status line while it is drawn.
   variant: {

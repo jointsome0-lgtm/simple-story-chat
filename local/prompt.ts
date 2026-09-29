@@ -1,5 +1,5 @@
 import { context, validTime } from '../lib/library.ts';
-import type { Library, MemoryVersion, Point } from '../lib/library.ts';
+import type { Job, Library, MemoryVersion, Point } from '../lib/library.ts';
 import type { ChatMessage, ModelRequest } from './model.ts';
 import { seedNarration } from './story-text.ts';
 import type { Narration } from './story-text.ts';
@@ -44,15 +44,20 @@ export function contextParts(state: Library, point: StoryPoint): {
 // (docs/knowledge/improve-runs.md#narrator-rule-2026-09-19): in SYSTEM, before thousands of tokens of story, it
 // changed nothing, and at the end of the request the narrator stopped accepting a false claim about the past. Being
 // last, it also leaves the cached prefix of the request untouched.
-export function makeRequest(state: Library, job: StoryPoint & { input: string }, maxOutputTokens: number): ModelRequest {
+// A story with a pace (lib/library.ts `Story.pace`) has its clause after the rule, the one for whoever has the move: the
+// hero, when the input is the reader's own message, or the narrator, when the reader handed it over (`Job.move`). A
+// story at «Сцена» has none, and its request is byte for byte what it was before paces came.
+export function makeRequest(state: Library, job: StoryPoint & { input: string; move?: Job['move'] }, maxOutputTokens: number): ModelRequest {
   const parts = contextParts(state, job);
   const story = state.stories[job.storyId];
   const n = storyNarration(state, job.storyId);
   // A null head (no scenes yet) is never a node id, so the seed start time is used.
   const referenceTime = story.nodes[job.head as string]?.time ?? state.seeds[story.seedId].startTime;
+  const last = `${n.lastMessage(referenceTime, job.input)}\n\n${n.narratorRule}`;
+  const pace = story.pace && Object.hasOwn(n.pace, story.pace) ? n.pace[story.pace][job.move ?? 'hero'] : undefined;
   const messages: ChatMessage[] = [
     ...parts.seed, ...parts.memory, ...parts.tail,
-    { role: 'user', content: `${n.lastMessage(referenceTime, job.input)}\n\n${n.narratorRule}` },
+    { role: 'user', content: pace ? `${last}\n\n${pace}` : last },
   ];
   return { system: n.system, messages, maxOutputTokens };
 }
