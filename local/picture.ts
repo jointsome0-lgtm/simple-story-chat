@@ -53,7 +53,7 @@ import type { CardPlace, Comfy, Graph, Steps } from './image-batch.ts';
 import { etaText, left, moved, waited } from './eta.ts';
 import type { Durations } from './eta.ts';
 import { STYLE, askJson, assemblePrompt, frameRequest, inWords, matchSheet, olderSheet, retellRequest, retoldOf, sheetOf, sheetRequest } from './illustrate.ts';
-import type { Character, Description, Excerpt } from './illustrate.ts';
+import type { Assembled, Character, Description, Excerpt } from './illustrate.ts';
 import { PORTRAIT_CLOTHES, PORTRAIT_STYLE, portraitPrompt, portraitText } from './image-portraits.ts';
 import type { ErrorDetails, Log } from './model-error.ts';
 import { errorCode, safeErrorDetails } from './model-error.ts';
@@ -63,6 +63,7 @@ import type { StyleChoice } from './picture-style.ts';
 import { REFERENCE_VERSION, frameReferences, pinReferences, readReference, referenceGraph, referencePrompt, temporaryReferences } from './picture-references.ts';
 import { pictureSize } from './reference.ts';
 import { povRequest, seenBy, viewerOf } from './picture-pov.ts';
+import { clothesRequest } from './picture-clothes.ts';
 import { poseGroups, poseRequest, viewsOf } from './pose-set.ts';
 import type { PoseGroup, Viewed } from './pose-set.ts';
 import { addChanges, changesRequest, countVersions, descriptionOf, lastingChangesOf, laterRequest, ownDescription, personHere, personKey,
@@ -506,6 +507,9 @@ export function createIllustrator(config: ImageConfig, deps: {
   // computer or on our card: the captions go into each frame's description, and no hosted API is to see them.
   const ownModel = deps.model?.provider === 'llama-cpp' || deps.model?.provider === 'simple-serving';
   const poseSetFor = (userId: string) => ownModel && !referenceGate(userId) && !!config.poseSetUsers?.has(userId);
+  // The tester's frame change of 2026-09-28 for its own readers (SIMPLE_CHAT_CLOTHES_USERS): a frame names what each
+  // person wears and what of them is bare, and says it before the reference wording. Without it every request is as it was.
+  const clothesFor = (userId: string) => config.users.has(userId) && !!config.clothesUsers?.has(userId);
 
   // The frame of each reader's latest described scene, in memory only and only until the next one: a sample of a
   // style is drawn from it without asking the language model again. Never stored and never logged.
@@ -597,7 +601,8 @@ export function createIllustrator(config: ImageConfig, deps: {
       // the viewer's apart. Each becomes a version at this scene, retold before this frame is drawn, so that the frame
       // of the scene with the haircut already has it. Without them the request is as it was.
       const named = versions ? sheet.filter(one => one !== viewer) : [];
-      const asked = changesRequest(request, named);
+      const changing = changesRequest(request, named);
+      const asked = clothesFor(userId) ? clothesRequest(changing) : changing;
       // For a reader with pose sets, each person of the sheet with a captioned set, the viewer's apart, whose body the
       // frame does not show, names the group of it that fits how the frame shows them, right after `who`: added last, so
       // that it stands before any other field that goes there. Without them the request is as it was.
@@ -760,7 +765,7 @@ export function createIllustrator(config: ImageConfig, deps: {
   async function drawFrame(userId: string, storyId: string, frame: { description: Description; sheet: Character[]; views?: Record<string, PoseGroup> },
     line: string, signal: AbortSignal, log: Log, savedRecipe?: PictureRecipe, status?: Watching) {
     const plain = assemblePrompt(frame.description, frame.sheet, line);
-    let assembled = plain;
+    let assembled: Assembled & { clothesStated?: number } = plain;
     // After a graph or checkpoint change, a sample uses today's recipe and portraits, as a new frame does.
     const saved = savedRecipe && savedRecipe.graph === graphId && savedRecipe.checkpoint === config.checkpoint ? savedRecipe : undefined;
     const recipe = saved ?? recipeOf(storyId);
@@ -774,7 +779,7 @@ export function createIllustrator(config: ImageConfig, deps: {
         if (referenceGraph(graph, bound.length)) {
           try {
             if (!saved) recipe.references = pinReferences(store, userId, bound);
-            assembled = referencePrompt(frame, bound, line);
+            assembled = referencePrompt(frame, bound, line, clothesFor(userId));
           } catch { reason = 'unavailable'; }
         }
       }
@@ -789,7 +794,10 @@ export function createIllustrator(config: ImageConfig, deps: {
     };
     try {
       const drawn = await draw(userId, recipe, assembled.prompt, signal, log, { fallbackPrompt: plain.prompt, reason, status });
-      return { assembled: drawn.referenceCount ? assembled : plain, recipe: drawn.recipe, drawn, releasePortraits };
+      const used: Assembled & { clothesStated?: number } = drawn.referenceCount ? assembled : plain;
+      // The row's word for what the clothes change did to this picture, where a reader has it.
+      const changed = used.clothesStated === undefined ? {} : { clothesStated: used.clothesStated };
+      return { assembled: used, recipe: drawn.recipe, drawn, releasePortraits, changed };
     } catch (error) { releasePortraits(); throw error; }
   }
 
@@ -964,7 +972,7 @@ export function createIllustrator(config: ImageConfig, deps: {
         namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook, clothesChanged: frame.clothesChanged,
         pictureStyle, ...pov === undefined ? {} : { pov }, ...frame.lastingChanges === undefined ? {} : { lastingChanges: frame.lastingChanges },
         ...frame.views ? { poseSetPeople: frame.poseSetPeople, poseViewsPicked: Object.keys(frame.views).length } : {},
-        ...size, ...elapsed() });
+        ...result.changed, ...size, ...elapsed() });
     } catch (error) {
       const code = errorCode(error);
       const cancelled = signal.aborted || code === 'cancelled' || code === 'scene_gone';
@@ -1064,7 +1072,7 @@ export function createIllustrator(config: ImageConfig, deps: {
             log('picture_sample', undefined, { outcome: 'ready', cancelled: signal.aborted, frameReused, describeMs,
               imageQueueMs: drawn.queueMs, imageMs: drawn.totalMs, ...status.waited(), imageSteps: steps,
               pictureAttention: drawn.pictureAttention, namesStripped: assembled.namesStripped,
-              withoutLook: assembled.withoutLook, pictureStyle, stylesAsked, ...frame.pov === undefined ? {} : { pov: frame.pov }, ...size });
+              withoutLook: assembled.withoutLook, pictureStyle, stylesAsked, ...frame.pov === undefined ? {} : { pov: frame.pov }, ...result.changed, ...size });
           } finally { result.releasePortraits(); }
           // The styles after the first are drawn from the frame already in hand.
           frameReused = true;

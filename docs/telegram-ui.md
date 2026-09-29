@@ -487,6 +487,48 @@ in is drawn as usual. The code is `local/picture-pov.ts`.
   frame with two references, as the tester's was, whether the card's Gemma follows the rule on the pier and the
   workbench, and a reflection that looks like the viewer.
 
+<a id='what-they-wear'></a>
+
+### What they wear
+
+The tester, 2026-09-28: «если персонаж голый, то он и должен быть голым, если он в одежде, то он и должен быть в
+одежде, а не в бодди из референса». Every kept portrait wears the bot's dark grey suit ([a portrait's own
+prompt](#portrait-prompt)). The frame's rule asks for a phrase of clothes that begins with wearing and says nothing of
+bare skin, and a frame with references gives the scene's clothes only in each person's clause, after the reference
+wording and the look. For the readers named in `SIMPLE_CHAT_CLOTHES_USERS` alone ([setup](setup.md)), in
+`local/picture-clothes.ts`:
+
+- **The frame's rule:** its sentence on `clothes` becomes the action experiment's change 8 word for word ([the variant
+  frame](action-experiment.md#variant)): bare skin named outright («wearing only rolled-up linen trousers,
+  bare-chested and barefoot») and nothing bared that the scene does not bare. One sentence follows it, since the
+  tester also saw a person the story leaves naked drawn in the clothes of their profile: a person with nothing on is
+  «wearing nothing», and `clothes` is never left empty. An empty `clothes` gives the person the outfit they wore before
+  the scene, in this picture (`assemblePrompt`, and the words before the references below) and in the next ones, since
+  the frame then records no clothes for them (`clothesOf` and `wornAt` in `local/picture.ts`). The schema stays as it
+  is, and the sentences are replaced at the call, since `local/illustrate.ts` is pinned (`textPins` in
+  `local/action-text.ts`).
+- **Before the reference wording:** a frame with reference pictures says what each referenced person wears in this
+  scene, in the order of the pictures, right after «Create a brand-new scene…» and before «Use the reference images
+  only…»: «The person from image 3 in this scene: wearing only rolled-up canvas trousers, bare-chested and barefoot.»
+  These are the clothes the assembly gives the person, the frame's or else the sheet's outfit, through the same nets
+  for names and ages, and the person's clause keeps them too. A frame without references changes by the rule alone.
+- **Row:** the `picture` and `picture_sample` rows of such a frame carry `clothesStated`, how many people's clothes
+  came before the reference wording.
+
+The rule came to the tester's line on 2026-09-29, after the owner approved it at about 13:05 UTC, without the places
+of a frame seen through someone's eyes that came with it on the tester stand's line. With the list empty, and with it
+naming only a reader who writes nothing, every model request, graph with its uploads, Telegram call and row is
+01abf78's: a dry run that day with a fake model, a fake ComfyUI that takes uploads and a fake Telegram, over a story of
+three people of whom two had the reader's own fronts, gave 12 requests, 6 graphs, 56 calls and 44 rows the same for a
+frame with no reference yet, a frame with both, its style sample, a variant, and a second reader's two frames. With
+the reader on the list it passed 18 checks. The two frame requests are 01abf78's with the rule in place of the bot's
+sentence and the same schema. The frame with both references and its sample say «The person from image 1 in this
+scene: wearing a grey wool coat. The person from image 2 in this scene: wearing nothing.» right before «Use the
+reference images only…», and their rows carry `clothesStated` 2. The frame with no reference yet, the variant and the
+man bound to no picture get no such words. The second reader's requests, graphs, calls and rows stay 01abf78's, and
+nothing of the story reaches a row. The pose sets' and the sheet versions' dry runs give 01abf78's outputs as before.
+No picture has been drawn with the rule on this line.
+
 <a id='along-the-story'></a>
 
 ### Along the story

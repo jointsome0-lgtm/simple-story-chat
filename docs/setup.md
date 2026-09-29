@@ -44,6 +44,7 @@ The variables go in `.env`, and [.env.example](../.env.example) is the starting 
 | `SIMPLE_CHAT_IMAGE_WAIT_SECONDS` | Optional: how long one picture may take, 180 by default (5 to 1800). A picture that outlives it is stopped on the card; the story is not affected either way |
 | `SIMPLE_CHAT_SHEET_VERSION_USERS` | Optional: numeric Telegram IDs separated by commas, all of them from `SIMPLE_CHAT_IMAGE_USERS`. **Empty by default.** Their frames name the lasting changes the story makes to a person's look, which then hold from that scene on down its line, and they may write a person's text «only from this moment» ([along the story](telegram-ui.md#along-the-story)). Everybody else's frames are as before |
 | `SIMPLE_CHAT_POSE_SET_USERS` | Optional: numeric Telegram IDs separated by commas, all of them from `SIMPLE_CHAT_IMAGE_REFERENCE_USERS`. **Empty by default.** They may give a person up to 200 pictures, which a small model on this computer sorts by pose, and each frame takes the one that fits ([pose sets](#pose-sets)). Everybody else's frames are as before |
+| `SIMPLE_CHAT_CLOTHES_USERS` | Optional: IDs from `SIMPLE_CHAT_IMAGE_USERS`. **Empty by default.** Their frames name what each person wears and what of them is bare, or that they wear nothing, and a frame with reference pictures says it before the words on what the pictures are for ([what they wear](telegram-ui.md#what-they-wear)). Everybody else's frames are as before |
 
 ### Model settings
 

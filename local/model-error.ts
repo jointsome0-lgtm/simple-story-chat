@@ -147,7 +147,10 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   // A pose set's archive (local/pose-archive.ts): of the pictures it kept, how many had all three labels from its
   // labels.csv and how many were marked main; and that file's rows, those that matched no picture and those with a value
   // the bot does not know.
-  'poseLabeled', 'poseMain', 'poseLabelRows', 'poseRowsUnmatched', 'poseRowsUnknown'] as const;
+  'poseLabeled', 'poseMain', 'poseLabelRows', 'poseRowsUnmatched', 'poseRowsUnknown',
+  // The tester's clothes change of 2026-09-28 (local/picture-clothes.ts): how many people's clothes came before the
+  // reference wording.
+  'clothesStated'] as const;
 
 export type ErrorDetails = {
   httpStatus?: number; phase?: typeof PHASES[number]; operation?: typeof OPERATIONS[number];

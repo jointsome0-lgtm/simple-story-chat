@@ -29,6 +29,9 @@ export type ImageConfig = {
   // The readers of the reference experiment who may send a person's pictures by the dozen, for each frame to take the one
   // whose pose fits (local/pose-set.ts), and the captioner on this computer that labels them. Nobody by default.
   poseSetUsers?: Set<string>; captioner?: CaptionerConfig;
+  // The tester's complaint of 2026-09-28 about clothes, for these readers alone and nobody by default: a frame names what
+  // each person wears and what of them is bare, and says it before the reference wording (local/picture-clothes.ts).
+  clothesUsers?: Set<string>;
 };
 export type Config = ModelConfig & { gpu: GpuConfig | undefined; images: ImageConfig | undefined; token: string; allowedUsers: Set<string>; ownerId: string; dbPath: string };
 // The agent interface (docs/agent-interface.md#privacy-a-separate-library): its own library file, and the bot's model
@@ -159,6 +162,7 @@ export function gpuConfig(env: Env, provider: string): GpuConfig | undefined {
 //   SIMPLE_CHAT_IMAGE_WAIT_SECONDS=180                        # optional; how long one picture may take
 //   SIMPLE_CHAT_SHEET_VERSION_USERS=123456789                 # optional; readers whose people change along the story
 //   SIMPLE_CHAT_POSE_SET_USERS=123456789                      # optional; readers who send many pictures of a person
+//   SIMPLE_CHAT_CLOTHES_USERS=123456789                       # optional; a frame says what each person wears and bares
 //
 // Without SIMPLE_CHAT_IMAGE_URL nothing is described and nothing is drawn: no second model call, no status line.
 // The graphs in gpu/ end in a node that saves the picture into ComfyUI's own output directory, where nothing of
@@ -227,6 +231,11 @@ export function imageConfig(env: Env, directory: string, allowedUsers: Set<strin
   for (const user of poseSetUsers) if (!referenceUsers.has(user)) {
     throw new Error('Every SIMPLE_CHAT_POSE_SET_USERS entry must be one of SIMPLE_CHAT_IMAGE_REFERENCE_USERS');
   }
+  // The tester's clothes change (local/picture-clothes.ts), read as the versions: a stray ID is a typo.
+  const clothesUsers = new Set((env.SIMPLE_CHAT_CLOTHES_USERS || '').split(',').map(one => one.trim()).filter(Boolean));
+  for (const user of clothesUsers) if (!users.has(user)) {
+    throw new Error('Every SIMPLE_CHAT_CLOTHES_USERS entry must be one of SIMPLE_CHAT_IMAGE_USERS');
+  }
   const root = resolve(import.meta.dirname, '..');
   const captioner = poseSetUsers.size ? { python: resolve(root, 'captioner/.venv/bin/python'), script: resolve(root, 'captioner/caption.py'),
     model: resolve(root, 'models/pose-captioner'), threads: 4 } : undefined;
@@ -234,7 +243,7 @@ export function imageConfig(env: Env, directory: string, allowedUsers: Set<strin
   // itself: it may be short even when a picture may take minutes.
   return { url: url.origin, workflow: resolve(directory, workflow), checkpoint, style, users,
     waitMs: seconds * 1000, timeoutMs: Math.min(60000, seconds * 1000), references: references === 'true', referenceUsers, versionUsers,
-    ...poseSetUsers.size ? { poseSetUsers, captioner } : {} };
+    clothesUsers, ...poseSetUsers.size ? { poseSetUsers, captioner } : {} };
 }
 
 // A hosted API or a consumer Codex account may log requests and train on them. By default they serve synthetic probes
