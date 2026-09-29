@@ -169,9 +169,10 @@ where two pictures share a name. `pose` is one of `стоя`, `сидя`, `ид�
 вправо`, `профиль влево`, `профиль вправо`, `спиной` (`front`, `three-quarter left`, `three-quarter right`, `profile left`,
 `profile right`, `back`), where left and right are the side of the picture the character faces; and `framing` one of `в
 полный рост`, `по пояс`, `по плечи` (`full body`, `half body`, `head and shoulders`). `main` (`да`, `yes` or `1`) marks the
-picture to stand for its pose before the others. The message that counts the pictures says how many came labeled, how
-many the captioner will label, and which rows found no picture or had a value the bot does not know
-([archives](telegram-ui.md#pose-set)).
+picture to stand for its pose before the others. A row that could mean two pictures, `A.png` beside `a.png` among them,
+labels neither, and a file of more than 1,000 filled rows is not read. The message that counts the pictures says how
+many came labeled, how many the captioner will label, and which rows found no picture or had a value the bot does not
+know, or that the file could not be read ([archives](telegram-ui.md#pose-set)).
 
 ### Backup and restore
 

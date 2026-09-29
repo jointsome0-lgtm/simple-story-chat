@@ -37,24 +37,24 @@ function zip(files: { name: string; data: Buffer; stored?: boolean; crc?: number
   end.writeUInt32LE(offset, 16);
   return Buffer.concat([...parts, ...directory, end]);
 }
-function refused(archive: Buffer) {
-  try { readPoseArchive(archive); } catch (error) { if (error instanceof ArchiveError) return error.code; throw error; }
+async function refused(archive: Buffer) {
+  try { await readPoseArchive(archive); } catch (error) { if (error instanceof ArchiveError) return error.code; throw error; }
   return undefined;
 }
 
-test('an archive past its limits is refused, whole or picture by picture, and nothing in it is unpacked past them', () => {
+test('an archive past its limits is refused, whole or picture by picture, and nothing in it is unpacked past them', async () => {
   // A bomb: ten megabytes of zeros weigh ten kilobytes packed. It is no picture and is not unpacked, or its CRC, which
   // is wrong, would have it broken; and two files over the same bytes refuse the archive.
-  assert.deepEqual(readPoseArchive(zip([{ name: 'a.png', data: Buffer.alloc(10 * 1024 * 1024), crc: 0 }])).pictures, [{ refused: 'type' }]);
-  assert.equal(refused(zip([{ name: 'a.png', data: Buffer.from('x') }, { name: 'b.png', data: Buffer.from('x'), at: 0 }])), 'bomb');
+  assert.deepEqual((await readPoseArchive(zip([{ name: 'a.png', data: Buffer.alloc(10 * 1024 * 1024), crc: 0 }]))).pictures, [{ refused: 'type' }]);
+  assert.equal(await refused(zip([{ name: 'a.png', data: Buffer.from('x') }, { name: 'b.png', data: Buffer.from('x'), at: 0 }])), 'bomb');
   // Names out of the archive, whichever way they climb.
   for (const name of ['../a.png', 'a/../../a.png', '/a.png', 'C:\\a.png', 'a\\..\\..\\a.png']) {
-    assert.equal(refused(zip([{ name, data: Buffer.from('x') }])), 'unsafe', name);
+    assert.equal(await refused(zip([{ name, data: Buffer.from('x') }])), 'unsafe', name);
   }
   // An archive inside is never opened, by its name or by its bytes; a picture over 10 MB is not unpacked, or its CRC,
   // which is wrong, would have it broken; the archive itself is read.
   const inner = zip([{ name: 'a.png', data: Buffer.from('x') }]);
-  const archive = readPoseArchive(zip([{ name: 'inner.zip', data: inner }, { name: 'inner.png', data: inner },
+  const archive = await readPoseArchive(zip([{ name: 'inner.zip', data: inner }, { name: 'inner.png', data: inner },
     { name: 'big.png', data: randomBytes(10 * 1024 * 1024 + 1), stored: true, crc: 0 }, { name: 'labels.csv', data: Buffer.from('file,pose\nbig.png,standing\n') }]));
   assert.deepEqual(archive.pictures.map(one => one.refused), ['archive', 'archive', 'too_large']);
   assert.deepEqual(archive.labels, { found: true, rows: 1, unmatched: [], unknown: [] });
