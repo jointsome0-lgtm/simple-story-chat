@@ -33,6 +33,12 @@ const IMAGE = 'vastai/base-image:cuda-13.0.3-cudnn-devel-ubuntu24.04-py312-2026-
 // image's nvcc 13 would then refuse to start on a card it compiled for. `cuda_max_good` is Vast's name for the
 // highest CUDA a host's driver runs; this floor moves with the image above and is tied to it by a test.
 const CUDA_FLOOR = 13.0;
+// The driver's own floor, which CUDA_FLOOR does not give: a 580 driver runs CUDA 13.0 and passes it. On 2026-09-29
+// simple-serving's text card stopped at CUDA error 804 on host 127708's 580.173.02, while its cards on 595.71.05 (hosts
+// 336596 and 573372) and 595.84 (403004 and 8725) served, and so did the picture card on 595.71.05 (416420).
+// llama.cpp's cards ran on 580.95.05 (host 406325) on earlier days. The rule is chooseOffers', which a rent runs again
+// over its own search: that day a dry run listed only 595 hosts, and the rent after it took a 580.173.02 one (525333).
+const DRIVER_FLOOR = 595;
 // The pinned files below (57.2 GB), the build tree, about 6 GB of wheels and packages, and room for the pictures
 // and logs the session writes beside them. A single-card session downloads the same files and only runs the two
 // lanes one after the other.
@@ -103,7 +109,7 @@ const DONE_SECONDS = 20;
 const MIN_DIRECT_PORTS = 2;
 
 export type RentPlan = {
-  lane: Lane; gpus: number; maxHour: number; diskGb: number; minRamGb: number; minDirectPorts: number;
+  lane: Lane; gpus: number; maxHour: number; diskGb: number; minRamGb: number; minDirectPorts: number; minDriver: number;
   sessionHours: number; sessionBytes: number; uploadBytes: number; trafficFactor: number; image: string; preferredHost: number | null;
   blockedCountries: string[];
 };
@@ -126,7 +132,7 @@ export function rentPlan({ gpus = 1, lane = 'both', preferredHost = PREFERRED_HO
   return {
     lane, gpus, maxHour, diskGb,
     minRamGb: lane === 'pictures' ? PICTURE_RAM_GB : lane === 'small' ? SMALL_RAM_GB : RAM_GB_PER_GPU * gpus,
-    minDirectPorts: MIN_DIRECT_PORTS,
+    minDirectPorts: MIN_DIRECT_PORTS, minDriver: DRIVER_FLOOR,
     sessionHours: hours === undefined ? SESSION_HOURS : hours + (BOOT_SECONDS + DONE_SECONDS + DESTROY_SECONDS) / 3600,
     // Qwen's files and torch's five gigabytes, the only wheels the picture lane pulls.
     sessionBytes: qwenOnly ? QWEN_BYTES + 5000000000 : bytes, uploadBytes: Math.round(uploadGb * 1e9), trafficFactor, image: IMAGE, preferredHost,
@@ -198,7 +204,7 @@ export function describeOffer(offer: RawOffer, plan: RentPlan): Offer {
 
 export type Choice = {
   candidates: Offer[]; offered: number; withinPrice: number; droppedForUnknownPrice: number; droppedForCountry: number;
-  droppedForFewCores: number; droppedForProxyOnly: number; droppedForRam: number;
+  droppedForFewCores: number; droppedForProxyOnly: number; droppedForRam: number; droppedForDriver: number;
 };
 
 // What an offer costs over the session's hours with its traffic both ways, in dollars: the unrounded parts summed and
@@ -211,8 +217,11 @@ export function sessionCost(offer: Pick<Offer, 'exact'>, plan: RentPlan): number
 
 // Every rule that drops offers reports how many it dropped, and each rule is its own step: a rule folded into
 // another one has no count and cannot be named as the reason the list is empty. An unknown core count or container
-// RAM is not a reason to drop an offer, only a known-too-small one is.
+// RAM is not a reason to drop an offer, only a known-too-small one is. An unknown driver is: on an old one the engine
+// does not start at all.
 const countryOf = (geo: unknown) => typeof geo === 'string' ? geo.slice(geo.lastIndexOf(',') + 1).trim().toUpperCase() : '';
+// The major of a driver version as Vast states it, "595.84" or "580.173.02"; null for anything else.
+const driverMajor = (driver: unknown) => typeof driver === 'string' && /^\d+\.\d+(\.\d+)?$/.test(driver) ? Number(driver.split('.')[0]) : null;
 
 export function chooseOffers(offers: RawOffer[], plan: RentPlan): Choice {
   const described = offers.map(offer => describeOffer(offer, plan));
@@ -222,7 +231,8 @@ export function chooseOffers(offers: RawOffer[], plan: RentPlan): Choice {
   const affordable = reachable.filter(o => o.hour <= plan.maxHour);
   const withCores = affordable.filter(o => o.cpus === null || o.cpus >= 4);
   const withPorts = withCores.filter(o => o.directPorts >= plan.minDirectPorts);
-  const candidates = withPorts.filter(o => o.ramGb === null || o.ramGb >= plan.minRamGb)
+  const withRam = withPorts.filter(o => o.ramGb === null || o.ramGb >= plan.minRamGb);
+  const candidates = withRam.filter(o => (driverMajor(o.driver) ?? 0) >= plan.minDriver)
     // The owner's machine first; then cheapest for this session, hours and traffic together.
     .sort((a, b) => Number(b.host === plan.preferredHost) - Number(a.host === plan.preferredHost)
       || exactSession(a, plan) - exactSession(b, plan));
@@ -230,24 +240,27 @@ export function chooseOffers(offers: RawOffer[], plan: RentPlan): Choice {
     candidates, offered: described.length, withinPrice: affordable.length,
     droppedForUnknownPrice: described.length - priced.length, droppedForCountry: priced.length - reachable.length,
     droppedForFewCores: affordable.length - withCores.length,
-    droppedForProxyOnly: withCores.length - withPorts.length, droppedForRam: withPorts.length - candidates.length,
+    droppedForProxyOnly: withCores.length - withPorts.length, droppedForRam: withPorts.length - withRam.length,
+    droppedForDriver: withRam.length - candidates.length,
   };
 }
 
-export type EmptyReason =
-  'none_offered' | 'none_in_reachable_country' | 'none_within_price' | 'none_with_enough_cores' | 'none_with_direct_ports' | 'none_with_enough_ram';
+export type EmptyReason = 'none_offered' | 'none_in_reachable_country' | 'none_within_price' | 'none_with_enough_cores'
+  | 'none_with_direct_ports' | 'none_with_enough_ram' | 'none_with_a_new_enough_driver';
 
 // Which rule emptied the list, for the one line the owner is left with. A search that answered with nothing at all,
-// and the rules on cores, ports and RAM, all drop offers the price never judged; reporting any of them as a price
-// failure sends the next attempt to change the wrong number.
+// and the rules on cores, ports, RAM and the driver, all drop offers the price never judged; reporting any of them as
+// a price failure sends the next attempt to change the wrong number.
 export function emptyReason(choice: Choice): EmptyReason {
   if (choice.offered === 0) return 'none_offered';
   if (choice.droppedForCountry > 0 && choice.offered - choice.droppedForUnknownPrice === choice.droppedForCountry) return 'none_in_reachable_country';
   if (choice.withinPrice === 0) return 'none_within_price';
   const withCores = choice.withinPrice - choice.droppedForFewCores;
   if (withCores === 0) return 'none_with_enough_cores';
-  if (withCores === choice.droppedForProxyOnly) return 'none_with_direct_ports';
-  return 'none_with_enough_ram';
+  const withPorts = withCores - choice.droppedForProxyOnly;
+  if (withPorts === 0) return 'none_with_direct_ports';
+  if (withPorts === choice.droppedForRam) return 'none_with_enough_ram';
+  return 'none_with_a_new_enough_driver';
 }
 
 export type CreateBody = {

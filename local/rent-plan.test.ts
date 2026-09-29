@@ -29,7 +29,7 @@ const QWEN = pinned('image-manifest.env', 'IMAGE_QWEN_MODEL_BYTES', 'IMAGE_QWEN_
 
 // A plausible cheap offer; every row changes only the fields it is about.
 const offer = (fields: RawOffer = {}): RawOffer => ({
-  id: 1, host_id: 7, geolocation: 'PL', driver_version: '580.95.05', direct_port_count: 12,
+  id: 1, host_id: 7, geolocation: 'PL', driver_version: '595.84', direct_port_count: 12,
   cpu_cores_effective: 30.72, cpu_ram: 128000, inet_down: 900, reliability2: 0.99,
   dph_total: 0.9, storage_cost: 0.1, inet_down_cost: 0.0026, inet_up_cost: 0.005, ...fields,
 });
@@ -123,8 +123,14 @@ test('each rule counts the offers it drops and names itself when it empties the 
       offer({ id: 4, geolocation: null, dph_total: 0.5 })], [3, 4], { droppedForCountry: 2, withinPrice: 2 }],
     ['a rule each', two, [offer({ id: 'good' }), offer({ id: 'too-dear', dph_total: 1.4 }),
       offer({ id: 'too-few-cores', cpu_cores_effective: 2 }), offer({ id: 'proxy-only', direct_port_count: 1 }),
-      offer({ id: 'too-little-ram', cpu_ram: 32000 }), offer({ id: 'ram-unknown', cpu_ram: null })], ['good', 'ram-unknown'],
-      { offered: 6, withinPrice: 5, droppedForFewCores: 1, droppedForProxyOnly: 1, droppedForRam: 1 }],
+      offer({ id: 'too-little-ram', cpu_ram: 32000 }), offer({ id: 'ram-unknown', cpu_ram: null }),
+      offer({ id: 'old-driver', driver_version: '580.173.02' })], ['good', 'ram-unknown'],
+      { offered: 7, withinPrice: 6, droppedForFewCores: 1, droppedForProxyOnly: 1, droppedForRam: 1, droppedForDriver: 1 }],
+    // The driver's major against its floor, 595: the card of CUDA error 804 had 580.173.02. Unlike the RAM, a driver
+    // that is not stated, or not as a version, is dropped.
+    ['the driver', two, [offer({ id: '580', driver_version: '580.173.02' }), offer({ id: '595', driver_version: '595.84' }),
+      offer({ id: '610', driver_version: '610.57.04' }), offer({ id: 'unstated', driver_version: undefined }),
+      offer({ id: 'unreadable', driver_version: 'n/a' })], ['595', '610'], { droppedForDriver: 3 }],
     // A search that matched nothing is the likeliest first answer to a two-card query, and says nothing of the price.
     ['nothing offered', two, [], [], { offered: 0 }, 'none_offered'],
     ['only a country out of reach', one, [offer({ geolocation: 'China, CN' })], [], { droppedForCountry: 1 }, 'none_in_reachable_country'],
@@ -132,6 +138,7 @@ test('each rule counts the offers it drops and names itself when it empties the 
     ['only too few cores', two, [offer({ cpu_cores_effective: 2 })], [], { droppedForFewCores: 1 }, 'none_with_enough_cores'],
     ['only the proxy', two, [offer({ direct_port_count: 1 })], [], { droppedForProxyOnly: 1 }, 'none_with_direct_ports'],
     ['only too little RAM for two cards', two, [offer({ cpu_ram: 32000 })], [], { droppedForRam: 1 }, 'none_with_enough_ram'],
+    ['only an old driver', two, [offer({ driver_version: '580.173.02' })], [], { droppedForDriver: 1 }, 'none_with_a_new_enough_driver'],
     ['the measured host\'s share, on the language machine', rentPlan({ lane: 'text' }), [offer(measured)], ['measured'], {}],
     ['the measured host\'s share, on the picture machine', rentPlan({ lane: 'pictures' }), [offer(measured)], ['measured'], {}],
     ['a share of 31.2 GB, on the picture machine', rentPlan({ lane: 'pictures' }), [share], ['share'], { droppedForRam: 0 }],

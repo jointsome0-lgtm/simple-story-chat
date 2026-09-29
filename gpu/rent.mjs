@@ -217,20 +217,21 @@ if (offers === null) { console.log(JSON.stringify({ event: 'search_failed', stat
 // know is ignored silently, and those two rules are each worth more than a rental.
 const choice = chooseOffers(offers, plan);
 const { offered, withinPrice, droppedForUnknownPrice, droppedForCountry, droppedForFewCores,
-  droppedForProxyOnly, droppedForRam } = choice;
+  droppedForProxyOnly, droppedForRam, droppedForDriver } = choice;
 const avoided = choice.candidates.filter(offer => !avoidHosts.includes(String(offer.host)));
 const droppedForHost = choice.candidates.length - avoided.length;
 const candidates = maxSession === null ? avoided : avoided.filter(offer => session(offer) <= maxSession);
 const droppedForSession = avoided.length - candidates.length;
 // A rule that drops offers says so: silence would read as "nothing was excluded". The counts are a chain -- what
 // the search returned, what the price left, then each later rule -- and `chosen` is what is left to try, which is
-// not `withinPrice`: the price is only the first rule of four.
+// not `withinPrice`: the price is only the first of the rules.
 console.log(JSON.stringify({ event: 'candidates', offered, withinPrice, chosen: candidates.length,
   maxHour: plan.maxHour, gpus: plan.gpus, lane: plan.lane, sessionHours, droppedForUnknownPrice, droppedForCountry, droppedForFewCores, droppedForProxyOnly,
-  minDirectPorts: plan.minDirectPorts, droppedForRam, minRamGb: plan.minRamGb, droppedForHost, avoidHost: avoidHosts.join(',') || null,
+  minDirectPorts: plan.minDirectPorts, droppedForRam, minRamGb: plan.minRamGb, droppedForDriver, minDriver: plan.minDriver,
+  droppedForHost, avoidHost: avoidHosts.join(',') || null,
   droppedForSession, maxSession, uploadGb: plan.uploadBytes / 1e9, trafficFactor: plan.trafficFactor }));
-// Which rule emptied the list, so that a session lost to an empty search, to cores, to ports or to RAM is not read
-// as a price to raise.
+// Which rule emptied the list, so that a session lost to an empty search, to cores, to ports, to RAM or to the driver
+// is not read as a price to raise.
 if (!candidates.length) {
   console.log(JSON.stringify({ event: avoided.length ? 'none_within_max_session' : choice.candidates.length ? 'only_the_avoided_host' : emptyReason(choice) }));
   process.exit(1);
