@@ -8,8 +8,10 @@
 // session sees a prompt. Four scenes are judged again at seed 7, round two's `repeatedScenes`, under fresh names in a
 // fresh order, for the judge's agreement with itself. A session without valid answers gets one fresh Astra session;
 // both attempts are kept, the first valid answer counts, and a second attempt without one leaves a missing judgment,
-// not a failed picture. G against C0 is the probe's one primary comparison; PE, PT and A+ against C0 are exploratory
-// (`compare`).
+// not a failed picture: the score counts it and leaves the verdicts it touches undecided. G against C0 is the probe's
+// one primary comparison; PE, GPE (G→PE), PT and A+ against C0 are exploratory, and GPE against G as well (`compare`).
+// Every frame the plan has is accounted for per arm: planned, drawn, failed on the card, the enhancer's failure, not
+// reached, judged, and without a judgment (`armsOf`).
 //   trial      before the card: the review's two blinded samples under the task and schema it left (two sessions)
 //   bundles    after the card: every session's bundle from the stands' pictures, each checked against its cell's hash
 //   judge      the sessions, three at a time
@@ -37,8 +39,9 @@ import { fakeCodex } from './image-refs-judge.ts';
 import { greyPng } from './fake-comfy.ts';
 import { INDEX_FILE } from './image-refs-test.ts';
 import type { StandIndex } from './image-refs-test.ts';
-import { ARMS, ARM_SEEDS, CHECKS_FILE, ENHANCER_FAILURES, FROZEN_SHA256, REWRITES_FILE, SCENES, SCHEDULES_FILE, STANDS, STAND_OF, armKey } from './image-prompt-arms.ts';
-import type { Arm, Optional, PromptCheck, Rewrites, Schedule, Schedules } from './image-prompt-arms.ts';
+import { ARMS, ARM_SEEDS, CHECKS_FILE, ENHANCER_FAILURES, FROZEN_SHA256, REWRITES_FILE, REWRITTEN, SCENES, SCHEDULES_FILE, STANDS, STAND_OF, armKey, armLabel,
+  isRewritten } from './image-prompt-arms.ts';
+import type { Arm, Optional, PromptCheck, Rewrites, Rewritten, Schedule, Schedules } from './image-prompt-arms.ts';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const sha256 = (bytes: Uint8Array | string) => createHash('sha256').update(bytes).digest('hex');
@@ -349,8 +352,8 @@ export function scoreAnswer(projection: Projection, answer: Answer): PictureScor
 }
 
 // What came of each case, a scene at a seed, of an arm: judged, with its scores; drawn and without a judgment; the
-// enhancer's output unusable (PE, PT); the frame failed on the card; not reached before the card's end, or cut by the
-// server; or, for an arm drawn only with a budget, its schedule never begun. `rewrite`: whether PE's or PT's pass gave
+// enhancer's output unusable (PE, GPE, PT); the frame failed on the card; not reached before the card's end, or cut by
+// the server; or, for an arm drawn only with a budget, its schedule never begun. `rewrite`: whether the arm's pass gave
 // the scene a usable text.
 export const OUTCOMES = ['judged', 'not_judged', 'enhancer_failed', 'render_failed', 'not_reached', 'budget_omitted'] as const;
 export type Outcome = typeof OUTCOMES[number];
@@ -358,8 +361,7 @@ export type Case = { arm: Arm; scene: string; seed: number; outcome: Outcome; sc
 export function casesOf(run: string, projections: Record<string, Projection>): Case[] {
   const dir = judgeDirOf(run), record = readJson<JudgingRecord>(recordFile(dir));
   const schedules = readJson<Schedules>(join(resolve(run), SCHEDULES_FILE)) ?? {};
-  const rewrites: Record<'PE' | 'PT', Rewrites | undefined> = { PE: readJson<Rewrites>(join(resolve(run), REWRITES_FILE.fast)),
-    PT: readJson<Rewrites>(join(resolve(run), REWRITES_FILE.think)) };
+  const rewrites = Object.fromEntries(REWRITTEN.map(arm => [arm, readJson<Rewrites>(join(resolve(run), REWRITES_FILE[arm]))])) as Record<Rewritten, Rewrites | undefined>;
   const indexes = Object.fromEntries(STANDS.map(stand => [stand, readJson<StandIndex>(join(resolve(run), stand, INDEX_FILE))]));
   const scored = new Map<string, PictureScore>();
   for (const session of judgeSessions().filter(one => one.kind === 'pictures')) {
@@ -373,13 +375,13 @@ export function casesOf(run: string, projections: Record<string, Projection>): C
   return ARMS.flatMap(arm => SCENES.flatMap(scene => ARM_SEEDS.map((seed): Case => {
     const base = { arm, scene, seed };
     if (arm !== 'C0' && arm !== 'G' && schedules[arm as Optional]?.state !== 'begun') return { ...base, outcome: 'budget_omitted' };
-    if (arm === 'PE' || arm === 'PT') {
+    if (isRewritten(arm)) {
       const rewrite = rewrites[arm]?.scenes[scene];
       if (rewrite?.status !== 'ok') {
         return { ...base, outcome: rewrite && ENHANCER_FAILURES.includes(rewrite.code ?? '') ? 'enhancer_failed' : 'not_reached', rewrite: false };
       }
     }
-    const own = { ...base, ...(arm === 'PE' || arm === 'PT' ? { rewrite: true } : {}) };
+    const own = { ...base, ...(isRewritten(arm) ? { rewrite: true } : {}) };
     const cell = indexes[STAND_OF[arm]]?.cells[armKey(arm, scene, seed)];
     if (cell?.status === 'failed' || cell?.status === 'out') return { ...own, outcome: 'render_failed' };
     if (cell?.status !== 'drawn' || !cell.sha256) return { ...own, outcome: 'not_reached' };
@@ -388,37 +390,49 @@ export function casesOf(run: string, projections: Record<string, Projection>): C
   })));
 }
 
-// The clauses each arm is set against C0 by, fixed on 2026-09-28 before any picture was drawn and changed by the
-// review before the card. G against C0 is the primary comparison, PE, PT and A+ against C0 exploratory. Every
-// difference is the mean over scenes of each scene's difference, a scene's value the mean over the seeds where both
-// arms have a case. `visible_essential_relations` gains 0.10 or more over 8 scenes at least, and the lower end of the
-// 90% interval from 10,000 resamples of whole scenes (action-report.ts `interval`) is above 0, else undecided; no
-// fewer pictures than C0 with every essential relation visible and with every participant; no more mixups, and at
-// most max(1, n/10) more anatomy errors among the n pictures judged in both, each counted as confirmed and with unsure
-// counted in; `looks` not below C0's by more than 0.05, conservatively and at its upper bound; a safeguard whose two
-// readings disagree is unresolved and leaves the arm undecided, unless another clause fails outright; and the arm's own
-// visible_essential_relations 0.50 or more. PE and PT are held to the relations over every case their schedule planned, an unusable text of the enhancer
-// counting as a picture that shows none (`operational`); their comparison over the pictures they drew is a diagnostic
-// with no verdict. An arm whose schedule was never begun or not finished is undecided, not failed.
+// The clauses each arm is set against its baseline by, fixed on 2026-09-28 before any picture was drawn and changed by
+// the review before the card. G against C0 is the primary comparison; PE, GPE, PT and A+ against C0 exploratory, and
+// GPE against G as well. Every difference is the mean over scenes of each scene's difference, a scene's value the mean
+// over the seeds where both arms have a case. `visible_essential_relations` gains 0.10 or more over 8 scenes at least,
+// and the lower end of the 90% interval from 10,000 resamples of whole scenes (action-report.ts `interval`) is above 0,
+// else undecided; no fewer pictures than the baseline with every essential relation visible and with every
+// participant; no more mixups, and at most max(1, n/10) more anatomy errors among the n pictures judged in both, each
+// counted as confirmed and with unsure counted in; `looks` not below the baseline's by more than 0.05,
+// conservatively and at its upper bound; a safeguard whose two readings disagree is unresolved and leaves the arm
+// undecided, unless another clause fails outright; and the arm's own visible_essential_relations 0.50 or more. A frame
+// that failed on the card counts as a picture that shows none, on either side; so does an unusable text of the
+// enhancer for PE, GPE and PT, which are held to the relations over every case their schedule planned (`operational`).
+// Their comparison over the pictures they drew is a diagnostic with no verdict, and reads drawn pictures alone. A case
+// drawn and never judged is counted apart (`missing`), never read as a picture, and leaves the verdict undecided; so
+// does an arm whose schedule was never begun or not finished.
 export const CLAUSES = { gain: 0.10, scenes: 8, looks: -0.05, floor: 0.5 };
 export type Pass = boolean | 'undecided' | 'unresolved';
 export type Clause = { clause: string; value: number | null; threshold: number; scenes: number; pass: Pass; lower?: number | null;
   treatments?: Record<string, { value: number | null; pass: boolean }> };
 export type Role = 'primary' | 'exploratory' | 'diagnostic';
-export type Comparison = { arm: Arm; role: Role; basis: 'operational' | 'matched'; scenes: number; pictures: number; verdict?: 'pass' | 'fail' | 'undecided'; why?: string[];
+// `shownNothing`: the pairs where the arm (`x`) or the baseline (`y`) failed on the card or had no usable text, read
+// as pictures that show nothing; `missing`: the cases of each drawn and without a judgment.
+export type Comparison = { arm: Arm; against: Arm; role: Role; basis: 'operational' | 'matched' | 'drawn'; scenes: number; pictures: number;
+  shownNothing: { x: number; y: number }; missing: { x: number; y: number }; verdict?: 'pass' | 'fail' | 'undecided'; why?: string[];
   clauses: Clause[]; visible: { x: number | null; y: number | null; difference: number | null; interval: [number, number] | null; ahead: number; level: number; behind: number;
     byScene: Record<string, number> } };
-type Pair = { scene: string; seed: number; x?: PictureScore; y: PictureScore };
-export function compare(cases: Case[], arm: Arm, role: Role): Comparison {
-  const operational = role !== 'diagnostic' && (arm === 'PE' || arm === 'PT');
+type Pair = { scene: string; seed: number; x?: PictureScore; y?: PictureScore };
+export function compare(cases: Case[], arm: Arm, role: Role, against: Arm = 'C0'): Comparison {
+  const operational = role !== 'diagnostic' && isRewritten(arm);
   const at = new Map(cases.map(one => [`${one.arm}:${one.scene}:${one.seed}`, one]));
+  // What a case gives a pair: its scores when judged; a picture that shows nothing when its frame failed on the card,
+  // or the enhancer gave its arm no usable text, except in a diagnostic, which reads the drawn pictures alone; and no
+  // pair at all otherwise: a case not reached, never begun, or drawn and not judged.
+  const side = (one: Case | undefined): { score?: PictureScore } | undefined => {
+    if (one?.outcome === 'judged' && one.score) return { score: one.score };
+    if (role !== 'diagnostic' && (one?.outcome === 'render_failed' || (isRewritten(one?.arm ?? '') && one?.outcome === 'enhancer_failed'))) return {};
+    return undefined;
+  };
   const pairs: Pair[] = SCENES.flatMap(scene => ARM_SEEDS.flatMap(seed => {
-    const x = at.get(`${arm}:${scene}:${seed}`), y = at.get(`C0:${scene}:${seed}`);
-    if (y?.outcome !== 'judged' || !y.score) return [];
-    if (x?.outcome === 'judged' && x.score) return [{ scene, seed, x: x.score, y: y.score }];
-    return operational && x?.outcome === 'enhancer_failed' ? [{ scene, seed, y: y.score }] : [];
+    const x = side(at.get(`${arm}:${scene}:${seed}`)), y = side(at.get(`${against}:${scene}:${seed}`));
+    return x && y ? [{ scene, seed, x: x.score, y: y.score }] : [];
   }));
-  const judged = pairs.filter(one => one.x);
+  const judged = pairs.filter(one => one.x && one.y);
   const means = (list: Pair[], read: (score: PictureScore | undefined) => number | null) => SCENES.flatMap(scene => {
     const own = list.filter(one => one.scene === scene).map(one => ({ x: read(one.x), y: read(one.y) })).filter(one => one.x !== null && one.y !== null);
     return own.length ? [{ scene, x: mean(own.map(one => one.x!)), y: mean(own.map(one => one.y!)) }] : [];
@@ -456,21 +470,27 @@ export function compare(cases: Case[], arm: Arm, role: Role): Comparison {
   const why = clauses.filter(one => one.pass === 'undecided' || one.pass === 'unresolved').map(one => `${one.clause}_${one.pass}`);
   const verdict = role === 'diagnostic' ? undefined : clauses.some(one => one.pass === false) ? 'fail' : why.length ? 'undecided' : 'pass';
   const diffs = relation.map(one => one.x - one.y);
-  return { arm, role, basis: operational ? 'operational' : 'matched', scenes: relation.length, pictures: pairs.length, ...(verdict ? { verdict } : {}),
-    ...(why.length ? { why } : {}), clauses,
+  const unjudged = (of: Arm) => cases.filter(one => one.arm === of && one.outcome === 'not_judged').length;
+  return { arm, against, role, basis: operational ? 'operational' : role === 'diagnostic' ? 'drawn' : 'matched', scenes: relation.length, pictures: pairs.length,
+    shownNothing: { x: pairs.filter(one => !one.x).length, y: pairs.filter(one => !one.y).length }, missing: { x: unjudged(arm), y: unjudged(against) },
+    ...(verdict ? { verdict } : {}), ...(why.length ? { why } : {}), clauses,
     visible: { x: own, y: relation.length ? mean(relation.map(one => one.y)) : null, difference: gain, interval: bounds,
       ahead: diffs.filter(one => one > EPS).length, level: diffs.filter(one => Math.abs(one) <= EPS).length, behind: diffs.filter(one => one < -EPS).length,
       byScene: Object.fromEntries(relation.map((one, index) => [one.scene, diffs[index]])) } };
 }
-// An arm is undecided while its schedule was never begun, or it or C0 has a case the card did not reach: C0 and G are
-// the schedule every other waits for.
+// An arm is undecided while its schedule was never begun, or it or its baseline has a case the card did not reach: C0
+// and G are the schedule every other waits for. So it is while either has a picture drawn and not judged.
 function scheduled(comparison: Comparison, cases: Case[]): Comparison {
-  const own = cases.filter(one => one.arm === comparison.arm), base = cases.filter(one => one.arm === 'C0');
-  const why = own.some(one => one.outcome === 'budget_omitted') ? 'budget_omitted'
-    : [...own, ...base].some(one => one.outcome === 'not_reached') ? 'schedule_unfinished' : undefined;
-  return why && comparison.verdict ? { ...comparison, verdict: 'undecided', why: [why, ...(comparison.why ?? [])] } : comparison;
+  const own = cases.filter(one => one.arm === comparison.arm), base = cases.filter(one => one.arm === comparison.against);
+  const why = [...(own.some(one => one.outcome === 'budget_omitted') ? ['budget_omitted']
+    : [...own, ...base].some(one => one.outcome === 'not_reached') ? ['schedule_unfinished'] : []),
+  ...(comparison.missing.x + comparison.missing.y ? ['judgments_missing'] : [])];
+  return why.length && comparison.verdict ? { ...comparison, verdict: 'undecided', why: [...why, ...(comparison.why ?? [])] } : comparison;
 }
-// Each arm over its judged pictures, and what came of every case it had.
+// Each arm over its judged pictures, and what came of every case it had. `frames` accounts for every frame the plan
+// has: drawn, failed on the card, without a usable text of the enhancer, or not reached, cut by the card's end or the
+// server (`cut`) or with its schedule never begun (`omitted`); and of those drawn, judged or without a judgment
+// (`missing`). `extra`: the pictures the judge saw a person or creature in that the scene's checklist does not have.
 function armsOf(cases: Case[]) {
   return Object.fromEntries(ARMS.map(arm => {
     const own = cases.filter(one => one.arm === arm), scores = own.flatMap(one => (one.score ? [one.score] : []));
@@ -480,21 +500,22 @@ function armsOf(cases: Case[]) {
     };
     const count = (read: (score: PictureScore) => boolean) => scores.filter(read).length;
     const sum = (read: (score: PictureScore) => Tally) => scores.map(read).reduce(plus, NONE);
-    return [arm, { pictures: scores.length, outcomes: Object.fromEntries(OUTCOMES.flatMap(outcome => {
-      const n = own.filter(one => one.outcome === outcome).length;
-      return n ? [[outcome, n]] : [];
-    })), visible: share(score => score.visible), essential: sum(score => score.essential), allVisible: count(score => score.allVisible),
-    complete: count(score => score.complete),
-    mixups: { confirmed: count(score => score.mixup.confirmed), unsureOnly: count(score => score.mixup.notRuledOut && !score.mixup.confirmed),
-      notRuledOut: count(score => score.mixup.notRuledOut) },
-    anatomy: { confirmed: count(score => score.anatomy.confirmed), unsureOnly: count(score => score.anatomy.notRuledOut && !score.anatomy.confirmed),
-      notRuledOut: count(score => score.anatomy.notRuledOut) },
-    looks: { conservative: share(score => score.looks.conservative), upper: share(score => score.looks.upper) },
-    extra: { yes: count(score => score.extra === 'yes'), unsure: count(score => score.extra === 'unsure') },
-    byWith: Object.fromEntries(WITH.map(kind => [kind, sum(score => score.byWith[kind])])) as Record<typeof WITH[number], Tally>,
-    otherRelations: sum(score => score.otherRelations),
-    kinds: Object.fromEntries(KINDS.map(kind => [kind, sum(score => score.kinds[kind])])) as Record<typeof KINDS[number], Tally>, proportions: share(score => score.proportions),
-    ...(arm === 'PE' || arm === 'PT' ? { usable: SCENES.filter(scene => own.some(one => one.scene === scene && one.rewrite === true)).length, of: SCENES.length } : {}) }];
+    const of = (outcome: Outcome) => own.filter(one => one.outcome === outcome).length;
+    return [arm, { pictures: scores.length, outcomes: Object.fromEntries(OUTCOMES.flatMap(outcome => (of(outcome) ? [[outcome, of(outcome)]] : []))),
+      frames: { planned: own.length, drawn: of('judged') + of('not_judged'), renderFailed: of('render_failed'), enhancerFailed: of('enhancer_failed'),
+        notReached: { cut: of('not_reached'), omitted: of('budget_omitted') }, judged: of('judged'), missing: of('not_judged') },
+      visible: share(score => score.visible), essential: sum(score => score.essential), allVisible: count(score => score.allVisible),
+      complete: count(score => score.complete),
+      mixups: { confirmed: count(score => score.mixup.confirmed), unsureOnly: count(score => score.mixup.notRuledOut && !score.mixup.confirmed),
+        notRuledOut: count(score => score.mixup.notRuledOut) },
+      anatomy: { confirmed: count(score => score.anatomy.confirmed), unsureOnly: count(score => score.anatomy.notRuledOut && !score.anatomy.confirmed),
+        notRuledOut: count(score => score.anatomy.notRuledOut) },
+      looks: { conservative: share(score => score.looks.conservative), upper: share(score => score.looks.upper) },
+      extra: { yes: count(score => score.extra === 'yes'), unsure: count(score => score.extra === 'unsure') },
+      byWith: Object.fromEntries(WITH.map(kind => [kind, sum(score => score.byWith[kind])])) as Record<typeof WITH[number], Tally>,
+      otherRelations: sum(score => score.otherRelations),
+      kinds: Object.fromEntries(KINDS.map(kind => [kind, sum(score => score.kinds[kind])])) as Record<typeof KINDS[number], Tally>, proportions: share(score => score.proportions),
+      ...(isRewritten(arm) ? { usable: SCENES.filter(scene => own.some(one => one.scene === scene && one.rewrite === true)).length, of: SCENES.length } : {}) }];
   }));
 }
 // The judge against itself: each repeat's answers against its first session's, picture by picture through the hashes,
@@ -561,7 +582,8 @@ export function scoreProbe(run: string, round2: string) {
   const dir = judgeDirOf(run), projections = projectionsOf(round2), cases = casesOf(run, projections), record = readJson<JudgingRecord>(recordFile(dir));
   return { pins: record?.pins, judging: record ? judgingCounts(record, judgeSessions().map(one => one.name)) : undefined, arms: armsOf(cases),
     comparisons: [scheduled(compare(cases, 'G', 'primary'), cases),
-      ...(['PE', 'PT'] as Arm[]).flatMap(arm => [scheduled(compare(cases, arm, 'exploratory'), cases), compare(cases, arm, 'diagnostic')]),
+      ...([['PE', 'C0'], ['GPE', 'C0'], ['GPE', 'G'], ['PT', 'C0']] as [Arm, Arm][]).flatMap(([arm, against]) => [scheduled(compare(cases, arm, 'exploratory', against), cases),
+        compare(cases, arm, 'diagnostic', against)]),
       scheduled(compare(cases, 'A+', 'exploratory'), cases)],
     agreement: agreementOf(dir, projections), namedAgainstShown: namedAgainstShown(run, cases, projections) };
 }
@@ -571,11 +593,11 @@ const shares = (tally: Tally) => (tally.of ? [tally.yes, tally.no, tally.unsure]
 const VERDICT_RU = { pass: 'проходит', fail: 'не проходит', undecided: 'не решено' };
 const ROLE_RU: Record<Role, string> = { primary: 'главное сравнение', exploratory: 'разведка', diagnostic: 'диагностика по одним нарисованным картинкам, без вердикта' };
 const PASS_RU = (pass: Pass) => (pass === true ? 'да' : pass === false ? 'нет' : pass === 'unresolved' ? 'не разрешено: исход зависит от ответов «не уверен»' : 'не решено');
-const OUTCOME_RU: Record<Outcome, string> = { judged: 'оценено', not_judged: 'нет суждения судьи', enhancer_failed: 'энхансер не дал годного текста',
-  render_failed: 'кадр не нарисован', not_reached: 'не дошли', budget_omitted: 'не начато: не хватило бюджета' };
 const CLAUSE_RU: Record<string, string> = { visible_essential_relations: 'видимые существенные отношения', all_visible: 'картинок, где видны все существенные',
   complete: 'картинок со всеми участниками', mixups: 'картинок с путаницей', anatomy: 'картинок с ошибкой анатомии', looks: 'внешность', floor: 'свой уровень отношений' };
-const WHY_RU: Record<string, string> = { budget_omitted: 'расписание не начато', schedule_unfinished: 'расписание не закончено' };
+const WHY_RU: Record<string, string> = { budget_omitted: 'расписание не начато', schedule_unfinished: 'расписание не закончено',
+  judgments_missing: 'не хватает суждений судьи' };
+const BASIS_RU = { operational: 'все случаи расписания', matched: 'пары случаев', drawn: 'пары нарисованных картинок' };
 const READING_RU: Record<string, string> = { confirmed: 'только «да»', with_unsure: 'с «не уверен»', conservative: 'осторожно', upper: 'верхняя граница' };
 const FAMILY_RU: Record<string, string> = { identity: 'кто есть кто', essential: 'существенные отношения', other_items: 'остальные пункты', mixups: 'путаница',
   anatomy: 'анатомия', looks: 'внешность', uncertainty: '«не уверен» или нет', safeguards: 'предохранители картинки' };
@@ -587,36 +609,42 @@ export function scoreMarkdown(score: ProbeScore): string {
   const lines = ['# Стенд промптов: оценки Astra', '',
     'Проба сравнивает замороженные рецепты промптов C0 и G на двенадцати выбранных сценах при одних настройках рисования: выводы только об этих сценах и этих промптах. '
       + 'Рука, которая проходит, улучшает видимые существенные отношения при перечисленных предохранителях; что её картинки вообще ближе к сцене, проба не показывает. '
-      + 'A+ отличается от C0 сразу моделью, квантованием и инструкцией; PE и PT: конвейеры энхансера.', '',
+      + 'A+ отличается от C0 сразу моделью, квантованием и инструкцией; PE, G→PE и PT: конвейеры энхансера, G→PE переписывает промпт G.', '',
     'Судья видел сцену, лист и список проверки, но не промпты; картинки под случайными именами и в случайном порядке. Доли в пунктах из 100.', '',
     '## Руки', '',
     '| Рука | Картинок | Видимые существенные отношения | Да / нет / не уверен | Все видны | Все участники | Путаница: да / только не уверен / не исключена | Анатомия: да / только не уверен / не исключена | Внешность: осторожно / верхняя граница | Лишние люди: да / не уверен |',
     '|---|---|---|---|---|---|---|---|---|---|',
-    ...arms.map(([arm, one]) => `| ${arm} | ${one.pictures} | ${points(one.visible)} | ${shares(one.essential)} | ${one.allVisible} | ${one.complete} | `
+    ...arms.map(([arm, one]) => `| ${armLabel(arm)} | ${one.pictures} | ${points(one.visible)} | ${shares(one.essential)} | ${one.allVisible} | ${one.complete} | `
       + `${one.mixups.confirmed} / ${one.mixups.unsureOnly} / ${one.mixups.notRuledOut} | ${one.anatomy.confirmed} / ${one.anatomy.unsureOnly} / ${one.anatomy.notRuledOut} | `
       + `${points(one.looks.conservative)} / ${points(one.looks.upper)} | ${one.extra.yes} / ${one.extra.unsure} |`),
     '', 'Видимые существенные отношения: ответы «да» среди всех существенных отношений сцены, «нет» и «не уверен» не засчитываются. «Не исключена»: осторожное чтение второго раунда, всё, кроме ответа «нет». '
-      + 'Внешность считается по участникам списка, у которых есть строка листа; верхняя граница засчитывает присутствующим и «не уверен».', '',
+      + 'Внешность считается по участникам списка, у которых есть строка листа; верхняя граница засчитывает присутствующим и «не уверен». '
+      + 'Лишние люди: картинки, где судья видит человека или существо, которого нет среди участников сцены.', '',
     '## Существенные отношения по виду', '', 'Да / нет / не уверен, в пунктах из 100.', '',
     '| Рука | Человек с человеком | Со своим телом | С предметом | Остальные отношения |', '|---|---|---|---|---|',
-    ...arms.map(([arm, one]) => `| ${arm} | ${shares(one.byWith.person)} | ${shares(one.byWith.self)} | ${shares(one.byWith.thing)} | ${shares(one.otherRelations)} |`),
+    ...arms.map(([arm, one]) => `| ${armLabel(arm)} | ${shares(one.byWith.person)} | ${shares(one.byWith.self)} | ${shares(one.byWith.thing)} | ${shares(one.otherRelations)} |`),
     '', 'Видимое касание нужно продукту: касание, которого не видно, не засчитывается. Замороженная инструкция G разрешает закрыть касание телом другого участника '
       + 'и просит прятать мелкие точные касания предметов ракурсом, поэтому отношения с предметами показаны отдельно. Трудные отношения не убирались после того, как появились картинки.', '',
     '## Остальные пункты по виду', '', 'Да / нет / не уверен, в пунктах из 100; ни в одном условии.', '',
     '| Рука | Взгляды | Лица | Одежда | Отражения | Масштаб | Пропорции, да |', '|---|---|---|---|---|---|---|',
-    ...arms.map(([arm, one]) => `| ${arm} | ${shares(one.kinds.gaze)} | ${shares(one.kinds.face)} | ${shares(one.kinds.clothes)} | ${shares(one.kinds.mirror)} | ${shares(one.kinds.scale)} | ${points(one.proportions)} |`),
-    '', '## Что вышло из каждого случая', '', 'Случай: сцена на сиде.', '',
-    ...arms.map(([arm, one]) => `- ${arm}: ${Object.entries(one.outcomes).map(([outcome, n]) => `${OUTCOME_RU[outcome as Outcome]} ${n}`).join(', ')}`
-      + `${one.usable === undefined ? '' : `; годный текст энхансера в ${one.usable} сценах из ${one.of}`}`),
-    '', '## Против C0', '',
-    'Главное сравнение: G против C0; PE, PT и A+ против C0: разведка. Разница: среднее по сценам разностей сцен, где у сцены сперва усреднены её сиды. Прирост видимых существенных отношений '
+    ...arms.map(([arm, one]) => `| ${armLabel(arm)} | ${shares(one.kinds.gaze)} | ${shares(one.kinds.face)} | ${shares(one.kinds.clothes)} | ${shares(one.kinds.mirror)} | ${shares(one.kinds.scale)} | ${points(one.proportions)} |`),
+    '', '## Каждый кадр плана', '', 'Кадр: сцена на сиде, 24 у каждой руки. Не дошли: срезано концом карты или сервером, или расписание не начато.', '',
+    '| Рука | По плану | Нарисовано | Не вышло на карте | Энхансер не дал текста | Не дошли: срезано / не начато | Оценено | Нет суждения судьи |', '|---|---|---|---|---|---|---|---|',
+    ...arms.map(([arm, one]) => `| ${armLabel(arm)} | ${one.frames.planned} | ${one.frames.drawn} | ${one.frames.renderFailed} | ${one.usable === undefined ? '—' : one.frames.enhancerFailed} | `
+      + `${one.frames.notReached.cut} / ${one.frames.notReached.omitted} | ${one.frames.judged} | ${one.frames.missing} |`),
+    '', ...arms.flatMap(([arm, one]) => (one.usable === undefined ? [] : [`- ${armLabel(arm)}: годный текст энхансера в ${one.usable} сценах из ${one.of}`])),
+    '', '## Против C0 и G', '',
+    'Главное сравнение: G против C0; PE, G→PE, PT и A+ против C0 и G→PE против G: разведка. Разница: среднее по сценам разностей сцен, где у сцены сперва усреднены её сиды. Прирост видимых существенных отношений '
       + 'не меньше 10 пунктов на 8 сценах или больше, и нижний край 90% интервала (10 000 выборок сцен целиком) выше нуля; прирост меньше 10 пунктов не проходит, а нижний край не выше нуля даёт «не решено». '
-      + 'PE и PT считаются по всем случаям своего расписания: где энхансер не дал годного текста, отношения засчитаны нулём. Путаница, анатомия и внешность проверены двумя способами, только по «да» '
+      + 'Кадр, который не вышел на карте, засчитан картинкой без видимых отношений с любой стороны сравнения, кроме диагностики. PE, G→PE и PT считаются по всем случаям своего расписания: '
+      + 'где энхансер не дал годного текста, отношения тоже засчитаны нулём. Кадр без суждения судьи не засчитан ни как картинка, ни как ноль: он показан отдельно, и вердикт тогда «не решено». '
+      + 'Путаница, анатомия и внешность проверены двумя способами, только по «да» '
       + 'и вместе с «не уверен»; если исход от этого меняется, условие не разрешено и вердикт «не решено», если только другое условие не провалено при любом чтении. '
       + 'Не начатое или не законченное расписание даёт «не решено», а не проигрыш.', '',
-    ...score.comparisons.flatMap(one => [`**${one.arm}**, ${ROLE_RU[one.role]}${one.verdict ? `: ${VERDICT_RU[one.verdict]}` : ''}`
+    ...score.comparisons.flatMap(one => [`**${armLabel(one.arm)} против ${armLabel(one.against)}**, ${ROLE_RU[one.role]}${one.verdict ? `: ${VERDICT_RU[one.verdict]}` : ''}`
       + `${one.why?.some(why => WHY_RU[why]) ? ` (${one.why.filter(why => WHY_RU[why]).map(why => WHY_RU[why]).join(', ')})` : ''}; `
-      + `${one.basis === 'operational' ? 'все случаи расписания' : 'пары нарисованных картинок'}: сцен ${one.scenes}, пар ${one.pictures}. Видимые существенные отношения `
+      + `${BASIS_RU[one.basis]}: сцен ${one.scenes}, пар ${one.pictures}, из них пустых картинок ${one.shownNothing.x} у ${armLabel(one.arm)} и ${one.shownNothing.y} у ${armLabel(one.against)}; `
+      + `без суждения судьи ${one.missing.x} и ${one.missing.y}. Видимые существенные отношения `
       + `${points(one.visible.x)} против ${points(one.visible.y)}, разница ${points(one.visible.difference)}, 90% интервал ${one.visible.interval ? one.visible.interval.map(points).join('…') : '—'}; `
       + `впереди в ${one.visible.ahead} сценах, вровень в ${one.visible.level}, позади в ${one.visible.behind}.`, '',
     ...one.clauses.map(clause => `- ${CLAUSE_RU[clause.clause]}: ${clause.treatments ? Object.entries(clause.treatments).map(([name, reading]) => `${READING_RU[name]} ${value(clause.clause, reading.value)}`).join(', ')
@@ -627,7 +655,7 @@ export function scoreMarkdown(score: ProbeScore): string {
     lines.push('## Названо в промпте и нарисовано', '', 'Существенные касания по картинкам руки: названо ли касание в промпте (по коду) и видит ли его Astra. '
       + 'Это описание того, что шло вместе, а не причина: названные и неназванные касания могут быть разной трудности.', '',
     '| Рука | Названо: нарисовано | Не названо: нарисовано |', '|---|---|---|',
-    ...Object.entries(score.namedAgainstShown).map(([arm, one]) => `| ${arm} | ${one.namedShown} из ${one.named} | ${one.unnamedShown} из ${one.unnamed} |`), '');
+    ...Object.entries(score.namedAgainstShown).map(([arm, one]) => `| ${armLabel(arm)} | ${one.namedShown} из ${one.named} | ${one.unnamedShown} из ${one.unnamed} |`), '');
   }
   return lines.join('\n');
 }
@@ -692,12 +720,15 @@ export function trialScores(run: string, round2: string) {
 // ---- The dry run ----
 
 // The judging without a card or a judge, in `dir`: made-up stands of grey pictures under the probe's keys, as a card
-// leaves them: C0, G and A+ in every case; PE's text unusable in three scenes and one of its frames failed; PT's text
-// unusable in two scenes and one scene never reached, so that its schedule is unfinished. A picture whose bytes are not
-// its cell's refused; the bundles, blinded, under random names in a random order, the repeats under fresh ones; the
-// sessions judged by a stand-in for codex that refuses once (image-refs-judge.ts `fakeCodex`); the scores, the
-// operational and the matched, and an arm whose schedule was omitted; the trial's two sessions; and the scenes' words
-// nowhere but the bundles and the sessions.
+// leaves them: C0, GPE and A+ in every case; G's frame failed in one; PE's text unusable in three scenes and one of its
+// frames failed; PT's text unusable in two scenes and one scene never reached, so that its schedule is unfinished. A
+// picture whose bytes are not its cell's refused; the bundles, blinded, GPE's pictures in the same sessions, under
+// random names in a random order, the repeats under fresh ones; the sessions judged by a stand-in for codex that
+// refuses once (image-refs-judge.ts `fakeCodex`); the scores: every frame of every arm accounted for, the failed frames
+// read as pictures that show nothing on either side, the operational, the matched and the drawn, GPE against C0 and
+// against G, and the people beyond each scene's checklist counted per arm; a session left without a judgment, counted
+// and leaving every verdict it touches undecided; an arm whose schedule was omitted; the trial's two sessions; and the
+// scenes' words nowhere but the bundles and the sessions.
 export async function dryJudge(dir: string, round2: string) {
   const dry = resolve(dir), run = join(dry, 'run'), temp = join(dry, 'tmp');
   for (const path of [dry, run, temp]) mkdirSync(path, { recursive: true, mode: 0o700 });
@@ -710,14 +741,14 @@ export async function dryJudge(dir: string, round2: string) {
     say(`prompt arms judging dry run in ${dry}: made-up pictures, a stand-in for codex; no card, no judge, no network`);
     let number = 0;
     const unusable: Record<string, string[]> = { PE: ['beach', 'cheer', 'lineout'], PT: ['demon', 'gym'] }, unreached: Record<string, string[]> = { PT: ['rescue'] };
-    const renderFailed = armKey('PE', 'giants', 11);
+    const renderFailed = [armKey('PE', 'giants', 11), armKey('G', 'monkeys', 7)];
     for (const stand of STANDS) {
       const cells: StandIndex['cells'] = {};
       for (const arm of ARMS.filter(one => STAND_OF[one] === stand)) {
         for (const scene of SCENES.filter(one => !unusable[arm]?.includes(one) && !unreached[arm]?.includes(one))) {
           for (const seed of ARM_SEEDS) {
             const key = armKey(arm, scene, seed), file = `frames/${arm}-${scene}-s${seed}.png`, own = { key, id: `${arm}-${scene}`, arm, kind: 'frame' as const, seed, group: 'words' as const, refs: 0 };
-            if (key === renderFailed) { cells[key] = { ...own, status: 'failed', code: 'image_failed' }; continue; }
+            if (renderFailed.includes(key)) { cells[key] = { ...own, status: 'failed', code: 'image_failed' }; continue; }
             // As the harness keeps a picture: its metadata stripped (image-batch.ts `stripPngMetadata`).
             const bytes = stripPngMetadata(greyPng(FRAME_CANVAS.width, FRAME_CANVAS.height, ++number));
             mkdirSync(join(run, stand, 'frames'), { recursive: true, mode: 0o700 });
@@ -728,12 +759,11 @@ export async function dryJudge(dir: string, round2: string) {
       }
       writeJson(join(run, stand, INDEX_FILE), { startedAt: new Date().toISOString(), pins: {}, server: {}, cells } satisfies StandIndex);
     }
-    const rewrites = (arm: 'PE' | 'PT') => ({ settings: {}, scenes: Object.fromEntries(SCENES.filter(scene => !unreached[arm]?.includes(scene)).map(scene => [scene,
+    const rewrites = (arm: Rewritten) => ({ settings: {}, scenes: Object.fromEntries(SCENES.filter(scene => !unreached[arm]?.includes(scene)).map(scene => [scene,
       unusable[arm]?.includes(scene) ? { status: 'failed', code: 'pe_unparsed', ms: 1 } : { status: 'ok', ms: 1, form: 'json' }])) });
-    writeJson(join(run, REWRITES_FILE.fast), rewrites('PE'));
-    writeJson(join(run, REWRITES_FILE.think), rewrites('PT'));
+    for (const arm of REWRITTEN) writeJson(join(run, REWRITES_FILE[arm]), rewrites(arm));
     const begun: Schedule = { state: 'begun', needSeconds: 1, leftSeconds: 2, at: new Date().toISOString() };
-    writeJson(join(run, SCHEDULES_FILE), { PE: begun, 'A+': begun, PT: begun } satisfies Schedules);
+    writeJson(join(run, SCHEDULES_FILE), { PE: begun, GPE: begun, 'A+': begun, PT: begun } satisfies Schedules);
 
     // A picture other than its cell recorded, and one that kept its metadata: each refused, and its bundle not written.
     const wrong = join(run, 'core', 'frames', 'G-guard-s11.png'), kept = readFileSync(wrong);
@@ -773,9 +803,11 @@ export async function dryJudge(dir: string, round2: string) {
         && !again.pictures.some(one => first.pictures.some(other => other.name === one.name))
         && again.pictures.every(one => sha256(readFileSync(join(judge, 'bundles', again.name, one.name))) === one.sha256);
     });
-    say(`2 bundles: ${counts.built} built, ${shownPictures} pictures shown of ${drawnPictures} drawn; each folder the task, the inputs, the schema and pictures under opaque names in `
-      + `the key's order: ${blind}; ${armsOrder} of 24 sessions in the arms' own order; each repeat its first session's pictures under fresh names: ${repeats}`);
-    expect(counts.built === 28 && shownPictures === drawnPictures && blind && armsOrder < 24 && repeats, '28 bundles, every picture drawn, blinded, in a random order, the repeats renamed');
+    const withGpe = judgeSessions().filter(one => one.kind === 'pictures' && keyOf(one.name).pictures.some(picture => picture.arms.includes('GPE'))).length;
+    say(`2 bundles: ${counts.built} built, ${shownPictures} pictures shown of ${drawnPictures} drawn, GPE's in ${withGpe} of 24 sessions; each folder the task, the inputs, the schema `
+      + `and pictures under opaque names in the key's order: ${blind}; ${armsOrder} of 24 sessions in the arms' own order; each repeat its first session's pictures under fresh names: ${repeats}`);
+    expect(counts.built === 28 && shownPictures === drawnPictures && withGpe === 24 && blind && armsOrder < 24 && repeats,
+      '28 bundles, every picture drawn, GPE\'s beside the others, blinded, in a random order, the repeats renamed');
 
     const exec = fakeCodex(3), log: object[] = [];
     const record = await judgeProbe(run, { exec, log: event => log.push(event) });
@@ -789,25 +821,71 @@ export async function dryJudge(dir: string, round2: string) {
     const score = scoreProbe(run, round2);
     writeFileSync(join(judge, 'score.md'), scoreMarkdown(score), { mode: 0o600 });
     writeJson(join(judge, 'score.json'), score);
-    const find = (arm: Arm, role: Role) => score.comparisons.find(one => one.arm === arm && one.role === role)!;
+    const find = (from: ProbeScore, arm: Arm, role: Role, against: Arm = 'C0') => from.comparisons.find(one => one.arm === arm && one.role === role && one.against === against)!;
     say(`4 scores: ${Object.entries(score.arms).map(([arm, one]) => `${arm} ${one.pictures} ${JSON.stringify(one.outcomes)}`).join('; ')}; `
-      + `${score.comparisons.map(one => `${one.arm} ${one.role} ${one.basis} ${one.verdict ?? 'no verdict'} over ${one.pictures} pairs${one.why ? ` (${one.why.join(', ')})` : ''}`).join('; ')}; `
+      + `${score.comparisons.map(one => `${one.arm} against ${one.against} ${one.role} ${one.basis} ${one.verdict ?? 'no verdict'} over ${one.pictures} pairs, `
+        + `${one.shownNothing.x} and ${one.shownNothing.y} showing nothing${one.why ? ` (${one.why.join(', ')})` : ''}`).join('; ')}; `
       + `agreement ${JSON.stringify(Object.fromEntries(Object.entries(score.agreement).map(([family, one]) => [family, one.of])))}`);
-    expect(score.arms.C0.pictures === 24 && score.arms.G.pictures === 24 && score.arms['A+'].pictures === 24 && score.arms.PE.pictures === 17 && score.arms.PT.pictures === 18
+    expect(score.arms.C0.pictures === 24 && score.arms.G.pictures === 23 && score.arms.GPE.pictures === 24 && score.arms['A+'].pictures === 24 && score.arms.PE.pictures === 17
+      && score.arms.PT.pictures === 18 && same(score.arms.G.outcomes, { judged: 23, render_failed: 1 }) && same(score.arms.GPE.outcomes, { judged: 24 })
       && same(score.arms.PE.outcomes, { judged: 17, enhancer_failed: 6, render_failed: 1 }) && same(score.arms.PT.outcomes, { judged: 18, enhancer_failed: 4, not_reached: 2 })
-      && score.arms.PE.usable === 9 && score.arms.PT.usable === 9 && !!find('G', 'primary').verdict && find('PE', 'exploratory').pictures === 23
-      && find('PE', 'diagnostic').pictures === 17 && find('PE', 'diagnostic').verdict === undefined && find('PT', 'exploratory').verdict === 'undecided'
-      && find('PT', 'exploratory').why?.[0] === 'schedule_unfinished' && ['identity', 'essential', 'uncertainty', 'safeguards'].every(family => (score.agreement[family]?.of ?? 0) > 0),
-    'every arm\'s cases as the card left them, PE held to its whole schedule and matched apart, PT undecided while unfinished, the agreement by family');
-    writeJson(join(run, SCHEDULES_FILE), { PE: begun, 'A+': { ...begun, state: 'omitted' }, PT: begun } satisfies Schedules);
+      && score.arms.PE.usable === 9 && score.arms.GPE.usable === 12 && score.arms.PT.usable === 9 && !!find(score, 'G', 'primary').verdict
+      && find(score, 'G', 'primary').pictures === 24 && same(find(score, 'G', 'primary').shownNothing, { x: 1, y: 0 })
+      && find(score, 'PE', 'exploratory').pictures === 24 && find(score, 'PE', 'exploratory').shownNothing.x === 7
+      && find(score, 'PE', 'diagnostic').pictures === 17 && find(score, 'PE', 'diagnostic').verdict === undefined
+      && find(score, 'GPE', 'exploratory').pictures === 24 && !!find(score, 'GPE', 'exploratory').verdict && find(score, 'GPE', 'diagnostic').pictures === 24
+      && find(score, 'GPE', 'exploratory', 'G').pictures === 24 && same(find(score, 'GPE', 'exploratory', 'G').shownNothing, { x: 0, y: 1 })
+      && find(score, 'GPE', 'diagnostic', 'G').pictures === 23 && find(score, 'GPE', 'exploratory', 'G').role === 'exploratory'
+      && find(score, 'PT', 'exploratory').verdict === 'undecided' && find(score, 'PT', 'exploratory').why?.[0] === 'schedule_unfinished'
+      && ['identity', 'essential', 'uncertainty', 'safeguards'].every(family => (score.agreement[family]?.of ?? 0) > 0),
+    'every arm\'s cases as the card left them, a failed frame read as showing nothing on either side, PE held to its whole schedule and matched apart, GPE against C0 and G, '
+      + 'PT undecided while unfinished, the agreement by family');
+    // Every frame the plan has, accounted for per arm; and the people beyond the checklist per arm, against a count
+    // straight from the answers and the keys.
+    const frames = Object.entries(score.arms).every(([, one]) => one.frames.planned === 24 && one.frames.drawn === one.frames.judged + one.frames.missing
+      && one.frames.planned === one.frames.drawn + one.frames.renderFailed + one.frames.enhancerFailed + one.frames.notReached.cut + one.frames.notReached.omitted);
+    const extra = Object.fromEntries(ARMS.map(arm => [arm, { yes: 0, unsure: 0 }]));
+    for (const one of judgeSessions().filter(session => session.kind === 'pictures')) {
+      const answers = readJson<{ pictures: Record<string, Answer> }>(join(judge, 'answers', `${one.name}.json`));
+      for (const picture of keyOf(one.name).pictures) {
+        const said = answers?.pictures[picture.name]?.extra_participants;
+        for (const arm of picture.arms) if (said === 'yes' || said === 'unsure') extra[arm][said]++;
+      }
+    }
+    const page = readFileSync(join(judge, 'score.md'), 'utf8');
+    say(`   every frame accounted for: ${frames}; ${Object.entries(score.arms).map(([arm, one]) => `${arm} ${JSON.stringify(one.frames)}`).join('; ')}; `
+      + `people beyond the checklist, yes and unsure: ${Object.entries(score.arms).map(([arm, one]) => `${arm} ${one.extra.yes}/${one.extra.unsure}`).join(', ')}, as the answers say `
+      + `${same(Object.fromEntries(Object.entries(score.arms).map(([arm, one]) => [arm, one.extra])), extra)}; G→PE on the page ${page.includes('| G→PE |')}`);
+    expect(frames && same(Object.fromEntries(Object.entries(score.arms).map(([arm, one]) => [arm, one.extra])), extra) && page.includes('| G→PE |')
+      && page.includes('## Каждый кадр плана'), 'every frame of every arm accounted for, and the people beyond each scene counted per arm, GPE\'s under its name');
+
+    // A session left without a judgment: its pictures counted as missing, read neither as pictures nor as nothing, and
+    // every verdict they touch undecided.
+    const missingName = `pictures-bandage-s${ARM_SEEDS[1]}`, recordPath = recordFile(judge), answersPath = join(judge, 'answers', `${missingName}.json`);
+    const [recordBytes, answerBytes] = [readFileSync(recordPath), readFileSync(answersPath)];
+    const unjudged = readJson<JudgingRecord>(recordPath)!;
+    unjudged.sessions[missingName] = { ...unjudged.sessions[missingName], state: 'failed' };
+    writeJson(recordPath, unjudged);
+    rmSync(answersPath);
+    const holes = scoreProbe(run, round2), verdicted = holes.comparisons.filter(one => one.verdict);
+    writeFileSync(recordPath, recordBytes, { mode: 0o600 });
+    writeFileSync(answersPath, answerBytes, { mode: 0o600 });
+    say(`5 a session without a judgment: ${Object.entries(holes.arms).map(([arm, one]) => `${arm} ${one.frames.missing}`).join(', ')} missing; G against C0 over `
+      + `${find(holes, 'G', 'primary').pictures} pairs, missing ${JSON.stringify(find(holes, 'G', 'primary').missing)}, ${find(holes, 'G', 'primary').verdict} `
+      + `(${find(holes, 'G', 'primary').why?.join(', ')}); ${verdicted.filter(one => one.verdict === 'undecided' && one.why?.includes('judgments_missing')).length} of ${verdicted.length} verdicts undecided for it`);
+    expect(Object.values(holes.arms).every(one => one.frames.missing === 1 && one.frames.drawn === one.frames.judged + 1) && find(holes, 'G', 'primary').pictures === 23
+      && same(find(holes, 'G', 'primary').missing, { x: 1, y: 1 }) && verdicted.length === 6
+      && verdicted.every(one => one.verdict === 'undecided' && one.why?.includes('judgments_missing')), 'a missing judgment counted, never a picture, never a pass');
+
+    writeJson(join(run, SCHEDULES_FILE), { PE: begun, GPE: begun, 'A+': { ...begun, state: 'omitted' }, PT: begun } satisfies Schedules);
     const omitted = scoreProbe(run, round2), plus = omitted.comparisons.find(one => one.arm === 'A+')!;
-    say(`5 A+'s schedule omitted: ${JSON.stringify(omitted.arms['A+'].outcomes)}, ${plus.verdict} (${plus.why?.join(', ')})`);
+    say(`6 A+'s schedule omitted: ${JSON.stringify(omitted.arms['A+'].outcomes)}, ${plus.verdict} (${plus.why?.join(', ')})`);
     expect(same(omitted.arms['A+'].outcomes, { budget_omitted: 24 }) && plus.verdict === 'undecided' && plus.why?.[0] === 'budget_omitted', 'an arm never begun is undecided, not failed');
 
     const trial = await runTrial(run, round2, { exec: fakeCodex(5) });
     const tried = judgingCounts(trial, SAMPLES.map(sampleName)), trialScored = trialScores(run, round2);
     const trialBlind = SAMPLES.every(sample => readFileSync(join(trialDirOf(run), 'bundles', sampleName(sample), 'TASK.md'), 'utf8') === `${TASK}\n`);
-    say(`6 trial: ${JSON.stringify(tried.states)} in ${tried.attempts} attempts, ${trialScored.pictures.length} pictures scored, the task the probe's: ${trialBlind}`);
+    say(`7 trial: ${JSON.stringify(tried.states)} in ${tried.attempts} attempts, ${trialScored.pictures.length} pictures scored, the task the probe's: ${trialBlind}`);
     expect(tried.states.answered === 2 && trialScored.pictures.length >= 4 && trialBlind, 'the trial\'s two sessions answered under the probe\'s task and scored');
 
     // The scenes' words stay in the bundles and the session copies; nothing is printed.
@@ -815,7 +893,7 @@ export async function dryJudge(dir: string, round2: string) {
     const scenes = SCENES.map(scene => sceneInput(round2, scene).scene.split(/\s+/).slice(0, 6).join(' '));
     const beyond = searchTree(dry, scenes.map(one => Buffer.from(one, 'utf8')), path => /\/(bundles|sessions)(\/|$)/.test(path));
     const printed = scenes.some(one => text.includes(one));
-    say(`7 privacy: a scene's opening words in ${beyond.hits.length} of ${beyond.files} files beside the bundles and the sessions; printed ${printed}`);
+    say(`8 privacy: a scene's opening words in ${beyond.hits.length} of ${beyond.files} files beside the bundles and the sessions; printed ${printed}`);
     expect(!beyond.hits.length && !beyond.unread.length && !printed, 'no scene beyond the bundles and the sessions, nothing printed');
     say(missed.length ? `the judging dry run did NOT go as expected: ${missed.length} of its checks` : 'the judging dry run went as expected');
     return { pass: !missed.length, missed };

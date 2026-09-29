@@ -1,6 +1,6 @@
 // The prompt arms probe (docs/action-experiment.md#prompt-arms), for the next picture card: does a picture prompt a
-// model writes beat the one code assembles today? The tester, through the owner on 2026-09-28: «мы явно не выжимаем
-// картинку, мы же промпт для картинки можем лучше делать, а не просто кодом». Twelve clean scenes of round two with
+// model writes beat the one code assembles today? The code-assembled picture prompt looked like the weak point.
+// Twelve clean scenes of round two with
 // actions and contacts (`SCENES`), seeds 7 and 11, every frame on the bot's picture path (docs/gpu.md#bot-card):
 //   C0  today's assembly, local/illustrate.ts `assemblePrompt`, from the bot's own frame description of the scene;
 //   G   the whole prompt written by the same model from the same scene (`gInstruction`): the main action first, who is
@@ -8,24 +8,29 @@
 //       bare; code only takes names and ages out and adds the style line, as the bot does to its fields;
 //   PE  C0 rewritten on the card by Qwen-Image 2.1's own text-to-image prompt enhancer (gpu/image-manifest.env
 //       IMAGE_QWEN_PE_T2I_*) through ComfyUI's TextGenerate, without thinking, as ComfyUI's template runs it;
+//   GPE G rewritten by the same enhancer exactly as PE rewrites C0, the enhancer given G byte for byte as the G arm
+//       draws it (shown as G→PE on the pages), which the owner asked for through the lead on 2026-09-29;
 //   A+  round two's variant prompt as round two drew it, written by round two's heretic, where C0's and G's are the
 //       hosted Gemma 4 31B's of 2026-09-28: another model, quantization and instruction at once;
 //   PT  C0 rewritten with thinking, as the enhancer's own model card runs it.
-// G against C0 is the probe's question; PE, A+ and PT are explored beside it. As the GPT-6 Astra review of 2026-09-28
-// asked, the card draws every C0 and G frame first, then each other arm as a schedule of its own, all twelve scenes at
-// both seeds, begun only while the time left covers all of it (`SCHEDULES_FILE`). Astra judges the pictures blind
-// against the scene and never against the prompt sent (local/image-prompt-arms-judge.ts). C0 and G are asked of a
-// hosted model before the card and frozen (`FROZEN_SHA256`); the rewrites and the pictures are the card's. The rest is
-// local/image-refs-test.ts's: the prices, cells.json and the pages. Round two's run is read and never written: its
-// stores are opened as copies.
+// G against C0 is the probe's question; PE, GPE, A+ and PT are explored beside it, GPE against G as well. As the GPT-6
+// Astra review of 2026-09-28 asked, the card draws every C0 and G frame first, then each other arm as a schedule of its
+// own, all twelve scenes at both seeds, begun only while the time left covers all of it (`SCHEDULES_FILE`). Astra
+// judges the pictures blind against the scene and never against the prompt sent (local/image-prompt-arms-judge.ts). C0
+// and G are asked of a hosted model before the card and frozen (`FROZEN_SHA256`); the rewrites and the pictures are the
+// card's. The rest is local/image-refs-test.ts's: the prices, cells.json and the pages. Round two's run is read and
+// never written: its stores are opened as copies.
 //   prompts    C0 and G on openrouter-paid, at most 40 requests in all, the words in the run's prompts.json
 //   checks     every arm's prompts by code: the looks kept, the scene's essential contacts named, the action first
 //   freeze     frozen.json from prompts.json and round two's A+, whose sha256 this file then pins
 //   pe-prompt  the enhancer's system prompt, fetched at its pinned revision and checked, into the run
 //   estimate   the cells, the schedules with their budgets, and the minutes
-//   dry-run    the whole card against local/fake-comfy.ts, the rewrites and the pictures
-//   card       on the card, --run DIR --until EPOCH: C0 and G; then PE's rewrites and frames, A+'s frames, PT's
-//              rewrites and frames, each schedule only if its budget fits
+//   dry-run    the whole card against local/fake-comfy.ts, the rewrites and the pictures; with --run DIR the run's
+//              frozen texts and system prompt where they are pinned, and with --strict as well nothing but them: a
+//              run without both pinned is refused
+//   card       on the card, --run DIR --until EPOCH: C0 and G; then PE's rewrites and frames, GPE's rewrites and
+//              frames, A+'s frames, PT's rewrites and frames, each schedule only if its budget fits; a job the card
+//              may still hold ends the run there
 //   page       the stands' pages
 // What it prints is keys, codes, counts and times: never a word of a prompt, a scene or a rewrite.
 import { parseArgs, parseEnv } from 'node:util';
@@ -78,26 +83,33 @@ const minutes = (ms: number) => Math.round(ms / 6000) / 10;
 // handles: two to four participants each, 49 essential relations in all (docs/action-experiment.md#prompt-arms).
 export const SCENES = ['bandage', 'beach', 'cheer', 'demon', 'giants', 'guard', 'gulliver', 'gym', 'jellyfish', 'lineout', 'monkeys', 'rescue'];
 export const ARM_SEEDS = [7, 11];
-export type Arm = 'C0' | 'G' | 'PE' | 'A+' | 'PT';
+export type Arm = 'C0' | 'G' | 'PE' | 'GPE' | 'A+' | 'PT';
 // C0 and G, drawn first whatever else the card has time for; then the others, each a schedule of its own, in this order.
 export const RESERVED: Arm[] = ['C0', 'G'];
-export type Optional = 'PE' | 'A+' | 'PT';
-export const OPTIONAL: Optional[] = ['PE', 'A+', 'PT'];
+export type Optional = 'PE' | 'GPE' | 'A+' | 'PT';
+export const OPTIONAL: Optional[] = ['PE', 'GPE', 'A+', 'PT'];
 export const ARMS: Arm[] = [...RESERVED, ...OPTIONAL];
-// C0, G and A+ from the frozen texts in one stand, drawn in two runs of it; PE and PT each from its pass of rewrites in
-// a stand named for the pass.
-export type StandName = 'core' | 'fast' | 'think';
-export const STANDS: StandName[] = ['core', 'fast', 'think'];
-export const STAND_OF: Record<Arm, StandName> = { C0: 'core', G: 'core', 'A+': 'core', PE: 'fast', PT: 'think' };
+// The arms the enhancer rewrites, each from one frozen arm's prompt, in a pass of its own: PE and GPE without thinking,
+// from C0 and from G; PT with it, from C0.
+export type Rewritten = 'PE' | 'GPE' | 'PT';
+export const REWRITTEN: Rewritten[] = ['PE', 'GPE', 'PT'];
+export const isRewritten = (arm: string): arm is Rewritten => (REWRITTEN as string[]).includes(arm);
+// An arm as the pages and the scores name it.
+export const armLabel = (arm: string) => (arm === 'GPE' ? 'G→PE' : arm);
+// C0, G and A+ from the frozen texts in one stand, drawn in two runs of it; PE, GPE and PT each from its pass of
+// rewrites in a stand named for the pass.
+export type StandName = 'core' | 'fast' | 'g-fast' | 'think';
+export const STANDS: StandName[] = ['core', 'fast', 'g-fast', 'think'];
+export const STAND_OF: Record<Arm, StandName> = { C0: 'core', G: 'core', 'A+': 'core', PE: 'fast', GPE: 'g-fast', PT: 'think' };
 export const armKey = (arm: Arm, scene: string, seed: number) => frameKey(`${arm}-${scene}`, undefined, seed);
 const frame = (arm: Arm, scene: string, seed: number) => cellOf({ key: armKey(arm, scene, seed), id: `${arm}-${scene}`, arm, kind: 'frame', seed,
   graph: 'action', canvas: FRAME_CANVAS, cfg: 1, negative: 'none', refs: [] });
 export const sceneOfCell = (one: Planned) => one.id.slice(one.arm.length + 1);
 // Seed by seed and scene by scene, the arms of a scene side by side, so that an end that comes early leaves whole
-// scenes at whole seeds: C0 and G, then A+. PE and PT only where the rewrite came back.
+// scenes at whole seeds: C0 and G, then A+. PE, GPE and PT only where the rewrite came back.
 const framesOf = (arms: Arm[], scenes: string[]) => ARM_SEEDS.flatMap(seed => scenes.flatMap(scene => arms.map(arm => frame(arm, scene, seed))));
 export const corePlan = () => [...framesOf(RESERVED, SCENES), ...framesOf(['A+'], SCENES)];
-export const rewritePlan = (arm: 'PE' | 'PT', rewritten: string[]) => framesOf([arm], SCENES.filter(scene => rewritten.includes(scene)));
+export const rewritePlan = (arm: Rewritten, rewritten: string[]) => framesOf([arm], SCENES.filter(scene => rewritten.includes(scene)));
 const PAGES: Record<StandName, { title: string; section: string; note: string; intro: string }> = {
   core: { title: 'Стенд промптов', section: 'Три промпта к одному кадру',
     note: 'C0: сборка кодом, как сейчас в боте. G: весь промпт пишет Gemma по сцене. A+: промпт варианта второго раунда, его писала другая модель. '
@@ -106,6 +118,9 @@ const PAGES: Record<StandName, { title: string; section: string; note: string; i
   fast: { title: 'Стенд промптов: энхансер', section: 'PE',
     note: 'Промпт C0, переписанный энхансером Qwen-Image 2.1 без размышлений: рисуется только его rewritten_prompt, холст 1280x704. Нет строки: энхансер не дал годного JSON или не успел.',
     intro: 'Рисуется после C0 и G, если хватает времени на все переписывания и кадры. Путь бота: cu130, Triton, внимание кухни.' },
+  'g-fast': { title: 'Стенд промптов: G через энхансер', section: 'G→PE',
+    note: 'Промпт G, переписанный энхансером Qwen-Image 2.1 без размышлений так же, как PE переписывает C0: рисуется только его rewritten_prompt, холст 1280x704. Нет строки: энхансер не дал годного JSON или не успел.',
+    intro: 'Рисуется после PE, если хватает времени на все переписывания и кадры. Путь бота: cu130, Triton, внимание кухни.' },
   think: { title: 'Стенд промптов: энхансер с размышлениями', section: 'PT',
     note: 'Промпт C0, переписанный энхансером с размышлениями, как советует карточка модели. Нет строки: энхансер не дал годного JSON или не успел.',
     intro: 'Рисуется последним, если хватает времени на все переписывания и кадры. Путь бота: cu130, Triton, внимание кухни.' },
@@ -114,14 +129,18 @@ export function standOf(name: StandName, plan: Planned[], day: string): Stand {
   const keys = new Set(plan.map(one => one.key)), arms = ARMS.filter(arm => STAND_OF[arm] === name), page = PAGES[name];
   const rows = SCENES.flatMap(scene => ARM_SEEDS.map(seed => ({ label: `${scene}, сид ${seed}`,
     keys: arms.map(arm => (keys.has(armKey(arm, scene, seed)) ? armKey(arm, scene, seed) : undefined)) }))).filter(row => row.keys.some(Boolean));
-  return { plan, date: day, title: page.title, sections: [{ title: page.section, columns: arms, rows, note: page.note }], intro: page.intro };
+  return { plan, date: day, title: page.title, sections: [{ title: page.section, columns: arms.map(armLabel), rows, note: page.note }], intro: page.intro };
 }
 
 // ---- The texts ----
 
 export const FROZEN_FILE = 'frozen.json', PROMPTS_FILE = 'prompts.json', CHECKS_FILE = 'checks.json';
 const SYSTEM_FILE = join('pe', 'system_prompt.txt');
-export const REWRITES_FILE: Record<'fast' | 'think', string> = { fast: join('pe', 'fast.json'), think: join('pe', 'think.json') };
+// Each pass of the enhancer: its mode, the frozen arm whose prompt it is given byte for byte, and its record, so that
+// GPE's rewrites of G never touch PE's of C0.
+export const PASSES: Record<Rewritten, { mode: 'fast' | 'think'; from: 'C0' | 'G' }> = { PE: { mode: 'fast', from: 'C0' }, GPE: { mode: 'fast', from: 'G' },
+  PT: { mode: 'think', from: 'C0' } };
+export const REWRITES_FILE: Record<Rewritten, string> = { PE: join('pe', 'fast.json'), GPE: join('pe', 'g-fast.json'), PT: join('pe', 'think.json') };
 // frozen.json as `freeze` wrote it from the hosted answers of 2026-09-28, byte for byte.
 export const FROZEN_SHA256 = 'bc2745a57cb35670da52dd7c09670809879b9b99e0bc4fc402f714c9b0488378';
 export type Frozen = { note: string; model: string; instructions: { frame: string; g: string }; scenes: Record<string, { C0: string; G: string; 'A+': string }> };
@@ -141,15 +160,18 @@ export function readFrozen(file: string, pinned = FROZEN_SHA256): Frozen {
 // texts.json of a stand, from the frozen texts and a pass of rewrites, the same bytes each time from the same two:
 // drawStand is pinned to their hash, and a resume under other texts is refused. With the stand's cells.json, which pins
 // the graphs, the weights, the attention and the server, it is the private record the review asked for: the exact text
-// each frame is drawn from, with its seed, graph, canvas and CFG.
+// each frame is drawn from, with its seed, graph, canvas and CFG. A rewritten arm's cell keeps beside the enhancer's
+// prompt the frozen one it was given (`input`): G's for GPE, C0's for PE and PT. drawStand reads only the fields it
+// checks (image-refs-test.ts `readTexts`), and the hash pins this one with the rest.
 export function textsOf(plan: Planned[], frozen: Frozen, rewrites?: Rewrites): string {
   const promptOf = (one: Planned) => {
     const scene = sceneOfCell(one), arm = one.arm as Arm;
-    return arm === 'PE' || arm === 'PT' ? rewrites!.scenes[scene]!.prompt! : frozen.scenes[scene][arm as 'C0' | 'G' | 'A+'];
+    return isRewritten(arm) ? { prompt: rewrites!.scenes[scene]!.prompt!, input: frozen.scenes[scene][PASSES[arm].from] }
+      : { prompt: frozen.scenes[scene][arm as 'C0' | 'G' | 'A+'] };
   };
   return JSON.stringify({ note: 'The prompt arms probe: the frozen texts and the rewrites the card returned, one cell each.',
     cells: plan.map(one => ({ key: one.key, kind: one.kind, seed: one.seed, graph: one.graph, canvas: sizeText(one.canvas), cfg: one.cfg, refs: one.refs,
-      prompt: promptOf(one), negative: '' })) }, null, 2);
+      ...promptOf(one), negative: '' })) }, null, 2);
 }
 
 // ---- G ----
@@ -396,8 +418,8 @@ export function checkAll(run: string, round2: string, tokenizers?: string) {
   const qwen = tokenizers ? loadTokenizers(tokenizers).qwen() : undefined;
   const tokens = qwen ? (text: string) => qwenPromptTokens(qwen, text, 'qwen_image').prompt : undefined;
   const hosted = readJson<PromptsRecord>(join(run, PROMPTS_FILE));
-  const rewrites = { PE: readJson<Rewrites>(join(run, REWRITES_FILE.fast)), PT: readJson<Rewrites>(join(run, REWRITES_FILE.think)) };
-  const arms: Record<string, Record<string, PromptCheck>> = { C0: {}, G: {}, PE: {}, 'A+': {}, PT: {}, A: {} };
+  const rewrites = Object.fromEntries(REWRITTEN.map(arm => [arm, readJson<Rewrites>(join(run, REWRITES_FILE[arm]))])) as Record<Rewritten, Rewrites | undefined>;
+  const arms: Record<string, Record<string, PromptCheck>> = { C0: {}, G: {}, PE: {}, GPE: {}, 'A+': {}, PT: {}, A: {} };
   const agreement: Record<'A' | 'A+', { both: number; neither: number; codeOnly: number; astraOnly: number }> = {
     A: { both: 0, neither: 0, codeOnly: 0, astraOnly: 0 }, 'A+': { both: 0, neither: 0, codeOnly: 0, astraOnly: 0 } };
   for (const scene of SCENES) {
@@ -405,7 +427,7 @@ export function checkAll(run: string, round2: string, tokenizers?: string) {
     const checklist = readJson<Checklist>(join(dir, 'checklist.json'));
     if (!checklist) throw new Refusal(`${dir} has no checklist: pass --round2 <round two's run directory>`);
     const prompts: Partial<Record<string, string>> = { C0: hosted?.scenes[scene]?.C0?.prompt, G: hosted?.scenes[scene]?.G?.prompt,
-      PE: rewrites.PE?.scenes[scene]?.prompt, PT: rewrites.PT?.scenes[scene]?.prompt, 'A+': roundPrompt(round2, scene, 'A+') || undefined,
+      PE: rewrites.PE?.scenes[scene]?.prompt, GPE: rewrites.GPE?.scenes[scene]?.prompt, PT: rewrites.PT?.scenes[scene]?.prompt, 'A+': roundPrompt(round2, scene, 'A+') || undefined,
       A: roundPrompt(round2, scene, 'A') || undefined };
     for (const [arm, prompt] of Object.entries(prompts)) if (prompt) arms[arm][scene] = checkPrompt(prompt, scene, checklist, worn, tokens);
     const answers = readJson<{ prompts?: Record<string, Record<string, string>> }>(join(dir, 'answers', 'text.json'));
@@ -487,17 +509,18 @@ export function peGraph(system: string, prompt: string, mode: Mode, nonce: strin
     [PREVIEW]: { class_type: 'PreviewAny', inputs: { source: ['2', 0], nonce } },
   };
 }
-export const settingsOf = (mode: Mode, system: string) => ({ file: PE.file, fileSha256: PE.sha256, system: sha256(system), mode, maxLength: MAX_LENGTH[mode],
-  ...SAMPLING, template: 'chat' });
+export const settingsOf = (arm: Rewritten, system: string) => ({ file: PE.file, fileSha256: PE.sha256, system: sha256(system), mode: PASSES[arm].mode,
+  from: PASSES[arm].from, maxLength: MAX_LENGTH[PASSES[arm].mode], ...SAMPLING, template: 'chat' });
 // A rewrite as the card returned it: its text only when it is a rewrite, and of the thinking its length alone. `form`:
 // the JSON object the system prompt asks for, alone or in one fenced block; `whRatio`, the ratio it asks for, recorded
-// and never drawn.
-export type Rewrite = { status: 'ok' | 'failed'; code?: string; httpStatus?: number; ms: number; prompt?: string; form?: 'json' | 'fenced';
+// and never drawn. `stopped`: whether a job given up was confirmed gone from the card; `cause`, the code a rewrite whose
+// stop was not confirmed would have had otherwise.
+export type Rewrite = { status: 'ok' | 'failed'; code?: string; cause?: string; httpStatus?: number; ms: number; prompt?: string; form?: 'json' | 'fenced';
   whRatio?: string; thinkingChars?: number; answerChars?: number; stopped?: boolean; oom?: boolean };
 export type Rewrites = { settings: ReturnType<typeof settingsOf>; scenes: Record<string, Rewrite> };
 // The rewrites that are the enhancer's own failure, which the judging counts as a frame showing nothing: the job failed
 // on the card, outlasted its time, never closed its thought, answered no such object, or an empty prompt. A pass the
-// card's end or the server cut is not reached, not failed.
+// card's end or the server cut is not reached, not failed, and so is a scene whose submission failed (`comfy_*`).
 export const ENHANCER_FAILURES = ['pe_failed', 'pe_timeout', 'pe_truncated', 'pe_unparsed', 'pe_empty'];
 // The answer after the last </think>, as the card's own code splits it, read as the review of 2026-09-28 fixed before
 // the card: the JSON object the system prompt asks for, alone or in one fenced block, whose `rewritten_prompt` alone
@@ -536,35 +559,43 @@ type HistoryRecord = { status?: { completed?: boolean; status_str?: string; mess
   outputs?: Record<string, { text?: unknown[] }> };
 // Polls of a job's record that may fail in a row before the rewrite is given up, as the harness allows its pictures.
 const POLL_RETRIES = 3;
-// A failure that says the server is gone or the graph is wrong ends the pass: every scene after it would fail alike.
+// A failure that says the server is gone or the graph is wrong ends the pass: every scene after it would fail alike. So
+// does a job given up whose stop was not confirmed (`comfy_stop_unconfirmed`): it may still hold the card, and the
+// next scene would queue behind it.
 const STOPS = new Set(['comfy_http_error', 'comfy_rejected_prompt', 'comfy_unreachable', 'out_of_time', 'comfy_stop_unconfirmed']);
 // One rewrite: submitted under an id of its own, its record read until the job is over or its time is up, and deleted
-// once read, since it holds the chat. A job whose time is up is stopped by name (image-batch.ts `stopJob`) with the
-// minute the end keeps for that.
+// once read, since it holds the chat. A job given up is stopped by that id (image-batch.ts `stopJob`) with the minute
+// the end keeps for that, and its record deleted: one whose time is up or whose polls failed, and one whose submission
+// threw or was answered without an id, since the server may have queued it all the same. The rewrite then fails, and
+// if the stop was not confirmed its code is `comfy_stop_unconfirmed`, which ends the pass and the card's run. An
+// answer to the submission that cannot be read is `comfy_bad_answer`, which the judging counts as not reached.
 async function rewriteOne(comfy: Comfy, graph: Graph, mode: Mode, timeoutMs: number, pollMs: number): Promise<Rewrite> {
   const began = performance.now(), ms = () => Math.round(performance.now() - began);
   const reserve: Comfy = { baseUrl: comfy.baseUrl, timeoutMs: comfy.timeoutMs, end: comfy.reserve };
   const forget = (id: string) => post(reserve, '/history', { delete: [id] }).catch(() => undefined);
-  const failure = (error: unknown, extra: Partial<Rewrite> = {}): Rewrite => {
+  const failure = (error: unknown, otherwise: string): Rewrite => {
     const raw = (error as { code?: unknown }).code;
     const lost = (error instanceof TypeError && error.message === 'fetch failed') || (error as { name?: unknown }).name === 'TimeoutError';
-    const code = typeof raw === 'string' && DRAW_CODES.includes(raw) ? raw : lost ? 'comfy_unreachable' : 'pe_failed';
+    const code = typeof raw === 'string' && DRAW_CODES.includes(raw) ? raw : lost ? 'comfy_unreachable' : otherwise;
     const { httpStatus } = safeErrorDetails(error);
-    return { status: 'failed', code, ...(httpStatus ? { httpStatus } : {}), ms: ms(), ...extra };
+    return { status: 'failed', code, ...(httpStatus ? { httpStatus } : {}), ms: ms() };
+  };
+  const abandon = async (id: string, failed: Rewrite): Promise<Rewrite> => {
+    const stopped = await stopJob(reserve, id, pollMs);
+    await forget(id);
+    return stopped ? { ...failed, ms: ms(), stopped } : { ...failed, code: 'comfy_stop_unconfirmed', ...(failed.code ? { cause: failed.code } : {}), ms: ms(), stopped };
   };
   let id: string = randomUUID();
   try {
     const answer = await (await post(comfy, '/prompt', { prompt: graph, prompt_id: id })).json() as { prompt_id?: unknown };
-    if (typeof answer.prompt_id !== 'string' || !answer.prompt_id) return { status: 'failed', code: 'comfy_rejected_prompt', ms: ms() };
+    if (typeof answer.prompt_id !== 'string' || !answer.prompt_id) return await abandon(id, { status: 'failed', code: 'comfy_rejected_prompt', ms: ms() });
     id = answer.prompt_id;
-  } catch (error) { return failure(error); }
+  } catch (error) { return await abandon(id, failure(error, 'comfy_bad_answer')); }
   try {
     for (let misses = 0; ;) {
       await delay(pollMs, undefined, { signal: comfy.end }).catch(() => undefined);
       if (comfy.end?.aborted || performance.now() - began > timeoutMs) {
-        const stopped = await stopJob(reserve, id, pollMs);
-        await forget(id);
-        return { status: 'failed', code: comfy.end?.aborted ? 'out_of_time' : 'pe_timeout', ms: ms(), stopped };
+        return await abandon(id, { status: 'failed', code: comfy.end?.aborted ? 'out_of_time' : 'pe_timeout', ms: ms() });
       }
       let entry: HistoryRecord | undefined;
       try {
@@ -584,18 +615,18 @@ async function rewriteOne(comfy: Comfy, graph: Graph, mode: Mode, timeoutMs: num
       return { ...parseRewrite(typeof text === 'string' ? text : '', mode), ms: ms() };
     }
   } catch (error) {
-    const stopped = await stopJob(reserve, id, pollMs);
-    await forget(id);
-    return failure(error, { stopped });
+    return await abandon(id, failure(error, 'pe_failed'));
   }
 }
 
 // One pass of rewrites, scene by scene, each begun only if its time and the frames after it still fit before `until`:
 // `need` prices the frames of the stand the pass feeds once `scenes` of it have a rewrite. A scene is rewritten once,
-// whatever comes back; one never begun is begun on a resume. The first rewrite of a pass loads the enhancer.
-async function rewritePass(options: { comfy: Comfy; mode: Mode; file: string; system: string; frozen: Frozen; until: number; timeoutMs: number; loadMs: number;
-  pollMs: number; need: (scenes: number) => number; log: (event: object) => void }): Promise<Rewrites> {
-  const settings = settingsOf(options.mode, options.system);
+// whatever comes back; one never begun is begun on a resume. The first rewrite of a pass loads the enhancer. The
+// enhancer is given the pass's frozen arm (`PASSES`) byte for byte: C0 for PE and PT, G for GPE. `stop`: the code that
+// ended the pass early, if one did.
+async function rewritePass(options: { comfy: Comfy; arm: Rewritten; file: string; system: string; frozen: Frozen; until: number; timeoutMs: number;
+  loadMs: number; pollMs: number; need: (scenes: number) => number; log: (event: object) => void }): Promise<{ rewrites: Rewrites; stop?: string }> {
+  const { mode, from } = PASSES[options.arm], settings = settingsOf(options.arm, options.system);
   const record: Rewrites = readJson<Rewrites>(options.file) ?? { settings, scenes: {} };
   if (!same(record.settings, settings)) throw new Refusal(`${options.file} was rewritten with other settings or another system prompt: move it aside; nothing is sent`);
   let first = true;
@@ -604,21 +635,22 @@ async function rewritePass(options: { comfy: Comfy; mode: Mode; file: string; sy
     const ok = SCENES.filter(one => record.scenes[one]?.status === 'ok').length, open = SCENES.filter(one => !record.scenes[one]).length;
     const needMs = options.timeoutMs + (first ? options.loadMs : 0) + options.need(ok + open);
     if (options.comfy.end?.aborted || Date.now() + needMs > options.until) {
-      options.log({ event: 'rewrite_not_begun', mode: options.mode, scene, needSeconds: Math.ceil(needMs / 1000),
+      options.log({ event: 'rewrite_not_begun', arm: options.arm, mode, scene, needSeconds: Math.ceil(needMs / 1000),
         leftSeconds: Math.max(0, Math.floor((options.until - Date.now()) / 1000)) });
       break;
     }
-    const result = await rewriteOne(options.comfy, peGraph(options.system, options.frozen.scenes[scene].C0, options.mode, randomUUID()), options.mode,
+    const result = await rewriteOne(options.comfy, peGraph(options.system, options.frozen.scenes[scene][from], mode, randomUUID()), mode,
       options.timeoutMs + (first ? options.loadMs : 0), options.pollMs);
     first = false;
     record.scenes[scene] = result;
     writeJson(options.file, record);
-    options.log({ event: 'rewrite', mode: options.mode, scene, status: result.status, ...(result.code ? { code: result.code } : {}), ms: result.ms,
+    options.log({ event: 'rewrite', arm: options.arm, mode, scene, status: result.status, ...(result.code ? { code: result.code } : {}),
+      ...(result.cause ? { cause: result.cause } : {}), ...(result.stopped !== undefined ? { stopped: result.stopped } : {}), ms: result.ms,
       ...(result.form ? { form: result.form } : {}), ...(result.prompt ? { words: result.prompt.split(/\s+/).length } : {}),
       ...(result.thinkingChars ? { thinkingChars: result.thinkingChars } : {}) });
-    if (result.code && STOPS.has(result.code)) break;
+    if (result.code && STOPS.has(result.code)) return { rewrites: record, stop: result.code };
   }
-  return record;
+  return { rewrites: record };
 }
 const rewritten = (record: Rewrites | undefined) => SCENES.filter(scene => record?.scenes[scene]?.status === 'ok');
 
@@ -628,7 +660,8 @@ const rewritten = (record: Rewrites | undefined) => SCENES.filter(scene => recor
 // about a minute, at a 9B's pace on the card (unmeasured); the time a rewrite is waited for, and the load of the
 // enhancer beside the image model's weights at a pass's start (docs/action-experiment.md#prompt-arms).
 export const REWRITE_MS = { fast: 20000, think: 60000 }, TIMEOUT_MS = { fast: 90000, think: 240000 }, LOAD_MS = 60000;
-// A swap of the enhancer and the image model as the estimate expects it, and the slot the card plan gives the probe.
+// A swap of the enhancer and the image model as the estimate expects it, and the slot the card plan gives the probe:
+// 38.1 minutes expected with GPE's schedule of 2026-09-29, inside it (`estimate`).
 const SWAP_MS = 20000, SLOT_MINUTES = 40;
 const priceOf = (ms: number) => Math.round(ms * MARGIN + CELL_MS);
 // The warm price of a frame from the words: the slowest of the core stand's warm frames once it has drawn, the seeded
@@ -642,25 +675,28 @@ export const SCHEDULES_FILE = 'schedules.json';
 export type Schedule = { state: 'begun' | 'omitted'; needSeconds: number; leftSeconds: number; at: string };
 export type Schedules = Partial<Record<Optional, Schedule>>;
 const FRAMES = SCENES.length * ARM_SEEDS.length;
-// What a schedule needs: for PE and PT the enhancer's load, every rewrite at its time priced as a frame's is, and the
-// image model's return; then every frame at `frame`.
+// What a schedule needs: for PE, GPE and PT the enhancer's load, every rewrite at its time priced as a frame's is, and
+// the image model's return; then every frame at `frame`.
 export const budgetOf = (arm: Optional, frame: number, rewriteMs: Record<Mode, number>, loadMs = LOAD_MS) => (arm === 'A+' ? SHAPE_MS + FRAMES * frame
-  : loadMs + SCENES.length * priceOf(rewriteMs[arm === 'PE' ? 'fast' : 'think']) + SHAPE_MS + FRAMES * frame);
-// A rewrite with thinking is priced at its seeded time, scaled up by as much as the card's rewrites without thinking
-// took longer than theirs, at their median.
-function thinkMs(seeded: Record<Mode, number>, fast: Rewrites | undefined) {
-  const times = SCENES.flatMap(scene => (fast?.scenes[scene]?.status === 'ok' ? [fast.scenes[scene].ms] : [])).sort((a, b) => a - b);
+  : loadMs + SCENES.length * priceOf(rewriteMs[PASSES[arm].mode]) + SHAPE_MS + FRAMES * frame);
+// A rewrite with thinking is priced at its seeded time, scaled up by as much as the card's rewrites without thinking,
+// PE's and GPE's, took longer than theirs, at their median.
+function thinkMs(seeded: Record<Mode, number>, fast: (Rewrites | undefined)[]) {
+  const times = fast.flatMap(record => SCENES.flatMap(scene => (record?.scenes[scene]?.status === 'ok' ? [record.scenes[scene].ms] : []))).sort((a, b) => a - b);
   return times.length ? Math.max(seeded.think, Math.round(seeded.think * times[Math.floor(times.length / 2)] / seeded.fast)) : seeded.think;
 }
 
 export type CardOptions = { run: string; comfy: string; until: number; frozenSha256?: string; systemSha256?: string; waitMs?: number; timeoutMs?: number;
   pollMs?: number; rewriteTimeoutMs?: Partial<Record<Mode, number>>; rewriteMs?: Partial<Record<Mode, number>>; loadMs?: number; log: (event: object) => void };
-export type CardResult = { core: StandIndex; pe?: StandIndex; pt?: StandIndex; schedules: Schedules };
+// `ended`: what ended the run before its last schedule, if anything did.
+export type CardResult = { core: StandIndex; pe?: StandIndex; gpe?: StandIndex; pt?: StandIndex; schedules: Schedules; ended?: string };
 // The whole card, as the review of 2026-09-28 ordered it: every C0 and G frame first; then PE's rewrites and frames,
-// A+'s frames, and PT's rewrites and frames, each schedule begun only if the time left covers all of it, and PE's and
-// PT's texts fixed once their pass is over, so that a resume draws from them. Refused before anything is sent: the
-// frozen texts or the system prompt other than the pinned, a card record without the enhancer's line, a server off the
-// bot's path or without the enhancer.
+// GPE's rewrites and frames, A+'s frames, and PT's rewrites and frames, each schedule begun only if the time left covers
+// all of it, and each pass's texts fixed once it is over, so that a resume draws from them. A pass that ended on
+// `comfy_stop_unconfirmed`, a rewrite given up whose job the card may still hold, ends the run at once: no stand is
+// drawn after it and no further schedule weighed, and a resume goes on from the scene after it. Refused before
+// anything is sent: the frozen texts or the system prompt other than the pinned, a card record without the enhancer's
+// line, a server off the bot's path or without the enhancer.
 export async function runCard(options: CardOptions): Promise<CardResult> {
   const run = resolve(options.run), log = options.log;
   const frozen = readFrozen(join(run, FROZEN_FILE), options.frozenSha256 ?? FROZEN_SHA256);
@@ -697,8 +733,8 @@ export async function runCard(options: CardOptions): Promise<CardResult> {
     return drawStand({ out: dir, comfy: options.comfy, until: options.until, pinned: sha256(texts), stand: standOf(name, plan, earlier?.startedAt.slice(0, 10) ?? day),
       keys, waitMs: options.waitMs, timeoutMs: options.timeoutMs, pollMs: options.pollMs, warm: warmth, log });
   };
-  const pass = (mode: Mode, need: (scenes: number) => number) => rewritePass({ comfy, mode, file: join(run, REWRITES_FILE[mode]), system, frozen, until: options.until,
-    timeoutMs: timeouts[mode], loadMs, pollMs, need, log });
+  const pass = (arm: Rewritten, need: (scenes: number) => number) => rewritePass({ comfy, arm, file: join(run, REWRITES_FILE[arm]), system, frozen,
+    until: options.until, timeoutMs: timeouts[PASSES[arm].mode], loadMs, pollMs, need, log });
   const schedulesFile = join(run, SCHEDULES_FILE), schedules: Schedules = readJson<Schedules>(schedulesFile) ?? {};
   // A schedule begun goes on on a resume; one omitted is weighed again.
   const gate = (arm: Optional, needMs: number) => {
@@ -715,27 +751,31 @@ export async function runCard(options: CardOptions): Promise<CardResult> {
   const result: CardResult = { core: await stand('core', coreCells, coreTexts, keysOf(RESERVED)), schedules };
   const ended = (index: StandIndex) => index.error ?? (index.stopped ? 'until' : undefined);
   const done = (end?: string) => {
-    log({ event: 'card_done', core: countsOf(result.core), ...(result.pe ? { pe: countsOf(result.pe) } : {}), ...(result.pt ? { pt: countsOf(result.pt) } : {}),
-      schedules: Object.fromEntries(Object.entries(schedules).map(([arm, one]) => [arm, one.state])), ...(end ? { ended: end } : {}) });
+    if (end) result.ended = end;
+    log({ event: 'card_done', core: countsOf(result.core), ...(result.pe ? { pe: countsOf(result.pe) } : {}), ...(result.gpe ? { gpe: countsOf(result.gpe) } : {}),
+      ...(result.pt ? { pt: countsOf(result.pt) } : {}), schedules: Object.fromEntries(Object.entries(schedules).map(([arm, one]) => [arm, one.state])),
+      ...(end ? { ended: end } : {}) });
     return result;
   };
   if (ended(result.core)) return done(ended(result.core));
   for (const arm of OPTIONAL) {
-    const price = framePrice(result.core), rewriteMs = { fast: seeded.fast, think: thinkMs(seeded, readJson<Rewrites>(join(run, REWRITES_FILE.fast))) };
+    const price = framePrice(result.core);
+    const rewriteMs = { fast: seeded.fast, think: thinkMs(seeded, [readJson<Rewrites>(join(run, REWRITES_FILE.PE)), readJson<Rewrites>(join(run, REWRITES_FILE.GPE))]) };
     if (!gate(arm, budgetOf(arm, price, rewriteMs, loadMs))) continue;
     if (arm === 'A+') {
       result.core = await stand('core', coreCells, coreTexts, keysOf(['A+']));
       if (ended(result.core)) return done(ended(result.core));
       continue;
     }
-    const mode: Mode = arm === 'PE' ? 'fast' : 'think', name = STAND_OF[arm];
-    const rewrites = existsSync(join(run, name, TEXTS_FILE)) ? readJson<Rewrites>(join(run, REWRITES_FILE[mode]))
-      : await pass(mode, scenes => SHAPE_MS + ARM_SEEDS.length * scenes * price);
+    const name = STAND_OF[arm];
+    const passed: { rewrites: Rewrites | undefined; stop?: string } = existsSync(join(run, name, TEXTS_FILE)) ? { rewrites: readJson<Rewrites>(join(run, REWRITES_FILE[arm])) }
+      : await pass(arm, scenes => SHAPE_MS + ARM_SEEDS.length * scenes * price);
+    if (passed.stop === 'comfy_stop_unconfirmed') return done(passed.stop);
     warmth.groups.clear();
-    const cells = rewritePlan(arm, rewritten(rewrites));
+    const rewrites = passed.rewrites, cells = rewritePlan(arm, rewritten(rewrites));
     if (!cells.length) continue;
     const drawn = await stand(name, cells, textsOf(cells, frozen, rewrites));
-    if (arm === 'PE') result.pe = drawn; else result.pt = drawn;
+    if (arm === 'PE') result.pe = drawn; else if (arm === 'GPE') result.gpe = drawn; else result.pt = drawn;
     if (ended(drawn)) return done(ended(drawn));
   }
   return done();
@@ -747,11 +787,11 @@ export async function runCard(options: CardOptions): Promise<CardResult> {
 // the first figure the card will correct.
 export function estimate() {
   const reserved = estimateOf(undefined, 0, 60, framesOf(RESERVED, SCENES)), frame = priceOf(SEED_MS.words);
-  const expectedOf = (arm: Optional) => (arm === 'A+' ? 0 : 2 * SWAP_MS + SCENES.length * REWRITE_MS[arm === 'PE' ? 'fast' : 'think']) + FRAMES * SEED_MS.words;
+  const expectedOf = (arm: Optional) => (arm === 'A+' ? 0 : 2 * SWAP_MS + SCENES.length * REWRITE_MS[PASSES[arm].mode]) + FRAMES * SEED_MS.words;
   const schedules = OPTIONAL.map(arm => ({ arm, rewrites: arm === 'A+' ? 0 : SCENES.length, frames: FRAMES, expectedMinutes: minutes(expectedOf(arm)),
     budgetMinutes: minutes(budgetOf(arm, frame, REWRITE_MS)) }));
   const sum = (values: number[]) => Math.round(values.reduce((total, value) => total + value, 0) * 10) / 10;
-  return { cells: { core: corePlan().length, pe: FRAMES, think: FRAMES, arms: Object.fromEntries(ARMS.map(arm => [arm, FRAMES])) }, scenes: SCENES.length, seeds: ARM_SEEDS,
+  return { cells: { core: corePlan().length, pe: FRAMES, gpe: FRAMES, think: FRAMES, arms: Object.fromEntries(ARMS.map(arm => [arm, FRAMES])) }, scenes: SCENES.length, seeds: ARM_SEEDS,
     reserved: { arms: RESERVED, frames: reserved.frames, expectedMinutes: reserved.expectedMinutes, pricedMinutes: reserved.pricedMinutes }, schedules,
     rewrites: { fastSeconds: REWRITE_MS.fast / 1000, thinkSeconds: REWRITE_MS.think / 1000, timeoutSeconds: { fast: TIMEOUT_MS.fast / 1000, think: TIMEOUT_MS.think / 1000 },
       loadSeconds: LOAD_MS / 1000 },
@@ -763,8 +803,8 @@ export function estimate() {
 // ---- The pages ----
 
 export function writePages(run: string) {
-  const plans: Record<StandName, () => Planned[]> = { core: corePlan, fast: () => rewritePlan('PE', rewritten(readJson<Rewrites>(join(run, REWRITES_FILE.fast)))),
-    think: () => rewritePlan('PT', rewritten(readJson<Rewrites>(join(run, REWRITES_FILE.think)))) };
+  const passPlan = (arm: Rewritten) => () => rewritePlan(arm, rewritten(readJson<Rewrites>(join(run, REWRITES_FILE[arm]))));
+  const plans: Record<StandName, () => Planned[]> = { core: corePlan, fast: passPlan('PE'), 'g-fast': passPlan('GPE'), think: passPlan('PT') };
   for (const name of STANDS) {
     const dir = join(run, name), file = join(dir, TEXTS_FILE);
     if (!existsSync(file)) continue;
@@ -775,18 +815,39 @@ export function writePages(run: string) {
 
 // ---- The dry run ----
 
-// The whole card without one, in `dir`: the real frozen texts and system prompt where the run holds them, synthetic
-// ones otherwise, each prompt with a made-up word. Every rewrite's graph built and read back; then local/fake-comfy.ts
+// The strict dry run's preflight: the run's frozen texts and the enhancer's system prompt, each at the sha256 this file
+// pins. A refusal names which of the two is missing or other than pinned, and nothing of what either holds.
+export function strictInputs(runDir: string | undefined) {
+  if (!runDir) throw new Refusal('dry-run --strict takes --run <the run\'s directory>, on whose pinned frozen texts and system prompt it runs; nothing is run');
+  const state = (file: string, pinned: string) => (!existsSync(file) ? 'missing' : sha256(readFileSync(file)) === pinned ? 'pinned' : 'not the one pinned');
+  const inputs = ([[FROZEN_FILE, FROZEN_SHA256], [SYSTEM_FILE, PE.systemSha256]] as const).map(([name, pinned]) => {
+    const file = join(resolve(runDir), name);
+    return { file, state: state(file, pinned) };
+  });
+  const wrong = inputs.filter(one => one.state !== 'pinned');
+  if (wrong.length) throw new Refusal(`The strict dry run runs on the run's pinned inputs alone: ${wrong.map(one => `${one.file} is ${one.state}`).join('; ')}; nothing is run`);
+  readFrozen(inputs[0].file);
+}
+
+// The whole card without one, in `dir`: the real frozen texts and system prompt where the run holds them pinned,
+// synthetic ones otherwise, and with `strict` the real ones or a refusal before anything is written (`strictInputs`);
+// each prompt with a made-up word. Every rewrite's graph built and read back, GPE's with G; then local/fake-comfy.ts
 // started as the bot's card with the enhancer, the fake answering each rewrite: frozen texts, a system prompt and a
 // card record other than the pinned, a server on cu128 and one without the enhancer refused before anything is sent;
 // a card whose end is too near for the first frame begins nothing and weighs no schedule; one with two and a half
-// minutes draws C0, G and A+ and omits both enhancer schedules for want of their budgets; the card: C0 and G; twelve
-// rewrites without thinking, one failing on the card, one past its time and stopped, one a plain paragraph and one a
-// fenced object, and PE's frames of the rest; A+'s frames; twelve rewrites with thinking, one never closing its thought
-// and one answering no JSON, and PT's frames; a resume that sends nothing; every job as built and in order, every
-// rewrite's record deleted once read, one job at a time; and the prompts' word only in the texts, the records of the
-// rewrites and the pages, the thinking's word and the fake's nowhere.
-export async function dryRun(dir: string, runDir?: string) {
+// minutes draws C0, G and A+ and omits the three enhancer schedules for want of their budgets; the card: C0 and G;
+// twelve rewrites of C0 without thinking, one failing on the card, one past its time and stopped, one a plain
+// paragraph and one a fenced object, and PE's frames of the rest; twelve rewrites of G, each given G byte for byte as
+// the G cells draw it, and GPE's 24 frames, each cell's record with both prompts; A+'s frames; twelve rewrites with
+// thinking, one never closing its thought, one answering no JSON, and one whose submission the fake queued and then
+// answered unreadably, stopped and deleted, after which the pass goes on; PT's frames; a resume that sends nothing;
+// every job as built and in order, every rewrite's record deleted once read, one job at a time. Then, in a run of its
+// own on a card where no stop is confirmed, a rewrite past its time, and on the resume the next one's submission
+// answered unreadably: each ends the pass and the card's run with `comfy_stop_unconfirmed`, and nothing more is sent.
+// The prompts' word only in the texts, the records of the rewrites and the pages, the thinking's word and the fake's
+// nowhere.
+export async function dryRun(dir: string, runDir?: string, strict = false) {
+  if (strict) strictInputs(runDir);
   const dry = resolve(dir), temp = join(dry, 'tmp'), run = join(dry, 'run');
   for (const path of [dry, temp, run, join(run, 'pe')]) mkdirSync(path, { recursive: true, mode: 0o700 });
   const previous = process.env.TMPDIR;
@@ -798,27 +859,38 @@ export async function dryRun(dir: string, runDir?: string) {
   let fake: Awaited<ReturnType<typeof startFakeComfy>> | undefined;
   const sent: Graph[] = [], fetched = globalThis.fetch;
   let strays = 0, origin = '', submits = 0;
-  // The fake's answers by scene and pass: `steer` sets what the next rewrite does on the card before it is submitted.
-  let steer: (graph: Graph, number: number) => void = () => undefined;
+  // The fake's answers by scene and pass: `steer` sets what the next job does on the card before it is submitted. Beyond
+  // the fake's own knobs, `garble` answers the submission unreadably once the fake has queued the job, and `deaf` makes
+  // a card on which /interrupt stops nothing, so that no stop of a running job is confirmed.
+  let steer: (graph: Graph, number: number) => void = () => undefined, garble = false, deaf = false;
+  const garbled: string[] = [];
   globalThis.fetch = async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
     if (new URL(url).origin !== origin) { strays++; throw new Error('the dry run asks the fake alone'); }
+    if (deaf && init?.method === 'POST' && url.endsWith('/interrupt')) return Response.json({});
     if (init?.method === 'POST' && url.endsWith('/prompt') && typeof init.body === 'string') {
-      const graph = (JSON.parse(init.body) as { prompt: Graph }).prompt;
-      sent.push(graph);
-      steer(graph, ++submits);
+      const asked = JSON.parse(init.body) as { prompt: Graph; prompt_id?: unknown };
+      sent.push(asked.prompt);
+      steer(asked.prompt, ++submits);
+      if (garble) {
+        await (await fetched(input, init)).arrayBuffer();
+        garbled.push(String(asked.prompt_id));
+        return new Response('not what ComfyUI answers', { status: 200 });
+      }
     }
     return fetched(input, init);
   };
   try {
     say(`prompt arms dry run in ${dry}: the texts, the rewrites' graphs, then the whole card against local/fake-comfy.ts; no card, no model, no network`);
-    const plan = estimate();
-    say(`0 the plan: ${plan.cells.core} cells of C0, G and A+, ${plan.cells.pe} of PE and ${plan.cells.think} of PT; C0 and G first, ${plan.reserved.expectedMinutes} minutes expected `
-      + `(${plan.reserved.pricedMinutes} at the admission prices), then ${plan.schedules.map(one => `${one.arm} ${one.expectedMinutes} (its budget ${one.budgetMinutes})`).join(', ')}: `
+    const plan = estimate(), planned = plan.schedules.reduce((sum, one) => sum + one.rewrites, 0);
+    say(`0 the plan: ${plan.cells.core} cells of C0, G and A+, ${plan.cells.pe} of PE, ${plan.cells.gpe} of GPE and ${plan.cells.think} of PT, ${planned} rewrites; C0 and G first, `
+      + `${plan.reserved.expectedMinutes} minutes expected (${plan.reserved.pricedMinutes} at the admission prices), then `
+      + `${plan.schedules.map(one => `${one.arm} ${one.expectedMinutes} (its budget ${one.budgetMinutes})`).join(', ')}: `
       + `${plan.expectedMinutes} minutes expected and ${plan.budgetMinutes} at the budgets, in a slot of ${plan.slotMinutes}`);
-    expect(plan.cells.core === 72 && plan.cells.pe === 24 && plan.cells.think === 24 && plan.expectedMinutes <= plan.slotMinutes
-      && new Set([...corePlan(), ...rewritePlan('PE', SCENES), ...rewritePlan('PT', SCENES)].map(one => one.key)).size === 120,
-    '72 cells of C0, G and A+, 24 of PE and 24 of PT, every key once, and the minutes expected inside the slot');
+    expect(plan.cells.core === 72 && plan.cells.pe === 24 && plan.cells.gpe === 24 && plan.cells.think === 24 && planned === 36
+      && same(plan.schedules.map(one => one.arm), ['PE', 'GPE', 'A+', 'PT']) && plan.expectedMinutes <= plan.slotMinutes
+      && new Set([...corePlan(), ...REWRITTEN.flatMap(arm => rewritePlan(arm, SCENES))].map(one => one.key)).size === 144,
+    '72 cells of C0, G and A+, 24 each of PE, GPE and PT, 36 rewrites, GPE\'s schedule right after PE\'s, every key once, and the minutes expected inside the slot');
 
     // The texts: the run's, pinned, or made up; a word in every prompt either way.
     const word = madeUpName(), thought = madeUpName(name => name !== word), marker = madeUpName(name => name !== word && name !== thought);
@@ -835,32 +907,39 @@ export async function dryRun(dir: string, runDir?: string) {
       : 'Rewrite the user\'s picture prompt. Answer with one JSON line: {"rewritten_prompt": "<the description>", "wh_ratio": "<e.g. 3:2>"}.';
     writeFileSync(join(run, SYSTEM_FILE), system, { mode: 0o600 });
     say(`1 the texts: ${real ? 'the run\'s frozen texts, pinned' : 'made-up texts, the run has no frozen texts pinned yet'}, and ${system === realSystem ? 'the enhancer\'s system prompt, pinned'
-      : 'a made-up system prompt'}; a made-up word in every prompt`);
+      : 'a made-up system prompt'}; a made-up word in every prompt${strict ? '; strict: the run\'s own alone' : ''}`);
+    if (strict) expect(!!real && system === realSystem, 'the strict dry run on the run\'s pinned frozen texts and system prompt');
 
-    // Each rewrite's graph as built, read back: the chat around the scene's C0, each pass's opening of the answer, the
-    // sampling, the file.
-    const graphRight = (graph: Graph, scene: string, mode: Mode) => {
+    // Each rewrite's graph as built, read back: the chat around the pass's frozen prompt (C0's for PE and PT, G's for
+    // GPE), each pass's opening of the answer, the sampling, the file.
+    const graphRight = (graph: Graph, scene: string, arm: Rewritten) => {
+      const { mode, from } = PASSES[arm];
       const nodes = Object.values(graph), generate = nodes.find(node => node.class_type === 'TextGenerate')?.inputs, loader = nodes.find(node => node.class_type === 'CLIPLoader')?.inputs;
       const preview = nodes.find(node => node.class_type === 'PreviewAny')?.inputs;
       return nodes.length === 3 && !!generate && !!loader && !!preview && loader.clip_name === PE.file && same(generate.clip, ['1', 0]) && same(preview.source, ['2', 0])
-        && generate.prompt === chatOf(system, frozen.scenes[scene].C0, mode) && String(generate.prompt).endsWith(mode === 'fast' ? '<think>\n\n</think>\n\n' : '<think>\n')
+        && generate.prompt === chatOf(system, frozen.scenes[scene][from], mode) && String(generate.prompt).endsWith(mode === 'fast' ? '<think>\n\n</think>\n\n' : '<think>\n')
         && String(generate.prompt).startsWith(`<|im_start|>system\n${system.trim()}<|im_end|>\n<|im_start|>user\n`) && generate.max_length === MAX_LENGTH[mode]
         && generate['sampling_mode.temperature'] === 1 && generate['sampling_mode.top_k'] === 20 && generate['sampling_mode.top_p'] === 0.95
         && generate['sampling_mode.repetition_penalty'] === 1 && generate.sampling_mode === 'on' && typeof preview.nonce === 'string';
     };
-    const built = SCENES.flatMap(scene => (['fast', 'think'] as Mode[]).map(mode => graphRight(peGraph(system, frozen.scenes[scene].C0, mode, randomUUID()), scene, mode)));
+    const built = SCENES.flatMap(scene => REWRITTEN.map(arm => graphRight(peGraph(system, frozen.scenes[scene][PASSES[arm].from], PASSES[arm].mode, randomUUID()), scene, arm)));
     say(`2 the rewrites' graphs: ${built.filter(Boolean).length} of ${built.length} read back right`);
-    expect(built.every(Boolean), 'every rewrite\'s graph as the card is to get it');
+    expect(built.length === 36 && built.every(Boolean), 'every rewrite\'s graph as the card is to get it');
 
-    // The fake as the bot's card with the enhancer. Its answers: by the scene's C0 in the chat and the pass.
-    const sceneIn = (graph: Graph) => {
-      const chat = String(Object.values(graph).find(node => node.class_type === 'TextGenerate')?.inputs.prompt ?? '');
-      return { scene: SCENES.find(scene => chat.includes(`<|im_start|>user\n${frozen.scenes[scene].C0}<|im_end|>`)), mode: (chat.endsWith('</think>\n\n') ? 'fast' : 'think') as Mode };
+    // The fake as the bot's card with the enhancer. Its answers: by the frozen prompt in the chat's user turn and the
+    // opening of the answer, which give the scene and the pass.
+    const chatIn = (graph: Graph) => String(Object.values(graph).find(node => node.class_type === 'TextGenerate')?.inputs.prompt ?? '');
+    const userOf = (chat: string) => /<\|im_start\|>user\n([\s\S]*)<\|im_end\|>\n<\|im_start\|>assistant\n/.exec(chat)?.[1];
+    const passIn = (chat: string): { scene: string; arm: Rewritten } | undefined => {
+      const given = userOf(chat), fast = chat.endsWith('</think>\n\n');
+      const scene = SCENES.find(one => given === frozen.scenes[one].C0 || (fast && given === frozen.scenes[one].G));
+      return scene ? { scene, arm: given === frozen.scenes[scene].C0 ? (fast ? 'PE' : 'PT') : 'GPE' } : undefined;
     };
     const answer = (chat: string) => {
-      const scene = SCENES.find(one => chat.includes(`<|im_start|>user\n${frozen.scenes[one].C0}<|im_end|>`))!, mode = chat.endsWith('</think>\n\n') ? 'fast' : 'think';
-      const json = JSON.stringify({ rewritten_prompt: `A rewritten ${scene} frame, the people where the scene has them. ${word}`, wh_ratio: '16:9' });
-      if (mode === 'fast') {
+      const { scene, arm } = passIn(chat)!;
+      const json = JSON.stringify({ rewritten_prompt: `A rewritten ${scene} frame${arm === 'GPE' ? ' from G' : ''}, the people where the scene has them. ${word}`, wh_ratio: '16:9' });
+      if (arm === 'GPE') return json;
+      if (arm === 'PE') {
         if (scene === 'lineout') return `${'A plain paragraph for the frame, the people where the scene has them, '.repeat(3)}${word}`;
         return scene === 'giants' ? `\`\`\`json\n${json}\n\`\`\`` : json;
       }
@@ -874,11 +953,13 @@ export async function dryRun(dir: string, runDir?: string) {
         PreviewAny: { input: { required: { source: ['*', {}] } } } } });
     fake = started;
     origin = started.url;
-    // Without thinking, beach's rewrite fails on the card and cheer's outlasts its time; the rest answer at once.
+    // PE's rewrite of beach fails on the card and cheer's outlasts its time; PT's submission of jellyfish is queued and
+    // answered unreadably while its job runs on; the rest answer at once.
     steer = (graph, number) => {
-      const { scene, mode } = sceneIn(graph);
-      started.options.failJobs = scene === 'beach' && mode === 'fast' ? [number] : [];
-      started.options.textMs = scene === 'cheer' && mode === 'fast' ? 5000 : 5;
+      const pass = passIn(chatIn(graph)), is = (scene: string, arm: Rewritten) => pass?.scene === scene && pass.arm === arm;
+      started.options.failJobs = is('beach', 'PE') ? [number] : [];
+      started.options.textMs = is('cheer', 'PE') || is('jellyfish', 'PT') ? 5000 : 5;
+      garble = is('jellyfish', 'PT');
     };
     writeCardRecord(join(run, 'card.txt'));
     const events: object[] = [];
@@ -907,7 +988,7 @@ export async function dryRun(dir: string, runDir?: string) {
     started.options.objectInfo = { ...offered, CLIPLoader: { input: { required: { clip_name: [[MANIFEST.IMAGE_QWEN_ENCODER_FILE]] } } } };
     await refused('a server without the enhancer', () => card());
     started.options.objectInfo = offered;
-    expect(!submits && !existsSync(join(run, REWRITES_FILE.fast)) && !existsSync(join(run, 'core', INDEX_FILE)) && !existsSync(join(run, SCHEDULES_FILE)),
+    expect(!submits && !REWRITTEN.some(arm => existsSync(join(run, REWRITES_FILE[arm]))) && !existsSync(join(run, 'core', INDEX_FILE)) && !existsSync(join(run, SCHEDULES_FILE)),
       'the refusals send and write nothing');
 
     const short = await card({ until: Date.now() + 5000, loadMs: 60000 });
@@ -916,41 +997,56 @@ export async function dryRun(dir: string, runDir?: string) {
       'a card whose end is near begins no frame and weighs no schedule');
     clear();
 
-    // Two and a half minutes: every frame of C0 and G, then A+, whose 24 frames the time left covers, and neither
-    // enhancer's schedule, whose twelve rewrites it does not.
+    // Two and a half minutes: every frame of C0 and G, then A+, whose 24 frames the time left covers, and none of the
+    // enhancer's schedules, whose twelve rewrites it does not.
     const tightFrom = submits, tight = await card({ until: Date.now() + 150000 });
     const states = (record: Schedules | undefined) => Object.fromEntries(Object.entries(record ?? {}).map(([arm, one]) => [arm, one.state]));
     const tightStates = states(readJson<Schedules>(join(run, SCHEDULES_FILE)));
     say(`5 two and a half minutes: ${countsOf(tight.core).drawn} frames of C0, G and A+ in ${submits - tightFrom} jobs; the schedules ${JSON.stringify(tightStates)}`);
-    expect(countsOf(tight.core).drawn === 72 && submits - tightFrom === 72 && same(tightStates, { PE: 'omitted', 'A+': 'begun', PT: 'omitted' })
-      && !existsSync(join(run, REWRITES_FILE.fast)) && !tight.pe && !tight.pt, 'C0, G and A+ drawn, both enhancer schedules omitted for want of their budgets');
+    expect(countsOf(tight.core).drawn === 72 && submits - tightFrom === 72 && same(tightStates, { PE: 'omitted', GPE: 'omitted', 'A+': 'begun', PT: 'omitted' })
+      && !REWRITTEN.some(arm => existsSync(join(run, REWRITES_FILE[arm]))) && !tight.pe && !tight.gpe && !tight.pt,
+    'C0, G and A+ drawn, the three enhancer schedules omitted for want of their budgets');
     clear();
 
     const firstSent = sent.length, firstJob = started.jobs.length;
     const done = await card();
-    const fast = readJson<Rewrites>(join(run, REWRITES_FILE.fast))!, think = readJson<Rewrites>(join(run, REWRITES_FILE.think))!;
+    const records = Object.fromEntries(REWRITTEN.map(arm => [arm, readJson<Rewrites>(join(run, REWRITES_FILE[arm]))!])) as Record<Rewritten, Rewrites>;
+    const { PE: fast, GPE: gfast, PT: think } = records;
     const schedules = states(readJson<Schedules>(join(run, SCHEDULES_FILE)));
     const codes = (record: Rewrites) => Object.fromEntries(SCENES.flatMap(scene => (record.scenes[scene]?.code ? [[scene, record.scenes[scene].code]] : [])));
     const drawnOf = (index: StandIndex | undefined) => (index ? countsOf(index).drawn : 0);
-    say(`6 the card: C0, G and A+ ${drawnOf(done.core)} drawn; without thinking ${rewritten(fast).length} of 12 rewritten, ${JSON.stringify(codes(fast))}, forms `
-      + `${JSON.stringify(SCENES.map(scene => fast.scenes[scene]?.form ?? '-'))}, PE ${drawnOf(done.pe)} drawn; with thinking ${rewritten(think).length} rewritten, `
-      + `${JSON.stringify(codes(think))}, PT ${drawnOf(done.pt)} drawn; the schedules ${JSON.stringify(schedules)}`);
+    say(`6 the card: C0, G and A+ ${drawnOf(done.core)} drawn; PE ${rewritten(fast).length} of 12 rewritten, ${JSON.stringify(codes(fast))}, forms `
+      + `${JSON.stringify(SCENES.map(scene => fast.scenes[scene]?.form ?? '-'))}, ${drawnOf(done.pe)} drawn; GPE ${rewritten(gfast).length} of 12 rewritten, `
+      + `${JSON.stringify(codes(gfast))}, ${drawnOf(done.gpe)} drawn; PT ${rewritten(think).length} rewritten, ${JSON.stringify(codes(think))}, ${drawnOf(done.pt)} drawn; `
+      + `the schedules ${JSON.stringify(schedules)}${done.ended ? `; ended ${done.ended}` : ''}`);
     expect(same(codes(fast), { beach: 'pe_failed', cheer: 'pe_timeout', lineout: 'pe_unparsed' }) && fast.scenes.cheer.stopped === true && fast.scenes.giants.form === 'fenced'
       && fast.scenes.bandage.form === 'json' && fast.scenes.bandage.whRatio === '16:9' && rewritten(fast).length === 9 && drawnOf(done.core) === 72 && drawnOf(done.pe) === 18
-      && same(codes(think), { demon: 'pe_truncated', gym: 'pe_unparsed' }) && rewritten(think).length === 10 && drawnOf(done.pt) === 20 && think.scenes.bandage.thinkingChars! > 0
-      && same(schedules, { PE: 'begun', 'A+': 'begun', PT: 'begun' }),
-    'nine rewrites without thinking and ten with, the failed, the stopped, the unclosed thought and the unread answers out; 72 frames of C0, G and A+, 18 of PE and 20 of PT');
+      && same(codes(gfast), {}) && rewritten(gfast).length === 12 && drawnOf(done.gpe) === 24
+      && same(codes(think), { demon: 'pe_truncated', gym: 'pe_unparsed', jellyfish: 'comfy_bad_answer' }) && rewritten(think).length === 9 && drawnOf(done.pt) === 18
+      && think.scenes.bandage.thinkingChars! > 0 && same(schedules, { PE: 'begun', GPE: 'begun', 'A+': 'begun', PT: 'begun' }) && !done.ended,
+    'nine rewrites of C0 without thinking, twelve of G and nine with thinking, the failed, the stopped, the unclosed thought, the unread answers and the unread submission out; '
+      + '72 frames of C0, G and A+, 18 of PE, 24 of GPE and 18 of PT');
+    // The submission the fake queued and answered unreadably: stopped by the id the probe gave it, confirmed, and its
+    // record gone from the server; the pass then went on to the scenes after it.
+    const lost = garbled[0], after = SCENES.slice(SCENES.indexOf('jellyfish') + 1);
+    const leftOnServer = lost ? Object.keys(await (await fetched(`${origin}/history/${lost}`)).json() as object).length : -1;
+    say(`   PT's jellyfish, its submission answered unreadably: ${think.scenes.jellyfish?.code}, stopped ${think.scenes.jellyfish?.stopped}, `
+      + `a delete of its record sent ${started.calls.some(one => one.method === 'POST' && one.path === '/history' && one.id === lost)}, records of it left ${leftOnServer}; `
+      + `the pass went on to ${after.filter(scene => think.scenes[scene]?.status === 'ok').length} of the ${after.length} scenes after it`);
+    expect(garbled.length === 1 && think.scenes.jellyfish?.stopped === true && leftOnServer === 0
+      && started.calls.some(one => one.method === 'POST' && one.path === '/history' && one.id === lost) && after.every(scene => think.scenes[scene]?.status === 'ok'),
+    'a submission that failed once the fake had queued its job stopped, confirmed and deleted, and the pass on past it');
 
-    // Each job against what was meant: C0 and G, PE's rewrites and frames, A+, PT's rewrites and frames; each rewrite's
-    // graph as built and its record deleted, each frame the cell's graph from its stand's texts.
-    const coreCells = corePlan(), peCells = rewritePlan('PE', rewritten(fast)), ptCells = rewritePlan('PT', rewritten(think));
-    const cellsOf: Record<StandName, Planned[]> = { core: coreCells, fast: peCells, think: ptCells };
+    // Each job against what was meant: C0 and G, PE's rewrites and frames, GPE's, A+, PT's rewrites and frames; each
+    // rewrite's graph as built and its record deleted, each frame the cell's graph from its stand's texts.
+    const coreCells = corePlan();
+    const cellsOf: Record<StandName, Planned[]> = { core: coreCells, fast: rewritePlan('PE', rewritten(fast)), 'g-fast': rewritePlan('GPE', rewritten(gfast)),
+      think: rewritePlan('PT', rewritten(think)) };
     const setups = Object.fromEntries(STANDS.map(name => [name, setupOf(join(run, name), sha256(readFileSync(join(run, name, TEXTS_FILE))), cellsOf[name])])) as Record<StandName, ReturnType<typeof setupOf>>;
-    type Meant = { rewrite: Mode; scene: string } | { stand: StandName; key: string };
-    const order: Meant[] = [...coreCells.filter(one => RESERVED.includes(one.arm as Arm)).map(one => ({ stand: 'core' as const, key: one.key })),
-      ...SCENES.map(scene => ({ rewrite: 'fast' as const, scene })), ...peCells.map(one => ({ stand: 'fast' as const, key: one.key })),
-      ...coreCells.filter(one => one.arm === 'A+').map(one => ({ stand: 'core' as const, key: one.key })),
-      ...SCENES.map(scene => ({ rewrite: 'think' as const, scene })), ...ptCells.map(one => ({ stand: 'think' as const, key: one.key }))];
+    type Meant = { rewrite: Rewritten; scene: string } | { stand: StandName; key: string };
+    const passOf = (arm: Rewritten): Meant[] => [...SCENES.map(scene => ({ rewrite: arm, scene })), ...cellsOf[STAND_OF[arm]].map(one => ({ stand: STAND_OF[arm], key: one.key }))];
+    const order: Meant[] = [...coreCells.filter(one => RESERVED.includes(one.arm as Arm)).map(one => ({ stand: 'core' as const, key: one.key })), ...passOf('PE'), ...passOf('GPE'),
+      ...coreCells.filter(one => one.arm === 'A+').map(one => ({ stand: 'core' as const, key: one.key })), ...passOf('PT')];
     const jobs = sent.slice(firstSent), wrong: string[] = [];
     order.forEach((meant, n) => {
       const graph = jobs[n];
@@ -964,23 +1060,75 @@ export async function dryRun(dir: string, runDir?: string) {
     const deletes = new Set(started.calls.filter(one => one.method === 'POST' && one.path === '/history').map(one => one.id));
     const rewriteIds = started.calls.filter(one => one.method === 'POST' && one.path === '/prompt' && one.id !== undefined)
       .map(one => one.id!).filter((id, n) => { const graph = sent[n]; return !!graph && Object.values(graph).some(node => node.class_type === 'TextGenerate'); });
-    const texts = (name: StandName, index: StandIndex | undefined) => !!index && cellsOf[name].every(one => {
-      const cell = index.cells[one.key], prompt = readJson<{ cells: { key: string; prompt: string }[] }>(join(run, name, TEXTS_FILE))!.cells.find(row => row.key === one.key)?.prompt ?? '';
-      const scene = sceneOfCell(one), arm = one.arm as Arm;
-      return cell?.status === 'drawn' && prompt === (arm === 'PE' ? fast.scenes[scene].prompt : arm === 'PT' ? think.scenes[scene].prompt : frozen.scenes[scene][arm as 'C0']);
-    });
-    const ownTexts = texts('core', done.core) && texts('fast', done.pe) && texts('think', done.pt);
+    // Each cell's record: its prompt, and for a rewritten arm the frozen prompt the enhancer was given beside it.
+    type TextRow = { key: string; prompt: string; input?: string };
+    const rowsOf = (name: StandName) => new Map((readJson<{ cells: TextRow[] }>(join(run, name, TEXTS_FILE))?.cells ?? []).map(row => [row.key, row]));
+    const texts = (name: StandName, index: StandIndex | undefined) => {
+      const rows = rowsOf(name);
+      return !!index && cellsOf[name].every(one => {
+        const row = rows.get(one.key), scene = sceneOfCell(one), arm = one.arm as Arm;
+        const meant = isRewritten(arm) ? { prompt: records[arm].scenes[scene].prompt, input: frozen.scenes[scene][PASSES[arm].from] }
+          : { prompt: frozen.scenes[scene][arm as 'C0' | 'G' | 'A+'], input: undefined };
+        return index.cells[one.key]?.status === 'drawn' && row?.prompt === meant.prompt && row?.input === meant.input;
+      });
+    };
+    const ownTexts = texts('core', done.core) && texts('fast', done.pe) && texts('g-fast', done.gpe) && texts('think', done.pt);
+    // GPE's enhancer given G byte for byte as the G cells draw it: each GPE rewrite's user turn against the core stand's
+    // G cells of its scene.
+    const coreRows = rowsOf('core');
+    const givenG = order.filter((meant, n) => 'rewrite' in meant && meant.rewrite === 'GPE'
+      && ARM_SEEDS.every(seed => userOf(chatIn(jobs[n])) === coreRows.get(armKey('G', meant.scene, seed))?.prompt)).length;
+    const generated = started.jobs.slice(firstJob).filter(job => job.generated).length, interrupted = started.jobs.slice(firstJob).filter(job => job.outcome === 'interrupted').length;
     say(`7 the jobs: ${jobs.length - wrong.length} of ${jobs.length} as meant, in order${wrong.length ? `, wrong ${wrong.join(', ')}` : ''}; each rewrite's record deleted `
-      + `${rewriteIds.every(id => deletes.has(id))}; each cell drawn from its own text ${ownTexts}`);
-    expect(!wrong.length && jobs.length === 48 + 12 + 18 + 24 + 12 + 20 && rewriteIds.length === 24 && rewriteIds.every(id => deletes.has(id)) && ownTexts,
-      'C0 and G first, then each schedule in order, each job as built, every record of a rewrite deleted');
-    expect(started.jobs.slice(firstJob).filter(job => job.generated).length === 22 && started.jobs.slice(firstJob).filter(job => job.outcome === 'interrupted').length === 1,
-      'twenty-two rewrites answered on the card, the failed one not, and the one past its time stopped there');
+      + `${rewriteIds.every(id => deletes.has(id))}; each cell drawn from its own text, a rewritten cell's with the prompt it was given, ${ownTexts}; GPE given G as the G cells `
+      + `draw it in ${givenG} of 12; ${generated} rewrites answered on the card, ${interrupted} stopped there`);
+    expect(!wrong.length && jobs.length === order.length && order.length === 48 + 12 + 18 + 12 + 24 + 24 + 12 + 18 && rewriteIds.length === 36 && rewriteIds.every(id => deletes.has(id))
+      && ownTexts && givenG === 12, 'C0 and G first, then each schedule in order, each job as built, every record of a rewrite deleted, GPE given G byte for byte');
+    expect(generated === 33 && interrupted === 2,
+      'thirty-three rewrites answered on the card, the failed one not, and the one past its time and the one whose submission went unread stopped there');
 
     const before = submits;
     const again = await card();
-    say(`8 a resume: ${submits - before} jobs sent; C0, G and A+ ${drawnOf(again.core)}, PE ${drawnOf(again.pe)} and PT ${drawnOf(again.pt)} drawn`);
-    expect(submits === before && drawnOf(again.core) === 72 && drawnOf(again.pe) === 18 && drawnOf(again.pt) === 20, 'a resume sends nothing');
+    say(`8 a resume: ${submits - before} jobs sent; C0, G and A+ ${drawnOf(again.core)}, PE ${drawnOf(again.pe)}, GPE ${drawnOf(again.gpe)} and PT ${drawnOf(again.pt)} drawn`);
+    expect(submits === before && drawnOf(again.core) === 72 && drawnOf(again.pe) === 18 && drawnOf(again.gpe) === 24 && drawnOf(again.pt) === 18, 'a resume sends nothing');
+
+    // A card on which no stop is confirmed, in a run of its own: PE's first rewrite outlasts its time; then, on the
+    // resume, the next one's submission is queued and answered unreadably. Each ends the pass and the card's run, and
+    // nothing is sent after it; the fake draws the job on to its end before anything else is sent.
+    const stuck = join(dry, 'stuck');
+    mkdirSync(join(stuck, 'pe'), { recursive: true, mode: 0o700 });
+    for (const file of [FROZEN_FILE, SYSTEM_FILE, 'card.txt']) copyFileSync(join(run, file), join(stuck, file));
+    const hang = async (scene: string, how: 'late' | 'unread') => {
+      let hungAt = 0;
+      steer = (graph, number) => {
+        const pass = passIn(chatIn(graph)), is = pass?.scene === scene && pass.arm === 'PE';
+        if (is) hungAt = number;
+        started.options.failJobs = [];
+        started.options.textMs = is ? 2000 : 5;
+        garble = is && how === 'unread';
+        deaf = is;
+      };
+      const from = submits, jobsFrom = started.jobs.length, result = await card({ run: stuck }), after = hungAt ? submits - hungAt : -1;
+      for (const began = Date.now(); started.jobs.length - jobsFrom < submits - from && Date.now() - began < 10000;) await delay(20);
+      deaf = false;
+      garble = false;
+      return { result, sent: submits - from, after, record: readJson<Rewrites>(join(stuck, REWRITES_FILE.PE)), schedules: states(readJson<Schedules>(join(stuck, SCHEDULES_FILE))) };
+    };
+    const late = await hang('bandage', 'late');
+    say(`9 a card that never confirms a stop: PE's bandage past its time ${late.record?.scenes.bandage?.code} (${late.record?.scenes.bandage?.cause}), stopped `
+      + `${late.record?.scenes.bandage?.stopped}; ${late.sent} jobs sent, ${late.after} after it; ${drawnOf(late.result.core)} frames of C0 and G; the schedules `
+      + `${JSON.stringify(late.schedules)}; the run ended ${late.result.ended}`);
+    expect(late.result.ended === 'comfy_stop_unconfirmed' && same(Object.keys(late.record?.scenes ?? {}), ['bandage'])
+      && late.record?.scenes.bandage.code === 'comfy_stop_unconfirmed' && late.record.scenes.bandage.cause === 'pe_timeout' && late.record.scenes.bandage.stopped === false
+      && late.sent === 49 && late.after === 0 && drawnOf(late.result.core) === 48 && same(late.schedules, { PE: 'begun' }) && !existsSync(join(stuck, 'fast', TEXTS_FILE)),
+    'a rewrite past its time whose stop is not confirmed ends the pass and the card\'s run: no stand drawn after it, no schedule weighed, nothing more sent');
+    const unread = await hang('beach', 'unread');
+    say(`   its resume: PE's beach, its submission answered unreadably, ${unread.record?.scenes.beach?.code} (${unread.record?.scenes.beach?.cause}), stopped `
+      + `${unread.record?.scenes.beach?.stopped}; ${unread.sent} jobs sent, ${unread.after} after it; the schedules ${JSON.stringify(unread.schedules)}; the run ended ${unread.result.ended}`);
+    expect(unread.result.ended === 'comfy_stop_unconfirmed' && same(Object.keys(unread.record?.scenes ?? {}), ['bandage', 'beach'])
+      && unread.record?.scenes.beach.code === 'comfy_stop_unconfirmed' && unread.record.scenes.beach.cause === 'comfy_bad_answer' && unread.record.scenes.beach.stopped === false
+      && unread.sent === 1 && unread.after === 0 && same(unread.schedules, { PE: 'begun' }) && !existsSync(join(stuck, 'fast', TEXTS_FILE)),
+    'a failed submission whose stop is not confirmed ends the pass and the card\'s run the same way');
 
     writePages(run);
     const figures = (page: string) => (page.match(/<figure>/g) ?? []).length;
@@ -988,22 +1136,23 @@ export async function dryRun(dir: string, runDir?: string) {
     const prose = (page: string) => page.replace(/<pre>[\s\S]*?<\/pre>/g, '');
     const mode = (path: string) => statSync(path).mode & 0o777;
     const modes = [run, join(run, 'pe'), ...STANDS.map(name => join(run, name)), join(run, 'core', 'frames')].every(path => mode(path) === 0o700)
-      && [REWRITES_FILE.fast, REWRITES_FILE.think, SCHEDULES_FILE, ...STANDS.flatMap(name => [join(name, TEXTS_FILE), join(name, INDEX_FILE), join(name, 'index.html')])]
+      && [...REWRITTEN.map(arm => REWRITES_FILE[arm]), SCHEDULES_FILE, ...STANDS.flatMap(name => [join(name, TEXTS_FILE), join(name, INDEX_FILE), join(name, 'index.html')])]
         .every(file => mode(join(run, file)) === 0o600) && coreCells.every(one => mode(join(run, 'core', one.file)) === 0o600);
     const dashes = STANDS.some(name => /[–—]/.test(prose(pages[name])));
-    say(`9 pages: ${STANDS.map(name => `${name} ${figures(pages[name])}`).join(', ')} figures; dashes in their own words ${dashes}; directories 700 and files 600: ${modes}`);
-    expect(figures(pages.core) === 72 && figures(pages.fast) === 18 && figures(pages.think) === 20 && !dashes && pages.core.includes('Нарисовано 72 из 72') && modes,
-      'the pages show every cell, in words without dashes');
+    say(`10 pages: ${STANDS.map(name => `${name} ${figures(pages[name])}`).join(', ')} figures; GPE's column named G→PE ${pages['g-fast'].includes('<th>G→PE</th>')}; `
+      + `dashes in their own words ${dashes}; directories 700 and files 600: ${modes}`);
+    expect(figures(pages.core) === 72 && figures(pages.fast) === 18 && figures(pages['g-fast']) === 24 && figures(pages.think) === 18 && pages['g-fast'].includes('<th>G→PE</th>')
+      && !dashes && pages.core.includes('Нарисовано 72 из 72') && modes, 'the pages show every cell, in words without dashes');
 
-    say(`10 the fake held at most ${started.mostHeld} job at once; ${strays} calls to anything but the fake`);
+    say(`11 the fake held at most ${started.mostHeld} job at once; ${strays} calls to anything but the fake`);
     expect(started.mostHeld === 1 && strays === 0, 'one job at a time, the fake alone');
 
     // The prompts' word is in the texts, the rewrites' records and the pages alone; the thinking's and the fake's nowhere.
-    const text = output.text(), allowed = new Set([FROZEN_FILE, TEXTS_FILE, 'index.html', basename(REWRITES_FILE.fast), basename(REWRITES_FILE.think)]);
+    const text = output.text(), allowed = new Set([FROZEN_FILE, TEXTS_FILE, 'index.html', ...REWRITTEN.map(arm => basename(REWRITES_FILE[arm]))]);
     const beyond = searchTree(dry, markerForms(word), path => allowed.has(basename(path)));
     const anywhere = searchTree(dry, [...markerForms(thought), ...markerForms(marker)]);
     const printed = [...markerForms(word), ...markerForms(thought), ...markerForms(marker)].some(form => Buffer.from(text, 'utf8').includes(form));
-    say(`11 privacy: the prompts' word in ${beyond.hits.length} of ${beyond.files} files beside the texts, the rewrites and the pages; the thinking's and the fake's in `
+    say(`12 privacy: the prompts' word in ${beyond.hits.length} of ${beyond.files} files beside the texts, the rewrites and the pages; the thinking's and the fake's in `
       + `${anywhere.hits.length} of ${anywhere.files}; unread ${beyond.unread.length + anywhere.unread.length}; printed ${printed}`);
     expect(!beyond.hits.length && !anywhere.hits.length && !beyond.unread.length && !anywhere.unread.length && !printed,
       'no prompt beyond the texts, the rewrites and the pages, no thinking kept, nothing printed');
@@ -1022,17 +1171,20 @@ export async function dryRun(dir: string, runDir?: string) {
 async function main(args: string[]) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     run: { type: 'string' }, round2: { type: 'string', default: join(ROOT, 'illustrations', 'action') }, scenes: { type: 'string' }, arms: { type: 'string' },
+    strict: { type: 'boolean', default: false },
     tokenizers: { type: 'string' }, from: { type: 'string' }, dir: { type: 'string' }, until: { type: 'string' },
     comfy: { type: 'string', default: 'http://127.0.0.1:8188' }, wait: { type: 'string', default: '300' }, timeout: { type: 'string', default: '60' },
   } });
   const command = positionals[0] ?? '';
   if (command === 'estimate') { print({ event: 'estimate', ...estimate() }); return; }
   if (command === 'dry-run') {
-    const result = await dryRun(values.dir ?? mkdtempSync(join(tmpdir(), 'simple-chat-prompt-arms-dry-')), values.run);
+    // The strict preflight before anything is made, the scratch directory too.
+    if (values.strict) strictInputs(values.run);
+    const result = await dryRun(values.dir ?? mkdtempSync(join(tmpdir(), 'simple-chat-prompt-arms-dry-')), values.run, values.strict);
     if (!result.pass) process.exitCode = 1;
     return;
   }
-  if (!values.run) throw new Refusal('Use: image-prompt-arms.ts prompts|checks|freeze|pe-prompt|estimate|dry-run|card|page; all but estimate and dry-run take --run <the run\'s directory>');
+  if (!values.run) throw new Refusal('Use: image-prompt-arms.ts prompts|checks|freeze|pe-prompt|estimate|dry-run|card|page; all but estimate and dry-run take --run <the run\'s directory>, dry-run with --strict as well');
   const run = resolve(values.run), round2 = resolve(values.round2!);
   mkdirSync(run, { recursive: true, mode: 0o700 });
   if (command === 'prompts') {
@@ -1069,7 +1221,7 @@ async function main(args: string[]) {
       throw new Refusal('Use: card --run <dir> --until <epoch seconds> [--wait 300] [--timeout 60] [--comfy http://127.0.0.1:8188]');
     }
     const result = await runCard({ run, comfy: comfyUrl(values.comfy!), until, waitMs: wait * 1000, timeoutMs: timeout * 1000, log: print });
-    if ([result.core, result.pe, result.pt].some(index => index?.error || index?.stopped)) process.exitCode = 1;
+    if (result.ended || [result.core, result.pe, result.gpe, result.pt].some(index => index?.error || index?.stopped)) process.exitCode = 1;
   } else throw new Refusal('Use: image-prompt-arms.ts prompts|checks|freeze|pe-prompt|estimate|dry-run|card|page (docs/action-experiment.md#prompt-arms)');
 }
 
