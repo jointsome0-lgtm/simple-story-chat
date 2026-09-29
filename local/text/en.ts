@@ -196,6 +196,7 @@ export const en: Messages = {
     clothesNote: 'The story itself changes the clothes, and the pictures take them from the scenes. They can be changed with “📋 Whole profile”.',
     sizeNote: 'Each number is for its text alone. The prompt also holds the description of the scene and the style; its exact size is under the picture. The picture model never reads the description itself: a portrait from the usual prompt is drawn from its English retelling. A portrait’s whole prompt, clothes, backdrop and pose included, is folded under it with its tokens, and can be edited.',
     scope: 'A change to the look applies to the next pictures of every branch of this story. The story text, its memory and the pictures already drawn stay as they are, and a picture being drawn right now may still come out the old way.',
+    scopeVersions: 'A change to the look applies to the next pictures of every branch of this story, and one made “only from this moment” to those of the scene you make it at and of every scene after it. The story text, its memory and the pictures already drawn stay as they are, and a picture being drawn right now may still come out the old way.',
     portraitNone: details => `🖼 No portrait yet. A portrait draws the face and the whole figure, full length, from the ${details ? 'retold description' : 'short look'}, which makes a reference easier to pick.`,
     portraitKept: details => `🖼 Portrait kept: the face and figure from the ${details ? 'retold description' : 'short look'}.`,
     portraitStale: details => `🖼 The kept portrait was drawn from an earlier look. A new one shows the face and figure from the ${details ? 'retold description' : 'short look'}.`,
@@ -225,7 +226,7 @@ export const en: Messages = {
     scopeAll: look => look ? '🌐 This edit is for the whole story, on every branch.'
       : '🌐 This edit is for the whole story, on every branch: this is the character from its start, and the lasting changes the story makes along the way (a haircut, a scar) lie over the description from the scenes where they happen.',
     scopeReplaces: n => `It also replaces your edits “only from this moment” (${n}).`,
-    scopeHere: (branch, look) => `📍 This edit is only from this moment: from the scene of the branch ${branch} you are at, and in every scene after it. Before that scene and on other branches the character stays as before.${look ? '' : ' Lasting changes the story makes later lie over the description.'}`,
+    scopeHere: (branch, look) => `📍 This edit is only from this moment: from the scene of the branch ${branch} you are at, and in every scene after it. Branches continued later from this scene or a later one get it too. Before that scene and on the rest of the branches the character stays as before.${look ? '' : ' Lasting changes the story makes later lie over the description.'}`,
     scopeShared: '📍 An edit “only from this moment” cannot be made here: another branch goes on from this scene, and the edit would reach it too. The button comes back after the next scene.',
     scopeHereButton: '📍 Only from this moment',
     scopeAllButton: '🌐 For the whole story',

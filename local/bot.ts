@@ -557,8 +557,8 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     // Where the look or the description being written lands, for a reader who has versions of the sheet
     // (local/picture-versions.ts): the whole story, as always, or «only from this moment», the scene the reader stands at
     // now, kept in the wait. It is chosen on the wait itself, before the text is sent, so that the text is taken as it
-    // comes, in one message as ever, and the bot never holds it while asking. A scene another line goes on from is
-    // not offered (`editableFrom`).
+    // comes, in one message as ever, and the bot never holds it while asking. A scene another line goes on from, or
+    // another branch stands at, is not offered (`editableFrom`).
     if (action === 'edit-scope:here' || action === 'edit-scope:all') {
       const wait = state.ui?.input === 'look' || state.ui?.input === 'details' ? state.ui : undefined;
       if (!wait || !pictureInfo.versions) throw refuse(t, 'staleButton');
@@ -579,12 +579,15 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         : (text ?? '').replace(/\r\n?/g, '\n').split('\n').map(one => one.trimEnd()).join('\n').replace(/\n{3,}/g, '\n\n').trim();
       if (!written) throw refuse(t, look ? 'lookNeedsText' : 'detailsNeedsText');
       if ([...written].length > (look ? LOOK_CHARS : DESCRIPTION_CHARS)) throw refuse(t, look ? 'lookTooLong' : 'detailsTooLong');
-      state.ui = null;
       const story = state.stories[storyId];
       const index = story?.sheet?.findIndex(one => one.name === name) ?? -1;
+      // «Only from this moment» needs the reader's versions still, and the scene it was chosen at. Without them the text
+      // is refused before the wait ends, since a refusal commits what came before it (`store.mutate` below): the wait
+      // stays, as for an empty text, so the next text is not taken for a move either, and a button or a command, /menu
+      // as the refusal says, leaves it.
+      if (from !== undefined && story && index >= 0 && (!pictureInfo.versions || !Object.hasOwn(story.nodes, from))) throw refuse(t, 'staleButton');
+      state.ui = null;
       if (!story || index < 0) throw refuse(t, look ? 'lookGone' : 'detailsGone');
-      // «Only from this moment» needs the reader's versions still, and the scene it was chosen at.
-      if (from !== undefined && (!pictureInfo.versions || !Object.hasOwn(story.nodes, from))) throw refuse(t, 'staleButton');
       // The owner's design of 2026-09-27 (docs/illustrations-plan.md#three-layers): the description is the person's
       // text, which wins over the one the sheet took from the story, and the details a portrait is drawn from and the
       // look the frames take are retold from it (local/picture.ts `retell`). A look the reader writes overrides that one

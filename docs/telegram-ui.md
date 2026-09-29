@@ -577,8 +577,14 @@ to a checkpoint before the change, shows the person as they were there. The code
   the reader stands at in the wait (`ui.from`), and the wait then says the edit is for that scene of the branch and
   every scene after it, with «🌐 Для всей истории» (`edit-scope:all`) to go back. The choice is on the wait, before the
   text, so that the text is taken in one message as ever and the bot never holds it while asking. At a scene another
-  branch goes on from, as right after going back to a checkpoint, it is not offered, since the version would reach that
-  branch's later scenes too, and the wait says so until the next scene. An edit for the whole story lands on the sheet
+  branch goes on from, as right after going back to a checkpoint, or stands at, as right after continuing from the
+  checkpoint of the scene being played (a fork starts its branch at the checkpoint's scene), it is not offered, since
+  the version would reach that branch's later scenes too, and the wait says so until the next scene (`editableFrom`).
+  A checkpoint alone does not count, since every scene keeps one: a branch continued later from that scene or a later
+  one starts with the edit, and the wait says so. A text for «only from this moment» that comes after the reader lost
+  the choice, as when the switch was turned off meanwhile, or after its scene is gone is refused as a stale button
+  before the wait ends: the wait stays, as for an empty text, until a button or a command, /menu as the refusal says,
+  ends it, so the text never becomes a move. An edit for the whole story lands on the sheet
   as before, and takes the place of what the reader wrote «only from this moment» anywhere in the story, which the wait
   counts: a description takes the place of their descriptions and looks, and a look of their looks, and is written
   beside a description of theirs, whose retold look would otherwise stand there. So it holds in every scene of every
@@ -588,7 +594,10 @@ to a checkpoint before the change, shows the person as they were there. The code
 - **Card, list and portrait:** each person is as they are at the scene the reader stands at in that story, the head of
   the branch being played, and as the sheet has them elsewhere. The card adds «📜 По ходу истории внешность менялась 2
   раза…» where the look changed along that line, a count of the scenes that changed it. A portrait is drawn from the
-  person at that scene, and the card calls a kept one current only while it was drawn from what they have there.
+  person at that scene, and the card calls a kept one current only while it was drawn from what they have there. For
+  such a reader the card's line on where an edit of the look holds adds that one made «only from this moment» holds
+  from the scene it is made at, in that scene and every scene after it (`scopeVersions`); everybody else's card keeps
+  the line that an edit reaches the next pictures of every branch.
 - **Rows:** `sheet_version_written` (`versionSource` `story` or `reader`, `versionField` `change`, `description` or
   `look`, `versionPeople`, `storyVersions`), `sheet_versions_cleared` when an edit for the whole story took the place of
   some (`versionsCleared`), `picture_version_retold` before a frame and `version_retold` after an edit, with the
