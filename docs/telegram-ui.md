@@ -648,7 +648,8 @@ drawing and playing stay in the chat. The server is `local/mini-app.ts`, the pag
   Mini App. No Telegram client has opened it yet: it was checked in headless Chrome with synthetic launch data.
 - **Log:** `mini_app_ready`, or `mini_app_failed` with an errno, at start; `mini_app_served` (`stories`, `characters`,
   `card`, `picture`) and `mini_app_refused` (`no_init_data`, `malformed`, `forged`, `expired`, `not_listed`,
-  `missing`, `picture_unavailable`, `busy`), with `actor` once the reader is known, each row at most once a minute.
+  `missing`, `picture_unavailable`, `library_too_large`, `busy`), with `actor` once the reader is known, each row at
+  most once a minute.
 
 ## Interface language
 

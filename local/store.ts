@@ -43,6 +43,11 @@ export class Store {
     if (state.version !== 1) throw new Error('Unsupported library version');
     return state;
   }
+  // The bytes of a reader's library as stored, 0 for none, known before it is parsed (local/mini-app.ts).
+  size(userId: string | number): number {
+    const row = this.db.prepare('SELECT octet_length(payload) AS bytes FROM libraries WHERE user_id = ?').get(String(userId));
+    return row ? Number(row.bytes) : 0;
+  }
   mutate<T>(userId: string | number, fn: (state: Library) => T): T {
     this.db.exec('BEGIN IMMEDIATE');
     const written: string[] = this.writing = [];

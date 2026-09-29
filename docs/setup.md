@@ -197,9 +197,10 @@ The address shows anybody the page itself, which holds no story. Everything else
 Telegram signed for this bot within the hour, from the library of the reader it names. The tunnel reaches this one
 port: not the database, the model's socket or the picture card. The server runs inside the bot's process, though, on
 its one thread. It takes at most 20 requests a second in all after a burst of 60, and a reader's requests to the API at
-most one a second after a burst of 20, holds at most 64 MB of answers not yet taken and gives each a minute; past that
-it answers 429. Within those bounds a flood to the address, or to the API with a copy of a reader's launch data for the
-rest of its hour, can still stall the bot and, at worst, stop it. A process of its own for the Mini App is the fix.
+most two a second after a burst of 40, holds at most 64 MB of answers not yet taken and gives each a minute; past that
+it answers 429. It parses no library over 64 MB. Within those bounds a flood to the address, or to the API with a copy
+of a reader's launch data for the rest of its hour, can still stall the bot and, at worst, stop it. A process of its own
+for the Mini App is the fix.
 
 Three ways to have the address, as their own pages described them on 2026-09-29. The choice is the owner's.
 

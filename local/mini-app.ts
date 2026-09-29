@@ -31,12 +31,15 @@ const INIT_DATA_CHARS = 8192;
 const PICTURE_BYTES = 16 * 1024 * 1024;
 // The server shares the bot's process and its one thread, and a reader's launch data, or a copy of it, may ask for an
 // hour (docs/setup.md#mini-app). So it takes at most 20 requests a second in all after a burst of 60, and a reader's
-// requests to the API at most one a second after a burst of 20; it holds at most 64 MB of answers their clients have
-// not taken yet, and gives each answer a minute. Past that it answers 429.
+// requests to the API at most two a second after a burst of 40, which leaves room to tap through a story's people and
+// their pictures quickly; it holds at most 64 MB of answers their clients have not taken yet, and gives each answer a
+// minute. Past that it answers 429. It parses no library over 64 MB, far past any the bot, which parses a reader's
+// library at each of their messages, would serve at a usable speed.
 const ALL_REQUESTS = { burst: 60, perSecond: 20 };
-const READER_REQUESTS = { burst: 20, perSecond: 1 };
+const READER_REQUESTS = { burst: 40, perSecond: 2 };
 const SENDING_BYTES = 64 * 1024 * 1024;
 const ANSWER_MS = 60000;
+const LIBRARY_BYTES = 64 * 1024 * 1024;
 
 // The key Telegram signs a Mini App's launch data with for this bot: HMAC-SHA-256 of the bot token under "WebAppData"
 // (https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app). The server holds this key alone,
@@ -77,6 +80,7 @@ const HEADERS = { 'cache-control': 'no-store', 'x-content-type-options': 'nosnif
 const PAGE_POLICY = "default-src 'none'; script-src 'self' https://telegram.org; style-src 'self'; img-src 'self' blob:; "
   + "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors https://web.telegram.org";
 const BUSY = { ...json(429, { error: 'busy' }), headers: { 'retry-after': '1' } };
+const size = (answer: Answer) => typeof answer.body === 'string' ? Buffer.byteLength(answer.body) : answer.body.byteLength;
 // The story IDs the library gives (lib/library.ts `id`), a place on a story's sheet and the tag of the name at it
 // (local/picture.ts `personAt`).
 const ID = { story: /^h\d{1,9}$/, index: /^\d{1,3}$/, tag: /^[0-9a-f]{8}$/ };
@@ -202,6 +206,7 @@ export async function serveMiniApp({ dbPath, port, key, users, ownerId = '', det
       || index !== undefined && (!ID.index.test(index) || !ID.tag.test(tag ?? '') || picture !== undefined && picture !== 'picture'))) {
       return missing('missing');
     }
+    if (store.size(userId) > LIBRARY_BYTES) return missing('library_too_large');
     const state = store.read(userId);
     if (storyId === undefined) return served('stories', json(200, storiesView(state)));
     const story = Object.hasOwn(state.stories, storyId) ? state.stories[storyId] : undefined;
@@ -224,10 +229,12 @@ export async function serveMiniApp({ dbPath, port, key, users, ownerId = '', det
 
   const server = createServer({ requestTimeout: 10000, headersTimeout: 5000, keepAliveTimeout: 5000 }, (request, response) => {
     let reply: Answer;
-    if (!allRequests() || sending > SENDING_BYTES) { note('mini_app_refused', 'busy'); reply = BUSY; }
+    if (!allRequests() || sending >= SENDING_BYTES) { note('mini_app_refused', 'busy'); reply = BUSY; }
     // A library or a file that cannot be read answers as a missing item, and stops nothing else.
     else try { reply = answer(request); } catch (error) { note('mini_app_failed', fileErrorCode(error)); reply = MISSING; }
-    const bytes = typeof reply.body === 'string' ? Buffer.byteLength(reply.body) : reply.body.byteLength;
+    // An answer that would take those not yet taken past their bound goes as a refusal instead.
+    if (reply !== BUSY && sending + size(reply) > SENDING_BYTES) { note('mini_app_refused', 'busy'); reply = BUSY; }
+    const bytes = size(reply);
     sending += bytes;
     const deadline = setTimeout(() => response.destroy(), ANSWER_MS).unref();
     response.once('close', () => { sending -= bytes; clearTimeout(deadline); });
