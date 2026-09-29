@@ -639,7 +639,8 @@ drawing and playing stay in the chat. The server is `local/mini-app.ts`, the pag
   the answer comes from that reader's library through a read-only connection of the server's own. A reader off the
   list, anything missing and anything of another reader's answer alike: 404 with the same body. A picture comes with
   the same header and is shown from memory; its file is the one the reader's library names, in the reader's own
-  directory, a plain file under 16 MB, read by `readReference`.
+  directory, a plain file under 16 MB, read by `readReference`. Requests past the server's bounds
+  ([setup](setup.md#mini-app)) answer 429, and the page offers to try again.
 - **Page:** plain HTML, CSS and JavaScript, no build. Telegram's `telegram-web-app.js` is its only outside address: no
   fonts, no analytics. Its policy lets it run its own and Telegram's scripts, fetch from its own address alone and be
   framed by Telegram Web alone, and it takes the colours of the reader's theme (`--tg-theme-*`). The page keeps the
@@ -647,7 +648,7 @@ drawing and playing stay in the chat. The server is `local/mini-app.ts`, the pag
   Mini App. No Telegram client has opened it yet: it was checked in headless Chrome with synthetic launch data.
 - **Log:** `mini_app_ready`, or `mini_app_failed` with an errno, at start; `mini_app_served` (`stories`, `characters`,
   `card`, `picture`) and `mini_app_refused` (`no_init_data`, `malformed`, `forged`, `expired`, `not_listed`,
-  `missing`, `picture_unavailable`), with `actor` once the reader is known, each row at most once a minute.
+  `missing`, `picture_unavailable`, `busy`), with `actor` once the reader is known, each row at most once a minute.
 
 ## Interface language
 

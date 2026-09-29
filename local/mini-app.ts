@@ -29,6 +29,14 @@ const INIT_DATA_CHARS = 8192;
 // A picture is read only up to this size. The bot keeps none above 10 MB (local/reference.ts), and a drawn portrait's
 // metadata, which the reader strips, adds little to that.
 const PICTURE_BYTES = 16 * 1024 * 1024;
+// The server shares the bot's process and its one thread, and a reader's launch data, or a copy of it, may ask for an
+// hour (docs/setup.md#mini-app). So it takes at most 20 requests a second in all after a burst of 60, and a reader's
+// requests to the API at most one a second after a burst of 20; it holds at most 64 MB of answers their clients have
+// not taken yet, and gives each answer a minute. Past that it answers 429.
+const ALL_REQUESTS = { burst: 60, perSecond: 20 };
+const READER_REQUESTS = { burst: 20, perSecond: 1 };
+const SENDING_BYTES = 64 * 1024 * 1024;
+const ANSWER_MS = 60000;
 
 // The key Telegram signs a Mini App's launch data with for this bot: HMAC-SHA-256 of the bot token under "WebAppData"
 // (https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app). The server holds this key alone,
@@ -68,9 +76,24 @@ const HEADERS = { 'cache-control': 'no-store', 'x-content-type-options': 'nosnif
   'cross-origin-resource-policy': 'same-origin' };
 const PAGE_POLICY = "default-src 'none'; script-src 'self' https://telegram.org; style-src 'self'; img-src 'self' blob:; "
   + "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors https://web.telegram.org";
+const BUSY = { ...json(429, { error: 'busy' }), headers: { 'retry-after': '1' } };
 // The story IDs the library gives (lib/library.ts `id`), a place on a story's sheet and the tag of the name at it
 // (local/picture.ts `personAt`).
 const ID = { story: /^h\d{1,9}$/, index: /^\d{1,3}$/, tag: /^[0-9a-f]{8}$/ };
+
+// Whether one more request fits a budget of `burst` requests that refills at `perSecond`.
+function budget({ burst, perSecond }: { burst: number; perSecond: number }) {
+  let left = burst;
+  let at = Date.now();
+  return () => {
+    const now = Date.now();
+    left = Math.min(burst, left + (now - at) / 1000 * perSecond);
+    at = now;
+    if (left < 1) return false;
+    left -= 1;
+    return true;
+  };
+}
 
 // The page, its script and its style, read once at start. The page carries its own few lines in every language, for
 // what it says before an answer or in place of one.
@@ -153,6 +176,10 @@ export async function serveMiniApp({ dbPath, port, key, users, ownerId = '', det
     log(event, code, actor && { actor });
   };
 
+  const allRequests = budget(ALL_REQUESTS);
+  const readerRequests = new Map<string, () => boolean>();
+  let sending = 0;
+
   const answer = (request: IncomingMessage): Answer => {
     const path = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
     if (request.method !== 'GET') return MISSING;
@@ -167,17 +194,22 @@ export async function serveMiniApp({ dbPath, port, key, users, ownerId = '', det
     const missing = (code: string) => { note('mini_app_refused', code, userId); return MISSING; };
     const served = (kind: string, reply: Answer) => { note('mini_app_served', kind, userId); return reply; };
     if (!users.has(userId)) return missing('not_listed');
-    const state = store.read(userId);
+    if (!readerRequests.has(userId)) readerRequests.set(userId, budget(READER_REQUESTS));
+    if (!readerRequests.get(userId)!()) { note('mini_app_refused', 'busy', userId); return BUSY; }
+    // An address of no route here is refused before the library is read.
     const [, , route, storyId, people, index, tag, picture, ...rest] = path.split('/');
-    if (route !== 'stories' || rest.length) return missing('missing');
+    if (route !== 'stories' || rest.length || storyId !== undefined && (!ID.story.test(storyId) || people !== 'people'
+      || index !== undefined && (!ID.index.test(index) || !ID.tag.test(tag ?? '') || picture !== undefined && picture !== 'picture'))) {
+      return missing('missing');
+    }
+    const state = store.read(userId);
     if (storyId === undefined) return served('stories', json(200, storiesView(state)));
-    const story = ID.story.test(storyId) && Object.hasOwn(state.stories, storyId) ? state.stories[storyId] : undefined;
-    if (!story || people !== 'people') return missing('missing');
+    const story = Object.hasOwn(state.stories, storyId) ? state.stories[storyId] : undefined;
+    if (!story) return missing('missing');
     if (index === undefined) return served('characters', json(200, charactersView(state, story)));
-    const found = ID.index.test(index) && ID.tag.test(tag ?? '') ? personAt(story, index, tag) : undefined;
+    const found = personAt(story, index, tag);
     if (!found) return missing('missing');
     if (picture === undefined) return served('card', json(200, cardView(state, story, found, details(userId))));
-    if (picture !== 'picture') return missing('missing');
     // The file the reader's own library names for the person, the one the card's portrait line speaks of, from the
     // reader's own directory: a plain file of a size the bot keeps, read by the bot's own reader of references, which
     // takes nothing but a random name there (local/picture-references.ts `readReference`). Only the bot writes that
@@ -192,8 +224,13 @@ export async function serveMiniApp({ dbPath, port, key, users, ownerId = '', det
 
   const server = createServer({ requestTimeout: 10000, headersTimeout: 5000, keepAliveTimeout: 5000 }, (request, response) => {
     let reply: Answer;
+    if (!allRequests() || sending > SENDING_BYTES) { note('mini_app_refused', 'busy'); reply = BUSY; }
     // A library or a file that cannot be read answers as a missing item, and stops nothing else.
-    try { reply = answer(request); } catch (error) { note('mini_app_failed', fileErrorCode(error)); reply = MISSING; }
+    else try { reply = answer(request); } catch (error) { note('mini_app_failed', fileErrorCode(error)); reply = MISSING; }
+    const bytes = typeof reply.body === 'string' ? Buffer.byteLength(reply.body) : reply.body.byteLength;
+    sending += bytes;
+    const deadline = setTimeout(() => response.destroy(), ANSWER_MS).unref();
+    response.once('close', () => { sending -= bytes; clearTimeout(deadline); });
     response.writeHead(reply.status, { ...HEADERS, 'content-type': reply.type, ...reply.headers });
     response.end(reply.body);
   });
