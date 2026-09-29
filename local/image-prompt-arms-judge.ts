@@ -272,9 +272,10 @@ export async function runQueue(options: QueueOptions): Promise<JudgingRecord> {
     let read: Read = { code: 'no_report' }, exitCode = -1, ms = 0;
     try {
       const schema = JSON.parse(readFileSync(join(options.bundles, name, 'schema.json'), 'utf8')) as Schema;
+      // The schema reaches the judge through --output-schema alone: a copy in the prompt as well was most of its text.
       ({ read, exitCode, ms } = await runAttempt({ bundle: join(options.bundles, name), copy: join(base, copy), report: join(base, `${copy}.report.md`),
         events: join(base, `${copy}.events.jsonl`), stderr: join(base, `${copy}.stderr.log`), model: JUDGE.model, prompt: options.prompt(name),
-        files: ['input.json', 'schema.json'], images: options.images ?? picturesOf,
+        files: ['input.json'], images: options.images ?? picturesOf,
         validate: got => (got.code === 'ok' && !fitsSchema(got.value, schema) ? { code: 'schema' } : got),
         exec: options.exec, codex: options.codex }));
     } catch { /* recorded below as an attempt without a report */ }
