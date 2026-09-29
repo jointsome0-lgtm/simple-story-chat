@@ -11,6 +11,161 @@ line per decision. A new step gets its full entry here, on top, and its line the
 Paths to result directories say where the numbers came from at the time. They do not promise that the files still
 exist or that you may read them.
 
+<a id='open-past-2026-09-29'></a>
+
+## 2026-09-29 · Opus 5.5 · the open past: a narrator rule that confirms a compatible claim about an unshown past (not accepted)
+
+A step of the loop, and the first judged by the rule for set `open` that the owner set on 2026-09-28 («Ну давай»;
+[improve-loop.md](../improve-loop.md#one-step), dc2bde8 and dd18b59). [L2](#l2-2026-09-28) had made the owner's
+expectation a trap, a compatible claim about an unshown past confirmed and kept a scene later, and no model of the main
+group met it: each refused the claim and kept refusing it. A narrator rule for that past was a prompt change for the
+owner, who approved this one on 2026-09-28 («Давай»). It was measured on `assault` on 2026-09-29.
+
+Hypothesis, of 2026-09-28. If the narrator's rule says that a claim about a past no scene showed, which nothing in the
+seed, memory or scenes rules out, is true, that those involved remember and confirm it and that the story keeps to it,
+while a claim that differs from them is answered as it was, the models pass the open traps without losing the older
+traps, set o2 or the memory.
+
+Change, in `narratorRule` of `local/story-text/ru.ts` only: c24731a and 1f0c93e on the branch `open-past`, rebased
+onto 75d69a1, touch nothing else. The other four catalogs, `local/prompt.ts` and the memory stayed as they were. The
+exact text is in the two commits, whose messages record `npm test` and `npm run check` passing.
+- The sentence that calls a reference to the past a character's words no longer adds that it is not a new fact. GPT-6
+  Astra had named that reading in [O2](#o2-2026-09-27): every reference to the past a character's claim, while
+  compatible new information is accepted.
+- Three sentences follow the one on claims that differ from the seed, memory or scenes. The same holds when the seed
+  or memory says that there is nothing else but what was shown: nothing unshown of that kind happened (1f0c93e). If
+  no scene showed it and nothing in the seed, memory or scenes rules it out, neither the course of events, nor who was
+  where and knew what, nor the seed's rules, the narrator takes it that it was so: those involved remember and confirm
+  it, and the story keeps to it from then on. The silence of earlier scenes and memory is not a contradiction
+  (c24731a).
+- 1f0c93e came from a Haiku 4.5 smoke of the first version on `hospital` (08:59 to 09:13 UTC on 2026-09-28, one run,
+  not the measurement), in which the narrator confirmed two claims that the seed rules out and set o2 expects refused,
+  `o2_order_confirmed` and `o2_handover_confirmed`. Those two guards are therefore not blind to the final wording.
+  Both are on `hospital`, which this step did not reach.
+
+The pack's `assault` (sha256 2fb45661…, the file 75d69a1 describes) holds 10 older traps with 12 questions, 9 traps of
+set o2 with 15, 7 of set open with 14, 12 memory checks and 10 boundary checks. An open trap asks `confirmed` of its
+scene and `kept` of the `then` scene written over it.
+
+The rule, in [improve-loop.md](../improve-loop.md#one-step) before the runs. Per model and run: P, the open traps
+passed on both questions; the guards S (the older traps), O (set o2) and M (the memory `score`); and B, the boundary
+checks, reported only. A gain: every candidate run above the model's best baseline run. A fall: the candidate mean
+below its lowest baseline run. No model may fall on P or a guard. Full success is a gain in the worst values' P,
+semi-success a gain in Gemma's. Each scenario gets its own day and baseline, and the step passes only if both
+scenarios do. A hosted model's failed cell gets one rerun, and a Haiku cell that fails at the Claude CLI up to two.
+
+Commands, with `R=~/simple-story-chat-runs/2026-09-29/open-past` and the step's scripts in
+`~/simple-story-chat-runs/2026-09-28/open-past/`. `side.sh base|cand assault $R` checked the commit, a clean `local/`,
+`lib/` and `examples/`, the links to the main tree's `.env.eval` and ledger, the pinned pack file, unchanged since the
+baseline started, and room under the day's caps. It then ran three replays at once, each with its own `TMPDIR`:
+
+```
+TMPDIR=$R/tmp/<side>-assault-N npm run -s eval -- --pack ~/simple-story-chat-eval --scenarios assault --mode plain --models openrouter:google/gemma-4-31b-it,openai:gpt-5.4-mini,claude:claude-haiku-4-5-20251001 --judge claude:claude-opus-5-5 --out $R/<side>-assault-N.json
+```
+
+- The baseline at 75d69a1, in the worktree `simple-chat-open-past-base`, from 00:08:21 to 00:30:57 UTC.
+- The candidate at 1f0c93e, in the worktree `simple-chat-open-past`, from 00:31:10 to 00:53:32.
+- Two baseline cells failed. `gpt-5.4-mini`'s in run 1 finished its replay, and then its judge, Opus 5.5 at the Claude
+  CLI, failed (`provider_failed`), so none of its traps got a verdict. Haiku's in run 3 failed at the Claude CLI during
+  its replay (`provider_failed`), so its traps went unjudged (`no_scenes`). Each got one rerun of that model alone, the
+  two at once, at 75d69a1 (`side.sh base assault $R <run> <model>`): mini's from 01:14:43 to 01:22:14
+  (`base-assault-1r`), Haiku's from 01:14:43 to 01:34:11 (`base-assault-3r`). Both finished, and Haiku's second rerun
+  was not needed. `decide.cjs` joins a rerun to its run, as `base-assault-1.json+base-assault-1r.json`, the later
+  file's model replacing the earlier's.
+
+Numbers as `decide.cjs` printed them, runs 1, 2 and 3, baseline → candidate; † marks a cell from a rerun:
+
+| Measure | Worst values | Gemma 4 31B | `gpt-5.4-mini` | Haiku 4.5 |
+| --- | --- | --- | --- | --- |
+| P, of 7 | 2, 1, 2 → 4, 4, 4: **gain** | 2, 3, 3 → 6, 4, 4: **gain** | 2†, 1, 4 → 5, 7, 6: **gain** | 4, 3, 2† → 4, 7, 7 |
+| S, of 12 | 10, 10, 11 → 8, 9, 10 | 11, 10, 12 → 11, 9, 11 | 10†, 10, 11 → 8, 9, 10: **fall** | 11, 10, 11† → 12, 11, 10 |
+| O, of 15 | 13, 13, 12 → 9, 11, 10 | 14, 14, 13 → 12, 11, 10: **fall** | 13†, 14, 13 → 9, 12, 13: **fall** | 14, 13, 12† → 15, 12, 15 |
+| M, of 12 | 8, 8, 8 → 7, 8, 8 | 8, 8, 8 → 8, 8, 8 | 10†, 10, 10 → 7, 9, 9: **fall** | 11, 11, 11† → 12, 12, 11 |
+| B, of 10 | 8, 7, 7 → 7, 7, 7 | 9, 10, 9 → 8, 9, 8 | 8†, 7, 7 → 7, 7, 7 | 10, 8, 10† → 10, 10, 10 |
+
+The worst values of S, O and M and Gemma's B fell as well, which decides nothing: the guards hold per model, and B is
+reported only.
+
+`confirmed` and `kept` apart, of 7 each, as `open-table.cjs` printed them from the same files:
+
+| Model | `confirmed` | `kept` |
+| --- | --- | --- |
+| Gemma 4 31B | 2, 3, 3 → 6, 4, 4 | 5, 7, 7 → 7, 7, 7 |
+| `gpt-5.4-mini` | 3†, 1, 4 → 6, 7, 7 | 5†, 6, 7 → 5, 7, 6 |
+| Haiku 4.5 | 4, 3, 3† → 5, 7, 7 | 7, 7, 6† → 5, 7, 7 |
+
+The gain is in `confirmed`: 26 of 63 answers on the baseline and 53 with the rule. `kept`, which a refusal kept a
+scene later also passes ([L2](#l2-2026-09-28)), stayed at 57 and 58.
+
+Decision: not accepted. P gained for the worst values, for Gemma and for mini, which with no fall would have been a
+full success, but four guards fell. Gemma's set o2 went from 14, 14 and 13 to 12, 11 and 10, a mean of 11 below its
+lowest baseline run of 13. mini's older traps fell to a mean of 9 against a lowest run of 10, its set o2 to 11.3
+against 13 and its memory to 8.3 against 10. Haiku fell on nothing; its P rose from 4, 3 and 2 to 4, 7 and 7, but its
+first candidate run only equalled its best baseline run. Since the step passes only if both scenarios do, `hospital`
+was not run, which saved about 2 million tokens on each of openrouter-paid and openai-small by `side.sh`'s estimate of
+a run. The rule stays on its branch: the working branch never had it, and its `ru.ts` is 75d69a1's. The third
+rejection in a row, after [L3](#l3-2026-09-27) and [L1](#l1-2026-09-27): by
+[the rule](../improve-loop.md#stop-conditions), three rejected hypotheses in a row stop the loop for the owner's
+decision.
+
+Diagnostics, which decide nothing:
+- P's means, baseline to candidate: Gemma 2.7 to 4.7 of 7, mini 2.3 to 6.0, Haiku 3.0 to 6.0. In every candidate run
+  the weakest model still failed 3 of the 7 open traps on at least one of the two questions.
+- L2's trap, `open_request_confirmed`, failed in all 9 baseline cells and passed in 8 of 9 with the rule, all but
+  Gemma's run 3.
+- The guards lost claims that the record rules out. `prior_discussion_accepted`, the older trap `invented_knowledge`,
+  which expects a contradicted discussion not to be accepted, failed in 3 of 9 baseline cells and in 7 of 9 with the
+  rule, more often for each model. Every miss in set o2, on either side, is in the four o2 traps that ask a claim to be
+  corrected (`…_corrected`, yes) and not accepted (`…_accepted`, no): 15 questions on the baseline, 26 with the rule.
+  `o2_release_at_seven` missed 12 against 6, in all three of Gemma's runs among others; `o2_river_road_six` and
+  `o2_box_arrival` 8 against 1, six of them mini's; `o2_gauge_fetch` 6 against 8. By model, set o2 missed 4 → 12
+  questions for Gemma, 5 → 11 for mini and 6 → 3 for Haiku.
+- mini's older traps also lost a count: the two questions of `mid_tunnel_stock`, a count of barriers after scene 10,
+  missed 4 against 1. Its other older misses, beside `prior_discussion_accepted`, stayed at 3 a side.
+- The memory questions and the boundary checks are asked in the narrator's request: `recall` in
+  `local/memory-probe.ts` builds it with `makeRequest`, which ends with the narrator rule, while the compactions'
+  requests (`local/memory.ts`) do not carry it. So the edit reached mini's memory answers as well as its trap scenes.
+  Three runs a side cannot tell that from mini's own spread, up to three questions of eight on `battle` in
+  [the noise entry](#noise-2026-09-18).
+
+The cost, from `npm run eval -- usage` before and after each part (`$R/usage-*.jsonl`):
+
+| Part | openrouter-paid | openai-small |
+| --- | --- | --- |
+| Baseline side | 1,031,855 tokens, 167 requests | 1,046,682 tokens, 121 requests |
+| Candidate side | 1,406,936, 255 | 1,066,609, 121 |
+| mini's rerun | | 318,708, 38 |
+
+The ledger is the main tree's and counts every agent's requests. openrouter-paid grew by 10,057 tokens in the 13
+seconds between the sides and by 91,925 during the reruns, in which no Gemma cell ran, so the sides' rows may hold
+other agents' requests; this record does not say why the candidate's openrouter-paid use is 375,081 tokens and 88
+requests above the baseline's. Haiku, its rerun and the judge ran on the Claude subscription, which the ledger does
+not count. No limit was reached: after the reruns the day stood at 2,577,443 tokens on openrouter-paid and 2,431,999
+on openai-small, under caps the ledger read as 7,000,000 and 5,500,000 then and as 5,000,000 and 2,250,000 when the
+baseline started.
+
+Conclusion: not accepted. On the open traps the rule did what it was written for: every model confirmed more
+compatible claims and kept them, and the worst values' P went from 1 or 2 of 7 to 4 in every run. But the models also
+accepted more claims that the record rules out: the contradicted discussion in 7 of 9 cells against 3, and set o2's
+corrections for Gemma and mini. By the rule Gemma fell on set o2, and mini on the older traps, set o2 and its memory
+answers. The guards were set for this trade, since a narrator that confirms every claim would pass every open trap,
+and by the rule a fall of any model rejects. A narrower
+wording would be a new step with a day for each scenario; after three rejections in a row, whether to try one is the
+owner's decision.
+
+Limitations:
+- `assault` alone. `hospital`, which the rule also needs, was not run, and the two o2 guards that 1f0c93e answers are
+  there, so no measurement has the final wording against them.
+- Three runs a side and one judge, Opus 5.5, judging once. The spread of P and of set o2 on this version of the pack
+  is known only from these runs.
+- The two rerun cells ran after the candidate side, on the same day and at the same code as their runs.
+- Hosted Gemma stands in for the bot's heretic Q6_K ([acceptance](../improve-loop.md#acceptance-on-gpu)). Russian,
+  `plain` only, one pack.
+- Results: `$R/{base,cand}-assault-N.json` with their `.log` and `.err` files, the reruns `$R/base-assault-{1r,3r}.*`,
+  `$R/usage-*.jsonl`, `$R/times.txt`, `$R/pack-assault.stat` and the probes' directories under `$R/tmp/`; `side.sh`,
+  `decide.cjs`, which printed the decision, `open-table.cjs`, which printed `confirmed`, `kept` and the failed keys,
+  and the smokes of 2026-09-28 in `~/simple-story-chat-runs/2026-09-28/open-past/`.
+
 <a id='scene-thinking-2026-09-28'></a>
 
 ## 2026-09-28 · Opus 5.5 · O3, phase 1: trap scenes that think, on hosted Gemma 4 31B (measurement)

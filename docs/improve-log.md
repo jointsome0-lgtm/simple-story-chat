@@ -8,6 +8,13 @@ and the main result with its limit. A new step gets its full entry there and its
 accepted**: tried and reverted. **Measurement**: numbers without a decision on a change. **Open**: a decision still
 waits. An open line is unfinished work, not an order to finish it.
 
+- 2026-09-29 · **not accepted** · [The open past: a narrator rule that confirms a compatible claim about an unshown past](knowledge/improve-runs.md#open-past-2026-09-29).
+  The owner approved the rule on 2026-09-28: a claim about a past no scene showed, which nothing in the record rules
+  out, is confirmed and kept. Three `assault` replays a side on the main group on 2026-09-29: the open traps passed on
+  both questions rose for every model, the worst values' from 2, 1 and 2 of 7 to 4 in each run, but the models also
+  accepted more claims that the record rules out, and Gemma fell on set o2 and `gpt-5.4-mini` on the older traps, set
+  o2 and memory. `hospital` was not run, since the step needs both scenarios. The third rejection in a row, which
+  stops the loop for the owner's decision.
 - 2026-09-28 · **measurement** · [O3, phase 1: trap scenes that think, over the same states](knowledge/improve-runs.md#scene-thinking-2026-09-28).
   O3 of the memory proposal, which the owner approved; no change. The eval gained `SCENE_THINKING` (45400b2), and with
   `RECALL_FROM` and `--judge` it writes the trap scenes again over a saved replay. Over step 1's `gemma-mem-1` states
