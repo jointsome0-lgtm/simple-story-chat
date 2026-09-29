@@ -615,6 +615,40 @@ to a checkpoint before the change, shows the person as they were there. The code
   says the person is pending until then. The card's Gemma has not answered the field yet: the probe for the next
   rental is ~/simple-story-chat-runs/2026-09-28/sheet-versions/run.mts.
 
+<a id='mini-app'></a>
+
+## Mini App
+
+A first step, read-only (2026-09-29): a page inside Telegram with the reader's stories, a story's characters and one
+person's card, to see whether that is handier than the chat's screens. It is served only where the owner sets it up
+([setup](setup.md#mini-app)) and only to the readers of `SIMPLE_CHAT_MINI_APP_USERS`. It changes nothing: editing,
+drawing and playing stay in the chat. The server is `local/mini-app.ts`, the page `local/mini-app/`.
+
+- **Button:** a listed reader's list of a story's characters has «📱 Открыть в мини-приложении» ("Open in the Mini App"),
+  a `web_app` button to `<url>/?story=<storyId>`, which opens the page at that story's characters with the list of
+  stories under it. Nobody else's screens change. Telegram shows such a button in a private chat only.
+- **Screens:** the stories, the one being played first and then the newest, with their branches, scenes and
+  characters; a story's characters as the chat's list has them; a person's card with the chat card's fields and lines
+  (`characterCard` in `local/ui.ts`), less those about its buttons. The picture its portrait line speaks of, the
+  reader's own in the reference experiment or else the kept portrait, is full width, and a tap shows it whole.
+  Telegram's Back button goes back one screen. The words are the reader's interface language, from the bot's catalogs.
+- **Access:** each request carries the launch data Telegram signed (`Authorization: tma <initData>`), checked against
+  the key derived from the bot token in constant time (`initDataUser`). Launch data over an hour old
+  (`INIT_DATA_SECONDS`) or more than five minutes ahead of this clock is refused as a forged one is, with 401, and the
+  page asks to reopen it from the chat. The reader is the one the signed data names, never one an address names, and
+  the answer comes from that reader's library through a read-only connection of the server's own. A reader off the
+  list, anything missing and anything of another reader's answer alike: 404 with the same body. A picture comes with
+  the same header and is shown from memory; its file is the one the reader's library names, in the reader's own
+  directory, a plain file under 16 MB, read by `readReference`.
+- **Page:** plain HTML, CSS and JavaScript, no build. Telegram's `telegram-web-app.js` is its only outside address: no
+  fonts, no analytics. Its policy lets it run its own and Telegram's scripts, fetch from its own address alone and be
+  framed by Telegram Web alone, and it takes the colours of the reader's theme (`--tg-theme-*`). The page keeps the
+  launch data in memory; Telegram's script keeps its launch parameters in the window's session storage, as for any
+  Mini App. No Telegram client has opened it yet: it was checked in headless Chrome with synthetic launch data.
+- **Log:** `mini_app_ready`, or `mini_app_failed` with an errno, at start; `mini_app_served` (`stories`, `characters`,
+  `card`, `picture`) and `mini_app_refused` (`no_init_data`, `malformed`, `forged`, `expired`, `not_listed`,
+  `missing`, `picture_unavailable`), with `actor` once the reader is known, each row at most once a minute.
+
 ## Interface language
 
 What the bot itself says (screens, buttons, refusals, the compaction status, the command menu) comes from a catalog per language in `local/text/`. The button labels quoted in this document are the Russian ones. The language of a story is a separate choice, made by its seed, not by this picker: see [story language](#story-language).

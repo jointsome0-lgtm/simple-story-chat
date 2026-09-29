@@ -1,7 +1,10 @@
 import https from 'node:https';
 import { setTimeout as delay } from 'node:timers/promises';
 
-export type InlineButton = { text: string; callback_data: string };
+// A button under a message: an action the bot answers, or one that opens the Mini App (local/mini-app.ts), which
+// Telegram shows only in a private chat with the bot.
+export type InlineButton = { text: string; callback_data: string; web_app?: undefined }
+  | { text: string; web_app: { url: string }; callback_data?: undefined };
 export type InlineKeyboard = { inline_keyboard: InlineButton[][] };
 export type Screen = { text: string; reply_markup?: InlineKeyboard; entities?: { type: 'pre'; offset: number; length: number }[] };
 export type TelegramPayload = { timeout?: number; [field: string]: unknown };

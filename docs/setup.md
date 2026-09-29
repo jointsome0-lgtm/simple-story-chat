@@ -45,6 +45,9 @@ The variables go in `.env`, and [.env.example](../.env.example) is the starting 
 | `SIMPLE_CHAT_SHEET_VERSION_USERS` | Optional: numeric Telegram IDs separated by commas, all of them from `SIMPLE_CHAT_IMAGE_USERS`. **Empty by default.** Their frames name the lasting changes the story makes to a person's look, which then hold from that scene on down its line, and they may write a person's text «only from this moment» ([along the story](telegram-ui.md#along-the-story)). Everybody else's frames are as before |
 | `SIMPLE_CHAT_POSE_SET_USERS` | Optional: numeric Telegram IDs separated by commas, all of them from `SIMPLE_CHAT_IMAGE_REFERENCE_USERS`. **Empty by default.** They may give a person up to 200 pictures, which a small model on this computer sorts by pose, and each frame takes the one that fits ([pose sets](#pose-sets)). Everybody else's frames are as before |
 | `SIMPLE_CHAT_CLOTHES_USERS` | Optional: IDs from `SIMPLE_CHAT_IMAGE_USERS`. **Empty by default.** Their frames name what each person wears and what of them is bare, or that they wear nothing, and a frame with reference pictures says it before the words on what the pictures are for ([what they wear](telegram-ui.md#what-they-wear)). Everybody else's frames are as before |
+| `SIMPLE_CHAT_MINI_APP_URL` | Optional: the HTTPS root a tunnel of your choice forwards to the Mini App's port, such as `https://some-words.trycloudflare.com`. Without it there is no Mini App ([Mini App](#mini-app)) |
+| `SIMPLE_CHAT_MINI_APP_PORT` | The loopback port the bot serves the Mini App on, 8790 by default (1024 to 65535) |
+| `SIMPLE_CHAT_MINI_APP_USERS` | Numeric Telegram IDs separated by commas, all of them from `SIMPLE_CHAT_ALLOWED_USER_IDS`. **Empty by default: nobody gets the Mini App** |
 
 ### Model settings
 
@@ -174,6 +177,39 @@ picture to stand for its pose before the others. A row that could mean two pictu
 labels neither, and a file of more than 1,000 filled rows is not read. The message that counts the pictures says how
 many came labeled, how many the captioner will label, and which rows found no picture or had a value the bot does not
 know, or that the file could not be read ([archives](telegram-ui.md#pose-set)).
+
+<a id='mini-app'></a>
+
+### Mini App
+
+What a reader gets is in [telegram-ui.md](telegram-ui.md#mini-app). Without `SIMPLE_CHAT_MINI_APP_URL` the bot opens
+no port and shows no button. With it, the bot serves the page on `127.0.0.1` at `SIMPLE_CHAT_MINI_APP_PORT`, never on
+another interface, and the readers of `SIMPLE_CHAT_MINI_APP_USERS` get its button on their list of a story's
+characters. A port that is taken is logged as `mini_app_failed` (`eaddrinuse`), and the bot runs on without the Mini
+App. Telegram opens a Mini App only from an HTTPS address, and this computer has none: a tunnel forwards one to that
+port. A button under a message needs nothing in BotFather.
+
+1. Start a tunnel to `http://127.0.0.1:8790` and note the HTTPS root it prints.
+2. Put that root in `.env` as `SIMPLE_CHAT_MINI_APP_URL`, and the readers in `SIMPLE_CHAT_MINI_APP_USERS`, yours first.
+3. Restart the bot ([running](#running)), open a story's characters in the chat and press «📱 Открыть в мини-приложении».
+
+The address shows anybody the page itself, which holds no story. Everything else is answered only to launch data
+Telegram signed for this bot within the hour, from the library of the reader it names. The tunnel reaches this one
+port: not the database, the model's socket or the picture card. The server runs inside the bot's process, though, so a
+flood of requests to the address slows the bot too.
+
+Three ways to have the address, as their own pages described them on 2026-09-29. The choice is the owner's.
+
+| Tunnel | Cost | Address | Who sees the traffic |
+| --- | --- | --- | --- |
+| Cloudflare quick tunnel: `cloudflared tunnel --url http://127.0.0.1:8790` | Free, no account | A new random `*.trycloudflare.com` name on every start: set it again and restart the bot, and the buttons already sent lead nowhere. Meant for testing: no uptime promise, at most 200 requests in flight | Cloudflare ends TLS, so it sees the page, the stories, the pictures and the launch data in clear, and could change the page |
+| Tailscale Funnel: `tailscale funnel 8790` | Free on every plan, Personal included. Needs a Tailscale account, HTTPS certificates and MagicDNS on, and the `funnel` attribute in the tailnet's policy | Stable: `https://<machine>.<tailnet>.ts.net` | TLS ends on this computer, and Tailscale's relays pass it encrypted. The machine's name goes into the public Certificate Transparency logs |
+| ngrok: `ngrok http 8790` | A free account: one dev domain, 1 GB and 20,000 requests a month. The Hobbyist plan is $10 a month | Stable: the account's dev domain | ngrok ends TLS and sees everything in clear. On the free plan a reader first gets ngrok's warning page, again after a week |
+
+Wherever TLS ends off this computer, that company can read what the Mini App shows, keep it in its logs and copy a
+reader's launch data, which opens that reader's library for the rest of its hour; it could also serve a changed page
+that sends the launch data elsewhere each time. Tell a reader so before you list them, and keep the tunnel pointed at
+this one port.
 
 ### Backup and restore
 

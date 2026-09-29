@@ -97,7 +97,8 @@ const TWO_PARTS = ['Маяк\n2026-08-02 20:00\nСеверный остров.',
 // The UI reads only a job's presence, kind and story; these jobs carry just that, including kinds the bot never writes.
 const partialJob = (fields: { id: string; kind?: string; storyId: string; branchId: string }) => fields as Job;
 
-const grid = (keyboard: InlineKeyboard | undefined) => keyboard?.inline_keyboard.map(row => row.map(button => button.callback_data));
+const grid = (keyboard: InlineKeyboard | undefined) => keyboard?.inline_keyboard.map(row => row.map(button =>
+  button.web_app ? `web_app:${button.web_app.url}` : button.callback_data));
 const callbacks = (message: Screen) => grid(message.reply_markup)?.flat() ?? [];
 // What a screen puts in pre blocks, to be copied in one tap or kept monospaced, and its buttons.
 const preAndButtons = (screen: Screen) => [screen.entities?.map(e => e.type === 'pre' ? screen.text.slice(e.offset, e.offset + e.length) : e.type), callbacks(screen)];

@@ -313,6 +313,17 @@ export const zh: Messages = {
     profileLong: (field, max) => `太长了：“${field}”最多 ${max} 个字符。请缩短后再发一次。`,
   },
 
+  miniApp: {
+    open: '📱 在小程序中打开',
+    stories: '📖 你的故事',
+    noStories: '还没有故事：故事要在和机器人的聊天里从种子开始。',
+    people: n => `${n} 个人物`,
+    notFound: '找不到：它已被删除，或者你在这里无法查看。',
+    expired: '无法验证这个页面，或者它已经打开太久了。请关闭它，再从和机器人的聊天里重新打开。',
+    failed: '加载失败。请检查网络后重试。',
+    outside: '这个页面要从 Telegram 里和机器人的聊天中打开。',
+  },
+
   model: {
     title: '🤖 模型',
     noData: '还没有模型的数据。',

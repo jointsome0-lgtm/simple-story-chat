@@ -303,6 +303,17 @@ A new description or new changes are retold into the details and the short look,
     profileLong: (field, max) => `Too long: the field “${field}” takes at most ${max} characters. Shorten it and send it again.`,
   },
 
+  miniApp: {
+    open: '📱 Open in the Mini App',
+    stories: '📖 Your stories',
+    noStories: 'No stories yet: they start from a seed in the chat with the bot.',
+    people: n => count(n, 'character', 'characters'),
+    notFound: 'Not found: it was deleted, or it is not open to you here.',
+    expired: 'This window could not be verified, or it has been open too long. Close it and open it again from the chat with the bot.',
+    failed: 'Could not load. Check the connection and try again.',
+    outside: 'This page opens from the chat with the bot in Telegram.',
+  },
+
   model: {
     title: '🤖 Model',
     noData: 'No model information yet.',

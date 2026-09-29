@@ -60,6 +60,9 @@ export type BotOptions = {
   // A ZIP archive of a pose set (local/pose-archive.ts), read before the library write as a picture is. Without it, an
   // archive is refused as one.
   readArchive?: (document: TelegramDocument, signal?: AbortSignal) => Promise<PoseArchive>;
+  // The Mini App (local/mini-app.ts) where it is served: its address and the readers whose list of a story's characters
+  // has the button that opens it.
+  miniApp?: { url: string; users: Set<string> };
   render: (state: Library, route: string, details: RenderDetails) => Screen;
   scenePrefix?: (stats: ContextStats | null, provenance: ModelInfo | undefined, lang?: unknown) => string;
   sceneKeyboard: (state: Library) => InlineKeyboard | undefined;
@@ -152,7 +155,14 @@ const UPLOAD_MS = 45_000;
 // How many files of pose sets are read at once, across readers (`readTurn`).
 const READS_AT_ONCE = 2;
 
-export function createBot({ store, api, provider, gpu, illustrator, readSeedFile, readPicture, captioner: captionerConfig, readArchive, render: renderUi, scenePrefix = () => '', sceneKeyboard, allowedUsers, ownerId = '', maxOutputTokens,
+// Whether this reader's scenes are illustrated, so that their menu offers the picture style, the bot's own style line,
+// and the counter of a text's tokens for the characters' card, and whether they may send a portrait of their own
+// (local/ui.ts `RenderDetails`). The Mini App's card has the same (local/mini-app.ts).
+export const pictureInfo = (illustrator: Illustrator | undefined, userId: string) => ({ pictures: illustrator?.enabledFor(userId) ?? false,
+  standardStyle: illustrator?.standardStyle, textTokens: illustrator?.textTokens, references: illustrator?.referencesFor(userId) ?? false,
+  versions: illustrator?.versionsFor(userId) ?? false, ...illustrator?.poseSetFor(userId) ? { poseSet: true } : {} });
+
+export function createBot({ store, api, provider, gpu, illustrator, readSeedFile, readPicture, captioner: captionerConfig, readArchive, miniApp, render: renderUi, scenePrefix = () => '', sceneKeyboard, allowedUsers, ownerId = '', maxOutputTokens,
   contextTokens = 65536, compactAtTokens = 54000, keepScenes = 4, memoryMode = 'plain', repairCoverage = false, model = 'unknown', providerName = 'claude-code', log = () => {} }: BotOptions) {
   const running = new Map<string, Running>();
   // One drawing on request at a time per reader, a sample of a style or a portrait (local/picture.ts `sample`,
@@ -175,12 +185,8 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
   // The GPU snapshot must provide every field the renderer reads.
   const render = (state: Library, route: string, details: RenderDetails = {}) =>
     renderUi(state, route, { ...details, modelInfo: { ...modelInfo }, gpuInfo: gpu?.snapshot() satisfies Required<GpuInfo> | undefined });
-  // Whether this reader's scenes are illustrated, so that their menu offers the picture style, the bot's own style
-  // line, and the counter of a text's tokens for the characters' card, and whether they may send a portrait of their
-  // own (local/ui.ts `RenderDetails`).
-  const pictureInfoOf = (userId: string) => ({ pictures: illustrator?.enabledFor(userId) ?? false,
-    standardStyle: illustrator?.standardStyle, textTokens: illustrator?.textTokens, references: illustrator?.referencesFor(userId) ?? false,
-    versions: illustrator?.versionsFor(userId) ?? false, ...illustrator?.poseSetFor(userId) ? { poseSet: true } : {} });
+  // What the reader's screens show of pictures (`pictureInfo`), and the Mini App's address if it serves them.
+  const pictureInfoOf = (userId: string) => ({ ...pictureInfo(illustrator, userId), miniApp: miniApp?.users.has(userId) ? miniApp.url : undefined });
   const requireGpu = (t: Messages) => {
     if (!gpu) return;
     try { gpu.assertReady(); }

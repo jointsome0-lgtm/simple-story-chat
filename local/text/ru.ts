@@ -445,6 +445,25 @@ export const ru = {
     profileLong: (field: string, max: number) => `Слишком длинно: в поле «${field}» можно не больше ${max} знаков. Сократи и пришли снова.`,
   },
 
+  // The Mini App (local/mini-app.ts, docs/telegram-ui.md#mini-app): a page inside Telegram where a reader it serves
+  // looks through their stories' characters and their pictures. It only shows: nothing is written or drawn there.
+  miniApp: {
+    // On the list of a story's characters: opens the Mini App at that list.
+    open: '📱 Открыть в мини-приложении',
+    // Above the reader's stories in the Mini App, and instead of them when there are none.
+    stories: '📖 Твои истории',
+    noStories: 'Историй пока нет: их начинают из сида в чате с ботом.',
+    // How many people a story's sheet has, beside the count of its scenes.
+    people: (n: number) => count(n, 'персонаж', 'персонажа', 'персонажей'),
+    // The page's own lines for what it cannot show. `notFound` answers anything missing and anything this reader may not
+    // see here alike; `expired`, a window whose launch data Telegram signed failed the check, most often by being over
+    // an hour old; `outside`, a page opened without Telegram.
+    notFound: 'Не найдено: это удалено или тебе здесь недоступно.',
+    expired: 'Не удалось проверить это окно, или оно открыто слишком давно. Закрой его и открой снова из чата с ботом.',
+    failed: 'Не удалось загрузить. Проверь связь и попробуй ещё раз.',
+    outside: 'Эта страница открывается из чата с ботом в Telegram.',
+  },
+
   model: {
     title: '🤖 Модель',
     noData: 'Данных о модели пока нет.',

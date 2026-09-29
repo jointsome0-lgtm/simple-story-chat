@@ -33,7 +33,12 @@ export type ImageConfig = {
   // each person wears and what of them is bare, and says it before the reference wording (local/picture-clothes.ts).
   clothesUsers?: Set<string>;
 };
-export type Config = ModelConfig & { gpu: GpuConfig | undefined; images: ImageConfig | undefined; token: string; allowedUsers: Set<string>; ownerId: string; dbPath: string };
+// The Mini App (local/mini-app.ts, docs/telegram-ui.md#mini-app), off unless SIMPLE_CHAT_MINI_APP_URL is set: the public
+// HTTPS root the owner exposes `port` at, the loopback port the bot serves it on, and the readers it serves and shows
+// its button to, nobody by default.
+export type MiniAppConfig = { url: string; port: number; users: Set<string> };
+export type Config = ModelConfig & { gpu: GpuConfig | undefined; images: ImageConfig | undefined; miniApp: MiniAppConfig | undefined;
+  token: string; allowedUsers: Set<string>; ownerId: string; dbPath: string };
 // The agent interface (docs/agent-interface.md#privacy-a-separate-library): its own library file, and the bot's model
 // queue if the bot serves one. `agentId` names the library inside that file when the client does not pass one.
 export type AgentConfig = ModelConfig & { dbPath: string; modelSocket: string; waitSeconds: number; agentId: string | undefined };
@@ -246,6 +251,32 @@ export function imageConfig(env: Env, directory: string, allowedUsers: Set<strin
     clothesUsers, ...poseSetUsers.size ? { poseSetUsers, captioner } : {} };
 }
 
+// The Mini App's switch. Telegram opens a Mini App only from an HTTPS address, and the bot has none of its own: the owner
+// forwards one to the loopback port through a tunnel of their choice (docs/setup.md#mini-app). The page and its API are
+// served from the root of that address.
+//
+//   SIMPLE_CHAT_MINI_APP_URL=https://some-words.trycloudflare.com
+//   SIMPLE_CHAT_MINI_APP_PORT=8790                            # optional; the loopback port the tunnel forwards to
+//   SIMPLE_CHAT_MINI_APP_USERS=123456789                      # the readers it serves; nobody by default
+export function miniAppConfig(env: Env, allowedUsers: Set<string>): MiniAppConfig | undefined {
+  const raw = env.SIMPLE_CHAT_MINI_APP_URL?.trim();
+  if (!raw) return undefined;
+  let url;
+  try { url = new URL(raw); } catch { throw new Error('Set SIMPLE_CHAT_MINI_APP_URL to the HTTPS root the Mini App is reached at'); }
+  if (url.protocol !== 'https:' || url.pathname !== '/' || url.search || url.hash || url.username || url.password) {
+    throw new Error('SIMPLE_CHAT_MINI_APP_URL must be an HTTPS root without a path, query or credentials');
+  }
+  const port = Number(env.SIMPLE_CHAT_MINI_APP_PORT || 8790);
+  if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new Error('Invalid SIMPLE_CHAT_MINI_APP_PORT');
+  // As for pictures: a reader not on the access list has no library to show, so a stray ID is a typo.
+  const users = new Set((env.SIMPLE_CHAT_MINI_APP_USERS || '').split(',').map(one => one.trim()).filter(Boolean));
+  for (const user of users) {
+    if (!/^\d+$/.test(user)) throw new Error('SIMPLE_CHAT_MINI_APP_USERS must be numeric Telegram IDs');
+    if (!allowedUsers.has(user)) throw new Error('Every SIMPLE_CHAT_MINI_APP_USERS entry must be one of SIMPLE_CHAT_ALLOWED_USER_IDS');
+  }
+  return { url: url.origin, port, users };
+}
+
 // A hosted API or a consumer Codex account may log requests and train on them. By default they serve synthetic probes
 // and never the bot's real stories; the one who runs the bot may accept that for their own stories in so many words.
 // The agent interface asks the same: an agent co-author may be given real text as easily as a Telegram user.
@@ -297,6 +328,7 @@ export function loadConfig(directory = process.cwd(), inherited: Env = process.e
   // The bot log marks the owner's rows with this ID. A mistyped one would mark them as someone else's without a word.
   const ownerId = env.SIMPLE_CHAT_OWNER_ID?.trim() || '';
   if (ownerId && !allowedUsers.has(ownerId)) throw new Error('SIMPLE_CHAT_OWNER_ID must be one of SIMPLE_CHAT_ALLOWED_USER_IDS');
-  return { ...model, gpu, images: imageConfig(env, directory, allowedUsers, model.baseUrl), token, allowedUsers, ownerId,
+  return { ...model, gpu, images: imageConfig(env, directory, allowedUsers, model.baseUrl), miniApp: miniAppConfig(env, allowedUsers),
+    token, allowedUsers, ownerId,
     dbPath: resolve(directory, env.SIMPLE_CHAT_DB_PATH || 'data/simple-chat.sqlite') };
 }

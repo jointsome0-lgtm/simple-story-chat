@@ -101,7 +101,7 @@ function portraits(lang: Lang | undefined): Library {
   return state;
 }
 
-const callbacks = (screen: Screen) => (screen.reply_markup?.inline_keyboard.flat() ?? []).map(button => button.callback_data);
+const callbacks = (screen: Screen) => (screen.reply_markup?.inline_keyboard.flat() ?? []).flatMap(button => button.callback_data ?? []);
 
 // Every screen the interface can produce for one language: [what it is, the screen]. For each state also the callbacks
 // its buttons offer on the way from the menu, and all it offers anywhere.
@@ -250,8 +250,8 @@ for (const lang of [undefined, ...REGISTERED]) {
       assert.ok(screen.reply_markup?.inline_keyboard.every(row => row.length > 0) ?? true, `${name}: an empty row of buttons`);
       for (const button of screen.reply_markup?.inline_keyboard.flat() ?? []) {
         assert.ok(button.text.trim().length > 0, `${name}: empty label for ${button.callback_data}`);
-        assert.ok(Buffer.byteLength(button.callback_data, 'utf8') <= 64, `${name}: ${button.callback_data}`);
-        assert.match(button.callback_data, ACTION, name);
+        assert.ok(Buffer.byteLength(button.callback_data ?? '', 'utf8') <= 64, `${name}: ${button.callback_data}`);
+        assert.match(button.callback_data ?? '', ACTION, name);
       }
     }
     for (const [state, wanted, never] of PATHS) {
@@ -263,7 +263,7 @@ for (const lang of [undefined, ...REGISTERED]) {
     assert.ok(!callbacks(render(library(lang), 'home')).some(data => /^view:(style|characters)/.test(data)), 'a menu without pictures');
     // The picker lists the registered languages by their own names and marks the one shown; the way to it reads the
     // same in every language, so that a reader in a wrong one still finds it.
-    const buttons = (route: string) => render(library(lang), route).reply_markup!.inline_keyboard.flat().map(button => [button.callback_data, button.text]);
+    const buttons = (route: string) => render(library(lang), route).reply_markup!.inline_keyboard.flat().map(button => [button.callback_data ?? '', button.text]);
     assert.deepEqual(buttons('language').filter(([data]) => data.startsWith('lang:')), REGISTERED.map(code => [`lang:${code}`, `${code === (lang ?? 'ru') ? '✅ ' : ''}${LANGS[code]}`]));
     assert.ok(buttons('home').some(([data, text]) => data === 'view:language' && text === LANGUAGE_BUTTON), 'the way to the picker');
     // An English reader reads no Russian, apart from the name of Russian in the picker.

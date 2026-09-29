@@ -42,10 +42,12 @@ export type GpuInfo = {
 // the pictures of a set counted as they come (local/bot.ts), for the message that counts them: those kept, those of them
 // the reader labeled whole in an archive's labels.csv, those refused by reason, and each labels.csv that came, by the
 // name of its archive (local/pose-archive.ts `ArchiveLabels`).
+// `miniApp`: the Mini App's address, for a reader it serves (local/mini-app.ts), so that the list of a story's characters
+// has a button that opens it there.
 export type RenderDetails = {
   modelInfo?: ModelInfo | null; gpuInfo?: GpuInfo | null; contextStats?: ContextStats | null; pictures?: boolean; standardStyle?: string;
   textTokens?: (text: string) => number | null;
-  retainsPortraits?: boolean; references?: boolean; versions?: boolean; poseSet?: boolean; poseTally?: PoseTally;
+  retainsPortraits?: boolean; references?: boolean; versions?: boolean; poseSet?: boolean; poseTally?: PoseTally; miniApp?: string;
 };
 // `unread`: the files of the wait still in the reader's queue; `finishing`: the wait is over, and they are still read.
 export type PoseTally = { storyId: string; name: string; at: number; kept: number; labeled: number; refused: Partial<Record<PoseSetRefusal, number>>;
@@ -143,7 +145,7 @@ function screen(state: State, route: string, details: RenderDetails) {
     case 'prompt-input': return promptInputScreen(state, details);
     case 'delete-style': return deleteStyleScreen(state, args[0], details);
     case 'sample': return sampleScreen(state, args[0], details);
-    case 'characters': return charactersScreen(state, args[0]);
+    case 'characters': return charactersScreen(state, args[0], details);
     case 'character': return characterScreen(state, args[0], args[1], args[2], details);
     // Only while the reader is writing a look or a description, as for a style.
     case 'look-input': return sheetInputScreen(state, 'look', details);
@@ -161,8 +163,8 @@ function screen(state: State, route: string, details: RenderDetails) {
     case 'pose-set-drop': return poseSetDropScreen(state, args[0], args[1], args[2], details);
     // A person's whole profile to copy and send back (local/profile.ts); the same with a line on top when the one the
     // reader edited had changed since (local/bot.ts); the wait for it, as for a look; and what a profile sent back changed.
-    case 'profile': return profileScreen(state, args[0], args[1], args[2]);
-    case 'profile-changed': return profileScreen(state, args[0], args[1], args[2], texts(state.language).characters.profileChanged);
+    case 'profile': return profileScreen(state, args[0], args[1], args[2], details);
+    case 'profile-changed': return profileScreen(state, args[0], args[1], args[2], details, texts(state.language).characters.profileChanged);
     case 'profile-input': return profileInputScreen(state, details);
     case 'profile-saved': return profileSaved(state, args[0], args[1], args[2], args[3]);
     case 'seeds': return seedList(state, args[0]);
@@ -518,23 +520,32 @@ function storyScreen(state: State, storyId: string | undefined, rawPage: string 
 }
 
 // The people of a story's sheet (local/picture.ts): who its pictures draw, and from what look. A sheet is written with
-// the story's first picture, never on a press here, so a story without one says when it comes.
-function charactersScreen(state: State, storyId: string | undefined) {
+// the story's first picture, never on a press here, so a story without one says when it comes. A reader the Mini App
+// serves may open the same list there.
+function charactersScreen(state: State, storyId: string | undefined, details: RenderDetails) {
   const t = texts(state.language);
   const c = t.characters;
   const story = own(state.stories, storyId);
   if (!story) return stale(t, t.story.notFound);
-  const sheet = people(story);
-  // Each as they are at the scene the reader stands at in this story (local/picture-versions.ts), as their card shows them.
-  const here = sheetAt(story, sceneOf(state, story.id));
+  const sheet = charactersOf(state, story);
   return payload([c.title(storyName(state, story)), '', sheet.length ? c.note : c.none, sheet.length ? '' : null,
-    ...sheet.map((one, n) => {
-      const now = here[one.index] ?? one;
-      return `${n + 1}. ${line(one.name, 40)} — ${line(now.look || descriptionOf(now), 90)}`;
-    })], [
-    ...sheet.map(one => [btn(`${seesThrough(story, one.name) ? '👁' : '👤'} ${line(one.name, 30) || t.format.untitledButton}`, `view:character:${personRef(story, one)}`)]),
+    ...sheet.map((one, n) => `${n + 1}. ${line(one.name, 40)} — ${line(one.summary, 90)}`)], [
+    ...sheet.map(one => [btn(`${one.viewer ? '👁' : '👤'} ${line(one.name, 30) || t.format.untitledButton}`, `view:character:${personRef(story, one)}`)]),
+    details.miniApp ? [appButton(t.miniApp.open, `${details.miniApp}/?story=${encodeURIComponent(story.id)}`)] : null,
     [btn(c.toStory, `view:story:${story.id}`), btn(t.buttons.menu, 'view:home')],
   ]);
+}
+
+// The people of a story's sheet as the list of them shows them, here and in the Mini App (local/mini-app.ts): each at
+// their place on the sheet, with their look, or their description where they have no look, as they are at the scene the
+// reader stands at in this story (local/picture-versions.ts), as their card shows them, and whether the story's frames
+// are seen through their eyes.
+export function charactersOf(state: State, story: Story) {
+  const here = sheetAt(story, sceneOf(state, story.id));
+  return people(story).map(one => {
+    const now = here[one.index] ?? one;
+    return { ...one, summary: now.look || descriptionOf(now), viewer: seesThrough(story, one.name) };
+  });
 }
 
 // One person (docs/illustrations-plan.md#three-layers): their description, the story's changes to it, the look and the
@@ -559,7 +570,49 @@ function characterScreen(state: State, storyId: string | undefined, rawIndex: st
   if (!story) return stale(t, t.story.notFound);
   // A button of somebody whose place on the sheet another person took since opens the list, not that other person.
   const found = personAt(story, rawIndex, tag);
-  if (!found) return charactersScreen(state, story.id);
+  if (!found) return charactersScreen(state, story.id, details);
+  const { person, described, descriptionTitle, descriptionSize, changes, along, lookSize, whose, clothes, clothesTitle, clothesSize,
+    portrait, source, frames, viewer, pov, prompt } = characterCard(state, story, found, details);
+  // A set of the person's pictures in many poses (local/pose-set.ts): how many and how heavy, those still without a
+  // caption, how the captioned ones were sorted, and whether frames take them now.
+  const set = person.poseSet?.length ? poseSetState(person) : undefined;
+  const groups = set ? poseGroups(person) : [];
+  const poses = !set ? [] : ['', c.poseSetLine(set.count, POSE_SET_PICTURES, megabytes(set.bytes)),
+    ...set.pending || set.failed ? [c.poseSetCaptions(set.pending, set.failed)] : [],
+    ...groups.length ? [c.poseSetGroups(groups.map(one => ({ name: c.poseGroupNames[one.group], count: one.count })))] : [],
+    details.poseSet && details.pictures ? c.poseSetFrames : c.poseSetUnused];
+  const result = payload([c.cardTitle(line(person.name, 60), storyName(state, story)), '',
+    ...described ? [descriptionTitle, described, descriptionSize, ''] : [],
+    ...changes ? [c.changes, changes, ''] : [], ...along ? [along, ''] : [],
+    c.look, person.look, lookSize, whose, '',
+    ...clothes ? [clothesTitle, clothes, clothesSize] : [c.noClothes], c.clothesNote, '',
+    c.sizeNote, '', c.scope, portrait === null ? null : '', portrait, source, frames, ...poses,
+    pov === null ? null : '', pov], [
+    [btn(c.editDetails, `details-edit:${personRef(story, person)}`)],
+    [btn(c.edit, `look-edit:${personRef(story, person)}`)],
+    [btn(c.profile, `view:profile:${personRef(story, person)}`)],
+    details.pictures ? [btn(c.portrait, `portrait:${personRef(story, person)}`),
+      details.references ? btn(c.ownPortrait, `ref-send:${personRef(story, person)}:front`) : null] : null,
+    details.pictures && prompt !== undefined ? [btn(c.defaultPrompt, `portrait-default:${personRef(story, person)}`)] : null,
+    (details.pictures && details.poseSet) || set ? [details.pictures && details.poseSet ? btn(c.poseSet, `pose-set:${personRef(story, person)}`) : null,
+      set ? btn(c.poseSetDrop, `pose-set-drop:${personRef(story, person)}`) : null] : null,
+    details.pictures ? [btn(viewer ? c.povOff : c.povOn, `${viewer ? 'pov-off' : 'pov'}:${personRef(story, person)}`)] : null,
+    [btn(c.back, `view:characters:${story.id}`)],
+  ]);
+  const pre = (text: string, after: string) => {
+    const offset = result.text.indexOf(text, result.text.indexOf(after) + after.length);
+    return text && offset >= 0 ? [{ type: 'pre' as const, offset, length: text.length }] : [];
+  };
+  result.entities = [...described ? pre(described, descriptionTitle) : [], ...pre(person.look, c.look), ...clothes ? pre(clothes, clothesTitle) : []];
+  return result;
+}
+
+// What a person's card says of them, in the chat (`characterScreen`) and in the Mini App (local/mini-app.ts): each field
+// with its title and size, and the lines on their portrait and on the frames seen through their eyes. `picture` is the
+// one the portrait's line speaks of, a picture of the reader's own or the portrait they kept.
+export function characterCard(state: State, story: Story, found: NonNullable<ReturnType<typeof personAt>>, details: RenderDetails) {
+  const t = texts(state.language);
+  const c = t.characters;
   const ref = activeRef(state);
   const branch = ref?.story === story && ref.branch.head ? ref.branch : null;
   // The person as they are at the scene the reader stands at, with the versions of its line (local/picture-versions.ts),
@@ -601,38 +654,9 @@ function characterScreen(state: State, storyId: string | undefined, rawIndex: st
   const viewer = seesThrough(story, person.name);
   const other = people(story).find(one => seesThrough(story, one.name));
   const pov = !details.pictures ? null : viewer ? c.povNote : other ? c.povOther(line(other.name, 60)) : null;
-  // A set of the person's pictures in many poses (local/pose-set.ts): how many and how heavy, those still without a
-  // caption, how the captioned ones were sorted, and whether frames take them now.
-  const set = person.poseSet?.length ? poseSetState(person) : undefined;
-  const groups = set ? poseGroups(person) : [];
-  const poses = !set ? [] : ['', c.poseSetLine(set.count, POSE_SET_PICTURES, megabytes(set.bytes)),
-    ...set.pending || set.failed ? [c.poseSetCaptions(set.pending, set.failed)] : [],
-    ...groups.length ? [c.poseSetGroups(groups.map(one => ({ name: c.poseGroupNames[one.group], count: one.count })))] : [],
-    details.poseSet && details.pictures ? c.poseSetFrames : c.poseSetUnused];
-  const result = payload([c.cardTitle(line(person.name, 60), storyName(state, story)), '',
-    ...described ? [descriptionTitle, described, c.descriptionSize([...described].length), ''] : [],
-    ...changes ? [c.changes, changes, ''] : [], ...changed ? [c.along(changed), ''] : [],
-    c.look, person.look, c.lookSize(...size(person.look)), whose, '',
-    ...clothes ? [clothesTitle, clothes, c.clothesSize(...size(clothes))] : [c.noClothes], c.clothesNote, '',
-    c.sizeNote, '', c.scope, portrait === null ? null : '', portrait, source, frames, ...poses,
-    pov === null ? null : '', pov], [
-    [btn(c.editDetails, `details-edit:${personRef(story, person)}`)],
-    [btn(c.edit, `look-edit:${personRef(story, person)}`)],
-    [btn(c.profile, `view:profile:${personRef(story, person)}`)],
-    details.pictures ? [btn(c.portrait, `portrait:${personRef(story, person)}`),
-      details.references ? btn(c.ownPortrait, `ref-send:${personRef(story, person)}:front`) : null] : null,
-    details.pictures && prompt !== undefined ? [btn(c.defaultPrompt, `portrait-default:${personRef(story, person)}`)] : null,
-    (details.pictures && details.poseSet) || set ? [details.pictures && details.poseSet ? btn(c.poseSet, `pose-set:${personRef(story, person)}`) : null,
-      set ? btn(c.poseSetDrop, `pose-set-drop:${personRef(story, person)}`) : null] : null,
-    details.pictures ? [btn(viewer ? c.povOff : c.povOn, `${viewer ? 'pov-off' : 'pov'}:${personRef(story, person)}`)] : null,
-    [btn(c.back, `view:characters:${story.id}`)],
-  ]);
-  const pre = (text: string, after: string) => {
-    const offset = result.text.indexOf(text, result.text.indexOf(after) + after.length);
-    return text && offset >= 0 ? [{ type: 'pre' as const, offset, length: text.length }] : [];
-  };
-  result.entities = [...described ? pre(described, descriptionTitle) : [], ...pre(person.look, c.look), ...clothes ? pre(clothes, clothesTitle) : []];
-  return result;
+  return { person, described, descriptionTitle, descriptionSize: c.descriptionSize([...described].length), changes,
+    along: changed ? c.along(changed) : null, lookSize: c.lookSize(...size(person.look)), whose, clothes, clothesTitle,
+    clothesSize: clothes ? c.clothesSize(...size(clothes)) : null, portrait, source, frames, viewer, pov, prompt, picture: mine ?? kept };
 }
 
 // Waiting for a look or a description the reader writes for the person `state.ui` names, with the text as it is now to
@@ -681,13 +705,14 @@ function sheetInputScreen(state: State, input: 'look' | 'details', details: Rend
 // one of a sheet the next picture writes anew, and one of a person whose look changed along the branch being played,
 // shown as at its last scene (local/profile.ts `versioned`), are shown without the button, with a line on why. `notice`
 // goes on top: the profile the reader edited had changed since.
-function profileScreen(state: State, storyId: string | undefined, rawIndex: string | undefined, tag: string | undefined, notice?: string) {
+function profileScreen(state: State, storyId: string | undefined, rawIndex: string | undefined, tag: string | undefined, details: RenderDetails,
+  notice?: string) {
   const t = texts(state.language);
   const c = t.characters;
   const story = own(state.stories, storyId);
   if (!story) return stale(t, t.story.notFound);
   const person = personAt(story, rawIndex, tag);
-  if (!person) return charactersScreen(state, story.id);
+  if (!person) return charactersScreen(state, story.id, details);
   const ref = personRef(story, person);
   const profile = profileOf(state, story, person);
   const title = c.profileTitle(line(person.name, 60), storyName(state, story));
@@ -1306,7 +1331,7 @@ function paceOf(story: Story): Pace {
   return story.pace === 'moment' || story.pace === 'chapter' ? story.pace : 'scene';
 }
 
-function storyName(state: State, story: Story) {
+export function storyName(state: State, story: Story) {
   const t = texts(state.language);
   const n = storiesOf(state, story.seedId).indexOf(story) + 1;
   return n ? t.common.storyName(quote(t, story.title), n) : quote(t, story.title);
@@ -1445,6 +1470,11 @@ function pager(p: Page<unknown>, route: string, previous: string, next: string):
 
 function btn(text: string, data: string): InlineButton | null {
   return encoder.encode(data).length <= 64 ? { text, callback_data: data } : null;
+}
+
+// Opens the Mini App at `url` (local/mini-app.ts) instead of asking the bot for a screen.
+function appButton(text: string, url: string): InlineButton {
+  return { text, web_app: { url } };
 }
 
 function keyboard(rows: (Row | null)[]): InlineKeyboard | undefined {

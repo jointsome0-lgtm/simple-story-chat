@@ -322,6 +322,17 @@ export const ko: Messages = {
     profileLong: (field, max) => `너무 길어요. ‘${field}’ 항목은 ${max}자까지예요. 줄여서 다시 보내 주세요.`,
   },
 
+  miniApp: {
+    open: '📱 미니 앱에서 열기',
+    stories: '📖 내 이야기',
+    noStories: '아직 이야기가 없어요. 이야기는 봇과의 채팅에서 시드로 시작해요.',
+    people: n => `인물 ${n}명`,
+    notFound: '찾을 수 없어요. 삭제됐거나 여기서는 볼 수 없어요.',
+    expired: '이 화면을 확인할 수 없거나 너무 오래 열려 있었어요. 닫고 봇과의 채팅에서 다시 열어 주세요.',
+    failed: '불러오지 못했어요. 연결을 확인하고 다시 시도해 주세요.',
+    outside: '이 페이지는 텔레그램의 봇 채팅에서 열어요.',
+  },
+
   model: {
     title: '🤖 모델',
     noData: '아직 모델 정보가 없어요.',
