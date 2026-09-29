@@ -226,7 +226,7 @@ export const isArchive = (document: TelegramDocument) => /zip/i.test(String(docu
 // refused before anything is downloaded; the download is seeds' own (local/seed-file.ts), in memory and never on this
 // disk; the rest is the picture's (`strippedReference`).
 export function createPictureReader(token: string, api: TelegramApi, { get = https.get }: { get?: HttpsGet } = {}) {
-  return async (message: { photo?: unknown; document?: TelegramDocument }): Promise<ReceivedPicture> => {
+  return async (message: { photo?: unknown; document?: TelegramDocument }, signal?: AbortSignal): Promise<ReceivedPicture> => {
     let file: { id: unknown; size: unknown; sent: ReceivedPicture['sent'] };
     if (Array.isArray(message.photo)) {
       const area = (size: PhotoSize | undefined) => typeof size?.width === 'number' && typeof size.height === 'number' ? size.width * size.height : -1;
@@ -240,7 +240,7 @@ export function createPictureReader(token: string, api: TelegramApi, { get = htt
     } else throw refusal('referenceType');
     if (typeof file.size === 'number' && file.size > REFERENCE_BYTES) throw refusal('referenceTooLarge');
     const bytes = await downloadFile(token, api, get, file.id, REFERENCE_BYTES,
-      { tooLarge: () => refusal('referenceTooLarge'), failed: () => refusal('referenceIncomplete') });
+      { tooLarge: () => refusal('referenceTooLarge'), failed: () => refusal('referenceIncomplete') }, signal);
     return { ...strippedReference(bytes), sent: file.sent };
   };
 }

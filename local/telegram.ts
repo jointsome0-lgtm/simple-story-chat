@@ -6,7 +6,8 @@ export type InlineKeyboard = { inline_keyboard: InlineButton[][] };
 export type Screen = { text: string; reply_markup?: InlineKeyboard; entities?: { type: 'pre'; offset: number; length: number }[] };
 export type TelegramPayload = { timeout?: number; [field: string]: unknown };
 // Bot API results are not validated; each caller reads only what its method returns.
-export type TelegramApi = (method: string, payload?: TelegramPayload) => Promise<unknown>;
+// `signal` ends the call and its request once it aborts, as a stop or a deadline does (local/seed-file.ts).
+export type TelegramApi = (method: string, payload?: TelegramPayload, options?: { signal?: AbortSignal }) => Promise<unknown>;
 export type Chat = ReturnType<typeof createChat>;
 // `deleteMessages` takes from 1 to 100 message ids in one call.
 const DELETE_BATCH = 100;
@@ -41,13 +42,13 @@ export function multipartBody(payload: TelegramPayload, boundary: string): Buffe
 }
 
 export function createApi(token: string): TelegramApi {
-  return async (method, payload = {}) => {
+  return async (method, payload = {}, options = {}) => {
     const upload = Object.values(payload).some(value => value instanceof Uint8Array);
     const boundary = upload ? `simple-chat-${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}` : '';
     const body = upload ? multipartBody(payload, boundary) : JSON.stringify(payload);
     return new Promise((resolve, reject) => {
       const request = https.request({ hostname: 'api.telegram.org', family: 4, method: 'POST',
-        path: `/bot${token}/${method}`, timeout: (payload.timeout || 0) * 1000 + 15_000,
+        path: `/bot${token}/${method}`, timeout: (payload.timeout || 0) * 1000 + 15_000, ...options.signal ? { signal: options.signal } : {},
         headers: { 'Content-Type': upload ? `multipart/form-data; boundary=${boundary}` : 'application/json',
           'Content-Length': Buffer.byteLength(body) },
       }, response => {

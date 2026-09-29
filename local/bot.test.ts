@@ -909,10 +909,11 @@ test('paused GPU accepts seed drafts and model controls but never creates an unw
 
 test('a pose-set file leaves the reader\'s queue only in the write that keeps its picture, so a stop halfway loses none', async t => {
   const picture = { bytes: new Uint8Array([1, 2, 3]), format: 'png' as const, width: 480, height: 640, strippedBytes: 0, sent: 'photo' as const };
-  let release = () => {};
-  const held = new Promise<void>(resolve => { release = resolve; });
+  // The download waits until its read is cut short, as the stop cuts a real one (local/seed-file.ts).
+  const waiting = (_message: unknown, signal?: AbortSignal) =>
+    new Promise<never>((_resolve, reject) => signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true }));
   const illustrator = { ...sketchbook([]), referencesFor: () => true, poseSetFor: (userId: string) => userId === '1' } as unknown as Illustrator;
-  const f = fixture(t, { illustrator, readPicture: async () => { await held; return picture; } });
+  const f = fixture(t, { illustrator, readPicture: waiting });
   await f.start();
   const storyId = Object.keys(f.store.read(1).stories)[0];
   f.store.mutate('1', state => {
@@ -924,9 +925,7 @@ test('a pose-set file leaves the reader\'s queue only in the write that keeps it
   // The update ends with the file queued, while its download still waits.
   await f.bot.handle(photo);
   assert.equal(f.store.read(1).poseUploads?.length, 1);
-  const stopping = f.bot.stop();
-  release();
-  await stopping;
+  await f.bot.stop();
   assert.equal(f.store.read(1).poseUploads?.length, 1, 'a stop halfway leaves the file queued');
   assert.equal(f.store.read(1).stories[storyId].sheet![0].poseSet, undefined);
   const again = createBot({ store: f.store, api: f.api, provider: f.provider, illustrator, allowedUsers: new Set(['1', '2']), maxOutputTokens: 4096,

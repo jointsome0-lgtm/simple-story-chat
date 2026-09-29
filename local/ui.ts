@@ -15,7 +15,7 @@ import type { PoseSetRefusal } from './model-error.ts';
 import { ARCHIVE_BYTES } from './pose-archive.ts';
 import type { ArchiveLabels } from './pose-archive.ts';
 import { seesThrough } from './picture-pov.ts';
-import { editableFrom, ownVersions, sceneOf, sheetAt, versionsOf } from './picture-versions.ts';
+import { editableFrom, ownVersions, personKey, sceneOf, sheetAt, versionsOf } from './picture-versions.ts';
 import { CHANGES_CHARS, CLOTHES_CHARS, DETAILS_CHARS, fieldsMask, maskFields, profileBlock, profileHash, profileOf, roundTrips } from './profile.ts';
 import type { ProfileField } from './profile.ts';
 import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX, PRESETS, PROMPT_CHARS, lineOf, ownStyle, ownStyles, pickerKeys, presetOf, styleKey } from './picture-style.ts';
@@ -761,13 +761,14 @@ function poseSetInputScreen(state: State, details: RenderDetails) {
 // how many files are still to be read, and how many the set holds now, with «✅ Готово» under it until the reader is
 // done, and after that, while files are still read, that its last word is to come. Once an archive with labels.csv came,
 // how many the reader labeled and how many are left to the captioner, and for each labels.csv the rows that matched no
-// picture or had a value the bot does not know, or that it could not be read.
+// picture or had a value the bot does not know, or that it could not be read. The person is found by the key a sheet
+// written again keeps (local/picture.ts `rewrittenSheet`).
 function poseSetStatus(state: State, details: RenderDetails) {
   const t = texts(state.language);
   const c = t.characters;
   const tally = details.poseTally;
   const story = own(state.stories, tally?.storyId);
-  const person = story && people(story).find(one => one.name === tally?.name);
+  const person = story && tally && people(story).find(one => personKey(one.name) === personKey(tally.name));
   if (!tally || !story || !person) return payload([c.poseSetTitle(line(tally?.name ?? '', 60), '…'), '', c.poseSetKept(tally?.kept ?? 0)], []);
   const refused = POSE_SET_REFUSALS.flatMap(reason => tally.refused[reason] ? [{ reason: c.poseSetReasons[reason], count: tally.refused[reason]! }] : []);
   const ref = personRef(story, person);

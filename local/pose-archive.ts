@@ -266,10 +266,10 @@ function cells(text: string, separator: string): string[][] {
 // Reads an archive a reader sent while the bot waited for a pose set (local/bot.ts): a size Telegram declares over the
 // limit is refused before anything is downloaded, and the download is seeds' own (local/seed-file.ts), in memory.
 export function createPoseArchiveReader(token: string, api: TelegramApi, { get = https.get }: { get?: HttpsGet } = {}) {
-  return async (document: TelegramDocument): Promise<PoseArchive> => {
+  return async (document: TelegramDocument, signal?: AbortSignal): Promise<PoseArchive> => {
     if (typeof document.file_size === 'number' && document.file_size > ARCHIVE_BYTES) throw new ArchiveError('too_large');
     const bytes = await downloadFile(token, api, get, document.file_id, ARCHIVE_BYTES,
-      { tooLarge: () => new ArchiveError('too_large'), failed: () => new ArchiveError('incomplete') });
+      { tooLarge: () => new ArchiveError('too_large'), failed: () => new ArchiveError('incomplete') }, signal);
     return readPoseArchive(bytes);
   };
 }

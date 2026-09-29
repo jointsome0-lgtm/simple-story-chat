@@ -23,7 +23,7 @@ import type { GpuController } from './gpu.ts';
 import type { Illustrator, PictureRequest, PortraitRequest, SampleRequest, VariantRequest } from './picture.ts';
 import { DESCRIPTION_CHARS, LOOK_CHARS, ownPortraitPrompt, personAt, personTag } from './picture.ts';
 import { seesThrough } from './picture-pov.ts';
-import { countVersions, editableFrom, landEdit, personHere } from './picture-versions.ts';
+import { countVersions, editableFrom, landEdit, personHere, personKey } from './picture-versions.ts';
 import { portraitText } from './image-portraits.ts';
 import { MAY_BE_EMPTY, PROFILE_CHARS, applyProfile, changedFields, fieldsMask, maskFields, parseProfile, profileHash, profileOf } from './profile.ts';
 import type { ProfileField } from './profile.ts';
@@ -51,14 +51,15 @@ export type BotOptions = {
   illustrator?: Illustrator;
   readSeedFile?: (document: TelegramDocument) => Promise<string>;
   // A picture a reader in the reference experiment sent of a person (local/reference.ts), read before the library write
-  // as a seed file is. Without it, a wait for one refuses whatever comes.
-  readPicture?: (message: { photo?: unknown; document?: TelegramDocument }) => Promise<ReceivedPicture>;
+  // as a seed file is. Without it, a wait for one refuses whatever comes. `signal` cuts short the read of a file of a
+  // pose set (`uploadNext`), as it does an archive's.
+  readPicture?: (message: { photo?: unknown; document?: TelegramDocument }, signal?: AbortSignal) => Promise<ReceivedPicture>;
   // The captioner of pose sets on this computer (local/pose-set.ts), for readers the illustrator gives them. Without it a
   // picture of a set waits for its caption.
   captioner?: CaptionerConfig;
   // A ZIP archive of a pose set (local/pose-archive.ts), read before the library write as a picture is. Without it, an
   // archive is refused as one.
-  readArchive?: (document: TelegramDocument) => Promise<PoseArchive>;
+  readArchive?: (document: TelegramDocument, signal?: AbortSignal) => Promise<PoseArchive>;
   render: (state: Library, route: string, details: RenderDetails) => Screen;
   scenePrefix?: (stats: ContextStats | null, provenance: ModelInfo | undefined, lang?: unknown) => string;
   sceneKeyboard: (state: Library) => InlineKeyboard | undefined;
@@ -116,9 +117,9 @@ type Plan = {
   // A row for the log once the write is committed: what a picture a reader sent became, a profile they sent back, or
   // where a person's text the reader wrote landed (local/picture-versions.ts).
   logged?: { event: string; details: ErrorDetails };
-  // A photo or a file of a pose set put in the reader's queue, to be read apart from this update; one refused, for the
-  // message that counts them (local/pose-set.ts).
-  poseQueued?: boolean; poseCount?: PoseCount;
+  // The reader's queue of pose-set files to read apart from this update, which a photo or a file joined, or refused as
+  // past its length; the refusal, for the message that counts them (local/pose-set.ts).
+  poseQueue?: boolean; poseCount?: PoseCount;
 };
 // One reader's turn, for as long as it can still be cancelled. What it leaves behind — a picture being stopped on
 // the other card — outlives the entry and is awaited through `inFlight` instead.
@@ -145,13 +146,11 @@ function poseFileOf(message: NonNullable<Update['message']>): PoseUploadFile {
     : { document: fields(message.document, ['file_id', 'file_size', 'mime_type', 'file_name']) };
 }
 // How long a file of a pose set may take to be read, Telegram's answer with its path, its download (20 s at most,
-// local/seed-file.ts) and an archive's reading together (`within`).
+// local/seed-file.ts) and an archive's reading together: after it the read is cut short, its requests with it
+// (`uploadNext`).
 const UPLOAD_MS = 45_000;
-// `work`, or what `late` gives once `ms` pass first; the work itself goes on unwatched.
-function within<T>(work: Promise<T>, ms: number, late: () => T): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  return Promise.race([work, new Promise<T>(resolve => { timer = setTimeout(() => resolve(late()), ms); })]).finally(() => clearTimeout(timer));
-}
+// How many files of pose sets are read at once, across readers (`readTurn`).
+const READS_AT_ONCE = 2;
 
 export function createBot({ store, api, provider, gpu, illustrator, readSeedFile, readPicture, captioner: captionerConfig, readArchive, render: renderUi, scenePrefix = () => '', sceneKeyboard, allowedUsers, ownerId = '', maxOutputTokens,
   contextTokens = 65536, compactAtTokens = 54000, keepScenes = 4, memoryMode = 'plain', repairCoverage = false, model = 'unknown', providerName = 'claude-code', log = () => {} }: BotOptions) {
@@ -526,9 +525,11 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       if (!person) throw refuse(t, 'staleButton');
       const sheetPerson = state.stories[storyId].sheet![person.index];
       const dropped = sheetPerson.poseSet?.length ?? 0;
-      // Files of the set still in the reader's queue go with it, unread.
-      if (kind === 'pose-set-dropped' && state.poseUploads?.some(one => one.storyId === storyId && one.name === sheetPerson.name)) {
-        const rest = state.poseUploads.filter(one => one.storyId !== storyId || one.name !== sheetPerson.name);
+      // Files of the set still in the reader's queue go with it, unread: those of the person as a sheet written again
+      // spells them (`personKey`).
+      const theirs = (one: PendingPoseUpload) => one.storyId === storyId && personKey(one.name) === personKey(sheetPerson.name);
+      if (kind === 'pose-set-dropped' && state.poseUploads?.some(theirs)) {
+        const rest = state.poseUploads.filter(one => !theirs(one));
         if (rest.length) state.poseUploads = rest; else delete state.poseUploads;
       }
       // The question first; a set already gone shows the card.
@@ -748,9 +749,10 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
 
   // Where a photo or a file of a pose set goes in the library write: into the reader's queue (`poseUploads`), unread, if
   // the wait it answered still stands, with pose sets and within its half hour, and its person is still on the story's
-  // sheet. The update ends there, and the queue is read apart from the updates (`uploadNext`), so that the downloads of an
-  // album or an archive hold up nobody's requests, the owner's among them. A queue as long as a set can be counts the
-  // next file as past the limit, unread.
+  // sheet, by the person's key, which a sheet written again keeps (local/picture.ts `rewrittenSheet`). The update ends
+  // there, and the queue is read apart from the updates (`uploadNext`), so that the downloads of an album or an archive
+  // hold up nobody's requests, the owner's among them. A queue as long as a set can be counts the next file as past the
+  // limit, unread. Either way the queue's reading goes on, or starts again after a write that failed.
   function queuedPoseUpload(state: Library, update: Update, upload: PoseUpload, t: Messages, pictureInfo: RenderDetails): Plan {
     const { storyId, name, at } = upload.wait;
     const wait = state.ui?.input === 'pose-set' ? state.ui : undefined;
@@ -759,31 +761,32 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       state.ui = null;
       throw refuse(t, pictureInfo.poseSet ? 'poseSetExpired' : 'poseSetOff');
     }
-    if (!state.stories[storyId]?.sheet?.some(one => one?.name === name)) { state.ui = null; throw refuse(t, 'poseSetGone'); }
+    if (!state.stories[storyId]?.sheet?.some(one => one && personKey(one.name) === personKey(name))) { state.ui = null; throw refuse(t, 'poseSetGone'); }
     const queue = state.poseUploads ?? [];
-    if (queue.length >= POSE_SET_PICTURES) return { poseCount: { storyId, name, at, kept: 0, labeled: 0, refused: { full: 1 } },
+    if (queue.length >= POSE_SET_PICTURES) return { poseQueue: true, poseCount: { storyId, name, at, kept: 0, labeled: 0, refused: { full: 1 } },
       logged: { event: 'pose_set_refused', details: { poseSetRefusal: 'full' } } };
     state.poseUploads = [...queue, { update: update.update_id, storyId, name, at, file: upload.file }];
     wait.last = Date.now();
-    return { poseQueued: true };
+    return { poseQueue: true };
   }
 
   // Reads a photo or a file of a pose set as `readUpload` reads a picture of the reader's own. A refusal is kept by its
   // code alone, for the message that counts the pictures, never shown on its own: an album of forty would be forty
   // messages. A ZIP archive is read whole, every picture in it, and one refused whole says why in a message of its own.
-  async function readPoseFile(file: PoseUploadFile): Promise<PoseRead> {
+  // One cut short by `signal` is refused as `incomplete`.
+  async function readPoseFile(file: PoseUploadFile, signal: AbortSignal): Promise<PoseRead> {
     const document = file.document as TelegramDocument | undefined;
     if (document && isArchive(document)) {
       try {
         if (!readArchive) throw new Error('archive_reader_unavailable');
-        return { archive: { ...await readArchive(document), name: String(document.file_name ?? '') } };
+        return { archive: { ...await readArchive(document, signal), name: String(document.file_name ?? '') } };
       } catch (error) {
         return { archiveRefused: error instanceof ArchiveError ? error.code : 'incomplete' };
       }
     }
     try {
       if (!readPicture) throw new Error('picture_reader_unavailable');
-      return { picture: await readPicture(file as { photo?: unknown; document?: TelegramDocument }) };
+      return { picture: await readPicture(file as { photo?: unknown; document?: TelegramDocument }, signal) };
     } catch (error) {
       const key = error instanceof UserError && error.key !== undefined && Object.hasOwn(REFUSAL_CODES, error.key)
         ? error.key as keyof typeof REFUSAL_CODES : 'referenceIncomplete';
@@ -796,13 +799,16 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
   // as one sent alone within the set's and the reader's limits (`poseSetLimit`), its caption to come, or its refusal
   // counted. An archive's pictures are kept in this one write, with the labels its labels.csv gave them.
   type PoseKept = { count?: PoseCount; captions?: boolean; refusal?: ArchiveError; logged: NonNullable<Plan['logged']> };
+  // The person of the story's sheet a file of the queue is for, by the key a sheet written again keeps.
+  const personOf = (state: Library, job: PendingPoseUpload) =>
+    state.stories[job.storyId]?.sheet?.find(one => one && personKey(one.name) === personKey(job.name));
   function keptPoseFile(state: Library, userId: string, job: PendingPoseUpload, read: PoseRead): PoseKept | undefined {
     const queue = state.poseUploads ?? [];
     if (!queue.some(one => one.update === job.update)) return undefined;
     const rest = queue.filter(one => one.update !== job.update);
     if (rest.length) state.poseUploads = rest; else delete state.poseUploads;
     const { storyId, name, at } = job;
-    const person = state.stories[storyId]?.sheet?.find(one => one?.name === name);
+    const person = personOf(state, job);
     if (!person) return { logged: { event: 'pose_upload_dropped', details: {} } };
     if (read.archiveRefused) {
       const refusal = new ArchiveError(read.archiveRefused);
@@ -896,11 +902,37 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
   if (captioner) for (const userId of allowedUsers) if (illustrator?.poseSetFor(userId)) captioner.enqueue(userId);
 
   // Each reader's queue of pose-set files, read one file at a time in the order they came, apart from the updates that
-  // brought them, while the reader's worker runs. A file leaves the queue in the write that keeps its pictures, so that a
-  // stop or a restart halfway reads it again and keeps it once, and a restart reads what it left. A file gets UPLOAD_MS
-  // to be read, the question to Telegram for its path included, and after that it is refused as `incomplete`.
+  // brought them, while the reader's worker runs, and READS_AT_ONCE files at most across readers. A file leaves the queue
+  // in the write that keeps its pictures, so that a stop or a restart halfway reads it again and keeps it once, and a
+  // restart reads what it left. A file gets UPLOAD_MS to be read once its turn comes, the question to Telegram for its
+  // path included: after that its read is cut short, its requests with it, and it is refused as `incomplete`. A stop
+  // cuts short the read in flight, and the file stays queued.
   const uploading = new Map<string, Promise<void>>();
   let uploadsStopped = false;
+  // The reads under way, which a stop cuts short; how many turns to read are taken, and the workers waiting for one, in
+  // the order they asked.
+  const reads = new Set<AbortController>();
+  let turnsTaken = 0;
+  const turnsAwaited: (() => void)[] = [];
+  // A turn to read a file: at once while fewer than READS_AT_ONCE are taken, or when one ends (`endTurn`), which hands it
+  // on to the worker that has waited longest.
+  function readTurn(): Promise<void> {
+    if (turnsTaken < READS_AT_ONCE) { turnsTaken++; return Promise.resolve(); }
+    return new Promise(resolve => turnsAwaited.push(resolve));
+  }
+  function endTurn() {
+    const next = turnsAwaited.shift();
+    if (next) next(); else turnsTaken--;
+  }
+  // Reads `file` in a turn of its own, cut short once UPLOAD_MS pass or the bot stops.
+  async function readInTurn(file: PoseUploadFile): Promise<PoseRead> {
+    await readTurn();
+    const controller = new AbortController();
+    const deadline = setTimeout(() => controller.abort(), UPLOAD_MS);
+    reads.add(controller);
+    try { return uploadsStopped ? {} : await readPoseFile(file, controller.signal); }
+    finally { clearTimeout(deadline); reads.delete(controller); endTurn(); }
+  }
   function readPoseQueue(userId: string) {
     if (uploadsStopped || uploading.has(userId)) return;
     let failed = false;
@@ -919,13 +951,11 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     const before = store.read(userId);
     const job = before.poseUploads?.[0];
     if (!job) return false;
-    const person = before.stories[job.storyId]?.sheet?.find(one => one?.name === job.name);
+    const person = personOf(before, job);
     const document = job.file.document as TelegramDocument | undefined;
-    const archive = !!document && isArchive(document);
     // A picture that the set's limits refuse already is not downloaded to be refused.
-    const full = person && !archive ? poseSetLimit(before, person, 0) : undefined;
-    const read: PoseRead = !person ? {} : full ? { refused: full }
-      : await within(readPoseFile(job.file), UPLOAD_MS, () => archive ? { archiveRefused: 'incomplete' } : { refused: 'incomplete' });
+    const full = person && !(document && isArchive(document)) ? poseSetLimit(before, person, 0) : undefined;
+    const read: PoseRead = !person ? {} : full ? { refused: full } : await readInTurn(job.file);
     if (uploadsStopped) return false;
     const log = logFor(userId);
     const kept = store.mutate(userId, state => keptPoseFile(state, userId, job, read));
@@ -1201,7 +1231,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       if (!plan) return;
       if (plan.logged) log(plan.logged.event, undefined, plan.logged.details);
       if (plan.poseCount) counted(userId, chat, plan.poseCount, log);
-      if (plan.poseQueued) readPoseQueue(userId);
+      if (plan.poseQueue) readPoseQueue(userId);
       // A wait for a pose set that «✅ Готово», another button or a command ended ends its count as well, once the files
       // sent in it are read.
       for (const tally of closing(userId)) await endTally(tally, log);
@@ -1359,8 +1389,9 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       for (const stop of sampling.values()) stop.abort();
       for (const stop of varying.values()) stop.abort();
       for (const stop of retelling) stop.abort();
-      // The file being read is left in its queue for the next start.
+      // The file being read is left in its queue for the next start, its read cut short.
       uploadsStopped = true;
+      for (const controller of reads) controller.abort();
       for (const mine of tallies.values()) for (const tally of mine.values()) await tally.progress.close();
       await captioner?.stop();
       await this.idle();
