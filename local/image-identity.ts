@@ -20,7 +20,7 @@
 // Nothing here talks to a model, and what it prints is counts, sizes, times and verdicts.
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
@@ -33,6 +33,7 @@ import { PORTRAIT_ACTION, PORTRAIT_CLOTHES, PORTRAIT_STYLE, portraitCanvas, port
 import { loadTokenizers, qwenPromptTokens } from './tokenizer.ts';
 import { readManifest } from './tokenizer-extract.ts';
 import { startFakeComfy } from './fake-comfy.ts';
+import { placeFile } from './picture-store.ts';
 import { IDENTITY_BINDING, IDENTITY_CONTROL, IDENTITY_SEEDS, IDENTITY_SMOKE, IDENTITY_STORY, identityFrames, identitySheet } from '../examples/identity-set.ts';
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -355,7 +356,7 @@ export function buildIdentityBundles(directory: string, log: (event: object) => 
     mkdirSync(folder, { recursive: true, mode: 0o700 });
     const entries = pictures.map((source, at) => ({ picture: `pic-${String(at + 1).padStart(2, '0')}.png`, source,
       one: cases.find(one => one.id === source.caseId)! }));
-    for (const entry of entries) copyFileSync(join(root, entry.source.file), join(folder, entry.picture));
+    for (const entry of entries) placeFile(join(root, entry.source.file), join(folder, entry.picture));
     writeFileSync(join(folder, 'cases.json'), JSON.stringify(entries.map(({ picture, one }) => ({ picture, scene_text_ru: one.scene,
       character_sheet: one.sheet, description: one.description, frame_text: one.prompt })), null, 2), { mode: 0o600 });
     writeFileSync(join(folder, 'checks.json'), JSON.stringify(checksOf(entries), null, 2), { mode: 0o600 });

@@ -35,6 +35,7 @@ import { kitchenLines } from './image-pilot.ts';
 import { readJson } from './action-text.ts';
 import { Refusal, capture, madeUpName, markerForms, searchTree } from './action-boundary.ts';
 import { safeError } from './image-action.ts';
+import { withStore, writePicture } from './picture-store.ts';
 import { startFakeComfy } from './fake-comfy.ts';
 import { BY_KEY, CROP, INDEX_FILE, PLANNED, TEXTS_FILE, TEXTS_SHA256, TRITON_ARGV, attentionInfo, buildJob, cellOf, cellRight, countsOf, drawStand, estimateOf,
   frameKey, inputsOf, sizeText, slotChains, tokenReport, writePage } from './image-refs-test.ts';
@@ -431,9 +432,9 @@ export async function dryRunTester(dir: string, stand: string, framesFile: strin
     writeFileSync(join(other, INDEX_FILE), JSON.stringify({ ...thirdIndex, pins: { ...thirdIndex.pins, transformer: 'another-transformer.safetensors' } }), { mode: 0o600 });
     await refused('a --third drawn from other weights', () => draw({ third: other }));
     const tFile = join(third, thirdIndex.cells[FRONTS.T].file!), tBytes = readFileSync(tFile);
-    writeFileSync(tFile, readFileSync(join(third, thirdIndex.cells[FRONTS.B].file!)), { mode: 0o600 });
+    writePicture(tFile, readFileSync(join(third, thirdIndex.cells[FRONTS.B].file!)));
     await refused('a front that is not the file its run recorded', () => draw());
-    writeFileSync(tFile, tBytes, { mode: 0o600 });
+    writePicture(tFile, tBytes);
     fakeA.options.pytorch = '2.11.0+cu128';
     await refused('a server on cu128', () => draw());
     fakeA.options.pytorch = '2.11.0+cu130';
@@ -476,10 +477,10 @@ export async function dryRunTester(dir: string, stand: string, framesFile: strin
     // H's front drawn anew in its run, file and record, since the stand first took it.
     const firstFile = join(first, INDEX_FILE), firstBytes = readFileSync(firstFile), firstIndex = JSON.parse(firstBytes.toString('utf8')) as StandIndex;
     const hFile = join(first, firstIndex.cells[FRONTS.H].file!), hBytes = readFileSync(hFile), lBytes = readFileSync(join(first, firstIndex.cells[FRONTS.L].file!));
-    writeFileSync(hFile, lBytes, { mode: 0o600 });
+    writePicture(hFile, lBytes);
     writeFileSync(firstFile, JSON.stringify({ ...firstIndex, cells: { ...firstIndex.cells, [FRONTS.H]: { ...firstIndex.cells[FRONTS.H], sha256: sha256(lBytes) } } }), { mode: 0o600 });
     await refused('a front its run has drawn anew since the stand took it', () => draw());
-    writeFileSync(hFile, hBytes, { mode: 0o600 });
+    writePicture(hFile, hBytes);
     writeFileSync(firstFile, firstBytes, { mode: 0o600 });
     expect(fakeB.jobs.length === 0 && fakeB.uploads.length === 0, 'the changed front sends nothing');
 
@@ -592,13 +593,13 @@ export async function dryRunTester(dir: string, stand: string, framesFile: strin
     await refused('a question file other than the pinned', () => judge.writeBundles(out));
     writeFileSync(questionsCopy, questionsBytes, { mode: 0o600 });
     const frameFile = join(out, PLANNED_5[0].file), frameBytes = readFileSync(frameFile);
-    writeFileSync(frameFile, readFileSync(join(out, PLANNED_5[1].file)), { mode: 0o600 });
+    writePicture(frameFile, readFileSync(join(out, PLANNED_5[1].file)));
     await refused('a picture changed since its cell recorded it', () => judge.writeBundles(out));
-    writeFileSync(frameFile, frameBytes, { mode: 0o600 });
-    writeFileSync(hFile, lBytes, { mode: 0o600 });
+    writePicture(frameFile, frameBytes);
+    writePicture(hFile, lBytes);
     writeFileSync(firstFile, JSON.stringify({ ...firstIndex, cells: { ...firstIndex.cells, [FRONTS.H]: { ...firstIndex.cells[FRONTS.H], sha256: sha256(lBytes) } } }), { mode: 0o600 });
     await refused('a front its run has drawn anew since the cells took it', () => judge.writeBundles(out));
-    writeFileSync(hFile, hBytes, { mode: 0o600 });
+    writePicture(hFile, hBytes);
     writeFileSync(firstFile, firstBytes, { mode: 0o600 });
     const kept = judge.writeBundles(out);
     say(`   built again: ${kept.kept} kept, ${kept.built} built`);
@@ -642,8 +643,9 @@ async function main(args: string[]) {
     if (!values.frames || !values.first || !values.third) {
       throw new Refusal('Use: dry-run --out <dir> --frames <frames.json> --first <the first stand\'s directory> --third <the third\'s> [--tokenizers <dir>] [--dir <dir>]');
     }
-    const result = await dryRunTester(values.dir ?? mkdtempSync(join(tmpdir(), 'simple-chat-refs-tester-dry-')), out, resolve(values.frames), resolve(values.first),
-      resolve(values.third), resolve(values.tokenizers ?? join(ROOT, 'tokenizers')));
+    const dir = resolve(values.dir ?? mkdtempSync(join(tmpdir(), 'simple-chat-refs-tester-dry-')));
+    const result = await withStore(join(dir, 'pictures'), () => dryRunTester(dir, out, resolve(values.frames!), resolve(values.first!), resolve(values.third!),
+      resolve(values.tokenizers ?? join(ROOT, 'tokenizers'))));
     if (!result.pass) process.exitCode = 1;
   } else if (command === 'page') {
     writePage(out, inputsOf(join(out, TEXTS_FILE), TEXTS_SHA256_5, PLANNED_5), readJson<StandIndex>(join(out, INDEX_FILE)), STAND_5);

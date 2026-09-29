@@ -27,7 +27,7 @@
 import { parseArgs } from 'node:util';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { appendFileSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -50,6 +50,7 @@ import { createBackgroundClient } from './background.ts';
 import { drawOne, stripPngMetadata } from './image-batch.ts';
 import type { Graph } from './image-batch.ts';
 import { codexArgs, spawnExec } from './action-judge.ts';
+import { placeFile } from './picture-store.ts';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const CHECKPOINT = 'qwen_image_2.1_int8_convrot.safetensors';
@@ -578,11 +579,6 @@ const bundleNames = SEEDS.map(seed => `s${seed}`);
 function taskOf(entries: [string, { id: string }][]) {
   return `${INTRO(entries.length)}\n\nWhat each picture is meant to show:\n${entries.map(([name, { id }]) => `- ${name}.png: ${sceneOf(id).scene.intent}`).join('\n')}\n\n${QUESTIONS}`;
 }
-// A second name for a picture where the file system allows it, else a copy: a bundle costs no disk.
-function place(from: string, to: string) {
-  rmSync(to, { force: true });
-  try { linkSync(from, to); } catch { copyFileSync(from, to); }
-}
 
 // One bundle per seed, its twenty pictures in a fixed shuffled order; the key stays outside the bundles.
 function bundles(out: string) {
@@ -613,12 +609,13 @@ async function judge(out: string, partial: boolean) {
       say({ event: 'bundle_waiting', bundle: name, pictures: present.length, open, of: entries.length });
       return;
     }
-    for (const [picture, { id, seed }] of present) place(pictureFile(out, keyOf(id, seed)), join(dir, `${picture}.png`));
+    // A link to the picture store's file (local/picture-store.ts): a bundle costs no disk.
+    for (const [picture, { id, seed }] of present) placeFile(pictureFile(out, keyOf(id, seed)), join(dir, `${picture}.png`));
     const task = taskOf(present);
     writeFileSync(join(dir, 'task.md'), task, { mode: 0o600 });
     // The session runs in a copy of the bundle away from the stand, so that no key, prompt or answer lies near it.
     const copy = mkdtempSync(join(tmpdir(), 'pov-judge-'));
-    for (const [picture] of present) place(join(dir, `${picture}.png`), join(copy, `${picture}.png`));
+    for (const [picture] of present) placeFile(join(dir, `${picture}.png`), join(copy, `${picture}.png`));
     writeFileSync(join(copy, 'task.md'), task, { mode: 0o600 });
     const report = join(out, 'judge', `${name}.report.json`);
     const started = Date.now();

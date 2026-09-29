@@ -13,7 +13,7 @@
 // inside `sealed/`; what this file prints and writes at the run's level is ids, codes, counts and times.
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { closeSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { ACTION_SEEDS, ACTION_STORIES, sharpTarget, repeatedScenes } from '../examples/action-set.ts';
@@ -29,6 +29,7 @@ import type { Turn } from './action-prompts.ts';
 import { FRAME_CANVAS, SCALED, VIEW_CANVAS, frameKey } from './action-draw.ts';
 import type { DrawIndex } from './action-draw.ts';
 import { PASSIVE_ITEMS, leanArgs, leanEnv } from './codex.ts';
+import { copyDir, placeFile } from './picture-store.ts';
 
 const sha256 = (value: string | Uint8Array) => createHash('sha256').update(value).digest('hex');
 const writeJson = (file: string, value: unknown) => {
@@ -304,7 +305,8 @@ export function sceneOf(root: string, story: string, nodeId: string): string {
   try { return Object.values(store.read(USER).stories)[0]?.nodes[nodeId]?.text ?? ''; } finally { store.close(); }
 }
 
-// A bundle: its task, its inputs, its schema and its files, written once; the key beside the story's other keys.
+// A bundle: its task, its inputs, its schema and its files, written once, the files as links to the picture store's;
+// the key beside the story's other keys.
 function writeBundle(root: string, session: Session, input: object, schema: Schema, files: { name: string; from: string }[], key: Partial<BundleKey>) {
   const dir = bundleDir(root, session);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -313,7 +315,7 @@ function writeBundle(root: string, session: Session, input: object, schema: Sche
   writeFileSync(join(dir, 'TASK.md'), task + '\n', { mode: 0o600 });
   writeFileSync(join(dir, 'input.json'), inputText, { mode: 0o600 });
   writeFileSync(join(dir, 'schema.json'), JSON.stringify(schema, null, 2), { mode: 0o600 });
-  for (const file of files) copyFileSync(file.from, join(dir, file.name));
+  for (const file of files) placeFile(file.from, join(dir, file.name));
   writeJson(keyFile(root, session), { story: session.story, kind: session.kind, ...(session.seed === undefined ? {} : { seed: session.seed }),
     task: sha256(task), schema: sha256(JSON.stringify(schema)), input: sha256(inputText), ...key });
 }
@@ -526,20 +528,21 @@ export function validated(root: string, session: Session, read: Read): Read {
   return fits ? read : { code: 'schema' };
 }
 
-// One attempt of a session, as every judging here runs it: a fresh copy of its bundle at `copy`; one lean `codex exec`
-// request in an empty directory beside it, whose prompt is the task and after it each of the copy's `files` whole under
-// its name, with the pictures `images` names in the copy attached and the answers held to the copy's schema.json; and
-// the report's answers read by `validate`, or `timeout` at the deadline. An attempt whose events hold an item that acts,
-// anything but a message, reasoning or the CLI's warning, is `unexpected_tools`, whatever its report says. The refs
-// stands' judging (local/image-refs-judge.ts) and the prompt arms probe's (local/image-prompt-arms-judge.ts) run their
-// sessions through it too.
+// One attempt of a session, as every judging here runs it: a fresh copy of its bundle at `copy`, whose pictures are
+// links to the picture store's files (local/picture-store.ts); one lean `codex exec` request in an empty directory
+// beside it, whose prompt is the task and after it each of the copy's `files` whole under its name, with the pictures
+// `images` names in the copy attached and the answers held to the copy's schema.json; and the report's answers read by
+// `validate`, or `timeout` at the deadline. An attempt whose events hold an item that acts, anything but a message,
+// reasoning or the CLI's warning, is `unexpected_tools`, whatever its report says. The refs stands' judging
+// (local/image-refs-judge.ts) and the prompt arms probe's (local/image-prompt-arms-judge.ts) run their sessions through
+// it too.
 export type Attempt = { bundle: string; copy: string; report: string; events: string; stderr: string; model: string; prompt: string; files: string[];
   images: (copy: string) => string[]; validate: (read: Read) => Read; env?: NodeJS.ProcessEnv; exec?: Exec; codex?: string };
 export async function runAttempt(one: Attempt): Promise<{ read: Read; exitCode: number; ms: number }> {
   rmSync(one.copy, { recursive: true, force: true });
   rmSync(one.report, { force: true });
   mkdirSync(dirname(one.copy), { recursive: true, mode: 0o700 });
-  cpSync(one.bundle, one.copy, { recursive: true });
+  copyDir(one.bundle, one.copy);
   const prompt = [one.prompt, ...one.files.map(name => `${name}:\n\`\`\`${name.split('.').at(-1)}\n${readFileSync(join(one.copy, name), 'utf8').trimEnd()}\n\`\`\``)]
     .join('\n\n');
   // The instructions go through a file beside the empty working directory, and both go once the attempt ends.

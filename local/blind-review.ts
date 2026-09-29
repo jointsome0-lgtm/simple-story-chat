@@ -6,9 +6,10 @@
 // counts. Only synthetic scenes are drawn here.
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { basename, dirname, join, resolve } from 'node:path';
+import { placeFile } from './picture-store.ts';
 
 // What this tool reads from a run directory: `index.json` and `prompts.json` of local/image-batch.ts.
 type Drawn = { caseId: string; checkpoint: string; seed: number; file: string; arm?: string; width?: number; height?: number };
@@ -232,7 +233,7 @@ function build(values: { run: string; out: string; rater: string; seed: string; 
   }
   const out = resolve(values.out);
   mkdirSync(join(out, 'img'), { recursive: true, mode: 0o700 });
-  for (const file of dealt.files) copyFileSync(file.from, join(out, 'img', file.name));
+  for (const file of dealt.files) placeFile(file.from, join(out, 'img', file.name));
   if (values.bundle) {
     writeFileSync(join(out, 'questions.json'), JSON.stringify(dealt.questions, null, 2), { mode: 0o600 });
     writeFileSync(join(out, 'TASK.md'), task(dealt.questions.length), { mode: 0o600 });

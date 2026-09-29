@@ -30,6 +30,7 @@ import { pngSize, stripPngMetadata } from './image-batch.ts';
 import { FRAME_CANVAS } from './action-draw.ts';
 import { Refusal, capture, searchTree } from './action-boundary.ts';
 import { safeError } from './image-action.ts';
+import { placeBytes, placeFile, withStore, writePicture } from './picture-store.ts';
 import { fitsSchema, readJson, storyDir } from './action-text.ts';
 import type { Schema, StoryText } from './action-text.ts';
 import { ENDING, JUDGE, MIXUPS, SHOWN, each, judgePins, projectionOf, runAttempt, sceneOf, sheetLines, shown, strict } from './action-judge.ts';
@@ -155,9 +156,12 @@ const shuffled = <T>(list: T[]) => {
 };
 // One bundle, written once: the task, the inputs, the schema and the pictures, under names drawn at random and in an
 // order drawn at random, neither of which says anything of an arm or a hash; the key, outside it, keeps both with the
-// arms. A repeat's names are drawn apart from its first session's (`taken`).
+// arms. A repeat's names are drawn apart from its first session's (`taken`). The pictures are links to the picture
+// store's files (local/picture-store.ts): a stand's own file where it is named (`file`), and else its checked bytes, as
+// round two's are, whose directory is never written.
+type Drawn = { arms: string[]; sha256: string; bytes: Buffer; file?: string };
 function writeBundle(dir: string, keyFile: string, name: string, scene: string, seed: number, base: Omit<PicturesInput, 'pictures'>,
-  drawn: { arms: string[]; sha256: string; bytes: Buffer }[], taken: Set<string> = new Set()) {
+  drawn: Drawn[], taken: Set<string> = new Set()) {
   const names = new Set(taken);
   const opaque = () => {
     let one: string;
@@ -172,7 +176,9 @@ function writeBundle(dir: string, keyFile: string, name: string, scene: string, 
   writeFileSync(join(dir, 'TASK.md'), `${TASK}\n`, { mode: 0o600 });
   writeFileSync(join(dir, 'input.json'), inputText, { mode: 0o600 });
   writeFileSync(join(dir, 'schema.json'), schemaText, { mode: 0o600 });
-  for (const one of pictures) writeFileSync(join(dir, one.name), one.bytes, { mode: 0o600 });
+  for (const one of pictures) {
+    if (one.file) placeFile(one.file, join(dir, one.name), one.sha256); else placeBytes(one.bytes, join(dir, one.name));
+  }
   const key: Key = { name, scene, seed, task: sha256(TASK), schema: sha256(schemaText), input: sha256(inputText),
     pictures: pictures.map(one => ({ name: one.name, arms: one.arms, sha256: one.sha256 })) };
   writeJson(keyFile, key);
@@ -200,19 +206,22 @@ export function writeBundles(run: string, round2: string, log: (event: object) =
     if (session.kind === 'repeat') {
       const first = `pictures-${session.scene}-s${session.seed}`, firstKey = readJson<Key>(join(judge, 'keys', `${first}.json`));
       if (!firstKey || !existsSync(join(judge, 'bundles', first))) { counts.skipped.no_first = (counts.skipped.no_first ?? 0) + 1; continue; }
-      const drawn = firstKey.pictures.map(one => ({ arms: one.arms, sha256: one.sha256, bytes: checked(join(judge, 'bundles', first, one.name), one.sha256, `${first}'s ${one.name}`) }));
+      const drawn = firstKey.pictures.map(one => {
+        const file = join(judge, 'bundles', first, one.name);
+        return { arms: one.arms, sha256: one.sha256, bytes: checked(file, one.sha256, `${first}'s ${one.name}`), file };
+      });
       writeBundle(dir, keyFile, session.name, session.scene, session.seed, inputOf(session.scene), drawn, new Set(firstKey.pictures.map(one => one.name)));
       counts.built++;
       log({ event: 'bundle_written', session: session.name, from: first });
       continue;
     }
-    const drawn: { arms: string[]; sha256: string; bytes: Buffer }[] = [];
+    const drawn: Drawn[] = [];
     for (const arm of ARMS) {
       const stand = STAND_OF[arm], cell = indexOf(stand)?.cells[armKey(arm, session.scene, session.seed)];
       if (cell?.status !== 'drawn' || !cell.file || !cell.sha256) continue;
-      const bytes = checked(join(resolve(run), stand, cell.file), cell.sha256, cell.key);
+      const file = join(resolve(run), stand, cell.file), bytes = checked(file, cell.sha256, cell.key);
       const same = drawn.find(one => one.sha256 === cell.sha256);
-      if (same) same.arms.push(arm); else drawn.push({ arms: [arm], sha256: cell.sha256, bytes });
+      if (same) same.arms.push(arm); else drawn.push({ arms: [arm], sha256: cell.sha256, bytes, file });
     }
     if (!drawn.length) { counts.skipped.no_picture = (counts.skipped.no_picture ?? 0) + 1; continue; }
     writeBundle(dir, keyFile, session.name, session.scene, session.seed, inputOf(session.scene), drawn);
@@ -753,7 +762,7 @@ export async function dryJudge(dir: string, round2: string) {
             // As the harness keeps a picture: its metadata stripped (image-batch.ts `stripPngMetadata`).
             const bytes = stripPngMetadata(greyPng(FRAME_CANVAS.width, FRAME_CANVAS.height, ++number));
             mkdirSync(join(run, stand, 'frames'), { recursive: true, mode: 0o700 });
-            writeFileSync(join(run, stand, file), bytes, { mode: 0o600 });
+            writePicture(join(run, stand, file), bytes);
             cells[key] = { ...own, status: 'drawn', file, sha256: sha256(bytes) };
           }
         }
@@ -771,7 +780,7 @@ export async function dryJudge(dir: string, round2: string) {
     const index = readJson<StandIndex>(join(run, 'core', INDEX_FILE))!, cell = index.cells[armKey('G', 'guard', 11)];
     for (const [what, bytes, pinned] of [['a picture other than its cell recorded', stripPngMetadata(greyPng(FRAME_CANVAS.width, FRAME_CANVAS.height, 9999)), cell.sha256],
       ['a picture that kept its metadata', greyPng(FRAME_CANVAS.width, FRAME_CANVAS.height, 9999), undefined]] as [string, Uint8Array, string | undefined][]) {
-      writeFileSync(wrong, bytes, { mode: 0o600 });
+      writePicture(wrong, bytes);
       writeJson(join(run, 'core', INDEX_FILE), { ...index, cells: { ...index.cells, [cell.key]: { ...cell, sha256: pinned ?? sha256(bytes) } } });
       try { writeBundles(run, round2); expect(false, `${what} refused`); } catch (error) {
         const bundled = existsSync(join(judgeDirOf(run), 'bundles', 'pictures-guard-s11'));
@@ -780,7 +789,7 @@ export async function dryJudge(dir: string, round2: string) {
       }
       rmSync(judgeDirOf(run), { recursive: true, force: true });
     }
-    writeFileSync(wrong, kept, { mode: 0o600 });
+    writePicture(wrong, kept);
     writeJson(join(run, 'core', INDEX_FILE), index);
 
     const counts = writeBundles(run, round2), judge = judgeDirOf(run);
@@ -914,7 +923,8 @@ async function main(args: string[]) {
   } });
   const command = positionals[0] ?? '', round2 = resolve(values.round2!);
   if (command === 'dry-run') {
-    const result = await dryJudge(values.dir ?? mkdtempSync(join(tmpdir(), 'simple-chat-prompt-arms-judge-dry-')), round2);
+    const dir = resolve(values.dir ?? mkdtempSync(join(tmpdir(), 'simple-chat-prompt-arms-judge-dry-')));
+    const result = await withStore(join(dir, 'pictures'), () => dryJudge(dir, round2));
     if (!result.pass) process.exitCode = 1;
     return;
   }

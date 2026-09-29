@@ -14,7 +14,7 @@
 // the hash of their bytes, so no name reaches the card, and they are stripped on the way like every other picture.
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { mkdirSync, readFileSync, writeFileSync, existsSync, copyFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -23,6 +23,7 @@ import { safeErrorDetails } from './model-error.ts';
 import { assemblePrompt, matchSheet } from './illustrate.ts';
 import type { Case } from './illustrate-probe.ts';
 import type { PictureEncoder } from './tokenizer.ts';
+import { placeFile } from './picture-store.ts';
 
 // A checkpoint's place in the comparison. The bot logs this role, never the file name (local/model-error.ts).
 export type Role = 'primary' | 'alternate';
@@ -1719,7 +1720,7 @@ export function buildBundles(directory: string, count: number, log: (event: obje
     mkdirSync(folder, { recursive: true, mode: 0o700 });
     const material = bundle.pictures.map(entry => {
       const one = cases.find(candidate => candidate.id === entry.source.caseId)!;
-      copyFileSync(join(root, entry.source.file), join(folder, entry.picture));
+      placeFile(join(root, entry.source.file), join(folder, entry.picture));
       return { picture: entry.picture, scene_text_ru: one.scene, character_sheet: one.sheet, description: one.description, prompt_sent: one.prompt };
     });
     writeFileSync(join(folder, 'cases.json'), JSON.stringify(material, null, 2), { mode: 0o600 });

@@ -23,7 +23,7 @@
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { MARKER_STORY } from '../examples/action-set.ts';
@@ -48,6 +48,7 @@ import type { Exec, JudgingRecord, SessionKind } from './action-judge.ts';
 import { writeGalleries, writeReport } from './action-report.ts';
 import { fakeGateway, fakeJudge, madeUpAnswers } from './action-fakes.ts';
 import type { Faults, JudgeFault } from './action-fakes.ts';
+import { PICTURE, STORE_CODES } from './picture-store.ts';
 
 const ROOT = resolve(import.meta.dirname, '..');
 export const RUN_DIR = join(ROOT, 'illustrations', 'action');
@@ -61,7 +62,7 @@ const tally = (names: (string | undefined)[]) => names.reduce<Record<string, num
 // pass safeErrorDetails, and its class when that is one of `CLASSES`. A refusal of the harness (`Refusal`) also says
 // what to do, in the harness's own words. No other message is printed, a plain Error's included: whose words those
 // are, nothing about the error says, and a parser's quotes what it read.
-const CODES = new Set<string>([...TEXT_CODES, ...DRAW_CODES, 'variant_anchor',
+const CODES = new Set<string>([...TEXT_CODES, ...DRAW_CODES, ...STORE_CODES, 'variant_anchor',
   // A system error's and the command line's, which name no file and no value.
   'ENOENT', 'EACCES', 'EPERM', 'EEXIST', 'EISDIR', 'ENOTDIR', 'ENOTEMPTY', 'ENOSPC', 'EMFILE',
   'ERR_PARSE_ARGS_UNKNOWN_OPTION', 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE', 'ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL']);
@@ -263,8 +264,9 @@ export async function dryRun(out: string, options: { tokenizers?: string } = {})
   const dry = resolve(out), root = join(dry, 'run'), temp = join(dry, 'tmp');
   mkdirSync(root, { recursive: true, mode: 0o700 });
   mkdirSync(temp, { recursive: true, mode: 0o700 });
-  const previous = process.env.TMPDIR;
+  const previous = process.env.TMPDIR, store = process.env.SIMPLE_CHAT_PICTURES;
   process.env.TMPDIR = temp;
+  process.env.SIMPLE_CHAT_PICTURES = join(dry, 'pictures');
   const output = capture();
   const say = (line: string) => console.log(line);
   const missed: string[] = [];
@@ -408,6 +410,18 @@ export async function dryRun(out: string, options: { tokenizers?: string } = {})
     say(`   sessions by model: ${JSON.stringify(tally(judge.runs.map(run => run.model)))}, faults ${JSON.stringify(tally(judge.runs.map(run => run.fault)))}; `
       + `sharp sessions that went to the fallback: ${fell.filter(run => run.story.startsWith('sharp-')).length}, clean ones: ${fell.filter(run => !run.story.startsWith('sharp-')).length}`);
     expect(!fell.some(run => !run.story.startsWith('sharp-')), 'a clean session never goes to the fallback');
+    // The picture store (local/picture-store.ts): every picture of a bundle or a session a link to a store's file, and a
+    // sharp one to sealed/'s own store alone, never to the store outside it.
+    const pictures = (dir: string) => existsSync(dir) ? readdirSync(dir, { recursive: true, withFileTypes: true })
+      .filter(entry => entry.isFile() && PICTURE.test(entry.name)).map(entry => lstatSync(join(entry.parentPath, entry.name))) : [];
+    const shared = new Set(pictures(join(dry, 'pictures')).map(stat => stat.ino)), sharp = pictures(join(root, 'sealed'));
+    const handed = readdirSync(root, { recursive: true, withFileTypes: true }).filter(entry => entry.isDirectory() && ['bundles', 'sessions'].includes(entry.name))
+      .flatMap(entry => pictures(join(entry.parentPath, entry.name)));
+    const alone = handed.filter(stat => stat.nlink < 2).length, out = sharp.filter(stat => shared.has(stat.ino)).length;
+    const sealedStore = pictures(join(root, 'sealed', 'pictures')).length;
+    say(`   the picture store: ${handed.length} pictures in bundles and sessions, ${alone} not linked; ${sharp.length} in sealed/, ${out} linked from the store `
+      + `outside it, ${sealedStore} in sealed/'s own`);
+    expect(handed.length > 0 && !alone && !out && sealedStore > 0, 'every picture of a bundle or a session linked, a sharp one from sealed/ alone');
 
     const report = reportCommand(root);
     say(`9 report: ${JSON.stringify(report)}`);
@@ -439,6 +453,7 @@ export async function dryRun(out: string, options: { tokenizers?: string } = {})
     await fake?.close();
     output.stop();
     if (previous === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = previous;
+    if (store === undefined) delete process.env.SIMPLE_CHAT_PICTURES; else process.env.SIMPLE_CHAT_PICTURES = store;
   }
 }
 

@@ -56,6 +56,7 @@ import { decodePng } from './image-pilot.ts';
 import { encodePng } from './image-levers.ts';
 import { Refusal } from './action-boundary.ts';
 import { safeError } from './image-action.ts';
+import { placeBytes, placeFile, withStore } from './picture-store.ts';
 import { CROP as GRAPH_CROP, SEEDS, SHEET_PEOPLE, frameKey, frontKey, sheetKey, viewKey } from './image-refs-test.ts';
 import type { Scene } from './image-refs-test.ts';
 import { FRONTS, SEEDS_3, SEEDS_4, TEXTS_SHA256_3, TEXTS_SHA256_4, viewId, viewKeyOf } from './image-refs-backlog.ts';
@@ -388,9 +389,10 @@ const SHOWS = { front: 'one woman, alone, full length from the front, on a plain
   sheet: 'one woman on a character sheet: full-length views from the front, the side and the back, and two head-and-shoulders portraits' };
 const showsOf = (key: string) => (key.startsWith('sheet:') ? SHOWS.sheet : key.startsWith('view:') ? SHOWS.view : key.startsWith('crop:') ? SHOWS.crop : SHOWS.front);
 
-// A drawn picture as a bundle takes it: the very file cells.json records, at its size, without any text chunk; FC's
-// crop is cut from its front here as ImageCrop cut it.
-function drawn(run: string, cells: Record<string, StandCell>, key: string): { bytes: Uint8Array; sha256: string } | undefined {
+// A drawn picture as a bundle takes it: the very file cells.json records, at its size, without any text chunk, and the
+// file itself (`from`) where it holds none; FC's crop is cut from its front here as ImageCrop cut it.
+type Taken = { bytes: Uint8Array; sha256: string; from?: string };
+function drawn(run: string, cells: Record<string, StandCell>, key: string): Taken | undefined {
   if (key === CROP_KEY) {
     const front = drawn(run, cells, CROP.from);
     const image = front && decodePng(front.bytes);
@@ -404,12 +406,20 @@ function drawn(run: string, cells: Record<string, StandCell>, key: string): { by
   if (!existsSync(path)) return undefined;
   const bytes = readFileSync(path), size = pngSize(bytes);
   if (sha256(bytes) !== cell.sha256 || size.width !== cell.width || size.height !== cell.height) throw new Refusal(`${key} is not the file cells.json recorded; no bundle is built from it`);
-  return { bytes: stripPngMetadata(bytes), sha256: cell.sha256 };
+  return takenOf(path, bytes, cell.sha256);
 }
+const takenOf = (path: string, bytes: Uint8Array, sha: string): Taken => {
+  const stripped = stripPngMetadata(bytes);
+  return { bytes: stripped, sha256: sha, ...(Buffer.compare(stripped, bytes) ? {} : { from: path }) };
+};
+// A bundle's picture through the picture store (local/picture-store.ts): the stand's own file where the bundle shows it
+// as it lies, and else the bytes shown, a crop's or a face's.
+const placeTaken = (file: Taken, dst: string) => file.from ? placeFile(file.from, dst, file.sha256) : placeBytes(file.bytes, dst);
 
-// Every session's bundle, written once: its task, input, schema, form and pictures in judge/bundles/<name>/, and its
-// key in judge/keys/. A cell the stand did not draw leaves its picture out and is listed as missing; a session left
-// with no picture, or a turned picture without its reference, is not built.
+// Every session's bundle, written once: its task, input, schema, form and pictures in judge/bundles/<name>/, the
+// pictures as links to the picture store's files (local/picture-store.ts), and its key in judge/keys/. A cell the stand
+// did not draw leaves its picture out and is listed as missing; a session left with no picture, or a turned picture
+// without its reference, is not built.
 export function writeBundles(run: string, log: (event: object) => void = () => undefined, from?: string) {
   const which = standOf(run);
   if (which === 3 || which === 4) return writeBundles34(run, which, log);
@@ -495,7 +505,7 @@ export function writeBundles(run: string, log: (event: object) => void = () => u
     writeFileSync(join(bundle, 'input.json'), inputText + '\n', { mode: 0o600 });
     writeJson(join(bundle, 'schema.json'), schema);
     writeJson(join(bundle, 'form.json'), formOf(schema));
-    for (const file of [...pictures, ...references]) writeFileSync(join(bundle, file.name), file.bytes, { mode: 0o600 });
+    for (const file of [...pictures, ...references]) placeTaken(file, join(bundle, file.name));
     const key: SessionKey = { name: session.name, kind: session.kind, group: one.group, rank: one.rank, ...(one.scene ? { scene: one.scene } : {}),
       ...(one.seed === undefined ? {} : { seed: one.seed }), task: sha256(task), schema: sha256(JSON.stringify(schema)), input: sha256(inputText),
       pictures: pictures.map(file => ({ name: file.name, key: file.key, sha256: file.sha256 })),
@@ -1653,9 +1663,9 @@ const pinOf = (stand: StandId) => (stand === 5 ? questionsPin5() : stand === 3 |
 
 // A picture of any run the stands drew from, by its run as the question file names it (under the runs' root) and its
 // key: the very file that run's cells.json records, checked against the sha256 and size recorded there, without any
-// text chunk.
+// text chunk (`drawn`'s Taken).
 function runPictures(root: string) {
-  const runs = new Map<string, Record<string, StandCell>>(), seen = new Map<string, { bytes: Uint8Array; sha256: string }>();
+  const runs = new Map<string, Record<string, StandCell>>(), seen = new Map<string, Taken>();
   return (run: string, key: string) => {
     const id = `${run}/${key}`;
     if (seen.has(id)) return seen.get(id);
@@ -1667,7 +1677,7 @@ function runPictures(root: string) {
     if (!existsSync(path)) return undefined;
     const bytes = readFileSync(path), size = pngSize(bytes);
     if (sha256(bytes) !== cell.sha256 || size.width !== cell.width || size.height !== cell.height) throw new Refusal(`${key} in ${run} is not the file its cells.json recorded; no bundle is built from it`);
-    const file = { bytes: stripPngMetadata(bytes), sha256: cell.sha256 };
+    const file = takenOf(path, bytes, cell.sha256);
     seen.set(id, file);
     return file;
   };
@@ -1775,7 +1785,7 @@ function writeBundles34(run: string, stand: Stand34, log: (event: object) => voi
     writeFileSync(join(bundle, 'input.json'), inputText + '\n', { mode: 0o600 });
     writeJson(join(bundle, 'schema.json'), schema);
     writeJson(join(bundle, 'form.json'), form);
-    for (const file of shown) writeFileSync(join(bundle, file.name), file.bytes, { mode: 0o600 });
+    for (const file of shown) placeTaken(file, join(bundle, file.name));
     const key: SessionKey = { name: session.name, kind: session.kind, group: one.group, rank: one.rank, ...(one.scene ? { scene: one.scene } : {}),
       ...(one.seed === undefined ? {} : { seed: one.seed }), task: sha256(task), schema: sha256(JSON.stringify(schema)), input: sha256(inputText),
       pictures: pictures.map(file => ({ name: file.name, key: file.key, sha256: file.sha256 })),
@@ -2560,7 +2570,7 @@ function writeBundles5(run: string, log: (event: object) => void) {
     writeFileSync(join(bundle, 'input.json'), inputText + '\n', { mode: 0o600 });
     writeJson(join(bundle, 'schema.json'), schema);
     writeJson(join(bundle, 'form.json'), form);
-    for (const file of shown) writeFileSync(join(bundle, file.name), file.bytes, { mode: 0o600 });
+    for (const file of shown) placeTaken(file, join(bundle, file.name));
     const key: SessionKey = { name: session.name, kind: session.kind, group: `${session.story}-s${session.seed}`, rank: session.rank, seed: session.seed,
       task: sha256(task), schema: sha256(JSON.stringify(schema)), input: sha256(inputText), pictures: pictures.map(file => ({ name: file.name, key: file.key, sha256: file.sha256 })),
       references: fronts.map(file => ({ name: file.name, key: file.key, sha256: file.sha256, compare: true })), missing };
@@ -2900,7 +2910,8 @@ async function main(args: string[]) {
     const minutes = Number(values['per-session']);
     if (!Number.isFinite(minutes) || minutes <= 0) throw new Refusal('Use: dry-run --out <dir> | --jobs <file> [--per-session 6]');
     const scratch = mkdtempSync(join(tmpdir(), 'simple-chat-refs-judge-dry-'));
-    print({ event: 'dry_run', dir: scratch, ...await dryJudge(values.jobs ? readJobs(values.jobs) : defaultJobs(out), scratch, minutes, 3, print) });
+    print({ event: 'dry_run', dir: scratch, ...await withStore(join(scratch, 'pictures'),
+      () => dryJudge(values.jobs ? readJobs(values.jobs) : defaultJobs(out), scratch, minutes, 3, print)) });
   } else if (command === 'agreement') {
     if (!values.second) throw new Refusal('Use: agreement --out <dir> --second <the compared judge\'s record directory>');
     const second = resolve(values.second), first = readRecord(judgeDirOf(out)), other = readRecord(second), stand = standOf(out);

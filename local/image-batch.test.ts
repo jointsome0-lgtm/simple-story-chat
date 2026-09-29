@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import type { IncomingMessage } from 'node:http';
@@ -13,6 +13,10 @@ import { tmpdir } from 'node:os';
 import { draw, buildBundles, bundlesOf, applyToWorkflow, defaultWorkflow, drawOne, encoderResolution, latentSizeOf, parseSeeds, phasesOf, pngSize, portraitsFor, referenceGeometry, referenceSlots, samplerSettingsOf, settled, stripPngMetadata, textEncoderOf, REVIEW } from './image-batch.ts';
 import type { BatchIndex, Comfy, DrawOptions, Graph, Picture, References } from './image-batch.ts';
 import type { Case } from './illustrate-probe.ts';
+
+// The bundles link their pictures into a store of this file's own (local/picture-store.ts), never the owner's.
+process.env.SIMPLE_CHAT_PICTURES = mkdtempSync(join(tmpdir(), 'simple-chat-pictures-'));
+after(() => rmSync(process.env.SIMPLE_CHAT_PICTURES!, { recursive: true, force: true }));
 
 // A real 2x2 PNG, written here the way ComfyUI writes one: the workflow and the prompt in text chunks beside the pixels.
 const RAW = Buffer.from([0, 10, 20, 30, 40, 50, 60, 0, 70, 80, 90, 100, 110, 120]);

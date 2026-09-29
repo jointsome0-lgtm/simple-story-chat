@@ -809,6 +809,15 @@ picture card, and 144 sessions after it: 28 of text and portraits, 56 of picture
 seed 7 alone there are 88 after it. Each of the owner's scenes adds a checklist and five sessions after the card,
 three with seed 7 alone. The fresh sessions for invalid reports come on top.
 
+<a id='picture-store'></a>
+
+**The picture store, since 2026-09-29.** A picture is kept once, under its sha256 in the store,
+`~/simple-story-chat-runs/pictures` ([picture-store.ts](../local/picture-store.ts)); a sharp scene's is kept in its
+`sealed/` directory's own `sealed/pictures`, so that none leaves `sealed/`. Every bundle, every session's copy of one
+and every stand holds a hard link to the store's file, never a copy or a symlink. The store's files are read-only, and
+a picture path is never written into, only renamed over. `npm run image:pictures -- gc` counts the store's files that
+nothing else links any more, and `--apply` removes them.
+
 <a id='gates'></a>
 
 ## The scores and the gates

@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -9,6 +9,10 @@ import { buildIdentityBundles, cardOf, checksOf, drawStage, dryRun, identityCase
 import { startFakeComfy } from './fake-comfy.ts';
 import { readManifest } from './tokenizer-extract.ts';
 import { IDENTITY_BINDING, IDENTITY_SEEDS, IDENTITY_SMOKE, IDENTITY_STORY, identitySheet } from '../examples/identity-set.ts';
+
+// The bundles link their pictures into a store of this file's own (local/picture-store.ts), never the owner's.
+process.env.SIMPLE_CHAT_PICTURES = mkdtempSync(join(tmpdir(), 'simple-chat-pictures-'));
+after(() => rmSync(process.env.SIMPLE_CHAT_PICTURES!, { recursive: true, force: true }));
 
 // Every person of the sheet has a portrait, as after the portrait run.
 const everybody: References = { [IDENTITY_STORY]: Object.fromEntries(identitySheet.map(one => [one.name, `${one.name}.png`])) };

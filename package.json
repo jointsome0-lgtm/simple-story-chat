@@ -43,6 +43,7 @@
     "image:refs-judge": "node local/image-refs-judge.ts",
     "image:prompt-arms": "node local/image-prompt-arms.ts",
     "image:prompt-arms-judge": "node local/image-prompt-arms-judge.ts",
+    "image:pictures": "node local/picture-store.ts",
     "agent": "node local/agent-cli.ts",
     "agent:gpu": "node --env-file=.env.gpu local/agent-cli.ts",
     "mcp": "node local/mcp.ts",
