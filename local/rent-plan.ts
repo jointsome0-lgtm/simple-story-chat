@@ -64,7 +64,11 @@ const QWEN_ONLY_DISK_GB = 60;
 export type Lane = 'both' | 'text' | 'pictures' | 'small';
 const LANES: Record<Lane, { diskGb: number; bytes: number }> = {
   both: { diskGb: DISK_GB, bytes: TEXT_BYTES + PICTURE_BYTES + 6000000000 },
-  text: { diskGb: 60, bytes: TEXT_BYTES + 1000000000 },
+  // simple-serving's text card (docs/gpu.md#serving-card): the heretic's NVFP4, its tokenizer's files and the MTP
+  // drafter at the revisions its card/manifest.env pins, 21.42 GB as Hugging Face sized them on 2026-09-29, and the
+  // wheels of its two locks, vLLM's with torch and the gateway's, 3.89 GB as PyPI sized them for Python 3.12 on Linux
+  // x86_64. Until then this lane was priced by llama.cpp's Q6, its draft and a gigabyte of packages: 26.72 GB.
+  text: { diskGb: 60, bytes: 20446774538 + 32195953 + 939045183 + 3890178507 + 3569650 },
   pictures: { diskGb: 100, bytes: PICTURE_BYTES + 5000000000 },
   // Gemma 4 E2B as simple-serving's branch rehearsal-e2b pins it, its tokenizer's files, and vLLM's wheels with torch.
   small: { diskGb: 60, bytes: 10246621918 + 32198128 + 6000000000 },

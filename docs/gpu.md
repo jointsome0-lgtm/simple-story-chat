@@ -122,14 +122,24 @@ A card's trial guard deletes it at most three hours after its first start (`--ho
 second rental with its own preparation. The next rental's two queues, one for each card, are in
 [action-experiment.md](action-experiment.md#tester-rental).
 
+**The dashboard.** The next text card runs `next-card-metrics` (9413d16, not pushed), in
+/var/tmp/simple-serving-metrics: `next-card` with simple-serving's branch `monitoring` merged, 12 commits. Its gateway
+serves `GET /metrics` and `/metrics/engine` on the control listener to a third key, the metrics key, which reads them
+and nothing else, so that Prometheus and Grafana on this machine chart the card through the tunnel of `up`
+(simple-serving's README, "Monitoring"). `keys` makes that key beside the other two and prints its SHA-256 as a third
+line, which bootstrap.sh takes; with `--metrics-file` it writes the key for Prometheus, here
+`~/.config/simple-serving/metrics.key`. The manifest, the locks and the contract's cases are as at 8672e62. The card
+gets `git archive` from this machine's checkout, so nothing needs a push. Without the dashboard, the lines below take
+`next-card` again.
+
 **The text card**, prepared as round two's text card was on 2026-09-27. `HOST` is its alias in `~/.ssh/config`, and
-`git archive` and the `uv run` lines run in simple-serving's checkout at `next-card`:
+`git archive` and the `uv run` lines run in simple-serving's checkout at `next-card-metrics`:
 
 ```sh
 SIMPLE_CHAT_RENT_DRY_RUN=1 npm run gpu:rent -- --lane text --hours 3    # each offer's session
 npm run gpu:rent -- --lane text --hours 3    # with the «да»; `rented` names ID, the host and destroyBy
 npm run gpu:rent -- --show ID                # ssh.direct: HostName and Port of HOST
-git archive next-card | ssh HOST 'mkdir -p /workspace/simple-serving && tar -xf - -C /workspace/simple-serving'
+git archive next-card-metrics | ssh HOST 'mkdir -p /workspace/simple-serving && tar -xf - -C /workspace/simple-serving'
 uv run python -m simple_serving.cli keys | ssh HOST bash /workspace/simple-serving/card/bootstrap.sh
 uv run python -m simple_serving.cli trial --ssh-host HOST
 uv run python -m simple_serving.cli up       # in a terminal of its own, until it says ready

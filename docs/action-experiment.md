@@ -3392,15 +3392,16 @@ tester's picture.
 Written on 2026-09-28 for the next rental; nothing is rented. [The owner's rules](gpu.md#while-the-cards-are-paid-for)
 hold, with the two of that day. A card runs for the work and not for the tester, who may use the bot while it is on, and
 it is deleted as soon as its queue is empty, whatever the tester is doing, once the requests in flight have ended. At
-most $3 a day goes on rentals, downloads included; on 2026-09-28 the owner raised that day's cap to $4. Within it the
-main session rents without asking once a fresh GPT-6 Astra session at `xhigh` has read the queues below and backed the
-jobs worth their minutes; the ones it does not back are left out. So each job says what it asks, what the answer can
-bring to the bot the tester uses, its minutes and dollars, what it brings back to this machine and what counts as a
-pass, and in each queue the cheap ones with a likely gain come first. Money is reckoned at $0.55 an hour a card, near
-what the rent dry runs of 2026-09-28 found ($0.498 to $0.63), with each card's download on top, which made most of the
-spread between offers before ([prices](knowledge/gpu-measurements.md#costs-and-downloads)). The day's $4 counts from the
-owner's message at 09:28 UTC on 2026-09-28. No card had been rented since when this was written, the Vast account held
-$5.09, and the rental was meant for that evening.
+most $3 a day goes on rentals, downloads included, and the rental, on 2026-09-29 or later, has that day's $3. Within it
+the main session rents without asking once a fresh GPT-6 Astra session at `high`, the owner's cap for Codex sessions
+since the evening of 2026-09-28, has read the queues below and backed the jobs worth their minutes; the ones it does
+not back are left out. So each job says what it asks, what the answer can bring to the bot the tester uses, its
+minutes and dollars, what it brings back to this machine and what counts as a pass, and in each queue the cheap ones
+with a likely gain come first. Money is reckoned at $0.55 an hour a card, near what the rent dry runs of 2026-09-28
+found ($0.498 to $0.63), with each card's download on top, which made most of the spread between offers before
+([prices](knowledge/gpu-measurements.md#costs-and-downloads)). On 2026-09-28 the owner raised that day's cap to $4,
+counted from the owner's message at 09:28 UTC; no card had been rented since when this was written, the Vast account
+held $5.09, and the rental was meant for that evening.
 
 **This round, the text card alone.** GPT-6 Astra Pro read this plan a fourth time, at about 20:40 UTC on 2026-09-28, and
 backed neither card yet. This round readies the text card and its jobs, T1, T2 and T3, for a fifth reading; the picture
@@ -3431,8 +3432,11 @@ move of the round before.
 
 **The text card**, simple-serving with the heretic's NVFP4 ([as gpu.md has it](gpu.md#serving-card)). Its preparation
 takes about 18 minutes, as on 2026-09-27: running after 2.3, first ready at 14.4, then the pair started again for the
-bigger cache, `up` and the smoke. That is $0.17, with a download of about $0.07. Every job is class `internal`, so a
-reader's turn goes first.
+bigger cache, `up` and the smoke. That is $0.17, with a download of about $0.07: 25.3 GB, the 21.4 GB of the model,
+its tokenizer's files and the drafter at the revisions card/manifest.env pins, as Hugging Face sized them on
+2026-09-29 (none of the three repositories gated, and the five large files' SHA-256 the manifest's), and the 3.9 GB of
+wheels its two locks pin, as PyPI sized them. The rent priced llama.cpp's 26.7 GB for this lane until then, and now
+prices these (local/rent-plan.ts). Every job is class `internal`, so a reader's turn goes first.
 
 - **T1, [the card probe](#tester-stand)**, 80 calls: 5 to 12 minutes (a frame took 2.5 to 3.7 s on the card on
   2026-09-28, a runaway about 7.5), $0.05 to $0.11; under 1 MB back. Does the heretic write the frames of the new
@@ -3500,6 +3504,21 @@ them at most 30, which Astra put at 23 to 26, so T1 to T3 take about 35 to 45 mi
 been guessed. The text card is on for 33 to 36 minutes with T1 and T2 alone, 51 if T2 runs away as far as it can:
 $0.37 to $0.40 with the download, $0.54 at most. With T3 it is on for 56 to 66, 81 at most: $0.58 to $0.68, $0.81 at
 most. Step 5 of the memory proposal, production-sized compactions, is not written, so it is not on the queue.
+
+**The dashboard, a change of its own.** Since 2026-09-29 the runbook archives simple-serving's `next-card-metrics`
+(9413d16) from /var/tmp/simple-serving-metrics, where it archived `next-card` (8672e62) from
+/var/tmp/simple-serving-next. Its 12 commits after 8672e62 merge simple-serving's `monitoring`: the card's gateway
+serves its metrics and vLLM's, `GET /metrics` and `/metrics/engine` on its control listener, to a third key, the
+metrics key, which reads them and nothing else, so that Prometheus and Grafana on this machine chart the card through
+the tunnel of `up` (simple-serving's README, "Monitoring"). `keys` makes that key beside the other two, never over
+them, and prints its SHA-256 as a third line, which bootstrap.sh takes; the key is in
+~/.config/simple-serving/metrics.key. card/manifest.env, the two locks, uv.lock and contract/'s cases are as at
+8672e62, so the card pulls and runs what it would have; docs/contract-v2.md gains the routes and the key. Its tests
+pass, 289 with one skipped, and so do `npm run test:serving` and T2's rehearsal against it; T2's passes against
+8672e62's gateway as well. One of its tests, that a signal ends the pair, failed once in three runs here and passed
+alone five times. 9413d16 is not on simple-serving's remote and needs no push: the card gets `git archive` from this
+machine's checkout. A rental without the dashboard takes three lines of the runbook back: /var/tmp/simple-serving-next
+in `ready_text` and in the `cd` before the text card's steps, and `git archive next-card`.
 
 **The picture card**, the bot's card on cu130 ([as gpu.md has it](gpu.md#bot-card)), with P2's prompt enhancer
 ([gpu.md](gpu.md#qwen-pe)): 9.47 GB more to fetch, 4.2 minutes at 300 Mbit/s. Its preparation, the check passed after
@@ -3588,7 +3607,7 @@ Both ends failing is what a card bills until its watchdog's destroy has ended: 2
 session the rent dry run prices. At the $0.63 an hour of the dearest offer the dry runs of 2026-09-28 found, both cards
 came to $3.11 to $3.19; the text card alone comes to $1.47 and its downloads. So **the rule on money**, which the
 runbook applies as code, now for the text card alone: the rent takes offers whose sessions keep the card within what is
-left of the $4. The rent dry run gives each offer it would try its `session`: the offer's hour with its disk over the
+left of the $3. The rent dry run gives each offer it would try its `session`: the offer's hour with its disk over the
 session, its downloads, and what the runbook brings back from the card at its host's outbound price (`up`: 0.02 GB,
 which the table leaves out), the traffic both ways priced twice (`--traffic-factor 2`, as if every download began again
 from the start once), the parts summed unrounded and rounded up to the cent once; `most` takes the dearest of the
@@ -3598,7 +3617,7 @@ choice is weighed at its worst, both ends failing, since that is the session the
 seconds, $0.88 at $0.55 and $0.99 at $0.63 with the downloads priced twice. Else nothing is rented and the owner is
 asked, as when a quote is not a sum of dollars. The rent is held to its quote: `--max-session` makes the rent script try
 no offer whose session costs more, whatever the search returns by then. The runbook prints what the quote leaves of the
-$4: at $0.63 an hour, with the table's downloads priced twice, a quote of $1.62 leaves $2.38, kept for what the quote
+$3: at $0.63 an hour, with the table's downloads priced twice, a quote of $1.62 leaves $1.38, kept for what the quote
 does not price (below). With `--hours 1` the card's jobs end by about 46 minutes after its rental: T1 and T2 fit, unless
 T2 runs away as far as it can and the card's end cuts it, and T3 does not begin, since the runbook starts it only on a
 two-hour card.
@@ -3634,8 +3653,8 @@ minute and tells the owner of, while the card bills up to $0.667 an hour with it
 named none: one the list never shows bills until its guard ends it, or, if its container never starts, bills its disk
 with no end; one the list cannot tell about keeps its sweeper telling the owner each minute. Traffic above twice the
 estimate, priced at each host's own rate, which differs twentyfold between offers. And this machine asleep or off, when
-no watchdog or sweeper runs. The $2.38 that a quote of $1.62 leaves is about three and a half hours more of the card at
-its dearest, or 33 hours of its 60 GB disk alone at the $0.87 per GB a month seen on 2026-09-25. Beyond that only the
+no watchdog or sweeper runs. The $1.38 that a quote of $1.62 leaves is about two hours more of the card at its
+dearest, or 19 hours of its 60 GB disk alone at the $0.87 per GB a month seen on 2026-09-25. Beyond that only the
 account bounds the money, and how depends on settings this plan has not read. By Vast's [billing
 guide](https://docs.vast.ai/guides/reference/billing), once the balance reaches $0.00 the instances "are stopped
 automatically" and "you will continue to be billed for disk storage, even if your balance is negative"; with a credit
@@ -3681,18 +3700,20 @@ card's deletions stay its own guard, which a stopped container does not run, and
 No second watchdog runs on the other machine, mini: this machine reaches no host of that name (no ssh alias, no DNS or
 mDNS name), so whether mini has the Vast CLI and the key is not known from here.
 
-**The ends, rehearsed** on 2026-09-28 by `rehearse-ends.sh` in ~/simple-story-chat-runs/2026-09-28/tester-stand, which
-reads the helpers and the runbook's lines from this page and runs them with no card and nothing paid: 157 checks, all
-passed, on the page of the commit that says so. `end_of` on a guard whose read failed, came back empty, was no number or
-was later than `destroyBy`, on a good number whose ssh then failed or ran out, and with no `destroyBy`, gave no end,
-marked the card stopped, said we're done and destroyed that card and not the other; on a good guard it gave the guard
-less 960 s and touched nothing. `gone` destroyed twice where the destroy did not read back gone and then told the owner,
-once on a key that may not delete, and once where it read back gone, marking the card gone; both its tries ended by the
-same second, 290 s after it began, and a try that took all of them was not repeated. `by` gave a step its seconds, cut
-them at the card's end and gave nothing past it; the text card's first step as this page has it asked nothing past the
-card's end and ended the card, and in time gave its steps their seconds; and after the end is known no step on the card
-has a bare limit. `busy` found a stand-in bot's connection to a stand-in port, and nothing once it closed or for another
-pid. It counted as busy a ComfyUI queue running, pending, not JSON, without its lists, with strings for them, answering
+**The ends, rehearsed** on 2026-09-28 and again on 2026-09-29 by `rehearse-ends.sh` in
+~/simple-story-chat-runs/2026-09-28/tester-stand, which reads the helpers and the runbook's lines from this page and
+runs them with no card and nothing paid: 158 checks, all passed, on the page of the commit that says so. `end_of` on a
+guard whose read failed, came back empty, was no number or was later than `destroyBy`, on a good number whose ssh then
+failed or ran out, and with no `destroyBy`, gave no end, marked the card stopped, said we're done and destroyed that
+card and not the other; on a good guard it gave the guard less 960 s and touched nothing. `gone` destroyed twice where
+the destroy did not read back gone and then told the owner, once on a key that may not delete, and once where it read
+back gone, marking the card gone; both its tries ended by the same second, 290 s after it began, and a try that took all
+of them was not repeated. `by` gave a step its seconds, cut them at the card's end and gave nothing past it; the text
+card's first step as this page has it asked nothing past the card's end and ended the card, and in time gave its steps
+their seconds; after the end is known no step on the card has a bare limit; and the text card's steps and `ready_text`
+run in one clean checkout of simple-serving, on the branch that first step archives. `busy` found a stand-in bot's
+connection to a stand-in port, and nothing once it closed or for another pid. It counted as busy a ComfyUI queue
+running, pending, not JSON, without its lists, with strings for them, answering
 500, down, or 300 KB long and running; an empty queue, 300 KB long as well, as idle; and an empty or malformed `bot` and
 a failed `ss` as busy. `calm` came back 0 within 10 s once idle, and 1 after its ten minutes on a clock run fast while a
 bot stayed connected, with no bot, on a queue not JSON and on a queue down. `ready_text` saw a stand-in `status` ready
@@ -3700,13 +3721,13 @@ at its third look and gave up on one never ready, and on a stand-in clock that o
 look taking all it was given, ended at the end of its seconds and not a pause later; `upto` began nothing with too few
 minutes or no end, and killed its job at the end; the runbook's own lines put T3's stop 30 minutes on, or 3 minutes
 before a nearer end, where 20 minutes are too few to begin; its rule on money chose 2, 1 and 0 hours as it should, with
-no offers too, and 0 whenever a quote was empty or no number, and with this page's own `left`, $4, gave the card 2 hours
+no offers too, and 0 whenever a quote was empty or no number, and with this page's own `left`, $3, gave the card 2 hours
 on a quote of $1.70; `most` gave the dearest session, passed the rent its arguments, the traffic priced twice among
 them, and gave `none` for no offers and for a dry run it could not read; `most` and `rented` gave the rent the same
 gigabytes to bring back and the same traffic factor; `rented` gave its five fields, and `none` for a session the rent
 did not sum, held the rent to its quote with each create recorded in tester-stand, rented nothing without a quote and
 gave nothing on an uncertain answer. The rent's own lines held the card to the quote of its hours, printed what the
-quote leaves of the $4 and rented nothing at 0 hours; outside the helpers no line of the runbook rents a second card or
+quote leaves of the $3 and rented nothing at 0 hours; outside the helpers no line of the runbook rents a second card or
 names the picture card, its host, its tunnel, P1 or P2. `rent_card`, on stand-ins that each looked for its inhibitor in
 systemd's list, held it through the rent and through the watchdog's start and let it go once the watchdog held its own,
 with the card's fields kept in `card-text.env` and the create's record dropped; ended a card whose watchdog did not
@@ -3743,9 +3764,11 @@ gone; a sweeper that ends before `destroyBy` on a list that shows nothing, one t
 empty one, one that ends though its destroy failed, one without its HUP trap and one without its inhibitor; T1's and
 T2's criteria before the card is gone; a picture card rented again; `most` or `rented` without the traffic priced twice,
 and `rented` without its record; what is left printed beside the wrong quote; a one-hour rent held to the two-hour
-quote; and the rule on money with its quotes swapped. The rent script's own tests, run with them, found each of 21
-changes to it: the list read at v0's address; `next_token` not followed; an ID given as a string read as one; a missing
-label, or another rental's, read as none; a page read without its header's checks; pages not summed to their total; an
+quote; and the rule on money with its quotes swapped. Two more after the dashboard failed one check each: the card
+archived from another branch than its checkout, and `ready_text` reading another checkout. The rent script's own tests,
+run with them, found each of 22 changes to it: the text lane priced by llama.cpp's files; the list read at v0's address;
+`next_token` not followed; an ID given as a string read as one; a missing label, or another rental's, read as none; a
+page read without its header's checks; pages not summed to their total; an
 unstated start taken as not the create's; no record before the request; a refusal that keeps its record; an adopted card
 timed from the look that found it; an uncertain create that exits 1; the traffic priced once whatever the factor;
 `--find` taking a list it cannot read, or one that cannot tell, for an empty one; the first of two carrying the label
@@ -3857,7 +3880,7 @@ calm() { local t=$(( $(date +%s) + 580 )) n=0
 # by `by` at the end of those seconds.
 ready_text() { local t=$(( $(date +%s) + $1 )) out s
   while s=$(by "$t" 60); do
-    out=$(cd /var/tmp/simple-serving-next && timeout "$s" uv run python -m simple_serving.cli status 2>/dev/null)
+    out=$(cd /var/tmp/simple-serving-metrics && timeout "$s" uv run python -m simple_serving.cli status 2>/dev/null)
     grep -q '^gateway: ready;' <<<"$out" && return 0; s=$(by "$t" 15) || break; sleep "$s"; done; return 1; }
 # The gigabytes a card of lane $1 sends back ("Back on this machine" above, rounded up), which its quote and its rent
 # both price at its host's outbound rate.
@@ -3900,11 +3923,11 @@ rent_card() { local lane=$1 n=1 why="the rent of $1" awake id host by s label f 
 
 # Terminal 1, in ~/work/simple-chat. The live bots' processes, for `calm`: two pids, the -0928 checkout's and the other's.
 bot=$(pgrep -f '^[^ ]*node /home/jo/work/simple-chat-live(-0928)?/local/main\.ts$' | paste -sd '|'); echo "$bot"
-# The rule on money. `left` is what is left of the day's $4, the owner's cap for 2026-09-28, all of it if nothing has been
-# spent on cards since 09:28 UTC. A quote is the dearest session of the offers a rent would try, with twice the traffic
+# The rule on money. `left` is what is left of the day's $3, the cap of gpu.md's rule 4, all of it if nothing has been
+# spent on cards that day. A quote is the dearest session of the offers a rent would try, with twice the traffic
 # expected: the card's hours and the 20 minutes 20 seconds after them, what it costs if both its ends fail. Any quote
 # that is not a sum rents nothing, and the rent is held to its own.
-left=4.00
+left=3.00
 t2=$(most text 2) t1=$(most text 1); echo "text $t2 for 2 hours, $t1 for 1"
 hours=$(node -e 'const q = process.argv.slice(1).map(v => /^\d+(\.\d+)?$/.test(v) ? Number(v) : NaN), [l, a, b] = q; console.log(!q.every(v => v > 0) ? 0 : a <= l ? 2 : b <= l ? 1 : 0)' "$left" "$t2" "$t1")
 echo "the text card: --hours $hours"    # 0: nothing is rented, and the owner is asked
@@ -3923,10 +3946,10 @@ end_text=$(end_of simple-chat-vast "$BY1" text); echo "$end_text"
 #   source "$runs/tester-stand/card-text.env" && watchdog "$ID1" "$BY1" text
 #   for f in "$runs"/tester-stand/pending-*; do [ -e "$f" ] && sweeper $(<"$f"); done
 
-# The text card, in simple-serving's checkout at next-card (gpu.md#serving-card). Each step is cut at the card's end,
-# and one that fails or is cut ends the card: Ctrl+C in terminal 2 as well.
-cd /var/tmp/simple-serving-next
-alive text && { s=$(by "$end_text" 300) && git archive next-card | on simple-chat-vast "$s" 'mkdir -p /workspace/simple-serving && tar -xf - -C /workspace/simple-serving' \
+# The text card, in simple-serving's checkout at next-card-metrics (the dashboard above; gpu.md#serving-card). Each step
+# is cut at the card's end, and one that fails or is cut ends the card: Ctrl+C in terminal 2 as well.
+cd /var/tmp/simple-serving-metrics
+alive text && { s=$(by "$end_text" 300) && git archive next-card-metrics | on simple-chat-vast "$s" 'mkdir -p /workspace/simple-serving && tar -xf - -C /workspace/simple-serving' \
   && s=$(by "$end_text" 1800) && uv run python -m simple_serving.cli keys | on simple-chat-vast "$s" bash /workspace/simple-serving/card/bootstrap.sh \
   && s=$(by "$end_text" 120) && timeout "$s" uv run python -m simple_serving.cli trial --ssh-host simple-chat-vast || stop_card text; }    # 9.2 min on 2026-09-27
 # Terminal 2, in the same checkout: `uv run python -m simple_serving.cli up`, until it says ready.
@@ -3984,7 +4007,7 @@ decide their switches as above; T3's six Astra sessions, if it ran; the watchdog
 and each sweeper's, with its create swept. The stand's bundles and judging and the prompt arms probe's wait with P1 and
 P2.
 
-**Left to the owner**: anything beyond the day's $4; whether the Vast account has a credit card saved or autobilling on,
+**Left to the owner**: anything beyond the day's $3; whether the Vast account has a credit card saved or autobilling on,
 which decides what bounds the paths no code here bounds (above); a round three of the action measurement; T4 and T5,
 which Astra dropped, and O3's card half would need the owner's yes besides; and whether the tester gets any of the new
 switches, whose lists stay empty meanwhile, since the verdicts come only after the cards. The places

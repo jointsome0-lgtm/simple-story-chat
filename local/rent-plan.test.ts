@@ -38,15 +38,16 @@ test('every machine is priced whole, its card, its own disk and its own download
   // [label, plan, disk, RAM floor in GB, downloads, what else its disk has room for, ceiling, the hour and the traffic
   // of an offer at $0.50/h, $0.10 per GB-month of disk and a cent per GB]. One disk size serves the offer filter, the
   // storage price and the create body. The downloads are the default run's files and wheels, torch's five gigabytes on
-  // the picture lane, so two single-lane machines pull what one machine for both would. Qwen is priced only where it is
-  // asked for, and fits every disk that draws pictures beside about 13 GiB of torch and ComfyUI; a machine that pulls
+  // the picture lane. The language machine is simple-serving's text card, priced by the files its manifest pins and the
+  // wheels of its locks, not by the llama.cpp files that one machine for both lanes pulls. Qwen is priced only where it
+  // is asked for, and fits every disk that draws pictures beside about 13 GiB of torch and ComfyUI; a machine that pulls
   // Qwen alone needs none of the pinned files and rents a disk that holds its own. The RAM floor is 32 GB a card, and
   // the picture lane's own 30 GB: it has no cache to feed. The small machine is simple-serving's rehearsal, priced by
   // Gemma 4 E2B and vLLM, under a ceiling of its own.
   const machines: [string, RentPlan, number, number, number, number, number, number[]][] = [
     ['one card for both lanes', rentPlan(), 150, 32, TEXT + PICTURES + 6e9, QWEN, 0.693, [0.521, 0.63]],
     ['two cards for both lanes', rentPlan({ gpus: 2 }), 150, 64, TEXT + PICTURES + 6e9, QWEN, 1.043, [0.521, 0.63]],
-    ['the language machine', rentPlan({ lane: 'text' }), 60, 32, TEXT + 1e9, 0, 0.667, [0.508, 0.27]],
+    ['the language machine', rentPlan({ lane: 'text' }), 60, 32, 20446774538 + 32195953 + 939045183 + 3890178507 + 3569650, 0, 0.667, [0.508, 0.25]],
     ['the picture machine', rentPlan({ lane: 'pictures' }), 100, 30, PICTURES + 5e9, QWEN, 0.678, [0.514, 0.36]],
     ['a picture machine that pulls Qwen alone', rentPlan({ lane: 'pictures', qwenOnly: true }), 60, 30, QWEN + 5e9, 0, 0.667, [0.508, 0.22]],
     ['the small machine', rentPlan({ lane: 'small' }), 60, 16, 10246621918 + 32198128 + 6e9, 0, 0.267, [0.508, 0.16]],
