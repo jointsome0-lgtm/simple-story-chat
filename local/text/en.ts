@@ -114,7 +114,7 @@ export const en: Messages = {
     names: { moment: 'Moment', scene: 'Scene', chapter: 'Chapter' },
     title: '⏱ Story pace',
     lines: {
-      moment: 'Moment — seconds to minutes a turn, in close detail and with dialogue. A turn ends where the hero has to act.',
+      moment: 'Moment — up to 5 minutes a turn, in up to 4 paragraphs. A turn ends where the hero has to answer, choose or act.',
       scene: 'Scene — the usual pace, with no special instruction to the narrator.',
       chapter: 'Chapter — hours to days a turn, told briefly. It stops only at an important fork.',
     },

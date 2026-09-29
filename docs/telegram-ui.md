@@ -53,8 +53,9 @@ The tester asked for it and the owner approved it on 2026-09-29. «⏱ Темп:
 (`view:pace:<storyId>`) picks the pace of the current story (`pace:<storyId>:<moment|scene|chapter>`), kept as
 `Story.pace`:
 
-- «⚡ Миг» ("Moment"): seconds to minutes a turn, in detail and with dialogue, at most 6 paragraphs against the rule's
-  12. The turn ends where the hero has to act.
+- «⚡ Миг» ("Moment"): up to 5 minutes a turn, in at most 4 paragraphs against the rule's 12. The narrator shows how
+  the hero makes the written move and what came of it, adds no line, decision or action of the hero's, and stops at
+  the nearest point where the hero has to answer, choose or act.
 - «🎬 Сцена» ("Scene"): the default and the bot as it was. A story without a pace, in an older library too, has it.
 - «🗓 Глава» ("Chapter"): hours to days a turn, told briefly, stopping only at an important fork.
 
@@ -62,13 +63,21 @@ The pace can change at any moment, also while a scene is being written, and coun
 story's first scene is always at «Сцена». Under «Миг» and «Глава» a written message is the hero's move: the narrator
 shows what came of it and how the world answers, and makes no further decision for the hero (the owner's rule of
 2026-09-29). «▶️ Продолжить», /continue, the start of a story and an empty `act` of the agent interface hand the move
-to the narrator (`Job.move = 'narrator'`), which may then move the hero itself, in small steps under «Миг». The pace
-reaches the model as one clause in the story's language (`Narration.pace` in `local/story-text/`), after the
-narrator's rule in the last message. The system prompt, the memory call and every request of «Сцена» stay as they
-were: a dry run with a fake model, with written messages, «Продолжить», /continue, compaction and a fork, showed them
-byte for byte those of 6cf7206. The clauses are not measured yet; their probe is
-~/simple-story-chat-runs/2026-09-29/pace/probe.mts. A scene's header is when the scene starts, so after a «Глава»
-turn the menu's world time and the next request's reference time stay at that turn's start.
+to the narrator (`Job.move = 'narrator'`), which may then move the hero itself; under «Миг» by one small step, the
+most obvious continuation of what the hero is already doing. The pace reaches the model as one clause in the story's
+language (`Narration.pace` in `local/story-text/`), after the narrator's rule in the last message. The system prompt,
+the memory call and every request of «Сцена» stay as they were: a dry run with a fake model, with written messages,
+«Продолжить», /continue, compaction and a fork, showed them byte for byte those of 6cf7206. A scene's header is when
+the scene starts, so after a «Глава» turn the menu's world time and the next request's reference time stay at that
+turn's start.
+
+~/simple-story-chat-runs/2026-09-29/pace/probe.mts measured the clauses on 2026-09-29, with Gemma 4 31B writing 4
+synthetic stories of 4 turns and a blind GPT-6 Sol judging them, against criteria fixed before the data (its
+notes.md). «Глава» keeps its time scale and stops at a fork, but decides for the hero after 7 of 8 written moves.
+«Миг»'s first wording failed, and the owner rewrote it the same day. The rewrite passes the length, time and technical
+criteria and decides for the hero after 1 of 8 written moves. It still stops where the hero must act in only 7 of 16
+turns, against the 14 asked, and after «Продолжить» it decides 3 to 5 things for the hero in 5 of 8 turns, against at
+most 2.
 
 <a id='branching'></a>
 
