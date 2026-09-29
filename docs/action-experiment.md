@@ -3392,10 +3392,12 @@ tester's picture.
 Written on 2026-09-28 for the next rental; nothing is rented. [The owner's rules](gpu.md#while-the-cards-are-paid-for)
 hold, with the two of that day. A card runs for the work and not for the tester, who may use the bot while it is on, and
 it is deleted as soon as its queue is empty, whatever the tester is doing, once the requests in flight have ended. At
-most $3 a day goes on rentals, downloads included, and the rental, on 2026-09-29 or later, has that day's $3. Within it
-the main session rents without asking once a fresh GPT-6 Astra session at `high`, the owner's cap for Codex sessions
-since the evening of 2026-09-28, has read the queues below and backed the jobs worth their minutes; the ones it does
-not back are left out. So each job says what it asks, what the answer can bring to the bot the tester uses, its
+most $3 a day goes on rentals, downloads included, by rule 4. The owner raised 2026-09-29's cap, and that day's alone,
+to $5, the tester paying (the owner's message at about 00:40 UTC): a rental that starts that day, in UTC, has $5 less
+what the day has spent on cards, and from 2026-09-30 a rental has $3 again. Within the day's cap the main session
+rents without asking once a fresh GPT-6 Astra session at `high`, the owner's cap for Codex sessions since the evening
+of 2026-09-28, has read the queues below and backed the jobs worth their minutes; the ones it does not back are left
+out. So each job says what it asks, what the answer can bring to the bot the tester uses, its
 minutes and dollars, what it brings back to this machine and what counts as a pass, and in each queue the cheap ones
 with a likely gain come first. Money is reckoned at $0.55 an hour a card, near what the rent dry runs of 2026-09-28
 found ($0.498 to $0.63), with each card's download on top, which made most of the spread between offers before
@@ -3404,7 +3406,8 @@ counted from the owner's message at 09:28 UTC; no card had been rented since whe
 held $5.09, and the rental was meant for that evening.
 
 **This round, the text card alone.** GPT-6 Astra Pro read this plan a fourth time, at about 20:40 UTC on 2026-09-28, and
-backed neither card yet. This round readies the text card and its jobs, T1, T2 and T3, for a fifth reading; the picture
+backed neither card yet. This round readies the text card and its jobs, T1, T2 and T3, for the next reading, which the
+owner gave on 2026-09-29 to a fresh GPT-6 Astra session at `high` in place of Pro's fifth; the picture
 card, P1 and P2 wait for a later round and its own fixes. So the runbook below rents no picture card and runs no step of
 P1 or P2, and its rehearsal checks that. The picture card's rent, preparation, tunnel and end, as the runbook had them,
 are at b2a359f, to bring back from there.
@@ -3607,8 +3610,9 @@ Both ends failing is what a card bills until its watchdog's destroy has ended: 2
 session the rent dry run prices. At the $0.63 an hour of the dearest offer the dry runs of 2026-09-28 found, both cards
 came to $3.11 to $3.19; the text card alone comes to $1.47 and its downloads. So **the rule on money**, which the
 runbook applies as code, now for the text card alone: the rent takes offers whose sessions keep the card within what is
-left of the $3. The rent dry run gives each offer it would try its `session`: the offer's hour with its disk over the
-session, its downloads, and what the runbook brings back from the card at its host's outbound price (`up`: 0.02 GB,
+left of the day's cap, $5 on 2026-09-29 and $3 after it. The rent dry run gives each offer it would try its `session`:
+the offer's hour with its disk over the session, its downloads, and what the runbook brings back from the card at its
+host's outbound price (`up`: 0.02 GB,
 which the table leaves out), the traffic both ways priced twice (`--traffic-factor 2`, as if every download began again
 from the start once), the parts summed unrounded and rounded up to the cent once; `most` takes the dearest of the
 offers, four at most, that the rent would try with the same arguments, and a dry run it cannot read is `none`. Each
@@ -3617,8 +3621,9 @@ choice is weighed at its worst, both ends failing, since that is the session the
 seconds, $0.88 at $0.55 and $0.99 at $0.63 with the downloads priced twice. Else nothing is rented and the owner is
 asked, as when a quote is not a sum of dollars. The rent is held to its quote: `--max-session` makes the rent script try
 no offer whose session costs more, whatever the search returns by then. The runbook prints what the quote leaves of the
-$3: at $0.63 an hour, with the table's downloads priced twice, a quote of $1.62 leaves $1.38, kept for what the quote
-does not price (below). With `--hours 1` the card's jobs end by about 46 minutes after its rental: T1 and T2 fit, unless
+day's cap: at $0.63 an hour, with the table's downloads priced twice, a quote of $1.62 leaves $3.38 of 2026-09-29's $5,
+and $1.38 of a later day's $3, kept for what the quote does not price (below). With `--hours 1` the card's jobs end by
+about 46 minutes after its rental: T1 and T2 fit, unless
 T2 runs away as far as it can and the card's end cuts it, and T3 does not begin, since the runbook starts it only on a
 two-hour card.
 
@@ -3653,15 +3658,16 @@ minute and tells the owner of, while the card bills up to $0.667 an hour with it
 named none: one the list never shows bills until its guard ends it, or, if its container never starts, bills its disk
 with no end; one the list cannot tell about keeps its sweeper telling the owner each minute. Traffic above twice the
 estimate, priced at each host's own rate, which differs twentyfold between offers. And this machine asleep or off, when
-no watchdog or sweeper runs. The $1.38 that a quote of $1.62 leaves is about two hours more of the card at its
-dearest, or 19 hours of its 60 GB disk alone at the $0.87 per GB a month seen on 2026-09-25. Beyond that only the
-account bounds the money, and how depends on settings this plan has not read. By Vast's [billing
-guide](https://docs.vast.ai/guides/reference/billing), once the balance reaches $0.00 the instances "are stopped
-automatically" and "you will continue to be billed for disk storage, even if your balance is negative"; with a credit
-card saved, "Your credit card will be periodically and automatically charged to cover any negative balance", and with
-none, "Your instances and stored data will be destroyed" after a grace that grows with the account's average daily
-spend. The account held $5.09 on the morning of 2026-09-28. Whether a card is saved there, or autobilling set, is the
-owner's to say: with neither, the balance is the last bound; with either, only the owner, told as above.
+no watchdog or sweeper runs. The $3.38 that a quote of $1.62 leaves of 2026-09-29's $5 is about five hours more of the
+card at its dearest, or 47 hours of its 60 GB disk alone at the $0.87 per GB a month seen on 2026-09-25; of a later
+day's $3 it leaves $1.38, about two hours of the card or 19 of its disk. Nothing here holds these four paths to the
+day's cap: their last bound is the account's prepaid balance. The account has no credit card saved and autobilling off
+(the owner, at about 00:00 UTC on 2026-09-29), and it held $10.09 at 00:37 UTC that day, up from $5.09 after the
+tester's top-up, with nothing owed. At worst the rental takes all of it, $5.09 past the day's $5, and below $0.00 only
+its disk bills on: by Vast's [billing guide](https://docs.vast.ai/guides/reference/billing), once the balance reaches
+$0.00 the instances "are stopped automatically" and "you will continue to be billed for disk storage, even if your
+balance is negative", and with no card saved "Your instances and stored data will be destroyed" after a grace that
+grows with the account's average daily spend.
 
 **Back on this machine**: P1's 0.53 to 0.68 GB of pictures and P2's 0.17 to 0.22 GB while they draw, 0.7 to 0.9 GB, and
 after the cards their bundles, about as much again for P1 and 0.2 GB for P2; the main session agreed to them on
@@ -3721,8 +3727,9 @@ at its third look and gave up on one never ready, and on a stand-in clock that o
 look taking all it was given, ended at the end of its seconds and not a pause later; `upto` began nothing with too few
 minutes or no end, and killed its job at the end; the runbook's own lines put T3's stop 30 minutes on, or 3 minutes
 before a nearer end, where 20 minutes are too few to begin; its rule on money chose 2, 1 and 0 hours as it should, with
-no offers too, and 0 whenever a quote was empty or no number, and with this page's own `left`, $3, gave the card 2 hours
-on a quote of $1.70; `most` gave the dearest session, passed the rent its arguments, the traffic priced twice among
+no offers too, and 0 whenever a quote was empty or no number, and with this page's own `left`, $5, and a later day's
+$3, gave the card 2 hours on a quote of $1.70; `most` gave the dearest session, passed the rent its arguments, the
+traffic priced twice among
 them, and gave `none` for no offers and for a dry run it could not read; `most` and `rented` gave the rent the same
 gigabytes to bring back and the same traffic factor; `rented` gave its five fields, and `none` for a session the rent
 did not sum, held the rent to its quote with each create recorded in tester-stand, rented nothing without a quote and
@@ -3923,11 +3930,12 @@ rent_card() { local lane=$1 n=1 why="the rent of $1" awake id host by s label f 
 
 # Terminal 1, in ~/work/simple-chat. The live bots' processes, for `calm`: two pids, the -0928 checkout's and the other's.
 bot=$(pgrep -f '^[^ ]*node /home/jo/work/simple-chat-live(-0928)?/local/main\.ts$' | paste -sd '|'); echo "$bot"
-# The rule on money. `left` is what is left of the day's $3, the cap of gpu.md's rule 4, all of it if nothing has been
-# spent on cards that day. A quote is the dearest session of the offers a rent would try, with twice the traffic
-# expected: the card's hours and the 20 minutes 20 seconds after them, what it costs if both its ends fail. Any quote
-# that is not a sum rents nothing, and the rent is held to its own.
-left=3.00
+# The rule on money. `left` is what is left of the day's cap, all of it if nothing has been spent on cards that day:
+# $5 for a rental that starts on 2026-09-29 UTC, the owner's for that day alone, and from 2026-09-30 the $3 of gpu.md's
+# rule 4, `left=3.00`. A quote is the dearest session of the offers a rent would try, with twice the traffic expected:
+# the card's hours and the 20 minutes 20 seconds after them, what it costs if both its ends fail. Any quote that is not
+# a sum rents nothing, and the rent is held to its own.
+left=5.00
 t2=$(most text 2) t1=$(most text 1); echo "text $t2 for 2 hours, $t1 for 1"
 hours=$(node -e 'const q = process.argv.slice(1).map(v => /^\d+(\.\d+)?$/.test(v) ? Number(v) : NaN), [l, a, b] = q; console.log(!q.every(v => v > 0) ? 0 : a <= l ? 2 : b <= l ? 1 : 0)' "$left" "$t2" "$t1")
 echo "the text card: --hours $hours"    # 0: nothing is rented, and the owner is asked
@@ -4007,8 +4015,8 @@ decide their switches as above; T3's six Astra sessions, if it ran; the watchdog
 and each sweeper's, with its create swept. The stand's bundles and judging and the prompt arms probe's wait with P1 and
 P2.
 
-**Left to the owner**: anything beyond the day's $3; whether the Vast account has a credit card saved or autobilling on,
-which decides what bounds the paths no code here bounds (above); a round three of the action measurement; T4 and T5,
+**Left to the owner**: anything beyond the day's cap, $5 on 2026-09-29 and $3 after it; a round three of the action
+measurement; T4 and T5,
 which Astra dropped, and O3's card half would need the owner's yes besides; and whether the tester gets any of the new
 switches, whose lists stay empty meanwhile, since the verdicts come only after the cards. The places
 (`SIMPLE_CHAT_POV_PLACE_USERS`, and `SIMPLE_CHAT_POV_PARTIAL_USERS` within it) and the clothes
