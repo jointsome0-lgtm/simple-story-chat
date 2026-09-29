@@ -2918,8 +2918,8 @@ tester's.
 
 ## The prompt arms probe
 
-On 2026-09-28 the tester, through the owner: «мы явно не выжимаем картинку, мы же промпт для картинки можем лучше
-делать, а не просто кодом». [image-prompt-arms.ts](../local/image-prompt-arms.ts) prepares the question for the next
+On 2026-09-28 the tester suggested, through the owner, that a model could write the picture prompt better than code
+assembles it. [image-prompt-arms.ts](../local/image-prompt-arms.ts) prepares the question for the next
 picture card, without a card: does a prompt a model writes whole beat the one code assembles today? What the probe can
 answer is narrower, in the review's words below: it compares the frozen C0 and G prompt-production recipes on the
 selected scenes under fixed rendering settings. It is a probe of its own: round two's pins do not move, and
@@ -3225,10 +3225,9 @@ the enhancer beside the cu130 install.
 
 ## The tester stand: where the others are and what they wear
 
-On 2026-09-28 the owner passed on two complaints of the tester's. A frame seen through the reader's eyes: «к тебе с
-двух сторон прижались девушки, а по картинке показывают что они напротив тебя, а мы по сути лишь их часть должны
-видеть боковым зрением». Clothes: «если персонаж голый, то он и должен быть голым, если он в одежде, то он и должен
-быть в одежде, а не в бодди из референса». bc6db2b answers each with a change to the frame behind a list of readers
+On 2026-09-28 the owner passed on two complaints of the tester's. A frame seen through the reader's eyes drew two
+people pressed against the viewer's sides as standing in front of them. Clothes: a person the story leaves naked
+was drawn in the clothes of their reference. bc6db2b answers each with a change to the frame behind a list of readers
 that is empty by default ([where the others are](telegram-ui.md#pov-places), [what they
 wear](telegram-ui.md#what-they-wear)). This stand, the fifth refs stand, asks whether Qwen then draws what the changes
 ask, on the bot's picture path, before any reader gets them. The owner approved preparing it («Да можешь готовить»);
@@ -3625,7 +3624,7 @@ which takes a minute at most, has not ended it: so no job's stop runs into the n
   0.26 GB of pictures back, and about 0.25 GB of bundles after. Does a picture prompt the model writes whole (G),
   today's rewritten by Qwen's enhancer (PE, PT), or G rewritten by it (G→PE, which the owner asked for on 2026-09-29),
   show more of a scene's essential contacts than today's assembly (C0)? If G passes, the bot's frames can become whole
-  prompts: the tester's «мы явно не выжимаем картинку». What passes is its own rules, written before its data; G→PE is
+  prompts, as the tester suggested. What passes is its own rules, written before its data; G→PE is
   judged as the others, against C0 and against G. P2 runs from P1's end until the round's time: its 40 minutes, the 90 s
   of its stop included, and what P1 left of its own, 54 minutes at the seeded times without the round ($0.50); and each
   schedule begins only if its budget fits: the arms before PT take 22.8 minutes as seeded, and PT's budget, 21.3, fits

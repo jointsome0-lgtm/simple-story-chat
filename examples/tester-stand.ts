@@ -1,9 +1,9 @@
 // The tester stand's synthetic stories (local/image-refs-tester.ts, docs/action-experiment.md#tester-stand): the two
-// complaints the tester sent through the owner on 2026-09-28 as clean cases. (1) «к тебе с двух сторон прижались
-// девушки, а по картинке показывают что они напротив тебя, а мы по сути лишь их часть должны видеть боковым зрением»:
+// complaints the tester sent through the owner on 2026-09-28 as clean cases. (1) people pressed against the viewer
+// from both sides were drawn standing in front of them:
 // four stories seen through Артём's eyes, where people are pressed against both his shoulders on a bench, walk at his
-// shoulder, lean in from behind, or, as the control, sit facing him. (2) «если персонаж голый, то он и должен быть
-// голым, если он в одежде, то он и должен быть в одежде, а не в бодди из референса»: four stories by a lake, a man
+// shoulder, lean in from behind, or, as the control, sit facing him. (2) people drawn in their references'
+// clothes whatever the story had them wear, naked or dressed: four stories by a lake, a man
 // bare-chested after a swim beside a woman who stays dressed, a woman in named everyday clothes, a woman in a
 // swimsuit, and a woman in a bath towel after the sauna, her own clothes left inside. The people are the refs stands'
 // H, L, B and T (their details and looks word for word, so that their kept fronts in the grey suit are their

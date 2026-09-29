@@ -1,6 +1,6 @@
 // What each person of a frame wears and what of them is bare, for the readers of SIMPLE_CHAT_CLOTHES_USERS: the tester's
-// complaint of 2026-09-28 («если персонаж голый, то он и должен быть голым, если он в одежде, то он и должен быть в
-// одежде, а не в бодди из референса»). Two things change, both at the call, never in local/illustrate.ts, whose request
+// complaint of 2026-09-28 that people were drawn in their references' clothes whatever the story had them wear,
+// naked or dressed. Two things change, both at the call, never in local/illustrate.ts, whose request
 // builders the action experiment pins by hash (local/action-text.ts `textPins`):
 //   - the frame's rule for `clothes` takes the words of that experiment's change 8 (local/action-text.ts), which name
 //     bare skin outright, in place of its own sentence, and one sentence more for a person with nothing on; the

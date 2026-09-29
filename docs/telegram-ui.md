@@ -405,8 +405,7 @@ in is drawn as usual. The code is `local/picture-pov.ts`.
 - **The first version** (1d5bd2f, live as 27739b9 from 20:05 UTC on 2026-09-27) put the whole look and the clothes in
   the clause («The viewer's own body and clothes: …»), said the viewer "is never shown whole", and had the model call
   them the viewer in the moment and the props. The tester's first frame with it, which had the references of the two
-  other people, was the usual scene from outside with one more person in it («при пове может ничего не меняться просто
-  как будто добавляется еще один человек с руками»).
+  other people, was the usual scene from outside with one more person in it.
 - **References:** the viewer is not among the frame's people, so their kept portrait is never sent as a reference: it
   would pull their whole figure into the frame. The others keep theirs. A reflection is therefore drawn from the
   answer's words alone, without their look, and need not look like them.
@@ -439,8 +438,8 @@ in is drawn as usual. The code is `local/picture-pov.ts`.
 
 #### Where the others are
 
-The tester, 2026-09-28: «к тебе с двух сторон прижались девушки, а по картинке показывают что они напротив тебя, а мы
-по сути лишь их часть должны видеть боковым зрением». The rule above says what the camera shows and not where the
+The tester reported on 2026-09-28 that people pressed against the viewer from both sides were drawn standing in front
+of them. The rule above says what the camera shows and not where the
 others are, so a person pressed against the viewer's side is drawn where people usually stand, facing the camera, and
 their kept portrait, a whole figure facing the viewer, probably pulls the same way. Two switches, each for the readers
 named in it alone ([setup](setup.md)), in `local/picture-pov.ts` and `local/picture.ts`:
@@ -470,8 +469,8 @@ named in it alone ([setup](setup.md)), in `local/picture-pov.ts` and `local/pict
 
 ### What they wear
 
-The tester, 2026-09-28: «если персонаж голый, то он и должен быть голым, если он в одежде, то он и должен быть в
-одежде, а не в бодди из референса». Every kept portrait wears the bot's dark grey suit ([a portrait's own
+The tester reported on 2026-09-28 that people were drawn in their references' clothes whatever the story had them
+wear, naked or dressed. Every kept portrait wears the bot's dark grey suit ([a portrait's own
 prompt](#portrait-prompt)). The frame's rule asks for a phrase of clothes that begins with wearing and says nothing of
 bare skin, and a frame with references gives the scene's clothes only in each person's clause, after the reference
 wording and the look. For the readers named in `SIMPLE_CHAT_CLOTHES_USERS` alone ([setup](setup.md)), in
@@ -509,7 +508,7 @@ yet drawn.
 
 ### Along the story
 
-The tester, 2026-09-28: «версонировать персонажей каким то образом в каждый момент истории или на чекпоинтах»; the
+The tester asked on 2026-09-28 for people's looks to follow the story, at each moment or at checkpoints; the
 owner: «Делай». A lasting change the story makes to a person's look, a haircut, a scar, dyed hair, reaches the picture
 of the scene where it happens and of every later scene on that line. A picture on another branch, or after going back
 to a checkpoint before the change, shows the person as they were there. The code is `local/picture-versions.ts`.
