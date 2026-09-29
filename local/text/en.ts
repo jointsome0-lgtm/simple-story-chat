@@ -248,6 +248,8 @@ export const en: Messages = {
     poseSetRows: (archive, unmatched, unknown) => `labels.csv${archive ? ` in ${archive}` : ''}: ${[unmatched ? `no picture for rows ${unmatched}` : '', unknown ? `rows ${unknown} have values the bot does not know, and the model captions those fields` : ''].filter(Boolean).join('; ')}.`,
     poseSetLabelsUnread: archive => `labels.csv${archive ? ` in ${archive}` : ''} could not be read: its first row must be the header file,pose,side,framing, separated by commas or semicolons. The model captions the pictures of that archive.`,
     poseSetMore: 'Send more, or tap “✅ Done”.',
+    poseSetUnread: n => `Still loading: ${n}.`,
+    poseSetFinishing: 'Loading the rest of what you sent; this message will show the result.',
     poseSetEnded: 'Done. The model captions the pictures in the background; the character\'s card shows how they were sorted by pose.',
     poseSetLine: (n, max, megabytes) => `🗂 Pose pictures: ${n} of ${max}, ${megabytes} MB.`,
     poseSetCaptions: (pending, failed) => [pending ? `Waiting for a caption: ${pending}.` : '', failed ? `Could not be captioned: ${failed}; frames will not take them.` : ''].filter(Boolean).join(' '),

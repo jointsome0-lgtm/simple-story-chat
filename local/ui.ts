@@ -47,8 +47,9 @@ export type RenderDetails = {
   textTokens?: (text: string) => number | null;
   retainsPortraits?: boolean; references?: boolean; versions?: boolean; poseSet?: boolean; poseTally?: PoseTally;
 };
+// `unread`: the files of the wait still in the reader's queue; `finishing`: the wait is over, and they are still read.
 export type PoseTally = { storyId: string; name: string; at: number; kept: number; labeled: number; refused: Partial<Record<PoseSetRefusal, number>>;
-  archives: (ArchiveLabels & { archive: string })[]; done: boolean };
+  archives: (ArchiveLabels & { archive: string })[]; unread?: number; finishing?: boolean; done: boolean };
 // State is read defensively (docs/telegram-ui.md#renderer), so any library field may be missing.
 type State = Partial<Library>;
 type Row = (InlineButton | null)[];
@@ -756,8 +757,9 @@ function poseSetInputScreen(state: State, details: RenderDetails) {
     [[btn(c.poseSetDone, `pose-set-done:${personRef(story, person)}`)], [btn(c.backToCard, `view:character:${personRef(story, person)}`)]]);
 }
 
-// The message that counts the pictures of a pose set as they come (local/bot.ts): those kept, those refused and why,
-// and how many the set holds now, with «✅ Готово» under it until the reader is done. Once an archive with labels.csv came,
+// The message that counts the pictures of a pose set as they are read (local/bot.ts): those kept, those refused and why,
+// how many files are still to be read, and how many the set holds now, with «✅ Готово» under it until the reader is
+// done, and after that, while files are still read, that its last word is to come. Once an archive with labels.csv came,
 // how many the reader labeled and how many are left to the captioner, and for each labels.csv the rows that matched no
 // picture or had a value the bot does not know, or that it could not be read.
 function poseSetStatus(state: State, details: RenderDetails) {
@@ -774,9 +776,10 @@ function poseSetStatus(state: State, details: RenderDetails) {
     ...archives.flatMap(one => one.unread ? [c.poseSetLabelsUnread(line(one.archive, 40))]
       : one.unmatched.length || one.unknown.length ? [c.poseSetRows(line(one.archive, 40), rowList(one.unmatched), rowList(one.unknown))] : [])];
   return payload([c.poseSetTitle(line(person.name, 60), storyName(state, story)), '', c.poseSetKept(tally.kept),
-    ...refused.length ? [c.poseSetRefused(refused)] : [], ...labels, c.poseSetHolds(person.poseSet?.length ?? 0, POSE_SET_PICTURES), '',
-    tally.done ? c.poseSetEnded : c.poseSetMore],
-    [tally.done ? [btn(c.backToCard, `view:character:${ref}`)] : [btn(c.poseSetDone, `pose-set-done:${ref}`)]]);
+    ...refused.length ? [c.poseSetRefused(refused)] : [], ...labels, ...tally.unread ? [c.poseSetUnread(tally.unread)] : [],
+    c.poseSetHolds(person.poseSet?.length ?? 0, POSE_SET_PICTURES), '',
+    tally.done ? c.poseSetEnded : tally.finishing ? c.poseSetFinishing : c.poseSetMore],
+    [tally.done || tally.finishing ? [btn(c.backToCard, `view:character:${ref}`)] : [btn(c.poseSetDone, `pose-set-done:${ref}`)]]);
 }
 
 // Row numbers of labels.csv as a message lists them: the first twenty, and how many more.

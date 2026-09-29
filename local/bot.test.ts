@@ -27,7 +27,7 @@ type TextControls = GenerateControls & Required<Pick<GenerateControls, 'onText'>
 type FixtureOptions = {
   progressFailure?: boolean; contextFailure?: boolean; deliveryFailure?: boolean;
   generate?: (request: ModelRequest, controls: TextControls) => Promise<GenerationResult>;
-  gpu?: GpuController; readSeedFile?: BotOptions['readSeedFile'];
+  gpu?: GpuController; readSeedFile?: BotOptions['readSeedFile']; readPicture?: BotOptions['readPicture'];
   model?: string; providerName?: string; compactAtTokens?: number; ownerId?: string; illustrator?: Illustrator;
   // Holds a Telegram call until the returned promise settles.
   hold?: (method: string, payload: Payload) => Promise<void> | undefined;
@@ -75,7 +75,7 @@ function fixture(t: TestContext, options: FixtureOptions = {}) {
       usage: { inputTokens: 100 + requests.length, outputTokens: 50, totalTokens: 150 + requests.length } };
   } };
   const bot = createBot({ store, api, provider, gpu: options.gpu, illustrator: options.illustrator, allowedUsers: new Set(['1', '2']), maxOutputTokens: 4096,
-    readSeedFile: options.readSeedFile, render, scenePrefix, sceneKeyboard, model: options.model ?? 'test-model',
+    readSeedFile: options.readSeedFile, readPicture: options.readPicture, render, scenePrefix, sceneKeyboard, model: options.model ?? 'test-model',
     providerName: options.providerName ?? 'claude-code', compactAtTokens: options.compactAtTokens ?? 54000, ownerId: options.ownerId,
     log: (event, code, details) => { rows.push({ event, ...(code === undefined ? {} : { code }), ...safeErrorDetails(details) }); } });
   const message = (text: string | undefined, user = 1, updateId = ++sequence): MessageUpdate => ({ update_id: updateId,
@@ -905,4 +905,36 @@ test('paused GPU accepts seed drafts and model controls but never creates an unw
   await f.bot.handle(update); await gpu.tick();
   assert.deepEqual(writes, ['running']);
   assert.deepEqual(f.store.read(1).ui, before);
+});
+
+test('a pose-set file leaves the reader\'s queue only in the write that keeps its picture, so a stop halfway loses none', async t => {
+  const picture = { bytes: new Uint8Array([1, 2, 3]), format: 'png' as const, width: 480, height: 640, strippedBytes: 0, sent: 'photo' as const };
+  let release = () => {};
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const illustrator = { ...sketchbook([]), referencesFor: () => true, poseSetFor: (userId: string) => userId === '1' } as unknown as Illustrator;
+  const f = fixture(t, { illustrator, readPicture: async () => { await held; return picture; } });
+  await f.start();
+  const storyId = Object.keys(f.store.read(1).stories)[0];
+  f.store.mutate('1', state => {
+    state.stories[storyId].sheet = [{ name: 'Мира', look: 'синтетическая' }];
+    state.ui = { input: 'pose-set', storyId, name: 'Мира', at: Date.now() };
+  });
+  const photo = f.message(undefined);
+  Object.assign(photo.message, { photo: [{ file_id: 'synthetic', width: 480, height: 640 }] });
+  // The update ends with the file queued, while its download still waits.
+  await f.bot.handle(photo);
+  assert.equal(f.store.read(1).poseUploads?.length, 1);
+  const stopping = f.bot.stop();
+  release();
+  await stopping;
+  assert.equal(f.store.read(1).poseUploads?.length, 1, 'a stop halfway leaves the file queued');
+  assert.equal(f.store.read(1).stories[storyId].sheet![0].poseSet, undefined);
+  const again = createBot({ store: f.store, api: f.api, provider: f.provider, illustrator, allowedUsers: new Set(['1', '2']), maxOutputTokens: 4096,
+    render, scenePrefix, sceneKeyboard, readPicture: async () => picture });
+  await again.idle();
+  await again.handle(photo);
+  await again.idle();
+  assert.equal(f.store.read(1).stories[storyId].sheet![0].poseSet?.length, 1, 'the next start keeps it, once');
+  assert.equal(f.store.read(1).poseUploads, undefined);
+  await again.stop();
 });

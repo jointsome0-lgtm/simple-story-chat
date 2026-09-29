@@ -146,10 +146,15 @@ export type LookInput = { input: 'look' | 'details'; storyId: string; name: stri
 // whose card they opened, by story and name.
 export type ReferenceInput = { input: 'reference'; storyId: string; name: string; pose: Pose; at: number; confirm?: undefined };
 // A reader in the pose-set experiment sending many pictures of one person of a story's sheet (local/pose-set.ts): every
-// photo or file that comes within half an hour of `last`, when the last picture came, or of `at`, when the wait began,
+// photo or file that comes within half an hour of `last`, when the last one came, or of `at`, when the wait began,
 // joins the person's pose set, until a button or a command ends the wait. The person is the one whose card they opened,
 // by story and name.
 export type PoseSetInput = { input: 'pose-set'; storyId: string; name: string; at: number; last?: number; confirm?: undefined };
+// A photo or a file a reader sent while a wait for a pose set stood, as Telegram described it, until the bot has read it
+// (local/bot.ts `uploadNext`): the sizes of a photo, or the file, never a caption; the wait it answered, by its story,
+// person and start; and the update that brought it. The fields are Telegram's, not validated here.
+export type PoseUploadFile = { photo?: Record<string, unknown>[]; document?: Record<string, unknown> };
+export type PendingPoseUpload = { update: number; storyId: string; name: string; at: number; file: PoseUploadFile };
 // A reader writing the whole prompt of a portrait of one person of a story's sheet (local/picture.ts `portrait`): their
 // next text message is that prompt, which the person keeps as theirs, and a variant of the portrait whose note they
 // pressed is drawn from it with that portrait's `seed`, while the graph and the checkpoint are still the ones its
@@ -192,6 +197,9 @@ export type Library = {
   // The pictures in this reader's chat that Telegram would still let the bot delete, so that deleting a seed or a
   // branch takes the pictures of its scenes out of the chat too (`forgetLostPictures`). Only the local bot writes them.
   sentPictures?: SentPicture[];
+  // The photos and files this reader sent for pose sets that the bot has not read yet, in the order they came. Only the
+  // local bot writes them.
+  poseUploads?: PendingPoseUpload[];
 };
 // Names the library gives to what it creates. They are stored as written and never translated afterwards.
 export type Labels = { firstBranch: string; seedCheckpoint: string; forkBranch: (from: string) => string; forkCheckpoint: string; afterCompaction: string };

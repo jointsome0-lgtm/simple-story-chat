@@ -362,6 +362,10 @@ export const ru = {
     poseSetRows: (archive: string, unmatched: string, unknown: string) => `labels.csv${archive ? ` в ${archive}` : ''}: ${[unmatched ? `нет картинки для строк ${unmatched}` : '', unknown ? `в строках ${unknown} есть значения, которых бот не знает, — эти поля подпишет модель` : ''].filter(Boolean).join('; ')}.`,
     poseSetLabelsUnread: (archive: string) => `labels.csv${archive ? ` в ${archive}` : ''} не прочитан: первой строкой в нём нужен заголовок file,pose,side,framing, через запятую или точку с запятой. Картинки из этого архива подпишет модель.`,
     poseSetMore: 'Присылай ещё или нажми «✅ Готово».',
+    // The files of the wait the bot has not read yet (local/bot.ts `uploadNext`), and, once the wait is over, that this
+    // message gets its last word when they are read.
+    poseSetUnread: (n: number) => `Ещё загружаются: ${n}.`,
+    poseSetFinishing: 'Дозагружаю присланное; итог появится в этом сообщении.',
     poseSetEnded: 'Готово. Модель подпишет картинки в фоне; как они разложены по позам, покажет карточка персонажа.',
     poseSetLine: (n: number, max: number, megabytes: number) => `🗂 Картинки поз: ${n} из ${max}, ${megabytes} МБ.`,
     poseSetCaptions: (pending: number, failed: number) => [pending ? `Ждут подписи: ${pending}.` : '', failed ? `Не удалось подписать: ${failed}, в кадры они не попадут.` : ''].filter(Boolean).join(' '),

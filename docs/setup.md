@@ -111,7 +111,7 @@ sets stay and can be removed, and frames do not take them. With the list empty n
 
 Pose sets are switched off by taking the reader off the list, or emptying it, and restarting: their sets stay, and new
 frames do not take them, while a variant or a style sample of a frame drawn with a set's picture still takes it, as its
-recipe says. Going back to code from before pose sets costs the readers their sets: its first start deletes the sets'
+recipe says. Files they sent that the bot had not read yet wait unread, for a start that gives them pose sets again. Going back to code from before pose sets costs the readers their sets: its first start deletes the sets'
 files, all but those frames were drawn with, and it drops a person's set when it writes a sheet again. Back up first
 ([Backup and restore](#backup-and-restore)) if the pictures are to be kept.
 

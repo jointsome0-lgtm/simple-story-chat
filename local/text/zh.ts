@@ -258,6 +258,8 @@ export const zh: Messages = {
     poseSetRows: (archive, unmatched, unknown) => `labels.csv${archive ? `（${archive}）` : ''}：${[unmatched ? `第 ${unmatched} 行没有对应的图片` : '', unknown ? `第 ${unknown} 行有机器人不认识的值，这些项由模型加说明` : ''].filter(Boolean).join('；')}。`,
     poseSetLabelsUnread: archive => `无法读取 labels.csv${archive ? `（${archive}）` : ''}：第一行必须是表头 file,pose,side,framing，用逗号或分号分隔。这个压缩包里的图片由模型加说明。`,
     poseSetMore: '继续发送，或点“✅ 完成”。',
+    poseSetUnread: n => `仍在读取：${n} 个。`,
+    poseSetFinishing: '正在读取你发来的其余文件；结果会显示在这条消息里。',
     poseSetEnded: '完成。模型会在后台给图片加说明；人物卡片会显示它们如何按姿势分组。',
     poseSetLine: (n, max, megabytes) => `🗂 姿势图片：${n} 张，最多 ${max} 张，${megabytes} MB。`,
     poseSetCaptions: (pending, failed) => [pending ? `等待说明：${pending} 张。` : '', failed ? `无法加说明：${failed} 张，画面不会使用它们。` : ''].join(''),

@@ -267,6 +267,8 @@ export const ko: Messages = {
     poseSetRows: (archive, unmatched, unknown) => `labels.csv${archive ? `(${archive})` : ''}: ${[unmatched ? `${unmatched}행에 맞는 그림이 없어요` : '', unknown ? `${unknown}행에 봇이 모르는 값이 있어서 그 항목은 모델이 설명해요` : ''].filter(Boolean).join('; ')}.`,
     poseSetLabelsUnread: archive => `labels.csv${archive ? `(${archive})` : ''}를 읽지 못했어요. 첫 행은 쉼표나 세미콜론으로 구분한 머리글 file,pose,side,framing이어야 해요. 이 압축 파일의 그림은 모델이 설명해요.`,
     poseSetMore: '더 보내거나 ‘✅ 완료’를 눌러 주세요.',
+    poseSetUnread: n => `아직 불러오는 중: ${n}개.`,
+    poseSetFinishing: '보내 준 나머지를 불러오고 있어요. 결과는 이 메시지에 나와요.',
     poseSetEnded: '완료했어요. 모델이 뒤에서 그림에 설명을 붙여요. 포즈별로 어떻게 나뉘었는지는 인물 카드에서 볼 수 있어요.',
     poseSetLine: (n, max, megabytes) => `🗂 포즈 그림: ${max}장 중 ${n}장, ${megabytes}MB.`,
     poseSetCaptions: (pending, failed) => [pending ? `설명을 기다리는 그림: ${pending}장.` : '', failed ? `설명을 붙이지 못한 그림: ${failed}장. 장면 그림에 쓰이지 않아요.` : ''].filter(Boolean).join(' '),

@@ -257,6 +257,8 @@ export const ja: Messages = {
     poseSetRows: (archive, unmatched, unknown) => `labels.csv${archive ? `（${archive}）` : ''}：${[unmatched ? `${unmatched}行目に合う絵がありません` : '', unknown ? `${unknown}行目にボットの知らない値があり、その項目はモデルが説明を付けます` : ''].filter(Boolean).join('。')}。`,
     poseSetLabelsUnread: archive => `labels.csv${archive ? `（${archive}）` : ''}を読めませんでした。1行目は見出し file,pose,side,framing で、カンマかセミコロンで区切ってください。このアーカイブの絵にはモデルが説明を付けます。`,
     poseSetMore: '続けて送るか、「✅ 完了」を押してください。',
+    poseSetUnread: n => `まだ読み込み中：${n}件。`,
+    poseSetFinishing: '送られた残りを読み込んでいます。結果はこのメッセージに出ます。',
     poseSetEnded: '完了しました。モデルがバックグラウンドで絵に説明を付けます。ポーズごとの分け方は人物のカードで見られます。',
     poseSetLine: (n, max, megabytes) => `🗂 ポーズの絵：${n}／${max}枚、${megabytes}MB。`,
     poseSetCaptions: (pending, failed) => [pending ? `説明待ち：${pending}枚。` : '', failed ? `説明を付けられなかった絵：${failed}枚。挿絵には使われません。` : ''].join(''),
