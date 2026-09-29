@@ -3467,7 +3467,8 @@ against. T5, O3's card half: hosted O3 had gained one answer of 76 (58 against 5
 owner had not been asked ([the entry](knowledge/improve-runs.md#scene-thinking-2026-09-28)). T3, the story bible's
 probe, for want of a command rehearsed against a gateway; a second session, from 14:50 to 14:53, backed it as a capped
 diagnostic on conditions (T3 below). The defects, each fixed below: a card whose guard could not be read, or whose
-preparation failed, was to be ended by hand, and now `end_of` and each failed step end it as code; the jobs had fixed
+preparation failed, was to be ended by hand, and now `end_of` ends it as code, and a failed step, tried three times,
+ends it where it cannot work and else stops its steps ([a card's end](#card-end)); the jobs had fixed
 limits, and now each ends by its card's end; `calm` could run 27 minutes, counted an error as idle and had five
 minutes of reserve, and now it has ten minutes by the clock, counts an error as busy and has sixteen; a text card that
 stops itself runs no guard while its disk bills, and now a watchdog on this machine deletes each card at its
@@ -3796,16 +3797,20 @@ mDNS name), so whether mini has the Vast CLI and the key is not known from here.
 
 **The ends, rehearsed** on 2026-09-28 and again on 2026-09-29 by `rehearse-ends.sh` in
 ~/simple-story-chat-runs/2026-09-28/tester-stand, which reads the helpers and the runbook's lines from this page and
-runs them with no card and nothing paid: 198 checks, all passed, on the page of the commit that says so. `end_of` on a
+runs them with no card and nothing paid: 245 checks, all passed, on the page of the commit that says so. `end_of` on a
 guard whose read failed, came back empty, was no number or was later than `destroyBy`, on a good number whose ssh then
 failed or ran out, and with no `destroyBy`, gave no end, marked the card stopped, said we're done and destroyed that
 card and not the other; on a good guard it gave the guard less 960 s and touched nothing. `gone` destroyed twice where
 the destroy did not read back gone and then told the owner, once on a key that may not delete, and once where it read
 back gone, marking the card gone; both its tries ended by the same second, 290 s after it began, and a try that took all
 of them was not repeated. `by` gave a step its seconds, cut them at the card's end and gave nothing past it; each card's
-first step as this page has it asked nothing past the card's end and ended the card, and in time gave its steps their
-seconds; after the end is known no step on either card has a bare limit; and the text card's steps and `ready_text` run
-in one clean checkout of simple-serving, on the branch that first step archives. `busy` found a stand-in bot's
+first step as this page has it asked nothing past the card's end and ended the card, in time gave its steps their
+seconds, and on a card whose every ssh failed made its first ssh three times, then stopped the card's steps and left the
+card running, destroying nothing; the text card's, run again then, began nothing; after the end is known no step on
+either card, in the runbook's lines or in the steps' helpers, has a bare limit, and each ssh there has its seconds from
+`by`; a step that still fails ends its card only through `failure`, and otherwise only the two lines that end the cards
+when their work is done call `stop_card`; and the text card's steps, their helpers and `ready_text` run in one clean
+checkout of simple-serving, on the branch that first step archives. `busy` found a stand-in bot's
 connection to a stand-in port, and nothing once it closed or for another pid. It counted as busy a ComfyUI queue
 running, pending, not JSON, without its lists, with strings for them, answering
 500, down, or 300 KB long and running; an empty queue, 300 KB long as well, as idle; and an empty or malformed `bot` and
@@ -3813,7 +3818,23 @@ a failed `ss` as busy. `calm` came back 0 within 10 s once idle, and 1 after its
 bot stayed connected, with no bot, on a queue not JSON and on a queue down. `ready_text` saw a stand-in `status` ready
 at its third look and gave up on one never ready, and on a stand-in clock that only its looks and pauses moved, each
 look taking all it was given, ended at the end of its seconds and not a pause later, and `check_pictures` on it asked
-nothing past its end, cut each of its two reads at it and took no server but the bot's on cu130; `upto` began nothing
+nothing past its end, cut each of its two reads at it and took no server but the bot's on cu130. By the owner's rules on
+[a card's end](#card-end), `on` waited 25 s for a connection, and no ssh of the day's block waits 10. `tries`, on a
+stand-in step and a clock that only its pauses moved, ran a step that passed once, and one that failed again 30 s later
+and last 90 s after that, ssh's 255 and timeout's 124 among them, and one that gave 96, 97 or 98 once; it cut each pause
+at the card's end, tried nothing past it, and tried no more after a pause in which the card was ended or its steps
+stopped. `failure` stopped the steps of a card whose end had not come, that card's alone, and left it running with
+nothing sent; it ended one at 97, ten minutes with no ssh answer, and one whose end had come; and it left one already
+ended as it was. `boot`, on a fake card whose every ssh ran here, gave the text card's bootstrap the keys on its input
+and passed once it ended with 0; ran one bootstrap where two began at once, and where a start's answer was lost and the
+start tried again; tried again a bootstrap that failed, also one whose own code was 97; gave 97 after ten minutes of
+looks with no ssh answer, 98 at its 1800 s and at the card's end, and 96 once the card had been ended meanwhile; and on
+the picture card passed with the bootstrap's two marks there, and without them failed three times. The smoke's step
+passed on a smoke that passed; took schema answers cut at their limit, with status 200 and the cut's counts, as a
+warning, after another failure too, kept the smoke's verdict and ran counts and privacy on their own, failing where they
+failed three times; and tried three times, and no more, a smoke that failed otherwise, one whose schema answer failed
+for more than its cut, and one whose cut came without its counts. The page's own smoke line, failing, stopped the text
+card's steps and left it running, and the rents cleared the marks of steps stopped before. `upto` began nothing
 with too few minutes or no end, and killed its job at the end; the runbook's own lines put T3's stop 30 minutes on, or 3
 minutes before a nearer end, where 20 minutes are too few to begin. The picture card's jobs as this page has them gave
 P1 the time before P2's 40 minutes, which are the slot the probe plans its cells in, and before the round's; gave P2 its
@@ -3913,11 +3934,35 @@ killed past its reserve reported as its own exit.
 **The runbook.** Terminal 1 rents both cards and runs the text card, terminal 2 holds its `up`, terminal 3 shows each
 message a watchdog or a sweeper writes to the owner, terminal 4 prepares the picture card and runs its jobs, and
 terminal 5 holds its tunnel. The helpers go into terminals 1, 3 and 4 first, from the block between their markers.
-Every ssh has a limit: `on` gives each its seconds, and `up` and the tunnel, which last the session, give each dial ten
-seconds and notice a connection gone quiet after 15 s x 3. Once a card's end is known, each step on it is cut at that
-end: `by` gives it its seconds, and none past the end, and so each look and pause inside `ready_text` and each read of
-`check_pictures`. A step marked `alive` begins nothing on a card that has been ended, and a step that fails or is cut
-ends the card at once with `stop_card`: nothing more starts on it, we're done, and the destroy until it reads back gone.
+Every ssh has a limit: `on` gives each its seconds, of which it waits up to 25 for the connection, and `up` and the
+tunnel, which last the session, give each dial ten seconds and notice a connection gone quiet after 15 s x 3. Once a
+card's end is known, each step on it is cut at that end: `by` gives it its seconds, and none past the end, and so each
+look and pause inside `ready_text`, `boot` and `tries` and each read of `check_pictures`. A step marked `alive` begins
+nothing on a card that has been ended or whose steps have stopped. `stop_card` ends a card: nothing more starts on it,
+we're done, and the destroy until it reads back gone.
+
+<a id='card-end'></a>
+
+**A card's end**, by the owner's word of 2026-09-29 at about 03:00 UTC on this runbook («он тупой какой-то»), comes only
+when it cannot work: its engine does not start for a cause read in its log, such as CUDA error 804; it answers no ssh
+for ten minutes; its work is done; or its time is up. That night six text cards had been ended for three causes: the
+driver (cards 2 and 6, on 580.173.02, which the rent now drops, [gpu.md](gpu.md)), ssh (card 3's pair, whose connection
+timed out, and card 4's bootstrap, whose host closed the connection), and the JSON whitespace loop (cards 1 and 5, whose
+smoke found schema answers run to their limit). A step that fails runs again, three tries in all, 30 s and then 90 s
+apart and only while its card reads alive (`tries`); ssh's 255 and timeout's 124 are tried again. One that still fails
+ends the card where it cannot work, with no ssh answer for ten minutes or at its end, and else stops its steps
+(`failure`, which marks the card `halted`): the card runs on, its watchdog still bounding the money, and nothing after
+that step runs until the main session has read the cause and either ended the card with `stop_card` or mended the cause,
+removed the mark and run the failed line again. Each bootstrap runs on its card apart from ssh, so that a dropped
+connection does not end it, and a try begins one only once none from an earlier try runs: simple-serving's bootstrap.sh
+may run again, its files checked by hash and keys.json kept, and so may image-bootstrap.sh, its files checked by size
+and SHA256. In the smoke, schema answers cut at their max_tokens (status 200, with the cut's counts of spaces and of
+characters outside ASCII) are that whitespace loop, which the owner chose on 2026-09-25 to meet as the bot meets it, by
+the limit and one retry: without whitespace between a schema's tokens, 5 of the action measurement's 18 sheets had come
+back with nobody on them (simple-serving's docs/contract-v2.md, 899f36c). The smoke still fails such an answer, and its
+lines keep that verdict; here it is a warning, and counts and privacy, which the smoke did not reach, then run on their
+own and must pass. Any other failure of the smoke is one to look at. Only `end_of`, before the steps, still ends a card
+at one failed look at its guard; whether it should look again is not yet decided.
 
 ```sh
 # The day of the rental. A fresh GPT-6 Astra session has read this section again, and the picture card's own review its
@@ -3942,9 +3987,9 @@ runs=~/simple-story-chat-runs/2026-09-28
 # (`--pending`) and, after an answer that names no instance, reads the account's v1 list for the one it may have made,
 # with the account's key from ~/work/simple-chat/.env.gpu.
 rent=(node "--env-file-if-exists=$HOME/work/simple-chat/.env.gpu" "$HOME/work/simple-chat-tester-stand/gpu/rent.mjs")
-# One ssh, for at most $2 seconds.
+# One ssh, for at most $2 seconds, of which it waits up to 25 for the connection.
 on() { local host=$1 limit=$2; shift 2
-  timeout "$limit" ssh -T -o ConnectTimeout=10 -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "$host" "$@"; }
+  timeout "$limit" ssh -T -o ConnectTimeout=25 -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "$host" "$@"; }
 # The seconds a step may take: $2 at most and never past $1, the card's end; nothing, and 1, once $1 has come.
 by() { local left=$(( ${1:-0} - $(date +%s) )); (( left > 0 )) || return 1; echo $(( left < $2 ? left : $2 )); }
 # The destroy until it reads back gone, twice at most and both within the 290 seconds the money allows it; a key that
@@ -3963,7 +4008,8 @@ stop_card() { local host=simple-chat-vast id=${ID1-}
   [ "$1" = pictures ] && { host=simple-chat-vast-pictures; id=${ID2-}; }
   touch "$runs/tester-stand/stopped-$1"; [ -n "$id" ] || return 0
   on "$host" 20 'date +%s > /root/.simple-chat-trial-deadline'; gone "$id"; }
-alive() { [ ! -e "$runs/tester-stand/stopped-$1" ]; }
+# Whether a step may begin on card $1: it has not been ended, and its steps have not stopped at a failure.
+alive() { [ ! -e "$runs/tester-stand/stopped-$1" ] && [ ! -e "$runs/tester-stand/halted-$1" ]; }
 # Whether an inhibitor giving $1 as its reason is in systemd's list, looked for over five seconds. The list is read
 # whole: systemd-inhibit writes its count after the table, and a `grep -q` gone at the match would fail that write,
 # which pipefail counts.
@@ -4079,6 +4125,80 @@ tell() { local f n first=1; local -A seen; while :; do
       [ -e "$f" ] || continue; n=$(grep -c 'TELL THE OWNER' "$f"); (( first )) && seen[$f]=$n
       (( n > ${seen[$f]:-0} )) && { grep 'TELL THE OWNER' "$f" | tail -n $(( n - ${seen[$f]:-0} )) | sed "s|^|${f##*/}: |; s|\$|\a|"; seen[$f]=$n; }
     done; first=0; sleep 15; done; }
+# The cards' steps, by the owner's rules of 2026-09-29 (a card's end, above). Card $1's end for its work: `end_text`
+# for the text card, `end` for the picture card.
+end_for() { if [ "$1" = pictures ]; then echo "${end-}"; else echo "${end_text-}"; fi; }
+# One ssh on card $1, for at most $2 seconds and none past its end.
+on_card() { local host=simple-chat-vast s; [ "$1" = pictures ] && host=simple-chat-vast-pictures
+  s=$(by "$(end_for "$1")" "$2") && on "$host" "$s" "${@:3}"; }
+# A step on card $1 that fails runs again, three tries in all, 30 s and then 90 s apart and only while the card reads
+# alive and its end has not come: 0 once one passes, else the last try's code. 96 (the card ended meanwhile), 97 (no ssh
+# answer for ten minutes) and 98 (a bootstrap past its time) are not tried again; ssh's 255 and timeout's 124 are.
+tries() { local lane=$1 rc n s; shift
+  for n in 1 2 3; do "$@" && return 0; rc=$?; echo "$1 failed with $rc, try $n of 3" >&2
+    (( n < 3 )) && [[ $rc != 9[678] ]] && s=$(by "$(end_for "$lane")" $(( n == 1 ? 30 : 90 ))) || break
+    sleep "$s"; alive "$lane" || break; done
+  return "$rc"; }
+# After a step's last try on card $1, whose code is $2: the card is ended where it cannot work, with no ssh answer for
+# ten minutes (97) or once its end has come. Any other failure stops its steps, `halted-LANE`, and the card runs on
+# while the main session reads the cause: one that keeps its engine from starting, such as CUDA error 804 in the
+# engine's log, ends it with `stop_card`; once the cause is mended, `rm "$runs/tester-stand/halted-LANE"` and the
+# failed line again. 1.
+failure() { local lane=$1
+  [ -e "$runs/tester-stand/stopped-$lane" ] && return 1
+  if [ "${2-}" = 97 ] || ! by "$(end_for "$lane")" 1 > /dev/null; then echo "the $lane card ends now, at code $2" >&2; stop_card "$lane"; return 1; fi
+  touch "$runs/tester-stand/halted-$lane"; echo "the $lane card's steps stop at code $2, and it runs on: look at the cause" >&2; return 1; }
+# A card's bootstrap, the command $3 on card $1, apart from ssh so that a dropped connection does not end it, with this
+# function's stdin as its own: /workspace/boot/run.sh runs it under a lock of its own and writes its code to `exit` as
+# it ends, and a new one begins only where none runs, whatever an earlier try left running. Then a look every 15 s,
+# each cut at the card's end: 0, or 1 and the log's last lines for any other code; 97 once no ssh has answered for ten
+# minutes, and 98 after $2 seconds or at the card's end.
+boot_run='d=$(cd "$(dirname "$0")" && pwd); exec 9> "$d/lock"; flock -n 9 || exit 0; rm -f "$d/exit"
+"$@" < "$d/in" > "$d/log" 2>&1 9>&-; echo $? > "$d/exit.new" && mv -f "$d/exit.new" "$d/exit"'
+boot_start='umask 077; d=/workspace/boot; cat > $d/in.$$
+if [ -e $d/lock ] && ! flock -n $d/lock true; then rm -f $d/in.$$; echo running; exit 0; fi
+mv -f $d/in.$$ $d/in; rm -f $d/exit; setsid -f bash $d/run.sh'
+boot() { local lane=$1 most=$2 s out r t0 seen
+  on_card "$lane" 60 'umask 077; mkdir -p /workspace/boot && cat > /workspace/boot/run.$$ && mv -f /workspace/boot/run.$$ /workspace/boot/run.sh' <<<"$boot_run" \
+    && out=$(on_card "$lane" 120 "$boot_start $3 < /dev/null > /dev/null 2>&1; echo started") || return 1
+  echo "the $lane card's bootstrap: ${out##*$'\n'}" >&2; t0=$(date +%s); seen=$t0
+  while s=$(by "$(end_for "$lane")" 15) && sleep "$s" && (( $(date +%s) - t0 < most )); do
+    alive "$lane" || return 96
+    if out=$(on_card "$lane" 30 'cat /workspace/boot/exit 2>/dev/null; echo .' < /dev/null); then
+      seen=$(date +%s); r=$(grep -xE '[0-9]+' <<<"$out") || continue
+      (( r == 0 )) && return 0; on_card "$lane" 30 'tail -n 5 /workspace/boot/log' < /dev/null >&2; return 1; fi
+    (( $(date +%s) - seen < 600 )) || { echo "no ssh answer from the $lane card for ten minutes" >&2; return 97; }
+  done
+  echo "the $lane card's bootstrap past $most s or the card's end" >&2; return 98; }
+# The text card's steps, in simple-serving's checkout at next-card-metrics (the dashboard above; gpu.md#serving-card).
+t_upload() { (cd /var/tmp/simple-serving-metrics && git archive next-card-metrics) \
+  | on_card text 300 'mkdir -p /workspace/simple-serving && tar -xf - -C /workspace/simple-serving'; }
+# bootstrap.sh may run again: its files are checked by hash, and keys.json is kept.
+t_boot() { local keys; keys=$(cd /var/tmp/simple-serving-metrics && uv run python -m simple_serving.cli keys) && [ -n "$keys" ] \
+  && boot text 1800 'bash /workspace/simple-serving/card/bootstrap.sh' <<<"$keys"; }
+t_trial() { local s; s=$(by "$end_text" 120) && (cd /var/tmp/simple-serving-metrics && timeout "$s" uv run python -m simple_serving.cli trial --ssh-host simple-chat-vast); }
+t_pair() { local py=/workspace/simple-serving-card/gateway/bin/python
+  on_card text 300 "cd /workspace/simple-serving && $py -m simple_serving.card --stop && $py -m simple_serving.card"; }
+# Whether the smoke's lines in $1 failed at `schemas` alone, and there only at answers cut at their max_tokens: status
+# 200, `finish` all that failed, with the cut's counts of spaces and of characters outside ASCII.
+cut_only() { node -e 'let rows; try { rows = require("fs").readFileSync(process.argv[1], "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line)); } catch { process.exit(1); }
+  const failed = rows.filter(row => row.ok === false), parts = failed.length === 1 && failed[0].probe === "schemas" ? Object.values(failed[0]).filter(v => v && typeof v === "object" && v.ok === false) : [];
+  process.exit(parts.length && parts.every(v => v.status === 200 && JSON.stringify(v.failed) === "[\"finish\"]" && Number.isInteger(v.space_chars) && Number.isInteger(v.non_ascii_chars)) ? 0 : 1);' "$1"; }
+# The smoke, its lines kept in tester-stand/$1.jsonl: 0 once it passes, or fails at cut schema answers alone.
+t_smoke() { local s log=$runs/tester-stand/$1.jsonl; shift; s=$(by "$end_text" 600) || return 1; rm -f "$log"
+  (cd /var/tmp/simple-serving-metrics && timeout "$s" uv run python -m simple_serving.smoke "$@") | tee "$log" || cut_only "$log"; }
+# The smoke's step. Schema answers cut at their max_tokens are the JSON whitespace loop, met as the bot meets it, by
+# its limit and one retry: the smoke's verdict stays in its lines, it is a warning here, and counts and privacy, which
+# the smoke did not reach, then run on their own and must pass.
+smoke_step() { tries text t_smoke smoke-text || return
+  cut_only "$runs/tester-stand/smoke-text.jsonl" || return 0
+  echo "the smoke: schema answers cut at their max_tokens, a warning; counts and privacy on their own" >&2
+  tries text t_smoke smoke-text-apart --only counts,privacy; }
+# The picture card's steps. image-bootstrap.sh may run again: its files are checked by size and SHA256.
+p_upload() { on_card pictures 60 'mkdir -p /workspace/simple-chat/gpu /workspace/simple-chat-gpu' \
+  && tar -cf - -C "$HOME/work/simple-chat-tester-stand/gpu" . | on_card pictures 120 'tar -xf - -C /workspace/simple-chat/gpu'; }
+p_boot() { boot pictures 2400 'env SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_TORCH=cu130 SIMPLE_CHAT_IMAGE_QWEN_PE=true bash /workspace/simple-chat/gpu/image-bootstrap.sh' < /dev/null \
+  && on_card pictures 30 'd=/workspace/simple-chat-gpu; test -s $d/image-verified.txt && test -f $d/ComfyUI/.venv-cu130/simple-chat-ready'; }
 # ---- The end of the helpers.
 
 # Terminal 3, after the helpers, from before the rents until each card and each create reads back gone: each message
@@ -4102,7 +4222,7 @@ tq=$t2; (( hours == 1 )) && tq=$t1
 # The rents, each card's watchdog before anything else. Anything but a watched card goes to the owner at once. The
 # picture card only once the text card's watchdog holds, on a fresh quote of the offers its rent would try, held to it,
 # and only if the text card's own session and that quote fit together in what is left; without it no step of its runs.
-rm -f "$runs"/tester-stand/stopped-* "$runs"/tester-stand/gone-*; watched=
+rm -f "$runs"/tester-stand/stopped-* "$runs"/tester-stand/halted-* "$runs"/tester-stand/gone-*; watched=
 (( hours )) && rent_card text "$hours" "$tq" && watched=1; echo "text ${ID1-} \$${S1-}"
 [ -n "$watched" ] && p2=$(most pictures 2 --avoid-host "$HOST1") && node -e 'const q = process.argv.slice(1).map(v => /^\d+(\.\d+)?$/.test(v) ? Number(v) : NaN), [l, s, p] = q; process.exit(q.every(v => v > 0) && s + p <= l ? 0 : 1)' "$left" "$S1" "$p2" \
   && rent_card pictures 2 "$p2" --avoid-host "$HOST1"; echo "pictures ${ID2-} \$${S2-}"
@@ -4110,8 +4230,8 @@ rm -f "$runs"/tester-stand/stopped-* "$runs"/tester-stand/gone-*; watched=
 systemd-inhibit --list --no-pager | grep -cE 'watchdog of|sweeper of'    # one a card: this machine stays awake until each is read back gone
 "${rent[@]}" --show "$ID1"    # ssh.direct as simple-chat-vast
 alive pictures && "${rent[@]}" --show "$ID2"    # ssh.direct as simple-chat-vast-pictures
-timeout 120 ssh -o ConnectTimeout=10 simple-chat-vast true    # each card's first ssh verifies its host key
-alive pictures && timeout 120 ssh -o ConnectTimeout=10 simple-chat-vast-pictures true
+timeout 120 ssh -o ConnectTimeout=25 simple-chat-vast true    # each card's first ssh verifies its host key
+alive pictures && timeout 120 ssh -o ConnectTimeout=25 simple-chat-vast-pictures true
 # Each card's end for its work, from its guard. A card whose guard cannot be read is ended here, and nothing starts on it.
 end_text=$(end_of simple-chat-vast "$BY1" text); echo "$end_text"
 alive pictures && end=$(end_of simple-chat-vast-pictures "$BY2" pictures) && declare -p ID2 BY2 end bot > "$runs/tester-stand/rental.env"
@@ -4123,19 +4243,17 @@ echo "${end-}"    # for terminal 4, which starts now
 #   for f in "$runs"/tester-stand/pending-*; do [ -e "$f" ] && sweeper $(<"$f"); done
 
 # The text card, in simple-serving's checkout at next-card-metrics (the dashboard above; gpu.md#serving-card). Each step
-# is cut at the card's end, and one that fails or is cut ends the card: Ctrl+C in terminal 2 as well.
+# is cut at the card's end and tried three times, and one that still fails ends the card where it cannot work and else
+# stops its steps (`failure`, and a card's end above): Ctrl+C in terminal 2 as well once the card is ended.
 cd /var/tmp/simple-serving-metrics
-alive text && { s=$(by "$end_text" 300) && git archive next-card-metrics | on simple-chat-vast "$s" 'mkdir -p /workspace/simple-serving && tar -xf - -C /workspace/simple-serving' \
-  && s=$(by "$end_text" 1800) && uv run python -m simple_serving.cli keys | on simple-chat-vast "$s" bash /workspace/simple-serving/card/bootstrap.sh \
-  && s=$(by "$end_text" 120) && timeout "$s" uv run python -m simple_serving.cli trial --ssh-host simple-chat-vast || stop_card text; }    # 9.2 min on 2026-09-27
+alive text && { tries text t_upload && tries text t_boot && tries text t_trial || failure text $?; }    # 9.2 min on 2026-09-27
 # Terminal 2, in the same checkout: `uv run python -m simple_serving.cli up`, until it says ready.
-alive text && { s=$(by "$end_text" 1200) && ready_text "$s" || stop_card text; }
+alive text && { s=$(by "$end_text" 1200) && ready_text "$s" || failure text $?; }
 # Ctrl+C in terminal 2. A fresh container's first start keeps the smaller cache: the pair again, then `up` again there.
-py=/workspace/simple-serving-card/gateway/bin/python
-alive text && { s=$(by "$end_text" 300) && on simple-chat-vast "$s" "cd /workspace/simple-serving && $py -m simple_serving.card --stop && $py -m simple_serving.card" || stop_card text; }
-alive text && { s=$(by "$end_text" 300) && ready_text "$s" || stop_card text; }    # from here the live bot's scenes are on the card
+alive text && { tries text t_pair || failure text $?; }
+alive text && { s=$(by "$end_text" 300) && ready_text "$s" || failure text $?; }    # from here the live bot's scenes are on the card
 alive text && s=$(by "$end_text" 30) && on simple-chat-vast "$s" "grep -o '\"kv_cache_tokens\": [0-9]*' /workspace/simple-serving-card/logs/card.jsonl | tail -n 1"    # 151300
-mkdir -p logs; alive text && { s=$(by "$end_text" 600) && timeout "$s" uv run python -m simple_serving.smoke | tee logs/smoke-text-card.jsonl || stop_card text; }    # exit 0
+alive text && { smoke_step || failure text $?; }    # exit 0, after a warning where schema answers were cut and counts and privacy then passed
 
 # The text card's jobs, in ~/work/simple-chat with gpu.md's four settings, which a bot started anew also takes, in
 # its checkout with the picture settings of setup.md#pictures: `npm run start:gpu 2>&1 | tee -ai logs/bot-gpu.jsonl`.
@@ -4168,23 +4286,17 @@ stop_card text
   node "$runs/sheet-versions/run.mts" --summary --out "$runs/sheet-versions/card"; }    # T2's counts and criteria
 
 # Terminal 4, in ~/work/simple-chat-tester-stand after the helpers: the picture card, beside the text card's
-# preparation (gpu.md#bot-card, gpu.md#qwen-pe), and its jobs. The bootstrap runs detached, so that a dropped connection
-# does not end it. Each step is cut at the card's end, and one that fails or is cut ends the card.
+# preparation (gpu.md#bot-card, gpu.md#qwen-pe), and its jobs. Each step as the text card's: cut at the card's end,
+# tried three times, and one that still fails ends the card where it cannot work and else stops its steps. The
+# bootstrap, 40 minutes at most, and its marks; else the log's last lines.
 cd ~/work/simple-chat-tester-stand; source ~/simple-story-chat-runs/2026-09-28/tester-stand/rental.env
-alive pictures && { s=$(by "$end" 60) && on simple-chat-vast-pictures "$s" 'mkdir -p /workspace/simple-chat/gpu /workspace/simple-chat-gpu' \
-  && s=$(by "$end" 120) && tar -cf - -C gpu . | on simple-chat-vast-pictures "$s" 'tar -xf - -C /workspace/simple-chat/gpu' \
-  && s=$(by "$end" 30) && on simple-chat-vast-pictures "$s" 'SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_TORCH=cu130 SIMPLE_CHAT_IMAGE_QWEN_PE=true setsid -f nohup bash /workspace/simple-chat/gpu/image-bootstrap.sh </dev/null >>/workspace/simple-chat-gpu/bootstrap.log 2>&1' \
-  || stop_card pictures; }
-# Its lock, 40 minutes at most, and its marks; else the log's last lines, and the card ends.
-sleep 15; alive pictures && { s=$(by "$end" 2400) && timeout "$s" bash -c 'until timeout 20 ssh -o ConnectTimeout=10 -o BatchMode=yes simple-chat-vast-pictures "flock -n /workspace/simple-chat-gpu/image-bootstrap.lock true"; do sleep 10; done' \
-  && s=$(by "$end" 30) && on simple-chat-vast-pictures "$s" 'd=/workspace/simple-chat-gpu; test -s $d/image-verified.txt && test -f $d/ComfyUI/.venv-cu130/simple-chat-ready' \
-  || { s=$(by "$end" 30) && on simple-chat-vast-pictures "$s" 'tail -n 5 /workspace/simple-chat-gpu/bootstrap.log'; stop_card pictures; }; }
-alive pictures && { s=$(by "$end" 30) && on simple-chat-vast-pictures "$s" 'grep -c qwen3.5_9b_qwen_image_2.1_pe_t2i /workspace/simple-chat-gpu/image-verified.txt' || stop_card pictures; }    # 1, for P2
-alive pictures && { s=$(by "$end" 30) && on simple-chat-vast-pictures "$s" 'SIMPLE_CHAT_IMAGE_TORCH=cu130 SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 SIMPLE_CHAT_IMAGE_TRITON=1 setsid -f nohup flock -n /root/.simple-chat-comfy.lock bash /workspace/simple-chat/gpu/image-serve.sh </dev/null >/dev/null 2>&1' || stop_card pictures; }
+alive pictures && { tries pictures p_upload && tries pictures p_boot || failure pictures $?; }
+alive pictures && { tries pictures on_card pictures 30 'grep -c qwen3.5_9b_qwen_image_2.1_pe_t2i /workspace/simple-chat-gpu/image-verified.txt' || failure pictures $?; }    # 1, for P2
+alive pictures && { tries pictures on_card pictures 30 'SIMPLE_CHAT_IMAGE_TORCH=cu130 SIMPLE_CHAT_IMAGE_QWEN=only SIMPLE_CHAT_IMAGE_GPU=0 SIMPLE_CHAT_IMAGE_TRITON=1 setsid -f nohup flock -n /root/.simple-chat-comfy.lock bash /workspace/simple-chat/gpu/image-serve.sh </dev/null >/dev/null 2>&1' || failure pictures $?; }
 # Terminal 5, in the same checkout: `bash gpu/tunnel.sh --pictures-only simple-chat-vast-pictures`: from here the live
 # bot's pictures are on the card. The server, then the check; a card ended here: Ctrl+C in terminal 5 as well.
-alive pictures && { s=$(by "$end" 600) && timeout "$s" bash -c 'until curl -sf -m 5 -o /dev/null http://127.0.0.1:8188/system_stats; do sleep 5; done' && check_pictures "$end" || stop_card pictures; }
-alive pictures && { s=$(by "$end" 30) && on simple-chat-vast-pictures "$s" 'd=/workspace/simple-chat-gpu/ComfyUI; du -sh $d/.venv-cu130; df -h /workspace | tail -1; test -f $d/.venv-cu130/simple-chat-ready && test ! -e $d/.venv && echo cu130 alone' || stop_card pictures; }    # the disk, for the next rental
+alive pictures && { s=$(by "$end" 600) && timeout "$s" bash -c 'until curl -sf -m 5 -o /dev/null http://127.0.0.1:8188/system_stats; do sleep 5; done' && check_pictures "$end" || failure pictures $?; }
+alive pictures && { tries pictures on_card pictures 30 'd=/workspace/simple-chat-gpu/ComfyUI; du -sh $d/.venv-cu130; df -h /workspace | tail -1; test -f $d/.venv-cu130/simple-chat-ready && test ! -e $d/.venv && echo cu130 alone' || failure pictures $?; }    # the disk, for the next rental
 # After the owner's smoke, if the owner is at hand:
 grep -E '"event":"picture(_portrait)?"' ~/work/simple-chat/logs/bot-gpu.jsonl | tail -n 2 | grep -c '"pictureAttention":"kitchen"'    # 2
 curl -s -m 10 http://127.0.0.1:8188/internal/logs/raw | grep -o 'is unavailable; using PyTorch attention' | wc -l    # 0
@@ -4212,12 +4324,14 @@ stop_card pictures
 
 **While the cards run**, nothing runs on this machine that the cards do not need; code, tests and commits go to a
 subagent in a worktree of its own. A card whose queue is empty is deleted at once and the owner told, whether or not the
-tester is at the bot. Each card has three ends besides its queue's: `stop_card`, which each failed step calls; its guard
+tester is at the bot. Each card has three ends besides its queue's: `stop_card`, which a step that still fails after its
+tries calls where the card cannot work, and the main session where it reads such a cause; its guard
 on the card, `--hours` after its container started; and its watchdog here at `destroyBy`, a quarter of an hour after
 that, which logs to `watchdog-text.log` or `watchdog-pictures.log` beside the card probe. The text card also stops
 itself after 13 minutes without a call, and `up` ends with it; a stopped card still bills its disk and its guard no
-longer runs, so it is ended with `stop_card text` as soon as that is seen, and by its watchdog otherwise. A card that
-fails its preparation, check or smoke is ended at once. Every destroy is read back gone, and one that is not goes to the
+longer runs, so it is ended with `stop_card text` as soon as that is seen, and by its watchdog otherwise. A card whose
+preparation, check or smoke still fails after its tries, and can work, runs on with its steps stopped until the main
+session has read the cause ([a card's end](#card-end)). Every destroy is read back gone, and one that is not goes to the
 owner at once, as its message says. A sweeper, if a create named no card, writes each such message to
 `sweeper-LABEL.log` beside the watchdogs'. Terminal 3 shows each of those messages as it is written, with the terminal's
 bell, and stays in sight until every card and every create reads back gone.
