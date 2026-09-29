@@ -4,7 +4,7 @@
 // here, and in the sharp stories it carries the dry run's marker, so that the boundary test has something to find.
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { ACTION_STORIES, MARKER_STORY } from '../examples/action-set.ts';
 import { FACINGS, isSharp, textStories } from './action-text.ts';
 import type { Fetch, Schema } from './action-text.ts';
@@ -168,19 +168,19 @@ export function madeUpAnswers(story: string, session: string, dir: string, marke
   const schema = JSON.parse(readFileSync(join(dir, 'schema.json'), 'utf8')) as Schema;
   return session === 'checklist' ? checklistFor(story, input as ChecklistInput, isSharp(story) ? ` ${marker}` : '') : answersFor(schema, `${story}/${session}`);
 }
-// A judge in place of `codex exec`: it reads the copy it is started in, as a session does, and writes its events,
-// its stderr and its report where the command says. Its words are made up; a sharp scene's carry the marker.
+// A judge in place of `codex exec`: it reads the copy whose schema the command holds it to, and writes its events, its
+// stderr and its report where the command says. Its words are made up; a sharp scene's carry the marker.
 export function fakeJudge({ marker, script = {} }: { marker: string; script?: Record<string, JudgeFault[]> }) {
   const runs: { story: string; session: string; attempt: number; model: string; fault: JudgeFault }[] = [];
   const exec: Exec = async (command, args, options) => {
-    const dir = args[args.indexOf('-C') + 1], report = args[args.indexOf('-o') + 1], model = args[args.indexOf('-m') + 1];
+    const dir = dirname(args[args.indexOf('--output-schema') + 1]), report = args[args.indexOf('-o') + 1], model = args[args.indexOf('--model') + 1];
     const [story, session, attempt] = basename(dir).split('.');
     const fault = script[`${story}/${session}`]?.[Number(attempt) - 1] ?? 'valid';
     runs.push({ story, session, attempt: Number(attempt), model, fault });
     const secret = isSharp(story) ? ` ${marker}` : '';
     const answers = madeUpAnswers(story, session, dir, marker);
     const block = (value: unknown) => '```json\n' + JSON.stringify(value, null, 2) + '\n```\n';
-    writeFileSync(options.stdout, JSON.stringify({ type: 'item.completed', text: `read input.json${secret}` }) + '\n');
+    writeFileSync(options.stdout, JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: `Ответ${secret}` } }) + '\n');
     writeFileSync(options.stderr, '');
     writeFileSync(report, fault === 'missing' ? `Всё рассмотрено${secret}, но ответа нет.\n`
       : fault === 'invalid' ? `Ответ${secret}.\n` + block({ ...answers as object, extra: 'field' })

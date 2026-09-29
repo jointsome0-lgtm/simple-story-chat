@@ -238,7 +238,7 @@ function openRecord(dir: string, pins: Record<string, string | number> = pinsOf(
 // A session's attempts, both Astra's: one fresh session after one without valid answers, and no more. Each attempt's
 // copy of the bundle and its report stay in sessions/, and the answers are the first valid ones.
 const ATTEMPTS = 2;
-const codexFailed = (read: Read) => read.code === 'no_report' || read.code === 'timeout';
+const codexFailed = (read: Read) => read.code === 'no_report' || read.code === 'timeout' || read.code === 'unexpected_tools';
 const picturesOf = (copy: string) => (JSON.parse(readFileSync(join(copy, 'input.json'), 'utf8')) as { pictures?: string[] }).pictures?.map(name => join(copy, name)) ?? [];
 export type QueueOptions = { dir: string; bundles: string; names: string[]; prompt: (name: string) => string; images?: (copy: string) => string[];
   pins?: Record<string, string | number>; parallel?: number; exec?: Exec; codex?: string; log?: (event: object) => void; badShare?: number };
@@ -265,7 +265,8 @@ export async function runQueue(options: QueueOptions): Promise<JudgingRecord> {
       const schema = JSON.parse(readFileSync(join(options.bundles, name, 'schema.json'), 'utf8')) as Schema;
       ({ read, exitCode, ms } = await runAttempt({ bundle: join(options.bundles, name), copy: join(base, copy), report: join(base, `${copy}.report.md`),
         events: join(base, `${copy}.events.jsonl`), stderr: join(base, `${copy}.stderr.log`), model: JUDGE.model, prompt: options.prompt(name),
-        images: options.images ?? picturesOf, validate: got => (got.code === 'ok' && !fitsSchema(got.value, schema) ? { code: 'schema' } : got),
+        files: ['input.json', 'schema.json'], images: options.images ?? picturesOf,
+        validate: got => (got.code === 'ok' && !fitsSchema(got.value, schema) ? { code: 'schema' } : got),
         exec: options.exec, codex: options.codex }));
     } catch { /* recorded below as an attempt without a report */ }
     const failed = codexFailed(read);

@@ -1,18 +1,19 @@
 // The judging of the action measurement (docs/action-experiment.md#judging). Four kinds of session work on each
-// scene, each a fresh `codex exec` session in its own copy of its bundle:
+// scene, each one fresh `codex exec` request on its own copy of its bundle:
 //   checklist  from the action scene, its target and the sheet, before any picture exists;
 //   text       the prompts of A and A+, the fronts and the views;
 //   pictures   one scene's pictures of one seed, and `repeat`, the same bundle again for four clean scenes at seed 7;
 //   identity   the same pictures beside the fronts of the bound people, once `pictures` has its answers.
 // A bundle holds its task, its inputs, its schema and its pictures, named by their hashes; which arm drew which picture
-// stays outside, in the story's `keys/`. A session's answers are the last JSON block of its report, read strictly
-// against its bundle's schema. A clean scene's report without a valid block gets one fresh session and then counts as
-// a judge's failure; a sharp scene's goes to gpt-6-sol, then to the owner's page (docs/action-experiment.md#sealed).
+// stays outside, in the story's `keys/`. A session's answers are its report, which Codex holds to its bundle's schema,
+// read strictly against that schema. A clean scene's report without valid answers gets one fresh session and then
+// counts as a judge's failure; a sharp scene's goes to gpt-6-sol, then to the owner's page
+// (docs/action-experiment.md#sealed).
 // Every word of a story stays in its directory, `sealed/<id>/` for a sharp one, and the sessions of a sharp story run
 // inside `sealed/`; what this file prints and writes at the run's level is ids, codes, counts and times.
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { closeSync, copyFileSync, cpSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { ACTION_SEEDS, ACTION_STORIES, sharpTarget, repeatedScenes } from '../examples/action-set.ts';
@@ -27,6 +28,7 @@ import { entryId, readPlan } from './action-prompts.ts';
 import type { Turn } from './action-prompts.ts';
 import { FRAME_CANVAS, SCALED, VIEW_CANVAS, frameKey } from './action-draw.ts';
 import type { DrawIndex } from './action-draw.ts';
+import { PASSIVE_ITEMS, leanArgs, leanEnv } from './codex.ts';
 
 const sha256 = (value: string | Uint8Array) => createHash('sha256').update(value).digest('hex');
 const writeJson = (file: string, value: unknown) => {
@@ -453,22 +455,37 @@ function attachments(dir: string, kind: SessionKind): string[] {
 
 // ---- The sessions' runs ----
 
-// `codex exec` as the second panel ran it: fresh and ephemeral, no user config or rules, a read-only sandbox, the
-// model and the effort pinned, started in the session's own copy, its report where `-o` says, its pictures attached.
+// `codex exec` as the second panel ran it: Codex's agent, started in the session's own copy, which read the files
+// there with its shell and sent the whole context, the pictures included, again at each step. Only the POV stand's
+// judging (local/pov-stand.ts) still starts it so.
 export function codexArgs({ model, dir, report, images, prompt }: { model: string; dir: string; report: string; images: string[]; prompt: string }) {
   return ['exec', '--json', '--ephemeral', '--ignore-user-config', '--ignore-rules', '--skip-git-repo-check', '--sandbox', 'read-only',
     '--color', 'never', '-m', model, '-c', `model_reasoning_effort="${JUDGE.effort}"`, '-C', dir, '-o', report,
     ...images.flatMap(image => ['-i', image]), '--', prompt];
 }
-// How a session is started: its command and arguments, its working directory and environment, the files its stdout
-// (the events) and stderr go to, and its deadline. It answers with the exit code once the process has exited: at the
-// deadline it is asked to stop, killed two seconds later if it has not, and still waited for, so nothing of it runs on.
-export type Exec = (command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; stdout: string; stderr: string;
+// The judge's own instructions in place of Codex's, which are an agent's. They say nothing of what is judged: that is
+// the task's, pinned by its hash.
+export const JUDGE_INSTRUCTIONS = 'You are a careful judge. The user\'s message is your task and, after it, each file of the task\'s folder that the task has you read, whole, under its name. The pictures the task names are attached to the message in the order the task gives. You have no tools and need none: everything the task needs is in the message. Your reply is held to the task\'s schema.json: give the answers as that JSON alone, with no fence and no text around it.';
+// `codex exec` as `runAttempt` starts it since 2026-09-29, the lean call of local/codex.ts: one request with no tool,
+// the judge's instructions from a file, the answers held to the bundle's schema, the report where `-o` says, the
+// pictures attached in their order, and the prompt on stdin, which the process list does not show.
+export function leanCodexArgs({ model, instructions, schema, report, images }: { model: string; instructions: string; schema: string; report: string;
+  images: string[] }) {
+  return [...leanArgs(model, JUDGE.effort, instructions), '--output-schema', schema, '-o', report, ...images.flatMap(image => ['-i', image]), '--', '-'];
+}
+// How a session is started: its command and arguments, its working directory and environment, its prompt on stdin if
+// any, the files its stdout (the events) and stderr go to, and its deadline. It answers with the exit code once the
+// process has exited: at the deadline it is asked to stop, killed two seconds later if it has not, and still waited
+// for, so nothing of it runs on.
+export type Exec = (command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; stdin?: string; stdout: string; stderr: string;
   signal: AbortSignal }) => Promise<number>;
-export const spawnExec: Exec = (command, args, { cwd, env, stdout, stderr, signal }) => new Promise(done => {
+export const spawnExec: Exec = (command, args, { cwd, env, stdin, stdout, stderr, signal }) => new Promise(done => {
   const out = openSync(stdout, 'w', 0o600), err = openSync(stderr, 'w', 0o600);
   let ended = false, kill: NodeJS.Timeout | undefined;
-  const child = spawn(command, args, { cwd, env, stdio: ['ignore', out, err] });
+  const child = spawn(command, args, { cwd, env, stdio: [stdin === undefined ? 'ignore' : 'pipe', out, err] });
+  // A process that ends before it has read its prompt closes the pipe; its exit code says what happened.
+  child.stdin?.on('error', () => {});
+  child.stdin?.end(stdin);
   const stop = () => {
     child.kill('SIGTERM');
     kill ??= setTimeout(() => child.kill('SIGKILL'), 2000);
@@ -491,12 +508,13 @@ export const spawnExec: Exec = (command, args, { cwd, env, stdout, stderr, signa
 // attempt is recorded as `timeout`: an attempt without answers, as one without a valid block is.
 export const SESSION_MS = 30 * 60000;
 
-// A report's answers: its last JSON block, parsed. Nothing of a block that does not parse is kept or shown: the parser's
-// message quotes it.
-export type Read = { code: 'ok' | 'no_report' | 'no_block' | 'unparsed_block' | 'schema' | 'timeout'; value?: unknown };
+// A report's answers, parsed: the report itself where it is one JSON object, as Codex writes the answers it holds to a
+// schema, and else its last JSON block. Nothing of a block that does not parse is kept or shown: the parser's message
+// quotes it. `unexpected_tools` is an attempt whose events hold an item that acts (runAttempt).
+export type Read = { code: 'ok' | 'no_report' | 'no_block' | 'unparsed_block' | 'schema' | 'timeout' | 'unexpected_tools'; value?: unknown };
 export function answersOf(report: string | undefined): Read {
   if (report === undefined) return { code: 'no_report' };
-  const block = [...report.matchAll(/```json\s*([\s\S]*?)```/g)].at(-1)?.[1];
+  const block = report.trimStart().startsWith('{') ? report : [...report.matchAll(/```json\s*([\s\S]*?)```/g)].at(-1)?.[1];
   if (block === undefined) return { code: 'no_block' };
   try { return { code: 'ok', value: JSON.parse(block) }; } catch { return { code: 'unparsed_block' }; }
 }
@@ -508,22 +526,47 @@ export function validated(root: string, session: Session, read: Read): Read {
   return fits ? read : { code: 'schema' };
 }
 
-// One attempt of a session, as every judging here runs it: a fresh copy of its bundle at `copy`, `codex exec` started
-// in it with the pictures `images` names in the copy attached, and the report's answers read by `validate`, or
-// `timeout` at the deadline. The refs stand's judging (local/image-refs-judge.ts) runs its sessions through it too.
-export type Attempt = { bundle: string; copy: string; report: string; events: string; stderr: string; model: string; prompt: string;
+// One attempt of a session, as every judging here runs it: a fresh copy of its bundle at `copy`; one lean `codex exec`
+// request in an empty directory beside it, whose prompt is the task and after it each of the copy's `files` whole under
+// its name, with the pictures `images` names in the copy attached and the answers held to the copy's schema.json; and
+// the report's answers read by `validate`, or `timeout` at the deadline. An attempt whose events hold an item that acts,
+// anything but a message, reasoning or the CLI's warning, is `unexpected_tools`, whatever its report says. The refs
+// stands' judging (local/image-refs-judge.ts) and the prompt arms probe's (local/image-prompt-arms-judge.ts) run their
+// sessions through it too.
+export type Attempt = { bundle: string; copy: string; report: string; events: string; stderr: string; model: string; prompt: string; files: string[];
   images: (copy: string) => string[]; validate: (read: Read) => Read; env?: NodeJS.ProcessEnv; exec?: Exec; codex?: string };
 export async function runAttempt(one: Attempt): Promise<{ read: Read; exitCode: number; ms: number }> {
   rmSync(one.copy, { recursive: true, force: true });
   rmSync(one.report, { force: true });
   mkdirSync(dirname(one.copy), { recursive: true, mode: 0o700 });
   cpSync(one.bundle, one.copy, { recursive: true });
-  const began = performance.now();
-  const deadline = AbortSignal.timeout(SESSION_MS);
-  const exitCode = await (one.exec ?? spawnExec)(one.codex ?? 'codex', codexArgs({ model: one.model, dir: one.copy, report: one.report, images: one.images(one.copy),
-    prompt: one.prompt }), { cwd: one.copy, env: one.env ?? process.env, stdout: one.events, stderr: one.stderr, signal: deadline });
-  const read: Read = deadline.aborted ? { code: 'timeout' } : one.validate(answersOf(existsSync(one.report) ? readFileSync(one.report, 'utf8') : undefined));
-  return { read, exitCode, ms: Math.round(performance.now() - began) };
+  const prompt = [one.prompt, ...one.files.map(name => `${name}:\n\`\`\`${name.split('.').at(-1)}\n${readFileSync(join(one.copy, name), 'utf8').trimEnd()}\n\`\`\``)]
+    .join('\n\n');
+  // The instructions go through a file beside the empty working directory, and both go once the attempt ends.
+  const home = mkdtempSync(`${one.copy}.codex-`), cwd = join(home, 'empty'), instructions = join(home, 'instructions.md');
+  try {
+    mkdirSync(cwd, { mode: 0o700 });
+    writeFileSync(instructions, JUDGE_INSTRUCTIONS, { mode: 0o600 });
+    const began = performance.now();
+    const deadline = AbortSignal.timeout(SESSION_MS);
+    const exitCode = await (one.exec ?? spawnExec)(one.codex ?? 'codex', leanCodexArgs({ model: one.model, instructions, schema: join(one.copy, 'schema.json'),
+      report: one.report, images: one.images(one.copy) }), { cwd, env: leanEnv(one.env ?? process.env), stdin: prompt, stdout: one.events, stderr: one.stderr,
+      signal: deadline });
+    const read: Read = deadline.aborted ? { code: 'timeout' } : acted(one.events) ? { code: 'unexpected_tools' }
+      : one.validate(answersOf(existsSync(one.report) ? readFileSync(one.report, 'utf8') : undefined));
+    return { read, exitCode, ms: Math.round(performance.now() - began) };
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+// Whether a session's events hold an item that acts: a command, a tool call, a search, an edit or any other kind.
+function acted(events: string): boolean {
+  if (!existsSync(events)) return false;
+  return readFileSync(events, 'utf8').split('\n').some(line => {
+    let event: { type?: unknown; item?: { type?: unknown } | null } | null;
+    try { event = JSON.parse(line); } catch { return false; }
+    return typeof event?.type === 'string' && event.type.startsWith('item.') && !PASSIVE_ITEMS.includes(event.item?.type as string);
+  });
 }
 
 // The run's record of the judging, `judging.json`: its pins and each session's attempts, by model, code and time.
@@ -583,7 +626,7 @@ export async function judgeSessions(options: JudgeOptions): Promise<JudgingRecor
     if (sealed) mkdirSync(tmp, { recursive: true, mode: 0o700 });
     const { read, exitCode, ms } = await runAttempt({ bundle: bundleDir(root, session), copy: join(base, name), report: join(base, `${name}.report.md`),
       events: join(base, `${name}.events.jsonl`), stderr: join(base, `${name}.stderr.log`), model, prompt: taskOf(session.kind),
-      images: copy => attachments(copy, session.kind), validate: one => validated(root, session, one),
+      files: ['input.json', 'schema.json'], images: copy => attachments(copy, session.kind), validate: one => validated(root, session, one),
       env: sealed ? { ...process.env, TMPDIR: tmp } : process.env, exec, codex: options.codex });
     entry.attempts.push({ model, code: read.code, ...(exitCode === 0 ? {} : { exitCode }), ms });
     if (read.code === 'ok') {

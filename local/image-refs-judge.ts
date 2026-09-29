@@ -539,8 +539,8 @@ export function nextModel(attempts: AttemptRecord[], model: string = JUDGE.model
   if (attempts.length > 1 || attempts[0].code === 'ok') return undefined;
   return attempts[0].code === 'no_block' ? fallback ?? undefined : model;
 }
-// codex itself failed, as against a judge that answered: no report at all, or the deadline.
-const codexFailed = (read: Read) => read.code === 'no_report' || read.code === 'timeout';
+// codex itself failed, as against a judge that answered: no report at all, the deadline, or an item that acts.
+const codexFailed = (read: Read) => read.code === 'no_report' || read.code === 'timeout' || read.code === 'unexpected_tools';
 // The judges a record may hold: the judge of record and its fallback, which is also judged alone to be compared.
 const MODELS = [JUDGE.model, JUDGE.fallback] as string[];
 
@@ -600,8 +600,9 @@ export async function judgeJobs(jobs: Job[], options: RunOptions = {}): Promise<
     try {
       const schema = JSON.parse(readFileSync(join(job.bundles, one.name, 'schema.json'), 'utf8')) as Schema;
       ({ read, exitCode, ms } = await runAttempt({ bundle: join(job.bundles, one.name), copy: join(base, name), report: join(base, `${name}.report.md`),
-        events: join(base, `${name}.events.jsonl`), stderr: join(base, `${name}.stderr.log`), model: now, prompt: taskOf(job.stand, one.kind), images: attachments,
-        validate: got => (got.code === 'ok' && !fitsSchema(got.value, schema) ? { code: 'schema' } : got), exec: options.exec, codex: options.codex }));
+        events: join(base, `${name}.events.jsonl`), stderr: join(base, `${name}.stderr.log`), model: now, prompt: taskOf(job.stand, one.kind),
+        files: ['input.json', 'form.json'], images: attachments, validate: got => (got.code === 'ok' && !fitsSchema(got.value, schema) ? { code: 'schema' } : got),
+        exec: options.exec, codex: options.codex }));
     } catch { /* recorded below as an attempt without a report */ }
     const failed = codexFailed(read);
     streak = failed ? streak + 1 : 0;
@@ -670,9 +671,10 @@ export const readRecord = (dir: string) => readJson<JudgingRecord>(recordFile(di
 
 // ---- The dry run ----
 
-// A stand-in for codex that answers every session with a valid form chosen at random from the schema, every picture
-// clean, and the first attempt of the second session with no block at all, as a refusal would: no request leaves the
-// computer. A field that may be null is null or its other type by turns (the prompt arms probe's places).
+// A stand-in for codex that answers every session with a valid form chosen at random from the schema it is held to,
+// every picture clean, and the first attempt of the second session with no answers at all, as a refusal would: no
+// request leaves the computer. A field that may be null is null or its other type by turns (the prompt arms probe's
+// places).
 const sampleOf = (schema: Schema, random: () => number, name = ''): unknown => name === 'clean' ? 'yes'
   : schema.enum ? schema.enum[Math.floor(random() * schema.enum.length)]
     : Array.isArray(schema.type) ? (random() < 0.5 ? null : sampleOf({ ...schema, type: schema.type.find(type => type !== 'null') }, random, name))
@@ -683,13 +685,13 @@ const sampleOf = (schema: Schema, random: () => number, name = ''): unknown => n
 export function fakeCodex(seed = 1): Exec {
   let state = seed, calls = 0;
   const random = () => { state = (state * 1103515245 + 12345) % 2147483648; return state / 2147483648; };
-  return async (_command, args, { cwd }) => {
+  return async (_command, args) => {
     calls++;
     const report = args[args.indexOf('-o') + 1];
-    const schema = JSON.parse(readFileSync(join(cwd, 'schema.json'), 'utf8')) as Schema;
+    const schema = JSON.parse(readFileSync(args[args.indexOf('--output-schema') + 1], 'utf8')) as Schema;
     const images = args.filter((_, at) => args[at - 1] === '-i');
     if (!images.length || images.some(image => !existsSync(image))) return 2;
-    writeFileSync(report, calls === 2 ? 'I will not judge these pictures.\n' : `Judged.\n\n\`\`\`json\n${JSON.stringify(sampleOf(schema, random))}\n\`\`\`\n`);
+    writeFileSync(report, calls === 2 ? 'I will not judge these pictures.\n' : JSON.stringify(sampleOf(schema, random)));
     return 0;
   };
 }

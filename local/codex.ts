@@ -19,11 +19,27 @@ type CliEvent = {
 
 // Codex is an agent with a shell. The narrator needs none of it: everything that can act is switched off, the sandbox
 // is read-only and the working directory is empty. An item of any other kind than these fails the request.
-const FEATURES_OFF = ['shell_tool', 'unified_exec', 'apps', 'plugins', 'memories', 'browser_use', 'computer_use',
+export const FEATURES_OFF = ['shell_tool', 'unified_exec', 'apps', 'plugins', 'memories', 'browser_use', 'computer_use',
   'image_generation', 'view_image', 'skill_search', 'tool_suggest', 'sleep_tool', 'hooks', 'goals'];
 // `error` items are the CLI's own warnings (unknown model metadata), not a failure; the turn's end decides that.
-const PASSIVE_ITEMS = ['agent_message', 'reasoning', 'error'];
+export const PASSIVE_ITEMS = ['agent_message', 'reasoning', 'error'];
 const SIGN_IN_OVERRIDES = ['OPENAI_API_KEY', 'CODEX_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_ORGANIZATION', 'OPENAI_PROJECT'];
+// The CLI as every request here starts it, the picture judges' too (action-judge.ts `runAttempt`): fresh and
+// ephemeral, without the user's config or rules, the model and its effort pinned, the instructions from a file in
+// place of Codex's own, and web search and every feature above off.
+export const leanArgs = (model: string, effort: string | undefined, instructions: string) => ['exec', '--json', '--ephemeral',
+  '--ignore-user-config', '--ignore-rules', '--skip-git-repo-check', '--sandbox', 'read-only', '--color', 'never', '--model', model,
+  ...(effort ? ['-c', `model_reasoning_effort="${effort}"`] : []), '-c', `model_instructions_file=${JSON.stringify(instructions)}`,
+  '-c', 'web_search="disabled"', ...FEATURES_OFF.flatMap(feature => ['--disable', feature])];
+// The CLI signs in through its own CODEX_HOME. A key or another address in the environment would send the request to
+// another account or another server, and the bot's settings are none of its business.
+export function leanEnv(from: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...from };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('SIMPLE_CHAT_') || key === 'TELEGRAM_BOT_TOKEN' || SIGN_IN_OVERRIDES.includes(key)) delete env[key];
+  }
+  return env;
+}
 // A model named `<id>@<effort>` runs at that reasoning effort, as a judge of the eval does (`codex:gpt-6-astra@high`);
 // a plain id keeps the CLI's own default, as the bot's narrator always has.
 const EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'];
@@ -46,22 +62,14 @@ export function createCodex(config: CodexConfig, { launch = spawn }: { launch?: 
       mkdirSync(cwd, { mode: 0o700 });
       const instructions = join(home, 'instructions.md');
       writeFileSync(instructions, request.system, { mode: 0o600 });
-      const args = ['exec', '--json', '--ephemeral', '--ignore-user-config', '--ignore-rules', '--skip-git-repo-check',
-        '--sandbox', 'read-only', '--color', 'never', '--model', model, ...(effort ? ['-c', `model_reasoning_effort="${effort}"`] : []),
-        '-c', `model_instructions_file=${JSON.stringify(instructions)}`, '-c', 'web_search="disabled"',
-        ...FEATURES_OFF.flatMap(feature => ['--disable', feature])];
+      const args = leanArgs(model, effort, instructions);
       if (request.outputSchema) {
         const schema = join(home, 'schema.json');
         writeFileSync(schema, JSON.stringify(request.outputSchema), { mode: 0o600 });
         args.push('--output-schema', schema);
       }
       args.push('-');
-      const env: NodeJS.ProcessEnv = { ...process.env };
-      // The CLI signs in through its own CODEX_HOME. A key or another address in the environment would send the story
-      // to another account or another server.
-      for (const key of Object.keys(env)) {
-        if (key.startsWith('SIMPLE_CHAT_') || key === 'TELEGRAM_BOT_TOKEN' || SIGN_IN_OVERRIDES.includes(key)) delete env[key];
-      }
+      const env = leanEnv(process.env);
       let child: ReturnType<Launch> | undefined;
       let forceKill: NodeJS.Timeout | undefined;
       let timeout: NodeJS.Timeout | undefined;

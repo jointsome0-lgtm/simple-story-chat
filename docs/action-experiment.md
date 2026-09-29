@@ -673,9 +673,12 @@ was.
 ## Judging
 
 The judges are fresh `gpt-6-astra` sessions through `codex exec`, at high reasoning effort in a read-only sandbox,
-each started in its own copy of its bundle with its pictures attached, as [the second
-panel](identity-experiment.md#second-panel) ran. The model, the effort, each task's text by its hash, and the size
-the pictures are attached at are pinned. No task names the arms, shows a prompt of a picture it judges, or states a
+each with its pictures attached. Round two's were each started in its own copy of its bundle and read its files there
+with Codex's shell, as [the second panel](identity-experiment.md#second-panel) ran. Since 2026-09-29 each is one
+request with nothing that can act, as [the narrator's](model-providers.md#codex-cli) is: Codex's own instructions
+replaced by a judge's few lines, the prompt the task with the files it reads after it, and the answers held to the
+bundle's schema (`runAttempt` in [action-judge.ts](../local/action-judge.ts)). The model, the effort, each task's text
+by its hash, and the size the pictures are attached at are pinned. No task names the arms, shows a prompt of a picture it judges, or states a
 hypothesis or a threshold. Four kinds of session work on each scene.
 
 1. **The checklist**, from the narrator's action scene, its target and the sheet, after the text run and before any
@@ -797,8 +800,8 @@ at seed 7. The report gives how often the two agree on each kind of item, and wh
 second's answers stood on those four scenes. The repeat never replaces the first, and it covers neither the sharp
 scenes nor identity.
 
-Each report ends with its answers as one JSON block, and each kind of session has a schema of its own, pinned by its
-hash. The checklist's schema describes the items it lists. The other three take only the ids code gave and values from
+Each report ends with its answers as one JSON block, or since 2026-09-29 is that JSON alone, and each kind of session
+has a schema of its own, pinned by its hash. The checklist's schema describes the items it lists. The other three take only the ids code gave and values from
 their enums, and a block with anything more or anything missing is invalid; the report's prose stays with the report.
 A clean scene's report without a valid block gets one fresh session of the same kind, and a second one without counts
 as a judge's failure; a sharp scene's goes as [below](#sealed). With both seeds there are 28 checklists before the
@@ -919,8 +922,9 @@ Where every piece of a sharp story lives, and what leaves it:
   run, which the harness keeps there and never in the system's temporary directory; the seed, the scenes, the sheet,
   the frames, the prompts and the manifest; the portraits, views and pictures; the judges' bundles; each judge's
   events, its stderr and its report; the answers; the owner's pages.
-- `codex exec` runs with `--ephemeral`, so it keeps no session file of its own, in a working directory inside the
-  sealed bundle and with `TMPDIR` in `sealed/tmp`.
+- `codex exec` runs with `--ephemeral`, so it keeps no session file of its own, with `TMPDIR` in `sealed/tmp`, in a
+  working directory inside `sealed/`: the session's copy of the bundle in round two, and since 2026-09-29 an empty
+  directory beside it, with the task and the files on its stdin and never in its arguments.
 - For a sharp story the harness prints its id, `sharp-1` on, codes from a fixed list, counts and times. An
   error prints its code and the fields that pass `safeErrorDetails`, never a message or a body. After each picture the
   card's record of the job is deleted, as `local/image-batch.ts` does. The file the graph saved stays on the card,
