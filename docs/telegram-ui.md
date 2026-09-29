@@ -405,8 +405,7 @@ in is drawn as usual. The code is `local/picture-pov.ts`.
 - **The first version** (1d5bd2f, live as 27739b9 from 20:05 UTC on 2026-09-27) put the whole look and the clothes in
   the clause («The viewer's own body and clothes: …»), said the viewer "is never shown whole", and had the model call
   them the viewer in the moment and the props. The tester's first frame with it, which had the references of the two
-  other people, was the usual scene from outside with one more person in it («при пове может ничего не меняться просто
-  как будто добавляется еще один человек с руками»).
+  other people, was the usual scene from outside with one more person in it.
 - **References:** the viewer is not among the frame's people, so their kept portrait is never sent as a reference: it
   would pull their whole figure into the frame. The others keep theirs. A reflection is therefore drawn from the
   answer's words alone, without their look, and need not look like them.
@@ -439,8 +438,8 @@ in is drawn as usual. The code is `local/picture-pov.ts`.
 
 ### Along the story
 
-The tester, 2026-09-28: «версонировать персонажей каким то образом в каждый момент истории или на чекпоинтах»; the
-owner: «Делай». A lasting change the story makes to a person's look, a haircut, a scar, dyed hair, reaches the picture
+The tester asked on 2026-09-28 for people's looks to follow the story, at each moment or at checkpoints; the owner:
+«Делай». A lasting change the story makes to a person's look, a haircut, a scar, dyed hair, reaches the picture
 of the scene where it happens and of every later scene on that line. A picture on another branch, or after going back
 to a checkpoint before the change, shows the person as they were there. The code is `local/picture-versions.ts`.
 

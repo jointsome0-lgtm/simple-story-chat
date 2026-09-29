@@ -36,8 +36,7 @@ const POV_TOKENS = 250;
 // last scene is named by its first words: without them the hosted Gemma 4 31B described the scene before a cutaway
 // without the viewer, the one with them, in two answers of two (2026-09-27). The viewer is the camera and never a
 // person of the answer: the first version called them "the viewer" in the moment and the props and gave their whole
-// look, and on the card Qwen drew the usual scene with one more person in it (the tester, 2026-09-27: «как будто
-// добавляется еще один человек с руками»).
+// look, and on the card Qwen drew the usual scene with one more person in it (the tester's report, 2026-09-27).
 const rule = (name: string, opening: string) => `
 Кадр от первого лица. Смотрящий — ${name}: если он есть в последней сцене, кадр снят его глазами. Камера стоит на месте его глаз и показывает то, что он видит в этот момент со своего места, при своей позе и туда, куда смотрит.
 - Последняя сцена — последний ответ рассказчика${opening ? `, тот, что начинается словами «${opening}…»` : ''}. Кадр всегда из неё, даже если смотрящего в ней нет: не бери ради него сцену раньше.

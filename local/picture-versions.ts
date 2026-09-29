@@ -1,5 +1,5 @@
-// A person's appearance along the story (the owner's design of 2026-09-28, «Делай», for the tester's «версонировать
-// персонажей каким то образом в каждый момент истории или на чекпоинтах»; docs/telegram-ui.md#along-the-story).
+// A person's appearance along the story (the owner's design of 2026-09-28, «Делай», for the tester's request that a
+// person's look follow the story; docs/telegram-ui.md#along-the-story).
 //
 // The sheet is each person as the story's first scene has them. A version holds from one scene on and only where the
 // story or the reader changed something: a lasting change the story made, as the frame of that scene named it (a haircut,
