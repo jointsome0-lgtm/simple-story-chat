@@ -11,9 +11,10 @@ import { summaryRequest, supplementRequest, parseMemory, inspectMemory } from '.
 import { seedLanguage } from './story-text.ts';
 import type { Store } from './store.ts';
 import type { Prepared } from './prepare.ts';
+import { waited } from './eta.ts';
 
 // Only the configuration fields generation reads; the bot and probes pass their full configuration.
-export type GenerationConfig = ContextConfig & { memoryMode?: 'plain' | 'sgr'; repairCoverage?: boolean };
+export type GenerationConfig = ContextConfig & { memoryMode?: 'plain' | 'sgr'; repairCoverage?: boolean; memoryThinking?: boolean };
 // Compaction does not read the model or provider name.
 type CompactionConfig = Omit<GenerationConfig, 'model' | 'provider'>;
 // `prepared`: extraction results computed ahead (local/prepare.ts), taken for an identical request.
@@ -25,6 +26,8 @@ type Report = (status: CompactionStatus) => void;
 // probes and the eval keep the Russian defaults.
 export type CompactionLabels = { beforeCompaction: string; afterCompaction: string };
 const LABELS: CompactionLabels = { beforeCompaction: 'До сжатия', afterCompaction: 'После сжатия' };
+// A useful partial supplement can leave more scenes out. Bound the extra requests, even while each makes progress.
+const COVERAGE_REPAIRS = 4;
 // Sizes and counts of a compaction and of its current model request. They go to the technical log; none is text.
 type Numbers = Required<Pick<ErrorDetails, 'sceneCount' | 'repairSceneCount' | 'requestBytes' | 'outputCharacters'>>
   & Pick<ErrorDetails, 'inputBytesBefore' | 'inputBytesAfter'>;
@@ -69,7 +72,7 @@ export async function compactBranch(options: Operation<CompactionConfig> & { onP
   catch (error) {
     const failure = error as Failure;
     // No response bodies, source identifiers or story text enter diagnostics. The caller logs the failure once, so
-    // the numbers travel on the error. Its own details win: a supplement that fails coverage counts its own scenes.
+    // the numbers travel on the error. The validator's own counts win where it supplies them.
     Object.assign(failure, details(), safeErrorDetails(failure));
     failure.operation = 'compact';
     report({ stage: failure.code === 'cancelled' ? 'cancelled' : 'failed', reason: failure.memoryReason ?? failure.code });
@@ -89,10 +92,11 @@ async function extractAndSave({ store, userId, jobId, provider, config, signal, 
   for (let attempt = 0; attempt < 8; attempt++) {
     load();
     Object.assign(numbers, { sceneCount: nodes.length, repairSceneCount: 0 });
-    let ahead: number | undefined;
+    let ahead: number | undefined, etaMs: number | undefined;
     const progress = (stage: CompactionStatus['stage']) => report({ stage, scenes: nodes.length, keptScenes: config.keepScenes ?? 4,
-      outputCharacters: numbers.outputCharacters, repairScenes: numbers.repairSceneCount, ahead: stage === 'queued' ? ahead : undefined });
-    const extract = async (subset: SceneNode[], request = summaryRequest(target, subset, config.memoryMode)) => {
+      outputCharacters: numbers.outputCharacters, repairScenes: numbers.repairSceneCount,
+      ahead: stage === 'queued' ? ahead : undefined, etaMs: stage === 'queued' ? etaMs : undefined });
+    const extract = async (subset: SceneNode[], request = summaryRequest(target, subset, config.memoryMode, config.memoryThinking)) => {
       Object.assign(numbers, { requestBytes: requestBudget(request, config.contextTokens).inputBytes, outputCharacters: 0 });
       // One row before each model request and one after it. A request that fails has its row written by the caller.
       record('compaction_request_started');
@@ -108,11 +112,20 @@ async function extractAndSave({ store, userId, jobId, provider, config, signal, 
       }
       const asked = Date.now();
       let waitMs: number | undefined;
+      // The first place the reader was shown, with its start time (local/eta.ts `waited`).
+      let shown: { ahead: number; etaMs?: number } | undefined;
       const result = await provider.generate(request, { signal,
-        onQueued: () => progress('queued'), onWait: count => { ahead = count; progress('queued'); }, onStart: () => { waitMs = Date.now() - asked; progress('extracting'); },
+        onQueued: () => progress('queued'),
+        onWait: (count, eta) => {
+          ahead = count;
+          etaMs = eta;
+          if (count > 0) shown ??= { ahead: count, etaMs: eta };
+          progress('queued');
+        },
+        onStart: () => { waitMs = Date.now() - asked; progress('extracting'); },
         onText: delta => { numbers.outputCharacters += delta.length; progress('extracting'); },
       });
-      record('compaction_request_completed', { ...result.timings, waitMs,
+      record('compaction_request_completed', { ...result.timings, waitMs, ...waited(shown),
         inputTokens: result.usage?.inputTokens ?? undefined, outputTokens: result.usage?.outputTokens ?? undefined });
       return result;
     };
@@ -127,17 +140,19 @@ async function extractAndSave({ store, userId, jobId, provider, config, signal, 
     load();
     progress('validating');
     if (config.repairCoverage && (config.memoryMode ?? 'plain') === 'plain') {
-      const draft = inspectMemory(result, nodes, 'plain', lang);
-      if (draft.missingSceneIds.length) {
+      let draft = inspectMemory(result, nodes, 'plain', lang);
+      // Count unique scenes that needed repair, not repeated attempts at the same missing scenes.
+      numbers.repairSceneCount = draft.missingSceneIds.length;
+      for (let repairRound = 0; draft.missingSceneIds.length && repairRound < COVERAGE_REPAIRS; repairRound++) {
+        load();
         const missing = new Set(draft.missingSceneIds);
         const subset = nodes.filter(node => missing.has(node.id));
-        numbers.repairSceneCount = subset.length;
-        // One supplement, solely for omitted scenes. Never invent coverage or
-        // save partial memory; validate the supplement and combined result.
-        const repair = await extract(subset, supplementRequest(target, nodes, draft));
+        // Only the remaining scenes may be cited. A structurally valid partial reply stays in memory until the
+        // whole increment passes parseMemory below; invalid output, cancellation or the fact cap stops the repair.
+        const repair = await extract(subset, supplementRequest(target, nodes, draft, config.memoryThinking));
         load();
         progress('validating');
-        const extra = parseMemory(repair, subset, 'plain', lang);
+        const extra = inspectMemory(repair, subset, 'plain', lang).delta;
         const positions = new Map(nodes.map((node, index) => [node.id, index]));
         // A fact covering an entire transition belongs after its latest source;
         // putting it at the first source can precede an intermediate correction.
@@ -146,6 +161,9 @@ async function extractAndSave({ store, userId, jobId, provider, config, signal, 
         const facts = [...draft.delta.facts, ...extra.facts].sort((a, b) => order(a) - order(b));
         result = { text: JSON.stringify({ facts }), finishReason: 'stop',
           usage: combinedUsage(result.usage, repair.usage) };
+        const next = inspectMemory(result, nodes, 'plain', lang);
+        if (next.missingSceneIds.length >= draft.missingSceneIds.length) break;
+        draft = next;
       }
     }
     const delta = parseMemory(result, nodes, config.memoryMode ?? 'plain', lang);
@@ -189,28 +207,49 @@ function combinedUsage(first: Usage | null | undefined, second: Usage | null | u
 }
 
 // A cancelled or replaced job cannot commit a late scene or memory increment.
-// `waiting`: how many calls are ahead in a shared model's queue, and null when the model starts reading the scene request.
+// `waiting`: how many calls are ahead in a shared model's queue, with roughly when this one starts once the queue can
+// tell (local/eta.ts), and null when the model starts reading the scene request.
 export async function generateScene({ store, userId, jobId, provider, config, signal, prepared, preview = () => async () => {}, waiting = () => {}, onProgress, log, labels }: Operation & {
-  preview?: (state: Library, job: Job, request: ModelRequest) => GenerateControls['onText']; waiting?: (ahead: number | null) => void;
+  preview?: (state: Library, job: Job, request: ModelRequest) => GenerateControls['onText']; waiting?: (ahead: number | null, etaMs?: number) => void;
   onProgress?: Report; log?: Log; labels?: CompactionLabels;
 }) {
   const load = () => loadTarget(store, userId, jobId, signal);
   const storyRequest = (target: ReturnType<typeof load>) => {
     const request = makeRequest(target.state, target.job, config.maxOutputTokens);
-    request.estimatedInputTokens = estimateRequest(target.state, target.job, request, config).tokens;
-    return request;
+    const estimate = estimateRequest(target.state, target.job, request, config);
+    request.estimatedInputTokens = estimate.tokens;
+    return { request, anchored: estimate.source === 'usage' };
   };
   prepared?.keep(load().job);
+  // The first place the reader was shown, with its start time, for the scene's row (local/eta.ts `waited`).
+  let shown: { ahead: number; etaMs?: number } | undefined;
+  const wait = (ahead: number | null, etaMs?: number) => {
+    if (ahead !== null && ahead > 0) shown ??= { ahead, etaMs };
+    waiting(ahead, etaMs);
+  };
   for (let pass = 0; pass <= 4; pass++) {
     const target = load();
-    const request = storyRequest(target);
+    const { request, anchored } = storyRequest(target);
+    const estimateTokens = request.estimatedInputTokens!;
+    const threshold = compactionThreshold(config);
+    // Far below the threshold a provider that counts input exactly is not asked to: the count costs about a second
+    // on the card's tunnel, and the server reports the number while it generates, which decides as before
+    // (local/llama.ts). Anchored on the last scene's measured input, the estimate guesses only the new scene and
+    // message, and there plain bytes / 4 counts Chinese 10% and Korean 7% short (Gemma 4's tokenizer on synthetic
+    // scenes, September 2026; Japanese, English and Russian not short at all): a few hundred tokens against the tenth
+    // of the threshold that 0.9 leaves, 4400 at the default. Without an anchor (a story's first scene, the first after
+    // a compaction or a change of model) the whole request is guessed, Korean came out about 5% short there, and only
+    // half the threshold is trusted: a tokenizer would have to need twice the tokens the estimate allows for a
+    // skipped count to matter. Even then the request is not lost: the server's own count ends it as `context_limit`,
+    // which compacts below.
+    if (provider.countInput && estimateTokens < threshold * (anchored ? 0.9 : 0.5)) request.trustEstimate = true;
+    const counted = !!provider.countInput && !request.trustEstimate;
     // The token count's time in the queue goes to `waitMs`, only its own run to `countMs`.
     const counting = Date.now();
     let countStart = counting;
-    if (provider.countInput) request.estimatedInputTokens = await provider.countInput(request, { signal, onWait: waiting, onStart: () => { countStart = Date.now(); } });
-    const countMs = provider.countInput ? Date.now() - countStart : undefined;
+    if (counted) request.estimatedInputTokens = await provider.countInput!(request, { signal, onWait: wait, onStart: () => { countStart = Date.now(); } });
+    const countMs = counted ? Date.now() - countStart : undefined;
     const countWaitMs = countStart - counting;
-    const threshold = compactionThreshold(config);
     // storyRequest has set the estimate.
     if (request.estimatedInputTokens! < threshold) {
       try {
@@ -218,17 +257,18 @@ export async function generateScene({ store, userId, jobId, provider, config, si
         let waitMs: number | undefined;
         const result = await provider.generate(request, {
           signal, inputLimitTokens: threshold - 1, onText: preview(target.state, target.job, request),
-          onWait: waiting, onStart: () => { waitMs = Date.now() - asked; waiting(null); },
+          onWait: wait, onStart: () => { waitMs = Date.now() - asked; wait(null); },
         });
         // Counts and durations only: where the time of a scene went (queue, token count, prefill, decoding).
         log?.('scene_request_completed', undefined, { ...result.timings, waitMs: waitMs === undefined ? undefined : countWaitMs + waitMs, countMs, elapsedMs: Date.now() - asked,
-          inputTokens: result.usage?.inputTokens ?? undefined, outputTokens: result.usage?.outputTokens ?? undefined });
+          ...waited(shown),
+          estimateTokens, inputTokens: result.usage?.inputTokens ?? undefined, outputTokens: result.usage?.outputTokens ?? undefined });
         load();
         // The threshold is above a non-negative estimate here, so a missing count never reaches it.
         if ((result.usage?.inputTokens ?? 0) >= threshold) throw new ModelError('context_limit');
         return { result, request };
       } catch (error) {
-        // A live input count can correct the estimate before any text is shown.
+        // A live input count can correct the estimate: before any text is shown, or with the scene when it was skipped.
         if (errorCode(error) !== 'context_limit') throw error;
       }
     }

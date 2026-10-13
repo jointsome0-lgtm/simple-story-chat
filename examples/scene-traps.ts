@@ -6,8 +6,15 @@
 // - Without `afterTurn` the scene follows the last frozen scene. These inputs never state the fact they test; some
 //   mention in passing a thing that never happened, and some are allowed, as a control for a narrator that refuses.
 // Ask the judge in the affirmative: a question with a double negative was answered wrongly.
-export type Trap = { key: string; afterTurn?: number; input?: string; facts?: string;
-  questions: [key: string, question: string, expected: 'yes' | 'no'][] };
+// - `set: 'o2'` marks the traps added on 2026-09-27 for time across the scene boundary and for claims about an
+//   unrecorded past, with their controls. The eval scores them apart, so the older traps stay the legacy set.
+// - `set: 'open'` marks the traps on a compatible claim about a past no scene shows, in a story whose seed does not
+//   rule it out. By the owner's word of 2026-09-27 the narrator confirms such a claim and the story keeps to it.
+// - `then`, in set open only, writes one more scene over the trap's scene, from its own input, as the bot would after the
+//   player's next message; its questions are asked of that scene with the trap's scene before it.
+type Question = [key: string, question: string, expected: 'yes' | 'no'];
+export type Trap = { key: string; afterTurn?: number; input?: string; facts?: string; set?: 'o2' | 'open';
+  questions: Question[]; then?: { input: string; questions: Question[] } };
 
 const BATTLE = `- «Красная печать» тратит 3 заряда из браслета Элин и после применения недоступна 10 минут. Других способов восстановить заряды нет.
 - Левое запястье Элин сломано в 08:01. Шина и повязка перелом не лечат: левой рукой она не может держать, поднимать или толкать тяжёлое. Сава не лечит.
@@ -47,6 +54,14 @@ export const traps: Record<string, { facts: string; traps: Trap[] }> = {
         questions: [['bridge_corrected', 'Сказано ли в сцене, что мост на самом деле не горел?', 'yes']] },
       { key: 'ally', input: '08:16. Элин посылает Саву к Роану: пусть пришлёт своих стражей на помощь, раз уж мы союзники.',
         questions: [['ally_corrected', 'Показано ли в сцене, что Роан не союзник: кто-то возражает, Элин поправляется или Роан отказывает как противник?', 'yes']] },
+      { key: 'o2_seal_wait', set: 'o2', input: 'Элин дожидается, когда браслет снова позволит применить «Красную печать», и применяет её против стражей, ломящихся в дверь.',
+        questions: [['o2_seal_early', 'Срабатывает ли «Красная печать» Элин против стражей у двери Верхней таможни раньше 2026-08-02 08:20?', 'no']] },
+      { key: 'o2_lock_no_jump', set: 'o2', input: 'Продолжи прямо с последнего щелчка отмычки: Сава дожимает ригель и докладывает, держит ли замок.',
+        questions: [['o2_lock_before_seal_time', 'Попадает ли начальная отметка времени сцены в интервал от 2026-08-02 08:15 до 2026-08-02 08:19 включительно?', 'yes']] },
+      { key: 'o2_author_minute', set: 'o2', input: '08:17. Тарек и лекарь меняются местами у двери, чтобы не выдохнуться.',
+        questions: [['o2_author_minute_kept', 'Стоит ли в первой строке сцены отметка 2026-08-02 08:17?', 'yes']] },
+      { key: 'o2_bundle_rope', set: 'o2', input: '08:16. Солевар развязывает свой узел, достаёт моток верёвки и предлагает примотать ручку двери к пустой скобе.',
+        questions: [['o2_rope_taken', 'Достаёт ли солевар из своего узла моток верёвки?', 'yes']] },
     ],
   },
   dance: {

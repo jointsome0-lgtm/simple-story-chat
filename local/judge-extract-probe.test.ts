@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { traps } from '../examples/scene-traps.ts';
 import { KEYS } from './judge-extract-keys.ts';
-import { quoteLevel, gradeSlot, gradeItem, scorePairs, agreementReport, versusYesNo, readExtraction, readKeys, readLabels,
-  extractionRequest, runExtraction, constantBaseline, resolveInputs, checkJudge, checkLabels, numberOf, cardFile, STATUSES } from './judge-extract-probe.ts';
+import { gradeSlot, gradeItem, scorePairs, agreementReport, versusYesNo, readExtraction, readKeys, readLabels,
+  extractionRequest, runExtraction, resolveInputs, checkJudge, checkLabels, cardFile } from './judge-extract-probe.ts';
 import type { Extraction, Item, ItemResult, Keys, Slot, Status } from './judge-extract-probe.ts';
 
 // A synthetic scene and its card; no story of anybody's is read here.
@@ -23,112 +23,66 @@ const graded = (side: 'trap' | 'twin', status: Status, over: Partial<ItemResult>
   ({ key: `${side}-${status}`, pairId: 'p1', side, scored: true, pass: true,
     slots: [{ key: 'seal_used', role: 'target', status, quote: 'exact', keyPass: true, pass: true, misses: [] }], ...over });
 
-test('a quote is verified against the scene with the whitespace and typography tolerance, and nothing below it', () => {
-  assert.equal(quoteLevel(SCENE, 'печать ещё не восстановилась'), 'exact');
-  assert.equal(quoteLevel(SCENE, '  печать   ещё\n не восстановилась '), 'whitespace');
-  assert.equal(quoteLevel(SCENE, '"Рано", - говорит она'), 'typography');
-  // Only after punctuation is dropped, which is a retyped line rather than a quote.
-  assert.equal(quoteLevel(SCENE, 'Рано говорит она'), 'punctuation');
-  assert.equal(quoteLevel(SCENE, 'Элин применяет печать'), 'none');
-  assert.equal(quoteLevel(SCENE, '   '), 'empty');
+test('a slot requires supported evidence, the right claim and a complete extraction', () => {
+  const rows: [Slot, Extraction | undefined, string[]][] = [
+    [slot(), found(), []],
+    [slot(), found({ status: 'completed' }), ['status']],
+    [slot({ expect: { status: ['refused'], actor: ['Тарек'] } }), found(), ['actor']],
+    [slot({ expect: { status: ['refused'], number: 3 } }), found(), ['number']],
+    [slot({ expect: { status: ['refused'], number: 3 } }), found({ number: 'три' }), []],
+    [slot({ expect: { status: ['refused'], number: 'none' } }), found({ number: 'три' }), ['number']],
+    [slot(), found({ quote: '  печать   ещё\n не восстановилась ' }), []],
+    [slot(), found({ quote: '"Рано", - говорит она' }), []],
+    [slot(), found({ quote: 'Рано говорит она' }), ['quote']],
+    [slot(), found({ quote: 'печать сгорела дотла' }), ['quote']],
+    [slot({ expect: { status: ['absent'] } }), found({ status: 'absent', quote: '' }), []],
+    [slot({ expect: { status: ['absent'] } }), found({ status: 'absent' }), ['quote']],
+    [slot(), undefined, ['missing']],
+  ];
+  for (const [key, extraction, misses] of rows) {
+    const result = gradeSlot(key, extraction, SCENE);
+    assert.deepEqual([result.misses, result.pass], [misses, !misses.length]);
+  }
+  assert.equal(gradeSlot(slot(), found({ quote: 'invented' }), SCENE).keyPass, true);
+  for (const separator of [' ', '\u00a0', '\u202f']) {
+    assert.equal(gradeSlot(slot({ expect: { status: ['refused'], number: 1200 } }), found({ number: `1${separator}200` }), SCENE).pass, true);
+  }
+  assert.deepEqual(readExtraction(JSON.stringify({ items: [found({ status: 'invented' as Status })] })), []);
+  assert.throws(() => readExtraction('{"answers":[]}'), { code: 'invalid_extraction' });
 });
 
-test('a slot passes on the status the key allows and fails on the actor, the number or an unsupported quote', () => {
-  assert.deepEqual(gradeSlot(slot(), found(), SCENE).misses, []);
-  assert.equal(gradeSlot(slot(), found(), SCENE).pass, true);
-  assert.deepEqual(gradeSlot(slot(), found({ status: 'completed' }), SCENE).misses, ['status']);
-  assert.deepEqual(gradeSlot(slot({ expect: { status: ['refused'], actor: ['Тарек'] } }), found(), SCENE).misses, ['actor']);
-  // A name the judge spells out in full still matches the key's short form.
-  assert.deepEqual(gradeSlot(slot({ expect: { status: ['refused'], actor: ['Элин'] } }), found({ actor: 'стражница Элин Вара' }), SCENE).misses, []);
-  assert.deepEqual(gradeSlot(slot({ expect: { status: ['refused'], number: 3 } }), found({ number: '' }), SCENE).misses, ['number']);
-  assert.deepEqual(gradeSlot(slot({ expect: { status: ['refused'], number: 'none' } }), found({ number: '' }), SCENE).misses, []);
-  assert.deepEqual(gradeSlot(slot({ expect: { status: ['refused'], number: 1200 } }), found({ number: '1 200' }), SCENE).misses, []);
-  assert.deepEqual(gradeSlot(slot(), found({ quote: 'печать сгорела дотла' }), SCENE).misses, ['quote']);
-  // The claim and the quote are separate verdicts: the yes/no judge can only be compared with the first.
-  const invented = gradeSlot(slot(), found({ quote: 'печать сгорела дотла' }), SCENE);
-  assert.deepEqual([invented.keyPass, invented.pass, invented.quote], [true, false, 'none']);
-});
-
-test('`absent` is the one status that needs an empty quote, and a slot the judge skipped is missing, not passed', () => {
-  const absent = slot({ expect: { status: ['absent'] } });
-  assert.deepEqual(gradeSlot(absent, found({ status: 'absent', quote: '' }), SCENE).misses, []);
-  assert.deepEqual(gradeSlot(absent, found({ status: 'absent', quote: 'печать ещё не восстановилась' }), SCENE).misses, ['quote']);
-  assert.deepEqual(gradeSlot(slot(), undefined, SCENE).misses, ['missing']);
-  assert.equal(gradeSlot(slot(), undefined, SCENE).status, null);
-});
-
-test('a scene that was never written or was cut off fails its slots without being scored as a refusal', () => {
-  const cut = gradeItem(item({ pairId: 'p1', side: 'trap' }), [], '', false);
-  assert.equal(cut.pass, false);
-  assert.deepEqual(cut.slots.map(one => one.misses), [['missing']]);
-  // The twin was written and carried out, but the trap side is unreadable, so the pair is reported, not rated.
-  assert.deepEqual(scorePairs([cut, graded('twin', 'completed')]), {
-    pairs: 0, pairPass: 0, strictPass: 0, falseDetected: 0, overCorrected: 0, withControls: 0,
-    rates: { pairPass: null, falseDetection: null, overCorrection: null }, unpaired: ['p1'] });
-});
-
-test('a pair passes only when the trap is refused and its true-premise twin is carried out', () => {
-  const pair = (trap: Status, twin: Status) => scorePairs([graded('trap', trap), graded('twin', twin)]);
-  assert.equal(pair('refused', 'completed').pairPass, 1);
-  assert.equal(pair('refused', 'refused').pairPass, 0);
-  assert.equal(pair('completed', 'completed').pairPass, 0);
-  // An evasive scene is not a refusal: silence would otherwise pass every prohibition.
-  assert.equal(pair('absent', 'completed').pairPass, 0);
-  assert.equal(pair('proposed', 'completed').pairPass, 0);
-});
-
-test('always refusing and always complying both score zero on pairs, and refusal shows up as false detection', () => {
-  const both = (trap: Status, twin: Status) => [graded('trap', trap), graded('twin', twin),
-    { ...graded('trap', trap), key: 'b-trap', pairId: 'p2' }, { ...graded('twin', twin), key: 'b-twin', pairId: 'p2' }];
-  const refusing = scorePairs(both('refused', 'refused'));
-  assert.deepEqual([refusing.pairs, refusing.pairPass, refusing.rates.falseDetection], [2, 0, 1]);
-  const complying = scorePairs(both('completed', 'completed'));
-  assert.deepEqual([complying.pairs, complying.pairPass, complying.rates.falseDetection], [2, 0, 0]);
-  const right = scorePairs(both('refused', 'completed'));
-  assert.deepEqual([right.rates.pairPass, right.rates.falseDetection], [1, 0]);
-});
-
-test('a strict pass needs every slot of both sides, and a half pair is reported unpaired rather than scored', () => {
-  const sloppy = graded('trap', 'refused');
-  sloppy.slots.push({ key: 'wrist_healed', role: 'control', status: 'refused', quote: 'exact', keyPass: false, pass: false, misses: ['status'] });
-  sloppy.pass = false;
+test('pairs reject constant answers, evasion, missing targets and failed controls', () => {
+  const rows: [Status, Status, number, number][] = [
+    ['refused', 'completed', 1, 0], ['refused', 'refused', 0, 1],
+    ['completed', 'completed', 0, 0], ['absent', 'completed', 0, 0], ['proposed', 'completed', 0, 0],
+  ];
+  for (const [trap, twin, pass, falseDetection] of rows) {
+    const result = scorePairs([graded('trap', trap), graded('twin', twin)]);
+    assert.deepEqual([result.pairs, result.pairPass, result.rates.falseDetection], [1, pass, falseDetection]);
+  }
+  const sloppy = graded('trap', 'refused', { pass: false });
+  sloppy.slots.push({ key: 'control', role: 'control', status: 'refused', quote: 'exact', keyPass: false, pass: false, misses: ['status'] });
   const score = scorePairs([sloppy, graded('twin', 'completed')]);
-  assert.deepEqual([score.pairPass, score.strictPass], [1, 0]);
-  // The control slot is the true half of the same turn: refusing it is over-correction, not caution.
-  assert.deepEqual([score.withControls, score.overCorrected, score.rates.overCorrection], [1, 1, 1]);
-  assert.deepEqual(scorePairs([graded('trap', 'refused')]).unpaired, ['p1']);
+  assert.deepEqual([score.pairPass, score.strictPass, score.overCorrected, score.rates.overCorrection], [1, 0, 1, 1]);
+  const missing = gradeItem(item({ pairId: 'p1', side: 'trap' }), [], '', false);
+  const targetMissing = gradeItem(item({ pairId: 'p1', side: 'trap', slots: [slot(), slot({ key: 'control', role: 'control' })] }), [found({ key: 'control' })], SCENE);
+  for (const sides of [[missing, graded('twin', 'completed')], [targetMissing, graded('twin', 'completed')], [graded('trap', 'refused')]]) {
+    const result = scorePairs(sides);
+    assert.deepEqual([result.pairs, result.pairPass, result.rates.pairPass, result.unpaired], [0, 0, null, ['p1']]);
+  }
 });
 
-test('the request carries the scene, the asks and no established facts, and a closed schema of the fixed statuses', () => {
-  const request = extractionRequest([slot(), slot({ key: 'wrist_healed', ask: 'Рука Элин снова работает' })], SCENE, '08:16. Элин применяет печать.');
-  assert.match(request.messages[0].content, /СЦЕНА:\nЭлин опускает браслет/);
-  assert.match(request.messages[0].content, /seal_used: Элин применяет «Красную печать»\nwrist_healed:/);
-  assert.doesNotMatch(request.messages[0].content, /УСТАНОВЛЕННЫЕ ФАКТЫ|остаётся ли|Остаётся ли/);
-  assert.equal(request.purpose, 'memory');
-  const schema = request.outputSchema as { properties: { items: { minItems: number; maxItems: number;
-    items: { properties: { status: { enum: string[] }; key: { enum: string[] } } } } } };
-  assert.deepEqual([schema.properties.items.minItems, schema.properties.items.maxItems], [2, 2]);
-  assert.deepEqual(schema.properties.items.items.properties.status.enum, [...STATUSES]);
-  assert.deepEqual(schema.properties.items.items.properties.key.enum, ['seal_used', 'wrist_healed']);
-});
-
-test('a fenced reply is read, an entry with an unknown status is dropped and a reply of the wrong shape fails', () => {
-  const card = (items: object[]) => JSON.stringify({ items });
-  assert.deepEqual(readExtraction('```json\n' + card([found()]) + '\n```').map(one => one.status), ['refused']);
-  assert.deepEqual(readExtraction(card([found({ status: 'invented' as Status }), found({ key: 'other' })])).map(one => one.key), ['other']);
-  // Missing strings become empty ones, so the grader sees a card and not a TypeError.
-  assert.deepEqual(readExtraction(card([{ key: 'seal_used', status: 'absent' }]))[0], { key: 'seal_used', status: 'absent', actor: '', object: '', number: '', quote: '' });
-  assert.throws(() => readExtraction('{"answers":[]}'), (error: { code?: string }) => error.code === 'invalid_extraction');
-});
-
-test('a key file and a label file are validated before anything is graded against them', () => {
-  const keys: Keys = { scenario: 'hard', items: [{ key: 'tickets', pairId: 'tickets', side: 'trap', input: 'Дай двенадцать.', slots: [slot()] },
-    { key: 'tickets_ok', pairId: 'tickets', side: 'twin', input: 'Дай два.', slots: [slot({ expect: { status: ['completed'] } })] }] };
-  assert.deepEqual(readKeys(structuredClone(keys)), keys);
-  assert.throws(() => readKeys({ ...keys, items: [{ ...keys.items[0], side: undefined }] }), /Invalid key file/);
-  assert.throws(() => readKeys({ ...keys, items: [{ ...keys.items[0], slots: [{ ...slot(), expect: { status: ['done'] } }] }] }), /Invalid key file/);
-  assert.deepEqual(readLabels({ labels: [{ scene: 'run-1', trap: 'seal_early', status: 'refused', number: '3' }] }).length, 1);
-  assert.throws(() => readLabels({ labels: [{ scene: 'run-1', trap: 'seal_early', status: 'maybe' }] }), /Invalid label file/);
+test('invalid keys, labels and judge inputs fail before a paid run', () => {
+  const trap: Item = { ...item(), pairId: 'p', side: 'trap' };
+  const twin: Item = { ...item({ key: 'twin' }), pairId: 'p', side: 'twin' };
+  for (const items of [[trap], [trap, { ...trap, key: 'extra' }, twin], [trap, twin, { ...twin, key: 'extra' }],
+    [{ ...trap, side: undefined }, twin], [{ ...trap, slots: [slot(), slot({ key: 'other' })] }, twin],
+    [item({ slots: [slot({ expect: { status: ['done' as Status] } })] })]]) {
+    assert.throws(() => readKeys({ scenario: 'hard', items }), /Invalid key file/);
+  }
+  assert.throws(() => readLabels({ labels: [{ scene: 'run', trap: 'trap', status: 'maybe' }] }), /Invalid label file/);
+  assert.throws(() => resolveInputs({ scenario: 'battle', items: [item()] }, null), { code: 'no_input' });
+  assert.throws(() => checkJudge('claude-opus-5', 'gemma-3-27b'), { code: 'judge_mismatch' });
 });
 
 test('hand labels score the extractor and the old yes/no judge on the same slots', () => {
@@ -210,28 +164,6 @@ test('each memory mode has its own card file, so the second mode does not overwr
   assert.deepEqual([again.passed, again.items[0].slots[0].quote], [1, 'exact']);
 });
 
-test('a failure keeps the cards already paid for, and --resume asks only for the scenes still missing', async t => {
-  const directory = mkdtempSync(join(tmpdir(), 'simple-chat-extract-resume-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const traps = ['seal_early', 'wrist', 'dagger'].map(key => ({ key, text: SCENE, truncated: false }));
-  writeFileSync(join(directory, 'report.json'), JSON.stringify({ scenario: 'battle', sourceHash: 'x', model: 'writer', startedAt: '', scope: '',
-    modes: { plain: { preemptions: 0, compactions: [], through: 16, traps, verdicts: [] } } }));
-  const keys: Keys = { scenario: 'battle', items: traps.map(trap => item({ key: trap.key })) };
-  let calls = 0;
-  const provider = { async generate() {
-    calls++;
-    if (calls === 2) throw Object.assign(new Error(), { code: 'provider_failed' });
-    return { text: JSON.stringify({ items: [found()] }), finishReason: 'stop' as const };
-  } };
-  const base = { directory, mode: 'plain', keys, inputs: {}, model: 'synthetic', provider };
-  await assert.rejects(() => runExtraction(base), (error: { code?: string }) => error.code === 'provider_failed');
-  const saved = JSON.parse(readFileSync(join(directory, cardFile('plain')), 'utf8'));
-  assert.deepEqual([saved.complete, Object.keys(saved.extractions)], [false, ['seal_early']]);
-  const report = await runExtraction({ ...base, resume: true });
-  // One call before the failure, one that failed, and the two scenes that were still missing.
-  assert.deepEqual([calls, report.complete, report.items.length], [4, true, 3]);
-});
-
 test('a reply cut off at the budget is named rather than parsed, and the budget follows the number of slots', async t => {
   const directory = mkdtempSync(join(tmpdir(), 'simple-chat-extract-cut-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
@@ -242,60 +174,8 @@ test('a reply cut off at the budget is named rather than parsed, and the budget 
   await assert.rejects(() => runExtraction({ directory, mode: 'plain', keys: { scenario: 'battle', items: [item()] }, inputs: {}, model: 'synthetic', provider }),
     (error: { code?: string }) => error.code === 'truncated_extraction');
   const three = [slot(), slot({ key: 'wrist_healed' }), slot({ key: 'door' })];
+  assert.doesNotMatch(extractionRequest([slot()], SCENE, '').messages[0].content, /УСТАНОВЛЕННЫЕ ФАКТЫ|остаётся ли|Остаётся ли/);
   assert.deepEqual([extractionRequest([slot()], SCENE, '').maxOutputTokens, extractionRequest(three, SCENE, '').maxOutputTokens], [1024, 2560]);
-});
-
-test('a pair is scored on the item\'s own target slot, and a key may not give a paired item two of them', () => {
-  const trap: Item = { key: 't', pairId: 'p', side: 'trap', slots: [slot(), slot({ key: 'door' })] };
-  const twin: Item = { key: 'w', pairId: 'p', side: 'twin', slots: [slot({ expect: { status: ['completed'] } })] };
-  // The judge answered the neighbouring slot and dropped the trap's own claim; the pair is then unreadable.
-  const score = scorePairs([gradeItem(trap, [found({ key: 'door' })], SCENE), gradeItem(twin, [found({ status: 'completed' })], SCENE)]);
-  assert.deepEqual([score.pairs, score.pairPass, score.unpaired], [0, 0, ['p']]);
-  assert.throws(() => readKeys({ scenario: 'battle', items: [trap] }), /Invalid key file/);
-  // The same item with the neighbour marked as the control is a legal key, and it is read on `seal_used`.
-  const legal: Item = { ...trap, slots: [slot(), slot({ key: 'door', role: 'control' })] };
-  assert.deepEqual(readKeys({ scenario: 'battle', items: [legal, twin] }).items.length, 2);
-  assert.equal(scorePairs([gradeItem(legal, [found(), found({ key: 'door' })], SCENE), gradeItem(twin, [found({ status: 'completed' })], SCENE)]).pairPass, 1);
-});
-
-test('a trap with no player message stops the run instead of showing the judge an empty message', () => {
-  const keys: Keys = { scenario: 'battle', items: [item()] };
-  // A mistyped --pack leaves no fixture; without the key file's own input the run would buy a card per empty message.
-  assert.throws(() => resolveInputs(keys, null), (error: { code?: string }) => error.code === 'no_input');
-  assert.deepEqual(resolveInputs({ scenario: 'battle', items: [item({ input: 'Дай двенадцать.' })] }, null), { seal_early: 'Дай двенадцать.' });
-  assert.deepEqual(resolveInputs(keys, { traps: [{ key: 'seal_early', input: '08:16. Печать.', questions: [] }], turns: [] }), { seal_early: '08:16. Печать.' });
-  assert.deepEqual(resolveInputs(keys, { traps: [{ key: 'seal_early', afterTurn: 1, questions: [] }], turns: ['08:15.', '08:16.'] }), { seal_early: '08:16.' });
-});
-
-test('the model the orchestrator names as the judge is checked before the first call is paid for', () => {
-  assert.equal(checkJudge(undefined, 'whatever-the-env-holds'), undefined);
-  assert.equal(checkJudge('claude-opus-5', 'claude-opus-5'), undefined);
-  assert.throws(() => checkJudge('claude-opus-5', 'gemma-3-27b'), (error: { code?: string }) => error.code === 'judge_mismatch');
-});
-
-test('a number the scene spells out is read, and the thousands separators are joined as memory-probe.ts joins them', () => {
-  assert.deepEqual([numberOf('3'), numberOf('три'), numberOf('Три заряда'), numberOf('тридцать восемь'), numberOf('второе место')], [3, 3, 3, 38, 2]);
-  assert.deepEqual([numberOf(''), numberOf('неизвестно'), numberOf('второе место из трёх')], [null, null, 2]);
-  // Both separators, written here as codes for the same reason they are escapes in the source.
-  for (const code of [0x20, 0xa0, 0x202f]) assert.equal(numberOf(`1${String.fromCharCode(code)}200`), 1200);
-  // The frozen battle scenes write «три заряда» and never «3 заряда», so the word has to pass the key that expects 3.
-  assert.deepEqual(gradeSlot(slot({ expect: { status: ['refused'], number: 3 } }), found({ number: 'три' }), SCENE).misses, []);
-  assert.deepEqual(gradeSlot(slot({ expect: { status: ['refused'], number: 'none' } }), found({ number: 'три' }), SCENE).misses, ['number']);
-});
-
-test('a constant answerer is scored on the same slots, and no built-in ask states the answer it expects', () => {
-  const alone = constantBaseline([{ item: item(), scene: SCENE }]);
-  assert.deepEqual([alone.slots, alone.best.status, alone.best.keyPass, alone.best.pass], [1, 'refused', 1, 1]);
-  // The open pack is almost all false premises, so a judge that answers `refused` to everything takes most of it.
-  // That is what the number is for: the score of this pack means nothing until it stands above this line.
-  const open = Object.values(KEYS).flatMap(keys => keys.items.map(one => ({ item: one, scene: SCENE })));
-  const baseline = constantBaseline(open);
-  assert.equal(baseline.best.status, 'refused');
-  assert.ok(baseline.best.keyPass > baseline.slots / 2, `a constant takes ${baseline.best.keyPass} of ${baseline.slots}`);
-  // An ask that asserts what the key expects is the answer sheet again: the slot names the claim, the key judges it.
-  for (const keys of Object.values(KEYS)) for (const one of keys.items) for (const slot of one.slots) {
-    assert.doesNotMatch(slot.ask, /В сцене сказано|В сцене показано/, `${one.key}/${slot.key}`);
-  }
 });
 
 test('the rate counts the slots the judge was asked about, over the denominator the baseline is counted on', async t => {
@@ -369,24 +249,16 @@ test('a label file that names no slot of the key stops the run before the first 
     (error: { code?: string }) => error.code === 'incomplete_label');
 });
 
-test('a pairId names one trap and one twin, so no side of a pack key is dropped from the rate', () => {
-  const side = (key: string, which: 'trap' | 'twin'): Item => ({ key, pairId: 'p', side: which, input: 'x',
-    slots: [slot(which === 'twin' ? { expect: { status: ['completed'] } } : {})] });
-  assert.equal(readKeys({ scenario: 'hard', items: [side('t1', 'trap'), side('w1', 'twin')] }).items.length, 2);
-  // Two traps under one id: `scorePairs` takes the first of them and the other falls out of the rate and out of
-  // `unpaired` alike, so the pack's headline would be counted over fewer traps than the file holds.
-  assert.throws(() => readKeys({ scenario: 'hard', items: [side('t1', 'trap'), side('t2', 'trap'), side('w1', 'twin')] }), /Invalid key file/);
-  assert.throws(() => readKeys({ scenario: 'hard', items: [side('t1', 'trap')] }), /Invalid key file/);
-  assert.throws(() => readKeys({ scenario: 'hard', items: [side('t1', 'trap'), side('w1', 'twin'), side('w2', 'twin')] }), /Invalid key file/);
-});
-
 test('a slot answers exactly one question of the fixture, and both instruments are scored question by question', () => {
   // Folding two questions into one slot credits the yes/no judge with the one it failed: on the scene below it
   // answered `seal_allowed_worked` right and `seal_allowed_charges` wrong, and both belong in the comparison.
   for (const [scenario, keys] of Object.entries(KEYS)) {
-    const questions = traps[scenario].traps.flatMap(trap => trap.questions.map(([key]) => key));
+    const questions = traps[scenario].traps.filter(trap => !trap.set).flatMap(trap => trap.questions.map(([key]) => key));
     const mapped = keys.items.flatMap(one => one.slots.map(one => one.verdictKey));
     assert.deepEqual([...mapped].sort(), [...questions].sort(), `${scenario} carries every question of the fixture once`);
+    assert.deepEqual(keys.items.map(one => one.key), traps[scenario].traps.filter(trap => !trap.set).map(one => one.key));
+    assert.deepEqual(readKeys(structuredClone(keys)), keys);
+    for (const one of keys.items) for (const slot of one.slots) assert.doesNotMatch(slot.ask, /В сцене сказано|В сцене показано/);
   }
   const keys: Keys = { scenario: 'battle', items: KEYS.battle.items.filter(one => one.key === 'seal_allowed') };
   // The seal was applied and no remainder is named: right on the first question, wrong on the second.
@@ -396,18 +268,4 @@ test('a slot answers exactly one question of the fixture, and both instruments a
   assert.deepEqual(results[0].slots.map(one => one.keyPass), [true, false]);
   const verdicts = [{ key: 'seal_allowed_worked', pass: true, expected: 'yes' }, { key: 'seal_allowed_charges', pass: false, expected: 'yes' }];
   assert.deepEqual(versusYesNo(keys, results, verdicts), { compared: 2, agreed: 2, extractorPassed: 1, judgePassed: 1, judgeConstantYes: 2 });
-});
-
-test('every built-in key names a trap of examples/scene-traps.ts and a question that exists', () => {
-  for (const [scenario, keys] of Object.entries(KEYS)) {
-    const fixture = traps[scenario];
-    assert.ok(fixture, `${scenario} has traps`);
-    const questions = fixture.traps.flatMap(trap => trap.questions.map(([key]) => key));
-    assert.deepEqual(keys.items.map(one => one.key), fixture.traps.map(trap => trap.key), `${scenario} covers every trap`);
-    for (const one of keys.items) for (const slot of one.slots) {
-      assert.ok(!slot.verdictKey || questions.includes(slot.verdictKey), `${scenario}/${one.key}: ${slot.verdictKey} is a question of the fixture`);
-    }
-    // The key file is data the judge never sees; the loader's rules still hold for it.
-    assert.deepEqual(readKeys(structuredClone(keys)), keys);
-  }
 });

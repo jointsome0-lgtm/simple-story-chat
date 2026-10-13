@@ -86,13 +86,14 @@ PROFILES='single pool-2 pool-3 pool-3-draft pool-3-cache-ram'
 # The profiles, in one place. `pool` is the shared cache of a unified profile and must equal the bot's
 # SIMPLE_CHAT_POOL_TOKENS; `cache_ram` is the host RAM snapshot cache in MiB.
 #
-# Every pooled profile keeps the one pool the card was measured at (docs/gpu.md, "Measured on a rented RTX 5090"), so
-# the comparison between them is about slots alone. That table is also why it is not raised: it leaves 4191 MiB free
-# on one slot, 2141 on two and 1717 on three at 98304 cells, so a slot costs about 424 MiB and a unified cell
-# (4191-2141-424)/(98304-65536) = 0.05 MiB. Three slots at 131072 cells would therefore keep about 91 MiB by that
-# table's own optimistic accounting (total minus used; `memory.free` read some 500 MiB lower still), against the
-# 1024 MiB of THRESHOLDS.freeVramMiB. Recompute both numbers for another card or quantization; the floor is the
-# scheduler's 78970 cells (docs/gpu.md, "The pool has a floor").
+# Every pooled profile keeps the one pool the card was measured at
+# (docs/knowledge/gpu-measurements.md#pool-2026-09-20), so the comparison between them is about slots alone. That
+# table is also why it is not raised: it leaves 4191 MiB free on one slot, 2141 on two and 1717 on three at 98304
+# cells, so a slot costs about 424 MiB and a unified cell (4191-2141-424)/(98304-65536) = 0.05 MiB. Three slots at
+# 131072 cells would therefore keep about 91 MiB by that table's own optimistic accounting (total minus used;
+# `memory.free` read some 500 MiB lower still), against the 1024 MiB of THRESHOLDS.freeVramMiB. Recompute both numbers
+# for another card or quantization; the floor is the scheduler's 78970 cells
+# (docs/knowledge/gpu-measurements.md#pool-floor).
 profile_env() {
   case "$1" in
     single)           slots=1 unified=false pool=0     draft=false cache_ram=0 ;;

@@ -1,4 +1,4 @@
-// The agent interface for scripts: one call per run, one JSON object on stdout (docs/agent-interface.md).
+// The agent interface for scripts: one call per run, one JSON object on stdout (docs/agent-interface.md#lifecycle).
 // Technical log rows and progress go to stderr; neither carries story text.
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

@@ -1,48 +1,85 @@
 // Draws the assembled prompts of local/illustrate-probe.ts on a rented card and prepares blind review bundles.
-// It talks to one ComfyUI server over its HTTP API through an ssh tunnel on loopback: POST /prompt, poll /history,
-// GET /view. Two rules come from docs/illustrations-plan.md and AGENTS.md and are not options:
+// It talks to one ComfyUI server through an ssh tunnel on loopback: POST /prompt, then its websocket and a poll of the
+// job's /history record until the job is over, then GET /view. Two rules come from AGENTS.md and the docs named
+// below, and are not options:
 //   - a picture is derived from somebody's scene, so every PNG we keep is rewritten without its text chunks. ComfyUI
 //     puts the whole prompt and workflow into tEXt/iTXt/zTXt, and the server's /history keeps every job until it is
-//     cleared. What this harness can reach it clears; what it cannot is named at `drawOne` and must be wiped with
-//     the card.
-//   - a review bundle never names the checkpoint that drew a picture; the key stays on our side of the bundle.
+//     cleared. What this harness can reach it clears; what it cannot, the file a node writes, is named at `drawOne`:
+//     a preview's goes from the card's RAM seconds later (gpu/image-sweeper.py), a saved one stays with the card
+//     (docs/gpu.md#what-the-card-keeps-of-a-picture).
+//   - a review bundle never names the checkpoint that drew a picture; the key stays on our side of the bundle
+//     (docs/illustrations-plan.md#blind-review).
 // The prompts of the frozen synthetic stories are the only input; no reader's story is drawn here. `--references`
 // adds reference portraits for a model that keeps a face across frames (Qwen Image 2.1): they are uploaded under
 // the hash of their bytes, so no name reaches the card, and they are stripped on the way like every other picture.
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, copyFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
+import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
+import { Refusal } from './action-boundary.ts';
 import { safeErrorDetails } from './model-error.ts';
-import { matchSheet } from './illustrate.ts';
+import { assemblePrompt, matchSheet } from './illustrate.ts';
 import type { Case } from './illustrate-probe.ts';
+import type { PictureEncoder } from './tokenizer.ts';
 
 // A checkpoint's place in the comparison. The bot logs this role, never the file name (local/model-error.ts).
 export type Role = 'primary' | 'alternate';
-export type Cell = { caseId: string; checkpoint: string; role: Role; seed: number };
-// Per-device video memory, as the server reports it while the picture is drawn.
-export type Vram = { index: number; totalMiB: number; usedMiBMax: number };
+// An arm of the identity comparison (docs/identity-experiment.md#identity-runbook). A draws a frame from its text
+// alone, as the bot does today; B draws it with the portraits of the people bound to it and the same text; C with the
+// same portraits and the text of those people without their appearance, each named by the number of their picture
+// instead.
+export type Arm = 'A' | 'B' | 'C';
+export const ARMS: Arm[] = ['A', 'B', 'C'];
+export type Cell = { caseId: string; checkpoint: string; role: Role; seed: number; arm?: Arm };
+// Per-device video memory, as the server reports it while the picture is drawn. `usedMiBMax` counts memory torch
+// holds but is not using as free, as ComfyUI does; `occupiedMiBMax`, where the server reports torch's own figures,
+// is the card as nvidia-smi sees it, and the caching allocator keeps it near the highest the job needed.
+export type Vram = { index: number; totalMiB: number; usedMiBMax: number; occupiedMiBMax?: number };
+// Where a job's time went, as far as ComfyUI's websocket shows it (`phasesOf`).
+export type Phases = { loadMs?: number; encodeMs?: number; sampleMs?: number; decodeMs?: number; otherMs?: number };
 export type Picture = Cell & {
   steps: number; sampler: string; scheduler: string; width: number; height: number;
   // How many reference portraits this frame was drawn with, on a run that has them. A count, not a name: which
-  // person it was stays on our side of the card, as `who` does in local/illustrate-probe.ts.
-  references?: number;
+  // person it was stays on our side of the card, as `who` does in local/illustrate-probe.ts. `referenceSizes` is the
+  // size each one reached the encoder at, after the encode node's resize (`referenceGeometry`), in slot order.
+  references?: number; referenceSizes?: [number, number][];
   // The seconds the rental asks for: submit to file. `viewMs` is the download through the tunnel, apart from the card.
   totalMs: number; viewMs: number; vram: Vram[]; bytes: number; sha256: string; file: string;
+  // `uploadMs`: the portraits this frame was the first to need, sent before the submit and so not in `totalMs`.
+  // `loaderCacheMiss`: ComfyUI ran at least one loader node of the job rather than answer it from its node cache
+  // (`execution_cached`), so a model was read in again rather than reused. It says nothing of where the weights were:
+  // a model the server offloads and brings back each time stays a hit, and that price is part of a warm frame's.
+  // `first`: the first picture of its arm in this run directory. A warm picture is neither a miss nor a first, and
+  // both fields, like `phases`, are missing when the socket did not hear the job from its start.
+  uploadMs?: number; loaderCacheMiss?: boolean; first?: boolean; phases?: Phases;
+  // Samples of video memory taken while the job ran, and the RAM the machine had in use meanwhile, other processes
+  // included: QwenImage21Cache on `auto` moves what does not fit the card into RAM instead of failing, so a run
+  // without an OOM may still have spilled. `partialModelLoadEvents` counts the lines of ComfyUI's own log that say a
+  // model was loaded or unloaded only in part, and a count of 0 does not prove that everything stayed on the card.
+  vramSamples?: number; ramMiB?: { min: number; max: number }; partialModelLoadEvents?: number;
+  // The prompt this cell was sent, in characters, and in tokens as the graph's text encoder reads it when a
+  // tokenizer is at hand (local/tokenizer.ts).
+  promptChars?: number; promptTokens?: number; conditioningTokens?: number;
 };
 // A cell that did not become a picture. The whole cell is on the row, so a later run that draws it can take its
 // failure off again; `httpStatus` is the server's own answer, the one thing that tells a refused graph from a
-// tunnel that went down (local/model-error.ts whitelists it).
-export type Failure = Cell & { code: string; httpStatus?: number };
+// tunnel that went down (local/model-error.ts whitelists it). `oom` says the card ran out of video memory, and
+// `references` how many portraits the cell was to be drawn with: a failed frame of four is a peak nobody measured.
+export type Failure = Cell & { code: string; httpStatus?: number; oom?: boolean; references?: number };
 export type BatchIndex = {
   startedAt: string; completedAt?: string; comfy: { steps: number; sampler: string; scheduler: string; cfg: number; width: number; height: number };
   // The graph this run posted, by name and by its own hash. One run has one workflow, so the Qwen comparison is a
   // second run directory; without this row two directories of one comparison differ in nothing a reader can check,
   // and `comfy` above says which settings that graph was actually filled with.
   workflow?: { file: string; sha256: string };
+  // What else the pictures depend on: the files the graph loads and the server's own versions and card. A resume
+  // under other pins is refused, as one under another graph is. `arms` marks an identity run; `stopped` says the
+  // time budget ended it before its last cell.
+  pins?: Record<string, string | number>; arms?: Arm[]; stopped?: 'budget';
   pictures: Picture[]; failures: Failure[]; error?: string;
 };
 export type Graph = Record<string, { class_type: string; inputs: Record<string, unknown> }>;
@@ -74,6 +111,13 @@ export function stripPngMetadata(bytes: Uint8Array): Uint8Array {
   return Buffer.concat(kept);
 }
 
+// A PNG's size, from the header chunk that always comes first.
+export function pngSize(bytes: Uint8Array): { width: number; height: number } {
+  if (bytes.length < 24 || PNG_SIGNATURE.some((byte, index) => bytes[index] !== byte)) throw new Error('not_a_png');
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return { width: view.getUint32(16), height: view.getUint32(20) };
+}
+
 // The plain workflow the plan asks for: no LoRA, no upscaler, so a weak picture means a weak prompt. It fits an
 // all-in-one checkpoint only — `CheckpointLoaderSimple` reads the `checkpoints` folder and must find the
 // transformer, the text encoder and the VAE in the one file. A model published as separate files, Krea 2 Turbo
@@ -92,8 +136,9 @@ export function defaultWorkflow(): Graph {
     '6': { class_type: 'VAEDecode', inputs: { samples: ['5', 0], vae: ['1', 2] } },
     // Not SaveImage. Whatever node writes the file writes ComfyUI's prompt and workflow into its text chunks, and
     // nothing in the HTTP API deletes a file afterwards; SaveImage would leave that copy in the server's permanent
-    // output directory. PreviewImage writes the same picture to the temp directory the server empties at startup,
-    // and /view serves it the same way, from the type the history entry reports.
+    // output directory. PreviewImage writes the same picture to the temp directory, which gpu/image-serve.sh keeps
+    // in RAM and gpu/image-sweeper.py empties once no job record names the file, and /view serves it the same way,
+    // from the type the history entry reports.
     '7': { class_type: 'PreviewImage', inputs: { images: ['6', 0] } },
   };
 }
@@ -102,9 +147,11 @@ export function defaultWorkflow(): Graph {
 // the file writes ComfyUI's prompt and the whole workflow into its text chunks, and `SaveImage` writes it into the
 // server's permanent output directory, which no route of the HTTP API deletes: the card would keep a copy of a
 // picture of somebody's scene until the card itself is gone. `PreviewImage` writes the same picture to the temp
-// directory the server empties at startup, and `/view` serves it from the type the history entry reports, so
-// nothing else about the drawing changes. The graphs pinned on a card end in `SaveImage` — that is what the batch
-// harness on a rented card wants, and it draws synthetic scenes; the bot draws a reader's, and rewrites it.
+// directory, which no route deletes either, but which gpu/image-serve.sh puts on a tmpfs and gpu/image-sweeper.py
+// empties a few seconds after `drawOne` has deleted the job record; `/view` serves it from the type the history
+// entry reports, so nothing else about the drawing changes. The graphs pinned on a card end in `SaveImage` — that
+// is what the batch harness on a rented card wants, and it draws synthetic scenes; the bot draws a reader's, and
+// rewrites it.
 export function previewOnly(graph: Graph): Graph {
   return Object.fromEntries(Object.entries(graph).map(([id, node]) => [id, node.class_type === 'SaveImage'
     ? { ...node, class_type: 'PreviewImage', inputs: { images: node.inputs.images } } : node]));
@@ -175,19 +222,59 @@ const promptKey = (node: Graph[string], role: 'positive' | 'negative') => {
 
 // The reference-picture inputs of an edit graph, in slot order. Qwen Image 2.1 takes each reference on its own
 // `images.image_N` input of the encode node (ComfyUI's autogrow inputs), and each of those is wired to a LoadImage
-// that names a file in the server's input directory, which is what `--references` uploads.
-export function referenceSlots(graph: Graph): { node: string; key: string; loader: string }[] {
-  const found: { node: string; key: string; order: number; loader: string }[] = [];
+// that names a file in the server's input directory, which is what `--references` uploads. A slot may reach its loader
+// through one node that takes an image and hands one on, a scale node (the action run's references, at a size of their
+// own: docs/action-experiment.md#portraits-and-views): `scale` is that node, and the file is named on the loader behind it.
+export type Slot = { node: string; key: string; loader: string; scale?: string };
+export function referenceSlots(graph: Graph): Slot[] {
+  const found: (Slot & { order: number })[] = [];
   for (const [node, { inputs }] of Object.entries(graph)) {
     for (const [key, value] of Object.entries(inputs)) {
       const slot = /^images\.image_(\d+)$/.exec(key);
-      const loader = Array.isArray(value) ? String(value[0]) : null;
-      if (slot && loader && graph[loader] && 'image' in graph[loader].inputs) {
-        found.push({ node, key, order: Number(slot[1]), loader });
-      }
+      const linked = Array.isArray(value) ? String(value[0]) : null;
+      if (!slot || !linked || !graph[linked] || !('image' in graph[linked].inputs)) continue;
+      const through = graph[linked].inputs.image;
+      const behind = Array.isArray(through) ? String(through[0]) : null;
+      if (behind === null) found.push({ node, key, order: Number(slot[1]), loader: linked });
+      else if (graph[behind] && typeof graph[behind].inputs.image === 'string') found.push({ node, key, order: Number(slot[1]), loader: behind, scale: linked });
     }
   }
-  return found.sort((a, b) => a.order - b.order).map(({ node, key, loader }) => ({ node, key, loader }));
+  return found.sort((a, b) => a.order - b.order).map(({ order, ...slot }) => slot);
+}
+
+// Python's round(), which takes a half to the even neighbour: ComfyUI rounds 720 / 32 = 22.5 to 22, not 23.
+const pyRound = (value: number) => {
+  const floor = Math.floor(value), rest = value - floor;
+  return rest > 0.5 || (rest === 0.5 && floor % 2 === 1) ? floor + 1 : floor;
+};
+// The size Qwen Image 2.1's encode node hands a reference to the text encoder and the VAE at, as the pinned
+// revision computes it (comfy_extras/nodes_qwen.py:99-168): about `resolution` squared at the picture's own aspect,
+// or at `resolution` 0 the picture's own size, in multiples of 32 either way. The node also hands out a latent of the
+// first reference's size, "to match with sampling as any other size shifts the edit"; the pinned edit graph leaves it
+// unwired and samples its own `EmptyLatentImage`, so that upright portraits still make wide frames.
+export function referenceGeometry(width: number, height: number, resolution: number): [number, number] {
+  const ratio = width / height;
+  const [w, h] = resolution > 0
+    ? [pyRound(Math.sqrt(resolution * resolution * ratio) / 32) * 32, pyRound(Math.sqrt(resolution * resolution / ratio) / 32) * 32]
+    : [pyRound(width / 32) * 32, pyRound(height / 32) * 32];
+  return [Math.max(32, w), Math.max(32, h)];
+}
+// The `resolution` input of the node the reference slots belong to, when the graph has such a node.
+export function encoderResolution(graph: Graph): number | undefined {
+  const node = referenceSlots(graph)[0]?.node;
+  const value = node === undefined ? undefined : graph[node].inputs.resolution;
+  return typeof value === 'number' ? value : undefined;
+}
+
+// The text encoder a graph conditions its picture with, as local/tokenizer.ts counts for it: the type of the
+// CLIPLoader behind the node on the sampler's positive input (Qwen Image 2.1's own node, or Krea's CLIPTextEncode).
+// A checkpoint's own CLIP, or a loader of any other type, is no encoder that tokenizer knows.
+export function textEncoderOf(graph: Graph): PictureEncoder | undefined {
+  const sampler = samplerOf(graph);
+  const positive = sampler ? linkedTo(graph, sampler[1].inputs, 'positive') : null;
+  const loader = positive ? linkedTo(graph, positive.inputs, 'clip') : null;
+  const type = loader?.class_type === 'CLIPLoader' ? loader.inputs.type : undefined;
+  return type === 'qwen_image' || type === 'krea2' ? type : undefined;
 }
 
 // Fills a graph by the role of each node rather than by its id, so a workflow pinned on the card keeps working as
@@ -238,7 +325,12 @@ export function applyToWorkflow(graph: Graph, values: WorkflowValues): Graph {
     }
     slots.forEach((slot, order) => {
       if (order < references.length) filled[slot.loader].inputs.image = references[order];
-      else { delete filled[slot.node].inputs[slot.key]; delete filled[slot.loader]; }
+      else {
+        delete filled[slot.node].inputs[slot.key];
+        delete filled[slot.loader];
+        // The whole chain of a slot this frame does not use: a scale node left behind would read a loader that is gone.
+        if (slot.scale) delete filled[slot.scale];
+      }
     });
   }
   return filled;
@@ -246,42 +338,106 @@ export function applyToWorkflow(graph: Graph, values: WorkflowValues): Graph {
 
 // `signal` ends the wait from outside: the bot draws while the reader reads, and a reader who sends the next
 // message is not waiting for this picture any more (local/picture.ts). The batch harness passes none.
-export type Comfy = { baseUrl: string; timeoutMs: number; signal?: AbortSignal };
-type HistoryEntry = { status?: { completed?: boolean; status_str?: string }; outputs?: Record<string, { images?: { filename: string; subfolder: string; type: string }[] }> };
-// The same server without the caller's signal: what stops an abandoned job must still reach the card after that
-// signal has fired, or the card would go on drawing a picture nobody waits for (`stopJob`).
-const afterAbort = (comfy: Comfy): Comfy => ({ baseUrl: comfy.baseUrl, timeoutMs: comfy.timeoutMs });
+// `end` is the end of an identity stage (`DrawOptions.until`), a signal that fires then: nothing is asked of the server
+// after it, and every request, the body of its answer included, is cut there. `reserve` fires `CLEANUP_RESERVE_MS`
+// later and bounds what a job already submitted still needs: its id, and its own stop and delete (`afterAbort`). The
+// bot passes neither. `serving`: the server is simple-serving's picture gateway (`servedBy`).
+export type Comfy = { baseUrl: string; timeoutMs: number; signal?: AbortSignal; end?: AbortSignal; reserve?: AbortSignal; serving?: Serving };
+// simple-serving's picture gateway in front of the card (its docs/pictures.md; local/image-serving.ts), with the key,
+// the class and the scope every request to it carries: the bot's pictures are a reader's (local/picture.ts `draw`), a
+// harness's `--comfy serving` is `internal` (`comfyUrl`). The entry points below draw through it when a Comfy names it
+// or its root was registered as it, and as they always did otherwise.
+export type Serving = { key: string; cls: 'reader' | 'agent' | 'internal'; scope: string };
+const gateways = new Map<string, Serving>();
+export const servedBy = (comfy: Comfy) => comfy.serving ?? gateways.get(comfy.baseUrl);
+type HistoryEntry = { status?: { completed?: boolean; status_str?: string; messages?: unknown };
+  outputs?: Record<string, { images?: { filename: string; subfolder: string; type: string }[] }> };
+// A minute: the id of a job submitted just before the end, then its stop and the delete of its record, on a card
+// that answers at all, take a few seconds of it. `--until` stands five minutes before the rental's own deadline, so
+// this ends four minutes before it (docs/identity-experiment.md#one-hour).
+export const CLEANUP_RESERVE_MS = 60000;
+// The same server without the caller's signal, and with the reserve for its end: what stops an abandoned job must
+// still reach the card after either has fired, or the card would go on drawing a picture nobody waits for (`stopJob`).
+export const afterAbort = (comfy: Comfy): Comfy => ({ baseUrl: comfy.baseUrl, timeoutMs: comfy.timeoutMs, end: comfy.reserve,
+  ...(comfy.serving ? { serving: comfy.serving } : {}) });
+const any = (...signals: (AbortSignal | undefined)[]) => {
+  const set = signals.filter(one => one !== undefined);
+  return set.length ? AbortSignal.any(set) : undefined;
+};
+// A caller who has let go, or a stage whose end has come, as the error that says which. Nothing is asked of the
+// server after either.
+export function halt(comfy: Comfy) {
+  if (comfy.signal?.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
+  if (comfy.end?.aborted) throw Object.assign(new Error('out_of_time'), { code: 'out_of_time' });
+}
 
-const call = async (comfy: Comfy, path: string, init?: RequestInit) => {
-  const timeout = AbortSignal.timeout(comfy.timeoutMs);
-  const response = await fetch(comfy.baseUrl + path, { ...init, signal: comfy.signal ? AbortSignal.any([comfy.signal, timeout]) : timeout });
+export const call = async (comfy: Comfy, path: string, init?: RequestInit) => {
+  halt(comfy);
+  const response = await fetch(comfy.baseUrl + path, { ...init, signal: any(AbortSignal.timeout(comfy.timeoutMs), comfy.signal, comfy.end) });
   if (!response.ok) throw Object.assign(new Error('comfy_http_error'), { code: 'comfy_http_error', httpStatus: response.status });
   return response;
 };
 
-// Used video memory per device, if this server reports it. A ComfyUI without the fields is not an error: the rental
-// reads the card directly as well (local/gpu-diagnose.ts).
-async function readVram(comfy: Comfy): Promise<{ index: number; totalMiB: number; usedMiBMax: number }[]> {
+// Used video memory per device and used system RAM, if this server reports them. A ComfyUI without the fields is not
+// an error: the rental reads the card directly as well (local/gpu-diagnose.ts). ComfyUI counts what torch holds but
+// is not using as free (`vram_free` includes `torch_vram_free`, comfy/model_management.py `get_free_memory`), so
+// `usedMiBMax` misses what the allocator keeps between allocations; adding it back gives the card as nvidia-smi
+// sees it, which stays near the highest the job has needed until the cache is emptied.
+type Stats = { vram: Vram[]; ramMiB?: number };
+async function readStats(comfy: Comfy): Promise<Stats> {
   try {
-    const stats = await (await call(comfy, '/system_stats')).json() as { devices?: { index?: number; vram_total?: number; vram_free?: number }[] };
-    return (stats.devices ?? []).flatMap((device, order) => {
+    const stats = await (await call(comfy, '/system_stats')).json() as { system?: { ram_total?: unknown; ram_free?: unknown };
+      devices?: { index?: number; vram_total?: number; vram_free?: number; torch_vram_free?: unknown }[] };
+    const mib = (bytes: number) => Math.round(bytes / 1024 / 1024);
+    const vram = (stats.devices ?? []).flatMap((device, order) => {
       if (typeof device.vram_total !== 'number' || typeof device.vram_free !== 'number') return [];
-      const mib = (bytes: number) => Math.round(bytes / 1024 / 1024);
-      return [{ index: device.index ?? order, totalMiB: mib(device.vram_total), usedMiBMax: mib(device.vram_total - device.vram_free) }];
+      const used = device.vram_total - device.vram_free, held = device.torch_vram_free;
+      return [{ index: device.index ?? order, totalMiB: mib(device.vram_total), usedMiBMax: mib(used),
+        ...(typeof held === 'number' ? { occupiedMiBMax: mib(used + held) } : {}) }];
     });
-  } catch { return []; }
+    const { ram_total: total, ram_free: free } = stats.system ?? {};
+    return { vram, ...(typeof total === 'number' && typeof free === 'number' ? { ramMiB: mib(total - free) } : {}) };
+  } catch { return { vram: [] }; }
 }
 
 const mergeVram = (into: Vram[], seen: Vram[]) => {
   for (const device of seen) {
     const known = into.find(one => one.index === device.index);
-    if (known) known.usedMiBMax = Math.max(known.usedMiBMax, device.usedMiBMax);
-    else into.push({ ...device });
+    if (!known) into.push({ ...device });
+    else {
+      known.usedMiBMax = Math.max(known.usedMiBMax, device.usedMiBMax);
+      if (device.occupiedMiBMax !== undefined) known.occupiedMiBMax = Math.max(known.occupiedMiBMax ?? 0, device.occupiedMiBMax);
+    }
   }
 };
 
-const post = (comfy: Comfy, path: string, body?: object) => call(comfy, path, { method: 'POST',
+// The memory a job was seen with: the video memory above, how many samples taken while it ran it rests on (the last
+// one, once the job is over, adds to the maxima and not to this count), and the RAM in use.
+export type Memory = { vram: Vram[]; samples: number; ramMiB?: { min: number; max: number } };
+const mergeStats = (into: Memory, seen: Stats, during: boolean) => {
+  if (seen.vram.length && during) into.samples++;
+  mergeVram(into.vram, seen.vram);
+  if (seen.ramMiB !== undefined) {
+    into.ramMiB = { min: Math.min(into.ramMiB?.min ?? seen.ramMiB, seen.ramMiB), max: Math.max(into.ramMiB?.max ?? 0, seen.ramMiB) };
+  }
+};
+
+export const post = (comfy: Comfy, path: string, body?: object) => call(comfy, path, { method: 'POST',
   headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}) });
+
+// What `drawOne` leaves running once it has the picture or has failed: the delete of the job's record and the samples
+// of video memory. The picture waits for neither, and nothing of it is dropped either: `settled` waits for all of it.
+// The bot waits there once the photo is out (local/picture.ts), so that `idle` and `stop` in local/bot.ts cannot end
+// with a delete still on its way; the harness waits there before it records a cell drawn as round one drew, whose
+// video memory it keeps, and at the end of a stage. On the stage's socket a job's last sample is its own to wait for
+// (`follow`'s `lastSample`), since the next job is drawing by the time its record is written.
+const trailing = new Set<Promise<unknown>>();
+const leave = (work: Promise<unknown>) => {
+  const kept = work.catch(() => undefined);
+  trailing.add(kept);
+  void kept.finally(() => trailing.delete(kept));
+};
+export async function settled() { await Promise.all([...trailing]); }
 
 // A reference picture into the server's input directory, where LoadImage reads it by name. The name is the hash of
 // the bytes and nothing else: a portrait is a face, and the sheet name it was drawn for must not be written onto
@@ -290,6 +446,8 @@ const post = (comfy: Comfy, path: string, body?: object) => call(comfy, path, { 
 export async function uploadReference(comfy: Comfy, bytes: Uint8Array): Promise<string> {
   const stripped = stripPngMetadata(bytes);
   const name = `ref-${createHash('sha256').update(stripped).digest('hex').slice(0, 16)}.png`;
+  const serving = servedBy(comfy);
+  if (serving) return (await import('./image-serving.ts')).putInput(comfy, serving, name, stripped);
   const form = new FormData();
   form.append('image', new Blob([stripped], { type: 'image/png' }), name);
   form.append('overwrite', 'true');
@@ -300,119 +458,816 @@ export async function uploadReference(comfy: Comfy, bytes: Uint8Array): Promise<
   return answer.subfolder ? `${answer.subfolder}/${answer.name}` : answer.name;
 }
 
-// The portraits of the people in this frame, in the order the prompt names them. `who` is the only described field
-// that carries a name; here it picks a file, the way it picks an appearance line in local/illustrate-probe.ts, and
-// goes no further.
-// Slot N is person N of the prompt and nothing else says so: the encoder's tokenizer puts its own
-// `<image1> <image2> …` block ahead of a prompt that never mentions the references, and `assemblePrompt` writes one
-// clause per person in this same order. So the binding stops at the first person there is no portrait for — a
-// person the sheet does not cover, or covers without a picture, or one whose portrait is already in a slot — rather
-// than skipping them and moving everybody after them up a slot, which would put a face against another person's
-// clause. Those later people are drawn from their appearance line alone, which is what the whole Krea lane does.
-export function portraitsFor(one: Case, references: References): string[] {
+// The binding plan of a frame: the portraits of its people in the order the prompt names them, each with the sheet
+// name it was picked by. `who` is the only described field that carries a name; here it picks a file, the way it
+// picks an appearance line in local/illustrate-probe.ts, and goes no further. One plan says both which pictures reach
+// the card and whose look arm C may drop (`withoutLooks`), so the two cannot disagree: a person who has a portrait
+// file but stands after the binding has stopped is not bound, and keeps their look.
+// Slot N is person N of the prompt: the encoder's tokenizer puts its own `<image1> <image2> …` block ahead of the
+// prompt, and `assemblePrompt` writes one clause per person in this same order. So the binding stops at the first
+// person there is no portrait for — a person the sheet does not cover, or covers without a picture, or one whose
+// portrait is already in a slot — rather than skipping them and moving everybody after them up a slot, which would
+// put a face against another person's clause. Those later people are drawn from their appearance line alone, which
+// is what the whole Krea lane does.
+export function bindingPlan(one: Case, references: References): { name: string; file: string }[] {
   const story = references[one.scenario] ?? {};
   const names = (one.sheet ?? []).map(character => character.name);
-  const found: string[] = [];
+  const found: { name: string; file: string }[] = [];
   for (const person of one.description?.people ?? []) {
     const matched = matchSheet(person.who ?? '', names);
     const file = matched === null ? undefined : story[matched];
-    if (!file || found.includes(file)) break;
-    found.push(file);
+    if (matched === null || !file || found.some(bound => bound.file === file)) break;
+    found.push({ name: matched, file });
   }
   return found;
 }
+export const portraitsFor = (one: Case, references: References): string[] => bindingPlan(one, references).map(bound => bound.file);
 
-// What the card is drawing now and what waits behind it. A queue entry is an array whose second element is the
-// prompt id; a server that answers with anything else, or does not answer at all, is read as an empty queue, and
-// then `stopJob` below does the one thing that is safe on an unknown card.
-const promptIds = (list: unknown): string[] => (Array.isArray(list) ? list : [])
-  .flatMap(one => (Array.isArray(one) && typeof one[1] === 'string' ? [one[1]] : []));
-async function readQueue(comfy: Comfy): Promise<{ running: string[]; pending: string[] }> {
-  try {
-    const seen = await (await call(comfy, '/queue')).json() as { queue_running?: unknown; queue_pending?: unknown };
-    return { running: promptIds(seen.queue_running), pending: promptIds(seen.queue_pending) };
-  } catch { return { running: [], pending: [] }; }
+// Arm C's prompt: the frame as `assemblePrompt` writes it, with the whole look of each bound person — face, hair,
+// build, marks, bearing — replaced by the number of their picture, and everything else kept: clothes, state, action,
+// and every person the binding stopped before. The tokenizer names the pictures `<image1>`, `<image2>` ahead of the
+// prompt (local/tokenizer.ts `comfyTokens`), so "the person from image 1" points at a picture by the number the
+// model sees it under, and no name goes with it.
+export function withoutLooks(one: Case, bound: string[]): string {
+  const sheet = (one.sheet ?? []).map(character => {
+    const slot = bound.indexOf(character.name);
+    return slot < 0 ? character : { ...character, look: `The person from image ${slot + 1}` };
+  });
+  return assemblePrompt(one.description, sheet).prompt;
 }
 
-// A picture that outlives the wait is still the card's. ComfyUI runs one job at a time, so the next cell would
-// queue behind the abandoned one and inherit its seconds — and the seconds are what the rental is decided on — and
-// its history entry, which holds the whole prompt and the workflow, is written when it finishes, which is after the
-// delete in `drawOne`'s `finally` has already run. So: out of the queue if it is still waiting, interrupted if it is
-// drawing, and then waited for, so that there is a record for the delete to remove.
+// What the card is drawing now and what waits behind it. A queue entry is an array whose second element is the
+// prompt id. A server that does not answer, or answers without the two lists, has read nothing (`undefined`), and
+// `stopJob` below takes that for a job that may still be on the card.
+type Queue = { running: string[]; pending: string[] };
+const promptIds = (list: unknown[]): string[] => list
+  .flatMap(one => (Array.isArray(one) && typeof one[1] === 'string' ? [one[1]] : []));
+async function readQueue(comfy: Comfy): Promise<Queue | undefined> {
+  try {
+    const seen = await (await call(comfy, '/queue')).json() as { queue_running?: unknown; queue_pending?: unknown };
+    if (!Array.isArray(seen.queue_running) || !Array.isArray(seen.queue_pending)) return undefined;
+    return { running: promptIds(seen.queue_running), pending: promptIds(seen.queue_pending) };
+  } catch { return undefined; }
+}
+
+// Where a job waits on the card (`onPlace`): how many jobs go before it, whether the card is drawing another one
+// meanwhile, and how long the wait has seen that one drawing. The pinned server takes the waiting job with the lowest
+// number first, and between two equal numbers the lower prompt id (execution.py `PromptQueue` is a heap of
+// `(number, prompt id, …)`), and a job sent with `front` has its number made negative (server.py `post_prompt`). The
+// entries carry each job's whole graph, and only their first two elements are read.
+export type CardPlace = { before: number; drawing: boolean; drawingMs: number };
+async function readPlace(comfy: Comfy, promptId: string): Promise<{ before: number; running: string | undefined } | null | undefined> {
+  try {
+    const seen = await (await call(comfy, '/queue')).json() as { queue_running?: unknown; queue_pending?: unknown };
+    if (!Array.isArray(seen.queue_running) || !Array.isArray(seen.queue_pending)) return undefined;
+    const pending = seen.queue_pending.flatMap(one =>
+      Array.isArray(one) && typeof one[0] === 'number' && typeof one[1] === 'string' ? [{ number: one[0], id: one[1] }] : []);
+    const own = pending.find(one => one.id === promptId);
+    if (!own) return null;
+    const before = pending.filter(one => one.number < own.number || (one.number === own.number && one.id < own.id)).length;
+    return { before, running: promptIds(seen.queue_running)[0] };
+  } catch { return undefined; }
+}
+// How often the bot's wait reads its job's place while the job waits on the card.
+const PLACE_MS = 2000;
+
+// A picture that outlives the wait, or whose polls fail, is still the card's. ComfyUI runs one job at a time, so the
+// next cell would queue behind the abandoned one and inherit its seconds — and the seconds are what the rental is
+// decided on — and its history entry, which holds the whole prompt and the workflow, is written when it finishes, so
+// a delete sent while it still draws removes nothing. So: out of the queue if it is still waiting, interrupted if it
+// is drawing, and then waited for, so that there is a record for the delete to remove.
 //
-// `/interrupt` carries no id: it stops whatever the card is drawing. With one card and two readers that is somebody
-// else's picture as often as ours, and they would get the failure line under a scene they never touched. So the
-// queue is read first and the interrupt is sent only while the card says this job is the one it is drawing. A job
-// that was still waiting is gone with the delete and will never write a record, so there is nothing to wait for
-// either; a card that did not answer the queue is left alone, because a wrong interrupt costs another reader their
-// picture and a missed one costs this reader's job a few more seconds of a card we are already paying for.
-async function stopJob(comfy: Comfy, promptId: string, pollMs: number) {
-  const queue = await readQueue(comfy);
+// The answer is whether the stop is confirmed: its record is there, or a read of the queue has the job in neither
+// list (twice, once it has been seen being drawn). A card that answers neither confirms nothing, and nor does one
+// still drawing the job when the ten looks or the reserve run out; `follow` then deletes nothing and stops the
+// run.
+//
+// With one card and two readers, the job being drawn is somebody else's as often as ours, and an interrupt that
+// reached theirs would give them the failure line under a scene they never touched. So the interrupt names this
+// job: the pinned server stops a job named by `prompt_id` only while it is the one being drawn, and does nothing
+// otherwise (server.py:1163-1191), where an interrupt without an id stops whatever is drawn. The queue is read after
+// the delete, when the job can no longer go from waiting to being drawn: one that did so a moment earlier is being
+// drawn now, and is interrupted and waited for like any other. One in neither list was taken out by the delete, or
+// is over and has its record, and there is nothing to wait for. The interrupt goes either way, since it can stop no
+// other job, and it is all that can stop this one on a card that did not answer the queue.
+export async function stopJob(comfy: Comfy, promptId: string, pollMs: number): Promise<boolean> {
   await post(comfy, '/queue', { delete: [promptId] }).catch(() => undefined);
-  if (!queue.running.includes(promptId)) return;
-  await call(comfy, '/interrupt', { method: 'POST' }).catch(() => undefined);
+  const queue = await readQueue(comfy);
+  await post(comfy, '/interrupt', { prompt_id: promptId }).catch(() => undefined);
+  const holds = (seen: Queue | undefined) => !seen || [...seen.running, ...seen.pending].includes(promptId);
+  if (!holds(queue)) return true;
   let missing = 0;
   for (let poll = 0; poll < 10; poll++) {
     const seen: Record<string, HistoryEntry> = await call(comfy, `/history/${promptId}`)
       .then(response => response.json() as Promise<Record<string, HistoryEntry>>).catch(() => ({}));
-    if (seen[promptId]) return;
+    if (seen[promptId]) return true;
     // An interrupted job leaves the queue a moment before its record appears, so one more poll is given to it; a
     // card that then still has neither is writing no record at all, and the rest of the wait would buy nothing.
-    const gone = await readQueue(comfy);
-    if (![...gone.running, ...gone.pending].includes(promptId) && ++missing > 1) return;
-    await delay(pollMs);
+    if (!holds(await readQueue(comfy)) && ++missing > 1) return true;
+    // The reserve (`end` here, `afterAbort`) ends the pause as it ends every request: the stop is over at it.
+    await delay(pollMs, undefined, { signal: comfy.end }).catch(() => undefined);
+    if (comfy.end?.aborted) return false;
   }
+  return false;
 }
 
-// One picture: submit, poll until the server has it, download it, forget the job. The elapsed time is measured from
-// the submit, which is what the reader waits for; never from a timestamp in the server's own reply.
-export async function drawOne(comfy: Comfy, graph: Graph, options: { pollMs?: number; waitMs?: number } = {}) {
-  const pollMs = options.pollMs ?? 500;
-  const started = performance.now();
-  // The submit itself is never cut short, however early the caller lets go: a job the card has taken and we have no
-  // id for is a job nobody can stop, and it would draw a whole picture for a reader who has already left. It is one
-  // request to loopback, and the abort is answered on the next line, with an id in hand.
-  const submitted = await (await call(afterAbort(comfy), '/prompt', { method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ prompt: graph }) })).json() as { prompt_id?: string; error?: unknown };
-  const promptId = submitted.prompt_id;
-  if (!promptId) throw Object.assign(new Error('comfy_rejected_prompt'), { code: 'comfy_rejected_prompt' });
-  const vram: Vram[] = [];
-  try {
-    const deadline = started + (options.waitMs ?? 600000);
-    let entry: HistoryEntry | undefined;
-    for (let poll = 0; ; poll++) {
-      // Asked before the poll rather than after it: a caller who has let go is answered without another request,
-      // and `stopJob` below takes the card off the job it is drawing.
-      if (comfy.signal?.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
-      const seen = await (await call(comfy, `/history/${promptId}`)).json() as Record<string, HistoryEntry>;
-      entry = seen[promptId];
-      if (entry?.status?.completed || entry?.status?.status_str === 'error') break;
-      if (performance.now() > deadline) throw Object.assign(new Error('image_timeout'), { code: 'image_timeout' });
-      // Video memory is sampled while the card works, not after it has freed the weights.
-      if (poll % 4 === 0) mergeVram(vram, await readVram(comfy));
-      await delay(pollMs);
+// One picture: submit, wait until the server has it, download it, forget the job. The elapsed time is measured from
+// the submit, which is what the reader waits for; never from a timestamp in the server's own reply. `vram` fills in
+// as its samples land, the last of them after the picture: `settled` waits for it.
+// A preview node (`previewOnly`) gets a key of its own for every job. ComfyUI answers a graph it has run before from
+// its cache, and the cached output names the earlier job's file, which gpu/image-sweeper.py deleted seconds after that
+// job: /view answered 404 to the second sample of one style on one scene. The key is part of the node's cache
+// signature and of nothing else, since the pinned server hands a node only the inputs it declares: the sampler's result
+// still comes from the cache, and only the file is written again.
+function freshPreviews(graph: Graph): Graph {
+  const nonce = randomUUID();
+  return Object.fromEntries(Object.entries(graph).map(([id, node]) =>
+    [id, node.class_type === 'PreviewImage' ? { ...node, inputs: { ...node.inputs, nonce } } : node]));
+}
+
+// Polls of a job's record that may fail in a row before the picture is given up. The card went on drawing through each:
+// the one failure seen, on the first job after a restart, came while the server loaded the model.
+const POLL_RETRIES = 3;
+
+// A job as the websocket has told it. ComfyUI sends a client's messages only to a socket that is connected when they
+// are sent (server.py:1392), so `started` is what says this socket heard the job from its beginning: one that opened
+// later has missed messages, and the `outputs` it heard may not be all of the job's. `cached` is the nodes the server
+// answered from its cache (execution.py:770), `ran` each other node with the moment it began (execution.py:496),
+// `overAt` the moment the job ended, all on our clock; `oom` says an error was the card running out of memory.
+// `broken`: the socket closed before the job was over, and what the card said of it after that is lost (`stageSocket`).
+// `startStamp` and `endStamp`: the server's own clock at the job's start and its success, in milliseconds, as its
+// messages carry them (execution.py:677-684 at the pinned revision); `startedAt`, the start on our clock.
+type Told = { started: boolean; succeeded: boolean; over: boolean; outputs: NonNullable<HistoryEntry['outputs']>;
+  cached?: string[]; ran: { node: string; at: number }[]; overAt?: number; oom?: boolean; broken?: boolean; startStamp?: number; endStamp?: number;
+  startedAt?: number };
+
+// Where a job's time went, by the kind of node it was spent in: the time from one node's start to the next one's is
+// the first node's. The sampler's share includes moving the model onto the card, which ComfyUI does inside it.
+const PHASES: [RegExp, keyof Phases][] = [[/Loader|^LoadImage$/, 'loadMs'], [/TextEncode/, 'encodeMs'], [/Sampler/, 'sampleMs'], [/^VAEDecode/, 'decodeMs']];
+export function phasesOf(graph: Graph, ran: { node: string; at: number }[], overAt: number): Phases {
+  const phases: Phases = {};
+  ran.forEach((step, order) => {
+    const key = PHASES.find(([pattern]) => pattern.test(graph[step.node]?.class_type ?? ''))?.[1] ?? 'otherMs';
+    phases[key] = (phases[key] ?? 0) + Math.round((ran[order + 1]?.at ?? overAt) - step.at);
+  });
+  return phases;
+}
+// An error the card gave because it ran out of memory (comfy/model_management.py `is_oom`). Only this answer is taken
+// from the message: the rest of an error carries the node's inputs, which are the prompt.
+const outOfMemory = (data: { exception_type?: unknown; exception_message?: unknown }) =>
+  /OutOfMemory|out of memory/i.test(`${data.exception_type} ${data.exception_message}`);
+
+// What ComfyUI's websocket (`/ws?clientId=`, server.py:269) has said of each job, and the wait for its news: it says
+// when a job is over, so that the wait ends then rather than at the next poll. What it carries names the job's file,
+// so none of it is logged. `strict`: only a job already in `jobs` is heard, as on the harness's socket, which carries
+// a whole stage's jobs (`stageSocket`); otherwise every job a message names is, as on the bot's, which carries one.
+// `onProgress` hears how far the running node has got, for the bot's status line (`drawOne`).
+// The line numbers here are those of the revision gpu/image-manifest.env pins.
+function hearing(strict: boolean, onProgress?: Steps) {
+  const jobs = new Map<string, Told>();
+  let heard = 0;
+  let wake: () => void = () => undefined;
+  // `executing` with no node is the one message that means "over": the server sends it once it has written the job's
+  // record, whether the job succeeded, failed or was interrupted (main.py:367-374). `execution_success` comes a moment
+  // before the record (execution.py:824), so it is noted and the wait goes on until the record is there: a delete
+  // sent on it could reach the card first and leave the record behind. An error or an interrupt sends the wait to the
+  // record at once, which says what became of the job; an error there need not be the end of it (execution.py:538).
+  const notice = () => { heard++; wake(); };
+  const hear = (event: { data: unknown }) => {
+    let message: { type?: unknown; data?: { prompt_id?: unknown; node?: unknown; output?: unknown; nodes?: unknown;
+      exception_type?: unknown; exception_message?: unknown; value?: unknown; max?: unknown } } | null;
+    try { message = typeof event.data === 'string' ? JSON.parse(event.data) : null; } catch { return; }
+    const data = message?.data;
+    if (!message || !data || typeof data.prompt_id !== 'string') return;
+    let job = jobs.get(data.prompt_id);
+    if (!job) {
+      if (strict) return;
+      jobs.set(data.prompt_id, job = { started: false, succeeded: false, over: false, outputs: {}, ran: [] });
     }
-    const image = Object.values(entry.outputs ?? {}).flatMap(output => output.images ?? [])[0];
-    if (!image || entry.status?.status_str === 'error') throw Object.assign(new Error('image_failed'), { code: 'image_failed' });
-    const viewStarted = performance.now();
-    const query = new URLSearchParams({ filename: image.filename, subfolder: image.subfolder ?? '', type: image.type ?? 'output' });
-    const bytes = new Uint8Array(await (await call(comfy, `/view?${query}`)).arrayBuffer());
-    const viewMs = Math.round(performance.now() - viewStarted);
-    mergeVram(vram, await readVram(comfy));
-    return { bytes: stripPngMetadata(bytes), totalMs: Math.round(performance.now() - started), viewMs, vram };
-  } catch (error) {
-    // The wait ran out or the caller let go, but the card did not stop by itself: see `stopJob`. A fetch cut by the
-    // signal arrives as an AbortError, so what the signal says is what this failure is called, whatever was thrown.
-    const cancelled = comfy.signal?.aborted === true;
-    if (cancelled || (error as { code?: string }).code === 'image_timeout') await stopJob(afterAbort(comfy), promptId, pollMs);
-    throw cancelled ? Object.assign(new Error('cancelled'), { code: 'cancelled' }) : error;
-  } finally {
-    // The server keeps the prompt, the workflow and the outputs of every job it has run until history is cleared.
-    // This clears the job record, and that is all it can clear: the file the saving node wrote stays in ComfyUI's
-    // own directory, with its text chunks, and the API has no route that deletes it. The picture on our disk is
-    // stripped; the card's copy goes when the card does, which is why only synthetic scenes are drawn on a rental.
-    await post(afterAbort(comfy), '/history', { delete: [promptId] }).catch(() => undefined);
+    const stamp = typeof (data as { timestamp?: unknown }).timestamp === 'number' ? (data as { timestamp: number }).timestamp : undefined;
+    if (message.type === 'execution_start') { job.started = true; job.startStamp = stamp; job.startedAt = performance.now(); }
+    else if (message.type === 'execution_cached' && Array.isArray(data.nodes)) job.cached = data.nodes.map(String);
+    else if (message.type === 'executing' && typeof data.node === 'string') job.ran.push({ node: data.node, at: performance.now() });
+    else if (message.type === 'executed' && typeof data.node === 'string' && data.output && typeof data.output === 'object') {
+      job.outputs[data.node] = data.output as Told['outputs'][string];
+    } else if (message.type === 'execution_success') { job.succeeded = true; job.endStamp = stamp; }
+    else if (message.type === 'execution_error' || message.type === 'execution_interrupted') {
+      if (outOfMemory(data)) job.oom = true;
+      notice();
+    } else if (message.type === 'executing' && data.node === null) { job.over = true; job.overAt = performance.now(); notice(); }
+    // The steps of the node that is running, most often the sampler's (latent_preview.py:128-138), sent to the client
+    // that submitted the job alone (main.py:432-435, execution.py:736-739), the first and the last always and the rest
+    // at most every 100 ms (comfy/utils.py:1316-1344). They are no news for the wait, and a listener that throws costs
+    // it nothing.
+    else if (message.type === 'progress' && onProgress) {
+      const { value, max } = data;
+      if (typeof value === 'number' && typeof max === 'number' && Number.isSafeInteger(max) && max > 0
+        && Number.isSafeInteger(value) && value >= 0 && value <= max) {
+        try { onProgress(value, max); } catch { /* the listener's own */ }
+      }
+    }
+  };
+  // The job's record without a read of it, once the socket has heard the whole job succeed. The record's outputs are
+  // the very objects the `executed` messages carried (execution.py:826-834), from a node that ran (execution.py:574-577)
+  // and from one the cache answered alike (comfy_execution/asset_enrichment.py:102-115), and a job that succeeded is
+  // recorded as completed with `success`. Nothing, whenever the socket cannot vouch for it.
+  const record = (promptId: string): HistoryEntry | undefined => {
+    const job = jobs.get(promptId);
+    return job?.started && job.succeeded && job.over && !job.broken ? { status: { completed: true, status_str: 'success' }, outputs: job.outputs } : undefined;
+  };
+  // What the socket saw of a whole job: where its time went, and whether any loader node ran rather than being
+  // answered from the server's node cache (`loaderCacheMiss` on a Picture). Nothing, when the socket did not hear the
+  // job from start to end.
+  const timing = (promptId: string, graph: Graph): { phases: Phases; loaderCacheMiss?: boolean } | undefined => {
+    const job = jobs.get(promptId);
+    if (!job?.started || job.overAt === undefined || job.broken) return undefined;
+    const loaders = Object.keys(graph).filter(id => /Loader/.test(graph[id].class_type));
+    return { phases: phasesOf(graph, job.ran, job.overAt),
+      ...(job.cached ? { loaderCacheMiss: loaders.some(id => !job.cached!.includes(id)) } : {}) };
+  };
+  // Until the socket has news, `ms` pass or `signal` fires, whichever comes first.
+  const wait = (ms: number, signal?: AbortSignal) => new Promise<void>(done => {
+    const finish = () => { clearTimeout(timer); signal?.removeEventListener('abort', finish); wake = () => undefined; done(); };
+    const timer = setTimeout(finish, ms);
+    wake = finish;
+    signal?.addEventListener('abort', finish, { once: true });
+    if (signal?.aborted) finish();
+  });
+  return {
+    jobs, hear, notice, record, timing, wait,
+    // How often the socket has had news: `drawOne` compares it across a poll to know whether to wait again.
+    get heard() { return heard; },
+    oom: (promptId: string) => jobs.get(promptId)?.oom === true,
+    // The nodes the server answered from its cache, as the socket heard them at the job's start.
+    cached: (promptId: string) => jobs.get(promptId)?.cached,
+    // The server's own stamps of the job's start and success, when the socket heard both.
+    stamps: (promptId: string) => {
+      const job = jobs.get(promptId);
+      return job?.startStamp !== undefined && job.endStamp !== undefined ? { start: job.startStamp, end: job.endStamp } : undefined;
+    },
+    // When the socket heard the job start, on our clock.
+    startedAt: (promptId: string) => jobs.get(promptId)?.startedAt,
+  };
+}
+
+// The socket for one picture, the bot's: for it everything about the socket is optional. One that cannot open, closes
+// early or says nothing useful leaves the wait to the polls in `drawOne`, which end it exactly as they did before there
+// was a socket. None of what it heard outlives the job.
+function watchJob(comfy: Comfy, onProgress?: Steps) {
+  const clientId = randomUUID();
+  const told = hearing(false, onProgress);
+  // Whether the socket opened, or `false` once it failed or closed first.
+  let opened = Promise.resolve(false);
+  let socket: WebSocket | undefined;
+  try {
+    const url = new URL('/ws', comfy.baseUrl);
+    url.protocol = 'ws:';
+    url.searchParams.set('clientId', clientId);
+    socket = new WebSocket(url);
+    const opening = socket;
+    opened = new Promise(done => {
+      opening.addEventListener('open', () => done(true), { once: true });
+      for (const end of ['error', 'close']) opening.addEventListener(end, () => done(false), { once: true });
+    });
+    socket.addEventListener('message', told.hear);
+  } catch { socket = undefined; }
+  return {
+    clientId, opened, get heard() { return told.heard; }, record: told.record, timing: told.timing, oom: told.oom, cached: told.cached,
+    stamps: told.stamps, startedAt: told.startedAt, wait: told.wait, close() { socket?.close(); },
+  };
+}
+type Watch = { readonly clientId: string; readonly heard: number; record: (promptId: string) => HistoryEntry | undefined;
+  timing: (promptId: string, graph: Graph) => { phases: Phases; loaderCacheMiss?: boolean } | undefined;
+  oom: (promptId: string) => boolean; cached: (promptId: string) => string[] | undefined;
+  stamps: (promptId: string) => { start: number; end: number } | undefined; startedAt: (promptId: string) => number | undefined;
+  wait: (ms: number, signal?: AbortSignal) => Promise<void> };
+
+// One socket for a whole stage of the harness (docs/action-experiment.md#one-socket), in place of one a picture:
+// every open cost the tunnel a channel of its own, 0.7-1.1 s in which the card had nothing to draw. It is open before
+// each submit (`ensureOpen`), since the card tells a job's news only to a socket connected when it tells it and a
+// socket opened later cannot get back what it missed, and it hears only the jobs registered on it, each under the id
+// minted for it before its submit, so that no job's news is taken for another's; the harness drops a job once it is
+// done with it. A socket that closes breaks every job it had not heard to its end: those keep their record, from the
+// polls, and lose their phases, as they would have with a socket of their own. The next open is a new socket under a
+// new client id: the pinned server files a socket under that id alone, and the handler of the old one, whenever it
+// notices its end, takes the id's socket with it (server.py:274-276, 324-326), which would be the new one.
+export function stageSocket(baseUrl: string) {
+  const told = hearing(true);
+  let socket: WebSocket | undefined;
+  let opened = Promise.resolve(false);
+  let clientId = '', epoch = 0, ended = false;
+  const drop = () => {
+    const old = socket;
+    if (!old) return;
+    socket = undefined;
+    for (const job of told.jobs.values()) if (!job.over) job.broken = true;
+    told.notice();
+    try { old.close(); } catch { /* gone either way */ }
+  };
+  const connect = () => {
+    epoch++;
+    clientId = randomUUID();
+    try {
+      const url = new URL('/ws', baseUrl);
+      url.protocol = 'ws:';
+      url.searchParams.set('clientId', clientId);
+      const one = new WebSocket(url);
+      socket = one;
+      opened = new Promise(done => {
+        one.addEventListener('open', () => done(true), { once: true });
+        for (const end of ['error', 'close']) one.addEventListener(end, () => done(false), { once: true });
+      });
+      one.addEventListener('message', event => { if (socket === one) told.hear(event); });
+      one.addEventListener('close', () => { if (socket === one) drop(); });
+    } catch { socket = undefined; opened = Promise.resolve(false); }
+  };
+  return {
+    get clientId() { return clientId; },
+    // How many sockets the stage has opened: a cursor into the card's log holds only while this stays the same.
+    get epoch() { return epoch; },
+    get open() { return socket?.readyState === WebSocket.OPEN; },
+    get heard() { return told.heard; },
+    // Open now, or within `ms`; one that is not by then is given up, and the next call starts another.
+    async ensureOpen(ms: number, signal?: AbortSignal): Promise<boolean> {
+      if (ended) return false;
+      if (socket?.readyState === WebSocket.OPEN) return true;
+      if (socket?.readyState !== WebSocket.CONNECTING) { drop(); connect(); }
+      const open = await Promise.race([opened, delay(ms, false, { ref: false, signal }).catch(() => false)]);
+      if (open && socket?.readyState === WebSocket.OPEN) return true;
+      drop();
+      return false;
+    },
+    register(promptId: string) { told.jobs.set(promptId, { started: false, succeeded: false, over: false, outputs: {}, ran: [] }); },
+    forget(promptId: string) { told.jobs.delete(promptId); },
+    record: told.record, timing: told.timing, oom: told.oom, cached: told.cached, stamps: told.stamps, startedAt: told.startedAt,
+    wait: told.wait, close() { ended = true; drop(); },
+  };
+}
+export type StageSocket = ReturnType<typeof stageSocket>;
+
+// ---- A dropped connection, in the harness (docs/action-experiment.md#dropped-connection) ----
+
+// The network between here and the card failing, as fetch reports it (undici): a TypeError whose cause, or an error of
+// an AggregateError among its causes, carries one of these codes. Nothing else is: not a request's own timeout, a
+// signal, an HTTP status or a reply that does not parse. Only the code is read, never a message.
+const TRANSPORT_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'ECONNABORTED', 'EPIPE', 'ETIMEDOUT', 'EHOSTUNREACH', 'EHOSTDOWN',
+  'ENETUNREACH', 'ENETDOWN', 'ENETRESET', 'EAI_AGAIN', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_CLOSED']);
+export function transportCode(error: unknown): string | undefined {
+  if (!(error instanceof TypeError)) return undefined;
+  const seen = new Set<unknown>();
+  const queue: unknown[] = [error];
+  while (queue.length) {
+    const one = queue.shift();
+    if (!one || typeof one !== 'object' || seen.has(one)) continue;
+    seen.add(one);
+    const code = (one as { code?: unknown }).code;
+    if (typeof code === 'string' && TRANSPORT_CODES.has(code)) return code;
+    queue.push((one as { cause?: unknown }).cause);
+    if (one instanceof AggregateError) queue.push(...one.errors);
   }
+  return undefined;
+}
+// A request refused at the connect never left: nothing of it reached the server. Through the tunnel that is a port
+// with no ssh listening on it.
+export const NEVER_SENT = new Set(['ECONNREFUSED', 'UND_ERR_CONNECT_TIMEOUT']);
+
+// How long one cell may lose to the network, its waits, the requests that failed on the way and the searches for its
+// job together (`windowMs`), the pause between two looks (`pauseMs`), and what it has lost so far (`spentMs`), which
+// its record keeps as `outageMs`. The window is the harness's to set (local/action-draw.ts `OUTAGE_MS`), and stays
+// under the ten minutes after which gpu/image-sweeper.py deletes a finished job's record (`RECORD_LIFE_MS`), so that a
+// job that ended as the network went is still recorded when the window runs out. What is left of the ten minutes is
+// for the request that was out when the window ran out, a last look of `PROBE_MS` at most and the requests that went
+// through, which a server answering slowly could still use up.
+export type Outage = { windowMs: number; pauseMs: number; spentMs: number };
+export const RECORD_LIFE_MS = 600000;
+const PROBE_MS = 10000;
+// A request that failed on the network, from `since`: its time is lost to the drop, as a wait is.
+export const charge = (outage: Outage | undefined, since: number) => {
+  if (outage) outage.spentMs += Math.round(performance.now() - since);
+};
+// The wait itself: a read of /queue at once and then after each pause, until one is answered. `true` once the server
+// answers, an error status included, since an answer means the network is back; `false` when the window, the stage's
+// end or the caller's signal comes first. A window of 0 looks once and does not wait; a window already spent does not
+// look.
+export async function ride(comfy: Comfy, outage: Outage): Promise<boolean> {
+  const began = performance.now();
+  const stop = any(comfy.signal, comfy.end);
+  try {
+    if (outage.windowMs > 0 && outage.spentMs >= outage.windowMs) return false;
+    for (;;) {
+      if (stop?.aborted) return false;
+      try {
+        await (await call({ ...comfy, timeoutMs: Math.min(PROBE_MS, comfy.timeoutMs) }, '/queue')).arrayBuffer();
+        return true;
+      } catch (error) {
+        if ((error as { code?: unknown }).code === 'comfy_http_error') return true;
+      }
+      const left = outage.windowMs - outage.spentMs - (performance.now() - began);
+      if (left <= 0 || stop?.aborted) return false;
+      await delay(Math.min(outage.pauseMs, left), undefined, { signal: stop }).catch(() => undefined);
+    }
+  } finally { outage.spentMs += Math.round(performance.now() - began); }
+}
+// Where a job is once the server answers again: waiting or drawing, recorded, or neither; `undefined` when the server
+// did not answer both reads. The queue is read first: the pinned server moves a job from the queue to its record under
+// one lock (execution.py:1321-1341, 1352-1356), so no job goes between the two reads unseen, and one in neither was
+// never taken, or has lost its record, as it does when the server starts again.
+async function locate(comfy: Comfy, promptId: string): Promise<'queued' | 'recorded' | 'absent' | undefined> {
+  const queue = await readQueue(comfy);
+  if (!queue) return undefined;
+  if ([...queue.running, ...queue.pending].includes(promptId)) return 'queued';
+  try {
+    const seen = await (await call(comfy, `/history/${promptId}`)).json() as Record<string, HistoryEntry>;
+    return seen[promptId] ? 'recorded' : 'absent';
+  } catch { return undefined; }
+}
+// How many times an upload, a submit that never left, a poll, a view or the search for a job may meet the network
+// failing again once the server has answered again: a connection that keeps dropping ends the cell rather than the
+// window.
+export const RIDES = 5;
+
+// `sampleEvery` is how many polls pass between two samples of memory: the bot keeps the tunnel quiet, and the harness,
+// which measures the card, samples at every poll. `requireSocket`: see `SOCKET_OPEN_MS`. `copies`: saving nodes whose
+// pictures are not the frame but a check of it, such as the action smoke's copies of its scaled references
+// (docs/action-experiment.md#drawing); the frame is the one picture of the other nodes, and each copy is read
+// back after it, stripped, in `copies`. `admit`: the caller's last word before the submit, asked once the socket is
+// open, such as whether the job can still end by the harness's `--until`; a job it refuses is not sent, and fails
+// as `not_admitted`. The harness's picture goes on the stage's one socket, with the cell's way through a dropped
+// connection, and is followed in its two halves (`submitOnStage`); the bot's goes through `drawOne`, as it always did.
+// `onSubmitted` tells the bot that a job exists, so an accepted reference job's failure never starts a fallback job.
+// `onProgress` gives the bot's status line the steps its socket hears (`hearing`); the stage's socket has none.
+// `front`: a reader's picture, sent with `front: true`, which the pinned server puts at the head of its pending queue
+// (server.py `post_prompt`: the job's number made negative), ahead of every job sent without it, such as a stand's
+// cells; the job it is drawing goes on to its end. Among front jobs the later one goes first. Only the bot sets it
+// (local/picture.ts `draw`); the harnesses' jobs, `submitOnStage` included, keep their order.
+// `onPlace` tells the bot's status line where its job waits on the card (`CardPlace`), every PLACE_MS once it has
+// waited that long, and `null` when it sees that the job waits no longer; nothing once the wait is over. The stage's
+// jobs have none.
+export type DrawOneOptions = { pollMs?: number; waitMs?: number; sampleEvery?: number; requireSocket?: boolean; copies?: string[];
+  admit?: () => boolean; onSubmitted?: () => void; onProgress?: Steps; front?: boolean; onPlace?: (place: CardPlace | null) => void };
+// How far the node the card is running has got: `value` of `max` steps, whole numbers, max at least 1 and value from
+// 0 to max.
+export type Steps = (value: number, max: number) => void;
+// The card tells a job's news only to a socket that is connected when it is sent, and the first of it, the job's start
+// and the nodes its cache answered, comes at the very start of the job (execution.py:683-720). So the submit waits
+// for the socket to open, this long at most. One that does not open in time leaves the bot's picture to the polls,
+// as it always could; a run that measures the card (`requireSocket`) fails the cell instead, before anything is
+// submitted, because a picture without the start of its job has no account of where its time went.
+const SOCKET_OPEN_MS = 2000;
+export async function drawOne(comfy: Comfy, graph: Graph | Promise<Graph>, options: DrawOneOptions = {}): Promise<Drawn> {
+  // A caller who has let go, or a stage whose end has come, puts nothing on the card: that is asked before the socket
+  // opens and again once it has, and either ends the wait for it at once. Nothing is awaited between the second
+  // asking, the caller's `admit` and the submit.
+  halt(comfy);
+  const serving = servedBy(comfy);
+  if (serving) return (await import('./image-serving.ts')).drawServed(comfy, serving, graph, options);
+  const watch = watchJob(comfy, options.onProgress);
+  const began = performance.now(), waitMs = options.waitMs ?? 600000;
+  try {
+    // `undefined` once the wait for the socket has run out.
+    const open = await Promise.race([watch.opened,
+      delay(Math.min(SOCKET_OPEN_MS, waitMs), undefined, { ref: false, signal: any(comfy.signal, comfy.end) }).catch(() => undefined)]);
+    // A graph its caller is still settling while the socket opens, as the bot asks the server about the kitchen's
+    // attention (local/picture.ts `draw`): the questions go beside the socket's opening, not before it.
+    const job = await graph;
+    halt(comfy);
+    // The wait is the caller's, and the socket has had its share of it: a wait the socket used up submits nothing.
+    if (open === undefined && waitMs <= SOCKET_OPEN_MS) throw Object.assign(new Error('image_timeout'), { code: 'image_timeout' });
+    if (!open && options.requireSocket) throw Object.assign(new Error('comfy_socket_unavailable'), { code: 'comfy_socket_unavailable' });
+    if (options.admit && !options.admit()) throw Object.assign(new Error('not_admitted'), { code: 'not_admitted' });
+    return await drawWatched(comfy, job, watch, { ...options, waitMs: waitMs - Math.round(performance.now() - began) });
+  } finally { watch.close(); }
+}
+
+// The harness's picture: as the bot's, on the stage's socket, and under a prompt id minted here and sent with the job
+// (the pinned server takes a canonical UUID, server.py:1093-1099, and mints a random one itself otherwise), so that a
+// submit whose answer was lost can be looked for on the card rather than sent again. Before anything reaches the card
+// a dropped connection is waited out within the cell's window (`ride`): a socket that does not open, and a submit
+// refused at the connect, which never left. When the window runs out the cell fails as `comfy_unreachable`, or as
+// `comfy_socket_unavailable` when the server answers and its socket still does not open; either leaves it never sent,
+// and the harness records nothing for it (docs/action-experiment.md#dropped-connection). A submit that may have left
+// is sent once and never again: whether the card has it is for the card to say once it answers (`follow`).
+// It returns once the job is on the card, with the job's halves for the harness to take in its own order
+// (docs/action-experiment.md#pipeline): the wait until the job is over, its last sample of video memory, and its
+// picture. The socket hears the job until it has failed or its picture is down.
+export async function submitOnStage(comfy: Comfy, graph: Graph, options: DrawOneOptions,
+  stage: { socket: StageSocket; outage: Outage }): Promise<StagedJob> {
+  // As in `drawOne`: a caller who has let go, or a stage whose end has come, puts nothing on the card.
+  halt(comfy);
+  const serving = servedBy(comfy);
+  if (serving) return (await import('./image-serving.ts')).submitServed(comfy, serving, graph, options);
+  const { socket, outage } = stage;
+  const began = performance.now(), spent = outage.spentMs, waitMs = options.waitMs ?? 600000;
+  const minted: string = randomUUID(), prompt = freshPreviews(graph);
+  const unsent = (code: string) => Object.assign(new Error(code), { code });
+  // A socket that did not open lost its time to the drop, as a request that failed does.
+  const opening = async () => {
+    const since = performance.now();
+    const open = await socket.ensureOpen(Math.min(SOCKET_OPEN_MS, waitMs), any(comfy.signal, comfy.end));
+    if (!open) charge(outage, since);
+    return open;
+  };
+  let promptId = minted, uncertain = false, submittedAt = 0, spentAtSubmit = 0;
+  for (let refused = 0; ; refused++) {
+    if (!(await opening())) {
+      halt(comfy);
+      if (!(await ride(comfy, outage))) { halt(comfy); throw unsent('comfy_unreachable'); }
+      if (!(await opening())) { halt(comfy); throw unsent('comfy_socket_unavailable'); }
+    }
+    halt(comfy);
+    if (options.admit && !options.admit()) throw unsent('not_admitted');
+    socket.register(minted);
+    submittedAt = performance.now();
+    spentAtSubmit = outage.spentMs;
+    let answer: { prompt_id?: unknown };
+    try {
+      answer = await (await call(afterAbort(comfy), '/prompt', { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ prompt, client_id: socket.clientId, prompt_id: minted }) })).json() as { prompt_id?: unknown };
+    } catch (error) {
+      const code = transportCode(error);
+      const timedOut = !code && (error as Error | undefined)?.name === 'TimeoutError' && !comfy.reserve?.aborted;
+      // The time the submit spent failing is lost to the network, or to a server that did not answer in time.
+      if (code || timedOut) charge(outage, submittedAt);
+      // Sent, or maybe: the network failed on the way, or the answer did not come in time. The job may be on the card.
+      if (timedOut || (code && !NEVER_SENT.has(code))) {
+        uncertain = true;
+        break;
+      }
+      socket.forget(minted);
+      if (!code) throw error;
+      if (refused >= RIDES || !(await ride(comfy, outage))) { halt(comfy); throw unsent('comfy_unreachable'); }
+      continue;
+    }
+    if (typeof answer.prompt_id !== 'string' || !answer.prompt_id) {
+      socket.forget(minted);
+      throw Object.assign(new Error('comfy_rejected_prompt'), { code: 'comfy_rejected_prompt' });
+    }
+    // A server that went its own way with the id is followed under its own; the socket may have missed the job's start.
+    if (answer.prompt_id !== minted) {
+      socket.forget(minted);
+      socket.register(promptId = answer.prompt_id);
+    }
+    break;
+  }
+  const job = follow(comfy, graph, socket, promptId, submittedAt,
+    { ...options, waitMs: waitMs - Math.round(submittedAt - began - (spentAtSubmit - spent)) }, { outage, uncertain, spentAtSubmit });
+  const release = () => socket.forget(promptId);
+  return {
+    untilOver: () => job.untilOver().catch((error: unknown) => { release(); throw error; }),
+    lastSample: job.lastSample,
+    fetch: () => job.fetch().finally(release),
+  };
+}
+// A picture as `drawOne` and a staged job's `fetch` give it. `partialLoads`, on a staged job once it is over and on its
+// picture, only through the gateway: its count of the card's partial loads for class `internal` (local/image-serving.ts).
+export type Drawn = Awaited<ReturnType<ReturnType<typeof follow>['fetch']>> & { partialLoads?: number };
+export type StagedJob = Pick<ReturnType<typeof follow>, 'untilOver' | 'lastSample'> & { fetch: () => Promise<Drawn>; readonly partialLoads?: number };
+
+// A job the harness submitted in `submitOnStage`: the cell's window, whether its submit's answer was lost, and what of
+// the window the cell had lost by the moment its submit left, from which its time is measured.
+type Staged = { outage: Outage; uncertain: boolean; spentAtSubmit: number };
+// A submit once sent is never cut short, however early the caller lets go or the stage ends: a job the card has taken
+// and we have no id for is a job nobody can stop, and it would draw a whole picture for a reader who has already left.
+// It is one request to loopback, bounded by the reserve alone, and the abort or the end is answered at the top of the
+// loop in `follow`, with an id in hand. It is not repeated either: a submit that failed may still have reached the
+// card.
+async function submitOnce(comfy: Comfy, graph: Graph, clientId: string, front = false): Promise<string> {
+  const submitted = await (await call(afterAbort(comfy), '/prompt', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ prompt: freshPreviews(graph), client_id: clientId, ...front ? { front: true } : {} }) })).json() as { prompt_id?: string; error?: unknown };
+  if (!submitted.prompt_id) throw Object.assign(new Error('comfy_rejected_prompt'), { code: 'comfy_rejected_prompt' });
+  return submitted.prompt_id;
+}
+
+// The bot's picture: submitted, then followed to its picture in one go, as it always was.
+async function drawWatched(comfy: Comfy, graph: Graph, watch: Watch, options: DrawOneOptions) {
+  const started = performance.now();
+  const promptId = await submitOnce(comfy, graph, watch.clientId, options.front);
+  options.onSubmitted?.();
+  const job = follow(comfy, graph, watch, promptId, started, options);
+  await job.untilOver();
+  return job.fetch();
+}
+
+// A job on the card, from its submit (`started`) to its picture, in two halves: `untilOver`, until its record says the
+// job is over and names its picture, and `fetch`, the picture and its copies downloaded by name, then the delete of
+// the record. The bot takes them back to back (`drawWatched`). The harness takes the job's last sample of video memory
+// (`lastSample`) and its next job's submit between them, so that the next job draws while this one's picture comes
+// down (docs/action-experiment.md#pipeline). `staged`: the harness's job (`submitOnStage`).
+function follow(comfy: Comfy, graph: Graph, watch: Watch, promptId: string, started: number, options: DrawOneOptions, staged?: Staged) {
+  // The socket says when the job is over. The polls are what the picture falls back on when it says nothing, and
+  // meanwhile they keep the tunnel's connection open for `/view`, where a new one would cost another ssh channel, about
+  // 0.3-0.6 s. Half a second does both, and the retries below still span the seconds they always did.
+  const pollMs = options.pollMs ?? 500;
+  const stop = any(comfy.signal, comfy.end);
+  // The harness's window through a dropped connection, and what of it the cell had spent before its submit: the time
+  // after that is added to the picture's own wait, which would otherwise run out first.
+  const outage = staged?.outage, spent = staged?.spentAtSubmit ?? 0;
+  const lost = () => Object.assign(new Error('comfy_connection_lost'), { code: 'comfy_connection_lost' });
+  const memory: Memory = { vram: [], samples: 0 };
+  // Video memory is sampled without waiting for the answer, and one request at a time: a card that stops answering
+  // would otherwise gather another hanging request every few polls. `sampling` is the one out; `lastTaken`, that the
+  // harness took the last one at the over (`lastSample`), and the download takes none after it.
+  let sampling: Promise<void> | undefined, lastTaken = false;
+  const sampleVram = (during = true) => {
+    if (sampling) return;
+    const one = readStats(comfy).then(seen => mergeStats(memory, seen, during)).finally(() => { sampling = undefined; });
+    sampling = one;
+    leave(one);
+  };
+  // The delete of the job's record: sent once and never waited for (`settled`), once the card is off the job — its
+  // record said the job was over (`over`), or `stopJob` confirmed the stop (`stopped`) — since a delete that arrives
+  // while the card still draws removes nothing, and the record written after it holds the whole prompt.
+  // `gone`: the harness's job that the card no longer answers for, the window having run out or the job being nowhere
+  // once it answered, as after a restart of the server; nothing is asked of the card for it, its stop included.
+  let forgotten = false, over = false, stopped = false, gone = false;
+  const forget = () => {
+    if (forgotten) return;
+    forgotten = true;
+    leave(post(afterAbort(comfy), '/history', { delete: [promptId] }));
+  };
+  // After the network failed, once the server answers again: the job is on the card or recorded, and the wait goes on,
+  // or it is nowhere, and the cell is lost. A submit whose answer was lost starts here (`sent`): the card says whether
+  // it has it, and one it does not have yet, whose submit may still be on its way through the server, is looked for
+  // once more after a pause before it counts as nowhere. The looks count against the window as its waits do. A job
+  // whose looks kept failing, the server answering between them, is stopped as any other.
+  const rideOut = () => ride(comfy, outage!);
+  const settle = async (sent = false) => {
+    let nowhere = sent ? 0 : 1;
+    for (let attempt = 0; attempt < RIDES; attempt++) {
+      if (!(await rideOut())) { halt(comfy); gone = true; throw lost(); }
+      const since = performance.now();
+      const where = await locate(comfy, promptId);
+      if (where === 'absent' && ++nowhere > 1) { gone = true; throw lost(); }
+      if (where === 'absent') await delay(outage!.pauseMs, undefined, { signal: stop }).catch(() => undefined);
+      charge(outage, since);
+      if (where === 'queued' || where === 'recorded') return;
+    }
+    throw lost();
+  };
+  // Whatever ends either half before its end — the wait ran out, the caller let go, the stage ended, the card answered
+  // a poll with an error status or the tunnel dropped more polls than the retries — the card did not stop by itself
+  // unless the record said the job was over: see `stopJob`, which the reserve bounds. A fetch cut by a signal arrives
+  // as an AbortError, so what the signals say is what this failure is called, whatever was thrown: the picture that was
+  // on its way down when the end came too. A stop nobody could confirm leaves a job that may still be drawing, with
+  // the next cell queued behind it, and says so under a code that stops the run (`stopsTheRun`). In the harness,
+  // what the network took after the submit is `comfy_connection_lost`, which stops the run too.
+  const fail = async (error: unknown): Promise<never> => {
+    try {
+      if (!over && !gone) stopped = await stopJob(afterAbort(comfy), promptId, pollMs);
+      halt(comfy);
+      if (!over && !stopped && !gone) throw Object.assign(new Error('comfy_stop_unconfirmed'), { code: 'comfy_stop_unconfirmed' });
+      throw staged && transportCode(error) ? lost() : error;
+    } finally {
+      // The server keeps the prompt, the workflow and the outputs of every job it has run until history is cleared.
+      // This clears the job record, and that is all the API can clear: the file the node wrote stays in ComfyUI's own
+      // directory, with its text chunks, and no route deletes it. Beside a server started by gpu/image-serve.sh,
+      // gpu/image-sweeper.py deletes a preview's file from RAM a few seconds after this record is gone, and the file
+      // and the record both after ten minutes should this delete never arrive. A saving node's file stays until the
+      // card goes, which is why the harness, whose graphs save, draws only synthetic scenes. The picture on our disk
+      // is stripped. The delete leaves on every way out once the card is off the job, here or after the picture in
+      // `fetch`, and nothing waits for its answer but `settled`; after a stop that was not confirmed, the record is
+      // the sweeper's.
+      if (over || stopped) forget();
+    }
+  };
+  // The bot's job in the card's queue (`onPlace`): one read of the queue at a time, never waited for, the first at the
+  // first poll and the next PLACE_MS after it, until the job waits no longer. The socket's word that the job has
+  // started settles that at once, and a read still out then says nothing. A place is told only once the job has
+  // waited PLACE_MS: one that starts sooner would flash on the reader's line for a moment, at the cost of two edits.
+  // `drawing`: the job the card was drawing at the last read, and since when this wait has seen it.
+  let placing = !!options.onPlace && !staged, reading = false, readAt = -Infinity;
+  let drawing: { id: string; since: number } | undefined;
+  const placed = (place: CardPlace | null) => {
+    if (!placing) return;
+    if (place === null) placing = false;
+    try { options.onPlace!(place); } catch { /* the listener's own */ }
+  };
+  const place = () => {
+    if (!placing) return;
+    if (watch.startedAt(promptId) !== undefined) return placed(null);
+    if (reading || performance.now() - readAt < PLACE_MS) return;
+    reading = true;
+    readAt = performance.now();
+    leave(readPlace(comfy, promptId).then(seen => {
+      if (seen === undefined || !placing) return;
+      if (seen === null || watch.startedAt(promptId) !== undefined) return placed(null);
+      if (seen.running !== drawing?.id) drawing = seen.running === undefined ? undefined : { id: seen.running, since: performance.now() };
+      if (performance.now() - started < PLACE_MS) return;
+      placed({ before: seen.before, drawing: !!drawing, drawingMs: drawing ? Math.round(performance.now() - drawing.since) : 0 });
+    }).finally(() => { reading = false; }));
+  };
+  // The record's word that the job is over: the record, the picture it names, and when the wait heard it.
+  let done: { entry: HistoryEntry; image: { filename: string; subfolder: string; type: string }; at: number } | undefined;
+  const copies = options.copies ?? [];
+  const untilOver = async () => {
+    try {
+      if (staged?.uncertain) await settle(true);
+      const deadline = () => started + (options.waitMs ?? 600000) + (outage ? outage.spentMs - spent : 0);
+      let entry: HistoryEntry | undefined;
+      let failures = 0, dropped = 0;
+      for (let poll = 0; ; poll++) {
+        // Asked before the poll rather than after it: a caller who has let go, or a stage that has ended, is answered
+        // without another request, and `stopJob` takes the card off the job it is drawing.
+        halt(comfy);
+        const heard = watch.heard;
+        place();
+        // A socket that heard the whole job succeed has its record already; the poll is for everything else.
+        entry = watch.record(promptId);
+        if (entry) break;
+        let seen: Record<string, HistoryEntry>;
+        const asked = performance.now();
+        try {
+          seen = await (await call(comfy, `/history/${promptId}`)).json() as Record<string, HistoryEntry>;
+          failures = 0;
+          dropped = 0;
+        } catch (error) {
+          // The harness waits out the network within the cell's window, and such a poll is not counted as failed; polls
+          // that keep dropping, the server answering between them, lose the job, which is stopped as any other.
+          if (outage && outage.windowMs > 0 && !stop?.aborted && transportCode(error)) {
+            charge(outage, asked);
+            if (++dropped > RIDES) throw lost();
+            await settle();
+            continue;
+          }
+          // A poll that did not arrive is asked again; one the server answered with an error status is its answer.
+          if (stop?.aborted || (error as { code?: unknown }).code === 'comfy_http_error' || ++failures > POLL_RETRIES
+            || performance.now() > deadline()) throw error;
+          if (watch.heard === heard) await watch.wait(pollMs, stop);
+          continue;
+        }
+        entry = seen[promptId];
+        if (entry?.status?.completed || entry?.status?.status_str === 'error') break;
+        if (performance.now() > deadline()) throw Object.assign(new Error('image_timeout'), { code: 'image_timeout' });
+        // Video memory is sampled while the card works, not after it has freed the weights.
+        if (poll % (options.sampleEvery ?? 4) === 0) sampleVram();
+        // News that came while the poll was out is acted on at once. A poll is never cut short for it: an aborted
+        // request takes its connection with it, and `/view` would pay for a new one.
+        if (watch.heard === heard) await watch.wait(pollMs, stop);
+      }
+      // The loop is left only by a throw or by the record's word that the job is over.
+      over = true;
+      const at = performance.now();
+      const image = Object.entries(entry.outputs ?? {}).filter(([node]) => !copies.includes(node)).flatMap(([, output]) => output.images ?? [])[0];
+      if (!image || entry.status?.status_str === 'error') {
+        const recorded = Array.isArray(entry.status?.messages) ? entry.status.messages : [];
+        const oom = watch.oom(promptId) || recorded.some(message => Array.isArray(message) && message[0] === 'execution_error' && outOfMemory(message[1] ?? {}));
+        throw Object.assign(new Error('image_failed'), { code: 'image_failed', ...(oom ? { oom } : {}) });
+      }
+      done = { entry, image, at };
+    } catch (error) { await fail(error); }
+    finally { placing = false; }
+  };
+  // The job's last sample of video memory, taken once it is over and waited for, after the sample still out if there is
+  // one: the harness's, before its next job goes out, so that nothing of the next job lands in this one's maxima.
+  const lastSample = async () => {
+    lastTaken = true;
+    await sampling;
+    sampleVram(false);
+    await sampling;
+  };
+  // The picture of a job `untilOver` saw end.
+  const fetch = async () => {
+    const { entry, image, at } = done!;
+    try {
+      const viewStarted = performance.now();
+      // In the harness a picture whose download the network cut is asked for again by its name, once the server answers:
+      // a saving node's file stays on the card's disk (gpu/image-workflow-qwen-action.json), whatever became of the record.
+      const view = async (one: { filename: string; subfolder: string; type: string }) => {
+        const query = new URLSearchParams({ filename: one.filename, subfolder: one.subfolder ?? '', type: one.type ?? 'output' });
+        for (let attempt = 0; ; attempt++) {
+          const since = performance.now();
+          try {
+            return new Uint8Array(await (await call(comfy, `/view?${query}`)).arrayBuffer());
+          } catch (error) {
+            if (!outage || stop?.aborted || !transportCode(error)) throw error;
+            charge(outage, since);
+            if (attempt >= RIDES || !(await rideOut())) { halt(comfy); throw lost(); }
+          }
+        }
+      };
+      const bytes = await view(image);
+      const viewMs = Math.round(performance.now() - viewStarted);
+      const copied: { node: string; bytes: Uint8Array }[] = [];
+      for (const node of copies) {
+        const one = entry.outputs?.[node]?.images?.[0];
+        if (one) copied.push({ node, bytes: stripPngMetadata(await view(one)) });
+      }
+      // The record goes first, on the connection `/view` has just left open, and the last sample after it, where the
+      // harness did not take it at the over.
+      forget();
+      if (!lastTaken) sampleVram(false);
+      // `memory` fills in like `vram` did; `timing` is the socket's account of the job, and `cached` the nodes it heard
+      // the server answer from its cache. `totalMs` runs from the submit to the picture on our side; the harness's
+      // leaves out the time between the over and the download, which went to its next job's submit.
+      // `queueMs`: from the submit to the socket's word that the job started, when it heard that.
+      const startedAt = watch.startedAt(promptId);
+      return { bytes: stripPngMetadata(bytes), totalMs: Math.round(performance.now() - started - (staged ? viewStarted - at : 0)), viewMs,
+        vram: memory.vram, memory, timing: watch.timing(promptId, graph), cached: watch.cached(promptId), stamps: watch.stamps(promptId),
+        ...(startedAt === undefined ? {} : { queueMs: Math.max(0, Math.round(startedAt - started)) }),
+        ...(copies.length ? { copies: copied } : {}) };
+    } catch (error) { return fail(error); }
+  };
+  return { untilOver, lastSample, fetch };
 }
 
 export type DrawOptions = {
@@ -422,9 +1277,25 @@ export type DrawOptions = {
   steps?: number; sampler?: string; scheduler?: string; cfg?: number; width?: number; height?: number;
   // `timeoutMs` is one HTTP request's own timeout; `waitMs` is how long a picture may take, which is a different
   // number by two orders of magnitude and used to be the same one.
-  negative: string; minutes: number; timeoutMs: number; waitMs: number; pollMs?: number; workflow?: string;
+  negative: string; timeoutMs: number; waitMs: number; pollMs?: number; workflow?: string;
+  // The time budget: `minutes` from the start, checked between cells, or `until`, the end of the stage on the wall
+  // clock (milliseconds). Nothing is sent to the server after `until`, and every wait and request ends there, the
+  // socket's opening and a picture's download included (`Comfy`'s `end`). A cell whose picture and measurements are
+  // not in hand by then is cut by the clock: it stays undrawn, nobody's failure, and the run stops. A job already
+  // submitted gets `CLEANUP_RESERVE_MS` more for its id and its own stop and delete, and nothing else does. With
+  // `estimate`, what a cell of this many portraits is expected to take, a cell that cannot end by `until` is not
+  // submitted, and a plan whose cells cannot all end by then is not begun: the identity set gets no verdict unless it
+  // is whole, so a half of it would buy nothing.
+  minutes?: number; until?: number; estimate?: (references: number, first: boolean) => number;
   // The portraits file of the identity run, read for the paths it names; see `portraitsFor`.
   references?: string; log?: (event: object) => void;
+  // An identity run (docs/identity-experiment.md#complete-run): every cell once per arm, all on one canvas, and a
+  // failed cell left as it failed. `only` draws these cases of prompts.json and no others (the smoke); `pins` joins
+  // the index and makes the server's own pins mandatory; `tokens` counts a prompt as the graph's encoder reads it,
+  // with this many pictures ahead of it; `requireSocket` fails a cell whose job the socket could not hear from its
+  // start.
+  arms?: Arm[]; only?: string[]; pins?: Record<string, string | number>; requireSocket?: boolean;
+  tokens?: (prompt: string, images: number) => { prompt: number; conditioning: number } | undefined;
 };
 
 // A checkpoint name and a case id both become one path component and nothing else: they name a file on our disk, and
@@ -432,7 +1303,7 @@ export type DrawOptions = {
 // name: fp8 and GGUF builds of one checkpoint are published under the same stem, and dropping it made two of them
 // share a path (below, `fileOf`, where a shared path would be read as "already drawn").
 const safeName = (value: string) => value.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 60);
-const fileOf = (cell: Cell) => join('pictures', safeName(cell.checkpoint), `${safeName(cell.caseId)}-s${cell.seed}.png`);
+const fileOf = (cell: Cell) => join('pictures', safeName(cell.checkpoint), `${safeName(cell.caseId)}-s${cell.seed}${cell.arm ? `-${cell.arm}` : ''}.png`);
 
 // Seeds as the command line writes them. An empty part is dropped rather than read as seed 0: `Number('')` is 0, so
 // one trailing comma would add a whole extra pass over every case, paid for in rented card time.
@@ -441,31 +1312,147 @@ export function parseSeeds(value: string): number[] {
   return seeds.every(seed => Number.isInteger(seed) && seed >= 0) && seeds.length ? seeds : [];
 }
 
-// One cell of the comparison: this scene, drawn by this checkpoint from this seed. The role is not part of it — it
-// follows from the checkpoint's place in the list.
-const isCell = (one: Cell, other: Cell) => one.caseId === other.caseId && one.checkpoint === other.checkpoint && one.seed === other.seed;
+// One cell of the comparison: this scene, drawn by this checkpoint from this seed, in this arm when the run has arms.
+// The role is not part of it — it follows from the checkpoint's place in the list.
+const isCell = (one: Cell, other: Cell) => one.caseId === other.caseId && one.checkpoint === other.checkpoint
+  && one.seed === other.seed && one.arm === other.arm;
 
 // Codes that say the graph or the server is wrong rather than this picture: every cell after them fails in the same
-// way, and on a rental each of those failures is paid for.
-const stopsTheRun = (code: string) => code === 'comfy_http_error' || code === 'comfy_rejected_prompt'
-  || code === 'comfy_upload_failed' || code.startsWith('workflow_');
+// way, and on a rental each of those failures is paid for. `comfy_stop_unconfirmed`: a job may still be drawing, and
+// every cell after it would queue behind it. `comfy_unreachable` and `comfy_connection_lost`: the network to the card
+// stayed down longer than the harness waits for it (`submitOnStage`), and a resume draws such a cell again.
+// `serving_refused`: the gateway refused the key, the class, the queue or the service's state before anything reached
+// the card (local/image-serving.ts).
+export const stopsTheRun = (code: string) => code === 'comfy_http_error' || code === 'comfy_rejected_prompt'
+  || code === 'comfy_upload_failed' || code === 'comfy_socket_unavailable' || code === 'comfy_stop_unconfirmed'
+  || code === 'comfy_unreachable' || code === 'comfy_connection_lost' || code === 'serving_refused' || code.startsWith('workflow_');
 
 // Checkpoint-major order: a switch reloads the whole checkpoint, and an early stop then leaves whole comparable
-// blocks rather than a little of each.
-export function cells(cases: Case[], checkpoints: string[], seeds: number[]): Cell[] {
-  return checkpoints.flatMap((checkpoint, order) => seeds.flatMap(seed =>
-    cases.map(one => ({ caseId: one.id, checkpoint, role: (order === 0 ? 'primary' : 'alternate') as Role, seed }))));
+// blocks rather than a little of each. The arms of one frame follow each other, so a stop leaves whole triples, and
+// whatever drifts on the card over an hour drifts under all three alike.
+export function cells(cases: Case[], checkpoints: string[], seeds: number[], arms?: Arm[]): Cell[] {
+  return checkpoints.flatMap((checkpoint, order) => seeds.flatMap(seed => cases.flatMap(one => {
+    const cell = { caseId: one.id, checkpoint, role: (order === 0 ? 'primary' : 'alternate') as Role, seed };
+    return arms ? arms.map(arm => ({ ...cell, arm })) : [cell];
+  })));
+}
+
+// ComfyUI's own log, the last 300 lines of it (/internal/logs/raw, app/logger.py): the one place that says a model
+// was loaded onto the card only in part, which is how the server fits what does not fit instead of failing. Only
+// those lines are counted, and none is kept: the rest of the log can carry a prompt.
+export async function logLines(comfy: Comfy): Promise<string[] | undefined> {
+  // The gateway reads the log itself and passes on its count of partial loads alone (`Drawn`), never a line.
+  if (servedBy(comfy)) return undefined;
+  try {
+    const seen = await (await call(comfy, '/internal/logs/raw')).json() as { entries?: { t?: unknown; m?: unknown }[] };
+    return Array.isArray(seen.entries) ? seen.entries.map(entry => `${entry.t}\u0000${entry.m}`) : undefined;
+  } catch { return undefined; }
+}
+// The partial loads after the last line seen before the job, or in the whole ring when that line has left it.
+export function partialLoadsSince(before: string[] | undefined, after: string[] | undefined): number | undefined {
+  if (!before || !after) return undefined;
+  const last = before.at(-1);
+  return after.slice(last === undefined ? 0 : after.lastIndexOf(last) + 1)
+    .filter(line => /loaded partially|Unloaded partially/.test(line)).length;
+}
+// Where a read of the log ended, kept without a word of it: the last line's time and the hash of the whole line, or
+// neither when the ring was empty. The harness keeps one from a job's read after it for the next job, in place of a
+// read before that one (docs/action-experiment.md#one-socket). `partialLoadsAfter` counts as `partialLoadsSince`
+// does.
+export type LogCursor = { t?: string; hash?: string };
+const lineHash = (line: string) => createHash('sha256').update(line).digest('hex');
+export function logCursor(lines: string[] | undefined): LogCursor | undefined {
+  if (!lines) return undefined;
+  const last = lines.at(-1);
+  return last === undefined ? {} : { t: last.slice(0, Math.max(0, last.indexOf('\u0000'))), hash: lineHash(last) };
+}
+// The lines of `after` past the cursor, and whether the cursor's line was still there: without it the lines are the
+// whole ring, and a count of them is a floor.
+export function linesAfter(cursor: LogCursor | undefined, after: string[] | undefined): { lines: string[]; whole: boolean } | undefined {
+  if (!cursor || !after) return undefined;
+  if (cursor.hash === undefined) return { lines: after, whole: true };
+  for (let at = after.length - 1; at >= 0; at--) if (lineHash(after[at]) === cursor.hash) return { lines: after.slice(at + 1), whole: true };
+  return { lines: after, whole: false };
+}
+export function partialLoadsAfter(cursor: LogCursor | undefined, after: string[] | undefined): number | undefined {
+  if (!cursor || !after) return undefined;
+  let from = 0;
+  if (cursor.hash !== undefined) {
+    for (let at = after.length - 1; at >= 0; at--) if (lineHash(after[at]) === cursor.hash) { from = at + 1; break; }
+  }
+  return after.slice(from).filter(line => /loaded partially|Unloaded partially/.test(line)).length;
+}
+
+// What the server says it is, read at the start of a run: its version, torch's, and the card's name. A run with pins
+// of its own is held to these as well, so for it a server that does not say all three is refused rather than read as
+// saying nothing: a resume on another card would otherwise pass as the same one. `triton` joins them only when the
+// server was started with comfy-kitchen's Triton backend (gpu/image-serve.sh SIMPLE_CHAT_IMAGE_TRITON), which may round
+// the int8 layers differently: a run without it keeps the pins it always had, and a resume across the switch is refused.
+export const SERVER_PINS = ['comfyui', 'pytorch', 'card'];
+// Whether the server's command line (/system_stats `argv`) has comfy-kitchen's Triton backend on, as the pinned server
+// reads its flags (comfy/quant_ops.py:33): asked for and not overridden.
+export const tritonOn = (argv: unknown) => Array.isArray(argv) && argv.includes('--enable-triton-backend') && !argv.includes('--disable-triton-backend');
+export async function serverPins(comfy: Comfy, strict: boolean): Promise<Record<string, string>> {
+  const serving = servedBy(comfy);
+  if (serving) return (await import('./image-serving.ts')).servedPins(comfy, serving, strict);
+  const pins: Record<string, string> = {};
+  try {
+    const stats = await (await call(comfy, '/system_stats')).json() as {
+      system?: { comfyui_version?: unknown; pytorch_version?: unknown; argv?: unknown }; devices?: { name?: unknown }[] };
+    const keep = (key: string, value: unknown) => { if (typeof value === 'string' && value) pins[key] = value.slice(0, 120); };
+    keep('comfyui', stats.system?.comfyui_version);
+    keep('pytorch', stats.system?.pytorch_version);
+    keep('card', stats.devices?.[0]?.name);
+    if (tritonOn(stats.system?.argv)) pins.triton = 'enabled';
+  } catch { /* judged below */ }
+  if (strict && !SERVER_PINS.every(key => pins[key])) {
+    throw new Error(comfy.end?.aborted ? 'The end (--until) came before the server said what it is; nothing is drawn'
+      : 'The server did not say what it is on /system_stats (ComfyUI, PyTorch and the card), and a pinned run is pinned to that too');
+  }
+  return pins;
+}
+
+// The kitchen's INT8 attention (docs/action-experiment.md#levers) through the pinned ComfyUI's core node
+// (comfy_extras/nodes_model_advanced.py:374-411), which lists it only where the kernel is available (377-379).
+export const ATTENTION_NODE = 'ModelAttentionBackend';
+export const KITCHEN_ATTENTION = 'comfy kitchen attention';
+// Whether the server's ModelAttentionBackend offers the kitchen's attention, by /object_info (the V3 schema's combo,
+// `["COMBO", { options }]`, or a list of options first, as older nodes list them). A server without the node answers
+// with nothing for it, which is no.
+export async function attentionOffered(comfy: Comfy): Promise<boolean> {
+  const serving = servedBy(comfy);
+  if (serving) return (await import('./image-serving.ts')).servedAttention(comfy, serving);
+  const info = await (await call(comfy, `/object_info/${ATTENTION_NODE}`)).json() as Record<string, { input?: { required?: Record<string, unknown> } } | undefined>;
+  const input = info[ATTENTION_NODE]?.input?.required?.attention;
+  const options = Array.isArray(input) ? (Array.isArray(input[0]) ? input[0] : (input[1] as { options?: unknown } | undefined)?.options) : undefined;
+  return Array.isArray(options) && options.includes(KITCHEN_ATTENTION);
+}
+// A graph with the kitchen's attention on the model the sampler takes, or the guider's where a SamplerCustomAdvanced
+// samples (the levers' turbo row), under a node id of its own; nothing for a graph with neither.
+export function withAttention(graph: Graph): Graph | undefined {
+  const out: Graph = JSON.parse(JSON.stringify(graph));
+  const sampler = Object.values(out).find(node => node.class_type === 'KSampler' || node.class_type === 'SamplerCustomAdvanced');
+  const guider = sampler && Array.isArray(sampler.inputs.guider) ? out[String(sampler.inputs.guider[0])] : undefined;
+  const holder = sampler && 'model' in sampler.inputs ? sampler : guider;
+  if (!holder || !Array.isArray(holder.inputs.model)) return undefined;
+  const id = String(Math.max(0, ...Object.keys(out).map(Number).filter(Number.isFinite)) + 1);
+  out[id] = { class_type: ATTENTION_NODE, inputs: { model: holder.inputs.model, attention: KITCHEN_ATTENTION } };
+  holder.inputs.model = [id, 0];
+  return out;
 }
 
 export async function draw(options: DrawOptions): Promise<BatchIndex> {
   const log = options.log ?? (() => undefined);
-  const comfy: Comfy = { baseUrl: options.comfy, timeoutMs: options.timeoutMs };
-  const cases: Case[] = JSON.parse(readFileSync(join(resolve(options.prompts), 'prompts.json'), 'utf8'));
+  // The end as signals, on the monotonic clock from here on: `end` at `until`, `reserve` a minute after it.
+  const at = (ms: number) => AbortSignal.timeout(Math.max(0, Math.round(ms - Date.now())));
+  const comfy: Comfy = { baseUrl: options.comfy, timeoutMs: options.timeoutMs,
+    ...(options.until === undefined ? {} : { end: at(options.until), reserve: at(options.until + CLEANUP_RESERVE_MS) }) };
+  // Everything below is read and checked before the run directory is touched: a resume that is refused leaves the
+  // experiment exactly as it was, and the first write is after the last check.
+  const prompts = readFileSync(join(resolve(options.prompts), 'prompts.json'));
+  const cases: Case[] = JSON.parse(prompts.toString('utf8'));
   if (!cases.length) throw new Error('No assembled prompts to draw');
   const directory = resolve(options.out);
-  mkdirSync(join(directory, 'pictures'), { recursive: true, mode: 0o700 });
-  // The bundles are built from this copy, so a review directory needs nothing but the run directory.
-  copyFileSync(join(resolve(options.prompts), 'prompts.json'), join(directory, 'prompts.json'));
   const graph = apiGraph(options.workflow ? JSON.parse(readFileSync(resolve(options.workflow), 'utf8')) : defaultWorkflow());
   // The size of the run: what `--size` asked for, or what the graph itself says. A workflow pinned on the card was
   // exported at a resolution somebody chose for this checkpoint, and drawing it at the harness's default instead
@@ -488,90 +1475,190 @@ export async function draw(options: DrawOptions): Promise<BatchIndex> {
   const references: References | null = options.references
     ? JSON.parse(readFileSync(resolve(options.references), 'utf8')) : null;
   const uploaded = new Map<string, string>();
-  const indexPath = join(directory, 'index.json');
-  const index: BatchIndex = existsSync(indexPath) ? JSON.parse(readFileSync(indexPath, 'utf8'))
-    : { startedAt: new Date().toISOString(), comfy: { steps, sampler, scheduler, cfg, width, height }, workflow,
-      pictures: [], failures: [] };
-  // A resume into a directory drawn by another graph would leave half a comparison under one name. The graph's own
-  // hash is what says so: the file can be renamed, and the same name can hold a different graph tomorrow.
-  if (index.workflow && index.workflow.sha256 !== workflow.sha256) {
-    throw new Error(`${indexPath} was drawn with another workflow (${index.workflow.file}); one run directory holds one graph`);
-  }
-  index.workflow = workflow;
-  const save = () => writeFileSync(indexPath, JSON.stringify(index, null, 2));
-  const deadline = performance.now() + options.minutes * 60000;
-
-  // Two cells that would write one file are a comparison of a checkpoint with itself: the second is read as already
-  // drawn, skipped, and recorded nowhere. A scene named twice in prompts.json, repeated checkpoints or seeds, and
-  // names that collide once `safeName` has folded or truncated them all land here — before anything is drawn, not
-  // after the card has been paid for — and the file is named, because the cause is not always the obvious one.
-  const plan = cells(cases, options.checkpoints, options.seeds);
-  const paths = plan.map(fileOf);
-  const shared = paths.find((path, order) => paths.indexOf(path) !== order);
-  if (shared) throw new Error(`Two cells would write ${shared}: a scene is in prompts.json twice, or a checkpoint or seed is repeated`);
-  // And every portrait the references file names, here rather than at the cell that wanted it: a path that is
+  // Every portrait the references file names is checked here rather than at the cell that wanted it: a path that is
   // wrong is wrong for the whole run, and a missing file inside the loop is an unreadable `image_failed` per cell.
-  // The story is named because it is a synthetic scenario; the person is not, because the person is a name.
+  // The story is named because it is a synthetic scenario; the person is not, because the person is a name. Each one
+  // is measured as the encode node will resize it, and the index records that size with every frame it goes into.
+  const resolution = encoderResolution(graph);
+  const sizes = new Map<string, [number, number]>();
+  const stories = new Set(cases.map(one => one.scenario));
+  const encoded = new Set<string>();
   for (const [story, people] of Object.entries(references ?? {})) {
     for (const portrait of Object.values(people ?? {})) {
       if (typeof portrait !== 'string' || !existsSync(resolve(referenceRoot, portrait))) {
         throw new Error(`The references file names a portrait for a person of "${story}" that is not a file beside it`);
       }
+      if (resolution === undefined) continue;
+      const size = pngSize(readFileSync(resolve(referenceRoot, portrait)));
+      sizes.set(portrait, referenceGeometry(size.width, size.height, resolution));
+      if (stories.has(story)) encoded.add(sizes.get(portrait)!.join('x'));
+    }
+  }
+  const arms = options.arms;
+  if (arms) {
+    // The arms differ in the portraits and in the looks and in nothing else, so all three are drawn on one canvas,
+    // the graph's own, and every portrait reaches the encoder at one size: portraits of two sizes are two runs. The
+    // portraits are upright and the frames wide, so the first of them is not the canvas, as the encode node's own
+    // latent would make it; docs/identity-experiment.md#geometry says why that latent is not wired, and what that
+    // leaves open.
+    if (encoded.size !== 1) {
+      throw new Error(encoded.size ? `The portraits reach the encoder at ${[...encoded].join(' and ')}; one run has one size of portrait`
+        : 'An identity run needs --references with the portraits of these frames, and a graph whose encode node takes them');
+    }
+    // Arm C has to differ from B by the looks alone, which holds only for a prompt the assembly wrote.
+    const edited = cases.find(one => assemblePrompt(one.description, one.sheet).prompt !== one.prompt);
+    if (edited) throw new Error(`The prompt of ${edited.id} is not the one assemblePrompt writes; arm C would differ from B in more than the looks`);
+  }
+
+  // Two cells that would write one file are a comparison of a checkpoint with itself: the second is read as already
+  // drawn, skipped, and recorded nowhere. A scene named twice in prompts.json, repeated checkpoints or seeds, and
+  // names that collide once `safeName` has folded or truncated them all land here — before anything is drawn, not
+  // after the card has been paid for — and the file is named, because the cause is not always the obvious one.
+  const unknown = options.only?.find(id => !cases.some(one => one.id === id));
+  if (unknown) throw new Error(`No case ${unknown} in prompts.json`);
+  const plan = cells(options.only ? cases.filter(one => options.only!.includes(one.id)) : cases, options.checkpoints, options.seeds, arms);
+  const paths = plan.map(fileOf);
+  const shared = paths.find((path, order) => paths.indexOf(path) !== order);
+  if (shared) throw new Error(`Two cells would write ${shared}: a scene is in prompts.json twice, or a checkpoint or seed is repeated`);
+
+  const pins = { ...options.pins, ...await serverPins(comfy, options.pins !== undefined) };
+  const indexPath = join(directory, 'index.json');
+  const earlier: BatchIndex | undefined = existsSync(indexPath) ? JSON.parse(readFileSync(indexPath, 'utf8')) : undefined;
+  const index: BatchIndex = earlier ?? { startedAt: new Date().toISOString(), comfy: { steps, sampler, scheduler, cfg, width, height },
+    workflow, ...(arms ? { arms } : {}), pictures: [], failures: [] };
+  // A resume into a directory drawn by another graph would leave half a comparison under one name. The graph's own
+  // hash is what says so: the file can be renamed, and the same name can hold a different graph tomorrow. The canvas,
+  // the arms, the pins and the prompts are held to the same rule, since pictures of two canvases are no comparison at
+  // all, and the bundles judge a picture by the copy of prompts.json beside it. A run with pins of its own compares
+  // every pin of either side, so one read now has to be there and match, and one missing now is a change too.
+  if (earlier) {
+    if (earlier.workflow && earlier.workflow.sha256 !== workflow.sha256) {
+      throw new Error(`${indexPath} was drawn with another workflow (${earlier.workflow.file}); one run directory holds one graph`);
+    }
+    if (earlier.comfy.width !== width || earlier.comfy.height !== height) {
+      throw new Error(`${indexPath} was drawn at ${earlier.comfy.width}x${earlier.comfy.height}; one run directory holds one canvas`);
+    }
+    if (String(earlier.arms ?? '') !== String(arms ?? '')) throw new Error(`${indexPath} was drawn with other arms; one run directory holds one set`);
+    const keys = options.pins ? [...new Set([...Object.keys(pins), ...Object.keys(earlier.pins ?? {})])]
+      : Object.keys(pins).filter(key => earlier.pins?.[key] !== undefined);
+    const changed = keys.find(key => earlier.pins?.[key] !== pins[key]);
+    if (changed) throw new Error(`${indexPath} was drawn under another ${changed}; one run directory holds one set of pins`);
+    const copy = join(directory, 'prompts.json');
+    if (existsSync(copy) && !readFileSync(copy).equals(prompts)) {
+      throw new Error(`${directory} was drawn from another prompts.json; one run directory holds one set of prompts`);
+    }
+  }
+  // Every check has passed; from here on the run directory is written. The bundles are built from this copy of the
+  // prompts, so a review directory needs nothing but the run directory.
+  mkdirSync(join(directory, 'pictures'), { recursive: true, mode: 0o700 });
+  writeFileSync(join(directory, 'prompts.json'), prompts, { mode: 0o600 });
+  index.workflow = workflow;
+  if (Object.keys(pins).length) index.pins = { ...index.pins, ...pins };
+  // What ended the last run says nothing about this one, which may draw every cell that is left.
+  delete index.stopped;
+  delete index.error;
+  const save = () => writeFileSync(indexPath, JSON.stringify(index, null, 2));
+  const until = options.until ?? Date.now() + (options.minutes ?? 30) * 60000;
+
+  // Resumable: a cell already drawn into this directory is left alone, so a lost session restarts where it stopped.
+  // In an identity run a cell's failure is its result, an OOM above all, and drawing it again until it comes out would
+  // be choosing the picture. What stopped the whole run was the server or the graph, not the cell: that resumes.
+  const done = (cell: Cell) => (index.pictures.some(picture => picture.file === fileOf(cell)) && existsSync(join(directory, fileOf(cell))))
+    || (!!arms && index.failures.some(failure => isCell(failure, cell) && !stopsTheRun(failure.code)));
+  // One upload per portrait, not per cell: the same face comes back in every frame of its story, and the card is
+  // billed by the minute. A cell whose people have no portraits is drawn without any, from the prompt alone, and so
+  // is every cell of arm A. An upload's seconds belong to the frame that needed the portrait first.
+  const portraitsOf = (cell: Cell) => references && cell.arm !== 'A' ? bindingPlan(cases.find(one => one.id === cell.caseId)!, references) : [];
+  const firstOf = (cell: Cell) => !index.pictures.some(picture => picture.arm === cell.arm);
+  if (options.estimate) {
+    const left = plan.filter(cell => !done(cell));
+    const seen = new Set<Arm | undefined>();
+    const needMs = left.reduce((total, cell) => {
+      const first = firstOf(cell) && !seen.has(cell.arm);
+      seen.add(cell.arm);
+      return total + options.estimate!(portraitsOf(cell).length, first);
+    }, 0);
+    if (left.length && Date.now() + needMs > until) {
+      index.stopped = 'budget';
+      log({ event: 'budget_short', cells: left.length, needMinutes: Math.ceil(needMs / 60000), leftMinutes: Math.max(0, Math.floor((until - Date.now()) / 60000)) });
     }
   }
 
-  for (const cell of plan) {
+  for (const cell of index.stopped ? [] : plan) {
     const file = fileOf(cell);
-    // Resumable: a cell already drawn into this directory is left alone, so a lost session restarts where it stopped.
-    if (index.pictures.some(picture => picture.file === file) && existsSync(join(directory, file))) continue;
-    if (performance.now() > deadline) { log({ event: 'budget_spent', drawn: index.pictures.length }); break; }
+    if (done(cell)) continue;
     const one = cases.find(entry => entry.id === cell.caseId)!;
+    const sent = portraitsOf(cell);
+    const first = firstOf(cell);
+    const spent = () => { index.stopped = 'budget'; log({ event: 'budget_spent', drawn: index.pictures.length }); };
+    if (Date.now() + (options.estimate?.(sent.length, first) ?? 0) > until) { spent(); break; }
     try {
-      // One upload per portrait, not per cell: the same face comes back in every frame of its story, and the card
-      // is billed by the minute. A cell whose people have no portraits is drawn without any, from the prompt alone.
       let bound: string[] | undefined;
+      let uploadMs = 0;
       if (references) {
         bound = [];
-        for (const portrait of portraitsFor(one, references)) {
+        for (const { file: portrait } of sent) {
           let name = uploaded.get(portrait);
           if (name === undefined) {
+            const began = performance.now();
             name = await uploadReference(comfy, readFileSync(resolve(referenceRoot, portrait)));
+            uploadMs += performance.now() - began;
             uploaded.set(portrait, name);
             log({ event: 'reference_uploaded', uploaded: uploaded.size });
           }
           bound.push(name);
         }
       }
-      const filled = applyToWorkflow(graph, { checkpoint: cell.checkpoint, prompt: one.prompt, negative: options.negative,
+      const prompt = cell.arm === 'C' ? withoutLooks(one, sent.map(person => person.name)) : one.prompt;
+      const filled = applyToWorkflow(graph, { checkpoint: cell.checkpoint, prompt, negative: options.negative,
         seed: cell.seed, steps, sampler, scheduler, width, height, cfg, references: bound });
-      const drawn = await drawOne(comfy, filled, { pollMs: options.pollMs, waitMs: options.waitMs });
+      const before = await logLines(comfy);
+      const drawn = await drawOne(comfy, filled, { pollMs: options.pollMs, waitMs: options.waitMs, sampleEvery: 1, requireSocket: options.requireSocket });
+      // The last sample of video memory lands after the picture does, and this cell's row records it.
+      await settled();
+      // Through the gateway the log is its own, and the picture carries its count (local/image-serving.ts).
+      const partialModelLoadEvents = partialLoadsSince(before, await logLines(comfy)) ?? drawn.partialLoads;
+      // A picture is the cell's only with its measurements, all in hand by the end.
+      if (comfy.end?.aborted) { spent(); break; }
+      const counted = options.tokens?.(prompt, sent.length);
       mkdirSync(join(directory, 'pictures', safeName(cell.checkpoint)), { recursive: true, mode: 0o700 });
       writeFileSync(join(directory, file), drawn.bytes, { mode: 0o600 });
       const picture: Picture = { ...cell, steps, sampler, scheduler,
-        ...(bound === undefined ? {} : { references: bound.length }),
+        ...(bound === undefined ? {} : { references: bound.length, referenceSizes: sent.flatMap(person => sizes.has(person.file) ? [sizes.get(person.file)!] : []) }),
         width, height, totalMs: drawn.totalMs, viewMs: drawn.viewMs, vram: drawn.vram,
-        bytes: drawn.bytes.length, sha256: createHash('sha256').update(drawn.bytes).digest('hex'), file };
+        bytes: drawn.bytes.length, sha256: createHash('sha256').update(drawn.bytes).digest('hex'), file,
+        ...(uploadMs ? { uploadMs: Math.round(uploadMs) } : {}), first, ...drawn.timing, vramSamples: drawn.memory.samples,
+        ...(drawn.memory.ramMiB ? { ramMiB: drawn.memory.ramMiB } : {}),
+        ...(partialModelLoadEvents === undefined ? {} : { partialModelLoadEvents }),
+        promptChars: prompt.length, ...(counted ? { promptTokens: counted.prompt, conditioningTokens: counted.conditioning } : {}) };
       // The index records cells, not attempts: this cell's earlier failure is off the list now that it has its
       // picture, and a cell drawn again (its file lost, say) replaces its own row instead of being dealt twice.
       index.failures = index.failures.filter(failure => !isCell(failure, cell));
       index.pictures = index.pictures.filter(earlier => earlier.file !== file);
       index.pictures.push(picture);
       save();
-      log({ event: 'picture_drawn', caseId: cell.caseId, role: cell.role, totalMs: picture.totalMs, viewMs: picture.viewMs,
+      log({ event: 'picture_drawn', caseId: cell.caseId, role: cell.role, arm: cell.arm, totalMs: picture.totalMs, viewMs: picture.viewMs,
         references: picture.references, vramUsedMiBMax: Math.max(0, ...drawn.vram.map(device => device.usedMiBMax)) });
     } catch (error) {
       const raw = String((error as { code?: string }).code ?? '');
       const code = /^[a-z_]{1,50}$/.test(raw) ? raw : 'image_failed';
       const { httpStatus } = safeErrorDetails(error);
+      const oom = (error as { oom?: unknown }).oom === true;
+      // Whatever failed once the end had come was cut by it, an upload or a download as much as a wait, and is not
+      // this cell's result: the cell is left undrawn, as one never begun is.
+      if (comfy.end?.aborted) { spent(); break; }
       index.failures = index.failures.filter(failure => !isCell(failure, cell));
-      index.failures.push({ ...cell, code, ...(httpStatus === undefined ? {} : { httpStatus }) });
+      index.failures.push({ ...cell, code, ...(httpStatus === undefined ? {} : { httpStatus }), ...(oom ? { oom } : {}),
+        ...(references ? { references: sent.length } : {}) });
       save();
-      log({ event: 'picture_failed', caseId: cell.caseId, role: cell.role, code, httpStatus });
+      log({ event: 'picture_failed', caseId: cell.caseId, role: cell.role, arm: cell.arm, code, httpStatus, oom });
       // The graph or the server, not this picture: every cell after it fails the same way, and the rental pays for
       // each. The run stops and says why; what is drawn stays, and a rerun into the same directory resumes.
       if (stopsTheRun(code)) { index.error = code; log({ event: 'batch_stopped', code, httpStatus }); break; }
     }
   }
+  // A failed cell's delete may still be on its way, and the run is not over before the card has had it.
+  await settled();
   index.completedAt = new Date().toISOString();
   save();
   return index;
@@ -593,40 +1680,65 @@ export function bundlesOf(pictures: Picture[], count: number): Bundle[] {
   return bundles.filter(bundle => bundle.pictures.length);
 }
 
-// Modelled on the task the fifth reading session was given (docs/illustrations-plan.md, step 6), widened from three
+// Modelled on the task the fifth reading session was given (docs/illustrations-plan.md#step-6), widened from three
 // pictures to a bundle: the question is a rate of rejection, and contradiction is counted apart from omission.
-export function taskMarkdown(count: number): string {
+// Question 5 asks about the style and about the people apart, and about a face and a figure apart: an even style
+// hides changing faces, and a face kept on a body that lost its build is not a person kept. An identity bundle
+// (local/image-identity.ts) shows each frame's text with the looks in it, whichever arm drew the picture, and adds
+// the sheet of checks the gates are counted from.
+export function taskMarkdown(count: number, identity = false): string {
+  const text = identity ? 'frame_text' : 'prompt_sent';
+  const material = identity
+    ? `- \`cases.json\`: для каждой картинки русский текст сцены (\`scene_text_ru\`), \`character_sheet\`, структурное описание и \`frame_text\` — текст кадра со строками внешности из листа. Модель картинок получила либо его, либо его вариант, где внешность части людей заменена их портретом, то есть картинкой того же человека; какой вариант у какой картинки, тебе не сообщают. Судишь всегда против \`frame_text\`;
+- \`checks.json\`: лист проверок, о нём в конце.`
+    : `- \`cases.json\`: для каждой картинки русский текст сцены (\`scene_text_ru\`), \`character_sheet\`, структурное описание и \`prompt_sent\` — ровно тот текст, который получила модель картинок.`;
+  const checks = identity ? `
+Лист проверок. У каждой проверки в \`checks.json\` есть \`id\`, \`kind\`, картинки и пункты \`items\`. На каждый пункт ответь \`yes\`, \`no\` или \`unsure\`. \`unsure\` засчитывается против картинки, поэтому ставь его только там, где решить правда нельзя.
+- \`transition\`: персонаж \`person\` на картинке \`from\` и на следующей картинке, где он есть, \`to\`. \`face\` — то же лицо: черты, волосы, приметы на лице. \`figure\` — та же фигура, и она совпадает со строкой внешности: телосложение, рост рядом с другими, силуэт, постоянные приметы. Лицо сохранилось, а фигура нет — это \`face: yes\`, \`figure: no\`.
+- \`picture\`: одна картинка. \`action\` — каждый человек делает то, что сказано в \`frame_text\`, там, где сказано, и никто не пропал и не добавлен. \`apart\` — ни у кого нет лица или фигуры другого человека из листа. \`swap\` — никто не получил вместе и внешность, и одежду другого человека из листа.
+- \`clothes\`: персонаж \`person\` на картинке \`picture\` одет так, как сказано о нём в \`frame_text\`.
+- \`style\`: во всех картинках один стиль.
+
+Последним в отчёте дай ответы одним блоком JSON, на все проверки и на все их пункты:
+\`\`\`json
+{"answers": {"t01": {"face": "yes", "figure": "no"}, "p01": {"action": "yes", "apart": "yes", "swap": "yes"}}}
+\`\`\`
+` : '';
   return `Ты оцениваешь сгенерированные иллюстрации, их здесь ${count}. Весь материал здесь синтетический, читай и смотри его свободно. Песочница только для чтения: ничего не записывай. Весь отчёт дай последним сообщением, по-русски. Первой строкой отчёта — точное название модели, которой ты работаешь.
 
 Контекст. Телеграм-бот пишет ветвящиеся истории по-русски. После того как сцена написана, второй вызов модели описывает по-английски один кадр этой сцены отдельными полями, а программа собирает из них запрос к модели картинок: план, место, момент, каждый человек (постоянная строка внешности из листа персонажей истории, затем состояние, затем действие), предметы, свет, одно предложение о стиле. Инструкция запрещает имена во всех полях, и программа вырезает из запроса те имена, которые знает по листу персонажей истории; человек, названный только в одной сцене, на лист не попадает, и вырезать его имя нечем. Про модель картинок известно, что она рисует, кто в кадре, где, в какой позе и с чем в руках, и не справляется с точными контактами, с тем, чья это рука, и с содержимым экранов. Поэтому описывающий вызов выбирает кадр, который на это не опирается: люди и место сразу до или сразу после действия, не больше четырёх человек, позы на уровне тела. Читатель получает сначала текст сцены, а под ним картинку. Вопрос в том, годятся ли такие картинки как иллюстрации.
 
 Материал в этом каталоге:
 - PNG-файлы с нейтральными именами \`pic-NN.png\`, числом ${count}; какой моделью нарисован каждый, тебе не сообщают, и угадывать это по картинке не надо;
-- \`cases.json\`: для каждой картинки русский текст сцены (\`scene_text_ru\`), \`character_sheet\`, структурное описание и \`prompt_sent\` — ровно тот текст, который получила модель картинок.
+${material}
 
 По каждой картинке отдельно:
-1. Против \`prompt_sent\`: каждый названный элемент и каждое отношение — выполнено / не выполнено, несколько слов там, где не выполнено. Итоги числами. Если в \`prompt_sent\` осталось имя человека — назови его: это ошибка сборки запроса, а не модели картинок.
+1. Против \`${text}\`: каждый названный элемент и каждое отношение — выполнено / не выполнено, несколько слов там, где не выполнено. Итоги числами. Если в \`${text}\` осталось имя человека — назови его: это ошибка сборки запроса, а не модели картинок.
 2. Против текста сцены: противоречит ли что-нибудь на картинке сцене (не та сторона травмы, открытая дверь там, где её держат закрытой, не то число щитов, человек делает чужое действие, не то место)? Пропуск — не противоречие: перечисли пропуски отдельно и скажи, важен ли каждый для читателя. Для каждого противоречия: вина описания или вина модели картинок.
 3. Дефекты изображения: руки, лица, лишние конечности, анатомия, перспектива, слипшиеся предметы, случайный текст.
 4. Хорошо ли описание выбрало кадр? Узнаётся ли момент как именно эта сцена, а не любая сцена этой истории? Если в тексте сцены есть кадр лучше и его можно нарисовать, назови его.
 
 По всем вместе:
-5. Держится ли один стиль? Там, где несколько картинок делят персонажа с одинаковой строкой внешности, узнаётся ли он как один и тот же человек?
+5. Стиль и люди — отдельными ответами: ровный стиль ещё не значит, что лица те же.
+   а) Стиль: держится ли один стиль во всех картинках? Назови картинки, где он ломается.
+   б) Люди: там, где несколько картинок делят персонажа с одинаковой строкой внешности, узнаётся ли он как тот же человек — отдельно по лицу и отдельно по фигуре (телосложение, рост рядом с другими, силуэт, постоянные приметы)? Лицо на месте, а телосложение потеряно — это провал фигуры, а не успех. Не перепутаны ли люди между собой, особенно похожие друг на друга?
 6. Что ты изменил бы в инструкции описывающей модели или в сборке запроса. Точные формулировки.
 7. По одной строке на картинку: принял бы читатель, только что прочитавший эту сцену, картинку под ней как иллюстрацию? да / с оговорками / нет, и одна главная причина.
 
 Будь конкретен и критичен, ничьи чувства от этого не зависят. Не смягчай находки и не выдумывай дефектов, на которые не можешь показать.
-`;
+${checks}`;
 }
 
 // Writes the bundles and their keys. The bundles go under `review/`, which holds nothing else: a session handed one
 // bundle is blind, and so is a session handed the whole of `review/` by a hand that mounted one directory too high.
 // The run directory itself is not blind — `pictures/` is named by checkpoint and `keys/` is the answer sheet — and
-// it stays on our side.
+// it stays on our side. An identity run is bundled by local/image-identity.ts: here its three arms of one frame would
+// be dealt as one picture drawn three times, and `prompt_sent` would show arm C's text to the judge.
 export const REVIEW = 'review';
 export function buildBundles(directory: string, count: number, log: (event: object) => void = () => undefined) {
   const root = resolve(directory);
   const index: BatchIndex = JSON.parse(readFileSync(join(root, 'index.json'), 'utf8'));
+  if (index.arms) throw new Error('This is an identity run; bundle it with npm run image:identity -- bundles');
   const cases: Case[] = JSON.parse(readFileSync(join(root, 'prompts.json'), 'utf8'));
   const bundles = bundlesOf(index.pictures, count);
   mkdirSync(join(root, 'keys'), { recursive: true, mode: 0o700 });
@@ -648,8 +1760,27 @@ export function buildBundles(directory: string, count: number, log: (event: obje
   return bundles;
 }
 
-// The server is reached through an ssh tunnel; it is never published, so only a loopback root is accepted.
-function comfyUrl(value: string): string {
+// The gateway's key for our own calls, and nothing else of the file, which also holds the control key and Vast's. The
+// value is never printed, logged or put in an error, and neither is anything the file says. The eval's text lane reads
+// it through local/action-text.ts, and `--comfy serving` below.
+export const CLIENT_KEY_FILE = join(homedir(), '.config', 'simple-serving', 'config.json');
+export function readClientKey(path = CLIENT_KEY_FILE): string {
+  let key: unknown;
+  try { key = (JSON.parse(readFileSync(path, 'utf8')) as { client_key?: unknown } | null)?.client_key; }
+  catch { throw new Refusal(`Cannot read ${path} as a JSON object`); }
+  if (typeof key !== 'string' || !key.trim() || /[\r\n]/.test(key)) throw new Refusal(`${path} has no client_key`);
+  return key.trim();
+}
+
+// The server is reached through an ssh tunnel; it is never published, so only a loopback root is accepted. `serving` is
+// simple-serving's picture gateway at the local end of `cli --lane pictures up`'s tunnel, drawn through under the
+// client key of simple-serving's configuration and the class `internal`, as the eval reaches the text lane.
+export const SERVING_URL = 'http://127.0.0.1:8084';
+export function comfyUrl(value: string): string {
+  if (value === 'serving') {
+    gateways.set(SERVING_URL, { key: readClientKey(), cls: 'internal', scope: 'internal' });
+    return SERVING_URL;
+  }
   let url;
   try { url = new URL(value); } catch { throw new Error('Set --comfy to the tunnelled ComfyUI root, such as http://127.0.0.1:8188'); }
   if (url.protocol !== 'http:' || !['127.0.0.1', '[::1]', 'localhost'].includes(url.hostname) || url.pathname !== '/' || url.search || url.username) {

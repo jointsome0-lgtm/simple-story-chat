@@ -1,0 +1,199 @@
+# Evaluating changes: `npm run eval`
+
+`npm run eval` compares versions of prompts and memory on several models at once, on synthetic stories. When a change
+may be made and how one step is measured is in [improve-loop.md](improve-loop.md); this page holds the commands and
+what their numbers mean. The keys of the hosted APIs are in `.env.eval` (template `.env.eval.example`), which an
+assistant does not open ([the rule](improve-loop.md#frozen-boundaries)). The probes run in an empty directory, so the
+bot's `.env` does not reach them.
+
+## Replay and scenes
+
+```
+npm run eval -- --models openrouter:google/gemma-4-31b-it:free,openai:gpt-5.4-mini,claude:claude-haiku-4-5-20251001
+```
+
+The replay runs the frozen scenes of `examples/frozen/<scenario>.json` through the memory of each model
+(`memory:probe --direct`, modes `plain` and `sgr`) and compares the answers with `examples/memory-checks.ts`. Models
+go in parallel, scenarios one after another. `npm run eval -- write --model <model>` recorded those scenes once
+through `story:probe`, continuing from the last saved scene on `rate_limited`; the accepted fixtures change only as
+[improve-loop.md](improve-loop.md#frozen-boundaries) allows. `MEMORY_THINKING=true` in the command's environment lets
+the replay's compactions think, and nothing else ([model-providers.md](model-providers.md#memory-thinking)).
+
+<a id='reader'></a>
+
+Two more switches in the environment measure the reader apart from its memory. `RECALL_THINKING=true` lets the recall
+think, and its output limit grows from 8192 to 16384; with `ceiling` the reader then thinks over the whole story.
+`RECALL_FROM=<probe directory>[,<probe directory>]` names finished replays of the same frozen scenes and model: each
+probe takes the one of its scenario, starts from the final state it saved, memories and all, and asks only the recall,
+in a directory of its own whose report names the one it read (`recallFrom`). Nothing is compacted again, so two
+readers are compared over the same memories. Where the provider counts reasoning tokens apart, as OpenRouter does, the
+usage keeps that count as `reasoningTokens`. On 2026-09-28 hosted Gemma 4 31B, thinking over the same memories,
+answered 12, 12 and 10 of `hospital`'s 12 questions and all of `assault`'s three times, where without thinking it
+answered 4, 3 and 4 and 8, 9 and 8. OpenRouter's `reasoning.max_tokens` did not cap its reasoning, so the switch has no
+cap ([the entry](knowledge/improve-runs.md#read-thinking-2026-09-28)).
+
+With `--judge openai:gpt-5.4`, after the memory questions each model writes one scene for each trap move of
+`examples/scene-traps.ts`, and the judge answers fixed yes/no questions (`local/scene-judge.ts`). The result is
+`sceneScore` next to `score`. `npm run eval -- judge --judge <model> --resume <probe directory> --mode plain` judges
+the finished scenes again, with `--pack` and `--scenarios` for a scenario of a pack. It writes its verdicts over the old
+ones in the probe's `report.json`, so each judge gets a copy of the directory.
+
+The traps marked `set: 'o2'` (step O2 of 2026-09-27: time across the scene boundary and claims about an unrecorded
+past, with controls; in `battle` of examples/ and in the pack's `assault` and `hospital`) are scored apart. A cell holds
+them as `sceneO2` and the summary as `sceneScoreO2`, by the same worst-model rule, while `scene` and `sceneScore` keep
+the older traps alone, so the log's earlier numbers stay comparable. The judge's `judged` event counts the older traps
+in `passed` and `total` and the new ones in `o2Passed` and `o2Total`.
+
+The traps marked `set: 'open'` (seven in the pack's `assault` and six in its `hospital`: `open_unrecorded_request`,
+frozen on 2026-09-27, and twelve more frozen on 2026-09-28, as the pack's README says)
+test a compatible claim about a past no scene shows, in a story whose seed does not rule it out: by the owner's word of
+2026-09-27 the narrator confirms it, and the story keeps to it. They are scored
+the same way apart, as `sceneOpen` and `sceneScoreOpen`, counted in `openPassed` and `openTotal`. Such a trap may have
+`then`: the probe commits the trap's scene in a copy of the story, as the bot would, writes one more scene over it from
+the `then` input, and the judge answers its questions from that scene with the trap's scene before it. The replayed
+story keeps neither scene. A `then` scene that fails to be written or judged fails its own questions only. Its question
+checks the next scene against the trap's scene, whatever that scene established, so a refusal kept a scene later
+passes it: one of the two questions passed is not a confirmation that was kept.
+
+<a id='scene-thinking'></a>
+
+`SCENE_THINKING=true` lets every trap scene think, and the `then` scene over it, to measure whether reasoning before a
+scene cuts its continuity and number errors (step O3 of 2026-09-28). The output limit grows by 4096, to 8192 at the
+bot's default, the most simple-serving's class `internal` takes; off, the probe sends the requests of a run without
+the switch, byte for byte. With `--judge`, a run with `RECALL_FROM` also writes every trap scene again, each at the
+point where the replay wrote it: after its scene, with the memory of the last compaction up to there, as the replay's
+checkpoints keep it. There all traps come before the recall, so a failed recall leaves them written. Scenes with and
+without thinking then come from the same states, and the recall and the boundary checks are asked again over them, as
+in any `RECALL_FROM` run. A trap scene keeps the counts of its request, the timings simple-serving and llama.cpp
+report, and `ms`, its time in the probe; its `trap_scene` event prints `ms`, `outputTokens` and, from OpenRouter,
+`reasoningTokens`. Thinking scenes take longer than the usual 30 minutes of a replay's probe, and `--minutes` (up to
+120) gives each probe more. On 2026-09-28 hosted Gemma 4 31B, over the same states of both scenarios, passed 58 of the
+76 trap questions without thinking and 59 with it, while a thinking scene took, at the median, 2.5 to 3 times the output
+tokens and 3 to 5 times the seconds ([the entry](knowledge/improve-runs.md#scene-thinking-2026-09-28)).
+
+A scenario may also carry `boundary`: checks in the shape of the memory questions, answered as of the end of scene 11,
+the last scene the replay's memory covers (step 2 of the memory proposal, 2026-09-28). The pack's `assault` carries 10
+and its `hospital` 11, each answer checked blind by GPT-6 Astra against the scenes. After the memory questions the
+probe asks them in a request of its own at scene 11, with that scene's time: the seed, the memory and the questions,
+without the scenes kept as text, so a miss is the compactions' and not a reading of the later scenes. In `full` the same
+request carries scenes 1 to 11 as text, the ceiling of these checks. A failure there fails these checks alone. They are
+scored apart, with or without `--judge`: a cell holds them as `boundary`, with its own `readingMisses`, the summary as
+`boundaryScore` by the worst-model rule, and `eval ceiling` prints them beside its answers. Under `RECALL_THINKING=true`
+this recall thinks too and is marked `thinking`, and a run with `RECALL_FROM` asks them over the memories it reads
+again ([the switches](#reader)). Hosted Gemma 4 31B reads them with `RECALL_THINKING=true`, since without thinking its
+reader misses what its memory holds: over the same memories it answered 5, 5 and 6 of `hospital`'s 11 without and 11,
+11 and 10 with ([the entry](knowledge/improve-runs.md#ceiling-boundary-2026-09-28)). `--boundary <file>` reads draft
+checks kept outside the pack, `{ "<scenario>": [[key, question, answer], ...] }`, in place of the pack's own.
+`npm run eval -- boundary --model <model> --resume <probe directory> --mode plain --pack <pack> --scenarios <name>`
+asks them over a replay that finished without them, from the state it saved, and refuses a mode that did not finish.
+It writes into the probe's `report.json`, so it gets a copy of the directory.
+
+`score` for each mode is the share of correct answers of the worst model, so a change cannot win because of the most
+obedient model. An unfinished mode gives zero answers, and its error code stays in the report. The full report with
+the failed keys goes to `eval.json`, whose path is the last line printed. The checks are fixed, without a judge
+model, and do not measure the quality of the prose.
+
+`npm run eval -- watch` in another terminal shows the current run: the last event of each model, scenario and mode,
+and the day's spending. The events go to `logs/eval.jsonl`, as codes and counters without text.
+
+<a id='own-card'></a>
+
+## Our own card: `gpu:` and `serving:`
+
+Two hosts name the heretic on a rented card, through a tunnel that is already open. Eval never starts, stops or
+reconnects the card, and the label after the colon only names the run.
+
+- `gpu:<label>` is llama.cpp with the bot's Q6_K, as `.env.gpu` sets it up ([llama-cpp.md](llama-cpp.md#connection-and-check)):
+  the provider, the address, the model, the context, the output limit, the timeout and the temperature, and nothing of
+  the rental or SSH.
+- `serving:<label>` is route A, simple-serving's gateway in front of vLLM with its NVFP4 conversion of the same
+  heretic, at the local end of the tunnel that simple-serving's `cli up` holds. The client key comes from
+  simple-serving's own configuration, the rest from the action measurement (`SERVING` in `local/action-text.ts`):
+  context 65536, the gateway's 900 s for class `internal`, and the bot's default output limit and temperature.
+
+Both tunnels hold local port 8080, so a card serves one of them at a time. The two adapters send the same sampling:
+the temperature, `top_p` 0.95, `top_k` 64, `min_p` 0, no repetition penalty, thinking off. A comparison therefore
+holds while `.env.gpu` keeps the context at 65536, the output limit at 4096 and the temperature at 0.8. The two routes
+still differ in the engine, in the weights and in the KV cache, q8_0 on llama.cpp and fp8 on vLLM, and eval measures
+the three together without telling one from another.
+
+Each probe keeps its report, the memories and the scenes with it, in a directory of its own under the system's
+temporary directory, and `eval judge --resume` can give those scenes to another judge only while it exists. On a paid
+card, point `TMPDIR` at a directory that outlives a reboot, such as one under `~/simple-story-chat-runs/`. On
+2026-09-25 a reboot took both routes' directories ([the card](knowledge/gpu-measurements.md#text-card-3-2026-09-25)).
+
+## Diagnostics
+
+A failed sum can be analysed without a model. For a numeric answer of two or more digits the probe writes `stated`: whether the number is present in the memory message (`memory`), in the scenes that remained as text (`scenes`), or nowhere (`none`). `readingMisses` in the result file are the failed questions whose answer was present in memory: memory is right, reading made the error. A failure with `none` means that the sum had to be added up at answer time. This is a diagnostic, not a score: a short number can match by chance.
+
+<a id='walk'></a>
+
+## The walk: `npm run eval -- walk`
+
+The replay measures what a model keeps of a story someone else wrote. The walk measures whether a model keeps its own story straight: from a seed it writes every scene itself, one per step of `examples/walk/<name>.json` (in a pack, `<name>/walk.json`). An empty step is the bot's own continue signal; any other step is the author's intervention, given to the narrator as a player's message. Memory is compacted after scene 7 and every fourth scene after it, as in the replay. Afterwards a panel of judges reads each scene against the seed and everything before it and lists the contradictions it finds, with quotes (`local/walk-judge.ts`). A listed contradiction is an inconsistent verdict whatever the flag says; an inconsistent flag without one is an abstention. Then the council: every contradiction anyone listed goes back to every judge, with the same seed, history and scene, to confirm or refute by the text; the judge that listed it checks it too and may take it back. A finding stands when more judges confirm it than refute it, and a scene with a standing finding is inconsistent; a scene whose findings are all refuted is consistent although a judge had flagged it; a tie on a finding, with nothing confirmed, is `split`; a scene nobody voted on is `unjudged`. `score.walk` is the share of scenes the council found consistent among the scenes it decided (a `split` scene is neither for nor against the model and leaves the denominator; an `unjudged` one still counts against it), for the worst model, and `score.votes` is the same share from the first round's majority alone. An unfinished walk is judged on the scenes it has, and the scenes it lacks count against the model.
+
+```
+npm run eval -- walk --models claude:claude-haiku-4-5-20251001,claude:claude-opus-5-5 --judges claude:claude-opus-5-5,claude:claude-fable-5-1,codex:gpt-6-astra --out walk.json
+```
+
+A Codex model may name its reasoning effort after `@`, as in `codex:gpt-6-astra@high`; without it the CLI's default applies, which is how the walks and the gold tree before 2026-09-27 were judged.
+
+Every judge's verdicts with their quotes stay next to the probe's report (`walk-judge-<judge>.json`, the council's checks in `walk-cross-<judge>.json`; the report directory is in the cell), and `npm run eval -- walk-judge --judge <model> --resume <directory>` adds a judge to a finished walk (`--cross` for its second round). Several judges are the point: one judge misreads a quote or has a taste of its own, and a model under test may also sit on the panel, so no scene is judged by one model alone. A walk is not a fixed set of questions: the model writes a different story each run, so compare walks the way [the noise section](improve-loop.md#noise) compares scenes, several runs per side.
+
+## Seed audit
+
+A seed is audited before it grows anything: `npm run eval -- seed-audit --judges <models> --scenarios <walk> --out <directory>` asks every judge for the seed's own contradictions and its ambiguities (a time given without saying by which clock, a canister named by its capacity, a nail "right of the door" seen from nowhere), and writes them to `<directory>/<walk>/issues.json` next to one `seed-audit-<judge>.json` per judge. An ambiguity in the seed is a false finding later, on every scene, for or against the model depending on the judge's reading; fix the seed and audit again until the judges have only taste left to list.
+
+<a id='gold-tree'></a>
+
+## The gold tree
+
+A walk compares whole stories, and two walks of one model differ in every scene. The gold tree fixes the prefixes: a tree of scenes grown from the seed that the council accepted, in the bot's own shape (every scene has a parent), kept next to the walk as `examples/walk/<name>.gold.json` (in a pack, `<name>/gold.json`) with a rendering for people beside it (`.gold.md` / `gold.md`), in which every scene nobody has read yet says so. The trunk follows the walk's steps; a branch is any other accepted continuation of a node.
+
+The commands below built version 1, the public tree `examples/walk/lighthouse.gold.json` of 2026-09-23: 63 scenes,
+none promoted ([the run](knowledge/improve-runs.md#gold-v1-2026-09-23)). Version 2 is decided and not yet built,
+except the path length limit; its rules are in [improve-loop.md](improve-loop.md#gold-v2), and the promotion defaults
+here are not its measured thresholds.
+
+| `npm run eval --` | What it does |
+| --- | --- |
+| `walk-gold --writers <models> --judges <models> --scenarios <walk> [--depth n] [--attempts 1..8] [--out directory]` | Grows the trunk one depth at a time. |
+| `gold-audit --judges <models> --scenarios <walk> --out <directory>` | Gives every judge the whole trunk at once, seed and all scenes, for contradictions between scenes that scene-by-scene reading let through and for the ambiguities the scenes themselves introduce. |
+| `gold-recheck --judges <models> --scenarios <walk> [--nodes g1,g2]` | Judges every node again, fresh, and reports how many the judges agree to a second time: the gate's own noise, measured. |
+| `gold-promote --scenarios <walk> [--rechecks 2] [--exposures 8]` | Makes gold of the candidates that pass. |
+| `gold-stats` | Prints the ledger's numbers, per judge as well: who points at earlier scenes late and how often that stands. Writes `pathTokens`. |
+| `gold-read --scenarios <walk> --nodes g1,g2` | Records that a person has read those scenes. |
+| `walk-nodes --models <models> --judges <models> --scenarios <walk> [--branches k] [--no-grow] [--max-path-tokens n] [--out file]` | The eval over the tree. |
+
+`walk-gold` grows the trunk one depth at a time: every writer (`local/walk-step.ts`) continues the accepted prefix, seen whole, with the walk's next step; the council reads each new scene against the seed and the prefix (`walk-judge.ts --only`), and the gate is not the eval's majority but the agreement of every judge: a scene without findings in the first round, or one whose findings nobody confirms in the second, the judge that listed a finding included, which may take it back. A finding one judge still stands by keeps the scene out, however many refute it, and a judge with no verdict or no checks does not agree. Of the agreed scenes one becomes the trunk, the one with the fewest first-round dissenters and findings, a tie going to the writer with the fewest trunk nodes so far, so that the trunk is not one author's; the other accepted scenes are branches at once. A rejected scene stays in the tree's `rejected` list with the findings that stood against it, and its writer tries again, every second attempt as a repair of its last rejected text with those findings quoted; when no writer passes in `--attempts` rounds the trunk stops there and says so. The tree is saved after every depth, so a stopped run continues where it was. One writer is a gold set of one author's habits; the four strongest available, each judged by all four, is the intended use.
+
+A scene every judge agreed to enters the tree as a **candidate**; it becomes **gold** by its ledger, not by the gate alone. Every node keeps a ledger: how many deeper scenes were judged with the node in their prefix (`seen`), every finding a judge listed against a deeper scene whose earlier quote stands in this node (`later`, with whether the finding stood after the cross round: a refuted one can still mean this node was the one at fault, and a person reads both kinds), every issue the whole-story audit placed in it (`audit`), and every fresh reading by the council (`recheck`). The audit's merged list lands in
+`<directory>/<walk>/issues.json` and in the nodes' ledgers, and a recheck records its outcome in each node's ledger.
+A judging in which a judge answered nothing (a failed probe, a timeout) is the provider's silence, not a reading: it enters no ledger, a recheck with a silent judge is not held, an attempt refused by silence alone is retried without a repair, and the recheck run stops when every judge is silent.
+
+`gold-promote` makes gold of every candidate with that many agreed rechecks, that many deeper scenes judged over it with no later finding that stood, and nothing from the audit; the thresholds are the flags, and a promoted node stays gold. `gold-read` records that a person has read those scenes; that is kept apart from the rule and shown next to it, because the council is made of models and the writers sit on it.
+
+`gold-stats` also writes `pathTokens` into every node when the `tiktoken` package is installed (`npm install`; a dependency of the eval only, `npm test` runs without it): the tokens of the seed, the steps and the scenes from the root to the node by one public ruler, OpenAI's `o200k_base`, the same counts as the Python package, so that a dataset can state what a model was asked to read; `walk-nodes --max-path-tokens n` keeps only the tasks whose prefix fits, one limit per run named in the report with the tasks it admitted, so that weaker models are measured on the same nodes and the frontier on the whole tree; the tree itself is never capped.
+
+`walk-nodes` is the eval over the tree: every model continues from the seed and from every trunk node with the trunk's next step, and from up to `k` branch nodes drawn at random (named in the report), each time through its own memory compaction of the prefix on the walk's schedule, as the bot would (`walk-step.ts --compact`); a deeper task of the same path reuses the library a shallower one left, the compaction being the same request either way. The council reads each new scene against the gold prefix; `score.nodes` is the share of consistent scenes among the decided ones, for the worst model, and `byDepth` in the report is the verdict at every depth of the trunk, so a model that holds the first seven scenes and loses the ninth is seen losing the ninth. A scene every judge agrees to joins the tree as a branch, whoever wrote it, unless `--no-grow`; so the tree grows with every run, and the next run has more prefixes to draw from. Every model gets the same tasks in one run; between runs the tree has changed, so compare models within a run.
+
+<a id='daily-limits'></a>
+
+## Daily limits of hosted APIs
+
+Every `openai-compatible` request goes through `local/budget.ts`. The counter is in `eval-usage.sqlite` in the project root and is shared by parallel probes; it holds the day in UTC, the channel name, the number of requests and tokens, without text. `npm run eval -- usage` shows today's spending and the limits in effect.
+
+| Channel | What goes into it | Default limit |
+| --- | --- | --- |
+| `openrouter-free` | OpenRouter models with `:free` | 900 requests |
+| `openrouter-paid` | the other OpenRouter models | closed |
+| `openai-small` | mini and nano from the free OpenAI quota | 2 250 000 tokens |
+| `openai-large` | large models from the same quota | 225 000 tokens |
+| `cerebras` | all Cerebras models | 900 000 tokens |
+| `groq` | all Groq models | 900 requests and 180 000 tokens |
+| `mistral` | all Mistral models | 500 000 tokens |
+| `openai-paid`, `other` | everything else | closed |
+
+The default values are one tenth below the free quotas. A paid channel is closed until a limit is set by hand in `.env.eval` (`OPENROUTER_PAID_DAILY_TOKENS` and similar) or through `SIMPLE_CHAT_BUDGET_REQUESTS` and `SIMPLE_CHAT_BUDGET_TOKENS` when a probe is started directly. Before sending, the input estimate plus the whole response limit is reserved; after the response, the reserve is replaced with the provider's `usage`. A request that failed keeps its reserve: it is unknown whether the provider counted it. Exceeding the limit gives `budget_exceeded` before sending.
+
+This is a local counter: it does not see spending from other computers or from other programs. The hard boundary is set by the provider itself: an OpenRouter key has a credit limit, an OpenAI project has a monthly budget.

@@ -41,9 +41,9 @@ export function contextParts(state: Library, point: StoryPoint): {
 }
 
 // The narrator's rule stands after the author's message, not in the system prompt. Measured on the GPU model
-// (docs/improve-log.md): in SYSTEM, before thousands of tokens of story, it changed nothing, and at the end of the
-// request the narrator stopped accepting a false claim about the past. Being last, it also leaves the cached prefix
-// of the request untouched.
+// (docs/knowledge/improve-runs.md#narrator-rule-2026-09-19): in SYSTEM, before thousands of tokens of story, it
+// changed nothing, and at the end of the request the narrator stopped accepting a false claim about the past. Being
+// last, it also leaves the cached prefix of the request untouched.
 export function makeRequest(state: Library, job: StoryPoint & { input: string }, maxOutputTokens: number): ModelRequest {
   const parts = contextParts(state, job);
   const story = state.stories[job.storyId];

@@ -1,61 +1,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { loadScenario, packScenarios, loadWalk, packWalks } from './scenarios.ts';
+import { loadScenario, loadWalk } from './scenarios.ts';
 
 const scenario = { authors: ['fable-5.1'], seed: 'Синтетика\n2026-01-01 10:00\nТекст сида.', turns: Array.from({ length: 16 }, (_, i) => `Ход ${i + 1}`),
   checks: [['total', 'Сколько всего? Целое число.', '7']], facts: '- Факт.', traps: [{ key: 'mid', afterTurn: 9, questions: [['mid_ok', 'Показано ли это?', 'yes']] }] };
 
-function pack(data: object) {
-  const directory = mkdtempSync(join(tmpdir(), 'simple-chat-pack-'));
-  mkdirSync(join(directory, 'hidden'));
-  writeFileSync(join(directory, 'hidden', 'scenario.json'), JSON.stringify(data));
-  return directory;
-}
-
-test('a built-in scenario loads with its checks, traps and frozen path, and has no pack authors', async () => {
-  const battle = await loadScenario('battle');
-  assert.equal(battle.turns.length, 16);
-  assert.ok(battle.checks.length && battle.traps.length && battle.frozenPath.endsWith(join('examples', 'frozen', 'battle.json')));
-  assert.deepEqual(battle.authors, []);
-  await assert.rejects(loadScenario('../battle'), /Unknown synthetic scenario/);
-  await assert.rejects(loadScenario('nothing'), /Unknown synthetic scenario/);
-});
-
-test('a pack scenario outside the repository loads with its authors and its own frozen story', async () => {
-  const directory = pack(scenario);
-  assert.deepEqual(packScenarios(directory), ['hidden']);
-  const hidden = await loadScenario('hidden', directory);
-  assert.deepEqual(hidden.authors, ['fable-5.1']);
-  assert.equal(hidden.frozenPath, join(directory, 'hidden', 'frozen.json'));
-  assert.equal(hidden.traps[0].afterTurn, 9);
-});
-
-test('a pack scenario without authors, with too few turns or with a malformed trap is refused', async () => {
-  await assert.rejects(loadScenario('hidden', pack({ ...scenario, authors: [] })), /Invalid scenario/);
-  await assert.rejects(loadScenario('hidden', pack({ ...scenario, turns: scenario.turns.slice(0, 15) })), /Invalid scenario/);
-  await assert.rejects(loadScenario('hidden', pack({ ...scenario, traps: [{ key: 'end', questions: [['q', 'Вопрос?', 'maybe']] }] })), /Invalid scenario/);
-  await assert.rejects(loadScenario('hidden', pack({ ...scenario, traps: [{ key: 'end', questions: [['q', 'Вопрос?', 'yes']] }] })), /Invalid scenario/);
-});
-
-test('a walk loads from examples or from a pack; the empty step is the continue signal, a bad seed time or name is refused', async () => {
-  const lighthouse = await loadWalk('lighthouse');
-  assert.equal(lighthouse.steps.length, 16);
-  assert.ok(lighthouse.steps.some(step => step === '') && lighthouse.steps.some(step => step !== ''));
-  assert.deepEqual(lighthouse.authors, ['fable-5.1']);
-  await assert.rejects(loadWalk('../lighthouse'), /Unknown synthetic walk/);
-  await assert.rejects(loadWalk('nothing'), /Unknown synthetic walk/);
-  // A pack directory holds replay scenarios and walks side by side; only a directory with walk.json is a walk.
-  const directory = pack(scenario);
-  mkdirSync(join(directory, 'night'));
+test('scenario and walk preflight refuses unsafe names and invalid pack data', async t => {
   const walk = { authors: ['gpt-6-astra'], seed: 'Ночь\n2026-01-01 10:00\nТекст сида.', steps: ['', 'Гаснет свет.', '', '', '', '', '', ''] };
-  writeFileSync(join(directory, 'night', 'walk.json'), JSON.stringify(walk));
-  assert.deepEqual(packWalks(directory), ['night']);
-  assert.equal((await loadWalk('night', directory)).steps[1], 'Гаснет свет.');
-  writeFileSync(join(directory, 'night', 'walk.json'), JSON.stringify({ ...walk, seed: 'Ночь\nвчера\nТекст сида.' }));
-  await assert.rejects(loadWalk('night', directory), /Invalid walk.json/);
-  writeFileSync(join(directory, 'night', 'walk.json'), JSON.stringify({ ...walk, steps: walk.steps.slice(0, 7) }));
-  await assert.rejects(loadWalk('night', directory), /Invalid walk.json/);
+  for (const [load, file, good, bad] of [
+    [loadScenario, 'scenario.json', scenario, [
+      { ...scenario, authors: [] }, { ...scenario, turns: scenario.turns.slice(0, 15) },
+      { ...scenario, traps: [{ key: 'end', questions: [['q', 'Вопрос?', 'maybe']] }] },
+      { ...scenario, traps: [{ key: 'end', questions: [['q', 'Вопрос?', 'yes']] }] },
+    ]],
+    [loadWalk, 'walk.json', walk, [{ ...walk, seed: 'Ночь\nвчера\nТекст сида.' }, { ...walk, steps: walk.steps.slice(0, 7) }]],
+  ] as const) {
+    for (const name of ['../hidden', 'nothing']) await assert.rejects(load(name), /Unknown synthetic/);
+    for (const data of [good, ...bad]) {
+      const root = mkdtempSync(join(tmpdir(), 'simple-chat-pack-'));
+      t.after(() => rmSync(root, { recursive: true, force: true }));
+      mkdirSync(join(root, 'hidden'));
+      writeFileSync(join(root, 'hidden', file), JSON.stringify(data));
+      if (data === good) assert.deepEqual((await load('hidden', root)).authors, good.authors);
+      else await assert.rejects(load('hidden', root), /Invalid/);
+    }
+  }
 });

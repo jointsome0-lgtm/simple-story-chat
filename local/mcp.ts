@@ -1,6 +1,7 @@
-// The agent interface as an MCP server over stdio (docs/agent-interface.md). A thin adapter: each tool is one call of
-// local/agent-api.ts, its input a JSON schema, its result the call's response as JSON text. The process is long-lived
-// and holds the agent library's lock, so a turn keeps running after its `wait` expires and `cancel` can reach it.
+// The agent interface as an MCP server over stdio (docs/agent-interface.md#the-contract). A thin adapter: each tool
+// is one call of local/agent-api.ts, its input a JSON schema, its result the call's response as JSON text. The
+// process is long-lived and holds the agent library's lock, so a turn keeps running after its `wait` expires and
+// `cancel` can reach it.
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';

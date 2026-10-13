@@ -5,6 +5,15 @@ import type { Branch, Checkpoint, Library, SceneNode, Story } from '../lib/libra
 import type { ContextStats } from './context.ts';
 import type { GpuStatus } from './gpu.ts';
 import type { InlineButton, InlineKeyboard, Screen } from './telegram.ts';
+import { STYLE } from './illustrate.ts';
+import { portraitFromDetails, portraitText } from './image-portraits.ts';
+import { DESCRIPTION_CHARS, LOOK_CHARS, descriptionOf, ownDescription, ownPortraitPrompt, personAt, personTag, wornAt } from './picture.ts';
+import { REFERENCE_BYTES, REFERENCE_SIDES } from './reference.ts';
+import { seesThrough } from './picture-pov.ts';
+import { editableFrom, ownVersions, sceneOf, sheetAt, versionsOf } from './picture-versions.ts';
+import { CHANGES_CHARS, CLOTHES_CHARS, DETAILS_CHARS, fieldsMask, maskFields, profileBlock, profileHash, profileOf, roundTrips } from './profile.ts';
+import type { ProfileField } from './profile.ts';
+import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX, PRESETS, PROMPT_CHARS, lineOf, ownStyle, ownStyles, pickerKeys, presetOf, styleKey } from './picture-style.ts';
 import { LANGS, LANGUAGE_BUTTON, REGISTERED, shownLang, texts } from './text.ts';
 import type { Messages } from './text.ts';
 
@@ -15,8 +24,20 @@ export type GpuInfo = {
   status?: GpuStatus; activeJobs?: number | null; idleMinutes?: number; idleRemainingSeconds?: number | null;
   canStart?: boolean; canPause?: boolean;
 };
-export type RenderDetails = { modelInfo?: ModelInfo | null; gpuInfo?: GpuInfo | null; contextStats?: ContextStats | null };
-// State is read defensively (docs/telegram-ui.md), so any library field may be missing.
+// `pictures`: this reader's scenes are illustrated (local/picture.ts), so the menu offers the picture style.
+// `standardStyle`: the bot's own style line, when it draws for anybody.
+// `textTokens`: the tokens of one field of a sheet as the picture model reads that text alone, null when unknown.
+// `retainsPortraits`: the keep confirmation explains retention for a reader in the reference experiment.
+// `references`: the reader is in the reference experiment (local/picture.ts `referencesFor`), so a person's card offers
+// to send a portrait of their own; anybody else is shown the card as if they could not.
+// `versions`: the reader has versions of the sheet (local/picture.ts `versionsFor`), so the wait for a person's text
+// offers to write it «only from this moment», and a person's card says where such an edit holds.
+export type RenderDetails = {
+  modelInfo?: ModelInfo | null; gpuInfo?: GpuInfo | null; contextStats?: ContextStats | null; pictures?: boolean; standardStyle?: string;
+  textTokens?: (text: string) => number | null;
+  retainsPortraits?: boolean; references?: boolean; versions?: boolean;
+};
+// State is read defensively (docs/telegram-ui.md#renderer), so any library field may be missing.
 type State = Partial<Library>;
 type Row = (InlineButton | null)[];
 type Page<T> = { page: number; pages: number; start: number; items: T[] };
@@ -96,12 +117,36 @@ function failure(t: Messages) {
 function screen(state: State, route: string, details: RenderDetails) {
   const [name, ...args] = route.split(':');
   switch (name) {
-    case 'home': return home(state, null, details.modelInfo, gpuFor(details));
+    case 'home': return home(state, null, details.modelInfo, gpuFor(details), details.pictures === true);
     case 'model': return modelScreen(texts(state.language), details.modelInfo, gpuFor(details));
     case 'language': return languageScreen(state);
+    case 'style': return args.length ? styleCard(state, args[0], details) : styleScreen(state, details);
+    // Only while the reader is writing a style: otherwise their next message would be taken as a move in the story.
+    case 'style-input': return styleInputScreen(state, details);
+    // The same for the prompt of a variant of a picture.
+    case 'prompt-input': return promptInputScreen(state, details);
+    case 'delete-style': return deleteStyleScreen(state, args[0], details);
+    case 'sample': return sampleScreen(state, args[0], details);
+    case 'characters': return charactersScreen(state, args[0]);
+    case 'character': return characterScreen(state, args[0], args[1], args[2], details);
+    // Only while the reader is writing a look or a description, as for a style.
+    case 'look-input': return sheetInputScreen(state, 'look', details);
+    case 'details-input': return sheetInputScreen(state, 'details', details);
+    case 'portrait': return portraitCaption(state, args[0], args[1], args[2], args[3]);
+    case 'portrait-kept': return portraitKept(state, args[0], args[1], details.retainsPortraits === true);
+    // Only while the reader is writing the prompt of a person's portraits, as for a look.
+    case 'portrait-prompt-input': return portraitPromptInputScreen(state, details);
+    // Only while the reader is to send a picture of a person of their own (local/reference.ts), as for a look.
+    case 'reference-input': return referenceInputScreen(state, details);
+    // A person's whole profile to copy and send back (local/profile.ts); the same with a line on top when the one the
+    // reader edited had changed since (local/bot.ts); the wait for it, as for a look; and what a profile sent back changed.
+    case 'profile': return profileScreen(state, args[0], args[1], args[2]);
+    case 'profile-changed': return profileScreen(state, args[0], args[1], args[2], texts(state.language).characters.profileChanged);
+    case 'profile-input': return profileInputScreen(state, details);
+    case 'profile-saved': return profileSaved(state, args[0], args[1], args[2], args[3]);
     case 'seeds': return seedList(state, args[0]);
-    case 'seed': return seedScreen(state, args[0], args[1]);
-    case 'story': return storyScreen(state, args[0], args[1]);
+    case 'seed': return seedScreen(state, args[0], args[1], details.pictures === true);
+    case 'story': return storyScreen(state, args[0], args[1], details.pictures === true);
     case 'tree': return treeScreen(state, args[0]);
     case 'log': return logScreen(state, args[0], args[1], args[2]);
     case 'branch': return branchScreen(state, args[0], args[1]);
@@ -111,13 +156,13 @@ function screen(state: State, route: string, details: RenderDetails) {
     case 'delete-seed': return deleteSeedScreen(state, args[0]);
     case 'delete-branch': return deleteBranchScreen(state, args[0], args[1]);
     case 'new-seed': return newSeedScreen(state);
-    default: return home(state, texts(state.language).home.unknownRoute, details.modelInfo, gpuFor(details));
+    default: return home(state, texts(state.language).home.unknownRoute, details.modelInfo, gpuFor(details), details.pictures === true);
   }
 }
 
 // Screens
 
-function home(state: State, note: string | null, modelInfo: ModelInfo | null | undefined, gpu: GpuInfo | null) {
+function home(state: State, note: string | null, modelInfo: ModelInfo | null | undefined, gpu: GpuInfo | null, pictures: boolean) {
   const t = texts(state.language);
   const seedCount = values(state.seeds).length;
   const ref = activeRef(state);
@@ -156,7 +201,8 @@ function home(state: State, note: string | null, modelInfo: ModelInfo | null | u
     lines.push(t.home.empty, t.common.whatIsSeed, '', t.home.createFirst);
   }
   rows.push([seedCount ? btn(t.buttons.seedsCount(seedCount), 'view:seeds:0') : null, btn(t.buttons.newSeed, 'new-seed'), btn(t.buttons.model, 'view:model')]);
-  rows.push([btn(LANGUAGE_BUTTON, 'view:language')]);
+  rows.push([btn(LANGUAGE_BUTTON, 'view:language'), pictures ? btn(t.buttons.pictureStyle, 'view:style') : null,
+    pictures && ref ? btn(t.buttons.characters, `view:characters:${ref.story.id}`) : null]);
   return payload(lines, rows);
 }
 
@@ -168,6 +214,110 @@ function languageScreen(state: State) {
     ...REGISTERED.map(lang => [btn(`${lang === current ? '✅ ' : ''}${LANGS[lang]}`, `lang:${lang}`)]),
     [btn(t.buttons.menu, 'view:home')],
   ]);
+}
+
+// The look of the reader's pictures (local/picture-style.ts): the presets, the reader's own styles, and the bot's own
+// line when it is not one of the presets. Every style opens its card, and a reader who is drawn for may ask for the
+// last scene in all of them at once. A reader who is not drawn for may still choose: the choice waits in their library.
+function styleScreen(state: State, details: RenderDetails) {
+  const t = texts(state.language);
+  const s = t.pictureStyle;
+  const standard = details.standardStyle ?? STYLE;
+  const current = styleKey(state, standard);
+  const own = ownStyles(state);
+  const open = (key: string) => btn(`${key === current ? '✅ ' : ''}${styleLabel(t, state, key)}`, `view:style:${key}`);
+  return payload([s.title, '', s.current(styleLabel(t, state, current)), '', s.note, details.pictures ? null : '', details.pictures ? null : s.off], [
+    ...pickerKeys(state, standard).map(key => [open(key)]),
+    own.length < OWN_STYLES_MAX ? [btn(s.add, 'style-new')] : null,
+    details.pictures ? [btn(s.sampleAll, 'style-samples')] : null,
+    [btn(t.buttons.menu, 'view:home')],
+  ]);
+}
+
+// A style's name as its button shows it.
+function styleLabel(t: Messages, state: State, key: string) {
+  const s = t.pictureStyle;
+  if (key === 'standard') return s.standard;
+  if (Object.hasOwn(PRESETS, key)) return s.presets[key as keyof typeof PRESETS];
+  return s.own(line(ownStyle(state, key)?.name, OWN_NAME_CHARS) || t.format.untitled);
+}
+
+// One style: the whole line it ends a prompt with, tap-to-copy, so that a reader can start a style of their own from
+// any of them; the empty one says that it has none, since a block of no characters has nothing to tap. The sample is
+// drawn only when the reader asks for it (local/picture.ts `sample`). A key this library has no style under — a style
+// deleted since, or the standard one where a preset stands for it — is the picker.
+function styleCard(state: State, key: string, details: RenderDetails) {
+  const t = texts(state.language);
+  const s = t.pictureStyle;
+  const standard = details.standardStyle ?? STYLE;
+  const full = lineOf(state, key, standard);
+  if (full === null || (key === 'standard' && presetOf(standard))) return styleScreen(state, details);
+  const own = ownStyle(state, key);
+  const chosen = styleKey(state, standard) === key;
+  const result = payload([styleLabel(t, state, key), chosen ? s.chosen : null, '', full ? s.prompt : s.promptEmpty, full || null,
+    details.pictures ? null : '', details.pictures ? null : s.off], [
+    chosen ? null : [btn(s.choose, `style:${key}`)],
+    details.pictures ? [btn(s.sample, `style-sample:${key}`)] : null,
+    own ? [btn(s.edit, `style-edit:${key}`), btn(s.remove, `view:delete-style:${key}`)] : null,
+    [btn(s.back, 'view:style')],
+  ]);
+  const offset = full ? result.text.indexOf(full, result.text.indexOf(s.prompt)) : -1;
+  if (offset >= 0) result.entities = [{ type: 'pre', offset, length: full.length }];
+  return result;
+}
+
+function deleteStyleScreen(state: State, key: string, details: RenderDetails) {
+  const t = texts(state.language);
+  const s = t.pictureStyle;
+  const own = ownStyle(state, key);
+  if (!own) return styleScreen(state, details);
+  const standard = details.standardStyle ?? STYLE;
+  const chosen = styleKey(state, standard) === key;
+  // After the deletion the pictures are drawn in the style a reader who never chose one gets.
+  const fallback = quote(t, styleLabel(t, state, presetOf(standard) ?? 'standard'), 60);
+  return payload([s.removeTitle(quote(t, own.name, OWN_NAME_CHARS)), chosen ? '' : null, chosen ? s.removeChosen(fallback) : null],
+    [[btn(s.removeYes, `remove-style:${key}`)], [btn(s.removeNo, `view:style:${key}`)]]);
+}
+
+// Waiting for a style of the reader's own: a new one, or a new version of the one `styleId` names. The next text
+// message is kept as it, and any button leaves. Without the wait this is the picker: otherwise the reader's next
+// message would be taken for a move in the story.
+function styleInputScreen(state: State, details: RenderDetails) {
+  const t = texts(state.language);
+  const s = t.pictureStyle;
+  const ui = state.ui?.input === 'style' ? state.ui : null;
+  if (!ui) return styleScreen(state, details);
+  if (ui.styleId) {
+    const own = ownStyle(state, ui.styleId);
+    if (!own) return styleScreen(state, details);
+    const result = payload([s.editTitle(quote(t, own.name, OWN_NAME_CHARS)), '', s.editNote(OWN_STYLE_CHARS), '', s.nowText, own.line],
+      [[btn(s.backToStyle, `view:style:${own.id}`)]]);
+    const offset = result.text.lastIndexOf(own.line);
+    if (offset >= 0) result.entities = [{ type: 'pre', offset, length: own.line.length }];
+    return result;
+  }
+  const example = s.exampleText;
+  const result = payload([s.newTitle, '', s.inputNote(OWN_STYLE_CHARS, OWN_NAME_CHARS), '', s.example, example, '', s.copyHint],
+    [[btn(s.back, 'view:style')]]);
+  const offset = result.text.indexOf(example);
+  if (offset >= 0) result.entities = [{ type: 'pre', offset, length: example.length }];
+  return result;
+}
+
+// Waiting for the whole prompt of a variant of a picture (local/picture.ts `variant`), which the reader copies from the
+// note under it. The next text message is taken as it, and any button leaves. Without the wait this is the menu.
+function promptInputScreen(state: State, details: RenderDetails) {
+  const v = texts(state.language).variant;
+  if (state.ui?.input !== 'prompt') return home(state, null, details.modelInfo, gpuFor(details), details.pictures === true);
+  return payload([v.title, '', v.note(PROMPT_CHARS)], [[btn(v.leave, 'view:home')]]);
+}
+
+// The caption and the buttons of a sample of a style (local/picture.ts `sample`), as they stand when it is asked for.
+function sampleScreen(state: State, key: string, details: RenderDetails) {
+  const t = texts(state.language);
+  const s = t.pictureStyle;
+  const chosen = styleKey(state, details.standardStyle ?? STYLE) === key;
+  return payload([s.sampleCaption(styleLabel(t, state, key))], [chosen ? null : [btn(s.choose, `style:${key}`)], [btn(s.back, 'view:style')]]);
 }
 
 // Deployment is chosen by the owner in the bot's config, so there is no switch here.
@@ -273,7 +423,8 @@ function seedList(state: State, rawPage: string | undefined) {
   return payload(lines, rows);
 }
 
-function seedScreen(state: State, seedId: string | undefined, rawPage: string | undefined) {
+// `pictures`: each story offers the people its pictures draw (`charactersScreen`).
+function seedScreen(state: State, seedId: string | undefined, rawPage: string | undefined, pictures: boolean) {
   const t = texts(state.language);
   const seed = own(state.seeds, seedId);
   if (!seed) return stale(t, t.seed.notFound);
@@ -295,10 +446,10 @@ function seedScreen(state: State, seedId: string | undefined, rawPage: string | 
       const branches = t.count.branches(values(story.branches).length);
       const scenes = t.count.scenes(Object.keys(story.nodes ?? {}).length);
       lines.push(`${n}. ${t.seed.story(n)} · ${branches} · ${scenes}${current}`);
-      rows.push([btn(t.seed.storyButton(n), `view:story:${story.id}`)]);
+      rows.push([btn(t.seed.storyButton(n), `view:story:${story.id}`), pictures ? btn(t.buttons.characters, `view:characters:${story.id}`) : null]);
     });
   } else {
-    lines.push(t.seed.noStories);
+    lines.push(t.seed.noStories, pictures ? t.characters.none : null);
   }
   rows.push(pager(p, `seed:${seed.id}`, t.buttons.previous, t.buttons.next));
   if (!state.job) rows.push([btn(t.seed.delete, `view:delete-seed:${seed.id}`)]);
@@ -306,7 +457,7 @@ function seedScreen(state: State, seedId: string | undefined, rawPage: string | 
   return payload(lines, rows);
 }
 
-function storyScreen(state: State, storyId: string | undefined, rawPage: string | undefined) {
+function storyScreen(state: State, storyId: string | undefined, rawPage: string | undefined, pictures: boolean) {
   const t = texts(state.language);
   const story = own(state.stories, storyId);
   if (!story) return stale(t, t.story.notFound);
@@ -324,9 +475,278 @@ function storyScreen(state: State, storyId: string | undefined, rawPage: string 
   if (!branches.length) lines.push(t.story.none);
   lines.push('', t.story.hint);
   rows.push(pager(p, `story:${story.id}`, t.buttons.previous, t.buttons.next));
-  rows.push([btn(t.story.tree, `view:tree:${story.id}`)]);
+  rows.push([btn(t.story.tree, `view:tree:${story.id}`), pictures ? btn(t.buttons.characters, `view:characters:${story.id}`) : null]);
   rows.push([seed ? btn(t.story.toSeed, `view:seed:${seed.id}`) : null, btn(t.buttons.menu, 'view:home')]);
   return payload(lines, rows);
+}
+
+// The people of a story's sheet (local/picture.ts): who its pictures draw, and from what look. A sheet is written with
+// the story's first picture, never on a press here, so a story without one says when it comes.
+function charactersScreen(state: State, storyId: string | undefined) {
+  const t = texts(state.language);
+  const c = t.characters;
+  const story = own(state.stories, storyId);
+  if (!story) return stale(t, t.story.notFound);
+  const sheet = people(story);
+  // Each as they are at the scene the reader stands at in this story (local/picture-versions.ts), as their card shows them.
+  const here = sheetAt(story, sceneOf(state, story.id));
+  return payload([c.title(storyName(state, story)), '', sheet.length ? c.note : c.none, sheet.length ? '' : null,
+    ...sheet.map((one, n) => {
+      const now = here[one.index] ?? one;
+      return `${n + 1}. ${line(one.name, 40)} — ${line(now.look || descriptionOf(now), 90)}`;
+    })], [
+    ...sheet.map(one => [btn(`${seesThrough(story, one.name) ? '👁' : '👤'} ${line(one.name, 30) || t.format.untitledButton}`, `view:character:${personRef(story, one)}`)]),
+    [btn(c.toStory, `view:story:${story.id}`), btn(t.buttons.menu, 'view:home')],
+  ]);
+}
+
+// One person (docs/illustrations-plan.md#three-layers): their description, the story's changes to it, the look and the
+// clothes, tap-to-copy, where an edited look reaches, and the portrait kept to pick a reference by, which a reader in
+// the reference experiment may send a picture of their own for (local/reference.ts). The description is
+// the person's text, the story's or the reader's own, which the details a portrait is drawn from and the look are
+// retold from (local/bot.ts). It has its characters alone, since the picture model never reads it: the whole prompt of
+// a portrait, the details in it, is folded under the portrait with its tokens (local/picture.ts `portrait`). The look and
+// the clothes each have their size as the picture model counts that text alone (never their sum: a prompt takes names
+// and ages out of them, joins them with the scene and adds the style). The card says when the look is the reader's own
+// instead, or not retold yet. Both have a button to write them, the description also for a person who has none yet.
+// The changes and the clothes are the story's to make, and the card only shows them: for the active story the clothes
+// the next pictures of the active branch start from, those of its latest picture or those the reader wrote there
+// (local/picture.ts `wornAt`), the sheet's own otherwise. The reader may change them, with every other field, in the
+// whole profile (`profileScreen`). A prompt the reader wrote for the person's portraits is said to be theirs, with a
+// button to go back to the bot's own.
+function characterScreen(state: State, storyId: string | undefined, rawIndex: string | undefined, tag: string | undefined,
+  details: RenderDetails) {
+  const t = texts(state.language);
+  const c = t.characters;
+  const story = own(state.stories, storyId);
+  if (!story) return stale(t, t.story.notFound);
+  // A button of somebody whose place on the sheet another person took since opens the list, not that other person.
+  const found = personAt(story, rawIndex, tag);
+  if (!found) return charactersScreen(state, story.id);
+  const ref = activeRef(state);
+  const branch = ref?.story === story && ref.branch.head ? ref.branch : null;
+  // The person as they are at the scene the reader stands at, with the versions of its line (local/picture-versions.ts),
+  // and how many times their look changed along it; elsewhere, as the sheet has them.
+  const person = { ...sheetAt(story, branch?.head)[found.index] ?? found, index: found.index };
+  const changed = branch ? versionsOf(story, branch.head, person.name) : 0;
+  const worn = branch ? wornAt(story, branch.head!, [{ ...person, outfit: '' }])[0].outfit ?? '' : '';
+  const clothes = worn || (typeof person.outfit === 'string' ? person.outfit : '');
+  const clothesTitle = worn ? c.clothesOfBranch(quote(t, branch!.name)) : c.clothesAtStart;
+  const size = (text: string) => {
+    let tokens: number | null = null;
+    try { tokens = details.textTokens?.(text) ?? null; } catch { /* unknown, as without a tokenizer */ }
+    return [tokens, [...text].length] as const;
+  };
+  const described = descriptionOf(person).trim();
+  const descriptionTitle = c.description(ownDescription(person));
+  const changes = person.changes?.trim() ?? '';
+  // A kept portrait records the text it was drawn from, the person's details or, until they are retold, the look
+  // (`portraitText`), and the card names which of the two a portrait is drawn from now. With a prompt the reader wrote
+  // for the person (`ownPortraitPrompt`) a portrait is drawn from that alone, and the one kept is current only if it was
+  // drawn from the very same prompt; without one, only if it was drawn from the bot's own around the text the person
+  // has now. A picture of the reader's own in its place was drawn from nothing of the kind (local/reference.ts).
+  const fromDetails = portraitFromDetails(person);
+  const mine = details.references ? person.poses?.front : undefined;
+  const prompt = ownPortraitPrompt(person);
+  const kept = person.portrait;
+  const portrait = mine ? c.ownPortraitKept(mine.width, mine.height)
+    : prompt !== undefined ? (!kept ? (details.pictures ? c.promptPortraitNone : null)
+      : kept.ownPrompt && kept.prompt === prompt ? c.promptPortraitKept : c.promptPortraitStale)
+    : kept ? (kept.ownPrompt ? c.portraitOfOwnPrompt(fromDetails) : kept.look === portraitText(person) ? c.portraitKept(fromDetails) : c.portraitStale(fromDetails))
+    : details.pictures ? c.portraitNone(fromDetails) : null;
+  // Where portraits come from while the reader's own prompt is the person's, and how the frames take a drawn portrait
+  // where they do: both said under the portrait's line. A picture of the reader's own has no prompt to edit.
+  const source = portrait !== null && prompt !== undefined ? c.ownPrompt : null;
+  const frames = details.references && portrait !== null && !mine ? c.portraitFrames : null;
+  const whose = person.edited ? c.lookOwn : person.lookPending ? c.lookPending : null;
+  // The frames seen through this person's eyes, or through another's (local/picture-pov.ts): a line last on the card,
+  // the first a long card loses, since the button says it too, and the button that switches it.
+  const viewer = seesThrough(story, person.name);
+  const other = people(story).find(one => seesThrough(story, one.name));
+  const pov = !details.pictures ? null : viewer ? c.povNote : other ? c.povOther(line(other.name, 60)) : null;
+  const result = payload([c.cardTitle(line(person.name, 60), storyName(state, story)), '',
+    ...described ? [descriptionTitle, described, c.descriptionSize([...described].length), ''] : [],
+    ...changes ? [c.changes, changes, ''] : [], ...changed ? [c.along(changed), ''] : [],
+    c.look, person.look, c.lookSize(...size(person.look)), whose, '',
+    ...clothes ? [clothesTitle, clothes, c.clothesSize(...size(clothes))] : [c.noClothes], c.clothesNote, '',
+    c.sizeNote, '', details.versions ? c.scopeVersions : c.scope, portrait === null ? null : '', portrait, source, frames, pov === null ? null : '', pov], [
+    [btn(c.editDetails, `details-edit:${personRef(story, person)}`)],
+    [btn(c.edit, `look-edit:${personRef(story, person)}`)],
+    [btn(c.profile, `view:profile:${personRef(story, person)}`)],
+    details.pictures ? [btn(c.portrait, `portrait:${personRef(story, person)}`),
+      details.references ? btn(c.ownPortrait, `ref-send:${personRef(story, person)}:front`) : null] : null,
+    details.pictures && prompt !== undefined ? [btn(c.defaultPrompt, `portrait-default:${personRef(story, person)}`)] : null,
+    details.pictures ? [btn(viewer ? c.povOff : c.povOn, `${viewer ? 'pov-off' : 'pov'}:${personRef(story, person)}`)] : null,
+    [btn(c.back, `view:characters:${story.id}`)],
+  ]);
+  const pre = (text: string, after: string) => {
+    const offset = result.text.indexOf(text, result.text.indexOf(after) + after.length);
+    return text && offset >= 0 ? [{ type: 'pre' as const, offset, length: text.length }] : [];
+  };
+  result.entities = [...described ? pre(described, descriptionTitle) : [], ...pre(person.look, c.look), ...clothes ? pre(clothes, clothesTitle) : []];
+  return result;
+}
+
+// Waiting for a look or a description the reader writes for the person `state.ui` names, with the text as it is now to
+// copy in one tap, where there is one. Without the wait this is the menu: otherwise the reader's next message would be
+// taken for a move in the story. A look the reader writes keeps the details retold from the description, which the
+// portraits are still drawn from (local/bot.ts), and the wait for it says so where there are any. Portraits drawn from a
+// prompt the reader wrote for the person read neither text, and the wait says that instead.
+function sheetInputScreen(state: State, input: 'look' | 'details', details: RenderDetails) {
+  const t = texts(state.language);
+  const c = t.characters;
+  const ui = state.ui?.input === input ? state.ui : null;
+  const story = own(state.stories, ui?.storyId);
+  const person = story && people(story).find(one => one.name === ui?.name);
+  if (!story || !person) return home(state, null, details.modelInfo, gpuFor(details), details.pictures === true);
+  const look = input === 'look';
+  // For a reader who has versions of the sheet, where the text lands (local/picture-versions.ts `landEdit`): the whole
+  // story, where it takes the place of what they wrote «only from this moment», or, as they chose here, the scene they
+  // stood at then and those after it. The text shown now is the one it replaces: the sheet's, or the person's at that
+  // scene. A scene another line goes on from, or another branch stands at, offers the whole story alone, and says why.
+  const scope = details.versions ? editableFrom(state, story.id) : undefined;
+  const from = details.versions && ui?.from !== undefined && Object.hasOwn(story.nodes, ui.from) ? ui.from : undefined;
+  const shown = from === undefined ? person : { ...sheetAt(story, from)[person.index] ?? person, index: person.index };
+  const now = look ? shown.look : descriptionOf(shown).trim();
+  const promptOwn = ownPortraitPrompt(person) !== undefined;
+  const keeps = look && !promptOwn && portraitFromDetails(shown);
+  const branch = activeRef(state)?.branch;
+  const replaced = details.versions && from === undefined ? ownVersions(story, person.name) : 0;
+  const where = !details.versions ? [] : from !== undefined ? ['', c.scopeHere(quote(t, branch?.name ?? ''), look)]
+    : ['', c.scopeAll(look), ...replaced ? [c.scopeReplaces(replaced)] : [], ...scope?.shared ? [c.scopeShared] : []];
+  const result = payload([(look ? c.editTitle : c.detailsTitle)(line(person.name, 60), storyName(state, story)), '',
+    look ? c.editNote(LOOK_CHARS) : c.detailsNote(DESCRIPTION_CHARS), ...keeps ? ['', c.editKeepsDetails] : [], ...promptOwn ? ['', c.ownPromptKeeps] : [],
+    ...where, ...now ? ['', c.nowText, now] : []],
+    [details.versions && from !== undefined ? [btn(c.scopeAllButton, 'edit-scope:all')] : null,
+      details.versions && from === undefined && scope && !scope.shared ? [btn(c.scopeHereButton, 'edit-scope:here')] : null,
+      [btn(c.backToCard, `view:character:${personRef(story, person)}`)]]);
+  const offset = now ? result.text.lastIndexOf(now) : -1;
+  if (offset >= 0) result.entities = [{ type: 'pre', offset, length: now.length }];
+  return result;
+}
+
+// A person's whole profile as one block to tap, copy, edit and send back (local/profile.ts): every field, in the
+// reader's language, and «✏️» for the wait that takes it back, whose button carries the fields shown and a hash of their
+// text. It is one message or nothing: one over the bot's 4000 characters leaves out the reader's prompt for the
+// portraits, which the note under a portrait drawn from it has, then the description too, which the card shows and has
+// a button for, and at last shows no block at all, never one clipped. A block that would not read back as it is shown,
+// one of a sheet the next picture writes anew, and one of a person whose look changed along the branch being played,
+// shown as at its last scene (local/profile.ts `versioned`), are shown without the button, with a line on why. `notice`
+// goes on top: the profile the reader edited had changed since.
+function profileScreen(state: State, storyId: string | undefined, rawIndex: string | undefined, tag: string | undefined, notice?: string) {
+  const t = texts(state.language);
+  const c = t.characters;
+  const story = own(state.stories, storyId);
+  if (!story) return stale(t, t.story.notFound);
+  const person = personAt(story, rawIndex, tag);
+  if (!person) return charactersScreen(state, story.id);
+  const ref = personRef(story, person);
+  const profile = profileOf(state, story, person);
+  const title = c.profileTitle(line(person.name, 60), storyName(state, story));
+  const back = [btn(c.backToCard, `view:character:${ref}`)];
+  const fits: ProfileField[][] = [profile.present, profile.present.filter(field => field !== 'prompt'),
+    profile.present.filter(field => field !== 'prompt' && field !== 'description')];
+  for (const [n, fields] of fits.entries()) {
+    if (n && fields.length === fits[n - 1].length) continue;
+    const block = profileBlock(person.name, profile, fields, state.language);
+    const editable = !profile.older && !profile.versioned && roundTrips(block, person.name, profile, fields);
+    const notes = [profile.older ? c.profileOlder : profile.versioned ? c.profileVersions : editable ? null : c.profileUnreadable,
+      profile.present.includes('prompt') && !fields.includes('prompt') ? c.profileNoPrompt : null,
+      fields.includes('description') ? null : c.profileNoDescription].filter(note => note !== null);
+    const lines = [title, ...notice ? ['', notice] : [], ...notes.length ? ['', ...notes] : [], '', block, ...editable ? ['', c.profileHint] : []];
+    if (lines.join('\n').length > LIMIT) continue;
+    const result = payload(lines, [editable ? [btn(c.profileEdit, `profile-edit:${ref}:${fieldsMask(fields)}:${profileHash(person.name, profile, fields)}`)] : null, back]);
+    const offset = result.text.indexOf(block);
+    if (offset >= 0) result.entities = [{ type: 'pre', offset, length: block.length }];
+    return result;
+  }
+  return payload([title, ...notice ? ['', notice] : [], '', c.profileTooLong], [back]);
+}
+
+// Waiting for the profile the reader sends back (local/bot.ts), which they copy from the message above: what it may
+// change and how, the limit of each field, where changed clothes go, and the way out. Without the wait this is the menu,
+// as for a look.
+function profileInputScreen(state: State, details: RenderDetails) {
+  const t = texts(state.language);
+  const c = t.characters;
+  const ui = state.ui?.input === 'profile' ? state.ui : null;
+  const story = own(state.stories, ui?.storyId);
+  const person = story && people(story).find(one => one.name === ui?.name);
+  if (!story || !person) return home(state, null, details.modelInfo, gpuFor(details), details.pictures === true);
+  const branch = profileOf(state, story, person).clothesAt === null ? null : activeRef(state)?.branch;
+  return payload([c.profileEditTitle(line(person.name, 60), storyName(state, story)), '',
+    c.profileEditNote(DESCRIPTION_CHARS, CHANGES_CHARS, DETAILS_CHARS, LOOK_CHARS, CLOTHES_CHARS, PROMPT_CHARS), '',
+    branch ? c.profileClothesBranch(quote(t, branch.name)) : c.profileClothesStart, '', c.profileLeave],
+    [[btn(c.backToCard, `view:character:${personRef(story, person)}`)]]);
+}
+
+// What a profile sent back changed, by the headings of the fields in `mask` (local/profile.ts `fieldsMask`), or that it
+// changed nothing, with the ways to the profile and to the card. A description retold for it follows as the card.
+function profileSaved(state: State, storyId: string | undefined, rawIndex: string | undefined, tag: string | undefined, mask: string | undefined) {
+  const t = texts(state.language);
+  const c = t.characters;
+  const story = own(state.stories, storyId);
+  const person = story && personAt(story, rawIndex, tag);
+  if (!story || !person) return stale(t, t.story.notFound);
+  const fields = maskFields(mask) ?? [];
+  const ref = personRef(story, person);
+  return payload([fields.length ? c.profileSaved(line(person.name, 60), fields.map(field => c.profileHeadings[field]).join(', ')) : c.profileUnchanged],
+    [[btn(c.profile, `view:profile:${ref}`)], [btn(c.backToCard, `view:character:${ref}`)]]);
+}
+
+// Waiting for a picture the reader sends of the person `state.ui` names, to keep as their portrait (local/reference.ts).
+// Without the wait, or for a reader outside the reference experiment, this is the menu, as for a look.
+function referenceInputScreen(state: State, details: RenderDetails) {
+  const t = texts(state.language);
+  const c = t.characters;
+  const ui = state.ui?.input === 'reference' ? state.ui : null;
+  const story = own(state.stories, ui?.storyId);
+  const person = story && people(story).find(one => one.name === ui?.name);
+  if (!story || !person || !details.references) return home(state, null, details.modelInfo, gpuFor(details), details.pictures === true);
+  const { min, max } = REFERENCE_SIDES;
+  return payload([c.ownPortraitTitle(line(person.name, 60), storyName(state, story)), '',
+    c.ownPortraitNote(min, max, REFERENCE_BYTES / 1024 / 1024), ...person.portrait || person.poses?.front ? ['', c.ownPortraitReplaces] : []],
+    [[btn(c.backToCard, `view:character:${personRef(story, person)}`)]]);
+}
+
+// Waiting for the whole prompt of the portraits of the person `state.ui` names (local/bot.ts), which the reader copies
+// from the note under a portrait of them, as for a variant of a scene's picture. Without the wait this is the menu, as
+// for a look.
+function portraitPromptInputScreen(state: State, details: RenderDetails) {
+  const t = texts(state.language);
+  const c = t.characters;
+  const ui = state.ui?.input === 'portrait-prompt' ? state.ui : null;
+  const story = own(state.stories, ui?.storyId);
+  const person = story && people(story).find(one => one.name === ui?.name);
+  if (!story || !person) return home(state, null, details.modelInfo, gpuFor(details), details.pictures === true);
+  return payload([c.promptTitle(line(person.name, 60), storyName(state, story)), '', c.promptNote(PROMPT_CHARS)],
+    [[btn(t.variant.leave, `view:character:${personRef(story, person)}`)]]);
+}
+
+// The caption and the buttons of a portrait (local/picture.ts `portrait`): another one, keeping this one by the id it
+// was drawn under, and the way back to its person.
+function portraitCaption(state: State, storyId: string | undefined, rawIndex: string | undefined, tag: string | undefined,
+  candidate: string | undefined) {
+  const t = texts(state.language);
+  const c = t.characters;
+  const story = own(state.stories, storyId);
+  const person = story && personAt(story, rawIndex, tag);
+  if (!story || !person) return stale(t, t.story.notFound);
+  // Asked for where it is drawn (local/bot.ts), so the prompt the person has then is the one it is drawn from.
+  return payload([(ownPortraitPrompt(person) === undefined ? c.caption : c.ownCaption)(line(person.name, 60))], [
+    [btn(c.again, `portrait:${personRef(story, person)}`), candidate ? btn(c.keep, `portrait-keep:${candidate}`) : null],
+    [btn(c.backToCard, `view:character:${personRef(story, person)}`)],
+  ]);
+}
+
+function portraitKept(state: State, storyId: string | undefined, rawIndex: string | undefined, retainsPortraits: boolean) {
+  const t = texts(state.language);
+  const c = t.characters;
+  const story = own(state.stories, storyId);
+  const person = story && people(story).find(one => String(one.index) === rawIndex);
+  if (!story || !person) return stale(t, t.story.notFound);
+  return payload([c.kept(line(person.name, 60)), ...retainsPortraits ? ['', c.retention] : []],
+    [[btn(c.backToCard, `view:character:${personRef(story, person)}`)]]);
 }
 
 // The story as a tree: scenes point at their parents, a branch or a checkpoint marks a scene. A straight run of scenes
@@ -758,6 +1178,17 @@ function ordered<T extends { id: string }>(items: T[]) {
 
 function storiesOf(state: State, seedId: string) {
   return ordered(values(state.stories).filter(story => story?.seedId === seedId));
+}
+
+// The people of a story's sheet with a name and a look, each at its own place on the sheet, which is what the
+// characters' buttons carry (local/bot.ts).
+function people(story: Story) {
+  return (Array.isArray(story.sheet) ? story.sheet : []).flatMap((one, index) =>
+    typeof one?.name === 'string' && typeof one.look === 'string' ? [{ ...one, index }] : []);
+}
+// A person as the buttons name them (local/picture.ts `personTag`).
+function personRef(story: Story, person: { name: string; index: number }) {
+  return `${story.id}:${person.index}:${personTag(person.name)}`;
 }
 
 function storyName(state: State, story: Story) {

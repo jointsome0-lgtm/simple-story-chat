@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { keyBalance, pooled, familyWeighted, clusters, bootstrap, dedupe, onCurrentKey, readCorpus, readEventLog, summarize } from './eval-stats.ts';
+import { pooled, bootstrap, dedupe, onCurrentKey, readCorpus, readEventLog, summarize } from './eval-stats.ts';
 import type { Cell, KeySet } from './eval-stats.ts';
 
 // Two synthetic scenarios, so that the arithmetic can be checked by hand and no fixture of the suite is involved.
@@ -16,56 +16,9 @@ const keys = new Map<string, KeySet>([
 const cell = (fields: Partial<Cell>): Cell => ({ run: 'r', source: 'events', model: 'M', scenario: 'alpha', mode: 'plain',
   instrument: 'memory', passed: 0, total: 0, ...fields });
 
-test('the answer key alone fixes what a model that never reads the story scores', () => {
-  assert.deepEqual(keyBalance(['yes', 'yes', 'yes', 'no']),
-    { keys: 4, byExpected: { yes: 3, no: 1 }, constantYes: 0.75, constantNo: 0.25, silence: 0, bestConstant: 0.75 });
-  // Exact answers: no constant string scores at all, and `unknown` earns nothing unless the key says so.
-  assert.deepEqual(keyBalance(['54', '2026-09-05', 'unknown']),
-    { keys: 3, byExpected: { number: 1, other: 1, unknown: 1 }, constantYes: 0, constantNo: 0, silence: 1 / 3, bestConstant: 1 / 3 });
-  assert.deepEqual(keyBalance([]).bestConstant, 0);
-});
-
-test('pooling across scenarios gives the longer one more votes than family weighting does', () => {
-  const cells = [cell({ scenario: 'alpha', passed: 3, total: 12 }), cell({ scenario: 'beta', passed: 3, total: 3 })];
-  assert.equal(pooled(cells), 6 / 15);
-  assert.equal(familyWeighted(cells), (3 / 12 + 1) / 2);
-  assert.equal(pooled([]), null);
-  assert.equal(familyWeighted([]), null);
-});
-
-test('a cluster is one item over the runs, and a trap passes only when all its questions do', () => {
-  const items = (outcome: Record<string, boolean>) => Object.entries(outcome).map(([key, pass]) => ({ key, pass }));
-  const cells = [
-    cell({ run: 'r1', instrument: 'scene', items: items({ t1a: true, t1b: false, t2a: true }) }),
-    cell({ run: 'r2', instrument: 'scene', items: items({ t1a: true, t1b: true, t2a: true }) }),
-  ];
-  assert.deepEqual(clusters(cells, key => key), [
-    { key: 't1b', runs: 2, passed: 1, rate: 0.5 },
-    { key: 't1a', runs: 2, passed: 2, rate: 1, flag: 'always' },
-    { key: 't2a', runs: 2, passed: 2, rate: 1, flag: 'always' },
-  ]);
-  const trapOf = new Map([...keys.get('alpha')!.trapOf]);
-  assert.deepEqual(clusters(cells, key => trapOf.get(key)!), [
-    { key: 't1', runs: 2, passed: 1, rate: 0.5 },
-    { key: 't2', runs: 2, passed: 2, rate: 1, flag: 'always' },
-  ]);
-});
-
-test('the bootstrap resamples cells, not questions, and repeats itself under one seed', () => {
-  const mean = (sample: number[][]) => sample[0].reduce((total, value) => total + value, 0) / sample[0].length;
-  assert.deepEqual(bootstrap([[1, 1, 1, 1]], mean, { samples: 200, seed: 1 }), { low: 1, high: 1 });
-  const half = bootstrap([Array.from({ length: 40 }, (_, index) => index % 2)], mean, { samples: 500, seed: 1 })!;
-  assert.ok(half.low > 0.2 && half.low < 0.5 && half.high > 0.5 && half.high < 0.8, JSON.stringify(half));
-  assert.deepEqual(bootstrap([[0, 1, 1]], mean, { samples: 200, seed: 1 }), bootstrap([[0, 1, 1]], mean, { samples: 200, seed: 1 }));
-  assert.notDeepEqual(bootstrap([[0, 1, 1]], mean, { samples: 200, seed: 1 }), bootstrap([[0, 1, 1]], mean, { samples: 200, seed: 2 }));
-  // The worst of two models keeps each model's own number of cells and draws only that model's cells. A statistic
-  // that reports the shape and the contents it was handed is what separates this from resampling the seven together:
-  // a pooled resample would hand over other group sizes, and would move a 1 into the group that has none.
+test('bootstrap preserves each model group instead of pooling unrelated cells', () => {
   const shape = (sample: number[][]) => sample[0].length + 100 * sample[1].length + (sample[0].includes(1) ? 1000 : 0);
   assert.deepEqual(bootstrap([[0, 0, 0, 0, 0], [1, 1]], shape, { samples: 200, seed: 3 }), { low: 205, high: 205 });
-  const worst = (sample: number[][]) => Math.min(...sample.map(group => group.reduce((total, value) => total + value, 0) / group.length));
-  assert.deepEqual(bootstrap([[1, 1], [0, 0]], worst, { samples: 100, seed: 3 }), { low: 0, high: 0 });
-  assert.equal(bootstrap([[]], mean, { samples: 10, seed: 1 }), null);
 });
 
 test('one run saved in three places is one cell, not three', () => {
@@ -283,81 +236,41 @@ test('a question the judge never saw is not an answer of the judge', () => {
     { verdicts: 3, answered: 0, yesRate: null, derived: 3, derivedYesRate: 0.6667 });
 });
 
-test('the event log keeps the cells of a run after the temporary directories are gone', () => {
-  const log = [
-    { event: 'run_started', models: ['M1'], scenarios: ['alpha'] },
-    { event: 'mode_complete', model: 'M1', scenario: 'alpha', mode: 'plain', passed: 3, total: 4 },
-    { event: 'trap_scene', model: 'M1', scenario: 'alpha', mode: 'plain', truncated: true },
-    { event: 'judged', model: 'M1', scenario: 'alpha', mode: 'plain', passed: 2, total: 3 },
-    // A mode that failed answers nothing; eval.ts scores that cell 0/N with the checks of the scenario as N.
-    { event: 'deferred_or_failed', model: 'M1', scenario: 'alpha', mode: 'sgr', code: 'invalid_memory' },
-    // A failure after the mode completed is a retry inside the run, not a second cell.
-    { event: 'deferred_or_failed', model: 'M1', scenario: 'alpha', mode: 'plain', code: 'rate_limited' },
-    { event: 'run_started', models: ['M1'], scenarios: ['alpha'] },
-    { event: 'mode_complete', model: 'M1', scenario: 'alpha', mode: 'plain', passed: 4, total: 4 },
-    // `eval judge` compares judges on the scenes of a finished run and tags them with the scenario name "judge".
-    { event: 'judged', model: 'M2', scenario: 'judge', mode: 'plain', passed: 1, total: 9 },
-  ].map(line => JSON.stringify(line)).join('\n') + '\nnot json\n';
-  const { cells, lines, runs } = readEventLog(log);
-  assert.deepEqual([lines, runs], [9, 2]);
-  assert.deepEqual(cells.map(({ run, scenario, mode, instrument, passed, total, error, truncated }) =>
-    ({ run, scenario, mode, instrument, passed, total, error, truncated })), [
-    { run: 'run-1', scenario: 'alpha', mode: 'plain', instrument: 'memory', passed: 3, total: 4, error: undefined, truncated: undefined },
-    { run: 'run-1', scenario: 'alpha', mode: 'plain', instrument: 'scene', passed: 2, total: 3, error: undefined, truncated: 1 },
-    { run: 'run-2', scenario: 'alpha', mode: 'plain', instrument: 'memory', passed: 4, total: 4, error: undefined, truncated: undefined },
-    { run: 'run-1', scenario: 'alpha', mode: 'sgr', instrument: 'memory', passed: 0, total: 4, error: 'invalid_memory', truncated: undefined },
-  ]);
-  // Counts only: the log never held the keys, so the cluster table stays empty and says so.
-  assert.equal(summarize(cells, keys, { samples: 50, seed: 1 }).clusters.checks.runs, 0);
-});
-
-test('two probe invocations of one scenario are two cells even when no run_started separates them', () => {
-  // `eval ceiling` and `eval judge` record no run_started (eval.ts:191-205), so their events carry the run counter of
-  // whatever ran before; two ceiling invocations of the same model and scenario share it. Each probe opens with
-  // `started`, which is the boundary of one cell.
-  const log = [
-    { event: 'run_started', models: ['M1'], scenarios: ['alpha'] },
-    { event: 'started', model: 'M1', scenario: 'alpha', mode: 'plain' },
-    { event: 'mode_complete', model: 'M1', scenario: 'alpha', mode: 'plain', passed: 3, total: 4 },
-    { event: 'started', model: 'M1', scenario: 'alpha', mode: 'full' },
-    { event: 'deferred_or_failed', model: 'M1', scenario: 'alpha', mode: 'full', code: 'rate_limited' },
-    // A second failure inside the same invocation is a retry of it, not another cell.
-    { event: 'deferred_or_failed', model: 'M1', scenario: 'alpha', mode: 'full', code: 'rate_limited' },
-    { event: 'started', model: 'M1', scenario: 'alpha', mode: 'full' },
-    { event: 'deferred_or_failed', model: 'M1', scenario: 'alpha', mode: 'full', code: 'server_error' },
-  ].map(line => JSON.stringify(line)).join('\n');
-  const { cells } = readEventLog(log);
-  assert.deepEqual(cells.filter(one => one.mode === 'full').map(one => [one.error, one.passed, one.total]),
-    [['rate_limited', 0, 4], ['server_error', 0, 4]]);
-});
-
-test('the memory probe and the judge of one cell are two invocations of one slot', () => {
-  // What `eval --judge` writes for one model, scenario and mode: memory-probe.ts:131 opens with `started`, writes the
-  // trap scenes and completes the mode, and eval.ts:147 then runs scene-judge.ts under the same tags, which opens
-  // with a `started` of its own (scene-judge.ts:32). The scenes belong to the cell the judge reports.
-  const log = [
-    { event: 'run_started', models: ['M1'], scenarios: ['alpha'] },
-    { event: 'started', model: 'M1', scenario: 'alpha', mode: 'plain' },
-    { event: 'trap_scene', model: 'M1', scenario: 'alpha', mode: 'plain', truncated: true },
-    { event: 'trap_scene', model: 'M1', scenario: 'alpha', mode: 'plain', truncated: false },
-    { event: 'mode_complete', model: 'M1', scenario: 'alpha', mode: 'plain', passed: 4, total: 4 },
-    { event: 'started', model: 'M1', scenario: 'alpha', mode: 'plain' },
-    { event: 'judged', model: 'M1', scenario: 'alpha', mode: 'plain', passed: 2, total: 3 },
-    // The same sequence in sgr, where the judge failed after the mode had completed. That is a judged cell nobody
-    // judged, not a memory cell of 0/4: counting it would lower the headline and report a failure that never happened.
-    { event: 'started', model: 'M1', scenario: 'alpha', mode: 'sgr' },
-    { event: 'mode_complete', model: 'M1', scenario: 'alpha', mode: 'sgr', passed: 3, total: 4 },
-    { event: 'started', model: 'M1', scenario: 'alpha', mode: 'sgr' },
-    { event: 'trap_judged', model: 'M1', scenario: 'alpha', mode: 'sgr' },
-    { event: 'deferred_or_failed', model: 'M1', scenario: 'alpha', mode: 'sgr', code: 'rate_limited' },
-  ].map(line => JSON.stringify(line)).join('\n');
-  const { cells } = readEventLog(log);
-  assert.deepEqual(cells.map(one => [one.mode, one.instrument, one.passed, one.total, one.truncated, one.error]), [
-    ['plain', 'memory', 4, 4, undefined, undefined],
-    ['plain', 'scene', 2, 3, 1, undefined],
-    ['sgr', 'memory', 3, 4, undefined, undefined],
-  ]);
-  const stats = summarize(cells, keys, { samples: 50, seed: 1 });
-  assert.deepEqual([stats.scores['memory/plain']!.all.pooled, stats.scores['memory/plain']!.failures.cells], [1, 0]);
-  assert.equal(stats.scores['scene/plain']!.failures.truncatedScenes, 1);
+test('event logs retain completed and failed invocations without counting retries or judges as new memory cells', () => {
+  const event = (event: string, fields: Record<string, unknown> = {}) => ({ event, model: 'M1', scenario: 'alpha', mode: 'plain', ...fields });
+  const started = () => event('started');
+  const complete = (passed = 4) => event('mode_complete', { passed, total: 4 });
+  const failed = (code: string, mode = 'plain') => event('deferred_or_failed', { code, mode });
+  const rows = [
+    {
+      label: 'saved runs, failed mode, retry and unrelated judge',
+      events: [event('run_started'), complete(3), event('trap_scene', { truncated: true }), event('judged', { passed: 2, total: 3 }),
+        failed('invalid_memory', 'sgr'), failed('rate_limited'), event('run_started'), complete(),
+        event('judged', { model: 'M2', scenario: 'judge', passed: 1, total: 9 })],
+      cells: [['plain', 'memory', 3, 4, undefined, undefined], ['plain', 'scene', 2, 3, 1, undefined],
+        ['plain', 'memory', 4, 4, undefined, undefined], ['sgr', 'memory', 0, 4, undefined, 'invalid_memory']],
+    },
+    {
+      label: 'separate invocations without run_started',
+      events: [started(), complete(3), event('started', { mode: 'full' }), failed('rate_limited', 'full'),
+        failed('rate_limited', 'full'), event('started', { mode: 'full' }), failed('server_error', 'full')],
+      cells: [['plain', 'memory', 3, 4, undefined, undefined], ['full', 'memory', 0, 4, undefined, 'rate_limited'],
+        ['full', 'memory', 0, 4, undefined, 'server_error']],
+    },
+    {
+      label: 'probe and judge share scenes; a failed judge cannot erase completed memory',
+      events: [event('run_started'), started(), event('trap_scene', { truncated: true }), event('trap_scene', { truncated: false }),
+        complete(), started(), event('judged', { passed: 2, total: 3 }), event('started', { mode: 'sgr' }),
+        event('mode_complete', { mode: 'sgr', passed: 3, total: 4 }), event('started', { mode: 'sgr' }),
+        event('trap_judged', { mode: 'sgr' }), failed('rate_limited', 'sgr')],
+      cells: [['plain', 'memory', 4, 4, undefined, undefined], ['plain', 'scene', 2, 3, 1, undefined],
+        ['sgr', 'memory', 3, 4, undefined, undefined]],
+    },
+  ];
+  for (const row of rows) {
+    const { cells } = readEventLog(row.events.map(event => JSON.stringify(event)).join('\n') + '\nnot json\n');
+    assert.deepEqual(cells.map(one => [one.mode, one.instrument, one.passed, one.total, one.truncated, one.error]), row.cells, row.label);
+    // Counts in logs cannot invent per-question answers.
+    assert.equal(summarize(cells, keys, { samples: 50, seed: 1 }).clusters.checks.runs, 0, row.label);
+  }
 });

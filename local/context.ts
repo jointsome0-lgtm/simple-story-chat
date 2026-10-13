@@ -49,14 +49,17 @@ export function requestStamp(request: ModelRequest, model: string, memory: strin
     systemHash: createHash('sha256').update(request.system).digest('hex') };
 }
 
+// Whether a scene's stamp was made for the model, provider, memory and system prompt of `stamp`: only then does the
+// input measured for that scene say anything about a request built now.
+export const sameContext = (previous: RequestStamp, stamp: RequestStamp) => previous.model === stamp.model
+  && (previous.provider ?? 'claude-code') === stamp.provider && previous.memory === stamp.memory && previous.systemHash === stamp.systemHash;
+
 export function estimateRequest(state: Library, point: StoryPoint, request: ModelRequest, config: Pick<ContextConfig, 'model' | 'provider'>) {
   const stamp = requestStamp(request, config.model, point.memory, config.provider);
   const node = own(state.stories[point.storyId]?.nodes, point.head);
   const previous = node?.requestContext;
   const measured = count(node?.usage?.inputTokens);
-  if (measured !== null && previous && count(previous.inputBytes) !== null && previous.model === stamp.model
-      && (previous.provider ?? 'claude-code') === stamp.provider
-      && previous.memory === stamp.memory && previous.systemHash === stamp.systemHash) {
+  if (measured !== null && previous && count(previous.inputBytes) !== null && sameContext(previous, stamp)) {
     // The previous measured input includes CLI overhead. Only the changed text
     // needs estimating; never carry this anchor across a compaction or model.
     // The delta is a scene or two, so the plain byte ratio is close enough even where the script is denser.

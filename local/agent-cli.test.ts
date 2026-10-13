@@ -2,6 +2,7 @@ import test from 'node:test';
 import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -27,10 +28,10 @@ function cli(t: TestContext) {
 }
 
 test('the CLI prints one JSON object per call; writers lock the library, readers do not', async t => {
-  const { directory, run } = cli(t);
-  const unknown = run('read');
-  assert.deepEqual(unknown.response, { status: 'failed', reason: 'not_found' });
-  const seed = run('create_seed', '--json', JSON.stringify({ requestId: 'seed-1', text: SEED }));
+  const { directory, run, runWith } = cli(t);
+  assert.deepEqual(run('read').response, { status: 'failed', reason: 'not_found' });
+  // A writer reads its JSON from stdin under the lock: the locked run is the one that reads it.
+  const seed = runWith({ input: JSON.stringify({ requestId: 'seed-1', text: SEED }) }, 'create_seed', '--json', '-');
   assert.deepEqual(seed.response, { requestId: 'seed-1', status: 'done', result: { seedId: 's1', title: 'Lighthouse', worldTime: '2026-08-02 20:00' } });
   assert.equal(seed.code, 0);
   assert.deepEqual(run('status', '--json', '{"requestId":"seed-1"}').response, seed.response);
@@ -39,25 +40,25 @@ test('the CLI prints one JSON object per call; writers lock the library, readers
   const usage = run('delete');
   assert.equal(usage.code, 2);
   assert.match(usage.stderr, /Usage/);
+  assert.equal(runWith({ input: 'not json' }, 'create_seed', '--json', '-').code, 2);
 
-  // Another writer holds the lock: a writer is refused, a reader still answers.
-  const holder = spawn('flock', [join(directory, 'agents.sqlite.lock'), 'sleep', '3'], { stdio: 'ignore' });
-  holder.unref();
-  await new Promise(resolve => setTimeout(resolve, 300));
+  // Another writer holds the lock, and says so once it does: a writer is refused, a reader still answers.
+  const holder = spawn('flock', [join(directory, 'agents.sqlite.lock'), 'sh', '-c', 'echo held; exec sleep 3'], { stdio: ['ignore', 'pipe', 'ignore'] });
+  t.after(() => { holder.kill(); holder.stdout.destroy(); });
+  await once(holder.stdout, 'data');
   const locked = run('create_seed', '--json', JSON.stringify({ requestId: 'seed-2', text: SEED }));
   assert.deepEqual(locked.response, { status: 'busy', reason: 'library_locked' });
   assert.equal(locked.code, 1);
   assert.equal(run('status', '--json', '{"requestId":"seed-1"}').response.status, 'done');
 });
 
-test('a writer reads JSON from stdin under the lock, and SIMPLE_CHAT_AGENT_ID picks the library', t => {
+test('SIMPLE_CHAT_AGENT_ID and --agent pick the agent\'s own library', t => {
   const { run, runWith } = cli(t);
-  const piped = runWith({ input: JSON.stringify({ requestId: 'seed-1', text: SEED }) }, 'create_seed', '--json', '-');
-  assert.equal(piped.response.status, 'done');
+  assert.equal(run('create_seed', '--json', JSON.stringify({ requestId: 'seed-1', text: SEED })).response.status, 'done');
   // Another agent id is another library: the default one does not see alice's seed, and alice's does.
   assert.equal(runWith({ env: { SIMPLE_CHAT_AGENT_ID: 'alice' } }, 'create_seed', '--json', JSON.stringify({ requestId: 'seed-a', text: SEED })).response.status, 'done');
   assert.equal(run('status', '--json', '{"requestId":"seed-a"}').response.reason, 'unknown_request');
   assert.equal(runWith({ env: { SIMPLE_CHAT_AGENT_ID: 'alice' } }, 'status', '--json', '{"requestId":"seed-a"}').response.status, 'done');
   assert.equal(run('status', '--json', '{"requestId":"seed-a"}', '--agent', 'alice').response.status, 'done');
-  assert.equal(runWith({ input: 'not json' }, 'create_seed', '--json', '-').code, 2);
+  assert.equal(runWith({ env: { SIMPLE_CHAT_AGENT_ID: 'alice' } }, 'status', '--json', '{"requestId":"seed-1"}').response.reason, 'unknown_request');
 });

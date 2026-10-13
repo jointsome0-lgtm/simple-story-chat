@@ -15,7 +15,8 @@ type Models = { data?: { id?: unknown }[] | null };
 type Props = { default_generation_settings?: { n_ctx?: unknown } | null; total_slots?: unknown };
 type StreamEvent = {
   error?: unknown; model?: unknown; choices?: unknown;
-  usage?: { prompt_tokens?: unknown; completion_tokens?: unknown; prompt_tokens_details?: { cached_tokens?: unknown } | null };
+  usage?: { prompt_tokens?: unknown; completion_tokens?: unknown; prompt_tokens_details?: { cached_tokens?: unknown } | null;
+    completion_tokens_details?: { reasoning_tokens?: unknown } | null };
   timings?: unknown;
 };
 // llama-server's field for each of our timing names. Durations come as fractional milliseconds.
@@ -34,7 +35,13 @@ type Choice = { index?: unknown; delta?: unknown; finish_reason?: unknown };
 
 const count = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
 const isObject = (value: unknown): value is { readonly [field: string]: unknown } => !!value && typeof value === 'object';
-const MAX_BODY = 2_000_000;
+// A response body's limit, here and in local/serving.ts.
+export const MAX_BODY = 2_000_000;
+// A thinking request streams each reasoning token as an event of its own, some 300 bytes from OpenRouter: 2 MB cut
+// four compactions short at about 6000 tokens on 2026-09-27 (improve-runs). Such a stream gets MAX_BODY for every 4096
+// tokens of its limit.
+export const streamLimit = (request: ModelRequest) =>
+  request.thinking === true ? MAX_BODY * Math.max(1, request.maxOutputTokens / 4096) : MAX_BODY;
 // OpenAI's current models reject `max_tokens` and a non-default temperature; OpenRouter lists `max_tokens`.
 const OPENAI_HOST = 'api.openai.com';
 // OpenAI's strict mode rejects string length limits; memory.ts checks the lengths of the parsed reply itself.
@@ -44,7 +51,7 @@ function withoutLengths(schema: unknown): unknown {
   return Object.fromEntries(Object.entries(schema).filter(([key]) => key !== 'minLength' && key !== 'maxLength')
     .map(([key, value]) => [key, withoutLengths(value)]));
 }
-function messagesFor(request: ModelRequest) {
+export function messagesFor(request: ModelRequest) {
   const messages: { role: string; content: string }[] = [];
   for (const message of [{ role: 'system', content: request.system }, ...request.messages]) {
     const previous = messages.at(-1);
@@ -55,14 +62,14 @@ function messagesFor(request: ModelRequest) {
 }
 
 // Decode complete SSE events, including UTF-8 characters split across chunks.
-async function* events(body: Response['body']) {
+export async function* events(body: Response['body'], limit = MAX_BODY) {
   if (!body) throw new ModelError('invalid_stream');
   const decoder = new TextDecoder('utf-8', { fatal: true });
   let buffer = '';
   let bytes = 0;
   for await (const chunk of body) {
     bytes += chunk.byteLength;
-    if (bytes > MAX_BODY) throw new ModelError('output_limit');
+    if (bytes > limit) throw new ModelError('output_limit');
     buffer += decoder.decode(chunk, { stream: true });
     let end: RegExpExecArray | null;
     while ((end = /\r?\n\r?\n/.exec(buffer))) {
@@ -102,6 +109,8 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
   const mistral = hosted && new URL(baseUrl).hostname === 'api.mistral.ai';
   // The bot's own server runs without thinking. Left on, a free reasoning model spends the whole output limit
   // of a memory request on reasoning and answers nothing. This is OpenRouter's switch for every model it hosts.
+  // A compaction under the thinking switch asks for it, with a limit that has room for it (local/memory.ts), and so
+  // does the eval's recall under RECALL_THINKING (local/memory-probe.ts).
   const openrouter = hosted && new URL(baseUrl).hostname === 'openrouter.ai';
   const headers = { 'Content-Type': 'application/json',
     ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}) };
@@ -113,7 +122,7 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
     messages: messagesFor(request),
     [openai ? 'max_completion_tokens' : 'max_tokens']: request.maxOutputTokens, stream: true,
     ...(mistral ? {} : { stream_options: { include_usage: true } }),
-    ...(openrouter ? { reasoning: { enabled: false } } : {}),
+    ...(openrouter ? { reasoning: { enabled: request.thinking === true } } : {}),
     ...(openai ? {} : { temperature: request.purpose === 'memory' ? 0.2 : config.temperature ?? 0.8 }),
     ...(request.outputSchema ? { response_format: { type: 'json_schema', json_schema: { name: 'reply', strict: true,
       schema: openai ? withoutLengths(request.outputSchema) : request.outputSchema } },
@@ -123,8 +132,9 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
     max_tokens: request.maxOutputTokens, stream: true, stream_options: { include_usage: true },
     temperature: request.purpose === 'memory' ? 0.2 : config.temperature ?? 0.8,
     top_p: 0.95, top_k: 64, min_p: 0, repeat_penalty: 1,
-    reasoning_effort: 'none', reasoning_format: 'deepseek',
-    chat_template_kwargs: { enable_thinking: false }, cache_prompt: true,
+    // The pinned server lets `reasoning_effort: 'none'` turn thinking off over the template's switch.
+    ...(request.thinking === true ? {} : { reasoning_effort: 'none' }), reasoning_format: 'deepseek',
+    chat_template_kwargs: { enable_thinking: request.thinking === true }, cache_prompt: true,
     ...(request.outputSchema ? { response_format: { type: 'json_object', schema: request.outputSchema } } : {}),
   });
 
@@ -175,22 +185,41 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
     catch { throw new ModelError('invalid_response'); }
   }
 
-  async function prepare(request: ModelRequest, signal: AbortSignal) {
-    if (prepared.has(request)) return prepared.get(request)!;
+  // `counted`: the number is our server's own count. `trust` lets a generate call take the estimate of a request whose
+  // caller trusts it (ModelRequest `trustEstimate`) instead: the count is a round trip of its own, about a second
+  // over the tunnel to the card, and the server reports the same number while it generates. That estimate is not kept.
+  async function prepare(request: ModelRequest, signal: AbortSignal, trust = false) {
+    const known = prepared.get(request);
+    if (known) return { ...known, counted: !hosted };
     const body = bodyFor(request);
+    const estimate = count(request.estimatedInputTokens);
+    if (trust && !hosted && request.trustEstimate === true && estimate) return { body, inputTokens: estimate, counted: false };
     // A hosted API counts input only while generating; until then the caller's estimate or bytes / 4 stands in.
-    const result = hosted ? { input_tokens: count(request.estimatedInputTokens) ?? Math.ceil(Buffer.byteLength(JSON.stringify(body.messages)) / 4) }
+    const result = hosted ? { input_tokens: estimate ?? Math.ceil(Buffer.byteLength(JSON.stringify(body.messages)) / 4) }
       : await json('/chat/completions/input_tokens', body, signal) as { input_tokens?: unknown };
     const inputTokens = count(result.input_tokens);
     if (inputTokens === null || inputTokens === 0) throw new ModelError('usage_unavailable');
     const value = { body, inputTokens };
     prepared.set(request, value);
-    return value;
+    return { ...value, counted: !hosted };
+  }
+
+  // llama-server refuses a prompt that does not fit its context with 400, before it generates anything. A request sent
+  // on an estimate makes the count it skipped, so that a prompt over the limit is a `context_limit`, which compacts,
+  // rather than a failure that every retry with the same estimate would meet again.
+  async function refused(error: unknown, body: object, limit: number, signal: AbortSignal): Promise<never> {
+    if ((error as Thrown)?.httpStatus === 400) {
+      const exact = await json('/chat/completions/input_tokens', body, signal)
+        .then(result => count((result as { input_tokens?: unknown }).input_tokens), () => null);
+      if (exact !== null && exact > limit) throw new ModelError('context_limit', { phase: 'generate', httpStatus: 400 });
+    }
+    throw error;
   }
 
   return {
     // llama.cpp 0.4.1 uses the same template and tokenizer for this endpoint
-    // and chat generation. No heuristic fallback to another protocol.
+    // and chat generation. No heuristic fallback to another protocol. A caller that asks for the count gets it, trusted
+    // estimate or not: a pool admits a call by this number (local/scheduler.ts).
     countInput(request: ModelRequest, { signal }: Controls = {}) {
       return operation(signal, 'count_input', async current => (await prepare(request, current)).inputTokens);
     },
@@ -202,7 +231,7 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
         const props = await json('/props', null, current) as Props;
         // The server reports what one slot may use: its own cells, or the limit a shared cache puts on a slot
         // (`--kv-unified-per-slot`, else the whole cache). The size of a shared pool is not in the API at all, so
-        // only one request's room is verified here; the pool is the operator's to match (docs/gpu.md).
+        // only one request's room is verified here; the pool is the operator's to match (docs/llama-cpp.md#slot-pool).
         const contextTokens = count(props.default_generation_settings?.n_ctx);
         if (contextTokens === null || contextTokens < config.contextTokens) throw new ModelError('context_limit');
         if (props.total_slots !== slots) throw new ModelError('unexpected_slots');
@@ -211,13 +240,14 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
     },
     generate(request: ModelRequest, { onText = async () => {}, signal, inputLimitTokens, slot }: GenerateControls = {}) {
       return operation(signal, 'generate', async (current): Promise<GenerationResult> => {
-        const { body, inputTokens: preparedTokens } = await prepare(request, current);
+        const { body, inputTokens: preparedTokens, counted } = await prepare(request, current, true);
         let inputTokens = preparedTokens;
         prepared.delete(request);
         const limit = Math.min(config.contextTokens - request.maxOutputTokens, inputLimitTokens ?? Infinity);
         if (inputTokens > limit) throw new ModelError('context_limit');
         const spend = hosted ? budget?.begin(inputTokens + request.maxOutputTokens) : undefined;
-        const response = await http('/chat/completions', !hosted && slot !== undefined ? { ...body, id_slot: slot } : body, current);
+        const response = await http('/chat/completions', !hosted && slot !== undefined ? { ...body, id_slot: slot } : body, current)
+          .catch(error => (counted || hosted) ? Promise.reject(error) : refused(error, body, limit, current));
         if (!response.headers.get('content-type')?.includes('text/event-stream')) {
           await response.body?.cancel();
           throw new ModelError('invalid_stream');
@@ -228,9 +258,11 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
         let outputTokens: number | null = null;
         let cachedInputTokens: number | null = null;
         let reasoningCharacters = 0;
+        // How many of the output tokens a hosted API counted as reasoning, where it says (OpenRouter does).
+        let reasoningTokens: number | null = null;
         let timings: Timings | undefined;
-        let measured = !hosted;
-        for await (const data of events(response.body)) {
+        let measured = counted;
+        for await (const data of events(response.body, streamLimit(request))) {
           if (data === '[DONE]') { done = true; break; }
           let event: StreamEvent;
           try { event = JSON.parse(data); } catch { throw new ModelError('invalid_stream'); }
@@ -239,10 +271,12 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
           if (!hosted && event.model && event.model !== config.model) throw new ModelError('unexpected_model');
           if (event.usage) {
             const reported = count(event.usage.prompt_tokens);
-            if (hosted && reported) { inputTokens = reported; measured = true; }
+            // Without a count of our own the server's is the measure; after one, the two must agree.
+            if (!counted && reported) { inputTokens = reported; measured = true; }
             else if (reported !== null && reported !== inputTokens) throw new ModelError('unexpected_context');
             outputTokens = count(event.usage.completion_tokens);
             cachedInputTokens = count(event.usage.prompt_tokens_details?.cached_tokens);
+            if (hosted) reasoningTokens = count(event.usage.completion_tokens_details?.reasoning_tokens);
           }
           timings = timingsOf(event.timings) ?? timings;
           if (event.choices.length > 1) throw new ModelError('invalid_stream');
@@ -276,7 +310,7 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
         if (!measured) throw new ModelError('usage_unavailable');
         if (inputTokens > limit) throw new ModelError('context_limit');
         return { text, finishReason, usage: { inputTokens, outputTokens, cachedInputTokens, reasoningCharacters,
-          totalTokens: outputTokens === null ? null : inputTokens + outputTokens },
+          ...(reasoningTokens === null ? {} : { reasoningTokens }), totalTokens: outputTokens === null ? null : inputTokens + outputTokens },
           // The slot a pool named goes with the timings: which cache the request met is half of what `cacheTokens` says.
           ...(timings ? { timings: !hosted && slot !== undefined ? { ...timings, slot } : timings } : {}) };
       });

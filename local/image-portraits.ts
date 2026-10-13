@@ -1,5 +1,5 @@
-// The first half of the identity test (docs/illustrations-plan.md): one portrait per person of the synthetic
-// stories, drawn on the card, and the file that binds those portraits to the frames they belong in.
+// The first half of the identity test (docs/identity-experiment.md#portrait-recipe): one portrait per person of the
+// synthetic stories, drawn on the card, and the file that binds those portraits to the frames they belong in.
 //   `prompts`    turns the character sheets inside an illustrate-probe prompts directory into a prompts directory
 //                of its own, one case per person, which local/image-batch.ts draws like any other.
 //   `references` turns the run directory that came out of it into the `--references` file of the frame run.
@@ -13,33 +13,66 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { assemblePrompt } from './illustrate.ts';
 import type { Description } from './illustrate.ts';
 import type { Case } from './illustrate-probe.ts';
-import type { BatchIndex, References } from './image-batch.ts';
+import { latentSizeOf } from './image-batch.ts';
+import type { BatchIndex, Graph, References } from './image-batch.ts';
 
-// A reference portrait is a body and a face with nothing happening: the frame run asks the model to keep this
-// person, not to repeat this moment. The fields are the ones every frame uses, so the style string and the name
-// stripping are the frames' own; only `look` differs, and that comes from the sheet through `assemblePrompt`.
+// A reference portrait carries the whole person, the figure as well as the face, so that a frame need not describe
+// the build every time: the owner's example is a man whose big muscles and barbarian menace should come from the
+// picture (2026-09-24). This is the recipe the bot draws its portraits by (local/picture.ts), fixed before the
+// identity run and pinned by it: the whole figure from the front, in plain close-fitting clothes of the bot's own
+// that hide none of the build and follow the person into no scene, standing, with no expression put on them — a grim
+// face is the look's to say — in a neutral style of its own, never a story's. The person's text comes from the sheet
+// (`portraitText`) through `assemblePrompt`, which strips names and ages here as in every frame, and these clothes
+// stand where a frame would put the sheet's outfit. Two portraits of one text differ by the seed.
+// The clothes are the T probe's dark grey suit since 2026-09-27, the owner's choice after seeing its clothing test
+// (docs/action-experiment.md#t-probe-suit): the identity run's white tank top and dark grey trousers hid the legs. A
+// portrait kept before keeps the clothes it records.
+export const PORTRAIT_CLOTHES = 'wearing a plain sleeveless close-fitting dark grey full-length one-piece athletic suit of matte fabric, '
+  + 'covering the torso and legs down to the ankles, and plain dark shoes';
+export const PORTRAIT_STYLE = 'Neutral character reference illustration with natural colors, realistic proportions and clean even rendering, the build, silhouette and permanent marks clearly readable.';
+export const PORTRAIT_ACTION = 'stands upright facing the viewer, arms relaxed at the sides';
 export function portraitDescription(name: string): Description {
   return {
     shot: 'Full-length character reference, the whole body in frame, seen from the front',
     setting: 'A plain even grey backdrop, no scenery',
     moment: 'One person stands still to be looked at',
     objects: '', props: '', light: 'Even soft frontal light, no strong shadows',
-    people: [{ who: name, look: '', state: '',
-      action: 'stands upright facing the viewer, arms relaxed at the sides, calm neutral expression' }],
+    people: [{ who: name, look: '', clothes: PORTRAIT_CLOTHES, state: '', action: PORTRAIT_ACTION }],
   };
+}
+// `names` are the sheet's, which a portrait strips as a frame does: the details of one person may name another. The
+// person's own comes first, and only once, so that nobody else's empty line stands for them.
+export const portraitPrompt = (name: string, text: string, names: string[] = []) =>
+  assemblePrompt(portraitDescription(name), [{ name, look: text, outfit: '' }, ...names
+    .filter(other => other.trim().toLowerCase() !== name.trim().toLowerCase()).map(other => ({ name: other, look: '', outfit: '' }))], PORTRAIT_STYLE);
+// What a portrait of a person of the sheet is drawn from (docs/illustrations-plan.md#three-layers): their details, the
+// English prose retold from their description, since a portrait holds one person and can take all of it, and a table of
+// measurements given to the image model as written was drawn as lettering. Until the details are retold, it is the look,
+// and so on a sheet written before 2026-09-26, and for details a reader wrote before 2026-09-27, which were never
+// retold. A look the reader wrote changes the frames alone. `portraitFromDetails` says which of the two texts it is,
+// for the card to name it (local/ui.ts).
+type SheetPerson = { details?: string; detailsEdited?: boolean; look: string };
+export const portraitFromDetails = (person: SheetPerson) => !!person.details?.trim() && !person.detailsEdited;
+export const portraitText = (person: SheetPerson) => portraitFromDetails(person) ? person.details! : person.look;
+
+// The canvas a portrait is drawn on: the text-to-image graph's own latent turned upright, the smaller side across. A
+// standing figure in a wide frame gets a third of the pixels; the bot applies the same rule to its own graph.
+export function portraitCanvas(graph: Graph): { width: number; height: number } {
+  const size = latentSizeOf(graph);
+  if (!size) throw new Error('The portrait graph has no latent size to turn upright');
+  return { width: Math.min(size.width, size.height), height: Math.max(size.width, size.height) };
 }
 
 // One portrait case per person of every story in `cases`. The id carries the story and a number, never the name:
 // it becomes a file name in the run directory and a key in a review bundle. A story is described once, so the
-// first case of each story is the one its sheet is taken from.
+// first case of each story is the one its sheet is taken from. A portrait here is drawn from the look, as the
+// identity run pinned its recipe, whatever else the sheet holds.
 export function portraitCases(cases: Case[]): Case[] {
   const stories = new Map<string, Case>();
   for (const one of cases) if (!stories.has(one.scenario)) stories.set(one.scenario, one);
   return [...stories.values()].flatMap(story => (story.sheet ?? []).map((character, order) => {
-    const description = portraitDescription(character.name);
-    const assembled = assemblePrompt(description, [character]);
-    return { id: `portrait-${story.scenario}-${order + 1}`, scenario: story.scenario, index: order + 1,
-      scene: '', sheet: [character], description, ...assembled } satisfies Case;
+    return { id: `portrait-${story.scenario}-${order + 1}`, scenario: story.scenario, index: order + 1, scene: '',
+      sheet: [character], description: portraitDescription(character.name), ...portraitPrompt(character.name, character.look) } satisfies Case;
   }));
 }
 

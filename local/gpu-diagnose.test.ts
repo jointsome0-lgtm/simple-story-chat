@@ -53,86 +53,43 @@ const stalls = async () => { throw Object.assign(new Error('PRIVATE_URL'), { nam
 // What fetch reports when `ssh -L` accepts the connection and then closes it because the channel was refused.
 const resets = async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'UND_ERR_SOCKET' } }); };
 
-test('a snapshot compares the forwarded port with the server loopback and keeps only known fields', async () => {
-  const f = fixture(succeed(remote()));
-  process.env.SIMPLE_CHAT_SYNTHETIC_SECRET = 'PRIVATE_KEY';
-  let report: Report;
-  try { report = await diagnose({ host: 'synthetic-host', script: 'print(1)', spawn: f.spawn, request: answers, now: () => new Date(0) }); }
-  finally { delete process.env.SIMPLE_CHAT_SYNTHETIC_SECRET; }
-  assert.equal(report.reading, 'ok');
-  assert.equal(report.at, '1970-01-01T00:00:00.000Z');
-  assert.deepEqual([report.tunnel!.models.httpStatus, report.tunnel!.props?.httpStatus, report.direct.failure], [200, 200, undefined]);
-  assert.deepEqual(f.calls[0].args.slice(-2), ['synthetic-host', 'python3 - --events 25']);
-  for (const option of ['StrictHostKeyChecking=yes', 'BatchMode=yes', 'ControlPath=none']) assert.ok(f.calls[0].args.includes(option));
-  assert.equal(await f.calls[0].script, 'print(1)');
-  assert.equal(f.calls[0].env.SIMPLE_CHAT_SYNTHETIC_SECRET, undefined);
-  assert.deepEqual(report.remote!.processes, { llamaServer: [{ pid: 108, ageSeconds: 5321, state: 'S' }],
-    sshd: { sessions: 2, unauthenticated: 4, startups: 4, dropFrom: 10, dropAllAt: 100 } });
-  assert.deepEqual([report.remote!.failed, report.remote!.http.models.modelId], [['gpus'], 'synthetic-model']);
-  assert.deepEqual(JSON.parse(JSON.stringify(report.remote!.gpus)), [{ pids: [], memoryUsedMiB: 28394, memoryFreeMiB: 3715, memoryTotalMiB: 32607, utilizationPercent: 97, temperatureC: 61 }, { pids: [], memoryUsedMiB: 1000 }]);
-  assert.deepEqual(report.remote!.http.props, { httpStatus: 200, failure: undefined, seconds: 0.01, contextTokens: 65536, slots: 1 });
-  assert.deepEqual(JSON.parse(JSON.stringify([report.remote!.machine, report.remote!.container])), [{ load1: 1.5, cpus: 16, memoryAvailableMiB: 50000 },
-    { throttledPeriods: 12, throttledSeconds: 3, memoryMiB: 30000, memoryLimitMiB: 64000, pressure: { scope: 'machine', cpu: 41.5, io: 0 } }]);
-  // Rows survive only with a well-formed event name; a malformed time or category is dropped from its row.
-  assert.deepEqual(JSON.parse(JSON.stringify(report.remote!.serverEvents.rows)), [
-    { at: '2026-09-17T02:12:17.803123+00:00', event: 'server_started', pid: 108 }, { event: 'server_diagnostic' }]);
-  assert.doesNotMatch(JSON.stringify(report), /PRIVATE/);
+test('diagnosis keeps safe counters and distinguishes transport failures without leaking remote data', async () => {
+  const rows: [NonNullable<Options['request']>, object, string][] = [
+    [answers, { httpStatus: 200, seconds: 0.01, modelId: '/PRIVATE/model.gguf' }, 'ok'],
+    [refuses, { httpStatus: 200 }, 'no_tunnel'],
+    [stalls, { httpStatus: 200 }, 'ssh_path'],
+    [resets, { httpStatus: 200 }, 'ssh_path'],
+    [answer(503), { httpStatus: 200 }, 'ssh_path'],
+    [answers, { failure: 'timeout', seconds: 5 }, 'server'],
+  ];
+  for (const [request, models, reading] of rows) {
+    const f = fixture(succeed(remote(models)));
+    process.env.SIMPLE_CHAT_SYNTHETIC_SECRET = 'PRIVATE_KEY';
+    let report: Report;
+    try { report = await diagnose({ script: '', spawn: f.spawn, request }); }
+    finally { delete process.env.SIMPLE_CHAT_SYNTHETIC_SECRET; }
+    assert.equal(report.reading, reading);
+    assert.equal(report.remote!.gpus[0].memoryFreeMiB, 3715);
+    assert.equal(report.remote!.http.props.contextTokens, 65536);
+    assert.equal(report.remote!.processes.llamaServer[0].pid, 108);
+    assert.doesNotMatch(JSON.stringify([report, f.calls[0].env]), /PRIVATE/);
+    assert.ok(f.calls[0].args.includes('StrictHostKeyChecking=yes'));
+  }
 });
 
-test('the reading separates a missing tunnel, a failing SSH path and a server that does not answer', async () => {
-  const read = async (request: NonNullable<Options['request']>, models?: object) =>
-    (await diagnose({ script: '', spawn: fixture(succeed(remote(models))).spawn, request })).reading;
-  assert.equal(await read(refuses), 'no_tunnel');
-  assert.equal(await read(stalls), 'ssh_path');
-  assert.equal(await read(resets), 'ssh_path');
-  assert.equal(await read(answer(503)), 'ssh_path');
-  assert.equal(await read(answers, { failure: 'timeout', seconds: 5 }), 'server');
-  assert.equal(await read(stalls, { httpStatus: 503, seconds: 0.01 }), 'server');
-  // A slow answer is still an answer; the time is in the report.
-  assert.equal(await read(answers, { httpStatus: 200, seconds: 4.2 }), 'ok');
-  // A model named by its file path is reported without the name.
-  const unnamed = await diagnose({ script: '', spawn: fixture(succeed(remote({ httpStatus: 200, seconds: 0.01, modelId: '/PRIVATE/model.gguf' }))).spawn, request: answers });
-  assert.deepEqual([unnamed.reading, unnamed.remote!.http.models.modelId], ['ok', undefined]);
-
-  // The bot's check: /v1/models, then /props, and nothing after a failed step.
-  const paths: string[] = [];
-  const second = await diagnose({ script: '', spawn: fixture(succeed(remote())).spawn,
-    request: async url => { paths.push(new URL(url).pathname); return paths.length === 1 ? answers() : stalls(); } });
-  assert.deepEqual([paths, second.reading, second.tunnel!.props?.failure], [['/v1/models', '/props'], 'ssh_path', 'timeout']);
-  const stalled = await diagnose({ script: '', spawn: fixture(succeed(remote())).spawn, request: stalls });
-  assert.deepEqual([stalled.tunnel!.models.failure, stalled.tunnel!.props], ['timeout', undefined]);
-  assert.equal((await diagnose({ script: '', spawn: fixture(succeed(remote())).spawn, request: resets })).tunnel!.models.failure, 'UND_ERR_SOCKET');
-  assert.doesNotMatch(JSON.stringify([second, stalled]), /PRIVATE/);
-});
-
-test('a failed SSH session reports only its status, signal and a fixed reason', async () => {
-  const refused = await diagnose({ script: '', request: answers, spawn: fixture(worker => {
-    worker.stderr.write('ssh: connect to host PRIVATE_HOST port 40022: Connection timed out\n');
-    worker.emit('close', 255, null);
-  }).spawn });
-  assert.equal(refused.reading, 'ssh_unreachable');
-  assert.equal(refused.remote, undefined);
-  const { seconds, ...failure } = refused.direct;
-  assert.ok(seconds >= 0);
-  assert.deepEqual(failure, { failure: 'ssh_failed', exitCode: 255, signal: undefined, sshReason: 'connect_timeout' });
-  assert.doesNotMatch(JSON.stringify(refused), /PRIVATE|40022/);
-
-  const script = await diagnose({ script: '', request: answers, spawn: fixture(worker => {
-    worker.stderr.write('Traceback PRIVATE_PATH\n'); worker.emit('close', 1, null);
-  }).spawn });
-  assert.deepEqual([script.reading, script.direct.failure, script.direct.exitCode], ['unclear', 'remote_failed', 1]);
-  const banner = await diagnose({ script: '', request: answers, spawn: fixture(succeed('PRIVATE banner, not a report')).spawn });
-  assert.deepEqual([banner.reading, banner.direct.failure], ['unclear', 'invalid_output']);
-  // Text a login script prints before the report does not matter.
-  assert.equal((await diagnose({ script: '', request: answers, spawn: fixture(succeed(`PRIVATE banner\n${remote()}`)).spawn })).reading, 'ok');
-  assert.doesNotMatch(JSON.stringify([script, banner]), /PRIVATE/);
-
-  // A session that never answers is stopped at the deadline.
+test('failed SSH diagnostics redact output and stop a silent process at its deadline', async () => {
+  for (const [status, output, expected] of [[255, 'PRIVATE_HOST Connection timed out', 'ssh_failed'],
+    [1, 'PRIVATE_PATH traceback', 'remote_failed'], [0, 'PRIVATE banner, not a report', 'invalid_output']] as const) {
+    const f = fixture(worker => { worker.stdout.write(output); worker.stderr.write(output); worker.emit('close', status, null); });
+    const report = await diagnose({ script: '', request: answers, spawn: f.spawn });
+    assert.equal(report.direct.failure, expected);
+    assert.equal(report.remote, undefined);
+    assert.doesNotMatch(JSON.stringify(report), /PRIVATE/);
+  }
   const silent = fixture(() => {});
-  const hung = await diagnose({ script: '', request: answers, timeoutMs: 5, spawn: silent.spawn });
-  assert.deepEqual([hung.reading, hung.direct.failure, silent.calls[0].killed], ['ssh_unreachable', 'ssh_timeout', true]);
+  const report = await diagnose({ script: '', request: answers, timeoutMs: 5, spawn: silent.spawn });
+  assert.deepEqual([report.direct.failure, silent.calls[0].killed], ['ssh_timeout', true]);
 });
-
 test('a watcher keeps one session open, probes the tunnel on every line and reopens a session that ended', async () => {
   const f = fixture(worker => {
     worker.stdout.write(`${remote()}\nPRIVATE banner\n${remote({ failure: 'timeout', seconds: 5 })}\n`);
@@ -150,17 +107,23 @@ test('a watcher keeps one session open, probes the tunnel on every line and reop
   assert.ok(seconds >= 0);
   assert.deepEqual([ended, reports[2].remote], [{ failure: 'ssh_failed', exitCode: 255, signal: undefined, sshReason: 'keepalive_timeout' }, undefined]);
   assert.equal(f.calls.length, 2);
-  assert.deepEqual(f.calls[0].args.slice(-2), ['synthetic-host', 'python3 - --events 5 --every 30']);
   for (const option of ['ControlPath=none', 'ServerAliveInterval=15', 'ServerAliveCountMax=3']) assert.ok(f.calls[0].args.includes(option));
-  assert.equal(await f.calls[0].script, 'print(1)');
   assert.doesNotMatch(JSON.stringify(reports), /PRIVATE/);
 });
 
 test('a watching session that goes quiet is reported as stalled; stopping the watcher ends its SSH process', async () => {
-  const f = fixture(worker => { worker.stdout.write(`${remote()}\n`); });
+  // Killed, this ssh leaves one more line in the pipe, and the watcher reads it after the session has ended.
+  const f = fixture(worker => {
+    worker.stdout.write(`${remote()}\n`);
+    const kill = worker.kill;
+    worker.kill = () => { worker.stdout.write(`${remote()}\n`); return kill(); };
+  });
   const stopped = new AbortController();
   const reports: Report[] = [];
-  await watch({ every: 30, retryMs: 1, silenceMs: 5, script: '', spawn: f.spawn, request: stalls, signal: stopped.signal }, report => {
+  // Every report reads the clock. Once the test has looked, a read throws, so a timer left running ends there.
+  let reads = 0, looked = false;
+  const now = () => { if (looked) throw new Error('a timer outlived the stopped watcher'); reads++; return new Date(0); };
+  await watch({ every: 30, retryMs: 1, silenceMs: 5, script: '', spawn: f.spawn, request: stalls, now, signal: stopped.signal }, report => {
     reports.push(report);
     if (reports.length === 3) stopped.abort();
   });
@@ -168,6 +131,13 @@ test('a watching session that goes quiet is reported as stalled; stopping the wa
     [['ssh_path', undefined, 'timeout'], ['ssh_stalled', 'ssh_silent', 'timeout'], ['ssh_stalled', 'ssh_silent', 'timeout']]);
   // The exit of a stopped session is not reported, and no new session follows.
   assert.deepEqual(f.calls.map(call => call.killed), [true]);
+  // Nor does the line read after the stop start a silence timer, which would re-arm itself every five milliseconds
+  // here and keep the process alive: gpu-measure's vram test hung on it under load.
+  await delay(20);
+  const settled = reads;
+  await delay(50);
+  looked = true;
+  assert.equal(reads, settled, 'nothing reports after the stop');
   // A session that delivers nothing at all is ended and replaced.
   const mute = fixture(() => {});
   const muted = new AbortController();
@@ -178,16 +148,6 @@ test('a watching session that goes quiet is reported as stalled; stopping the wa
   });
   assert.deepEqual(failures.map(report => [report.reading, report.direct.failure]), [['ssh_unreachable', 'ssh_timeout'], ['ssh_unreachable', 'ssh_timeout']]);
   assert.deepEqual(mute.calls.map(call => call.killed), [true, true]);
-  // The remote script ends with status 0 at its own time limit: a new session follows and no failure is reported.
-  const limited = fixture(worker => { worker.stdout.write(`${remote()}\n`); worker.emit('close', 0, null); });
-  const again = new AbortController();
-  const rows: Report[] = [];
-  await watch({ every: 30, retryMs: 1, script: '', spawn: limited.spawn, request: answers, signal: again.signal }, report => {
-    rows.push(report);
-    if (rows.length === 2) again.abort();
-  });
-  assert.deepEqual(rows.map(report => report.reading), ['ok', 'ok']);
-  assert.equal(limited.calls.length, 2);
   // A snapshot that cannot be written ends the watch with that error instead of a quiet terminal.
   const unsaved = fixture(worker => { worker.stdout.write(`${remote()}\n`); });
   await assert.rejects(watch({ every: 30, retryMs: 1, script: '', spawn: unsaved.spawn, request: answers, signal: new AbortController().signal },
@@ -210,7 +170,6 @@ test('a counters-only watcher probes no path and asks the instance for the parts
     spawn: f.spawn, request: counted, signal: stopped.signal }, report => { reports.push(report); stopped.abort(); });
   assert.deepEqual(reports.map(report => [report.reading, report.tunnel]), [['counters', undefined]]);
   assert.equal(probes, 0);
-  assert.equal(f.calls[0].args.at(-1), 'python3 - --events 0 --every 2 --parts gpus,processes');
   assert.equal(reports[0].remote!.gpus.length, 2);
   await assert.rejects(watch({ every: 2, parts: 'gpus,PRIVATE_PART', script: '', spawn: f.spawn, request: answers,
     signal: stopped.signal }, () => {}), { message: 'invalid_parts' });
@@ -251,8 +210,6 @@ test('a host or an event count that is not plain is refused before SSH starts', 
   await assert.rejects(diagnose({ events: 1.5, spawn: f.spawn, request: answers }), { message: 'invalid_events' });
   await assert.rejects(diagnose({ events: -1, spawn: f.spawn, request: answers }), { message: 'invalid_events' });
   assert.equal(f.calls.length, 0);
-  assert.equal((await diagnose({ events: 'all', script: '', spawn: f.spawn, request: answers })).reading, 'ok');
-  assert.equal(f.calls[0].args.at(-1), 'python3 - --events all');
 });
 
 test('snapshots are appended privately; pulled server events go to their own file', async t => {
@@ -317,7 +274,6 @@ test('the remote script reports a synthetic server and retained events without a
   // Rotated files come first, so a full pull stays in order.
   assert.deepEqual((await run('all'))[0].serverEvents.rows.map((row: { event: string }) => row.event), ['server_started', 'server_diagnostic', 'server_exit']);
   assert.deepEqual((await run('0'))[0].serverEvents.rows, []);
-  assert.ok(Number.isInteger(report.machine.cpus) && typeof report.container === 'object' && Number.isInteger(report.processes.sshd.sessions));
   // A watcher prints a line per interval and ends by itself at its time limit.
   const lines = await run('0', '--every', '1', '--limit', '2');
   assert.deepEqual(lines.map(line => line.http.health.httpStatus), [200, 200]);

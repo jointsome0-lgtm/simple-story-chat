@@ -1,4 +1,5 @@
 import test from 'node:test';
+import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -18,10 +19,12 @@ import type { ReplayReport } from './memory-probe.ts';
 type Schema = { properties: { answers?: object; evidence?: object } };
 // Summary requests carry their scenes as JSON in the first message.
 type SummaryInput = { newScenes: { id: string; input: string }[] };
-// Probe progress lines; the test reads the failure code and the report directory.
-type Progress = { code?: string; directory?: string };
+// Probe progress lines; the tests read the event, the failure code and the report directory.
+type Progress = { event?: string; code?: string; directory?: string };
 
-test('background probe resumes a failed synthetic step without repeating committed increments', async t => {
+// Frozen synthetic scenes of the dance scenario in a directory of their own, and the probe that replays them through the
+// model socket of a bot whose database is `test.sqlite` there.
+function replay(t: TestContext) {
   const directory = mkdtempSync(join(tmpdir(), 'simple-chat-memory-test-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const state = emptyLibrary();
@@ -34,6 +37,24 @@ test('background probe resumes a failed synthetic step without repeating committ
   }
   const source = join(directory, 'evidence.json');
   writeFileSync(source, JSON.stringify({ report: { scenario: 'dance' }, state }));
+  async function run(resume?: string) {
+    const child = spawn(process.execPath, [new URL('./memory-probe.ts', import.meta.url).pathname,
+      '--source', source, '--minutes', '1', ...(resume ? ['--resume', resume] : [])], {
+      cwd: directory, env: { PATH: process.env.PATH, LANG: 'C.UTF-8', TELEGRAM_BOT_TOKEN: '1:synthetic',
+        SIMPLE_CHAT_ALLOWED_USER_IDS: '1', SIMPLE_CHAT_MODEL: 'synthetic-model', SIMPLE_CHAT_DB_PATH: 'test.sqlite' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let output = '';
+    child.stdout.on('data', data => { output += data; });
+    child.stderr.resume();
+    const code = await new Promise((resolve, reject) => { child.once('exit', resolve); child.once('error', reject); });
+    return { code, events: output.trim().split('\n').map((line): Progress => JSON.parse(line)) };
+  }
+  return { socketPath: join(directory, 'test.sqlite.model.sock'), run };
+}
+
+test('background probe resumes a failed synthetic step without repeating committed increments', async t => {
+  const { socketPath, run } = replay(t);
   let calls = 0;
   const provider = { async generate(request: ModelRequest) {
     calls++;
@@ -50,22 +71,9 @@ test('background probe resumes a failed synthetic step without repeating committ
     return { text: JSON.stringify(data), finishReason: 'stop', usage: { inputTokens: 2000, outputTokens: 100, totalTokens: 2100 } };
   } };
   const scheduler = createScheduler(provider, { quietMs: 0 });
-  const server = await serveBackground({ socketPath: join(directory, 'test.sqlite.model.sock'), scheduler,
+  const server = await serveBackground({ socketPath, scheduler,
     status: () => ({ model: 'synthetic-model', gpu: { status: 'ready' } }) });
   t.after(async () => { await server.close(); await scheduler.close(); });
-  async function run(resume?: string) {
-    const child = spawn(process.execPath, [new URL('./memory-probe.ts', import.meta.url).pathname,
-      '--source', source, '--minutes', '1', ...(resume ? ['--resume', resume] : [])], {
-      cwd: directory, env: { PATH: process.env.PATH, LANG: 'C.UTF-8', TELEGRAM_BOT_TOKEN: '1:synthetic',
-        SIMPLE_CHAT_ALLOWED_USER_IDS: '1', SIMPLE_CHAT_MODEL: 'synthetic-model', SIMPLE_CHAT_DB_PATH: 'test.sqlite' },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let output = '';
-    child.stdout.on('data', data => { output += data; });
-    child.stderr.resume();
-    const code = await new Promise((resolve, reject) => { child.once('exit', resolve); child.once('error', reject); });
-    return { code, events: output.trim().split('\n').map((line): Progress => JSON.parse(line)) };
-  }
   const first = await run();
   assert.equal(first.code, 1);
   assert.equal(first.events.at(-1)!.code, 'background_timeout');
@@ -89,4 +97,25 @@ test('background probe resumes a failed synthetic step without repeating committ
     assert.equal(context(story, branch).memories.length, 3);
     assert.equal(history(story, branch.head).length, turns.length);
   }
+});
+
+test('a probe ends gpu_paused at the first refusal from a card that pauses, instead of spending its retries at once', async t => {
+  const { socketPath, run } = replay(t);
+  // The owner pauses the card while the probe's first call runs. The queue stops that call, as the bot's does, and
+  // would refuse every later one at once.
+  let status = 'ready', calls = 0;
+  const provider = { generate: (_request: ModelRequest, { signal }: { signal: AbortSignal }) => new Promise<never>((_resolve, reject) => {
+    calls++;
+    status = 'draining';
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+  }) };
+  const scheduler = createScheduler(provider, { quietMs: 0, pollMs: 10,
+    backgroundAllowed: () => status === 'ready', backgroundCanWait: () => status === 'ready' });
+  const server = await serveBackground({ socketPath, scheduler, status: () => ({ model: 'synthetic-model', gpu: { status } }) });
+  t.after(async () => { await server.close(); await scheduler.close(); });
+  const { code, events } = await run();
+  t.after(() => rmSync(events[0].directory!, { recursive: true, force: true }));
+  assert.equal(code, 1);
+  assert.deepEqual(events.filter(e => e.event === 'yielded').map(e => e.code), ['background_unavailable']);
+  assert.deepEqual([events.at(-1)!.event, events.at(-1)!.code, calls], ['deferred_or_failed', 'gpu_paused', 1]);
 });

@@ -17,6 +17,8 @@ const count = (n: number, one: string, few: string, many: string) => `${n} ${for
 const grouped = (n: number, separator: string) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, separator);
 const lastScenes = (n: number | null) => (n === null ? 'последние сцены' : `последние ${count(n, 'сцена', 'сцены', 'сцен')}`);
 const jobs = (n: number | null) => (n === null ? 'неизвестно' : String(n));
+const textSize = (label: string, tokens: number | null, chars: number) =>
+  `${label}: ${tokens === null ? 'токены неизвестны' : `${grouped(tokens, ' ')} ${form(tokens, 'токен', 'токена', 'токенов')}`} · ${grouped(chars, ' ')} ${form(chars, 'знак', 'знака', 'знаков')}`;
 
 export const ru = {
   format: {
@@ -75,6 +77,10 @@ export const ru = {
     next: 'Следующие ➡️',
     // Answer «no» on both delete confirmations.
     keep: '↩️ Не удалять',
+    // In the menu of a reader whose scenes are illustrated.
+    pictureStyle: '🎨 Стиль картинок',
+    // Beside a story, for a reader whose scenes are illustrated.
+    characters: '👤 Персонажи',
   },
 
   // Marks and notes shared by several screens.
@@ -141,6 +147,252 @@ export const ru = {
     note: 'Меняется только язык меню и сообщений бота. Язык историй задают сид и твои сообщения.',
   },
 
+  // A variant of a scene's picture from a prompt the reader writes whole (local/picture.ts `variant`): the button under
+  // the picture's folded prompt, the screen while the reader writes, and the status line while it is drawn.
+  variant: {
+    button: '✏️ Изменить промпт и нарисовать вариант',
+    title: '✏️ Свой промпт для картинки',
+    // `max` is PROMPT_CHARS in local/picture-style.ts.
+    note: (max: number) => `Скопируй промпт из заметки под картинкой, поправь и пришли одним сообщением, до ${max} знаков. Это весь промпт вместе со стилем, я ничего не добавлю и не уберу. Нарисую с теми же настройками и тем же начальным шумом, что и исходную картинку, так что отличаться будет только промпт. Вариант придёт отдельной картинкой под той же сценой.`,
+    leave: '↩️ Не рисовать',
+    drawing: '🎨 Рисую вариант…',
+    failed: 'Не получилось нарисовать вариант. Попробуй ещё раз чуть позже.',
+  },
+
+  // The look of the pictures under the scenes (local/picture-style.ts): the picker, a card for every style with its
+  // prompt, and the reader's own styles. Style names are buttons: keep them short.
+  pictureStyle: {
+    title: '🎨 Стиль картинок',
+    // `name` is the chosen style as its button names it.
+    current: (name: string) => `Сейчас: ${name}`,
+    note: 'Нажми на стиль, чтобы увидеть его промпт, выбрать его или попросить пример. Стиль меняет только следующие картинки, уже нарисованные останутся как были. Персонажи сохранят свою внешность: волосы, одежду, приметы.',
+    off: 'Картинки к твоим сценам пока не включены. Выбор сохранится и заработает, когда их включат.',
+    standard: '⚙️ Стандартный',
+    presets: {
+      semi: '🖌 Полуреализм',
+      novel: '📖 Визуальная новелла',
+      film: '🎬 Кинокадр',
+      graphic: '🖋 Графический роман',
+      watercolor: '💧 Акварель',
+      empty: '⬜ Без стиля',
+    },
+    // `name` is the name the reader gave a style of their own, already shortened.
+    own: (name: string) => `✍️ ${name}`,
+    add: '➕ Новый стиль',
+    // A style's card. The prompt under `prompt` stays in English, as the picture model reads it.
+    chosen: '✅ Картинки рисуются в этом стиле.',
+    prompt: 'Промпт стиля (нажми, чтобы скопировать):',
+    // The card of the empty style, which has no prompt to copy.
+    promptEmpty: 'Промпт стиля пустой: картинка рисуется по описанию сцены, к нему ничего не добавляется.',
+    choose: '✅ Рисовать в этом стиле',
+    sample: '🖼 Пример на последней сцене',
+    sampleAll: '🖼 Все стили на последней сцене',
+    edit: '✏️ Изменить',
+    remove: '🗑 Удалить',
+    back: '↩️ К стилям',
+    // `quotedName` is already wrapped by `format.quote`; `name` is the style the pictures fall back to, quoted too.
+    removeTitle: (quotedName: string) => `🗑 Удалить стиль ${quotedName}?`,
+    removeChosen: (name: string) => `Сейчас картинки рисуются в нём. После удаления будут рисоваться в стиле ${name}.`,
+    removeYes: '🗑 Да, удалить',
+    removeNo: '↩️ Оставить',
+    // While the reader writes a style. `max` and `nameMax` are limits in characters.
+    newTitle: '➕ Новый стиль картинок',
+    editTitle: (quotedName: string) => `✏️ Стиль ${quotedName}`,
+    inputNote: (max: number, nameMax: number) => `Пришли одним сообщением, как рисовать: техника, цвета, свет, настроение, до ${max} знаков. Первой строкой можно дать название, до ${nameMax} знаков. Сюжет и персонажей не пиши, их возьмём из сцены. Модель картинок лучше всего понимает английский.`,
+    editNote: (max: number) => `Пришли новый текст одним сообщением, до ${max} знаков. Первой строкой можно дать новое название, иначе останется прежнее.`,
+    example: 'Например:',
+    // Two lines: a name in the reader's language, then the style in English, which the picture model reads best.
+    exampleText: 'Масло при свечах\nOil painting with visible impasto brushstrokes, warm candlelight and deep shadows.',
+    copyHint: 'Промпт любого стиля можно скопировать с его карточки и поправить.',
+    nowText: 'Сейчас:',
+    backToStyle: '↩️ К стилю',
+    // Under a sample picture; `name` is the style as its button names it.
+    sampleCaption: (name: string) => `Пример стиля: ${name}`,
+    drawingSample: '🎨 Рисую пример…',
+    // `count` is how many styles are drawn, one picture each.
+    drawingAll: (count: number) => `🎨 Рисую последнюю сцену во всех стилях (${count}). Картинки придут по одной; следующий ход в истории остановит рисование.`,
+  },
+
+  // The people the pictures of a story draw (local/picture.ts): the list the story's first picture writes, a card for
+  // each person, the look and the detailed look the reader writes for them, and a portrait drawn on request, to pick a
+  // reference by. The detailed look is the long description a portrait is drawn from; the scenes' pictures take the
+  // short look. Looks and clothes stay in English, as the picture model reads them. `person` is a name as the story
+  // gives it, not quoted; `story` is common.storyName.
+  characters: {
+    title: (story: string) => `👤 Персонажи: ${story}`,
+    note: 'Такими их рисуют картинки этой истории. Нажми на персонажа, чтобы увидеть описание целиком, поправить внешность или нарисовать портрет.',
+    none: 'Персонажи появятся в истории после первой иллюстрации.',
+    toStory: '📖 К истории',
+    cardTitle: (person: string, story: string) => `👤 ${person} · ${story}`,
+    // The look the pictures of the scenes take, retold from the description above or written by the reader.
+    look: 'Короткая внешность для картинок к сценам (нажми, чтобы скопировать):',
+    // The size of the text above, alone: `tokens` as the picture model reads it, null when the bot has no tokenizer.
+    lookSize: (tokens: number | null, chars: number) => textSize('Текст короткой внешности', tokens, chars),
+    // Under the look the reader wrote themselves: it stays until they write the description again.
+    lookOwn: '✍️ Это твой текст. Картинки к сценам берут его, пока ты не изменишь описание: тогда короткую внешность снова перескажут из него.',
+    // Under a person not retold yet from the description the reader wrote, or from the sheet just written: the model
+    // was off, or its answer failed.
+    lookPending: '⏳ Описание сохранено, но бот ещё не пересказал его для картинок, и картинки к сценам и портрет пока берут прежнюю внешность. Бот перескажет его перед следующей картинкой этой истории.',
+    // The person's description, the main text of the card, above the look: `own` is true for one the reader wrote,
+    // false for the one the sheet took from the story. Its size in characters alone: the picture model reads the
+    // retelling of it in a portrait's prompt, which is under the portrait with its tokens (notices.promptSummary).
+    description: (own: boolean): string => own ? 'Описание внешности, твоё (нажми, чтобы скопировать):' : 'Описание внешности из истории (нажми, чтобы скопировать):',
+    descriptionSize: (chars: number) => `Текст описания: ${grouped(chars, ' ')} ${form(chars, 'знак', 'знака', 'знаков')}`,
+    // Above the lasting changes the story made to the person's look, a scar or a haircut, in the story's language.
+    changes: 'Постоянные перемены по ходу истории:',
+    // Under the lasting changes, while the reader plays this story and the person's look changed along the line of the
+    // scene they stand at (local/picture-versions.ts): `times` is how many scenes of that line changed it, by the story or
+    // by the reader «only from this moment». The card above shows the person as they are at that scene.
+    along: (times: number) => `📜 По ходу истории внешность менялась ${count(times, 'раз', 'раза', 'раз')}: здесь она такая, какой стала к сцене, где ты сейчас.`,
+    // `branch` is the quoted name of the branch being played.
+    clothesOfBranch: (branch: string) => `Одежда, с которой начнутся следующие картинки ветки ${branch}:`,
+    clothesAtStart: 'Одежда, с которой начались картинки этой истории:',
+    clothesSize: (tokens: number | null, chars: number) => textSize('Текст одежды', tokens, chars),
+    noClothes: 'Одежда пока не записана.',
+    // `profile` below names the button that opens the whole profile, where the clothes can be changed.
+    clothesNote: 'Одежду меняет сама история, и картинки берут её из сцен. Поправить её можно кнопкой «📋 Профиль целиком».',
+    sizeNote: 'Числа относятся к каждому тексту отдельно. В промпт также входят описание сцены и стиль; точный размер указан под картинкой. Само описание модель картинок не читает: портрет по обычному промпту рисуется по его пересказу по-английски. Весь промпт портрета, с одеждой, фоном и позой, свёрнут под ним с числом токенов, и его можно поправить.',
+    scope: 'Правка внешности действует на следующие картинки всех веток этой истории. Текст истории, память и уже нарисованные картинки не меняются, а картинка, которая рисуется сейчас, может выйти по-старому.',
+    // `scope` for a reader who has versions of the sheet (local/picture-versions.ts), whose edit may instead hold only
+    // from the scene they make it at: in that scene and every scene after it, whatever branch goes on from there.
+    scopeVersions: 'Правка внешности действует на следующие картинки всех веток этой истории, а сделанная «только с этого момента» — на картинки сцены, где ты её делаешь, и всех сцен после неё. Текст истории, память и уже нарисованные картинки не меняются, а картинка, которая рисуется сейчас, может выйти по-старому.',
+    // What a portrait is drawn from: `details` is true for the English retelling of the description, false for the short
+    // look of a person not retold yet.
+    portraitNone: (details: boolean) => `🖼 Портрета пока нет. Портрет рисует лицо и фигуру в полный рост по ${details ? 'пересказу описания' : 'короткой внешности'}, так проще подобрать референс.`,
+    portraitKept: (details: boolean) => `🖼 Портрет сохранён: лицо и фигура по ${details ? 'пересказу описания' : 'короткой внешности'}.`,
+    portraitStale: (details: boolean) => `🖼 Сохранённый портрет нарисован по прежней внешности. Новый покажет лицо и фигуру по ${details ? 'пересказу описания' : 'короткой внешности'}.`,
+    // The kept portrait was drawn from a prompt the reader wrote, which the person no longer has: a new one is drawn
+    // from the bot's own prompt again.
+    portraitOfOwnPrompt: (details: boolean) => `🖼 Сохранённый портрет нарисован по твоему прежнему промпту. Новый покажет лицо и фигуру по ${details ? 'пересказу описания' : 'короткой внешности'}.`,
+    // The same while the person has a prompt the reader wrote for their portraits (ownPrompt below): none kept yet, one
+    // kept that was drawn from that very prompt, and one drawn from another, the bot's own or an earlier one.
+    promptPortraitNone: '🖼 Портрета пока нет.',
+    promptPortraitKept: '🖼 Портрет сохранён: нарисован по твоему нынешнему промпту.',
+    promptPortraitStale: '🖼 Сохранённый портрет нарисован не по нынешнему промпту.',
+    // Under the line above while the person has a prompt the reader wrote; the button it names is defaultPrompt.
+    ownPrompt: '✍️ Портреты рисуются по твоему промпту слово в слово, с новым начальным шумом каждый раз; описание и короткая внешность в него не входят. «↩️ Обычный промпт» вернёт промпт бота.',
+    // For a reader in the reference experiment, whose frames take the kept portrait (local/picture-references.ts
+    // `referencePrompt`, which tells them to copy nothing of it but the person), while it is a drawn one or none.
+    portraitFrames: 'Кадрам велено брать с сохранённого портрета только лицо и фигуру и не копировать одежду; она всё же может проступить, и её можно поправить в промпте под портретом.',
+    edit: '✏️ Изменить короткую внешность',
+    // Opens the wait for a description, also for a person who has none yet.
+    editDetails: '✏️ Изменить описание',
+    portrait: '🖼 Портрет',
+    // Drops the prompt the reader wrote for the person's portraits, for the bot's own.
+    defaultPrompt: '↩️ Обычный промпт',
+    // The frames of the story seen through this person's eyes (local/picture-pov.ts): the button that turns it on, the
+    // one back to the usual frames, the last line of that person's card, and the last line of another person's card
+    // while the frames are seen through the eyes of `person`, where the first button switches them to this one.
+    povOn: '👁 Вид от первого лица',
+    povOff: '🎥 Обычный вид',
+    povNote: '👁 Картинки к сценам этой истории показывают то, что видит этот персонаж: со своего места, в своей позе, туда, куда смотрит. В кадр попадают его руки, ноги и тело, если он смотрит вниз, его одежда и то, что он держит, его тень и отражение, но сам он целиком со стороны не виден. Сцены без него рисуются как обычно.',
+    povOther: (person: string) => `👁 Сейчас картинки к сценам этой истории показаны глазами другого персонажа: ${person}. Кнопка «👁» ниже переключит их на этого.`,
+    back: '↩️ К персонажам',
+    // While the reader writes a short look. `max` is a limit in characters.
+    editTitle: (person: string, story: string) => `✏️ Короткая внешность: ${person} · ${story}`,
+    editNote: (max: number) => `Пришли новую короткую внешность одним сообщением, до ${max} знаков: лицо, волосы, телосложение, рост, приметы. Одежду и имя не пиши: одежду меняет история, а имя остаётся прежним. Модель картинок лучше всего понимает английский.`,
+    // Under editNote, when the portrait is drawn from the retold description: it stays so.
+    editKeepsDetails: 'Портрет по-прежнему рисуется по пересказу описания. Твоя короткая внешность заменит пересказанную до следующей правки описания.',
+    // Under editNote and detailsNote, when the person's portraits are drawn from a prompt the reader wrote.
+    ownPromptKeeps: 'Портреты этого персонажа рисуются по твоему промпту, и эта правка их не изменит.',
+    // While the reader writes a description. `max` is a limit in characters.
+    detailsTitle: (person: string, story: string) => `✏️ Описание внешности: ${person} · ${story}`,
+    detailsNote: (max: number) => `Пришли описание внешности одним сообщением, до ${max} знаков, на любом языке и в любом виде, с переносами строк и таблицей мерок тоже: пол, возраст и на сколько человек выглядит, цвет кожи, рост и телосложение, мерки, волосы и обычная причёска, лицо, приметы. Одежду и имя не пиши: одежду берут из сцен. Бот перескажет его по-английски для портрета и сожмёт в короткую внешность для картинок к сценам, ничего не добавляя от себя. Постоянные перемены по ходу истории (шрам, стрижку) он прибавит к описанию, а где они с ним расходятся, поверит описанию. Короткая внешность, написанная тобой, заменится пересказанной.`,
+    nowText: 'Сейчас:',
+    backToCard: '↩️ К персонажу',
+    // For a reader who has versions of the sheet (local/picture-versions.ts), under the wait for a short look (`look`
+    // true) or a description: where the text lands. For the whole story, the default: the lasting changes the story makes
+    // lie over a description from their scenes on, and the edit replaces the `n` texts of the person's the reader wrote
+    // «only from this moment». Or only from the scene the reader stands at, on the branch `branch` (common.quote), and
+    // in every scene after it, on the branches continued later from it or from a later scene as well. At a scene another
+    // branch goes on from or stands at, the whole story alone, and why. The two buttons switch between them; the first
+    // names what the second of these lines calls «только с этого момента».
+    scopeAll: (look: boolean): string => look ? '🌐 Это правка для всей истории, на всех ветках.'
+      : '🌐 Это правка для всей истории, на всех ветках: таким персонаж будет с её начала, а постоянные перемены, которые история делает по ходу (стрижка, шрам), лягут поверх описания с тех сцен, где случились.',
+    scopeReplaces: (n: number) => `Она заменит и твои правки «только с этого момента» (их ${n}).`,
+    scopeHere: (branch: string, look: boolean) => `📍 Это правка только с этого момента: со сцены ветки ${branch}, где ты сейчас, и во всех сценах после неё. Её получат и ветки, которые потом пойдут от этой сцены или от более поздней. Раньше этой сцены и на остальных ветках персонаж останется прежним.${look ? '' : ' Постоянные перемены, которые история сделает дальше, лягут поверх описания.'}`,
+    scopeShared: '📍 Правку «только с этого момента» здесь не сделать: от этой сцены идёт и другая ветка, и правка задела бы её. Кнопка появится после следующей сцены.',
+    scopeHereButton: '📍 Только с этого момента',
+    scopeAllButton: '🌐 Для всей истории',
+    // Under a portrait of the bot's own prompt, which is drawn in plain neutral clothes whatever the story's, and under
+    // one drawn from a prompt the reader wrote. The whole prompt follows it, folded as under every picture.
+    caption: (person: string) => `🖼 Портрет: ${person}. Лицо и фигура в полный рост, в простой нейтральной одежде.`,
+    ownCaption: (person: string) => `🖼 Портрет: ${person}. Нарисован по твоему промпту.`,
+    // While the reader writes the whole prompt of the person's portraits, from the button under a portrait's prompt
+    // (variant.button). `max` is PROMPT_CHARS in local/picture-style.ts.
+    promptTitle: (person: string, story: string) => `✏️ Промпт портрета: ${person} · ${story}`,
+    promptNote: (max: number) => `Скопируй промпт из заметки под портретом, поправь и пришли одним сообщением, до ${max} знаков. Это весь промпт, я ничего не добавлю и не уберу. Нарисую вариант с теми же настройками и тем же начальным шумом, что и тот портрет, так что отличаться будет только промпт. Промпт останется у персонажа: следующие портреты будут рисоваться по нему с новым шумом, пока на карточке персонажа не нажмёшь «↩️ Обычный промпт».`,
+    again: '🔄 Ещё вариант',
+    keep: '✅ Оставить',
+    // Once the reader kept a portrait. Experiment readers also get the retention notice.
+    kept: (person: string) => `✅ Портрет сохранён: ${person}.`,
+    retention: 'При замене прежний портрет остаётся на диске, пока нужен для вариантов нарисованных по нему кадров.',
+    drawing: '🎨 Рисую портрет…',
+    // While the description the reader has just written is retold; the card replaces it.
+    retelling: '⏳ Пересказываю описание для картинок…',
+    portraitFailed: 'Не получилось нарисовать портрет. Попробуй ещё раз чуть позже.',
+    // A portrait of the reader's own in place of the drawn one (local/reference.ts), for a reader in the reference
+    // experiment: the button on the card, the wait for it, the line under the wait for a person who has a portrait, and
+    // the card's line once it is kept. `width` and `height` are its size in pixels; `min`, `max` and `megabytes` are
+    // REFERENCE_SIDES and REFERENCE_BYTES there, and 2.5 is REFERENCE_SIDES.ratio. Once it is kept, the reader gets
+    // `kept` and `retention` above.
+    ownPortrait: '📎 Свой портрет',
+    ownPortraitTitle: (person: string, story: string) => `📎 Свой портрет: ${person} · ${story}`,
+    ownPortraitNote: (min: number, max: number, megabytes: number) => `Пришли картинку этого персонажа фотографией или файлом PNG, JPEG или WebP, до ${megabytes} МБ: короткая сторона от ${min} пикселей, длинная до ${max} и не больше чем в 2,5 раза длиннее короткой. Бот не обрезает и не растягивает картинку. Только рисунок: фотографию реального человека присылать нельзя. Бот удалит из файла метаданные (место, камеру, подписи) и сохранит картинку как портрет персонажа: кадры будут брать её так же, как нарисованный портрет. Бот ждёт полчаса; выйти без изменений можно кнопкой «↩️» или командой /cancel.`,
+    ownPortraitReplaces: 'Новая картинка заменит сохранённый портрет. Если потом нарисуешь и оставишь портрет, он снова займёт это место.',
+    ownPortraitKept: (width: number, height: number) => `🖼 Портрет сохранён: твоя картинка, ${width}×${height}. Кадры берут её так же, как нарисованный портрет.`,
+    // The whole profile of the person as one block to copy, edit and send back (local/profile.ts): the button on the card
+    // and the title of the message.
+    profile: '📋 Профиль целиком',
+    profileTitle: (person: string, story: string) => `📋 Профиль: ${person} · ${story}`,
+    // The block's headings, one for each field and one for its last line, `end`. A profile sent back is read by the
+    // headings of every language, so no two fields may share one, in this language or across them.
+    profileHeadings: { description: 'Описание внешности', changes: 'Постоянные перемены', details: 'Детали для портрета, по-английски',
+      look: 'Короткая внешность', clothes: 'Одежда', prompt: 'Промпт портрета', end: 'Конец профиля' },
+    // Under the block when it can be sent back; `profileEdit` is the button.
+    profileHint: 'Нажми на блок, чтобы скопировать его целиком. Чтобы поправить профиль, нажми «✏️ Изменить профиль» и пришли скопированный текст со своими правками.',
+    profileEdit: '✏️ Изменить профиль',
+    // Above the block when the whole profile did not fit one message: the reader's prompt for the person's portraits, and
+    // then also the description, were left out. Nothing fitting at all says profileTooLong instead of any block.
+    profileNoPrompt: 'Твой промпт портрета сюда не поместился. Нарисуй портрет кнопкой «🖼 Портрет» на карточке: промпт придёт в заметке под ним, и там его можно поправить.',
+    profileNoDescription: 'Описание сюда не поместилось вместе с остальным: оно на карточке персонажа, и поправить его можно кнопкой «✏️ Изменить описание».',
+    profileTooLong: 'Профиль целиком не помещается в одно сообщение Telegram, поэтому здесь его не показать. Поля можно посмотреть и поправить на карточке персонажа.',
+    // Above a block that is shown and cannot be sent back: a sheet from before 2026-09-27, which the story's next picture
+    // writes anew, and a field with a line that would be read as a heading.
+    profileOlder: 'Этот список персонажей записан прежней версией бота, и следующая картинка истории запишет его заново, поэтому здесь профиль только показан. Описание и короткую внешность можно поправить на карточке: они сохранятся.',
+    profileUnreadable: 'В одном из полей есть строка, которая начинается с «#», как заголовок, поэтому этот профиль не прочитать обратно, и здесь его не поправить. Поля можно поправить на карточке персонажа.',
+    // Above a block that is shown and cannot be sent back because the person's look changed along the branch being played
+    // (local/profile.ts `versioned`): the profile is the person at its last scene, while a profile sent back would write
+    // for the whole story. The card's own edits, «✏️ Изменить описание» and «✏️ Изменить короткую внешность», offer
+    // «📍 Только с этого момента».
+    profileVersions: '📜 Внешность персонажа менялась по ходу этой ветки, и профиль показан таким, как в сцене, где ты сейчас. Правка профиля целиком легла бы на всю историю, поэтому здесь её нет. Описание и короткую внешность поправь кнопками на карточке: там правку можно сделать и только с этого момента.',
+    // Above the profile as it is now, when the reader pressed the button under one that has changed since, or sent one
+    // back from it.
+    profileChanged: 'Профиль изменился с тех пор, как бот прислал его выше: например, закончился пересказ описания или новая картинка сменила одежду. Ничего не сохранено. Вот он сейчас.',
+    // While the reader sends the profile back. The numbers are each field's limit in characters (local/profile.ts
+    // PROFILE_CHARS); the headings named are profileHeadings.
+    profileEditTitle: (person: string, story: string) => `✏️ Профиль: ${person} · ${story}`,
+    profileEditNote: (description: number, changes: number, details: number, look: number, clothes: number, prompt: number) => `Скопируй блок из сообщения выше, поправь в нём нужное и пришли весь текст одним сообщением. Первую строку с именем, заголовки «##» и последнюю строку «# Конец профиля» не меняй: по ним бот находит поля и видит, что профиль дошёл целиком. Имя поменять нельзя.
+
+Сохранится только то, что ты изменишь, и так, как написано. Пределы: описание — ${description} знаков, постоянные перемены — ${changes}, детали — ${details}, короткая внешность — ${look}, одежда — ${clothes}, промпт — ${prompt}. Пустыми можно оставить только перемены и промпт: без промпта портреты снова рисуются по промпту бота. Telegram делит сообщение длиннее 4096 знаков на части, и такой профиль бот не примет.
+
+Новое описание или новые перемены бот перескажет в детали и короткую внешность, как после правки описания на карточке: пересказ заменит и короткую внешность, написанную тобой раньше. То, что изменено в том же сообщении, останется как написано: с новыми деталями бот ничего не пересказывает, а новую короткую внешность оставляет.`,
+    // The last lines of that wait: where changed clothes go, for the branch being played, named by `branch`, and for a
+    // story not being played; then the way out.
+    profileClothesBranch: (branch: string) => `Одежда: она запишется в последнюю сцену ветки ${branch}, и с неё начнутся следующие картинки, пока сцена её не сменит. Ветки, которые отходят от более ранних сцен, её не получат.`,
+    profileClothesStart: 'Одежда: с неё начинаются картинки этой истории там, где сцены ещё не одели персонажа иначе.',
+    profileLeave: 'Выйти без изменений можно кнопкой «↩️» или командой /cancel.',
+    // Once a profile sent back is saved: `fields` lists the headings of the fields it changed.
+    profileSaved: (person: string, fields: string) => `✅ Профиль сохранён: ${person}. Изменено: ${fields}.`,
+    profileUnchanged: 'Ничего не изменилось: все поля такие же, как были.',
+    // A profile sent back that cannot be taken; the wait stays. `name` is the person's, `heading` the line the bot does
+    // not know, `field` a heading of profileHeadings, and `max` its limit in characters.
+    profileName: (name: string) => `Имя поменять нельзя: первая строка должна остаться «# ${name}». Поправь и пришли снова.`,
+    profileHeading: (heading: string) => `Не знаю такого заголовка: «${heading}». Заголовки полей оставь как в профиле, а строки внутри полей не начинай с «#». Поправь и пришли снова.`,
+    profileEmpty: (field: string) => `Поле «${field}» нельзя оставить пустым. Верни прежний текст или напиши новый и пришли снова.`,
+    profileLong: (field: string, max: number) => `Слишком длинно: в поле «${field}» можно не больше ${max} знаков. Сократи и пришли снова.`,
+  },
+
   model: {
     title: '🤖 Модель',
     noData: 'Данных о модели пока нет.',
@@ -148,6 +400,7 @@ export const ru = {
     providers: {
       'claude-code': { short: 'Claude Code', full: 'Claude Code по подписке Claude (не наш GPU-сервер)' },
       'llama-cpp': { short: 'наш сервер', full: 'наш сервер модели (llama.cpp)' },
+      'simple-serving': { short: 'наш сервер', full: 'наш сервер модели (vLLM)' },
       'codex-cli': { short: 'Codex', full: 'Codex CLI по подписке ChatGPT (не наш GPU-сервер)' },
       'openai-compatible': { short: 'размещённый API', full: 'размещённый API в формате OpenAI (не наш GPU-сервер)' },
     },
@@ -157,6 +410,7 @@ export const ru = {
     notes: {
       'claude-code': 'Модель работает по подписке Claude, а не на нашем арендованном GPU.',
       'llama-cpp': 'Это наш сервер модели. Его проверка не измеряет видеокарту, память GPU, скорость и качество текста.',
+      'simple-serving': 'Это наш сервер модели. Его проверка не измеряет видеокарту, память GPU, скорость и качество текста.',
       'codex-cli': 'Модель работает по подписке ChatGPT, а не на нашем арендованном GPU. Текст истории уходит стороннему сервису.',
       'openai-compatible': 'Модель работает у стороннего провайдера, а не на нашем арендованном GPU. Текст истории уходит стороннему сервису.',
     },
@@ -181,7 +435,7 @@ export const ru = {
   gpu: {
     title: '🖥 GPU — общий для всех пользователей бота',
     ready: (n: number | null) => `🟢 Работает. Задач модели сейчас: ${jobs(n)}.`,
-    autoPause: (minutes: number) => `Автопауза — после ${minutes} мин без задач модели, считая от конца последней сцены или сжатия. Просмотр меню этот отсчёт не сбрасывает.`,
+    autoPause: (minutes: number) => `Автопауза — после ${minutes} мин без задач модели, считая от конца последней из них. Просмотр меню этот отсчёт не сбрасывает.`,
     untilPause: (minutes: number) => `До автопаузы ≈${minutes} мин.`,
     untilPauseSoon: 'До автопаузы ≈меньше минуты.',
     draining: (n: number | null) => `⏳ Ставится на паузу: ждём, пока закончатся все задачи модели (сейчас: ${jobs(n)}).`,
@@ -381,7 +635,8 @@ export const ru = {
 
   // Both delete confirmations.
   deletion: {
-    note: 'Удаляется из сохранённой библиотеки бота, восстановить будет нельзя. Уже отправленные сообщения в этом чате останутся.',
+    // Two days: Telegram lets a bot delete its own messages for 48 hours only. The texts of scenes are never deleted.
+    note: 'Восстановить будет нельзя. Картинки к удалённым сценам бот уберёт из этого чата, если с отправки прошло меньше двух суток. Тексты сцен в чате останутся.',
     seedTitle: (name: string) => `🗑 Удалить сид ${name}?`,
     // Heads a bulleted list of count.stories, count.branches and scenesAndCheckpoints.
     withSeed: 'Вместе с ним навсегда удалятся:',
@@ -441,10 +696,16 @@ export const ru = {
     discard: '🗑 Отменить черновик',
   },
 
-  // Waiting for the shared model: a line of the compaction status, and a disappearing draft before a scene.
+  // Waiting for a shared model: for the language model a line of the compaction status and a disappearing draft before
+  // a scene, for the picture card a second line under a picture's status. `eta` is roughly when the request starts,
+  // `seconds` or `minutes` below, and absent until the bot has timed enough of its own work
+  // (docs/telegram-ui.md#waiting).
   wait: {
-    ahead: (n: number) => `Перед вами в очереди к модели: ${count(n, 'запрос', 'запроса', 'запросов')}.`,
-    queued: (n: number) => `⏳ Очередь к модели: перед вами ${count(n, 'запрос', 'запроса', 'запросов')}.`,
+    ahead: (n: number, eta?: string) => `Перед вами в очереди к модели: ${count(n, 'запрос', 'запроса', 'запросов')}${eta ? `, начало ${eta}` : ''}.`,
+    queued: (n: number, eta?: string) => `⏳ Очередь к модели: перед вами ${count(n, 'запрос', 'запроса', 'запросов')}${eta ? `, начало ${eta}` : ''}.`,
+    picture: (n: number, eta?: string) => `⏳ Очередь к модели картинок: перед вами ${count(n, 'картинка', 'картинки', 'картинок')}${eta ? `, начало ${eta}` : ''}.`,
+    seconds: (s: number) => `примерно через ${s} с`,
+    minutes: (m: number) => `примерно через ${m} мин`,
     next: '⏳ Подошла ваша очередь.',
     reading: '📖 Модель читает историю, скоро начнёт писать…',
   },
@@ -521,10 +782,21 @@ export const ru = {
     compactionUnverified: (command: string) => `Сжатие не удалось проверить. Исходные сцены и готовые чекпоинты сохранены. Повторить: ${command}.`,
     failed: (command: string) => `Не получилось завершить операцию. Готовые сцены и чекпоинты сохранены. Повторить: ${command}.`,
     gpuNotConfigured: 'Управление арендой GPU пока не настроено. /model покажет текущую модель.',
+    // /gpu_start and /gpu_pause when simple-serving runs the card: the bot neither starts nor pauses it.
+    modelServiceSeparate: 'Сервис модели запускается отдельно, не из этого чата. /model покажет текущую модель.',
+    // A model service that is starting, asleep or out of reach. The bot cannot tell which, so it names none.
+    modelUnavailable: 'Сервис модели сейчас недоступен. Продолжить историю можно, когда он снова заработает.',
     gpuPaused: 'GPU перешла на паузу. Открой /model и запусти её; затем отправь действие снова.',
     // Стоит под сценой, пока рисуется картинка, и исчезает вместе с ней.
     drawing: '🎨 Рисую иллюстрацию…',
     pictureFailed: 'Иллюстрация не получилась. Сцена сохранена.',
+    // The one line of the folded block under every picture that holds the prompt it was drawn from (local/picture.ts).
+    // Raw counts: `chars` of the prompt; `tokens` as the picture model's text encoder reads it and `style` of them the
+    // style line, both null when the bot has no tokenizer for that model.
+    promptSummary: (chars: number, tokens: number | null, style: number | null) =>
+      `🖼 Промпт: ${tokens === null ? '' : `${grouped(tokens, ' ')} ${form(tokens, 'токен', 'токена', 'токенов')}${style === null ? '' : `, из них стиль ${grouped(style, ' ')}`} · `}${grouped(chars, ' ')} ${form(chars, 'знак', 'знака', 'знаков')}`,
+    // A sample of a style (local/picture.ts `sample`) that did not come out; the reader asked for it and waits.
+    sampleFailed: 'Не получилось нарисовать пример. Попробуй ещё раз чуть позже.',
   },
 
   // Refusals shown as a plain message. The key is what the code throws; keep the group flat, strings only.
@@ -557,6 +829,60 @@ export const ru = {
     fileType: 'Пришли текстовый файл .txt или .md в кодировке UTF-8. PDF и DOCX пока не поддерживаются.',
     fileEncoding: 'Не удалось прочитать UTF-8. Сохрани файл как UTF-8 и отправь снова; черновик не изменён.',
     fileBinary: 'Нужен непустой текстовый файл .txt или .md без двоичных данных. Черновик не изменён.',
+    // While the reader writes a picture style of their own, and on a style's card. The numbers are OWN_STYLE_CHARS and
+    // OWN_STYLES_MAX in local/picture-style.ts.
+    styleNeedsText: 'Пришли стиль текстом, одним сообщением. Выйти без изменений можно кнопкой «↩️» или командой /cancel.',
+    styleTooLong: 'Слишком длинно: стиль должен уложиться в 400 знаков. Сократи и пришли снова.',
+    stylesFull: 'В библиотеке уже 10 своих стилей. Чтобы добавить новый, удали один из них.',
+    sampleOff: 'Картинки к твоим сценам пока не включены, поэтому пример нарисовать нельзя.',
+    sampleBusy: 'Сцена ещё пишется. Попроси пример, когда она придёт.',
+    sampleNoScene: 'Пример рисуется по последней сцене. Начни историю, и после первой сцены его можно будет попросить.',
+    sampleInFlight: 'Уже рисую пример. Следующий можно попросить, когда он придёт.',
+    // A variant of a picture (local/picture.ts `variant`). The number is PROMPT_CHARS in local/picture-style.ts.
+    promptNeedsText: 'Пришли промпт текстом, одним сообщением. Выйти без изменений можно кнопкой «↩️» или командой /cancel.',
+    promptTooLong: 'Слишком длинно: промпт должен уложиться в 4000 знаков. Сократи и пришли снова.',
+    variantOff: 'Картинки к твоим сценам пока не включены, поэтому вариант нарисовать нельзя.',
+    variantGone: 'Вариант этой картинки уже не нарисовать: её сцена удалена.',
+    variantChanged: 'С тех пор поменялась модель картинок или её настройки, и с прежними эту картинку уже не повторить. С новыми рисовать не буду, иначе отличался бы не только промпт.',
+    variantBusy: 'Сцена ещё пишется. Попроси вариант, когда она придёт.',
+    variantInFlight: 'Уже рисую вариант. Следующий можно попросить, когда он придёт.',
+    // While the reader writes a look, and under a portrait. The number is LOOK_CHARS in local/picture.ts.
+    lookNeedsText: 'Пришли внешность текстом, одним сообщением. Выйти без изменений можно кнопкой «↩️» или командой /cancel.',
+    lookTooLong: 'Слишком длинно: внешность должна уложиться в 400 знаков. Сократи и пришли снова.',
+    lookGone: 'Этого персонажа уже нет в истории, внешность не сохранена. Открой /menu.',
+    // The same for a description. The number is DESCRIPTION_CHARS in local/picture.ts.
+    detailsNeedsText: 'Пришли описание внешности текстом, одним сообщением. Выйти без изменений можно кнопкой «↩️» или командой /cancel.',
+    detailsTooLong: 'Слишком длинно: описание внешности должно уложиться в 1800 знаков. Сократи и пришли снова.',
+    detailsGone: 'Этого персонажа уже нет в истории, описание не сохранено. Открой /menu.',
+    portraitOff: 'Картинки к твоим сценам пока не включены, поэтому портрет нарисовать нельзя.',
+    portraitPending: 'Внешность этого персонажа ещё не пересказана для картинок, поэтому портрет пока нарисовать нельзя. Попробуй после следующей картинки этой истории.',
+    portraitStale: 'Этот портрет уже не сохранить: он устарел или внешность с тех пор изменилась. Нарисуй новый.',
+    portraitInFlight: 'Уже рисую картинку по твоей просьбе. Портрет можно попросить, когда она придёт.',
+    portraitPromptGone: 'Этого персонажа уже нет в истории, промпт не сохранён. Открой /menu.',
+    // A prompt that arrives while another portrait or a sample is being drawn: it is not kept, and the wait for it stays.
+    portraitPromptInFlight: 'Уже рисую картинку по твоей просьбе. Когда она придёт, пришли промпт ещё раз: я его жду, а пока он не сохранён.',
+    // The whole profile sent back (local/profile.ts); the wait stays for all but profileGone. The heading of the last
+    // line is characters.profileHeadings.end.
+    profileNeedsText: 'Пришли профиль текстом, одним сообщением. Выйти без изменений можно кнопкой «↩️» или командой /cancel.',
+    profileIncomplete: 'Это не профиль целиком: первой должна идти строка с именем, «# …», а последней — «# Конец профиля». Telegram делит сообщение длиннее 4096 знаков на части; если профиль длинный, сократи его. Пришли его снова одним сообщением. Выйти без изменений можно кнопкой «↩️» или командой /cancel.',
+    profileSections: 'В профиле должны быть те же поля, что и в сообщении бота, каждое по одному разу. Поправь и пришли снова.',
+    profileOutside: 'Весь текст должен стоять под заголовками полей: между строкой с именем и первым полем ничего быть не должно. Поправь и пришли снова.',
+    profileGone: 'Этого персонажа уже нет в истории, профиль не сохранён. Открой /menu.',
+    // A picture of the reader's own (local/reference.ts). The numbers are REFERENCE_SIDES and REFERENCE_BYTES there, and
+    // the half hour is REFERENCE_WAIT_MS.
+    referencesOff: 'Свои картинки персонажей тебе сейчас недоступны. Открой /menu.',
+    referenceNeedsPicture: 'Жду картинку: пришли её фотографией или файлом PNG, JPEG или WebP. Выйти без изменений можно кнопкой «↩️» или командой /cancel.',
+    referenceType: 'Это не подойдёт: нужна фотография или файл PNG, JPEG или WebP, без анимации. Пришли другую картинку или выйди кнопкой «↩️».',
+    referenceBroken: 'Не получилось разобрать картинку: файл повреждён или записан так, как бот не читает. Пересохрани её и пришли снова.',
+    referenceSmall: 'Картинка слишком маленькая: короткая сторона должна быть не меньше 320 пикселей. Пришли побольше.',
+    referenceHuge: 'Картинка слишком большая: длинная сторона должна быть не больше 4096 пикселей. Пришли поменьше.',
+    referenceShape: 'Картинка слишком вытянута: длинная сторона может быть не больше чем в 2,5 раза длиннее короткой. Бот её не обрезает и не растягивает; обрежь её ближе к персонажу и пришли снова.',
+    referenceTooLarge: 'Файл слишком большой: картинка может весить до 10 МБ. Пришли поменьше.',
+    referenceIncomplete: 'Не удалось получить картинку целиком. Ничего не изменилось; пришли её ещё раз.',
+    referenceArchive: 'Это архив, а нужна одна картинка: фотография или файл PNG, JPEG или WebP.',
+    referenceExpired: 'Бот уже не ждёт картинку: прошло больше получаса. Открой персонажа и нажми кнопку снова.',
+    referenceGone: 'Этого персонажа уже нет в истории, картинка не сохранена. Открой /menu.',
+    referenceChanged: 'Пока картинка загружалась, ожидание сменилось, и она не сохранена. Пришли её снова.',
   },
 
   // Names the bot gives to branches and checkpoints it creates. They are stored with the story and keep the language
@@ -584,6 +910,7 @@ export const ru = {
     compact: 'Сжать ранние сцены в память сейчас',
     model: 'Текущая модель и подключение',
     language: 'Язык интерфейса',
+    style: 'Стиль картинок к сценам',
     gpu_pause: 'Пауза GPU после завершения работы',
     gpu_start: 'Запустить арендованную GPU',
     cancel: 'Отменить ввод или генерацию',

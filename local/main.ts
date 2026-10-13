@@ -6,19 +6,23 @@ import { createModel } from './model.ts';
 import type { GenerationResult, ModelRequest } from './model.ts';
 import { createBot } from './bot.ts';
 import type { Update } from './bot.ts';
-import { createIllustrator } from './picture.ts';
+import { fileURLToPath } from 'node:url';
+import { createIllustrator, encoderTokens, textTokens } from './picture.ts';
+import { loadTokenizers } from './tokenizer.ts';
 import { render, scenePrefix, sceneKeyboard } from './ui.ts';
 import { commandSets } from './text.ts';
 import { createSeedFileReader } from './seed-file.ts';
+import { createPictureReader } from './reference.ts';
 import { createVast } from './vast.ts';
-import { createGpu } from './gpu.ts';
+import { createGpu, queueOptions } from './gpu.ts';
 import type { GpuController } from './gpu.ts';
 import { createGpuConnection } from './gpu-connection.ts';
 import { createScheduler } from './scheduler.ts';
+import { createDurations } from './eta.ts';
 import type { Scheduler } from './scheduler.ts';
 import { serveBackground } from './background.ts';
 import type { Log } from './model-error.ts';
-import { safeErrorDetails } from './model-error.ts';
+import { safeErrorDetails, unavailable } from './model-error.ts';
 
 // Thrown values are not checked: startup and polling failures are Error objects,
 // and Telegram, model and GPU errors add a code (Telegram errors also a retry delay).
@@ -51,27 +55,21 @@ try {
       starts = state.starts;
       scheduler?.forget();
     }); }, 10000);
-  } else await rawProvider.check?.();
-  const pool = config.slots > 1;
-  scheduler = createScheduler(rawProvider, { log,
+  } else await rawProvider.check?.().catch((error: unknown) => {
+    // simple-serving puts its card to sleep on its own. A service that is only out of reach now lets the bot start, and
+    // its first model call checks it again (local/serving.ts); a wrong key, model, context or contract stops the start.
+    if (config.provider !== 'simple-serving' || !unavailable(error)) throw error;
+    log('model_check_deferred', (error as Failure).code, error);
+  });
+  // How long the bot's own work usually takes, text and pictures, from which a reader who waits is told roughly when
+  // their request starts (local/eta.ts). In memory: a restart starts the timing over.
+  const durations = createDurations();
+  scheduler = createScheduler(rawProvider, { log, durations,
     slots: config.slots, poolTokens: config.poolTokens, sharedCache: config.sharedCache,
     outputTokens: request => request.maxOutputTokens,
-    backgroundAllowed: () => {
-      const state = gpu?.snapshot();
-      // Without an idle deadline (null) background work is not allowed.
-      return state?.status === 'ready' && state.activeJobs === 0 && (state.idleRemainingSeconds ?? 0) > 100;
-    },
-    // An agent turn holds the GPU through the idle countdown, so it starts only if it can end before it, and never extends it.
-    // In a pool it also starts beside people's jobs, which keep the GPU up anyway.
-    agentCanStart: () => {
-      const state = gpu?.snapshot();
-      return state?.status === 'ready' && (pool && state.activeJobs > 0
-        || state.activeJobs === 0 && (state.idleRemainingSeconds ?? 0) > config.timeoutMs / 1000 + 100);
-    },
-    // Without GPU control there is no socket and no agent work here. A started agent turn holds the GPU, which then
-    // drains instead of pausing under it; a stopped or failing GPU stops the turn.
-    agentCanRun: () => ['ready', 'draining'].includes(gpu?.snapshot().status ?? ''),
-    holdAgentTurn: () => gpu ? gpu.hold() : () => {},
+    // Without GPU control there is no socket, and no agent or probe work here.
+    ...gpu ? queueOptions(gpu, { pool: config.slots > 1 })
+      : { backgroundAllowed: () => false, agentCanStart: () => false, agentCanRun: () => false },
   });
   const provider = scheduler.foreground;
   const api = createApi(config.token);
@@ -80,20 +78,33 @@ try {
   const webhook = await api('getWebhookInfo') as { url?: string };
   if (webhook.url) throw new Error('webhook_configured');
   store = new Store(config.dbPath);
-  store.recover();
+  store.recover(log);
   if (gpu) background = await serveBackground({ socketPath: config.dbPath + '.model.sock', scheduler,
     status: () => ({ model: config.model, contextTokens: config.contextTokens, gpu: gpu!.snapshot() }) });
-  // Pictures under the scenes, if this computer has a second card tunnelled for them (docs/illustrations-plan.md).
+  // Pictures under the scenes, if this computer has a second card tunnelled for them (docs/gpu.md#picture-card).
   // The graph is read and checked here, at startup: a workflow that is not a ComfyUI API export must fail now and
   // not under the first reader who gets a scene.
-  const illustrator = config.images ? createIllustrator(config.images, { store, provider }) : undefined;
+  // The note under each picture counts the prompt in the picture model's tokens when `npm run tokenizers` has written
+  // the vocabulary (docs/tokenizers.md#files). A missing or broken file costs the count alone: the note gives
+  // characters. The characters' card counts each field of a sheet the same way, on its own.
+  const tokenizers = loadTokenizers(fileURLToPath(new URL('../tokenizers', import.meta.url)));
+  const counter = (count: typeof encoderTokens) => (graph: Parameters<typeof encoderTokens>[1]) => {
+    try {
+      const qwen = tokenizers.qwen();
+      return qwen && count(qwen, graph);
+    } catch (error) { log('tokenizer_unreadable', undefined, error); return undefined; }
+  };
+  const illustrator = config.images ? createIllustrator(config.images, { store, provider, ownerId: config.ownerId, durations,
+    model: { model: config.model, provider: config.provider, contextTokens: config.contextTokens },
+    promptTokens: counter(encoderTokens), textTokens: counter(textTokens) }) : undefined;
   if (config.images) log('pictures_configured');
-  bot = createBot({ store, api, provider, gpu, illustrator, providerName: config.provider, readSeedFile: createSeedFileReader(config.token, api), render, scenePrefix, sceneKeyboard,
+  bot = createBot({ store, api, provider, gpu, illustrator, providerName: config.provider, readSeedFile: createSeedFileReader(config.token, api),
+    readPicture: createPictureReader(config.token, api), render, scenePrefix, sceneKeyboard,
     allowedUsers: config.allowedUsers, ownerId: config.ownerId, maxOutputTokens: config.maxOutputTokens,
     contextTokens: config.contextTokens, compactAtTokens: config.compactAtTokens,
     keepScenes: config.keepScenes, memoryMode: config.memoryMode, repairCoverage: config.repairCoverage, model: config.model, log });
   // Telegram shows the list that matches the language of the user's app, and the first, English one to everyone else.
-  for (const commands of commandSets(!!gpu)) await api('setMyCommands', commands);
+  for (const commands of commandSets(!!gpu, !!illustrator)) await api('setMyCommands', commands);
   log('bot_ready');
   // This is bot processing, not a developer transcript export. Only authorized
   // private chats reach storage; no incoming text is printed or logged.

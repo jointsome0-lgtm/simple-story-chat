@@ -1,7 +1,7 @@
 // Explicitly invoked live measurement of one llama-server profile, for the rented GPU session. No Telegram, no story
 // database, no private seeds: the prompts are synthetic and the report holds counters, never text.
 // One run measures one server profile and writes `report.json`; `--decide` reads several reports and applies the
-// thresholds the owner agreed on (docs/gpu.md, "Measurement session").
+// thresholds the owner agreed on (docs/llama-measurement.md#measurement-session).
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
@@ -479,7 +479,7 @@ async function main(args: string[]) {
     // Which card the memory verdicts are about, and how often it is read. The cards llama-server is seen computing
     // on decide; `--card` answers for a driver that attributes no process, and is reported when the driver's own
     // attribution contradicts it. The sampler is fast by default: a recorded out-of-memory arrived twelve seconds
-    // after a start (docs/gpu.md), which a slow one misses entirely.
+    // after a start (docs/knowledge/gpu-measurements.md#pool-2026-09-20), which a slow one misses entirely.
     card: { type: 'string' }, 'vram-seconds': { type: 'string', default: '2' },
   } });
   if (values.decide) return void printDecision(resolve(values.decide));
@@ -715,8 +715,8 @@ export function recordCards(vram: Vram, remote: { gpus: Remote['gpus']; processe
 // The interval is the operator's (`--vram-seconds`) and a couple of seconds by default: memory runs out in seconds
 // under load, and a slow sampler leaves a fatal peak unread. That cadence is affordable only through the watcher's
 // one long-lived session: a login per sample would be thirty a minute, and the bot was backed off from far fewer
-// because they piled up on sshd (docs/gpu.md). The window before a profile starts — the server's own start — still
-// belongs to `npm run gpu:diagnose -- --watch`.
+// because they piled up on sshd (docs/knowledge/gpu-measurements.md#ssh-failures). The window before a profile starts
+// — the server's own start — still belongs to `npm run gpu:diagnose -- --watch` (docs/llama-cpp.md#diagnostics).
 function watchVram(run: Report, save: () => void, seconds: number, named: number | null) {
   const configured = process.env.SIMPLE_CHAT_GPU_SSH_HOST;
   const host = configured && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(configured) ? configured : undefined;

@@ -269,7 +269,9 @@ export async function watch({ host = 'simple-chat-vast', every, script: source =
         let parsed: unknown;
         try { parsed = JSON.parse(line); } catch { continue; }
         clearTimeout(silence);
-        silence = setTimeout(silent, silenceMs);
+        // A line read after the session has ended, one ssh left in the pipe when it was killed, arms no timer: that
+        // timer would outlive the session and re-arm itself, and the process would never exit.
+        if (!finished) silence = setTimeout(silent, silenceMs);
         delivered = true;
         report({ seconds: age() }, remoteOf(parsed));
       }

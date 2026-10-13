@@ -7,11 +7,13 @@ and true.
 ## Improving the story system
 
 If the owner asks you to improve prompts or memory, follow [docs/improve-loop.md](docs/improve-loop.md): what may
-change, what may not, how one step is measured with `npm run eval`, and when to stop. Past steps are in
-`docs/improve-log.md`.
+change, what may not, how one step is measured with [`npm run eval`](docs/eval.md), and when to stop. Past steps are
+in [docs/improve-log.md](docs/improve-log.md).
 
-When you delegate: Opus subagents run at `max` reasoning effort, GPT-6 (codex) sessions at `high`; Fable and GPT-6
-are kept for the steps that decide something. The owner's rule, 2026-09-21; details in the same document.
+When you delegate: Opus subagents run at `medium` reasoning effort for routine work and at `high` for code and for
+anything that touches card money or private data, while the main session stays at `max`; GPT-6 (codex) sessions,
+Astra's reviews included, at `high` at most; Fable and GPT-6 Astra, not Sol or Luna, are kept for the steps that decide
+something. The owner's rules of 2026-09-21 and 2026-09-28; details in the same document.
 
 ## What this project is
 
@@ -21,11 +23,36 @@ Whoever runs the bot brings the model; adapters behind one interface are describ
 [docs/model-providers.md](docs/model-providers.md).
 
 - `npm start` runs the bot from `.env`; `npm run start:gpu` swaps in the model connection from `.env.gpu`.
+- Rented cards bill every minute, working or idle. Before renting, read the owner's rules in
+  [docs/gpu.md](docs/gpu.md#while-the-cards-are-paid-for).
 - `npm test` needs no `npm install`, network, Telegram or model. `npm run check` (after `npm install`) type-checks
-  `local/`, verifies the generated `lib/library.js` and the syntax of the cloud files.
+  `local/` and `lib/`. A test goes in only where a failure would cost money, leak something or lose data unnoticed.
+  The owner wants fewer tests, not more ([local/AGENTS.md](local/AGENTS.md)).
 - `local/*.ts` import each other with explicit `.ts` specifiers and use erasable syntax only. More in
   [local/AGENTS.md](local/AGENTS.md).
-- `npm run eval` measures world consistency on synthetic stories; see "Improving the story system" above.
+
+## Reading the project docs
+
+Read the working instructions for the task at hand; they are not a startup reading list. Start with the relevant
+heading or index and open the sections you need.
+
+README links both working instructions and the owner's knowledge pages. Research plans, ideas and past measurements
+are read for a specific question. Their dates, configurations and unresolved limits matter. A historical note does not
+authorize a new rental, a higher budget or a publication, and does not override current rules.
+
+When shortening a document, keep useful evidence, ideas and reasons accessible through ordinary links. Remove a
+substantive passage only when its replacement is identified or its error is explained. Do not move history into code
+comments or automatic imports to make a size count smaller.
+
+| Task | Read |
+| --- | --- |
+| Setup, settings, access, backup | [setup.md](docs/setup.md) |
+| A model adapter, hosted consent | [model-providers.md](docs/model-providers.md), [llama-cpp.md](docs/llama-cpp.md) |
+| Telegram screens and pictures | [telegram-ui.md](docs/telegram-ui.md) |
+| The agent CLI and MCP server | [agent-interface.md](docs/agent-interface.md) |
+| A rental, the picture card, image privacy | [gpu.md](docs/gpu.md), from [the owner's rules](docs/gpu.md#while-the-cards-are-paid-for) |
+| Prompts, memory, the eval | [improve-loop.md](docs/improve-loop.md), [eval.md](docs/eval.md) |
+| The identity, action or llama.cpp experiment | [identity-experiment.md](docs/identity-experiment.md), [action-experiment.md](docs/action-experiment.md), [llama-measurement.md](docs/llama-measurement.md) |
 
 ## Privacy: whose data you may read
 
@@ -53,22 +80,16 @@ applies there.
 |-----------------|-------------------------------------------------------------------|
 | `local/`        | The bot: Telegram transport, storage, model adapters, memory, UI, eval and probes, with tests next to the code. |
 | `local/agent-api.ts`, `agent-cli.ts`, `mcp.ts` | The agent interface: CLI and MCP server over a separate agent library ([docs/agent-interface.md](docs/agent-interface.md)). |
-| `lib/library.ts`| Pure story-library logic shared by the bot and the cloud draft.   |
+| `lib/library.ts`| Pure story-library logic: the library's types and the operations on it. |
 | `examples/`     | Synthetic seeds and eval scenarios. Safe to read and to send to models. |
-| `gpu/`          | Bootstrap and start scripts for llama.cpp on a rented GPU ([docs/gpu.md](docs/gpu.md)). |
-| `docs/`         | Reference docs, the improvement loop and its log.                 |
-| `schema.js`, `handlers/`, other `lib/` files | The undeployed Telegram Serverless draft, see below. |
+| `gpu/`          | Renting a card and setting up llama.cpp or ComfyUI on it ([docs/gpu.md](docs/gpu.md), [docs/llama-cpp.md](docs/llama-cpp.md)). |
+| `docs/`         | Working instructions and the research notes that the README lists. |
+| `docs/knowledge/` | Dated measurements, checks and the full records of past steps. |
 | `data/`, `backups/`, `exports/`, `logs/`, `.env*` | Local state, gitignored. See Privacy above. |
 | `.tgcloud/`     | CLI state (credentials, snapshot, cached layout). **Never edit or read from here** — it's gitignored machine state. |
 
-## The cloud draft (not deployed)
+## Telegram Serverless
 
-`schema.js`, `handlers/` and the hand-written JS in `lib/` are an earlier draft for Telegram's serverless platform
-(V8 isolate, `tgcloud` CLI). It is not deployed and the local bot does not use it, apart from the shared
-`lib/library.ts`. `lib/library.js` is generated from `lib/library.ts` by `npm run cloud:lib` and stays plain JS; edit
-only the `.ts` source and regenerate. The rest of `lib/` and `handlers/` stays hand-written JS.
-
-The platform's rules differ from Node's: modules are imported by bare name (`'schema'`, `'lib/cart'`, `'sdk'`), never
-by a relative path or with an extension; there is no filesystem and no npm at runtime; every DB call is async; there
-are no foreign keys; drops happen only via `.deprecated('reason')`; deploying never touches the database. Read
-[docs/tgcloud-sdk.md](docs/tgcloud-sdk.md) before touching those files.
+The owner's account is on the waiting list for Telegram's serverless platform. The draft for it (`schema.js`,
+`handlers/`, the JS in `lib/`, `docs/tgcloud-sdk.md`) was removed while there is no access; its last version is at
+commit ea88089, to bring back from there.

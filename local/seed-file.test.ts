@@ -10,7 +10,7 @@ import type { TelegramApi } from './telegram.ts';
 type Options = { body?: Buffer; apiError?: boolean; path?: string; fileSize?: number; status?: number; headers?: Record<string, string>; complete?: boolean };
 
 function fixture(options: Options = {}) {
-  const body = options.body ?? Buffer.from('\ufeffМаяк\r\n2026-08-02 20:00\r\nОписание.\r\n');
+  const body = options.body ?? Buffer.from('﻿Маяк\r\n2026-08-02 20:00\r\nОписание.\r\n');
   let calls = 0;
   let downloads = 0;
   const api: TelegramApi = async (method, payload) => {
@@ -39,40 +39,42 @@ function fixture(options: Options = {}) {
   return { run, counts: () => ({ calls, downloads }) };
 }
 
+// A refusal is a user error that names neither the token nor a secret. Which one it was, and how far the reader got.
+async function refusal(label: string, options: Options, document?: TelegramDocument) {
+  const f = fixture(options);
+  const error = await f.run(document).then(() => null, (error: unknown) => error);
+  assert.ok(error instanceof UserError, label);
+  assert.doesNotMatch(error.message, /synthetic secret|synthetic-token/, label);
+  return { key: error.key, ...f.counts() };
+}
+
 test('UTF-8 files preserve long text and Markdown, remove BOM and normalize line endings', async () => {
-  const f = fixture();
-  assert.equal(await f.run(), 'Маяк\n2026-08-02 20:00\nОписание.');
+  assert.equal(await fixture().run(), 'Маяк\n2026-08-02 20:00\nОписание.');
   const text = '# Маяк\n2026-08-02 20:00\n' + '**Синтетический остров.** '.repeat(2000);
   assert.equal(await fixture({ body: Buffer.from(text) }).run({ file_name: 'SEED.TXT' }), text.trim());
 });
 
-test('wrong type and declared oversize files are rejected before downloading', async () => {
-  const f = fixture();
-  await assert.rejects(f.run({ file_name: 'seed.docx' }), UserError);
-  await assert.rejects(f.run({ file_size: SEED_BYTES + 1 }), UserError);
-  assert.deepEqual(f.counts(), { calls: 0, downloads: 0 });
-  const oversized = fixture({ fileSize: SEED_BYTES + 1 });
-  await assert.rejects(oversized.run(), UserError);
-  assert.equal(oversized.counts().downloads, 0);
-});
-
+// A wrong type or a declared oversize is refused before anything is downloaded, a cut file never becomes a partial
+// seed, a redirect or a foreign path never takes the download (and the token) elsewhere, and neither bad text nor a
+// failed getFile shows the reader a raw error. Columns: the message, then the getFile calls and downloads made.
 test('stream limits, truncated transfers, redirects and invalid paths fail without a partial file', async () => {
-  for (const options of [
-    { body: Buffer.alloc(SEED_BYTES + 1, 65), fileSize: 1 },
-    { headers: { 'content-length': String(SEED_BYTES + 1) } },
-    { complete: false }, { fileSize: 1 }, { status: 302 },
-    { path: '../secret' }, { path: 'https://example.invalid/file.txt' },
-  ]) await assert.rejects(fixture(options).run(), UserError);
-});
-
-test('bad UTF-8, binary data, empty files and network errors never leak raw errors', async () => {
-  for (const options of [
-    { body: Buffer.from([0xff, 0xfe, 0x41, 0]) },
-    { body: Buffer.from('title\u0000binary') },
-    { body: Buffer.from(' \n ') }, { apiError: true },
-  ]) await assert.rejects(fixture(options).run(), error => {
-    assert.ok(error instanceof UserError);
-    assert.doesNotMatch(error.message, /synthetic secret|synthetic-token/);
-    return true;
-  });
+  const refused: [string, Options, string, number, number, TelegramDocument?][] = [
+    ['a .docx', {}, 'fileType', 0, 0, { file_name: 'seed.docx' }],
+    ['a message that declares too many bytes', {}, 'fileTooLarge', 0, 0, { file_size: SEED_BYTES + 1 }],
+    ['getFile that declares too many bytes', { fileSize: SEED_BYTES + 1 }, 'fileTooLarge', 1, 0],
+    ['a stream over the limit', { body: Buffer.alloc(SEED_BYTES + 1, 65), fileSize: 1 }, 'fileTooLarge', 1, 1],
+    ['a content-length over the limit', { headers: { 'content-length': String(SEED_BYTES + 1) } }, 'fileTooLarge', 1, 1],
+    ['a truncated transfer', { complete: false }, 'fileIncomplete', 1, 1],
+    ['a size other than getFile declared', { fileSize: 1 }, 'fileIncomplete', 1, 1],
+    ['a redirect', { status: 302 }, 'fileIncomplete', 1, 1],
+    ['a path out of the bot\'s files', { path: '../secret' }, 'fileIncomplete', 1, 0],
+    ['a path to another host', { path: 'https://example.invalid/file.txt' }, 'fileIncomplete', 1, 0],
+    ['bad UTF-8', { body: Buffer.from([0xff, 0xfe, 0x41, 0]) }, 'fileEncoding', 1, 1],
+    ['binary data', { body: Buffer.from('title\u0000binary') }, 'fileBinary', 1, 1],
+    ['an empty file', { body: Buffer.from(' \n ') }, 'fileBinary', 1, 1],
+    ['a failed getFile', { apiError: true }, 'fileIncomplete', 1, 0],
+  ];
+  for (const [label, options, key, calls, downloads, document] of refused) {
+    assert.deepEqual(await refusal(label, options, document), { key, calls, downloads }, label);
+  }
 });

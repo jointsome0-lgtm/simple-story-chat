@@ -7,7 +7,7 @@ A way for an AI agent to use the story engine without Telegram. It serves two us
   checkpoints.
 
 It is not a way into the Telegram libraries of people, and it is not another eval (`npm run eval` measures world
-consistency on fixed scenarios, see [improve-loop.md](improve-loop.md)).
+consistency on fixed scenarios, see [eval.md](eval.md)).
 
 A turn runs the same code as the bot: `local/turn.ts` takes the job lock, generates the scene (with automatic
 compaction), saves it with its usage and request stamp, and saves the scene's checkpoint. The bot adds Telegram
@@ -29,17 +29,16 @@ prompts or model output. The stories and results themselves are in the agent lib
 
 ## Model access
 
-The same model configuration as the bot (`.env`, or `.env.gpu` with the `:gpu` scripts), and the same consent gate: an
-`openai-compatible` or `codex-cli` provider needs `SIMPLE_CHAT_ALLOW_HOSTED=stories-leave-this-computer`, exactly as
-for the bot.
+The same model configuration as the bot (`.env`, or `.env.gpu` with the `:gpu` scripts), and the same
+[consent gate](model-providers.md#consent-to-a-hosted-connection-for-the-bot): an `openai-compatible` or `codex-cli`
+provider needs `SIMPLE_CHAT_ALLOW_HOSTED=stories-leave-this-computer`, exactly as for the bot.
 
-When the bot runs with GPU control it serves its model queue on `<bot database>.model.sock` (`local/background.ts`).
+When the bot runs with [GPU control](llama-cpp.md#managed-gpu) it serves its model queue on `<bot database>.model.sock` (`local/background.ts`).
 If that socket answers, agent turns go through it in their own queue (`local/scheduler.ts`), between people and
 disposable probes:
 
-- people in Telegram go first: an agent call starts only after the bot has been quiet for a minute, the GPU is ready
-  and the auto-pause is further away than the model's timeout plus 100 seconds. Until then it waits in the queue; the
-  agent's `wait` keeps answering `running`;
+- people in Telegram go first: an agent call starts only after the bot has been quiet for a minute and the GPU is
+  ready. Until then it waits in the queue; the agent's `wait` keeps answering `running`;
 - once started, a turn keeps the model to its end, so the GPU does real work while people read: nobody runs between its
   compaction steps and its scene, so a started step is never cut off and another turn's prompt never evicts its cache.
   (The compaction and the scene have different system prompts, so llama.cpp reuses only their common prefix; the turn
@@ -49,13 +48,16 @@ disposable probes:
   call stops and a later call under its id is refused. An agent call has no time limit of its own, only the model's
   timeout;
 - an agent call stops a running probe;
-- a stopped or paused GPU gives `failed` / `gpu_not_ready` at once and is never woken for an agent. A started turn holds
-  the GPU: an idle or manual pause waits for it (the bot shows the GPU draining), but agent work does not reset the
-  idle countdown, so the rental runs at most one turn longer. If the GPU stops or fails anyway, the turn ends
-  `preempted` (`background_unavailable`). It is never rerun silently; ask again with a new `requestId`.
+- a stopped or paused GPU gives `failed` / `gpu_not_ready` at once and is never woken for an agent. A started turn keeps
+  the GPU up from its first call to its end, the gaps between its calls included, and past its end until its last call
+  has ended on the server: the auto-pause counts from then, and a manual pause waits for it (the bot shows the GPU
+  draining). If the GPU stops or fails anyway, the turn ends `preempted` (`background_unavailable`). It is never rerun
+  silently; ask again with a new `requestId`.
 
 The queue checks that it serves the configured model, so start the agent with the bot's model configuration
-(`npm run agent:gpu`, `npm run mcp:gpu`). Without the socket the agent calls the configured provider directly. The
+(`npm run agent:gpu`, `npm run mcp:gpu`). Without the socket the agent calls the configured provider directly. With
+`simple-serving` it always does, whatever socket answers, checks the service before its first count or generation, and
+says each call is an agent's ([model providers](model-providers.md#simple-serving-our-gateway)). The
 route is chosen at the first model call of a turn and kept to the turn's end; the next turn checks the queue again, so
 an MCP server started before the bot switches to its queue once the bot is up. A turn never changes route midway: if
 its queue goes away, it ends `preempted` (`background_unavailable`) rather than go on as a new direct request.

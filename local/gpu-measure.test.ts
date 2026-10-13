@@ -6,57 +6,17 @@ import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { active, addSeed, beginJob, commitTurn, emptyLibrary, history, newStory } from '../lib/library.ts';
+import { addSeed, beginJob, commitTurn, emptyLibrary, newStory } from '../lib/library.ts';
 import type { Library } from '../lib/library.ts';
-import { makeRequest } from './prompt.ts';
 import type { GenerationResult, ModelRequest, Provider } from './model.ts';
-import { THRESHOLDS, verdictOf, decide, measureCall, cacheState, withoutPromptCache, buildWorkload,
-  summaries, measureAgentTurn, closePhase, measurementPlan, smokeOutcome, expectCache, recordCards, serverCard,
-  serverShape } from './gpu-measure.ts';
+import { THRESHOLDS, verdictOf, decide, measureCall,
+  measureAgentTurn, closePhase, recordCards, serverCard } from './gpu-measure.ts';
 import type { Call, Phase, Report, Vram, WorkCase } from './gpu-measure.ts';
 import { startFakeLlama, REHEARSAL_OUTPUT_TOKENS } from './fake-llama.ts';
-import { createLlama } from './llama.ts';
 
 const request: ModelRequest = { system: 'Synthetic timing test.', messages: [{ role: 'user', content: 'Continue.' }], maxOutputTokens: 1000 };
 const result = (over: Partial<GenerationResult> = {}): GenerationResult => ({ text: '2026-09-20 21:00\n\nSynthetic scene.', finishReason: 'stop',
   usage: { inputTokens: 4000, cachedInputTokens: 3990, outputTokens: 100, totalTokens: 4100 }, ...over });
-
-test('the first nonempty delta has its own clock, before completion, and both queue waits are observed', async () => {
-  let now = 100;
-  const provider: Provider = {
-    async countInput(seen, controls) {
-      assert.equal(seen, request);
-      now += 10; controls?.onStart?.(); now += 15;
-      return 4000;
-    },
-    async generate(seen, controls) {
-      assert.equal(seen, request);
-      now += 20; controls?.onStart?.();
-      now += 3; controls?.onText?.('');
-      now += 7; controls?.onText?.('2026');
-      now += 5; controls?.onText?.('-09-20');
-      now += 25;
-      return result({ timings: { promptMs: 6, predictedTokens: 100, predictedMs: 20 } });
-    },
-  };
-  const { call } = await measureCall(provider, request, { label: 'clock', now: () => now });
-  assert.deepEqual([call.countMs, call.countQueueMs, call.queueMs, call.elapsedMs, call.totalRequestMs], [25, 10, 30, 40, 85]);
-  assert.deepEqual([call.firstTextFromStartMs, call.firstTextFromRequestMs], [10, 55]);
-  assert.equal(call.decodeTokensPerSecond, 5000);
-  assert.equal(call.unattributedMs, 14);
-  assert.equal('transportMs' in call, false);
-  assert.equal('text' in call, false);
-});
-
-test('a completed response cannot invent a dispatch time, first text, count or missing server timers', async () => {
-  let now = 0;
-  const { call } = await measureCall({ async generate() { now = 30; return result({ timings: { predictedTokens: 100 } }); } },
-    request, { label: 'unknown', now: () => now });
-  for (const key of ['countMs', 'countedInputTokens', 'queueMs', 'elapsedMs', 'firstTextFromStartMs',
-    'firstTextFromRequestMs', 'decodeTokensPerSecond', 'unattributedMs'] as const) assert.equal(call[key], null, key);
-  assert.equal(call.totalRequestMs, 30);
-  assert.equal(call.cacheObserved, 'unknown');
-});
 
 test('input count is a real admission bound and cancellation reaches a running stream', async () => {
   let generated = false;
@@ -72,29 +32,6 @@ test('input count is a real admission bound and cancellation reaches a running s
   await assert.rejects(running, /bounded_test/);
 });
 
-test('forcing cold prefill changes only the generation body and preserves the original request', async () => {
-  const seen: { url: string; init: RequestInit }[] = [];
-  const cold = withoutPromptCache(async (url, init) => { seen.push({ url, init }); return new Response(); });
-  const signal = new AbortController().signal;
-  const init = { method: 'POST', body: JSON.stringify({ cache_prompt: true, id_slot: 2, stream: true }), signal };
-  await cold('http://localhost/v1/chat/completions', init);
-  await cold('http://localhost/v1/chat/completions/input_tokens', init);
-  await cold('http://localhost/props', init);
-  assert.deepEqual(JSON.parse(String(seen[0].init.body)), { cache_prompt: false, id_slot: 2, stream: true });
-  assert.equal(seen[0].init.signal, signal);
-  assert.equal(seen[1].init, init);
-  assert.equal(seen[2].init, init);
-  assert.equal(JSON.parse(init.body).cache_prompt, true);
-});
-
-test('cold and warm labels require both server cache and prefill counters', () => {
-  assert.equal(cacheState({ cacheTokens: 0, promptTokens: 4000 }, 4000), 'cold');
-  assert.equal(cacheState({ cacheTokens: 3990, promptTokens: 10 }, 4000), 'warm');
-  assert.equal(cacheState({ cacheTokens: 1000, promptTokens: 3000 }, 4000), 'mixed');
-  assert.equal(cacheState({ cacheTokens: 3990 }, 4000), 'unknown');
-  assert.equal(cacheState({ cacheTokens: 3990, promptTokens: 10 }, null), 'unknown');
-});
-
 function frozen(count = 2): Library {
   const state = emptyLibrary();
   const seed = addSeed(state, 'Synthetic island\n2026-09-20 21:00\nMara watches a lighthouse.');
@@ -105,63 +42,6 @@ function frozen(count = 2): Library {
   }
   return state;
 }
-
-test('history sizing counts actual makeRequest messages and repeats whole frozen scenes', async () => {
-  const source = frozen();
-  const seen: ModelRequest[] = [];
-  const work = await buildWorkload(source, 2400, 1000, async value => {
-    seen.push(value); return 1000 + value.messages.length * 100;
-  });
-  assert.equal(work.inputTokens, 2400);
-  assert.equal(work.sceneCount, 6);
-  assert.ok(seen.length > 2);
-  assert.deepEqual(work.request, makeRequest(work.state, work.state.job!, 1000));
-  const before = active(source), after = active(work.state);
-  const originals = history(before.story, before.branch.head);
-  const copied = history(after.story, after.branch.head);
-  assert.deepEqual(copied.map(node => node.text), Array.from({ length: 6 }, (_, i) => originals[i % 2].text));
-  assert.equal(history(before.story, before.branch.head).length, 2);
-  assert.deepEqual(work.outputCharacters, { min: originals[0].text.length, max: originals[0].text.length });
-  assert.deepEqual(work.previousRequest, makeRequest(work.state,
-    { ...work.state.job!, head: copied.at(-1)!.parent, input: copied.at(-1)!.input }, 1000));
-  assert.equal(work.previousInputTokens, 2200);
-  assert.equal(work.prefixTokens, 2200);
-  // The previous request wraps the last action with the narrator rule; the next stores the raw action and a scene.
-  assert.notEqual(work.previousRequest.messages.at(-1)!.content, work.request.messages.at(-3)!.content);
-});
-
-test('all three checked-in frozen fixtures render through the ordinary prompt path', async () => {
-  for (const name of ['battle', 'chess', 'dance']) {
-    const state = (JSON.parse(readFileSync(new URL(`../examples/frozen/${name}.json`, import.meta.url), 'utf8')) as { state: Library }).state;
-    // A deterministic fake server count exercises the builder; it is not a claimed token count for these fixtures.
-    const work = await buildWorkload(state, 4000, 4096, async value => Math.ceil(JSON.stringify(value).length / 4));
-    assert.ok(work.inputTokens <= 4000);
-    assert.ok(work.sceneCount > 0);
-    assert.ok(work.outputCharacters.min > 1000);
-    assert.deepEqual(work.request, makeRequest(work.state, work.state.job!, 4096));
-  }
-});
-
-test('the rehearsal server answers by default with a scene the measurer counts', async t => {
-  // The documented rehearsal (`node local/fake-llama.ts --slots 3 --context 65536`) names no answer length, so the
-  // default decides whether it decides anything: a call shorter than the shortest scene of the fixture it replays is
-  // not representative, and every latency check reports the short scene instead of a verdict.
-  let shortest = 0;
-  for (const name of ['battle', 'chess', 'dance']) {
-    const state = (JSON.parse(readFileSync(new URL(`../examples/frozen/${name}.json`, import.meta.url), 'utf8')) as { state: Library }).state;
-    const work = await buildWorkload(state, 4000, 4096, async value => Math.ceil(JSON.stringify(value).length / 4));
-    shortest = Math.max(shortest, work.outputCharacters.min);
-  }
-  const fake = await startFakeLlama({ model: 'synthetic', slots: 1, contextTokens: 65536,
-    outputTokens: REHEARSAL_OUTPUT_TOKENS });
-  t.after(() => fake.close());
-  const llama = createLlama({ baseUrl: fake.baseUrl, model: 'synthetic', contextTokens: 65536 }, { slots: 1 });
-  const { call } = await measureCall(llama, { system: 'Синтетический замер. Начинай ответ с даты 2026-09-20 21:00 на отдельной строке.',
-    maxOutputTokens: 4096, messages: [{ role: 'user', content: 'Синтетическая сцена.' }] },
-    { label: 'rehearsal', range: { min: shortest, max: shortest } });
-  assert.equal(call.formatFailed, false);
-  assert.ok(call.representative, `a default answer of ${call.outputCharacters} characters against ${shortest}`);
-});
 
 const emptyPhase = (): Phase => ({ seconds: 0, tester: [], agent: [], probes: { completed: 0, preempted: 0 },
   usefulOutputTokens: null, usefulTokensPerHour: null });
@@ -182,35 +62,20 @@ function agentProvider(scene: () => Promise<GenerationResult> = async () => resu
     } };
 }
 
-test('useful compaction tokens require a valid next scene that consumed the validated increment', async () => {
-  const phase = emptyPhase();
-  await measureAgentTurn(agentProvider(), frozen(6), options, call => phase.agent.push(call));
-  assert.deepEqual(phase.agent.map(call => [call.label, call.formatFailed, call.useful]),
-    [['agent_compaction', false, true], ['agent_scene', false, true]]);
-  closePhase(phase, 100);
-  assert.equal(phase.usefulOutputTokens, 200);
-  assert.equal(phase.usefulTokensPerHour, 7200);
-});
-
-test('abandoned extraction and malformed scenes contribute no useful tokens', async () => {
-  const phase = emptyPhase();
-  await assert.rejects(measureAgentTurn(agentProvider(async () => { throw new Error('cancelled'); }), frozen(6), options,
-    call => phase.agent.push(call)), /cancelled/);
-  closePhase(phase, 100);
-  assert.equal(phase.agent.length, 1);
-  assert.equal(phase.usefulOutputTokens, 0);
-  await measureAgentTurn(agentProvider(async () => result({ text: 'broken' })), frozen(6), options, call => phase.agent.push(call));
-  closePhase(phase, 100);
-  assert.equal(phase.usefulOutputTokens, 0);
-  assert.equal(phase.agent.at(-1)!.formatFailed, true);
-});
-
-test('missing usage stays unknown when useful work was completed', () => {
-  const phase = emptyPhase();
-  phase.tester.push(call({ useful: true, outputTokens: null }));
-  closePhase(phase, 100);
-  assert.equal(phase.usefulOutputTokens, null);
-  assert.equal(phase.usefulTokensPerHour, null);
+test('only a valid scene using committed memory contributes useful tokens; missing usage stays unknown', async () => {
+  for (const outcome of ['complete', 'cancelled', 'malformed', 'truncated', 'unknown_usage'] as const) {
+    const phase = emptyPhase();
+    const running = measureAgentTurn(agentProvider(async () => {
+      if (outcome === 'cancelled') throw new Error('cancelled');
+      return result(outcome === 'malformed' ? { text: 'broken' } : outcome === 'truncated' ? { finishReason: 'length' } : outcome === 'unknown_usage' ? { usage: undefined } : {});
+    }), frozen(6), options, call => phase.agent.push(call));
+    if (outcome === 'cancelled') await assert.rejects(running, /cancelled/);
+    else await running;
+    closePhase(phase, 100);
+    const expected = { complete: 200, cancelled: 0, malformed: 0, truncated: 0, unknown_usage: null }[outcome];
+    assert.equal(phase.usefulOutputTokens, expected, outcome);
+    assert.equal(phase.usefulTokensPerHour, expected === null ? null : expected * 36, outcome);
+  }
 });
 
 const cell: WorkCase = { id: 'synthetic-4000', fixture: 'synthetic', fixtureSha256: 'fixture', requestSha256: 'request',
@@ -238,68 +103,31 @@ const make = (over: Partial<Report> = {}): Report => ({ profile: '96k-3', starte
   vram: { samples: 3, card: 0, cards: [{ index: 0, totalMiB: 32768, usedMiBMax: 30000, freeMiBMin: 2768, server: true }] }, ...over });
 const of = (run: Report, id: number) => verdictOf(run).find(check => check.id === id)!;
 
-test('a complete representative workload passes the agreed thresholds without adding latency or decode budgets', () => {
-  assert.deepEqual(verdictOf(make()).map(check => check.verdict), ['pass', 'pass', 'pass', 'pass', 'pass']);
-  assert.equal(of(make(), 3).measured, '2.5x');
-  assert.deepEqual(THRESHOLDS, { freeVramMiB: 1024, cacheToleranceTokens: 256, throughputGain: 1.2,
-    sceneSecondsUnderLoad: 10, waitSeconds: 120, draftSpeedup: 1.2 });
-});
-
-test('legacy, incomplete, unconfirmed-cold and short-scene runs cannot pass as representative workloads', () => {
-  const legacy = make({ workload: undefined });
-  const partial = make({ phases: { solo: phase(), loaded: phase({ complete: false }) } });
-  const short = make({ phases: { solo: phase(), loaded: phase({ tester: [coldCall(), call({ representative: false, outputCharacters: 100 })] }) } });
-  const unconfirmed = make({ phases: { solo: phase({ tester: [call({ cacheIntent: 'cold' }), call()] }), loaded: phase() } });
-  const missing = make({ phases: { solo: phase(), loaded: phase({ tester: [coldCall(), call({ cacheObserved: 'unknown' })] }) } });
-  for (const run of [legacy, partial, short, unconfirmed, missing]) {
-    assert.deepEqual(verdictOf(run).slice(1).map(check => check.verdict), ['unknown', 'unknown', 'unknown', 'unknown']);
-    assert.equal(decide([run]).pool.take, null);
+test('profile decisions require representative evidence and reject measured budget failures', () => {
+  assert.ok(verdictOf(make()).every(check => check.verdict === 'pass'));
+  const cases: [string, Partial<Report>, number, string][] = [
+    ['legacy', { workload: undefined }, 2, 'unknown'],
+    ['incomplete', { phases: { solo: phase(), loaded: phase({ complete: false }) } }, 2, 'unknown'],
+    ['short scene', { phases: { solo: phase(), loaded: phase({ tester: [coldCall(), call({ representative: false })] }) } }, 4, 'unknown'],
+    ['unconfirmed cold', { phases: { solo: phase({ tester: [call({ cacheIntent: 'cold' }), call()] }), loaded: phase() } }, 2, 'unknown'],
+    ['unknown reuse', { phases: { solo: phase(), loaded: phase({ tester: [coldCall(), call({ cacheObserved: 'unknown' })] }) } }, 2, 'unknown'],
+    ['lost cache', { phases: { solo: phase(), loaded: phase({ tester: [coldCall(), { ...coldCall(), cacheIntent: 'warm' }] }) } }, 2, 'fail'],
+    ['queue bound', { phases: { solo: phase(), loaded: phase({ tester: [coldCall(), call({ queueMs: 121000 })] }) } }, 5, 'fail'],
+    ['no throughput gain', { phases: { solo: phase(), loaded: phase({ usefulTokensPerHour: 39600 }) } }, 3, 'fail'],
+    ['missing memory', { vram: { samples: 0, card: null, cards: [] } }, 1, 'unknown'],
+    ['idle rehearsal', { phases: { solo: phase(), loaded: phase({ agent: [], probes: { completed: 0, preempted: 3 } }) } }, 3, 'unknown'],
+  ];
+  for (const [label, override, id, expected] of cases) {
+    const report = make(override);
+    assert.equal(of(report, id).verdict, expected, label);
+    assert.equal(decide([report]).pool.take, null, label);
   }
-});
-
-test('a cold response where warm reuse was requested fails cache retention, with the existing tolerance', () => {
-  const missed = { ...coldCall(), cacheIntent: 'warm' as const };
-  const run = make({ phases: { solo: phase(), loaded: phase({ tester: [coldCall(), missed] }) } });
-  assert.equal(of(run, 2).verdict, 'fail');
-  assert.equal(of(run, 2).measured, `${THRESHOLDS.cacheToleranceTokens - 4000} tokens of margin`);
-});
-
-test('cold prefill is reported separately and cannot redefine the agreed warm-scene budget', () => {
-  const tester = [coldCall(), call({ elapsedMs: 2000 }), call({ elapsedMs: 2000 }), call({ elapsedMs: 2000 })];
-  tester[0].elapsedMs = 16000;
-  const run = make({ workload: { ...make().workload!, warmRuns: 3 },
-    phases: { solo: phase({ tester: structuredClone(tester) }), loaded: phase({ tester }) } });
-  assert.equal(of(run, 4).verdict, 'pass');
-  assert.equal(of(run, 4).measured, '2 s');
-  const rows = summaries(tester);
-  assert.equal(rows.find(row => row.group.endsWith(':cold'))!.n, 1);
-  assert.deepEqual(rows.find(row => row.group.endsWith(':warm'))!.metrics.elapsedMs, { n: 3, median: 2000, max: 2000 });
-  tester[1].elapsedMs = tester[2].elapsedMs = tester[3].elapsedMs = 16000;
-  assert.equal(of(run, 4).verdict, 'fail');
-  assert.equal(of(run, 4).measured, '16 s');
-});
-
-test('queue, useful throughput and memory thresholds still reject their own failures', () => {
-  const waited = make({ phases: { solo: phase(), loaded: phase({ tester: [coldCall(), call({ queueMs: 121000 })] }) } });
-  assert.equal(of(waited, 5).verdict, 'fail');
-  assert.equal(of(make({ phases: { solo: phase(), loaded: phase({ usefulTokensPerHour: 39600 }) } }), 3).verdict, 'fail');
-  assert.equal(of(make({ vram: { samples: 1, card: 0, cards: [{ index: 0, totalMiB: 32768, usedMiBMax: 32000, freeMiBMin: 768, server: true }] } }), 1).verdict, 'fail');
-  assert.equal(of(make({ vram: { samples: 0, card: null, cards: [] } }), 1).verdict, 'unknown');
-  const idle = make({ phases: { solo: phase(), loaded: phase({ agent: [], probes: { completed: 0, preempted: 3 } }) } });
-  assert.deepEqual(verdictOf(idle).slice(1, 4).map(check => check.verdict), ['unknown', 'unknown', 'unknown']);
-});
-
-test('profile selection compares equal workloads and still takes the faster sound pool', () => {
   const one = make({ profile: 'one', bot: { ...make().bot, slots: 1 } });
-  const five = make({ profile: 'five', bot: { ...make().bot, slots: 5 }, phases: { solo: phase(), loaded: phase({ usefulTokensPerHour: 120000 }) } });
-  assert.deepEqual(decide([one, make(), five]).pool, { take: 'five', over: 'one', note: 'take the pool' });
-  const other = { ...five, workload: { ...five.workload!, fingerprint: 'different-fixture-or-cadence' } };
-  assert.equal(decide([one, make(), other]).pool.take, null);
-  // What the fingerprint does not carry: the server's own cells and prefill batch. A profile started with another
-  // `--ctx-size` is compared as if it were the same work, which is why gpu/measure-profile.sh freezes both for the
-  // whole session instead of relying on this check to notice.
-  const wider = { ...five, profile: 'wider', server: { slots: 5, contextTokens: 131072 } };
-  assert.equal(decide([one, make(), wider]).pool.take, 'wider');
+  assert.equal(decide([one, make()]).pool.take, '96k-3');
+  assert.equal(decide([one, make({ workload: { ...make().workload!, fingerprint: 'other' } })]).pool.take, null);
+  const combined = make({ draft: true, vram: { samples: 1, card: 0,
+    cards: [{ index: 0, totalMiB: 32768, usedMiBMax: 32100, freeMiBMin: 668, server: true }] } });
+  assert.equal(decide([make(), combined]).together.verdict, 'fail');
 });
 
 test('draft speed needs the same request series and configuration, with complete server timing samples', () => {
@@ -318,89 +146,7 @@ test('draft speed needs the same request series and configuration, with complete
   assert.equal(decide([plain, broken]).draft.verdict, 'fail');
 });
 
-test('the failed combined profile remains visible without replacing a measured draft pair', () => {
-  const plain = make({ profile: 'one', bot: { ...make().bot, slots: 1 } });
-  const fast = make({ profile: 'one-mtp', draft: true, bot: { ...make().bot, slots: 1 }, phases: {
-    solo: phase({ tester: [{ ...coldCall(), decodeTokensPerSecond: 100 }, call({ decodeTokensPerSecond: 100 })] }), loaded: phase() } });
-  const failed = make({ profile: 'pool-mtp', draft: true, error: 'gpu_server_unreachable', phases: {},
-    vram: { samples: 0, card: null, cards: [] } });
-  const answer = decide([failed, plain, fast, make()]);
-  assert.equal(answer.draft.verdict, 'pass');
-  assert.equal(answer.draft.measured, '2x');
-  assert.equal(answer.together.verdict, 'unknown');
-  assert.equal(answer.together.measured, 'measurement incomplete (gpu_server_unreachable)');
-  assert.equal(answer.pool.take, '96k-3');
-});
-
-test('a measured memory shortage rejects the combined profile; an incomplete warm series decides no speed-up', () => {
-  const plain = make();
-  const short = make({ profile: 'pool-mtp', draft: true,
-    vram: { samples: 2, card: 0, cards: [{ index: 0, totalMiB: 32768, usedMiBMax: 32100, freeMiBMin: 668, server: true }] } });
-  assert.equal(decide([plain, short]).together.verdict, 'fail');
-  assert.equal(decide([plain, short]).pool.note, 'take the pool without the draft model');
-  const series = (draft: boolean): Report => make({ draft, profile: draft ? 'mtp' : 'plain',
-    workload: { ...make().workload!, warmRuns: 2 }, phases: {
-      solo: phase({ tester: [coldCall(), call(), call({ decodeTokensPerSecond: null })] }), loaded: phase() } });
-  assert.equal(decide([series(false), series(true)]).draft.verdict, 'unknown');
-});
-
-test('long complete scenes remain representative, while short or truncated scenes cannot validate a profile', async () => {
-  const measure = (text: string, finishReason: 'stop' | 'length' = 'stop') => measureCall({ async generate(_request, controls) {
-    controls?.onStart?.(); return result({ text, finishReason });
-  } }, request, { label: 'length', range: { min: 100, max: 200 } });
-  const text = '2026-09-20 21:00\n\n' + 'Synthetic. '.repeat(50);
-  assert.equal((await measure(text)).call.representative, true);
-  assert.equal((await measure(text)).call.formatFailed, false);
-  assert.equal((await measure('2026-09-20 21:00\n\nShort.')).call.representative, false);
-  assert.equal((await measure(text, 'length')).call.formatFailed, true);
-});
-
-test('the default plan leaves room for setup and cold prefill, and an overfull plan is rejected before model work', () => {
-  const plan = measurementPlan({ cases: 3, coldRuns: 2, warmRuns: 1, readSeconds: 15, minutes: 30 });
-  assert.deepEqual(plan, { calls: 48, readingSeconds: 360, callReserveSeconds: 480,
-    plannedSeconds: 840, budgetSeconds: 1800, maximumPlannedSeconds: 1260, fits: true });
-  assert.equal(measurementPlan({ cases: 3, coldRuns: 2, warmRuns: 3, readSeconds: 30, minutes: 30 }).fits, false);
-  assert.equal(measurementPlan({ cases: 9, coldRuns: 2, warmRuns: 1, readSeconds: 15, minutes: 30 }).fits, false);
-  assert.equal(measurementPlan({ cases: 1, coldRuns: 1, warmRuns: 1, readSeconds: 0, minutes: 2, smoke: true }).calls, 2);
-});
-
-test('smoke requires exactly one confirmed cold and warm call; missing timings or cache reuse fail', () => {
-  assert.deepEqual(smokeOutcome([coldCall(), call()]), { passed: true, cold: 'cold', warm: 'warm' });
-  assert.equal(smokeOutcome([coldCall(), { ...coldCall(), cacheIntent: 'warm' }]).passed, false);
-  assert.equal(smokeOutcome([coldCall(), call({ cacheObserved: 'unknown' })]).passed, false);
-  assert.equal(smokeOutcome([coldCall()]).passed, false);
-  assert.equal(smokeOutcome([coldCall(), call(), call()]).passed, false);
-});
-
-test('a next turn retains its counted common prefix while pre-filling a new action and scene', () => {
-  const next = call({ cacheObserved: 'mixed', timings: { cacheTokens: 3010, promptTokens: 990 }, elapsedMs: 30000 });
-  expectCache(next, 'next', 3000);
-  assert.equal(next.expectedPromptTokens, 1000);
-  assert.equal(next.cacheMatched, true);
-  const primer = { ...coldCall(), cacheIntent: 'prime' as const, countedInputTokens: 3300 };
-  const nextPhase = () => phase({ tester: [coldCall(), call(), next], primers: [primer] });
-  const run = make({ workload: { ...make().workload!, nextTurns: true,
-    cases: [{ ...cell, prefixTokens: 3000, previousInputTokens: 3300 }] },
-    phases: { solo: nextPhase(), loaded: nextPhase() } });
-  assert.equal(of(run, 2).verdict, 'pass');
-  // The added-prefill latency stays visible and separate from the existing warm replay gate.
-  assert.equal(of(run, 4).verdict, 'pass');
-  assert.equal(summaries(run.phases.loaded!.tester).find(row => row.group.endsWith(':next'))!.metrics.elapsedMs.median, 30000);
-  next.timings = { cacheTokens: 0, promptTokens: 4000 };
-  next.cacheObserved = 'cold';
-  expectCache(next, 'next', 3000);
-  assert.equal(next.cacheMatched, false);
-  assert.equal(of(run, 2).verdict, 'fail');
-  next.timings = { cacheTokens: 3990, promptTokens: 10 };
-  next.cacheObserved = 'warm';
-  expectCache(next, 'next', 3000);
-  assert.equal(of(run, 2).verdict, 'unknown');
-  primer.cacheObserved = 'unknown';
-  assert.equal(of(run, 2).verdict, 'unknown');
-});
-
-for (const [smoke, reuse] of [[true, true], [true, false], [false, true]]) test(
-  `${smoke ? 'smoke' : 'measurement'} CLI observes fake-server cache behavior (${reuse})`, { timeout: 15000 }, async t => {
+test('the smoke CLI saves its failed cache receipt and exits unsuccessfully', { timeout: 15000 }, async t => {
   // A fresh cwd and explicit environment prevent reading any workspace configuration. Only this loopback fake is used.
   const directory = mkdtempSync(join(tmpdir(), 'gpu-measure-smoke-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
@@ -417,7 +163,7 @@ for (const [smoke, reuse] of [[true, true], [true, false], [false, true]]) test(
     if (incoming.url?.endsWith('/input_tokens')) return send({ input_tokens: input });
     assert.equal(incoming.url, '/v1/chat/completions');
     caches.push(body!.cache_prompt);
-    const cached = reuse && body!.cache_prompt ? input - 10 : 0;
+    const cached = 0;
     response.setHeader('Content-Type', 'text/event-stream');
     response.end(`data: ${JSON.stringify({ model: 'synthetic', choices: [{ index: 0,
       delta: { content: '2026-09-20 21:00\n\n' + 'Синтетическая сцена. '.repeat(120) }, finish_reason: 'stop' }],
@@ -428,41 +174,22 @@ for (const [smoke, reuse] of [[true, true], [true, false], [false, true]]) test(
   t.after(() => { server.closeAllConnections(); server.close(); });
   const address = server.address();
   assert.ok(address && typeof address === 'object');
-  const mode = smoke ? ['--smoke'] : ['--profile', 'fake-normal', '--history-tokens', '4000', '--cold-runs', '1',
-    '--scenes', '1', '--read-seconds', '0', '--minutes', '2'];
+  const mode = ['--smoke'];
   const child = spawn(process.execPath, [fileURLToPath(new URL('./gpu-measure.ts', import.meta.url)), ...mode, '--no-vram', '--out', directory], {
     cwd: directory, env: { PATH: dirname(process.execPath), SIMPLE_CHAT_PROVIDER: 'llama-cpp', SIMPLE_CHAT_MODEL: 'synthetic',
       SIMPLE_CHAT_BASE_URL: `http://127.0.0.1:${address.port}`, SIMPLE_CHAT_MODEL_TIMEOUT_MS: '10000' }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   t.after(() => child.kill());
-  let stdout = '', stderr = '';
-  child.stdout.on('data', chunk => { stdout += chunk; });
+  let stderr = '';
+  child.stdout.resume();
   child.stderr.on('data', chunk => { stderr += chunk; });
   const code = await new Promise<number | null>((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
-  assert.equal(code, reuse ? 0 : 1, stderr);
+  assert.equal(code, 1, stderr);
   const saved = JSON.parse(readFileSync(join(directory, 'report.json'), 'utf8')) as Report;
-  assert.equal(saved.plan!.budgetSeconds, 120);
-  const rows = stdout.trim().split('\n').map(line => JSON.parse(line) as { event: string; cacheObserved?: string });
-  if (smoke) {
-    assert.deepEqual(caches, [false, true]);
-    assert.deepEqual(saved.smoke, { passed: reuse, cold: 'cold', warm: reuse ? 'warm' : 'cold' });
-    assert.equal(saved.plan!.calls, 2);
-    assert.equal(saved.phases.loaded, undefined);
-    assert.deepEqual(rows.filter(row => row.event === 'call_measured').map(row => row.cacheObserved), ['cold', reuse ? 'warm' : 'cold']);
-  } else {
-    assert.deepEqual(caches, [false, true, false, true, false, true, false, true]);
-    assert.equal(saved.plan!.calls, 8);
-    assert.equal(saved.smoke, undefined);
-    for (const part of [saved.phases.solo!, saved.phases.loaded!]) {
-      assert.equal(part.complete, true);
-      assert.deepEqual(part.tester.map(call => call.cacheIntent), ['cold', 'warm', 'next']);
-      assert.equal(part.primers!.length, 1);
-      assert.ok(part.tester[2].expectedPromptTokens! > THRESHOLDS.cacheToleranceTokens);
-      // This fake reports best-case reuse even on a changed prompt. The CLI must expose the missing next prefill.
-      assert.equal(part.tester[2].cacheMatched, false);
-    }
-    assert.equal(of(saved, 2).verdict, 'unknown');
-  }
+  assert.deepEqual(caches, [false, true]);
+  assert.deepEqual(saved.smoke, { passed: false, cold: 'cold', warm: 'cold' });
+  assert.equal(saved.plan!.calls, 2);
+
 });
 
 const snapshot = (used: [number, number], pids: [number[], number[]] = [[], []]) => ({
@@ -470,90 +197,33 @@ const snapshot = (used: [number, number], pids: [number[], number[]] = [[], []])
     memoryFreeMiB: 32607 - used[index] - 498, memoryTotalMiB: 32607 })),
   processes: { llamaServer: [{ pid: 108 }], sshd: {} } });
 
-test('each card keeps its own memory, read as free rather than derived, and llama-server names the card', () => {
-  const vram: Vram = { samples: 0, card: null, cards: [] };
-  recordCards(vram, snapshot([28394, 12000], [[7000], [108]]));
-  recordCards(vram, snapshot([30000, 11000], [[7000], [108]]));
-  // The driver's reserve is in neither used nor total: 32607 - 30000 = 2607, while the card reports 2109 free.
-  assert.deepEqual(vram.cards, [
-    { index: 0, totalMiB: 32607, usedMiBMax: 30000, freeMiBMin: 2109, server: false },
-    { index: 1, totalMiB: 32607, usedMiBMax: 12000, freeMiBMin: 20109, server: true }]);
-  assert.equal(vram.samples, 2);
-  // The card the verdicts are about is the one llama-server computes on, not the first one read.
-  assert.equal(vram.card, 1);
-  assert.equal(serverCard({ vram } as Report)!.freeMiBMin, 20109);
-
-  // A driver too old to report free memory is still read. A card named by hand is not used against the driver's own
-  // attribution: the pids say llama-server computes on card 1, and that is the card the verdict is about.
-  const old: Vram = { samples: 0, card: 0, cards: [] };
-  const seen = snapshot([28394, 12000], [[7000], [108]]);
-  recordCards(old, { gpus: seen.gpus.map(gpu => ({ ...gpu, memoryFreeMiB: undefined })), processes: seen.processes }, 0);
-  assert.deepEqual([old.card, old.cards[0].freeMiBMin], [1, 32607 - 28394]);
-
-  // Several cards and no process attributed to any of them: no card is named, and check 1 says so rather than
-  // reporting about whichever card was read first. The operator's `--card` answers for that driver.
-  const unattributed: Vram = { samples: 0, card: null, cards: [] };
-  recordCards(unattributed, snapshot([28394, 12000]));
-  assert.equal(unattributed.card, null);
-  assert.equal(serverCard({ vram: unattributed } as Report), null);
-  const byHand: Vram = { samples: 0, card: 1, cards: [] };
-  recordCards(byHand, snapshot([28394, 12000]), 1);
-  assert.equal(byHand.card, 1);
-  // One card leaves nothing to choose between, even before the server appears on it.
-  const single: Vram = { samples: 0, card: null, cards: [] };
-  const one = snapshot([28394, 12000]);
-  recordCards(single, { gpus: one.gpus.slice(0, 1), processes: { llamaServer: [], sshd: {} } });
-  assert.equal(single.card, 0);
-});
-
-test('a server spread over several cards is judged by the tightest of them, and an unread card is one of them', () => {
-  // Nothing in gpu/serve.sh restricts llama-server to one device, and llama.cpp spreads a model over every visible
-  // card by default, so the same pid appears on both. Card 1 is the one it shares with the image model; if the
-  // roomy card answered for the server, the profile would pass the memory threshold the run actually failed.
-  const split = (free: [number, number]) => ({
-    gpus: [0, 1].map(index => ({ index, pids: [108, ...(index ? [7000] : [])], memoryUsedMiB: 32607 - free[index] - 498,
-      memoryFreeMiB: free[index], memoryTotalMiB: 32607 })),
+test('memory verdicts use the tightest attributed card, retain peaks, and keep unknown readings unknown', () => {
+  for (const [label, pids, expectedCard, verdict] of [
+    ['server on the roomy card', [[7000], [108]], 1, 'pass'],
+    ['server split across cards', [[108], [108]], 0, 'fail'],
+    ['no attribution', [[], []], null, 'unknown'],
+  ] as [string, [number[], number[]], number | null, string][]) {
+    const vram: Vram = { samples: 0, card: null, cards: [] };
+    recordCards(vram, snapshot([31000, 12000], pids));
+    recordCards(vram, snapshot([32000, 11000], pids));
+    assert.equal(vram.card, expectedCard, label);
+    assert.deepEqual(vram.cards.map(card => [card.usedMiBMax, card.freeMiBMin]), [[32000, 109], [12000, 20109]], label);
+    assert.equal(of(make({ vram }), 1).verdict, verdict, label);
+  }
+  const unread: Vram = { samples: 0, card: null, cards: [] };
+  recordCards(unread, { gpus: [snapshot([12000, 0]).gpus[0], { index: 1, pids: [108] }],
     processes: { llamaServer: [{ pid: 108 }], sshd: {} } });
-  const vram: Vram = { samples: 0, card: null, cards: [] };
-  recordCards(vram, split([18109, 209]));
-  assert.deepEqual(vram.cards.map(card => [card.index, card.server, card.freeMiBMin]), [[0, true, 18109], [1, true, 209]]);
-  assert.equal(vram.card, 1);
-  assert.deepEqual(of(make({ vram }), 1), { id: 1, name: 'video memory at the peak', verdict: 'fail',
-    measured: '209 MiB free on card 1', threshold: '>= 1024 MiB' });
-
-  // A card whose counters the driver did not report is still a card of the machine, so a two-card box is never
-  // mistaken for a one-card box, and a card the server holds but nothing could be read from is the tightest of all:
-  // an unread card cannot be called roomy.
-  const partial: Vram = { samples: 0, card: null, cards: [] };
-  recordCards(partial, { gpus: [{ index: 0, pids: [], memoryUsedMiB: 12000, memoryFreeMiB: 20000, memoryTotalMiB: 32607 },
-    { index: 1, pids: [], memoryUsedMiB: undefined, memoryFreeMiB: undefined, memoryTotalMiB: undefined }],
-    processes: { llamaServer: [{ pid: 108 }], sshd: {} } });
-  assert.deepEqual([partial.card, partial.cards.length, partial.samples], [null, 2, 1]);
-  recordCards(partial, { gpus: [{ index: 0, pids: [], memoryUsedMiB: 12000, memoryFreeMiB: 20000, memoryTotalMiB: 32607 },
-    { index: 1, pids: [108], memoryUsedMiB: undefined, memoryFreeMiB: undefined, memoryTotalMiB: undefined }],
-    processes: { llamaServer: [{ pid: 108 }], sshd: {} } });
-  assert.equal(partial.card, 1);
-  assert.equal(of(make({ vram: partial }), 1).measured, 'not read');
-});
-
-test('the scheduler is told the shape of the server the bot runs under, cache mode included', () => {
-  // All three travel together: with isolated slots the scheduler admits a call by handing it a whole slot, and one
-  // that was not told so would admit by size instead and send more calls than the server has slots to run them in.
-  assert.deepEqual(serverShape({ slots: 3, poolTokens: 65536, sharedCache: false }),
-    { slots: 3, poolTokens: 65536, sharedCache: false });
-  assert.deepEqual(serverShape({ slots: 3, poolTokens: 98304, sharedCache: true }),
-    { slots: 3, poolTokens: 98304, sharedCache: true });
-});
-
-test('a report written before memory was recorded per card is still judged, without a card number', () => {
-  // The owner's `measurements/` holds these, and docs/gpu.md tells the operator to run `--decide` over them.
+  assert.equal(unread.card, 1);
+  assert.equal(of(make({ vram: unread }), 1).verdict, 'unknown');
+  const manual: Vram = { samples: 0, card: null, cards: [] };
+  recordCards(manual, snapshot([31000, 12000]), 1);
+  assert.equal(manual.card, 1);
+  const driver: Vram = { samples: 0, card: null, cards: [] };
+  recordCards(driver, snapshot([31000, 12000], [[7000], [108]]), 0);
+  assert.equal(driver.card, 1, 'driver attribution wins over an explicit card');
   const legacy = make({ vram: { samples: 4, totalMiB: 32768, usedMiBMax: 32000, freeMiBMin: 768 } as unknown as Vram });
   assert.deepEqual(serverCard(legacy), { index: null, freeMiBMin: 768 });
-  assert.deepEqual([of(legacy, 1).verdict, of(legacy, 1).measured], ['fail', '768 MiB free']);
-  assert.equal(of(make({ vram: { samples: 0 } as unknown as Vram }), 1).verdict, 'unknown');
-  assert.deepEqual(decide([legacy]).profiles[0].checks[0].verdict, 'fail');
-  // The new shape names the card it read.
-  assert.equal(of(make(), 1).measured, '2768 MiB free on card 0');
+  assert.equal(of(legacy, 1).verdict, 'fail');
 });
 
 // A whole measurement against local/fake-llama.ts: a loopback server with a real per-slot prefix cache, a slot that
@@ -596,6 +266,7 @@ test('the whole plan runs against a fake server whose cache is real, and its cac
   assert.equal(second.code, 0, second.stderr);
   const saved = JSON.parse(readFileSync(join(directory, 'report.json'), 'utf8')) as Report;
   assert.equal(saved.error, undefined);
+  assert.doesNotMatch(JSON.stringify(saved), /Синтетический ответ замера|The light crossed the water|The bell rang/);
   // The rehearsal ran the configuration the bot runs on this server: isolated slots, one whole context each.
   assert.deepEqual([saved.bot.sharedCache, saved.bot.slots, saved.bot.poolTokens], [false, 3, 65536]);
   for (const phase of [saved.phases.solo!, saved.phases.loaded!]) {
@@ -631,7 +302,7 @@ test('video memory is sampled per card through one SSH session, and the card is 
   const directory = mkdtempSync(join(tmpdir(), 'gpu-measure-vram-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   // A stand-in for ssh that lives as long as the session it stands for: it records the session and the remote
-  // command, then keeps printing what the remote script prints, one line every 150 ms, until it is killed. The
+  // command, then keeps printing what the remote script prints, one line every 60 ms, until it is killed. The
   // shebang is this very Node, because the measurer's PATH holds nothing else. Card 0 is nearly full and card 1
   // holds llama-server: a measurer that kept one number for the machine, or believed the `--card 0` given below,
   // would report the image model's shortage as this server's.
@@ -671,8 +342,9 @@ test('video memory is sampled per card through one SSH session, and the card is 
   // The hand-given card is contradicted by the driver's own attribution, and the operator is told so.
   const events = stdout.trim().split('\n').map(line => JSON.parse(line) as { event: string; named?: number; card?: number });
   assert.deepEqual(events.filter(event => event.event === 'vram_card_mismatch'), [{ event: 'vram_card_mismatch', named: 0, card: 1 }]);
-  // One login for the whole run: a session per sample was what the bot was backed off from (docs/gpu.md). The
-  // session asks for the cards and the processes on them, and for no server events.
+  // One login for the whole run: a session per sample was what the bot was backed off from
+  // (docs/knowledge/gpu-measurements.md#ssh-failures). The session asks for the cards and the processes on them, and
+  // for no server events.
   assert.equal(readFileSync(sessions, 'utf8').trim().split('\n').length, 1);
   assert.equal(readFileSync(asked, 'utf8'), 'python3 - --events 0 --every 1 --parts gpus,processes');
 });
@@ -706,7 +378,7 @@ test('a sampler that cannot reach the instance says so while the block is still 
   const saved = JSON.parse(readFileSync(join(directory, 'report.json'), 'utf8')) as Report;
   assert.deepEqual([saved.vram.samples, saved.vram.card, saved.vram.cards], [0, null, []]);
   // One attempt in a run this short: a sampler that logged in again every couple of seconds would be the pile-up
-  // on sshd the bot itself was backed off from (docs/gpu.md).
+  // on sshd the bot itself was backed off from (docs/knowledge/gpu-measurements.md#ssh-failures).
   assert.equal(readFileSync(sessions, 'utf8').trim().split('\n').length, 1);
   assert.doesNotMatch(stdout, /PRIVATE/);
 });

@@ -2,11 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { Job, Library, SceneNode } from '../lib/library.ts';
 import type { ContextStats } from './context.ts';
-import type { Screen } from './telegram.ts';
+import type { InlineKeyboard, Screen } from './telegram.ts';
 import type { GpuInfo, ModelInfo, RenderDetails } from './ui.ts';
-import { render, renderContext, scenePrefix, sceneKeyboard } from './ui.ts';
+import { render, renderContext, sceneKeyboard } from './ui.ts';
+import { personTag } from './picture.ts';
+import { PRESETS } from './picture-style.ts';
+import { texts } from './text.ts';
 
-const ACTION = /^(view:.+|new-seed|save-seed:[^:]+|start:[^:]+|use:[^:]+:[^:]+|fork:[^:]+:[^:]+|remove-seed:[^:]+|remove-branch:[^:]+:[^:]+|continue|cancel|last|compact|gpu:start|gpu:pause|lang:[a-z]{2})$/;
+const t = texts('ru');
 
 function node(id: string, parent: string | null, time: string, body: string, input = 'Ввод'): SceneNode {
   return { id, parent, input, text: `${time}\n\n${body}`, time, truncated: false, delivery: 'sent' };
@@ -43,156 +46,176 @@ function fixture(): Library {
   };
 }
 
+// The story's people as its first picture wrote them, and a first scene that dressed Мира otherwise than the sheet did.
+const LOOK = 'Tall, short grey hair, a scar on the left cheek.';
+function drawn(): Library {
+  const state = fixture();
+  state.stories.h2.sheet = [{ name: 'Мира', look: LOOK, outfit: 'a dark wool coat' },
+    { name: 'Олег', look: 'A broad-shouldered man with a shaved head.', outfit: 'a fisherman sweater' }];
+  state.stories.h2.nodes.n5.clothes = { Мира: 'a yellow raincoat' };
+  return state;
+}
+// A reader whose scenes are drawn, with the semi preset as the owner's standard line.
+const on = { pictures: true, standardStyle: PRESETS.semi };
+// A button names a person by their place on the sheet and the hash of their name (local/picture.ts `personTag`).
+const mira = `h2:0:${personTag('Мира')}`;
+
+// An owned style is removable only through its confirmation.
+const styled = (): Library => ({ ...fixture(), pictureStyles: { y7: { id: 'y7', name: 'Масло при свечах', line: 'Oil painting, warm candlelight' } }, pictureStyle: 'y7' });
+// A seed being collected from the parts sent so far.
+const drafting = (parts: string[]): Library => ({ ...fixture(), ui: { input: 'seed', draftId: 'd123', parts } });
+const TWO_PARTS = ['Маяк\n2026-08-02 20:00\nСеверный остров.', 'Вторая часть описания.'];
+
 // The UI reads only a job's presence, kind and story; these jobs carry just that, including kinds the bot never writes.
 const partialJob = (fields: { id: string; kind?: string; storyId: string; branchId: string }) => fields as Job;
 
-function callbacks(message: Screen) {
-  return (message.reply_markup?.inline_keyboard ?? []).flat().map(button => button.callback_data);
+const grid = (keyboard: InlineKeyboard | undefined) => keyboard?.inline_keyboard.map(row => row.map(button => button.callback_data));
+const callbacks = (message: Screen) => grid(message.reply_markup)?.flat() ?? [];
+// What a screen puts in pre blocks, to be copied in one tap or kept monospaced, and its buttons.
+const preAndButtons = (screen: Screen) => [screen.entities?.map(e => e.type === 'pre' ? screen.text.slice(e.offset, e.offset + e.length) : e.type), callbacks(screen)];
+
+// Stats may reach the renderer incomplete, so overrides can replace any field with any value.
+function stats(overrides: Record<string, unknown> = {}) {
+  return {
+    scope: 'checkpoint', label: 'Сцена 2',
+    storyId: 'h2', branchId: 'b3', checkpointId: 'c7',
+    model: 'claude-haiku-4-5-20251001',
+    limitTokens: 65536, reserveTokens: 4096,
+    seed: { bytes: 1200, estimatedTokens: 300 },
+    memory: { count: 0, bytes: 0, estimatedTokens: 0 },
+    prefix: { bytes: 1200, estimatedTokens: 300 },
+    tail: { count: 3, bytes: 8800, estimatedTokens: 2200 },
+    snapshot: { bytes: 10000, estimatedTokens: 2500 },
+    request: { bytes: 13000, estimatedTokens: 3250, estimateSource: 'usage' },
+    budget: { inputTokens: 3250, limitTokens: 61440, remainingTokens: 58190 },
+    compaction: { thresholdTokens: 54000, keepScenes: 4 },
+    lastRequest: { inputTokens: 2700, outputTokens: 500, totalTokens: 3200 },
+    ...overrides,
+  } as ContextStats;
 }
 
-function checkPayload(message: Screen & { parse_mode?: unknown }, route: string) {
-  assert.equal(typeof message.text, 'string', route);
-  assert.ok(message.text.length > 0 && message.text.length <= 4096, route);
-  assert.equal(message.parse_mode, undefined, route);
-  for (const row of message.reply_markup?.inline_keyboard ?? []) {
-    assert.ok(row.length > 0, route);
-    for (const button of row) {
-      assert.ok(button.text, route);
-      assert.ok(Buffer.byteLength(button.callback_data, 'utf8') <= 64, `${route}: ${button.callback_data}`);
-      assert.match(button.callback_data, ACTION, route);
+const current = (overrides?: Record<string, unknown>) => stats({ scope: 'current', label: 'Начало', checkpointId: null, ...overrides });
+
+function modelInfo(overrides: ModelInfo = {}): ModelInfo {
+  return { provider: 'llama-cpp', model: 'gemma-4-31b-heretic-Q4_K_M', status: 'ready', checkedAt: '2026-09-16T10:05:30.000Z', ...overrides };
+}
+
+// GPU status is rendered defensively, so overrides can replace any field with any value.
+function gpuInfo(overrides: Record<string, unknown> = {}) {
+  return { status: 'ready', activeJobs: 0, idleMinutes: 15, idleRemainingSeconds: 600, canStart: false, canPause: true, ...overrides } as GpuInfo;
+}
+
+type Row = [string, unknown, unknown];
+
+test('each state offers only the actions it allows: the scene keyboard, compaction, characters, the GPU and stale routes', () => {
+  const at = (fields: Partial<Library>, base = fixture()): Library => ({ ...base, ...fields });
+  const job = (kind?: string) => partialJob({ id: 'j12', kind, storyId: 'h2', branchId: 'b3' });
+  const menu = callbacks(render(drawn(), 'home', on));
+  // The model screen's buttons, and whether it shows the GPU at all.
+  const model = (details: RenderDetails) => { const screen = render(fixture(), 'model', details); return [callbacks(screen), screen.text.includes('🖥')]; };
+  // [what, what is offered, what must be]
+  const rows: Row[] = [
+    // The scene's keyboard: going on while idle, cancel and a way around while busy, nothing without a story.
+    ['scene keyboard while idle', grid(sceneKeyboard(fixture()))?.flat(), ['continue', 'view:context', 'view:model', 'view:checkpoints:h2:b3:0', 'view:story:h2', 'view:home']],
+    ['scene keyboard while busy', grid(sceneKeyboard(at({ job: job() })))?.flat(), ['cancel', 'view:context', 'view:model', 'view:home']],
+    ['scene keyboard without a story', sceneKeyboard(at({ active: null })), undefined],
+    ['scene keyboard of a branch that is gone', sceneKeyboard(at({ active: { storyId: 'h2', branchId: 'gone' } })), undefined],
+    // Compaction is offered for the live branch while idle, first on its context; never for a checkpoint or during a job.
+    ['compaction of the idle current branch', callbacks(render(fixture(), 'context', { contextStats: current() }))[0], 'compact'],
+    ['compaction of the idle current branch without stats', callbacks(render(fixture(), 'context')).includes('compact'), true],
+    ['compaction at a checkpoint', callbacks(render(fixture(), 'context:h2:c7', { contextStats: stats() })).includes('compact'), false],
+    ['the detailed views of the branch and of a checkpoint', [current(), stats()].map(one => callbacks(renderContext(one))),
+      [['view:context', 'view:checkpoints:h2:b3:0', 'view:home'], ['view:checkpoint:h2:c7', 'view:home']]],
+    ['compaction without a story', callbacks(render(at({ active: null }), 'context', { contextStats: current() })).includes('compact'), false],
+    ...[undefined, 'scene', 'compact'].map((kind): Row => [`compaction during a job of kind ${kind}`,
+      [{ contextStats: current() }, {}].some(details => callbacks(render(at({ job: job(kind) }), 'context', details)).includes('compact')), false]),
+    // Character navigation is gated on pictures; stale person buttons never select another person.
+    ...['home', 'seed:s1', 'story:h2'].map((route): Row => [`the way to characters from ${route}, with and without pictures`,
+      [on, {}].map(details => callbacks(render(fixture(), route, details)).includes('view:characters:h2')), [true, false]]),
+    // Somebody not on the sheet, or a button of one whose place another person took since, is the list, never a card.
+    ...['character:h2:7', 'character:h2:x', 'character:h2:0', 'character:h2:0:00000000', `character:h2:1:${personTag('Мира')}`].map((route): Row =>
+      [`a stale person: ${route}`, callbacks(render(drawn(), route, on)), callbacks(render(drawn(), 'characters:h2', on))]),
+    ['a look without the wait for one', callbacks(render(drawn(), 'look-input', on)), menu],
+    ['a look for Мира', preAndButtons(render(at({ ui: { input: 'look', storyId: 'h2', name: 'Мира' } }, drawn()), 'look-input', on)), [[LOOK], [`view:character:${mira}`]]],
+    ['a look for somebody gone from the sheet', callbacks(render(at({ ui: { input: 'look', storyId: 'h2', name: 'Нет такой' } }, drawn()), 'look-input', on)), menu],
+    ...[`portrait:h99:0:${personTag('Мира')}:0a1b2c3d`, `portrait:h2:7:${personTag('Мира')}:0a1b2c3d`, `portrait:h2:1:${personTag('Мира')}:0a1b2c3d`, 'portrait-kept:h2:7']
+      .map((route): Row => [`a stale portrait: ${route}`, callbacks(render(drawn(), route, on)).some(data => data.startsWith('portrait')), false]),
+    // GPU power follows canStart and canPause alone, whatever the status says; there is no GPU for Claude or without one.
+    ...[[false, false], [true, false], [false, true], [true, true], [undefined, 'yes']].flatMap(([canStart, canPause]) =>
+      ['ready', 'paused', 'weird', undefined].map((status): Row => [`GPU ${status}, start ${canStart}, pause ${canPause}`,
+        model({ modelInfo: modelInfo(), gpuInfo: gpuInfo({ status, canStart, canPause }) }),
+        [[...canStart === true ? ['gpu:start'] : [], ...canPause === true ? ['gpu:pause'] : [], 'view:model', 'view:home'], true]])),
+    ['GPU without model data', model({ gpuInfo: gpuInfo({ status: 'paused', canStart: true, canPause: false }) }), [['gpu:start', 'view:model', 'view:home'], true]],
+    ['GPU for Claude', model({ modelInfo: modelInfo({ provider: 'claude-code', model: 'claude-haiku-4-5-20251001' }), gpuInfo: gpuInfo({ canStart: true }) }),
+      [['view:model', 'view:home'], false]],
+    ...[undefined, null, 'ready'].map((gpu): Row => [`GPU info ${gpu}`, model({ modelInfo: modelInfo(), gpuInfo: gpu as GpuInfo | null | undefined }), [['view:model', 'view:home'], false]]),
+    // The menu has a line about the GPU and never its controls.
+    ...[{ status: 'paused', canStart: true }, { status: 'ready', activeJobs: 2 }].map((gpu): Row => [`the menu with a GPU ${gpu.status}`,
+      (screen => [screen.text.includes('🖥'), callbacks(screen).some(data => data.startsWith('gpu:'))])(render(fixture(), 'home', { modelInfo: modelInfo(), gpuInfo: gpuInfo(gpu) })),
+      [true, false]]),
+    ['the menu for Claude', render(fixture(), 'home', { modelInfo: modelInfo({ provider: 'claude-code' }), gpuInfo: gpuInfo() }).text.includes('🖥'), false],
+    // Style input and deletion require their own active state or confirmation.
+    ['a style without the wait for one', callbacks(render(styled(), 'style-input', on)), callbacks(render(styled(), 'style', on))],
+    ['the deletion of a style', callbacks(render(styled(), 'delete-style:y7', on)), ['remove-style:y7', 'view:style:y7']],
+    ['the deletion of a style that is gone', callbacks(render(styled(), 'delete-style:y8', on)), callbacks(render(styled(), 'style', on))],
+    // Tree and history navigation must not repeat the scene text.
+    ...['tree:h2', 'log:h2:b8:0'].map((route): Row => [route, /Ветер бьёт|Огонь гаснет/.test(render(fixture(), route).text), false]),
+    // A stale or malformed route leads back to the menu or the seeds.
+    ...['seed:s99', 'story:h99', 'branch:h2:b99', 'checkpoints:h9:b3:0', 'checkpoint:h2:c99', 'delete-seed:s99', 'delete-branch:h2:b99', 'seed:constructor',
+      'story:__proto__', 'nonsense', '', 'seeds:-1', 'seeds:abc', 'context:h2:c99', 'characters:h99', 'tree:h99', 'log:h2:b99:0'].map((route): Row =>
+      [`the stale route "${route}"`, callbacks(render(fixture(), route)).some(data => data === 'view:home' || data === 'view:seeds:0'), true]),
+    ['no library at all', callbacks(render(null, 'home')).includes('new-seed'), true],
+  ];
+  for (const [label, got, want] of rows) assert.deepEqual(got, want, label);
+  // All mutating story routes, especially a confirmation opened before the job began, become inert while busy.
+  const mutations = /^(start|use|fork|remove-seed|remove-branch):|^(continue|compact)$|^view:delete-/;
+  for (const kind of ['scene', 'compact']) {
+    const state = at({ job: job(kind) });
+    for (const route of ['home', 'seed:s1', 'story:h2', 'branch:h2:b3', 'checkpoint:h2:c5', 'context',
+      'delete-seed:s1', 'delete-branch:h2:b3']) {
+      for (const data of callbacks(render(state, route))) assert.doesNotMatch(data, mutations, `${kind}: ${route}`);
     }
   }
-}
 
-// Renders every screen reachable through view: buttons.
-function crawl(state: Library) {
-  const seen = new Set<string>();
-  const queue = ['home', 'new-seed'];
-  const all: string[] = [];
-  while (queue.length) {
-    const route = queue.shift()!;
-    if (seen.has(route)) continue;
-    seen.add(route);
-    const message = render(state, route);
-    checkPayload(message, route);
-    for (const data of callbacks(message)) {
-      all.push(data);
-      if (data.startsWith('view:')) queue.push(data.slice(5));
-    }
-  }
-  return { routes: seen, callbacks: all };
-}
-
-test('every reachable screen is a valid payload', () => {
-  const { routes, callbacks: all } = crawl(fixture());
-  for (const route of ['seeds:0', 'seed:s1', 'story:h2', 'branch:h2:b3', 'branch:h2:b8', 'checkpoints:h2:b3:0', 'checkpoint:h2:c4', 'delete-seed:s1', 'delete-branch:h2:b8', 'context', 'context:h2:c4', 'model']) {
-    assert.ok(routes.has(route), route);
-  }
-  for (const action of ['continue', 'last', 'new-seed', 'start:s1', 'use:h2:b8', 'fork:h2:c5', 'remove-seed:s1', 'remove-branch:h2:b3', 'compact']) {
-    assert.ok(all.includes(action), action);
-  }
 });
 
-test('empty library guides to seed creation', () => {
-  const state: Library = { version: 1, seq: 0, seeds: {}, stories: {}, active: null, job: null, ui: null, seen: [] };
-  const home = render(state);
-  assert.deepEqual(callbacks(home), ['new-seed', 'view:model', 'view:language']);
-  assert.deepEqual(callbacks(render(state, 'seeds:0')), ['new-seed', 'view:home']);
-  crawl(state);
-});
+test('deletion names its scope, stats belong to their checkpoint and GPU status exposes no reader data', () => {
+  const single = fixture();
+  delete single.stories.h2.branches.b8;
+  for (const id of ['c10', 'c11']) delete single.stories.h2.checkpoints[id];
+  delete single.stories.h2.nodes.n9;
+  // [what, the confirmation, what it says goes]
+  const scopes: [string, Screen, RegExp[]][] = [
+    ['a seed', render(fixture(), 'delete-seed:s1'), [/1 история/, /2 ветки/, /3 сцены/]],
+    ['a branch beside another', render(fixture(), 'delete-branch:h2:b3'), [/3 чекпоинта/, /1 сцена, которой нет в других ветках/, /1 другая ветка/]],
+    ['the only branch', render(single, 'delete-branch:h2:b3'), [/история удалится целиком/]],
+  ];
+  for (const [label, screen, says] of scopes) for (const scope of says) assert.match(screen.text, scope, label);
+  assert.deepEqual(scopes.map(([, screen]) => callbacks(screen).filter(data => data.startsWith('remove-'))),
+    [['remove-seed:s1'], ['remove-branch:h2:b3'], ['remove-branch:h2:b3']]);
+  for (const route of ['home', 'seed:s1', 'story:h2', 'branch:h2:b3'])
+    assert.ok(!callbacks(render(fixture(), route)).some(data => data.startsWith('remove-')), route);
 
-test('new seed screen has a copyable example and a cancel path', () => {
-  const message = render(fixture(), 'new-seed');
-  assert.ok(callbacks(message).includes('cancel'));
-  const [entity] = message.entities!;
-  const example = message.text.slice(entity.offset, entity.offset + entity.length).split('\n');
-  assert.equal(example[0], 'Маяк на краю света');
-  assert.match(example[1], /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
-  assert.ok(example[2].length > 0);
-});
 
-test('seed can be collected from several messages before explicit save', () => {
-  const state = fixture();
-  state.ui = { input: 'seed', draftId: 'd123', parts: [] };
-  const initial = render(state, 'new-seed');
-  checkPayload(initial, 'new-seed initial');
-  assert.deepEqual(callbacks(initial), ['cancel']);
-  assert.match(initial.text, /одним или несколькими сообщениями/);
-  assert.match(initial.text, /Сохранить сид/);
-  assert.match(initial.text, /\.txt \/ \.md \(UTF-8, до 256 КиБ/);
-  assert.match(initial.text, /Подпись к файлу не учитывается, PDF и DOCX не подходят/);
-  assert.doesNotMatch(render(state).text, /одно сообщение/);
+  // A context screen shows only the stats that are its own.
+  const shown: [string, Screen, boolean][] = [
+    ['checkpoint c7 with its stats', render(fixture(), 'context:h2:c7', { contextStats: stats() }), true],
+    ['checkpoint c5 with those of c7', render(fixture(), 'context:h2:c5', { contextStats: stats() }), false],
+    ['the preview of checkpoint c7', render(fixture(), 'checkpoint:h2:c7', { contextStats: stats() }), false],
+    ['the current branch with its stats', render(fixture(), 'context', { contextStats: current() }), true],
+    ['the current branch with those of another branch', render(fixture(), 'context', { contextStats: current({ branchId: 'b8' }) }), false],
+    ['the current branch with those of a checkpoint', render(fixture(), 'context', { contextStats: stats() }), false],
+  ];
+  for (const [label, screen, numbers] of shown) assert.equal(/≈\d/.test(screen.text), numbers, label);
 
-  state.ui.parts = ['Маяк\n2026-08-02 20:00\nСеверный остров.', 'Вторая часть описания.'];
-  const receipt = render(state, 'new-seed');
-  checkPayload(receipt, 'new-seed draft');
-  assert.deepEqual(callbacks(receipt), ['save-seed:d123', 'cancel']);
-  const chars = [...state.ui.parts.join('\n\n')].length;
-  assert.match(receipt.text, /не сохранён/);
-  assert.match(receipt.text, new RegExp(`Получено: 2 части · ${chars} знак`));
-  assert.doesNotMatch(receipt.text, /Маяк|2026-08-02|Северный остров|Вторая часть/);
-  assert.match(receipt.text, /\.txt/);
-  assert.doesNotMatch(receipt.text, /⚠️|ток/);
-  assert.equal(receipt.entities, undefined);
+  // A paused card names no price and does not promise that a message starts it. The jobs are a count, never whose.
+  const gpu = (overrides: Record<string, unknown>) => render(fixture(), 'model', { modelInfo: modelInfo(), gpuInfo: gpuInfo(overrides) }).text;
+  assert.doesNotMatch(gpu({ status: 'paused', activeJobs: 0, canStart: true, canPause: false }), /\$|₽|руб|USD|\/ч|бесплатн|напиши|сообщени/i, 'a paused GPU');
+  assert.doesNotMatch(gpu({ activeJobs: 3, users: ['Алиса'], storyTitle: 'Секрет' }), /Алиса|Секрет/);
 
-  // Format is left to the backend: blank lines, headings or a title-only first part get no warning.
-  state.ui.parts = ['# Маяк'];
-  const titleOnly = render(state, 'new-seed');
-  assert.match(titleOnly.text, /Получено: 1 часть/);
-  assert.doesNotMatch(titleOnly.text, /⚠️|Маяк/);
-  assert.deepEqual(callbacks(titleOnly), ['save-seed:d123', 'cancel']);
-
-  state.ui = { input: 'seed', draftId: 'd456', parts: ['x'.repeat(50000)] };
-  const long = render(state, 'new-seed');
-  checkPayload(long, 'long draft');
-  assert.ok(long.text.length < 1000);
-  assert.match(long.text, /50000 знаков/);
-  assert.deepEqual(callbacks(long), ['save-seed:d456', 'cancel']);
-});
-
-test('busy state hides mutations but keeps navigation and cancel', () => {
-  const state = fixture();
-  state.job = { id: 'j12', storyId: 'h2', branchId: 'b3', head: 'n6', memory: null, input: 'дальше', started: 0 };
-  const { callbacks: all } = crawl(state);
-  assert.ok(all.includes('cancel'));
-  assert.ok(all.includes('view:checkpoint:h2:c5'));
-  for (const data of all) {
-    assert.doesNotMatch(data, /^(start|use|fork|remove-seed|remove-branch):|^(continue|compact)$|^view:delete-/, data);
-  }
-  assert.ok(all.includes('view:model'));
-  assert.ok(!callbacks(render(state, 'context', { contextStats: current() })).includes('compact'));
-  assert.ok(!callbacks(render(state, 'delete-seed:s1')).some(data => data.startsWith('remove-')));
-  assert.ok(!callbacks(render(state, 'delete-branch:h2:b3')).some(data => data.startsWith('remove-')));
-});
-
-test('delete confirmations show scope', () => {
-  const state = fixture();
-  const seed = render(state, 'delete-seed:s1').text;
-  assert.match(seed, /1 история/);
-  assert.match(seed, /2 ветки/);
-  assert.match(seed, /3 сцены/);
-  const branch = render(state, 'delete-branch:h2:b3').text;
-  assert.match(branch, /3 чекпоинта/);
-  assert.match(branch, /1 сцена, которой нет в других ветках/);
-  assert.match(branch, /1 другая ветка/);
-  delete state.stories.h2.branches.b8;
-  for (const id of ['c10', 'c11']) delete state.stories.h2.checkpoints[id];
-  delete state.stories.h2.nodes.n9;
-  assert.match(render(state, 'delete-branch:h2:b3').text, /история удалится целиком/);
-});
-
-test('stale and malformed routes recover', () => {
-  const state = fixture();
-  for (const route of ['seed:s99', 'story:h99', 'branch:h2:b99', 'checkpoints:h9:b3:0', 'checkpoint:h2:c99', 'delete-seed:s99', 'delete-branch:h2:b99', 'seed:constructor', 'story:__proto__', 'nonsense', '', 'seeds:-1', 'seeds:abc']) {
-    const message = render(state, route);
-    checkPayload(message, route);
-    assert.ok(callbacks(message).some(data => data === 'view:home' || data === 'view:seeds:0'), route);
-  }
-  checkPayload(render(state, undefined), 'undefined');
-  checkPayload(render(null, 'home'), 'null state');
-  state.active = { storyId: 'h2', branchId: 'gone' };
-  checkPayload(render(state), 'stale active');
-  assert.equal(sceneKeyboard(state), undefined);
+  for (const status of ['error', 'weird', undefined]) assert.ok(!gpu({ status }).includes(t.gpu.paused), 'unknown is not stopped');
+  const draft = render(drafting(TWO_PARTS), 'new-seed');
+  assert.doesNotMatch(draft.text, /Маяк|Северный остров|Вторая часть/, 'a draft receipt does not repeat story text');
 });
 
 test('long collections paginate and long texts fit', () => {
@@ -219,368 +242,23 @@ test('long collections paginate and long texts fit', () => {
   const preview = render(state, 'checkpoint:h2:c239');
   assert.ok(callbacks(preview).includes('fork:h2:c239'));
   assert.ok(preview.text.includes('новую ветку'), 'footer survives clipping');
-  crawl(state);
-});
 
-// Stats may reach the renderer incomplete, so overrides can replace any field with any value.
-function stats(overrides: Record<string, unknown> = {}) {
-  return {
-    scope: 'checkpoint', label: 'Сцена 2',
-    storyId: 'h2', branchId: 'b3', checkpointId: 'c7',
-    model: 'claude-haiku-4-5-20251001',
-    limitTokens: 65536, reserveTokens: 4096,
-    seed: { bytes: 1200, estimatedTokens: 300 },
-    memory: { count: 0, bytes: 0, estimatedTokens: 0 },
-    prefix: { bytes: 1200, estimatedTokens: 300 },
-    tail: { count: 3, bytes: 8800, estimatedTokens: 2200 },
-    snapshot: { bytes: 10000, estimatedTokens: 2500 },
-    request: { bytes: 13000, estimatedTokens: 3250, estimateSource: 'usage' },
-    budget: { inputTokens: 3250, limitTokens: 61440, remainingTokens: 58190 },
-    compaction: { thresholdTokens: 54000, keepScenes: 4 },
-    lastRequest: { inputTokens: 2700, outputTokens: 500, totalTokens: 3200 },
-    ...overrides,
-  } as ContextStats;
-}
+  // A seed pasted in parts: the receipt counts them without repeating any, and keeps its save and cancel.
+  state.ui = { input: 'seed', draftId: 'd456', parts: ['x'.repeat(50000)] };
+  const draft = render(state, 'new-seed');
+  assert.ok(draft.text.length < 1000 && draft.text.includes(t.draft.received(1, 50000)) && !draft.text.includes('xxx'), 'a 50,000-character draft');
+  assert.deepEqual(callbacks(draft), ['save-seed:d456', 'cancel']);
+  state.ui = null;
 
-const current = (overrides?: Record<string, unknown>) => stats({ scope: 'current', label: 'Начало', checkpointId: null, ...overrides });
-
-test('detailed context view separates exact bytes, estimates and measurements', () => {
-  const message = renderContext(current());
-  checkPayload(message, 'context full');
-  const text = message.text;
-  assert.match(text, /65\s536/);
-  assert.match(text, /Сид \+ память: 1\s200 Б · ≈300 ток\./);
-  assert.match(text, /Весь снимок: 10\s000 Б · ≈2\s500 ток\./);
-  assert.match(text, /Следующий запрос ≈3\s250 ток\. \(≈5% окна\)/);
-  assert.match(text, /сверена с последним измеренным/);
-  assert.match(text, /≈3\s250 из 61\s440 ток\./);
-  assert.match(text, /Осталось ≈58\s190 ток\./);
-  assert.match(text, /проверяется в начале ответа/);
-  assert.match(text, /Автосжатие: когда вход достигает ≈54\s000 ток\.; последние 4 сцены остаются целиком/);
-  assert.match(text, /Память: пусто, сжатий ещё не было/);
-  assert.doesNotMatch(text, /не реализовано/);
-  assert.match(text, /вход 2\s700 · выход 500 · всего 3\s200/);
-  assert.match(text, /скрытые рассуждения/);
-  assert.match(text, /байты UTF-8 ÷ 4/);
-  assert.doesNotMatch(text, /haiku/i);
-  assert.ok(callbacks(message).includes('view:home'));
-
-  const rough = renderContext(current({ request: { bytes: 13000, estimatedTokens: 3250, estimateSource: 'bytes' } })).text;
-  assert.match(rough, /Грубая оценка: байты UTF-8 ÷ 4 плюс запас/);
-  const compacted = renderContext(current({ memory: { count: 2, bytes: 900, estimatedTokens: 225 } })).text;
-  assert.match(compacted, /Память: 2 части · 900 Б · ≈225 ток\./);
-  const exhausted = renderContext(current({ budget: { inputTokens: 62000, limitTokens: 61440, remainingTokens: -560 } })).text;
-  assert.match(exhausted, /⚠️ По оценке бюджет ввода уже исчерпан/);
-});
-
-test('scene prefix is a minimal approximate percentage', () => {
-  assert.equal(scenePrefix(current()), '_📏 Контекст ≈ 5%_\n\n');
-  assert.equal(scenePrefix(current({ request: { estimatedTokens: 3250, estimateSource: 'bytes' } })), '_📏 Контекст ≈ 5%, грубая оценка_\n\n');
-  assert.equal(scenePrefix(current({ request: { estimatedTokens: 300, estimateSource: 'usage' } })), '_📏 Контекст менее 1%_\n\n');
-  assert.equal(scenePrefix(current({ request: { estimatedTokens: 70000, estimateSource: 'usage' } })), '_📏 Контекст ≈ 107%_\n\n');
-  for (const unknown of [null, undefined, {} as ContextStats, current({ request: null }), current({ request: { estimatedTokens: null } }), current({ limitTokens: null }), current({ limitTokens: 0 })]) {
-    assert.equal(scenePrefix(unknown), '');
+  // Every screen a button reaches fits one Telegram message.
+  const queue = ['home', 'new-seed'], seen = new Set<string>();
+  while (queue.length) {
+    const route = queue.shift()!;
+    if (seen.has(route)) continue;
+    seen.add(route);
+    const screen = render(state, route);
+    assert.ok(screen.text.length > 0 && screen.text.length <= 4096, `${route}: ${screen.text.length} characters`);
+    for (const data of callbacks(screen)) if (data.startsWith('view:')) queue.push(data.slice(5));
   }
-  const prefix = scenePrefix(current());
-  assert.ok(prefix.endsWith('\n\n'));
-  assert.equal(prefix.trim().split('\n').length, 1);
-  assert.doesNotMatch(prefix, /\d{3}|ток|[.()<>[\]*`]/);
-});
-
-test('scene prefix names the model only when the scene carries provenance', () => {
-  const haiku = { provider: 'claude-code', model: 'claude-haiku-4-5-20251001' };
-  assert.equal(scenePrefix(current(), haiku), '_🤖 Claude Code · claude‐haiku‐4‐5‐20251001 · 📏 Контекст ≈ 5%_\n\n');
-  assert.equal(scenePrefix(null, haiku), '_🤖 Claude Code · claude‐haiku‐4‐5‐20251001_\n\n');
-  const gemma = scenePrefix(current(), { provider: 'llama-cpp', model: 'gemma_4*31b [Q4_K_M].gguf`' });
-  assert.equal(gemma, '_🤖 наш сервер · gemma‐4‐31b ‐Q4‐K‐M‐gguf‐ · 📏 Контекст ≈ 5%_\n\n');
-  assert.doesNotMatch(gemma.slice(1, -3), /[_*`[\]()<>.\\]/);
-  // Old scenes without provenance, or broken metadata, are never labelled.
-  for (const missing of [undefined, null, {}, { provider: 'llama-cpp' }, { provider: 'other', model: 'x' }, { provider: 'claude-code', model: '  ' }]) {
-    assert.equal(scenePrefix(current(), missing), '_📏 Контекст ≈ 5%_\n\n');
-    assert.equal(scenePrefix(null, missing), '');
-  }
-});
-
-function modelInfo(overrides: ModelInfo = {}): ModelInfo {
-  return { provider: 'llama-cpp', model: 'gemma-4-31b-heretic-Q4_K_M', status: 'ready', checkedAt: '2026-09-16T10:05:30.000Z', ...overrides };
-}
-
-test('model screen explains provider and status without a switch', () => {
-  const state = fixture();
-  for (const provider of ['claude-code', 'llama-cpp']) {
-    for (const status of ['configured', 'ready', 'unavailable']) {
-      for (const checkedAt of ['2026-09-16T10:05:30.000Z', null]) {
-        const route = `model ${provider} ${status} ${checkedAt}`;
-        const message = render(state, 'model', { modelInfo: modelInfo({ provider, status, checkedAt }) });
-        checkPayload(message, route);
-        assert.deepEqual(callbacks(message), ['view:model', 'view:home'], route);
-        assert.doesNotMatch(message.text, /undefined|null|NaN/, route);
-        if (status === 'ready') {
-          assert.match(message.text, /не постоянное наблюдение/, route);
-          assert.match(message.text, checkedAt ? /2026-09-16 10:05 UTC/ : /время неизвестно/, route);
-        } else {
-          assert.doesNotMatch(message.text, /✅/, route);
-        }
-      }
-    }
-  }
-  const claude = render(state, 'model', { modelInfo: modelInfo({ provider: 'claude-code', model: 'claude-haiku-4-5-20251001' }) }).text;
-  assert.match(claude, /Claude Code по подписке Claude/);
-  assert.match(claude, /не на нашем арендованном GPU/);
-  assert.match(claude, /claude-haiku-4-5-20251001/);
-
-  const llama = render(state, 'model', { modelInfo: modelInfo() }).text;
-  assert.match(llama, /наш сервер модели \(llama\.cpp\)/);
-  assert.match(llama, /не измеряет видеокарту, память GPU/);
-  assert.doesNotMatch(llama, /RTX|5090|ГиБ|VRAM/);
-
-  assert.match(render(state, 'model', { modelInfo: modelInfo({ status: 'configured' }) }).text, /не проверена — готова ли она, неизвестно/);
-  assert.match(render(state, 'model', { modelInfo: modelInfo({ status: 'unavailable' }) }).text, /Недоступна при проверке: 2026-09-16 10:05 UTC/);
-
-  for (const details of [undefined, {}, { modelInfo: null }, { modelInfo: { provider: 'other', model: 'x' } }]) {
-    const empty = render(state, 'model', details);
-    checkPayload(empty, 'model without info');
-    assert.match(empty.text, /Данных о модели пока нет/);
-    assert.deepEqual(callbacks(empty), ['view:model', 'view:home']);
-  }
-});
-
-test('home shows a model line only with model info', () => {
-  const state = fixture();
-  assert.ok(callbacks(render(state)).includes('view:model'));
-  assert.doesNotMatch(render(state).text, /🤖/);
-  assert.match(render(state, 'home', { modelInfo: modelInfo() }).text, /🤖 наш сервер · gemma-4-31b-heretic-Q4_K_M · отвечала 2026-09-16 10:05 UTC/);
-  assert.match(render(state, 'home', { modelInfo: modelInfo({ provider: 'claude-code', status: 'configured' }) }).text, /🤖 Claude Code · .* · не проверена/);
-  assert.match(render(state, 'home', { modelInfo: modelInfo({ status: 'unavailable' }) }).text, /· недоступна при проверке/);
-  assert.match(render(state, 'nonsense', { modelInfo: modelInfo() }).text, /🤖 наш сервер/);
-});
-
-// GPU status is rendered defensively, so overrides can replace any field with any value.
-function gpuInfo(overrides: Record<string, unknown> = {}) {
-  return { status: 'ready', activeJobs: 0, idleMinutes: 15, idleRemainingSeconds: 600, canStart: false, canPause: true, ...overrides } as GpuInfo;
-}
-
-const GPU_STATUSES = ['unknown', 'ready', 'paused', 'starting', 'stopping', 'draining', 'error'];
-
-test('gpu controls follow canStart and canPause only', () => {
-  const state = fixture();
-  for (const status of [...GPU_STATUSES, 'weird', undefined]) {
-    for (const [canStart, canPause] of [[false, false], [true, false], [false, true], [true, true], [undefined, 'yes']]) {
-      const route = `model gpu ${status} ${canStart} ${canPause}`;
-      const message = render(state, 'model', { modelInfo: modelInfo(), gpuInfo: gpuInfo({ status, canStart, canPause }) });
-      checkPayload(message, route);
-      const expected = [canStart === true ? 'gpu:start' : null, canPause === true ? 'gpu:pause' : null, 'view:model', 'view:home'].filter(Boolean);
-      assert.deepEqual(callbacks(message), expected, route);
-      assert.doesNotMatch(message.text, /undefined|null|NaN/, route);
-      const buttons = message.reply_markup!.inline_keyboard.flat().map(b => b.text).join(' ');
-      if (canStart === true) assert.match(buttons, /Запустить GPU/, route);
-      if (canPause === true) assert.match(buttons, /Пауза GPU/, route);
-      // Power control, never provider selection.
-      assert.doesNotMatch(buttons, /Claude|llama|Провайдер|Выбрать/, route);
-    }
-  }
-  // Model data may be missing while the GPU is still known.
-  assert.deepEqual(callbacks(render(state, 'model', { gpuInfo: gpuInfo({ status: 'paused', canStart: true, canPause: false }) })), ['gpu:start', 'view:model', 'view:home']);
-});
-
-test('gpu status texts are honest about billing, waiting and unknown states', () => {
-  const state = fixture();
-  const text = (overrides: Record<string, unknown>, details: RenderDetails = {}) => render(state, 'model', { modelInfo: modelInfo(), gpuInfo: gpuInfo(overrides), ...details }).text;
-
-  const ready = text({ activeJobs: 0, idleRemainingSeconds: 600 });
-  assert.match(ready, /общий для всех пользователей/);
-  assert.match(ready, /Задач модели сейчас: 0/);
-  assert.match(ready, /после 15 мин без задач модели/);
-  assert.match(ready, /Просмотр меню этот отсчёт не сбрасывает/);
-  assert.match(ready, /До автопаузы ≈10 мин/);
-  assert.match(ready, /дождётся конца всех сцен и сжатий/);
-  assert.doesNotMatch(text({ activeJobs: 2 }), /До автопаузы/);
-  assert.match(text({ activeJobs: 0, idleRemainingSeconds: 20 }), /До автопаузы ≈меньше минуты/);
-  assert.match(text({ activeJobs: null }), /Задач модели сейчас: неизвестно/);
-
-  const draining = text({ status: 'draining', activeJobs: 2, canPause: false });
-  assert.match(draining, /ждём, пока закончатся все задачи модели \(сейчас: 2\)/);
-  assert.match(draining, /Новые сцены и сжатия до паузы не начинаются/);
-
-  const paused = text({ status: 'paused', activeJobs: 0, canStart: true, canPause: false });
-  assert.match(paused, /Vast подтвердил остановку/);
-  assert.match(paused, /диск оплачивается и дальше/);
-  assert.match(paused, /Истории и чекпоинты хранятся у бота/);
-  assert.match(paused, /прогрев модели/);
-  assert.doesNotMatch(paused, /\$|₽|руб|USD|\/ч|бесплатн/);
-  // No claim that writing a message starts the GPU.
-  assert.doesNotMatch(paused, /напиши|сообщени/i);
-
-  assert.match(text({ status: 'starting', canPause: false }), /ждём свободную видеокарту на Vast и прогрев модели/);
-  for (const status of ['unknown', 'error', 'weird', undefined]) {
-    const unclear = text({ status, canPause: false });
-    assert.match(unclear, /не значит, что он на паузе/, String(status));
-    assert.match(unclear, /Обновить/, String(status));
-    assert.doesNotMatch(unclear, /⏸ На паузе|Vast подтвердил/, String(status));
-  }
-
-  // Only a count of active jobs, nothing about who runs them.
-  const extra = { ...gpuInfo({ activeJobs: 3 }), users: ['Алиса'], storyTitle: 'Секрет' };
-  const busy = render(state, 'model', { modelInfo: modelInfo(), gpuInfo: extra }).text;
-  assert.doesNotMatch(busy, /Алиса|Секрет/);
-});
-
-test('gpu info is hidden for the Claude provider and when absent', () => {
-  const state = fixture();
-  const claude = render(state, 'model', { modelInfo: modelInfo({ provider: 'claude-code', model: 'claude-haiku-4-5-20251001' }), gpuInfo: gpuInfo({ canStart: true }) });
-  assert.deepEqual(callbacks(claude), ['view:model', 'view:home']);
-  assert.doesNotMatch(claude.text, /🖥/);
-  assert.doesNotMatch(render(state, 'home', { modelInfo: modelInfo({ provider: 'claude-code' }), gpuInfo: gpuInfo() }).text, /🖥/);
-  for (const gpu of [undefined, null, 'ready']) {
-    const message = render(state, 'model', { modelInfo: modelInfo(), gpuInfo: gpu as GpuInfo | null | undefined });
-    assert.deepEqual(callbacks(message), ['view:model', 'view:home']);
-    assert.doesNotMatch(message.text, /🖥/);
-  }
-});
-
-test('home shows a compact gpu line without controls', () => {
-  const state = fixture();
-  const home = (overrides: Record<string, unknown>) => render(state, 'home', { modelInfo: modelInfo(), gpuInfo: gpuInfo(overrides) });
-  const ready = home({ activeJobs: 2 });
-  assert.match(ready.text, /🤖 наш сервер · .*\n🖥 GPU: работает · задач: 2\n/);
-  assert.ok(!callbacks(ready).some(data => data.startsWith('gpu:')));
-  assert.ok(callbacks(ready).includes('view:model'));
-  assert.match(home({ status: 'paused', canStart: true }).text, /🖥 GPU: на паузе/);
-  assert.ok(!callbacks(home({ status: 'paused', canStart: true })).includes('gpu:start'));
-  assert.match(home({ status: 'draining', activeJobs: 1 }).text, /🖥 GPU: ставится на паузу, ждёт задач: 1/);
-  assert.match(home({ status: 'starting' }).text, /🖥 GPU: запускается/);
-  assert.match(home({ status: 'stopping' }).text, /🖥 GPU: останавливается/);
-  assert.match(home({ status: 'error' }).text, /🖥 GPU: ошибка, открой «Модель» и обнови/);
-  assert.match(home({ status: 'unknown' }).text, /🖥 GPU: состояние неизвестно/);
-  for (const status of GPU_STATUSES) checkPayload(home({ status }), `home gpu ${status}`);
-  assert.match(render(state, 'home', { gpuInfo: gpuInfo({ status: 'paused' }) }).text, /🏠 Меню\n\n🖥 GPU: на паузе\n\n/);
-
-  // Scene provenance and scene keyboards are unchanged by GPU controls.
-  assert.equal(scenePrefix(current(), { provider: 'llama-cpp', model: 'gemma' }), '_🤖 наш сервер · gemma · 📏 Контекст ≈ 5%_\n\n');
-  assert.ok(!sceneKeyboard(state)!.inline_keyboard.flat().some(b => b.callback_data.startsWith('gpu:')));
-});
-
-test('compact now is offered only for the idle current branch', () => {
-  const state = fixture();
-  const idle = render(state, 'context', { contextStats: current() });
-  checkPayload(idle, 'context idle');
-  assert.equal(callbacks(idle)[0], 'compact');
-  assert.match(idle.text, /Последние 4 сцены останутся целиком/);
-  assert.match(idle.text, /в архиве/);
-  assert.match(idle.text, /до и после сжатия будут чекпоинты/);
-  assert.ok(callbacks(render(state, 'context')).includes('compact'));
-
-  assert.ok(!callbacks(render(state, 'context:h2:c7', { contextStats: stats() })).includes('compact'));
-  assert.ok(!callbacks(renderContext(current())).includes('compact'));
-  assert.ok(!callbacks(renderContext(stats())).includes('compact'));
-  state.active = null;
-  assert.ok(!callbacks(render(state, 'context', { contextStats: current() })).includes('compact'));
-
-  state.active = { storyId: 'h2', branchId: 'b3' };
-  for (const kind of [undefined, 'scene', 'compact']) {
-    state.job = partialJob({ id: 'j12', kind, storyId: 'h2', branchId: 'b3' });
-    assert.ok(!callbacks(render(state, 'context', { contextStats: current() })).includes('compact'), String(kind));
-    assert.ok(!callbacks(render(state, 'context')).includes('compact'), String(kind));
-  }
-});
-
-test('busy labels distinguish compaction from scene generation', () => {
-  const state = fixture();
-  state.job = partialJob({ id: 'j12', kind: 'compact', storyId: 'h2', branchId: 'b3' });
-  const home = render(state);
-  assert.match(home.text, /⏳ Идёт сжатие памяти в истории/);
-  assert.doesNotMatch(home.text, /Пишется сцена/);
-  assert.ok(home.reply_markup!.inline_keyboard.flat().some(b => b.callback_data === 'cancel' && b.text === '✖️ Отменить сжатие'));
-  assert.match(render(state, 'seed:s1').text, /Сейчас идёт сжатие памяти: начать историю или удалить сид можно будет после него/);
-  assert.match(render(state, 'context', { contextStats: current() }).text, /Идёт сжатие памяти/);
-  assert.match(render(state, 'new-seed').text, /Сжатие памяти, начатое раньше/);
-
-  state.job = partialJob({ id: 'j13', kind: 'scene', storyId: 'h2', branchId: 'b3' });
-  assert.match(render(state).text, /⏳ Пишется сцена в истории/);
-  assert.match(render(state, 'seed:s1').text, /Сейчас пишется сцена: .* после неё/);
-  assert.ok(render(state).reply_markup!.inline_keyboard.flat().some(b => b.text === '✖️ Отменить генерацию'));
-});
-
-test('missing measurements are unknown, never zero', () => {
-  const partial = current({ lastRequest: { inputTokens: null, outputTokens: 500, totalTokens: null }, seed: { bytes: 1200, estimatedTokens: null }, request: null });
-  const text = renderContext(partial).text;
-  assert.match(text, /вход неизвестно · выход 500 · всего неизвестно/);
-  assert.match(text, /Сид: 1\s200 Б · токены неизвестны/);
-  assert.match(text, /оценки нет/);
-  assert.match(renderContext(current({ lastRequest: null })).text, /нет измерений/);
-  assert.match(renderContext(current({ budget: { inputTokens: null, limitTokens: 61440, remainingTokens: null } })).text, /Бюджет ввода \(окно минус резерв\): неизвестно из 61\s440/);
-  checkPayload(renderContext(null), 'null stats');
-});
-
-test('context routes use only matching stats', () => {
-  const state = fixture();
-  const own = render(state, 'context:h2:c7', { contextStats: stats() });
-  assert.match(own.text, /≈2\s500/);
-  assert.ok(callbacks(own).includes('view:checkpoint:h2:c7'));
-
-  const other = render(state, 'context:h2:c5', { contextStats: stats() });
-  assert.doesNotMatch(other.text, /≈/);
-  assert.ok(callbacks(other).includes('view:checkpoint:h2:c5'));
-
-  const preview = render(state, 'checkpoint:h2:c7', { contextStats: stats() });
-  assert.doesNotMatch(preview.text, /📏|≈|\d Б/);
-  assert.ok(callbacks(preview).includes('view:context:h2:c7'));
-
-  assert.match(render(state, 'context', { contextStats: current() }).text, /≈3\s250/);
-  assert.doesNotMatch(render(state, 'context', { contextStats: current({ branchId: 'b8' }) }).text, /≈/);
-  assert.doesNotMatch(render(state, 'context', { contextStats: stats() }).text, /≈/);
-  assert.match(render(state, 'context').text, /пока нет/);
-  checkPayload(render(state, 'context', null), 'null details');
-
-  state.job = partialJob({ id: 'j12', storyId: 'h2', branchId: 'b3' });
-  const busy = render(state, 'context', { contextStats: current() });
-  assert.match(busy.text, /⏳/);
-  assert.ok(callbacks(render(state)).includes('view:context'));
-
-  state.job = null;
-  state.active = null;
-  assert.ok(callbacks(render(state, 'context', { contextStats: current() })).includes('view:seeds:0'));
-  assert.ok(callbacks(render(state, 'context:h2:c99')).includes('view:home'));
-});
-
-test('scene keyboard follows state', () => {
-  const state = fixture();
-  assert.deepEqual(sceneKeyboard(state)!.inline_keyboard.flat().map(b => b.callback_data), ['continue', 'view:context', 'view:model', 'view:checkpoints:h2:b3:0', 'view:story:h2', 'view:home']);
-  state.job = partialJob({ id: 'j12', storyId: 'h2', branchId: 'b3' });
-  assert.deepEqual(sceneKeyboard(state)!.inline_keyboard.flat().map(b => b.callback_data), ['cancel', 'view:context', 'view:model', 'view:home']);
-  state.job = null;
-  state.active = null;
-  assert.equal(sceneKeyboard(state), undefined);
-});
-
-test('the story tree folds straight runs, shows forks, saved checkpoints and the active branch in a pre block', () => {
-  const state = fixture();
-  const story = state.stories.h2;
-  story.nodes.n12 = node('n12', 'n9', '2026-08-02 21:00', 'Шаги на лестнице.');
-  story.nodes.n13 = node('n13', 'n12', '2026-08-02 21:20', 'Дверь открыта.');
-  story.branches.b8.head = 'n13';
-  story.checkpoints.c14 = { id: 'c14', branchId: 'b8', label: 'Перед дверью', kind: 'manual', head: 'n12', memory: null };
-  state.active = { storyId: 'h2', branchId: 'b8' };
-  story.nodes.n15 = node('n15', 'n6', '2026-08-02 22:00', 'Туман.');
-  story.nodes.n16 = node('n16', 'n15', '2026-08-02 22:30', 'Колокол.');
-  story.branches.b3.head = 'n16';
-  story.checkpoints.c17 = { id: 'c17', branchId: 'b3', label: 'После сжатия', kind: 'compaction', head: 'n15', memory: null };
-  const tree = ['🌱 начало', '└─ 1 сцена до 02.08 20:00', '  ├─ 2 сцены до 02.08 22:00 · 🗜 сжатие памяти', '  │ └─ 1 сцена до 02.08 22:30 · 🌿 Начало',
-    '  └─ 2 сцены до 02.08 21:00 · 📍 Перед дверью', '    └─ 1 сцена до 02.08 21:20 · 🌿 От Сцена 1 ✅'].join('\n');
-  const screen = render(state, 'tree:h2');
-  assert.ok(screen.text.includes(tree));
-  assert.deepEqual(screen.entities, [{ type: 'pre', offset: screen.text.indexOf(tree), length: tree.length }]);
-  assert.ok(!screen.text.includes('Ветер бьёт'));
-  assert.deepEqual(screen.reply_markup!.inline_keyboard.flat().map(b => b.callback_data), ['view:log:h2:b3:0', 'view:log:h2:b8:0', 'view:story:h2', 'view:home']);
-  // The log of a branch reads like a commit log: every scene, newest first, with the names that point at it.
-  story.checkpoints.c18 = { id: 'c18', branchId: 'b8', label: 'Сцена 3', kind: 'scene', head: 'n12', memory: null };
-  const log = render(state, 'log:h2:b8:0');
-  assert.match(log.text, /4\. 2026-08-02 21:20 · 🌿 От Сцена 1\n {3}✍️ Ввод\n3\. 2026-08-02 21:00 · 📍 Перед дверью\n {3}✍️ Ввод\n2\. 2026-08-02 20:40\n {3}✍️ Ввод\n1\. 2026-08-02 20:00 · ⑂ Начало/);
-  assert.ok(!log.text.includes('Шаги на лестнице'));
-  assert.deepEqual(log.reply_markup!.inline_keyboard.flat().map(b => b.callback_data),
-    // Scene 4 has no checkpoint in this fixture, so it has no button; the bot saves one after every scene.
-    ['view:checkpoint:h2:c14', 'view:checkpoint:h2:c11', 'view:checkpoint:h2:c5', 'view:tree:h2', 'view:branch:h2:b8', 'view:home']);
-  assert.match(render(state, 'log:h2:missing:0').text, /не найдена/);
-  assert.ok(render(state, 'story:h2').reply_markup!.inline_keyboard.flat().some(b => b.callback_data === 'view:tree:h2'));
-  assert.match(render(state, 'tree:missing').text, /не найдена/);
+  assert.ok(seen.size > 100, 'the crawl reaches the long library');
 });

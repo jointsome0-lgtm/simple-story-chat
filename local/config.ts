@@ -1,29 +1,36 @@
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { parseEnv } from 'node:util';
 import { basename, dirname, join, resolve } from 'node:path';
+import { memoryOutputTokens } from './memory.ts';
 
 export type Env = NodeJS.Dict<string>;
 export type ModelConfig = {
-  provider: 'claude-code' | 'codex-cli' | 'llama-cpp' | 'openai-compatible'; model: string; baseUrl: string | undefined; apiKey: string; temperature: number;
-  memoryMode: 'plain' | 'sgr'; repairCoverage: boolean; timeoutMs: number; contextTokens: number; maxOutputTokens: number;
+  provider: 'claude-code' | 'codex-cli' | 'llama-cpp' | 'openai-compatible' | 'simple-serving'; model: string; baseUrl: string | undefined; apiKey: string; temperature: number;
+  memoryMode: 'plain' | 'sgr'; repairCoverage: boolean; memoryThinking: boolean; timeoutMs: number; contextTokens: number; maxOutputTokens: number;
   compactAtTokens: number; keepScenes: number;
-  // llama.cpp: the server's slots, whether they share one KV cache (`--kv-unified`) and how many cells that is.
-  // With isolated slots `poolTokens` is `contextTokens`: one slot holds one request.
+  // The scheduler's lanes: llama.cpp's slots, or the calls simple-serving takes from the bot at once. For llama.cpp
+  // also whether the slots share one KV cache (`--kv-unified`) and how many cells that is. With isolated slots, and
+  // over the gateway, `poolTokens` is `contextTokens`: one lane holds one request.
   slots: number; poolTokens: number; sharedCache: boolean;
   // Overrides of the daily cap of a hosted API's channel; see budget.ts.
   budget: { requests: number | undefined; tokens: number | undefined };
 };
 export type GpuConfig = { instanceId: string; apiKey: string; sshHost: string; idleMinutes: number };
-// A picture under each scene (docs/illustrations-plan.md), off unless SIMPLE_CHAT_IMAGE_URL is set. `style` is the
+// A picture under each scene (docs/setup.md#pictures), off unless SIMPLE_CHAT_IMAGE_URL is set. `style` is the
 // one fixed style line of every prompt; without it the line the six steps were measured with is used
 // (local/illustrate.ts `STYLE`). `users` are the Telegram IDs whose scenes may be drawn — nobody by default.
 export type ImageConfig = {
   url: string; workflow: string; checkpoint: string; style: string | undefined; users: Set<string>;
-  waitMs: number; timeoutMs: number;
+  waitMs: number; timeoutMs: number; references?: boolean; referenceUsers?: Set<string>;
+  // The readers who have versions of a story's sheet (local/picture-versions.ts): their frames name the lasting changes
+  // the story makes to a person's look, and they may write a person's text «only from this moment». Nobody by default.
+  versionUsers?: Set<string>;
+  // Only with SIMPLE_CHAT_IMAGE_PROVIDER=simple-serving: the picture gateway's client key (local/image-serving.ts).
+  serving?: { key: string };
 };
 export type Config = ModelConfig & { gpu: GpuConfig | undefined; images: ImageConfig | undefined; token: string; allowedUsers: Set<string>; ownerId: string; dbPath: string };
-// The agent interface (docs/agent-interface.md): its own library file, and the bot's model queue if the bot serves one.
-// `agentId` names the library inside that file when the client does not pass one.
+// The agent interface (docs/agent-interface.md#privacy-a-separate-library): its own library file, and the bot's model
+// queue if the bot serves one. `agentId` names the library inside that file when the client does not pass one.
 export type AgentConfig = ModelConfig & { dbPath: string; modelSocket: string; waitSeconds: number; agentId: string | undefined };
 
 function environment(directory: string, inherited: Env): Env {
@@ -36,7 +43,7 @@ function environment(directory: string, inherited: Env): Env {
 export function modelBaseUrl(value: string | undefined): string {
   let url;
   // URL converts its argument to a string, so a missing value fails here too.
-  try { url = new URL(String(value)); } catch { throw new Error('Set SIMPLE_CHAT_BASE_URL to the llama.cpp server root'); }
+  try { url = new URL(String(value)); } catch { throw new Error('Set SIMPLE_CHAT_BASE_URL to the model server root'); }
   const loopback = ['127.0.0.1', '[::1]', 'localhost'].includes(url.hostname);
   if (url.username || url.password || url.search || url.hash || url.pathname !== '/'
       || (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback))) {
@@ -62,38 +69,53 @@ function modelConfig(env: Env): ModelConfig {
     return value;
   };
   const provider = env.SIMPLE_CHAT_PROVIDER || 'claude-code';
-  if (provider !== 'claude-code' && provider !== 'codex-cli' && provider !== 'llama-cpp' && provider !== 'openai-compatible') throw new Error('Unsupported SIMPLE_CHAT_PROVIDER');
-  const baseUrl = provider === 'llama-cpp' ? modelBaseUrl(env.SIMPLE_CHAT_BASE_URL)
+  if (provider !== 'claude-code' && provider !== 'codex-cli' && provider !== 'llama-cpp' && provider !== 'openai-compatible'
+      && provider !== 'simple-serving') throw new Error('Unsupported SIMPLE_CHAT_PROVIDER');
+  // simple-serving is our gateway on the card (local/serving.ts): its root, like llama-server's, is HTTPS or loopback.
+  const baseUrl = provider === 'llama-cpp' || provider === 'simple-serving' ? modelBaseUrl(env.SIMPLE_CHAT_BASE_URL)
     : provider === 'openai-compatible' ? apiBaseUrl(env.SIMPLE_CHAT_BASE_URL) : undefined;
   const apiKey = env.SIMPLE_CHAT_API_KEY?.trim() || '';
   if (/[\r\n]/.test(apiKey)) throw new Error('Invalid SIMPLE_CHAT_API_KEY');
+  // The gateway asks every request for its key, over the tunnel too.
+  if (provider === 'simple-serving' && !apiKey) throw new Error('Set SIMPLE_CHAT_API_KEY to the gateway key');
   if (baseUrl?.startsWith('https:') && !apiKey) throw new Error('Set SIMPLE_CHAT_API_KEY for a remote HTTPS server');
   const temperature = Number(env.SIMPLE_CHAT_TEMPERATURE || '0.8');
   if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) throw new Error('Invalid SIMPLE_CHAT_TEMPERATURE');
   if (provider === 'openai-compatible' && !env.SIMPLE_CHAT_MODEL) throw new Error('Set SIMPLE_CHAT_MODEL for the hosted API');
   // Which models a Codex account may use depends on its plan, so there is no safe default.
   if (provider === 'codex-cli' && !env.SIMPLE_CHAT_MODEL) throw new Error('Set SIMPLE_CHAT_MODEL for the Codex CLI');
+  // The gateway serves one model under the name its operator gave it and refuses any other.
+  if (provider === 'simple-serving' && !env.SIMPLE_CHAT_MODEL) throw new Error('Set SIMPLE_CHAT_MODEL to the model name the gateway serves');
   const model = env.SIMPLE_CHAT_MODEL || (provider === 'llama-cpp' ? 'gemma-4-31b-heretic-q6k' : 'claude-haiku-4-5-20251001');
-  if (!/^[A-Za-z0-9][A-Za-z0-9_./:-]{0,199}$/.test(model)) throw new Error('Invalid SIMPLE_CHAT_MODEL');
+  // A Codex model may end in `@<effort>`, which local/codex.ts checks; every other provider refuses `@`.
+  if (!/^[A-Za-z0-9][A-Za-z0-9_./:-]{0,199}$/.test(provider === 'codex-cli' ? model.replace(/@[a-z]+$/, '') : model)) throw new Error('Invalid SIMPLE_CHAT_MODEL');
   const contextTokens = integer('SIMPLE_CHAT_CONTEXT_TOKENS', 65536, 8192, 65536);
   const memoryMode = env.SIMPLE_CHAT_MEMORY_MODE || 'plain';
   if (memoryMode !== 'plain' && memoryMode !== 'sgr') throw new Error('Invalid SIMPLE_CHAT_MEMORY_MODE');
   const repairCoverage = env.SIMPLE_CHAT_MEMORY_REPAIR_COVERAGE || 'false';
   if (!['true', 'false'].includes(repairCoverage)) throw new Error('Invalid SIMPLE_CHAT_MEMORY_REPAIR_COVERAGE');
+  // Lets a compaction think (docs/model-providers.md#memory-thinking), for measuring: the bot's own turns never pass it
+  // on (local/main.ts). No SIMPLE_CHAT_ prefix, because the eval gives its probes none of those (local/eval.ts `probe`).
+  const memoryThinking = env.MEMORY_THINKING || 'false';
+  if (!['true', 'false'].includes(memoryThinking)) throw new Error('Invalid MEMORY_THINKING');
   const maxOutputTokens = integer('SIMPLE_CHAT_MAX_OUTPUT_TOKENS', 4096, 256, 8192);
-  const maxInput = contextTokens - Math.max(maxOutputTokens, memoryMode === 'sgr' ? 8192 : 4096);
+  const maxInput = contextTokens - Math.max(maxOutputTokens, memoryOutputTokens(memoryMode, memoryThinking === 'true'));
   if (maxInput < 2048) throw new Error('Output reserve leaves too little input context');
   // A pool (scheduler.ts) needs a server started with the same slots (gpu/serve.sh). By default each slot holds its own
   // request of `contextTokens` and nothing is divided. `SIMPLE_CHAT_GPU_KV_UNIFIED=true` is llama.cpp's `--kv-unified`:
-  // the slots then share `SIMPLE_CHAT_POOL_TOKENS` cells and the scheduler admits calls by size.
-  const slots = provider === 'llama-cpp' ? integer('SIMPLE_CHAT_GPU_SLOTS', 1, 1, 8) : 1;
+  // the slots then share `SIMPLE_CHAT_POOL_TOKENS` cells and the scheduler admits calls by size. A simple-serving
+  // gateway has no slots to place a call in and admits calls itself, so over it the lanes are the bot's own: as many
+  // calls as it sends at once, two by default, as route A was measured, and at most the readers' four places
+  // (contract section 7). Every other provider runs one lane.
+  const slots = provider === 'llama-cpp' ? integer('SIMPLE_CHAT_GPU_SLOTS', 1, 1, 8)
+    : provider === 'simple-serving' ? integer('SIMPLE_CHAT_SERVING_LANES', 2, 1, 4) : 1;
   const unified = env.SIMPLE_CHAT_GPU_KV_UNIFIED || 'false';
   if (!['true', 'false'].includes(unified)) throw new Error('Invalid SIMPLE_CHAT_GPU_KV_UNIFIED');
-  const sharedCache = unified === 'true';
+  const sharedCache = provider === 'llama-cpp' && unified === 'true';
   const poolTokens = slots > 1 && sharedCache ? integer('SIMPLE_CHAT_POOL_TOKENS', contextTokens, contextTokens, 131072) : contextTokens;
   return {
     slots, poolTokens, sharedCache,
-    provider, model, baseUrl, apiKey, temperature, memoryMode, repairCoverage: repairCoverage === 'true',
+    provider, model, baseUrl, apiKey, temperature, memoryMode, repairCoverage: repairCoverage === 'true', memoryThinking: memoryThinking === 'true',
     timeoutMs: integer('SIMPLE_CHAT_MODEL_TIMEOUT_MS', 300000, 1000, 1800000),
     contextTokens, maxOutputTokens,
     compactAtTokens: integer('SIMPLE_CHAT_COMPACT_AT_TOKENS', Math.min(provider === 'claude-code' || provider === 'codex-cli' ? 54000 : 44000, maxInput), 2048, maxInput),
@@ -109,6 +131,7 @@ export function loadModelConfig(directory = process.cwd(), inherited: Env = proc
 
 export function gpuConfig(env: Env, provider: string): GpuConfig | undefined {
   if (!env.SIMPLE_CHAT_VAST_INSTANCE_ID?.trim()) return undefined;
+  if (provider === 'simple-serving') throw new Error('simple-serving runs its own card, not the bot: unset SIMPLE_CHAT_VAST_INSTANCE_ID');
   const instanceId = env.SIMPLE_CHAT_VAST_INSTANCE_ID.trim();
   const apiKey = env.SIMPLE_CHAT_VAST_API_KEY?.trim();
   const sshHost = env.SIMPLE_CHAT_GPU_SSH_HOST || 'simple-chat-vast';
@@ -121,11 +144,11 @@ export function gpuConfig(env: Env, provider: string): GpuConfig | undefined {
   return { instanceId, apiKey, sshHost, idleMinutes };
 }
 
-// The picture lane, which is a second card and never this computer's or the language model's (the plan's "Two
-// constraints that do not bend": the language model holds 22-25 GB of the 32, and the image model needs its own).
-// `SIMPLE_CHAT_IMAGE_URL` is therefore the loopback end of the ssh tunnel to that other machine, as
-// `gpu/tunnel.sh --pictures` forwards it (127.0.0.1:8188), and never a published address: a scene is drawn from a
-// reader's own text, so it may leave this computer only through a tunnel to a card we run.
+// The picture lane, which is a second card and never this computer's or the language model's
+// (docs/illustrations-plan.md#two-constraints-that-do-not-bend: the language model holds 22-25 GB of the 32, and the
+// image model needs its own). `SIMPLE_CHAT_IMAGE_URL` is therefore the loopback end of the ssh tunnel to that other
+// machine, as `gpu/tunnel.sh --pictures` forwards it (127.0.0.1:8188), and never a published address: a scene is
+// drawn from a reader's own text, so it may leave this computer only through a tunnel to a card we run.
 //
 //   SIMPLE_CHAT_IMAGE_URL=http://127.0.0.1:8188
 //   SIMPLE_CHAT_IMAGE_WORKFLOW=gpu/image-workflow-qwen.json   # the graph, in ComfyUI's API format
@@ -133,8 +156,14 @@ export function gpuConfig(env: Env, provider: string): GpuConfig | undefined {
 //   SIMPLE_CHAT_IMAGE_USERS=123456789                         # the readers who get pictures; nobody by default
 //   SIMPLE_CHAT_IMAGE_STYLE=...                               # optional; the measured style line is the default
 //   SIMPLE_CHAT_IMAGE_WAIT_SECONDS=180                        # optional; how long one picture may take
+//   SIMPLE_CHAT_SHEET_VERSION_USERS=123456789                 # optional; readers whose people change along the story
+//   SIMPLE_CHAT_IMAGE_PROVIDER=simple-serving                 # optional; comfyui by default
+//   SIMPLE_CHAT_IMAGE_API_KEY=...                             # the picture gateway's client key, with simple-serving
 //
 // Without SIMPLE_CHAT_IMAGE_URL nothing is described and nothing is drawn: no second model call, no status line.
+// With SIMPLE_CHAT_IMAGE_PROVIDER=simple-serving the pictures go through simple-serving's picture gateway in front of
+// the card (its docs/pictures.md), and SIMPLE_CHAT_IMAGE_URL is the gateway's tunnel, http://127.0.0.1:8084. The
+// default, `comfyui`, is ComfyUI through its own tunnel, with nothing of the gateway read.
 // The graphs in gpu/ end in a node that saves the picture into ComfyUI's own output directory, where nothing of
 // ours can delete it again; the bot loads such a node as a preview one, so the card keeps no copy of a reader's
 // scene (local/image-batch.ts `previewOnly`). The batch harness on a rented card draws synthetic scenes and keeps
@@ -162,6 +191,12 @@ export function imageConfig(env: Env, directory: string, allowedUsers: Set<strin
   if (ownCard && cardOf(url) === ownCard) {
     throw new Error('SIMPLE_CHAT_IMAGE_URL must be the second card\'s tunnel, not the language model\'s own server');
   }
+  const provider = env.SIMPLE_CHAT_IMAGE_PROVIDER?.trim() || 'comfyui';
+  if (provider !== 'comfyui' && provider !== 'simple-serving') throw new Error('SIMPLE_CHAT_IMAGE_PROVIDER must be comfyui or simple-serving');
+  const key = env.SIMPLE_CHAT_IMAGE_API_KEY?.trim() || '';
+  if (provider === 'simple-serving' && (!key || /[\r\n]/.test(key))) {
+    throw new Error('Set SIMPLE_CHAT_IMAGE_API_KEY to the picture gateway\'s client key, on one line');
+  }
   const workflow = env.SIMPLE_CHAT_IMAGE_WORKFLOW?.trim();
   if (!workflow) throw new Error('Set SIMPLE_CHAT_IMAGE_WORKFLOW to a ComfyUI graph exported in API format, such as gpu/image-workflow-qwen.json');
   const checkpoint = env.SIMPLE_CHAT_IMAGE_CHECKPOINT?.trim();
@@ -180,10 +215,23 @@ export function imageConfig(env: Env, directory: string, allowedUsers: Set<strin
   }
   const seconds = Number(env.SIMPLE_CHAT_IMAGE_WAIT_SECONDS || 180);
   if (!Number.isSafeInteger(seconds) || seconds < 5 || seconds > 1800) throw new Error('Invalid SIMPLE_CHAT_IMAGE_WAIT_SECONDS');
+  const references = env.SIMPLE_CHAT_IMAGE_REFERENCES?.trim() || 'false';
+  if (!['true', 'false'].includes(references)) throw new Error('SIMPLE_CHAT_IMAGE_REFERENCES must be true or false');
+  const referenceUsers = new Set((env.SIMPLE_CHAT_IMAGE_REFERENCE_USERS || '').split(',').map(one => one.trim()).filter(Boolean));
+  for (const user of referenceUsers) if (!users.has(user)) {
+    throw new Error('Every SIMPLE_CHAT_IMAGE_REFERENCE_USERS entry must be one of SIMPLE_CHAT_IMAGE_USERS');
+  }
+  // A person's look along the story (local/picture-versions.ts), for these readers alone: a reader without pictures has
+  // no sheet, so a stray ID is a typo here too.
+  const versionUsers = new Set((env.SIMPLE_CHAT_SHEET_VERSION_USERS || '').split(',').map(one => one.trim()).filter(Boolean));
+  for (const user of versionUsers) if (!users.has(user)) {
+    throw new Error('Every SIMPLE_CHAT_SHEET_VERSION_USERS entry must be one of SIMPLE_CHAT_IMAGE_USERS');
+  }
   // One HTTP request of the picture lane is a submit, a poll or a download through the tunnel, never the drawing
   // itself: it may be short even when a picture may take minutes.
   return { url: url.origin, workflow: resolve(directory, workflow), checkpoint, style, users,
-    waitMs: seconds * 1000, timeoutMs: Math.min(60000, seconds * 1000) };
+    waitMs: seconds * 1000, timeoutMs: Math.min(60000, seconds * 1000), references: references === 'true', referenceUsers, versionUsers,
+    ...(provider === 'simple-serving' ? { serving: { key } } : {}) };
 }
 
 // A hosted API or a consumer Codex account may log requests and train on them. By default they serve synthetic probes

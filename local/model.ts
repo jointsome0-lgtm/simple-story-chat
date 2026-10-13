@@ -3,28 +3,47 @@ import type { ModelConfig } from './config.ts';
 import { createClaude } from './claude.ts';
 import { createCodex } from './codex.ts';
 import { createLlama, createOpenAI } from './llama.ts';
+import { createServing } from './serving.ts';
 import { createBudget, channelFor, capsFor } from './budget.ts';
 import { resolve } from 'node:path';
+import type { Work } from './eta.ts';
 
 // One ledger for every probe on this computer; *.sqlite is ignored by Git.
 export const BUDGET_PATH = resolve(import.meta.dirname, '..', 'eval-usage.sqlite');
 
 export type ChatMessage = { role: 'user' | 'assistant'; content: string };
+// `trustEstimate`: the caller's estimate is far enough below its limit that a provider which counts input exactly
+// may send the request without counting it first (local/llama.ts); the count the server reports while generating
+// still decides whether the result stands.
+// `thinking`: the model may reason before it answers. Only a compaction under the thinking switch (local/memory.ts), the
+// eval's recall under RECALL_THINKING and its trap scenes under SCENE_THINKING (local/memory-probe.ts) ask for it;
+// llama.cpp, simple-serving and OpenRouter send thinking off without it, and other adapters ignore it.
 export type ModelRequest = {
   system: string; messages: ChatMessage[]; maxOutputTokens: number;
-  purpose?: 'memory'; outputSchema?: object; estimatedInputTokens?: number;
+  purpose?: 'memory'; outputSchema?: object; estimatedInputTokens?: number; trustEstimate?: boolean; thinking?: boolean;
 };
-// `onWait`: a shared model's queue reports how many calls are ahead of this one, each time the number changes.
+// Whose call a shared model's queue (local/scheduler.ts) runs. `foreground`: a person in Telegram. `agent`: a turn of
+// the agent interface (local/agent-api.ts), real work that fills the GPU while people read and, once started, is not
+// cut off by them. `background`: disposable probes that yield to anyone.
+export type Priority = 'foreground' | 'agent' | 'background';
+// `onWait`: a shared model's queue reports how many calls are ahead of this one, each time the number changes, and
+// roughly in how many milliseconds this one starts, when it can tell (local/eta.ts), each time that moves by much.
 // `onStart`: the call has left a shared model's queue and runs.
-export type Controls = { signal?: AbortSignal; onWait?: (ahead: number) => void; onStart?: () => void };
+// `priority` and `holder`: whose call it is, as that queue passes them on (TurnOptions `holder`); a direct call has
+// neither, except an agent's, which says `agent` (local/agent-api.ts). The scheduler writes them over whatever its caller
+// passed, so no caller of the queue names its own. Only a provider that serves kinds of work apart reads them
+// (local/serving.ts).
+export type Controls = {
+  signal?: AbortSignal; onWait?: (ahead: number, etaMs?: number) => void; onStart?: () => void; priority?: Priority; holder?: string;
+};
 // `slot`: the llama.cpp slot a pooled scheduler places the call in (`id_slot`), so its cache stays with its owner.
 export type GenerateControls = Controls & {
   onText?: (delta: string) => unknown; inputLimitTokens?: number; onQueued?: () => void; slot?: number;
 };
-// Server-side counts and durations of one request, as llama-server reports them, and the pool slot it ran in. For logs
-// only; never stored.
+// Server-side counts and durations of one request, as llama-server reports them, and the pool slot it ran in; or as a
+// simple-serving gateway measures them (`serving…`, local/serving.ts). For logs only; never stored.
 export type Timings = Partial<Record<'cacheTokens' | 'promptTokens' | 'promptMs' | 'predictedTokens' | 'predictedMs'
-  | 'draftTokens' | 'draftAcceptedTokens' | 'slot', number>>;
+  | 'draftTokens' | 'draftAcceptedTokens' | 'slot' | 'servingWaitMs' | 'servingFirstTokenMs' | 'servingTotalMs', number>>;
 export type GenerationResult = {
   text: string; finishReason: 'stop' | 'length'; usage?: Usage | null; timings?: Timings; streamResultMismatch?: boolean;
 };
@@ -32,7 +51,9 @@ export type GenerationResult = {
 // anybody else's call arrives, but which its holder's own turns wait for. `sharesPrefix`: work done ahead of need that
 // continues its holder's own last request rather than ask with a prompt of its own, so it belongs in the slot where that
 // prefix is cached and gives way to its holder's next turn as well; it yields whether or not `yields` is set.
-export type TurnOptions = { holder?: string; yields?: boolean; sharesPrefix?: boolean };
+// `work`: what the turn does, by which the queue times it for the start times it tells the people who wait
+// (local/eta.ts); it changes nothing of how the turn is run.
+export type TurnOptions = { holder?: string; yields?: boolean; sharesPrefix?: boolean; work?: Work };
 export type Provider = {
   generate(request: ModelRequest, controls?: GenerateControls): Promise<GenerationResult>;
   countInput?(request: ModelRequest, controls?: Controls): Promise<number>;
@@ -46,6 +67,7 @@ export function createModel(config: ModelConfig & { dbPath: string }): Provider 
   if (config.provider === 'claude-code') return createClaude(config);
   if (config.provider === 'codex-cli') return createCodex(config);
   if (config.provider === 'llama-cpp') return createLlama(config, { slots: config.slots });
+  if (config.provider === 'simple-serving') return createServing(config);
   if (config.provider === 'openai-compatible') {
     const channel = channelFor(config.baseUrl!, config.model);
     return createOpenAI(config, { budget: createBudget(BUDGET_PATH, channel, capsFor(channel, config.budget)) });

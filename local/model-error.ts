@@ -1,4 +1,6 @@
 // Provider errors are safe codes, never raw HTTP/CLI output or story text.
+import { POSES } from '../lib/library.ts';
+
 const PHASES = ['count_input', 'generate', 'health', 'gpu_read', 'gpu_write', 'ssh_wait', 'ssh_connect', 'ssh_tunnel'] as const;
 const OPERATIONS = ['compact', 'scene'] as const;
 const MEMORY_REASONS = ['output_limit', 'finish_reason', 'json', 'shape', 'fact', 'source', 'coverage', 'evidence', 'quote', 'conflict'] as const;
@@ -21,11 +23,53 @@ const IMAGE_ROLES = ['primary', 'alternate'] as const;
 export const CLI_RESULTS = ['success', 'error_max_turns', 'error_during_execution', 'error_max_budget_usd',
   'error_max_structured_output_retries', 'no_init', 'missing', 'other'] as const;
 // How one scene's picture ended (local/picture.ts): sent, failed with a code, ended by the reader's next message,
-// or not attempted at all because the card was paused. Four words; the scene and the picture stay out.
+// or not attempted at all because the card was paused. Four words; the scene and the picture stay out. A retelling
+// of the people's descriptions ends the same ways: written, failed, stopped, or given up with a code.
 const OUTCOMES = ['ready', 'failed', 'cancelled', 'skipped'] as const;
+// Which style a picture was drawn in (local/picture-style.ts): the bot's own line, a preset, or one of the reader's
+// own, whose words and names stay out of the row as the prompt does.
+const PICTURE_STYLES = ['standard', 'semi', 'novel', 'film', 'graphic', 'watercolor', 'empty', 'custom'] as const;
+// Whether a picture was drawn with the kitchen's INT8 attention (local/picture.ts `kitchenAttention`), and why not where
+// it was not: the bot's graph is not one it was measured on, the server's torch is not for CUDA 13, its node does not
+// offer it, or the server did not say.
+const PICTURE_ATTENTION = ['kitchen', 'plain_graph', 'plain_torch', 'plain_offer', 'plain_unanswered'] as const;
+const PICTURE_REFERENCES = ['used', 'disabled', 'not_allowed', 'no_portrait', 'legacy', 'unsupported_graph',
+  'unavailable', 'upload_failed', 'graph_rejected'] as const;
+// A picture of a person that a reader in the reference experiment sent (local/reference.ts): whether it came as a photo
+// or as a file, its format by its first bytes, and the pose it went to. Its caption and the name of its file stay out,
+// as the person's name does.
+const REFERENCE_SENT = ['photo', 'document'] as const;
+const REFERENCE_FORMATS = ['png', 'jpeg', 'webp'] as const;
+const REFERENCE_PLACES = POSES;
+// Why such a picture was refused (local/reference.ts `REFUSAL_CODES`): not a PNG, JPEG or WebP, or not one the bot
+// reads; its shorter side too short, its longer side too long, or the two too far apart; its bytes over the limit;
+// its download cut short; or an archive where a picture was awaited.
+const REFERENCE_REFUSALS = ['type', 'broken', 'small', 'huge', 'shape', 'too_large', 'incomplete', 'archive'] as const;
+// A person's whole profile that a reader sent back (local/profile.ts, local/bot.ts `profileSent`): how much of it the
+// message it was copied from showed, all of it, all but the portrait's prompt, or all but that and the description;
+// where new clothes went, into the scene the story stands at or into the sheet; and why a text was refused: the person
+// gone, the profile changed since, no text, a text that does not start with the name's line or end with the last line,
+// the name changed, a heading the bot does not know, the fields not those of the message once each, text outside them,
+// a field emptied that may not be, or a field over its limit.
+const PROFILE_FITS = ['whole', 'no_prompt', 'no_description'] as const;
+const PROFILE_CLOTHES = ['scene', 'sheet'] as const;
+const PROFILE_REFUSALS = ['gone', 'changed', 'no_text', 'incomplete', 'name', 'heading', 'sections', 'outside', 'empty', 'too_long'] as const;
+// A version of a person's look along the story (local/picture-versions.ts): whether the story wrote it, from a lasting
+// change a frame named, or the reader, «only from this moment», and which of the person's texts it holds. The change,
+// the description and the look stay out, as the person's name does.
+const VERSION_SOURCES = ['story', 'reader'] as const;
+const VERSION_FIELDS = ['change', 'description', 'look'] as const;
 // Why the model's last message ended, as the API names it, for the row of a failed Claude CLI run: `max_tokens` there
 // means the run's output cap was hit, which the CLI reports as an error rather than a truncation.
 export const STOP_REASONS = ['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'refusal', 'other'] as const;
+// The code a simple-serving gateway refused a request with (its contract, section 9; local/serving.ts), beside the
+// bot's own code it maps to: `class_not_allowed`, `queue_full` and `internal_error` tell whoever reads the log more
+// than `unauthorized`, `rate_limited` and `provider_failed` do. The picture lane adds its own (its docs/pictures.md,
+// section 4; local/image-serving.ts), before a job or in its stream. A code neither lists is `other`.
+const SERVING_CODES = ['invalid_request', 'unsupported_field', 'limit_exceeded', 'context_limit', 'unauthorized',
+  'class_not_allowed', 'scope_not_allowed', 'forbidden', 'not_found', 'stale_boot', 'stale_generation', 'body_too_large',
+  'queue_full', 'internal_error', 'starting', 'draining', 'drained', 'engine_unavailable', 'timeout',
+  'graph_refused', 'graph_rejected', 'picture_failed', 'socket_unavailable', 'stop_unconfirmed'] as const;
 // Sizes, counts and durations. Each is kept only as a non-negative safe integer, so none can carry text.
 const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'repairSceneCount', 'requestBytes',
   'inputBytesBefore', 'inputBytesAfter', 'outputCharacters', 'inputTokens', 'outputTokens', 'elapsedMs',
@@ -34,28 +78,94 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   // One model request: time in the queue and in token counting, then llama-server's own timings (local/model.ts Timings).
   'waitMs', 'countMs', 'cacheTokens', 'promptTokens', 'promptMs', 'predictedTokens', 'predictedMs', 'draftTokens',
   'draftAcceptedTokens', 'slot',
+  // What a waiting reader was told first (local/eta.ts `waited`): how many requests or pictures were ahead, and in
+  // how many seconds the bot expected theirs to start, when it could tell; `waitMs` or `imageQueueMs` is how long it
+  // took in fact.
+  'ahead', 'etaSeconds',
+  // A simple-serving gateway's own measurements of one request instead (local/serving.ts), each from the moment it
+  // accepted the request: until it handed the request to its engine, until the first token, until its last event.
+  // `waitMs` stays the bot's own queue.
+  'servingWaitMs', 'servingFirstTokenMs', 'servingTotalMs',
+  // The scene request's size as the bot estimated it before any count (local/generation.ts): beside `inputTokens` it
+  // shows how far the estimate that let a request skip the count was from the server's own.
+  'estimateTokens',
   // Which run of local/prepare.ts a row belongs to, counted from the start of the process.
   'prepareRun',
-  // One illustrated scene (docs/illustrations-plan.md): the description call, then the image server from submit to
-  // file, and what the reader waits from the end of the scene to the picture. The seed stays out: it is drawn from
-  // 0..2^64-1 and is not a safe integer, and so do the prompt, the description and the file name, which are the
-  // reader's scene in another form.
-  // `pictureSeconds` is the same wait as `pictureAfterSceneMs`, rounded: the plan asks for the seconds from the end
-  // of the scene to the picture as a non-negative integer, and that is the number a reader's patience is read in.
+  // One illustrated scene (docs/gpu.md#bot-log): the description call, then the image server from submit to the job's
+  // start (`imageQueueMs`) and to the file, and what the reader waits from the end of the scene to the picture. The
+  // seed stays out: it is drawn from 0..2^64-1 and is not a safe integer, and so do the prompt, the description and
+  // the file name, which are the reader's scene in another form.
+  // `pictureSeconds` is the same wait as `pictureAfterSceneMs`, rounded:
+  // docs/illustrations-plan.md#reader-experience-history asks for the seconds from the end of the scene to the
+  // picture as a non-negative integer, and that is the number a reader's patience is read in.
   // The three counts of the description are all anybody can see of it: how many people the story's character sheet
   // holds (one for a whole story is almost certainly a wrong sheet), how many names the assembly had to cut out of
   // a field the instruction forbids them in, and how many people reached the prompt with no appearance at all.
   'describeMs', 'imageQueueMs', 'imageMs', 'imageSteps', 'pictureAfterSceneMs', 'pictureSeconds',
-  'sheetCharacters', 'namesStripped', 'withoutLook'] as const;
+  'sheetCharacters', 'namesStripped', 'withoutLook',
+  // The clothes of a frame (local/picture.ts): how many people of the sheet it shows in other clothes than the
+  // picture before it in that line of the story, which is how a change of clothes in the story is seen to arrive.
+  'clothesChanged',
+  // The prompt a picture was drawn from, as the note under it gives its size (local/picture.ts `promptSize`): its
+  // characters, its tokens as the picture model's text encoder reads them, and how many of those the style line is.
+  'promptCharacters', 'pictureTokens', 'styleTokens',
+  // A sample of styles (local/picture.ts `sample`): how many styles one press of the reader asked for, one on a
+  // style's own card and every style of the picker for "all styles".
+  'stylesAsked',
+  // The photo's upload to Telegram, its time and its size: what decides whether a JPEG from the card, one more lossy
+  // step before Telegram's own, would be worth it.
+  'photoMs', 'photoBytes',
+  // Pictures whose scenes were deleted (local/bot.ts, lib/library.ts `forgetLostPictures`): those taken out of the
+  // chat, and those Telegram would not delete or was no longer asked to after a failure (local/telegram.ts `removeAll`).
+  'picturesRemoved', 'picturesNotRemoved',
+  // The details and looks retold from the people's descriptions (local/picture.ts `retellPending`): how many people one
+  // call was asked for and how many it wrote, the characters of the longest description it read, and the words of the
+  // longest look it wrote, which the rule asks 15-25 of.
+  'retellPeople', 'retoldPeople', 'descriptionCharacters', 'lookWords', 'referenceCount', 'referenceAttempted',
+  // A picture a reader sent of a person (local/reference.ts): its bytes as it came, those its metadata took, which were
+  // stripped, and its size in pixels.
+  'referenceBytes', 'strippedBytes', 'referenceWidth', 'referenceHeight',
+  // A profile a reader sent back (local/bot.ts `profileSent`): the characters of the whole text, and of each field it
+  // changed as it was written, the description's in `descriptionCharacters` and the prompt's in `promptCharacters`.
+  'profileCharacters', 'changesCharacters', 'detailsCharacters', 'lookCharacters', 'clothesCharacters',
+  // Versions of people's looks along a story (local/picture-versions.ts): how many lasting changes a frame found and
+  // wrote, how many people one write gave a version, how many versions the story holds after it, and how many of the
+  // reader's «only from this moment» an edit for the whole story took the place of.
+  'lastingChanges', 'versionPeople', 'storyVersions', 'versionsCleared'] as const;
 
 export type ErrorDetails = {
   httpStatus?: number; phase?: typeof PHASES[number]; operation?: typeof OPERATIONS[number];
   memoryReason?: typeof MEMORY_REASONS[number]; transportCode?: typeof TRANSPORT_CODES[number] | 'other';
+  servingCode?: typeof SERVING_CODES[number] | 'other';
   exitCode?: number; signal?: typeof SIGNALS[number]; sshReason?: typeof SSH_REASONS[number];
   // Whose request a bot log row belongs to. Only the owner allowed reading the owner's own stories for debugging.
   actor?: typeof ACTORS[number]; automatic?: boolean; agentCall?: typeof AGENT_CALLS[number]; stage?: typeof STAGES[number];
-  // A picture: which checkpoint drew it, how it ended, and whether the reader's next message ended it before it arrived.
+  // A picture: which checkpoint drew it, how it ended, whether the reader's next message ended it before it arrived,
+  // in which style, for a sample of a style whether the scene's frame was still in memory, and with which attention.
   imageRole?: typeof IMAGE_ROLES[number]; outcome?: typeof OUTCOMES[number]; cancelled?: boolean;
+  pictureStyle?: typeof PICTURE_STYLES[number]; frameReused?: boolean; pictureAttention?: typeof PICTURE_ATTENTION[number];
+  pictureReferences?: typeof PICTURE_REFERENCES[number]; referenceCleanup?: boolean;
+  // A picture a reader sent of a person: as what, in which format, and where it went, or why it was refused.
+  referenceSent?: typeof REFERENCE_SENT[number]; referenceFormat?: typeof REFERENCE_FORMATS[number];
+  referencePlace?: typeof REFERENCE_PLACES[number]; referenceRefusal?: typeof REFERENCE_REFUSALS[number];
+  // A picture drawn from a prompt the reader wrote whole (local/picture.ts `variant`) rather than one the bot assembled.
+  edited?: boolean;
+  // A portrait drawn from the whole prompt the reader wrote for the person (local/picture.ts `portrait`), true, or from
+  // the bot's own around the sheet's text of them, false.
+  ownPrompt?: boolean;
+  // A frame of a story seen through one person's eyes (local/picture-pov.ts): true when it was drawn through them,
+  // false when they were not in the scene and it was drawn as usual. A story without such a person leaves it out.
+  pov?: boolean;
+  // A sheet written in place of an older one that still had the clothes in its appearance lines.
+  sheetRewritten?: boolean;
+  // A profile a reader sent back: which of its fields it changed, whether the details and the look are retold from it,
+  // how much of the profile its message showed and where new clothes went, or why it was refused.
+  profileDescription?: boolean; profileChanges?: boolean; profileDetails?: boolean; profileLook?: boolean;
+  profileClothes?: boolean; profilePrompt?: boolean; profileRetell?: boolean;
+  profileFit?: typeof PROFILE_FITS[number]; profileClothesAt?: typeof PROFILE_CLOTHES[number];
+  profileRefusal?: typeof PROFILE_REFUSALS[number];
+  // A version of a person's look along the story: who wrote it and which text it holds.
+  versionSource?: typeof VERSION_SOURCES[number]; versionField?: typeof VERSION_FIELDS[number];
   // A failed Claude CLI run: how it ended and whether the CLI itself called the result an error.
   cliResult?: typeof CLI_RESULTS[number]; cliError?: boolean; stopReason?: typeof STOP_REASONS[number];
 } & { [Key in typeof COUNTS[number]]?: number };
@@ -77,6 +187,7 @@ export function safeErrorDetails(value: unknown = {}): ErrorDetails {
   if (member(OPERATIONS, input?.operation)) result.operation = input.operation;
   if (member(MEMORY_REASONS, input?.memoryReason)) result.memoryReason = input.memoryReason;
   if (typeof input?.transportCode === 'string' && input.transportCode) result.transportCode = member(TRANSPORT_CODES, input.transportCode) ? input.transportCode : 'other';
+  if (typeof input?.servingCode === 'string' && input.servingCode) result.servingCode = member(SERVING_CODES, input.servingCode) ? input.servingCode : 'other';
   const exitCode = input?.exitCode;
   if (typeof exitCode === 'number' && Number.isInteger(exitCode) && exitCode >= 0 && exitCode <= 255) result.exitCode = exitCode;
   if (member(SIGNALS, input?.signal)) result.signal = input.signal;
@@ -88,6 +199,27 @@ export function safeErrorDetails(value: unknown = {}): ErrorDetails {
   if (member(IMAGE_ROLES, input?.imageRole)) result.imageRole = input.imageRole;
   if (member(OUTCOMES, input?.outcome)) result.outcome = input.outcome;
   if (typeof input?.cancelled === 'boolean') result.cancelled = input.cancelled;
+  if (member(PICTURE_STYLES, input?.pictureStyle)) result.pictureStyle = input.pictureStyle;
+  if (typeof input?.frameReused === 'boolean') result.frameReused = input.frameReused;
+  if (member(PICTURE_ATTENTION, input?.pictureAttention)) result.pictureAttention = input.pictureAttention;
+  if (member(PICTURE_REFERENCES, input?.pictureReferences)) result.pictureReferences = input.pictureReferences;
+  if (typeof input?.referenceCleanup === 'boolean') result.referenceCleanup = input.referenceCleanup;
+  if (member(REFERENCE_SENT, input?.referenceSent)) result.referenceSent = input.referenceSent;
+  if (member(REFERENCE_FORMATS, input?.referenceFormat)) result.referenceFormat = input.referenceFormat;
+  if (member(REFERENCE_PLACES, input?.referencePlace)) result.referencePlace = input.referencePlace;
+  if (member(REFERENCE_REFUSALS, input?.referenceRefusal)) result.referenceRefusal = input.referenceRefusal;
+  if (typeof input?.edited === 'boolean') result.edited = input.edited;
+  if (typeof input?.ownPrompt === 'boolean') result.ownPrompt = input.ownPrompt;
+  if (typeof input?.pov === 'boolean') result.pov = input.pov;
+  if (typeof input?.sheetRewritten === 'boolean') result.sheetRewritten = input.sheetRewritten;
+  for (const key of ['profileDescription', 'profileChanges', 'profileDetails', 'profileLook', 'profileClothes', 'profilePrompt', 'profileRetell'] as const) {
+    if (typeof input?.[key] === 'boolean') result[key] = input[key];
+  }
+  if (member(PROFILE_FITS, input?.profileFit)) result.profileFit = input.profileFit;
+  if (member(PROFILE_CLOTHES, input?.profileClothesAt)) result.profileClothesAt = input.profileClothesAt;
+  if (member(PROFILE_REFUSALS, input?.profileRefusal)) result.profileRefusal = input.profileRefusal;
+  if (member(VERSION_SOURCES, input?.versionSource)) result.versionSource = input.versionSource;
+  if (member(VERSION_FIELDS, input?.versionField)) result.versionField = input.versionField;
   if (member(CLI_RESULTS, input?.cliResult)) result.cliResult = input.cliResult;
   if (typeof input?.cliError === 'boolean') result.cliError = input.cliError;
   if (member(STOP_REASONS, input?.stopReason)) result.stopReason = input.stopReason;
@@ -101,7 +233,7 @@ export class ModelError extends Error {
   declare code: string;
   declare httpStatus?: number; declare phase?: ErrorDetails['phase']; declare operation?: ErrorDetails['operation'];
   declare memoryReason?: ErrorDetails['memoryReason']; declare transportCode?: ErrorDetails['transportCode'];
-  declare exitCode?: number; declare signal?: ErrorDetails['signal']; declare sshReason?: ErrorDetails['sshReason'];
+  declare servingCode?: ErrorDetails['servingCode']; declare exitCode?: number; declare signal?: ErrorDetails['signal']; declare sshReason?: ErrorDetails['sshReason'];
   declare cliResult?: ErrorDetails['cliResult']; declare cliError?: boolean; declare stopReason?: ErrorDetails['stopReason'];
   declare sceneCount?: number; declare missingCount?: number; declare connectionAgeMs?: number;
   // A failed compaction carries its sizes and counts to the log row of the failure.
@@ -130,4 +262,11 @@ export const reasonCode = (error: unknown): Reason => {
 // TelegramError carries an HTTP-like number or a string. Callers compare or sanitize the code.
 export function errorCode(error: unknown): string | number | undefined {
   return (error as { code?: string | number }).code;
+}
+
+// A model that is not there now, rather than one that answered wrongly: a service that is starting, draining or asleep
+// (`model_unavailable`), or one out of reach, such as behind a closed tunnel (a transport failure).
+export function unavailable(error: unknown) {
+  const { code, transportCode } = (error ?? {}) as { code?: unknown; transportCode?: unknown };
+  return code === 'model_unavailable' || (code === 'provider_failed' && transportCode !== undefined);
 }

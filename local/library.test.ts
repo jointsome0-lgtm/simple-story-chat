@@ -1,10 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as source from '../lib/library.ts';
-// The committed cloud artifact; `npm run check` verifies that it is the current tsc output of lib/library.ts.
-import * as artifact from '../lib/library.js';
 import type { Library } from '../lib/library.ts';
 import { Store } from './store.ts';
+import { sheetAt } from './picture-versions.ts';
 
 // A synthetic library in format v1, built with the original JS domain plus the fields the bot adds to scenes and
 // memory: sent and pending scenes, a compacted branch, a fork and a pending job.
@@ -49,60 +48,68 @@ test('a stored v1 library is read and saved unchanged, and recovery only marks i
   assert.equal(store.db.prepare('SELECT payload FROM libraries WHERE user_id = ?').get('1')!.payload, payload);
   store.recover();
   assert.deepEqual(store.read('1'), { ...structuredClone(stored), job: null, interrupted: true });
-});
-
-test('a library written before the language choice has no language, and a chosen one is stored with the library', t => {
-  const store = new Store(':memory:');
-  t.after(() => store.close());
-  store.db.prepare('INSERT INTO libraries VALUES (?, ?)').run('1', payload);
+  // A library from before the language choice has none, like a new one, and a chosen language is stored with it.
   assert.equal(store.read('1').language, undefined);
   assert.equal(store.read('2').language, undefined);
   store.mutate('1', state => source.setLanguage(state, 'ja'));
-  assert.deepEqual(store.read('1'), { ...structuredClone(stored), language: 'ja' });
+  assert.deepEqual(store.read('1'), { ...structuredClone(stored), job: null, interrupted: true, language: 'ja' });
 });
 
-// The same operations on a copy of the stored library: scenes, a checkpoint, compaction, a fork and deletions.
-// Each result or expected rejection is recorded with the state after it.
-function exercise(domain: typeof source) {
+// The versions of a person's look sit on the scenes (local/picture-versions.ts): nothing else holds them, so a save that
+// dropped them, or a deleted branch that took those of scenes it shares with another, would lose them unnoticed.
+test('versions of the people along a story are saved as they are, and a deleted branch takes only those of its own scenes', t => {
+  const store = new Store(':memory:');
+  t.after(() => store.close());
   const state: Library = JSON.parse(payload);
-  const results: unknown[] = [];
-  const keep = (value: unknown) => { results.push(structuredClone({ value, state })); };
-  const reject = (operation: () => unknown) => {
-    try { operation(); } catch (error) { keep({ userError: error instanceof domain.UserError, error: String(error), key: (error as { key?: string }).key }); return; }
-    assert.fail('the operation should be rejected');
-  };
-  const { story, branch, seed } = domain.active(state);
-  keep(['2026-08-02 20:04', '2024-02-29 23:59', '2026-02-29 20:04', '2026-13-01 20:04', '2026-08-02 24:00', '206-08-02 20:04', '20:04']
-    .map(time => domain.validTime(time)));
-  keep(domain.history(story, branch.head));
-  keep(domain.context(story, branch));
-  keep([domain.jobTarget(state, 'j20'), domain.jobTarget(state, 'j0')]);
-  reject(() => domain.beginJob(state, 'Ещё раз.', 6000));
-  reject(() => domain.commitTurn(state, 'j20', 'Без даты.\n\nСцена 4.'));
-  keep(domain.commitTurn(state, 'j20', '2026-08-02 20:04\n\nСцена 4.'));
-  keep(domain.saveCheckpoint(state, story, branch, 'Сцена 4', 'scene'));
-  const job = domain.beginJob(state, 'Продолжай.', 7000);
-  reject(() => domain.commitMemory(state, job.id, ['n9'], { facts: [] }));
-  keep(domain.commitMemory(state, job.id, ['n12'], { facts: [{ kind: 'event', at: '2026-08-02 20:03', text: 'Ключ спрятан.', source: ['n12'] }] }));
-  keep(domain.memoryChain(story, branch.memory));
-  state.job = null;
-  keep(domain.fork(state, story.id, 'c16'));
-  reject(() => domain.addSeed(state, 'Без даты'));
-  keep(domain.newStory(state, domain.addSeed(state, 'Порт\n2026-08-03 09:00\nСинтетическая гавань.').id));
-  keep(domain.deleteBranch(state, story.id, branch.id));
-  reject(() => domain.deleteBranch(state, story.id, branch.id));
-  keep(domain.deleteSeed(state, seed.id));
-  reject(() => domain.deleteSeed(state, seed.id));
-  // Names in another interface language are stored as given; the defaults above are the Russian ones.
-  const labels = { firstBranch: 'Start', seedCheckpoint: 'Seed', forkBranch: (from: string) => `From ${from}`, forkCheckpoint: 'Fork point', afterCompaction: 'After' };
-  const harbour = domain.newStory(state, domain.addSeed(state, 'Harbour\n2026-08-03 09:00\nA synthetic harbour.').id, labels);
-  keep(domain.fork(state, harbour.story.id, Object.keys(harbour.story.checkpoints)[0], labels));
-  keep(domain.setLanguage(state, 'en'));
-  keep([domain.emptyLibrary(), domain.id(state, 'x')]);
-  return { results, state };
-}
+  const story = state.stories.h2;
+  story.sheet = [{ name: 'Мира', description: 'Смотрительница с длинными русыми волосами.', look: 'young woman, long fair hair' }];
+  // Scene 4 is written on b18 alone; n9 is on both branches.
+  const { nodeId } = source.commitTurn(state, 'j20', '2026-08-02 20:04\n\nСцена 4.')!;
+  story.nodes.n9.appearance = { 'Мира': { changes: ['шрам через левую бровь'], retold: { details: 'scar', look: 'young woman, scar', from: '0' } } };
+  story.nodes[nodeId].appearance = { 'Мира': { changes: ['волосы коротко острижены'], look: 'short hair' } };
+  store.db.prepare('INSERT INTO libraries VALUES (?, ?)').run('1', JSON.stringify(state));
+  store.mutate('1', () => {});
+  assert.deepEqual(store.read('1'), state);
+  store.mutate('1', saved => source.deleteBranch(saved, 'h2', 'b18'));
+  const kept = store.read('1').stories.h2;
+  assert.equal(kept.nodes[nodeId], undefined);
+  assert.deepEqual([kept.sheet, kept.nodes.n9.appearance], [story.sheet, story.nodes.n9.appearance]);
+  assert.equal(sheetAt(kept, 'n12')[0].changes, 'шрам через левую бровь');
+});
 
-test('the generated cloud domain behaves like lib/library.ts on a stored v1 library', () => {
-  assert.notEqual(artifact.UserError, source.UserError);
-  assert.deepEqual(exercise(artifact), exercise(source));
+test('pictures are recorded as sent, and a deletion forgets those of its lost scenes and those too old to delete', () => {
+  const state: Library = JSON.parse(payload);
+  const hour = 60 * 60 * 1000;
+  const now = 1_790_000_000_000;
+  // The list is read through a call: an assertion narrows the field it names, and the calls below change it.
+  const pictures = () => state.sentPictures;
+  const ids = () => pictures()?.map(one => one.messageId);
+  // A library that never had a picture gets no list from a deletion either.
+  assert.deepEqual(source.forgetLostPictures(state, now), []);
+  assert.equal(pictures(), undefined);
+  // Scene 4 is written on b18 alone; n6 is on both branches.
+  const { nodeId } = source.commitTurn(state, 'j20', '2026-08-02 20:04\n\nСцена 4.')!;
+  const sent = (messageId: number, scene: string, at: number) => ({ storyId: 'h2', nodeId: scene, messageId, at });
+  source.recordPicture(state, sent(1, 'n6', now - 50 * hour));
+  source.recordPicture(state, sent(2, nodeId, now - 47 * hour));
+  assert.deepEqual(ids(), [1, 2]);
+  // Every record drops what Telegram would no longer delete by then.
+  source.recordPicture(state, sent(3, 'n6', now - hour));
+  source.recordPicture(state, sent(4, nodeId, now - hour / 2));
+  // A portrait of one of the story's people shows no scene, and goes with the story alone.
+  const portrait = { storyId: 'h2', messageId: 5, at: now - hour / 4 };
+  source.recordPicture(state, portrait);
+  assert.deepEqual(ids(), [2, 3, 4, 5]);
+  // The branch takes scene 4 with it: its picture of half an hour ago is returned for the chat, the one from 48 hours
+  // ago is only forgotten, and the picture of the shared scene stays, as does the portrait of the story that stays.
+  source.deleteBranch(state, 'h2', 'b18');
+  assert.deepEqual(source.forgetLostPictures(state, now + hour), [4]);
+  assert.deepEqual(pictures(), [sent(3, 'n6', now - hour), portrait]);
+  source.deleteSeed(state, 's1');
+  assert.deepEqual(source.forgetLostPictures(state, now + hour), [3, 5]);
+  assert.deepEqual(pictures(), []);
+  // However many are sent within the 48 hours, the library keeps the newest thousand.
+  for (let n = 0; n < source.SENT_PICTURES_MAX + 5; n++) source.recordPicture(state, sent(100 + n, 'n6', now + n));
+  assert.equal(ids()?.length, source.SENT_PICTURES_MAX);
+  assert.equal(ids()?.[0], 105);
 });

@@ -52,26 +52,14 @@ const runMachine = (box: string) => spawnSync('bash', [resolve('gpu/bootstrap.sh
   },
 });
 
-test('a draft model already in place is reported when it fails its check, not deleted', needsBox, t => {
-  const box = fakeMachine(t);
-  const draft = join(box, 'state/models', manifest['DRAFT_FILE']!);
-  writeFileSync(draft, 'not the draft model');
-  const run = runMachine(box);
-  assert.equal(run.status, 1, `${run.stdout}${run.stderr}`);
-  assert.match(run.stdout + run.stderr, /Draft model size mismatch/);
-  // Half a gigabyte that a rented link already paid for. A pin that is wrong, or a file the hub replaced, is a
-  // reason to stop and look, not to make the next run download it again; the weights are treated the same way.
-  assert.ok(existsSync(draft), 'the draft model that was already here was deleted by its own check');
-});
-
-test('a draft download that did not finish is thrown away when it fails its check', needsBox, t => {
-  const box = fakeMachine(t);
-  const part = `${join(box, 'state/models', manifest['DRAFT_FILE']!)}.part`;
-  // What the shimmed curl "downloaded": a partial file of the wrong size. Nothing can be resumed from it and
-  // nothing would use it, so this one goes.
-  writeFileSync(part, 'half a draft model');
-  const run = runMachine(box);
-  assert.equal(run.status, 1, `${run.stdout}${run.stderr}`);
-  assert.match(run.stdout + run.stderr, /Draft model size mismatch/);
-  assert.equal(existsSync(part), false, 'the unusable partial file was kept');
+test('a failed draft check preserves installed weights and discards only incomplete downloads', needsBox, t => {
+  for (const installed of [true, false]) {
+    const box = fakeMachine(t);
+    const path = join(box, 'state/models', manifest['DRAFT_FILE']!) + (installed ? '' : '.part');
+    writeFileSync(path, 'synthetic invalid weights');
+    const run = runMachine(box);
+    assert.equal(run.status, 1, `${run.stdout}${run.stderr}`);
+    assert.match(run.stdout + run.stderr, /Draft model size mismatch/);
+    assert.equal(existsSync(path), installed);
+  }
 });

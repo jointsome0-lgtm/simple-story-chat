@@ -101,10 +101,9 @@ function fakeBox(t: Hooks, host: Host): string {
   const state = join(box, 'state');
   mkdirSync(join(box, 'gpu'), { recursive: true });
   mkdirSync(join(box, 'shim'), { recursive: true });
-  mkdirSync(join(state, 'ComfyUI/.git'), { recursive: true });
-  mkdirSync(join(state, 'ComfyUI/.venv/bin'), { recursive: true });
-  mkdirSync(join(state, 'ComfyUI/models/text_encoders'), { recursive: true });
-  mkdirSync(join(state, 'ComfyUI/models/vae'), { recursive: true });
+  for (const directory of ['.git', '.venv/bin', 'models/diffusion_models', 'models/text_encoders', 'models/vae']) {
+    mkdirSync(join(state, 'ComfyUI', directory), { recursive: true });
+  }
   copyFileSync(script, join(box, 'gpu/image-bootstrap.sh'));
   copyFileSync(resolve('gpu/image-workflow.json'), join(box, 'gpu/image-workflow.json'));
   // The encoder and the VAE are already here and verify, so only the pinned model is fetched over the loopback link.
@@ -164,57 +163,88 @@ const startBox = (t: Hooks, box: string, extra: Record<string, string> = {}): Ch
   t.after(() => { try { process.kill(-running.pid!, 'SIGKILL'); } catch { /* already gone */ } });
   return running;
 };
-const partPath = (box: string) => join(box, 'state/ComfyUI/models/diffusion_models/model.safetensors.part');
+const modelPath = (box: string) => join(box, 'state/ComfyUI/models/diffusion_models/model.safetensors');
+const partPath = (box: string) => `${modelPath(box)}.part`;
+// The pinned file itself, as the weights host serves it.
+const served = (size: number) => Buffer.from(Array.from({ length: size }, (ignored, index) => (index * 7 + 3) % 251));
 const sizeOf = (path: string) => { try { return statSync(path).size; } catch { return -1; } };
 
-test('the speed floor judges the machine link, not the bytes that land in models/', needsBox, async t => {
-  // 4 MB trickled over about 4 s is 8 Mbit/s of weights, well under this run's 50 Mbit/s floor, while the link
-  // carries far more: on the rented box that is the script's own torch wheels and the 24 GB bootstrap.sh pulls
-  // over 16 connections. Counting only models/ turns that fast machine into "destroy this machine".
-  const host = await startHost(t, { size: 4_000_000, chunk: 100_000, pause: 0.1 });
-  const box = fakeBox(t, host);
-  // The traffic runs for several seconds, so the window falls inside it wherever the run's own start lands.
-  const traffic = spawn('python3', ['-c', linkTraffic, '400', '0.01'], { stdio: 'ignore' });
-  t.after(() => traffic.kill('SIGKILL'));
-  const run = runBox(box, { SIMPLE_CHAT_IMAGE_SPEED_WINDOW: '2', SIMPLE_CHAT_IMAGE_MIN_MBIT: '50',
-    SIMPLE_CHAT_IMAGE_LINK_IF: 'lo' });
-  assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
-  assert.doesNotMatch(run.stderr, /destroy this machine/);
-  assert.match(run.stdout, /The link is carrying about \d+ Mbit\/s/);
-  assert.match(run.stdout, /model\.safetensors: SHA256 verified/);
-});
-
-test('a link below the floor still ends the run and the downloads with it', needsBox, async t => {
-  // The other half of the money decision: no machine carries 100 Tbit/s, so this link is below its floor and the
-  // answer is to stop paying for it now rather than to spend the session watching 70 GB arrive.
-  const host = await startHost(t, { size: 4_000_000, chunk: 100_000, pause: 0.1 });
-  const box = fakeBox(t, host);
-  const run = runBox(box, { SIMPLE_CHAT_IMAGE_SPEED_WINDOW: '2', SIMPLE_CHAT_IMAGE_MIN_MBIT: '100000000',
-    SIMPLE_CHAT_IMAGE_LINK_IF: 'lo' });
-  assert.equal(run.status, 1);
-  assert.match(run.stderr, /below the 100000000 Mbit\/s floor, so destroy this machine/);
-  assert.match(run.stderr, /A download failed or was ended/);
-  assert.doesNotMatch(run.stdout, /SHA256 verified/);
-});
-
-test('a run that ends takes its downloads with it', needsBox, async t => {
-  const host = await startHost(t, { size: 4_000_000, chunk: 50_000, pause: 0.1 });
-  const box = fakeBox(t, host);
-  // `git fetch` fails two seconds in, the way the repository check, the torch install and the sm_120 abort can end
-  // the run under `set -e` while four curls are pulling. An orphan keeps writing into the .part, and the next run
-  // resumes that file from an end nobody wrote: a corruption the SHA256 only reports after the whole download.
-  const running = startBox(t, box, { GIT_SHIM_SLEEP: '2', GIT_SHIM_STATUS: '1',
-    SIMPLE_CHAT_IMAGE_SPEED_WINDOW: '30', SIMPLE_CHAT_IMAGE_MIN_MBIT: '0' });
-  const code = await new Promise<number>(done => running.on('exit', status => done(status ?? -1)));
-  assert.equal(code, 1);
-  const stopped = sizeOf(partPath(box));
-  assert.ok(stopped > 0, 'the download should have written something before the run ended');
-  await delay(1500);
-  assert.equal(sizeOf(partPath(box)), stopped, 'the .part grew after the run ended: a curl outlived it');
-  if (pathOf('pgrep')) {
-    const left = spawnSync('pgrep', ['-g', String(running.pid), '-x', 'curl'], { encoding: 'utf8' });
-    assert.equal(left.stdout.trim(), '', 'a curl of this run is still alive');
+test('the pinned file verifies on a busy link, after a refused resume and with nothing to fetch', needsBox, async t => {
+  const rows: [string, Parameters<typeof startHost>[1], Record<string, string>, { traffic?: true;
+    leftover?: 'part' | 'whole'; says?: RegExp; warns?: RegExp; never?: RegExp; within?: number }][] = [
+    // 4 MB trickled over about 4 s is 8 Mbit/s of weights, well under this run's 50 Mbit/s floor, while the link
+    // carries far more: on the rented box that is the script's own torch wheels and the 24 GB bootstrap.sh pulls
+    // over 16 connections. Counting only models/ turns that fast machine into "destroy this machine". The traffic
+    // runs for several seconds, so the window falls inside it wherever the run's own start lands.
+    ['a fast link busy with other traffic', { size: 4_000_000, chunk: 100_000, pause: 0.1 },
+      { SIMPLE_CHAT_IMAGE_SPEED_WINDOW: '2', SIMPLE_CHAT_IMAGE_MIN_MBIT: '50', SIMPLE_CHAT_IMAGE_LINK_IF: 'lo' },
+      { traffic: true, says: /The link is carrying about \d+ Mbit\/s/, never: /destroy this machine/ }],
+    // A host that answers a ranged request with the whole file (curl exit 33: "Cannot resume"). Kept, that leftover
+    // fails the same way on every later run, and the box can never finish on its own.
+    ['a leftover the host will not resume', { size: 4_000_000, ranges: false, chunk: 1_000_000, pause: 0 },
+      { SIMPLE_CHAT_IMAGE_SPEED_WINDOW: '1', SIMPLE_CHAT_IMAGE_MIN_MBIT: '0' },
+      { leftover: 'part', warns: /model\.safetensors\.part cannot be resumed/ }],
+    // Nothing was supposed to arrive, so there is nothing to measure. The window used to be slept out anyway and the
+    // run then reported "about 0 Mbit/s" — the reading of a dead link, on a run where the link was never used.
+    ['every pinned file already there', { size: 4_000, chunk: 4_000, pause: 0 },
+      { GIT_SHIM_SLEEP: '1', SIMPLE_CHAT_IMAGE_SPEED_WINDOW: '20', SIMPLE_CHAT_IMAGE_MIN_MBIT: '200' },
+      { leftover: 'whole', never: /Mbit\/s/, within: 15_000 }],
+  ];
+  for (const [label, hosting, environment, expected] of rows) {
+    const host = await startHost(t, hosting);
+    const box = fakeBox(t, host);
+    if (expected.traffic) {
+      const traffic = spawn('python3', ['-c', linkTraffic, '400', '0.01'], { stdio: 'ignore' });
+      t.after(() => traffic.kill('SIGKILL'));
+    }
+    if (expected.leftover === 'part') writeFileSync(partPath(box), Buffer.alloc(1_000_000));
+    if (expected.leftover === 'whole') writeFileSync(modelPath(box), served(host.size));
+    const started = Date.now();
+    const run = runBox(box, environment);
+    assert.equal(run.status, 0, `${label}: ${run.stdout}${run.stderr}`);
+    assert.ok(Date.now() - started < (expected.within ?? Infinity),
+      `${label}: the run waited out the measurement window with nothing to measure`);
+    assert.match(run.stdout, /model\.safetensors: SHA256 verified/, label);
+    assert.equal(createHash('sha256').update(readFileSync(modelPath(box))).digest('hex'), host.digest, label);
+    if (expected.says) assert.match(run.stdout, expected.says, label);
+    if (expected.warns) assert.match(run.stderr, expected.warns, label);
+    if (expected.never) assert.doesNotMatch(run.stdout + run.stderr, expected.never, label);
   }
+});
+
+test('a link below the floor ends the run and its downloads, and so does any other end of a run', needsBox, async t => {
+  const rows: [string, (label: string) => Promise<void>][] = [
+    // The money decision: no machine carries 100 Tbit/s, so this link is below its floor and the answer is to stop
+    // paying for it now rather than to spend the session watching 70 GB arrive.
+    ['a link below the floor', async label => {
+      const host = await startHost(t, { size: 4_000_000, chunk: 100_000, pause: 0.1 });
+      const run = runBox(fakeBox(t, host), { SIMPLE_CHAT_IMAGE_SPEED_WINDOW: '2',
+        SIMPLE_CHAT_IMAGE_MIN_MBIT: '100000000', SIMPLE_CHAT_IMAGE_LINK_IF: 'lo' });
+      assert.equal(run.status, 1, label);
+      assert.match(run.stderr, /below the 100000000 Mbit\/s floor, so destroy this machine/, label);
+      assert.match(run.stderr, /A download failed or was ended/, label);
+      assert.doesNotMatch(run.stdout, /SHA256 verified/, label);
+    }],
+    // `git fetch` fails two seconds in, the way the repository check, the torch install and the sm_120 abort can end
+    // the run under `set -e` while four curls are pulling. An orphan keeps writing into the .part, and the next run
+    // resumes that file from an end nobody wrote: a corruption the SHA256 only reports after the whole download.
+    ['a run that ends under set -e', async label => {
+      const host = await startHost(t, { size: 4_000_000, chunk: 50_000, pause: 0.1 });
+      const box = fakeBox(t, host);
+      const running = startBox(t, box, { GIT_SHIM_SLEEP: '2', GIT_SHIM_STATUS: '1',
+        SIMPLE_CHAT_IMAGE_SPEED_WINDOW: '30', SIMPLE_CHAT_IMAGE_MIN_MBIT: '0' });
+      assert.equal(await new Promise<number>(done => running.on('exit', status => done(status ?? -1))), 1, label);
+      const stopped = sizeOf(partPath(box));
+      assert.ok(stopped > 0, `${label}: the download should have written something before the run ended`);
+      await delay(1500);
+      assert.equal(sizeOf(partPath(box)), stopped, `${label}: the .part grew after the run ended: a curl outlived it`);
+      if (pathOf('pgrep')) {
+        const left = spawnSync('pgrep', ['-g', String(running.pid), '-x', 'curl'], { encoding: 'utf8' });
+        assert.equal(left.stdout.trim(), '', `${label}: a curl of this run is still alive`);
+      }
+    }],
+  ];
+  for (const [label, row] of rows) await row(label);
 });
 
 test('a second run is refused while one is working in the same directory', needsBox, async t => {
@@ -229,35 +259,4 @@ test('a second run is refused while one is working in the same directory', needs
   assert.equal(second.status, 1);
   assert.match(second.stderr, /Another image-bootstrap\.sh is working/);
   process.kill(-running.pid!, 'SIGKILL');
-});
-
-test('a leftover this host refuses to resume is discarded and fetched again', needsBox, async t => {
-  // A host that answers a ranged request with the whole file (curl exit 33: "Cannot resume"). Kept, that leftover
-  // fails the same way on every later run, and the box can never finish on its own.
-  const host = await startHost(t, { size: 4_000_000, ranges: false, chunk: 1_000_000, pause: 0 });
-  const box = fakeBox(t, host);
-  mkdirSync(join(box, 'state/ComfyUI/models/diffusion_models'), { recursive: true });
-  writeFileSync(partPath(box), Buffer.alloc(1_000_000));
-  const run = runBox(box, { SIMPLE_CHAT_IMAGE_SPEED_WINDOW: '1', SIMPLE_CHAT_IMAGE_MIN_MBIT: '0' });
-  assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
-  assert.match(run.stderr, /model\.safetensors\.part cannot be resumed/);
-  assert.match(run.stdout, /model\.safetensors: SHA256 verified/);
-  const fetched = readFileSync(join(box, 'state/ComfyUI/models/diffusion_models/model.safetensors'));
-  assert.equal(createHash('sha256').update(fetched).digest('hex'), host.digest);
-});
-
-test('a rerun with every pinned file present is not held for the measurement window', needsBox, async t => {
-  const host = await startHost(t, { size: 4_000, chunk: 4_000, pause: 0 });
-  const box = fakeBox(t, host);
-  mkdirSync(join(box, 'state/ComfyUI/models/diffusion_models'), { recursive: true });
-  const blob = Buffer.from(Array.from({ length: host.size }, (ignored, index) => (index * 7 + 3) % 251));
-  writeFileSync(join(box, 'state/ComfyUI/models/diffusion_models/model.safetensors'), blob);
-  const started = Date.now();
-  // Nothing was supposed to arrive, so there is nothing to measure. The window used to be slept out anyway and the
-  // run then reported "about 0 Mbit/s" — the reading of a dead link, on a run where the link was never used.
-  const run = runBox(box, { GIT_SHIM_SLEEP: '1', SIMPLE_CHAT_IMAGE_SPEED_WINDOW: '20',
-    SIMPLE_CHAT_IMAGE_MIN_MBIT: '200' });
-  assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
-  assert.doesNotMatch(run.stdout + run.stderr, /Mbit\/s/);
-  assert.ok(Date.now() - started < 15_000, 'the run waited out the measurement window with nothing to measure');
 });

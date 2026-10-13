@@ -27,10 +27,35 @@ turbo="${SIMPLE_CHAT_IMAGE_TURBO:-true}"
 [[ "$turbo" = true || "$turbo" = false ]] || { echo 'Use SIMPLE_CHAT_IMAGE_TURBO=true or false.' >&2; exit 1; }
 # Qwen-Image 2.1 is the opt-in third checkpoint: 17.28 GB that local/rent-plan.ts does not price, so a session that
 # wants it says so before it rents. Off by default, unlike Turbo, because it is a comparison somebody chose to make.
+# `only` fetches Qwen's three files and nothing of Krea's, Turbo included, and so needs no token: the box of the
+# identity measurement (docs/identity-experiment.md#one-hour, docs/gpu.md#qwen-image), which draws nothing else and
+# pays for every minute of 48.7 GB.
 qwen="${SIMPLE_CHAT_IMAGE_QWEN:-false}"
-[[ "$qwen" = true || "$qwen" = false ]] || { echo 'Use SIMPLE_CHAT_IMAGE_QWEN=true or false.' >&2; exit 1; }
-# An offer that advertises 1171 Mbit/s has delivered 115 (docs/gpu.md). Below the floor the answer is to destroy the
-# machine and take the next candidate, not to wait: 22 GB at 100 Mbit/s is half the session.
+[[ "$qwen" = true || "$qwen" = false || "$qwen" = only ]] || { echo 'Use SIMPLE_CHAT_IMAGE_QWEN=true, false or only.' >&2; exit 1; }
+# Viggle's few-step LoRA for Qwen and its node (docs/gpu.md#viggle), a test: off by default, and only beside Qwen.
+viggle="${SIMPLE_CHAT_IMAGE_VIGGLE:-false}"
+[[ "$viggle" = true || "$viggle" = false ]] || { echo 'Use SIMPLE_CHAT_IMAGE_VIGGLE=true or false.' >&2; exit 1; }
+[[ "$viggle" = false || "$qwen" != false ]] || { echo 'Viggle'\''s LoRA is for Qwen-Image 2.1: set SIMPLE_CHAT_IMAGE_QWEN too.' >&2; exit 1; }
+# Qwen's text-to-image prompt enhancer (docs/action-experiment.md#prompt-arms), for the prompt arms probe alone: off by
+# default, and only beside Qwen. One more text encoder, 9.47 GB, which the bot never loads.
+qwen_pe="${SIMPLE_CHAT_IMAGE_QWEN_PE:-false}"
+[[ "$qwen_pe" = true || "$qwen_pe" = false ]] || { echo 'Use SIMPLE_CHAT_IMAGE_QWEN_PE=true or false.' >&2; exit 1; }
+[[ "$qwen_pe" = false || "$qwen" != false ]] || { echo 'The prompt enhancer is Qwen-Image 2.1'\''s: set SIMPLE_CHAT_IMAGE_QWEN too.' >&2; exit 1; }
+# Which torch this run installs (docs/gpu.md#cu130): cu128, the default, into ComfyUI/.venv, or cu130 into
+# ComfyUI/.venv-cu130, for comfy-kitchen's CUDA backend: the bot's card installs cu130 alone (docs/gpu.md#bot-card), and
+# the experiments keep cu128. A cu130 run leaves the default environment as it is, so it can run in the background
+# beside a server started from that one, and image-serve.sh switches between them with a restart.
+torch_line="${SIMPLE_CHAT_IMAGE_TORCH:-cu128}"
+case "$torch_line" in
+  cu128) venv="$comfy_dir/.venv"; torch_index="$TORCH_INDEX_URL"
+    torch_pins=("torch==$TORCH_VERSION" "torchvision==$TORCHVISION_VERSION" "torchaudio==$TORCHAUDIO_VERSION") ;;
+  cu130) venv="$comfy_dir/.venv-cu130"; torch_index="$TORCH_CU130_INDEX_URL"
+    torch_pins=("torch==$TORCH_CU130_VERSION" "torchvision==$TORCHVISION_CU130_VERSION" "torchaudio==$TORCHAUDIO_CU130_VERSION") ;;
+  *) echo 'Use SIMPLE_CHAT_IMAGE_TORCH=cu128 or cu130.' >&2; exit 1 ;;
+esac
+# An offer that advertises 1171 Mbit/s has delivered 115 (docs/knowledge/gpu-measurements.md#costs-and-downloads).
+# Below the floor the answer is to destroy the machine and take the next candidate, not to wait: 22 GB at 100 Mbit/s
+# is half the session.
 min_mbit="${SIMPLE_CHAT_IMAGE_MIN_MBIT:-200}"
 window="${SIMPLE_CHAT_IMAGE_SPEED_WINDOW:-60}"
 [[ "$min_mbit" =~ ^[0-9]+$ && "$window" =~ ^[1-9][0-9]*$ ]] || { echo 'Invalid SIMPLE_CHAT_IMAGE_MIN_MBIT/WINDOW.' >&2; exit 1; }
@@ -80,10 +105,12 @@ fi
 records=()
 add_record() { records+=("$1"$'\t'"$2"$'\t'"$3"$'\t'"$4"$'\t'"$5"); }
 hf_url() { printf 'https://huggingface.co/%s/resolve/%s/%s' "$1" "$2" "$3"; }
-add_record "$IMAGE_MODEL_URL" "$models_dir/diffusion_models/$IMAGE_MODEL_FILE" "$IMAGE_MODEL_SHA256" "$IMAGE_MODEL_BYTES" civitai
+[[ "$qwen" = only ]] || add_record "$IMAGE_MODEL_URL" "$models_dir/diffusion_models/$IMAGE_MODEL_FILE" "$IMAGE_MODEL_SHA256" "$IMAGE_MODEL_BYTES" civitai
 # The two file names the graph's loaders have to name: `official` installs different ones, and a graph that kept
 # the `comfy` names would fail inside CLIPLoader on a box that passed every check here.
-if [[ "$image_source" = official ]]; then
+if [[ "$qwen" = only ]]; then
+  encoder_file=''; vae_file=''
+elif [[ "$image_source" = official ]]; then
   encoder_file="$OFFICIAL_ENCODER_FILE"; vae_file="$OFFICIAL_VAE_FILE"
   add_record "$(hf_url "$OFFICIAL_REPO" "$OFFICIAL_REVISION" "$OFFICIAL_ENCODER_PATH")" \
     "$models_dir/text_encoders/$OFFICIAL_ENCODER_FILE" "$OFFICIAL_ENCODER_SHA256" "$OFFICIAL_ENCODER_BYTES" hf
@@ -102,13 +129,24 @@ else
 fi
 # Qwen brings its own transformer, its own text encoder and its own VAE; nothing of Krea's is shared with it, and
 # nothing of Krea's is replaced, so both checkpoints stay drawable from the same box. Public repository, no token.
-if [[ "$qwen" = true ]]; then
+if [[ "$qwen" != false ]]; then
   add_record "$(hf_url "$IMAGE_QWEN_REPO" "$IMAGE_QWEN_REVISION" "$IMAGE_QWEN_MODEL_PATH")" \
     "$models_dir/diffusion_models/$IMAGE_QWEN_MODEL_FILE" "$IMAGE_QWEN_MODEL_SHA256" "$IMAGE_QWEN_MODEL_BYTES" none
   add_record "$(hf_url "$IMAGE_QWEN_REPO" "$IMAGE_QWEN_REVISION" "$IMAGE_QWEN_ENCODER_PATH")" \
     "$models_dir/text_encoders/$IMAGE_QWEN_ENCODER_FILE" "$IMAGE_QWEN_ENCODER_SHA256" "$IMAGE_QWEN_ENCODER_BYTES" none
   add_record "$(hf_url "$IMAGE_QWEN_REPO" "$IMAGE_QWEN_REVISION" "$IMAGE_QWEN_VAE_PATH")" \
     "$models_dir/vae/$IMAGE_QWEN_VAE_FILE" "$IMAGE_QWEN_VAE_SHA256" "$IMAGE_QWEN_VAE_BYTES" none
+fi
+# The enhancer, verified as the weights are and named in image-verified.txt, which the probe reads before it rewrites.
+[[ "$qwen_pe" = false ]] || add_record "$(hf_url "$IMAGE_QWEN_REPO" "$IMAGE_QWEN_REVISION" "$IMAGE_QWEN_PE_T2I_PATH")" \
+  "$models_dir/text_encoders/$IMAGE_QWEN_PE_T2I_FILE" "$IMAGE_QWEN_PE_T2I_SHA256" "$IMAGE_QWEN_PE_T2I_BYTES" none
+# Viggle's LoRA, and its node, which is code the server runs: each fetched at the pinned revision and verified as the
+# weights are, before it is given its name. image-serve.sh loads the node only when asked to.
+if [[ "$viggle" = true ]]; then
+  add_record "$(hf_url "$IMAGE_VIGGLE_REPO" "$IMAGE_VIGGLE_REVISION" "$IMAGE_VIGGLE_LORA_PATH")" \
+    "$models_dir/loras/$IMAGE_VIGGLE_LORA_FILE" "$IMAGE_VIGGLE_LORA_SHA256" "$IMAGE_VIGGLE_LORA_BYTES" none
+  add_record "$(hf_url "$IMAGE_VIGGLE_REPO" "$IMAGE_VIGGLE_REVISION" "$IMAGE_VIGGLE_NODE_PATH")" \
+    "$comfy_dir/custom_nodes/$IMAGE_VIGGLE_NODE_FILE" "$IMAGE_VIGGLE_NODE_SHA256" "$IMAGE_VIGGLE_NODE_BYTES" none
 fi
 
 # The pinned graph names the `comfy` files; this fills in what this run installs, so `official` is posted with the
@@ -133,7 +171,11 @@ render_qwen() {
     render_workflow "$graph" "$IMAGE_QWEN_MODEL_FILE" "$IMAGE_QWEN_ENCODER_FILE" "$IMAGE_QWEN_VAE_FILE" >"$gpu_dir/$graph"
   done
 }
-[[ "$print_workflow" = false ]] || { render_workflow "$IMAGE_WORKFLOW" "$IMAGE_MODEL_FILE" "$encoder_file" "$vae_file"; exit 0; }
+if [[ "$print_workflow" = true ]]; then
+  [[ "$qwen" != only ]] || { echo 'A Qwen-only box installs no Krea graph to print; it writes the Qwen graphs once verified.' >&2; exit 1; }
+  render_workflow "$IMAGE_WORKFLOW" "$IMAGE_MODEL_FILE" "$encoder_file" "$vae_file"
+  exit 0
+fi
 
 # One run at a time on this machine. Two would resume the same .part from two ends and the corruption would only
 # show in the SHA256, after the whole file has been paid for; a dry run would meanwhile throw away a leftover the
@@ -168,18 +210,22 @@ for token in "$civitai_token" "$hf_token"; do
   [[ "$token" != *[\"\\]* ]] || { echo 'A token contains a quote or a backslash and cannot be passed this way.' >&2; exit 1; }
 done
 if [[ "$dry_run" = true ]]; then
-  echo "Source $image_source, $(( total_bytes / 1024**3 )) GiB to fetch:"
+  echo "$([[ "$qwen" = only ]] && echo 'Qwen only' || echo "Source $image_source"), $(( total_bytes / 1024**3 )) GiB to fetch:"
   for record in "${records[@]}"; do
     IFS=$'\t' read -r url destination digest size auth <<<"$record"
     printf '%s\t%s bytes\t%s\n' "$(basename -- "$destination")" "$size" "$([[ -f "$destination" ]] && echo present || echo 'to fetch')"
   done
-  echo "The graph would load $IMAGE_MODEL_FILE, $encoder_file and $vae_file; --print-workflow prints it."
+  [[ "$qwen" = only ]] || echo "The graph would load $IMAGE_MODEL_FILE, $encoder_file and $vae_file; --print-workflow prints it."
   [[ "$qwen" = false ]] || echo "Qwen is on: $IMAGE_QWEN_WORKFLOW and $IMAGE_QWEN_EDIT_WORKFLOW would load $IMAGE_QWEN_MODEL_FILE, $IMAGE_QWEN_ENCODER_FILE and $IMAGE_QWEN_VAE_FILE."
+  [[ "$viggle" = false ]] || echo "Viggle is on: its LoRA into models/loras and $IMAGE_VIGGLE_NODE_FILE into custom_nodes, which image-serve.sh loads with SIMPLE_CHAT_IMAGE_VIGGLE=true."
+  [[ "$qwen_pe" = false ]] || echo "The prompt enhancer is on: $IMAGE_QWEN_PE_T2I_FILE into models/text_encoders, for the prompt arms probe."
+  [[ "$torch_line" = cu128 ]] || echo "Torch is $torch_line: ${torch_pins[*]} into $venv; the default environment, if the box has one, stays as it is."
   exit 0
 fi
 
 command -v nvidia-smi >/dev/null && nvidia-smi --query-gpu=index,name,memory.total,driver_version --format=csv,noheader
 mkdir -p "$models_dir/diffusion_models" "$models_dir/text_encoders" "$models_dir/vae"
+[[ "$viggle" = false ]] || mkdir -p "$models_dir/loras" "$comfy_dir/custom_nodes"
 # The weights plus the virtual environment: torch with its CUDA libraries is about 12 GB on disk.
 python3 - "$gpu_dir" "$total_bytes" <<'PY'
 import pathlib,shutil,sys
@@ -316,22 +362,41 @@ fi
 git -C "$comfy_dir" fetch --depth 1 origin "$COMFYUI_REVISION"
 git -C "$comfy_dir" checkout --detach "$COMFYUI_REVISION"
 [[ "$(git -C "$comfy_dir" rev-parse HEAD)" = "$COMFYUI_REVISION" ]]
-[[ -d "$comfy_dir/.venv" ]] || python3 -m venv "$comfy_dir/.venv"
-python="$comfy_dir/.venv/bin/python"
-"$python" -m pip install --quiet --upgrade pip
-# Torch first and pinned, from the CUDA index: ComfyUI's requirements.txt asks for a bare `torch`, and the default
-# index would serve a build without sm_120 kernels.
-"$python" -m pip install --quiet --index-url "$TORCH_INDEX_URL" \
-  "torch==$TORCH_VERSION" "torchvision==$TORCHVISION_VERSION" "torchaudio==$TORCHAUDIO_VERSION"
-"$python" -m pip install --quiet -r "$comfy_dir/requirements.txt"
-"$python" - "$TORCH_ARCH" <<'PY'
+[[ -d "$venv" ]] || python3 -m venv "$venv"
+python="$venv/bin/python"
+# cu130's mark of a whole environment, which image-serve.sh starts it on: gone while this run changes it, and written
+# at the end, once the sm_120 check has passed and the weights are verified. The runbook waits for it.
+ready="$venv/simple-chat-ready"
+[[ "$torch_line" = cu128 ]] || rm -f -- "$ready"
+# cu130 goes beside an environment and the weights already on the box, and a Qwen-only box has 60 GB: pip keeps no
+# second copy of the wheels.
+pip_flags=(--quiet)
+[[ "$torch_line" = cu128 ]] || pip_flags+=(--no-cache-dir)
+"$python" -m pip install "${pip_flags[@]}" --upgrade pip
+# Torch first and pinned, from the CUDA index: ComfyUI's requirements.txt asks for a bare `torch` (and a bare
+# torchvision and torchaudio, which the pinned ones satisfy), and the default index would serve a build without sm_120
+# kernels. On cu130 its four wheels go on by their sha256 first (image-manifest.env), alone, and the line after them
+# adds what they pull.
+if [[ "$torch_line" = cu130 ]]; then
+  lock="$(mktemp)"
+  printf '%s --hash=sha256:%s\n' "torch==$TORCH_CU130_VERSION" "$TORCH_CU130_SHA256" "torchvision==$TORCHVISION_CU130_VERSION" "$TORCHVISION_CU130_SHA256" \
+    "torchaudio==$TORCHAUDIO_CU130_VERSION" "$TORCHAUDIO_CU130_SHA256" "triton==$TRITON_CU130_VERSION" "$TRITON_CU130_SHA256" > "$lock"
+  "$python" -m pip install "${pip_flags[@]}" --require-hashes --no-deps --index-url "$torch_index" -r "$lock"
+  rm -f -- "$lock"
+fi
+"$python" -m pip install "${pip_flags[@]}" --index-url "$torch_index" "${torch_pins[@]}"
+"$python" -m pip install "${pip_flags[@]}" -r "$comfy_dir/requirements.txt"
+torch_said="$("$python" - "$TORCH_ARCH" <<'PY'
 import sys,torch
 archs=torch.cuda.get_arch_list()
 print(f'torch {torch.__version__}, CUDA {torch.version.cuda}, architectures: {" ".join(archs)}')
 if sys.argv[1] not in archs:
     raise SystemExit(f'This torch build has no {sys.argv[1]} kernels; the card would fall back or fail.')
 PY
-# Nothing here installs a custom node, and image-serve.sh disables the folder anyway; say so if one appeared.
+)"
+echo "$torch_said"
+# Nothing here installs a custom node but Viggle's one file when asked, and image-serve.sh disables the folder anyway,
+# that file aside when asked to load it; say so if a node's directory appeared.
 if compgen -G "$comfy_dir/custom_nodes/*/" >/dev/null; then
   echo 'Third-party custom nodes are present in ComfyUI/custom_nodes; they stay disabled at run time.' >&2
 fi
@@ -345,9 +410,16 @@ if [[ -n "$guard_pid" ]]; then
 fi
 (( failed == 0 )) || { echo 'A download failed or was ended; nothing is verified.' >&2; exit 1; }
 
+# What this box was verified to run, the ComfyUI revision and each file's SHA256 as computed here, one
+# `<sha256>  <file>` line apiece: the identity runbook copies it home before the first job and local/image-identity.ts
+# pins the run to it. It is written whole or not at all, and a record from an earlier run does not outlive a
+# verification that failed.
+verified="$gpu_dir/image-verified.txt"
+rm -f -- "$verified"
+echo "revision $(git -C "$comfy_dir" rev-parse HEAD)" >"$verified.part"
 for record in "${records[@]}"; do
   IFS=$'\t' read -r url destination digest size auth <<<"$record"
-  python3 - "$destination" "$digest" "$size" <<'PY'
+  python3 - "$destination" "$digest" "$size" "$verified.part" <<'PY'
 import hashlib,pathlib,sys
 target=pathlib.Path(sys.argv[1]); current=target if target.exists() else pathlib.Path(str(target)+'.part')
 def mismatch(message):
@@ -357,11 +429,24 @@ if current.stat().st_size != int(sys.argv[3]): mismatch('size mismatch; not star
 with current.open('rb') as f: digest=hashlib.file_digest(f,'sha256').hexdigest()
 if digest != sys.argv[2]: mismatch('SHA256 mismatch; not starting.')
 if current != target: current.rename(target)
+with open(sys.argv[4],'a') as record: record.write(f'{digest}  {target.name}\n')
 print(f'{target.name}: SHA256 verified.')
 PY
 done
+mv -- "$verified.part" "$verified"
 # The graph is written only once the weights it names are verified, so its presence means the box can render.
-render_workflow "$IMAGE_WORKFLOW" "$IMAGE_MODEL_FILE" "$encoder_file" "$vae_file" >"$gpu_dir/$IMAGE_WORKFLOW"
+[[ "$qwen" = only ]] || render_workflow "$IMAGE_WORKFLOW" "$IMAGE_MODEL_FILE" "$encoder_file" "$vae_file" >"$gpu_dir/$IMAGE_WORKFLOW"
 [[ "$qwen" = false ]] || render_qwen
-echo "Prepared; post $gpu_dir/$IMAGE_WORKFLOW. Start with: bash $task_dir/image-serve.sh"
-[[ "$qwen" = false ]] || echo "Qwen is on: $gpu_dir/$IMAGE_QWEN_WORKFLOW draws frames, $gpu_dir/$IMAGE_QWEN_EDIT_WORKFLOW takes reference portraits."
+torch_env=''
+if [[ "$torch_line" != cu128 ]]; then
+  printf '%s\n' "$torch_said" >"$ready"
+  torch_env="SIMPLE_CHAT_IMAGE_TORCH=$torch_line "
+fi
+if [[ "$qwen" = only ]]; then
+  echo "Prepared, Qwen only: $gpu_dir/$IMAGE_QWEN_WORKFLOW draws frames and portraits, $gpu_dir/$IMAGE_QWEN_EDIT_WORKFLOW takes reference portraits; $verified says what was verified. Start with: ${torch_env}SIMPLE_CHAT_IMAGE_QWEN=only bash $task_dir/image-serve.sh"
+else
+  echo "Prepared; post $gpu_dir/$IMAGE_WORKFLOW. Start with: ${torch_env}bash $task_dir/image-serve.sh"
+  [[ "$qwen" = false ]] || echo "Qwen is on: $gpu_dir/$IMAGE_QWEN_WORKFLOW draws frames, $gpu_dir/$IMAGE_QWEN_EDIT_WORKFLOW takes reference portraits."
+fi
+[[ "$viggle" = false ]] || echo "Viggle's LoRA and node are verified; a server started with SIMPLE_CHAT_IMAGE_VIGGLE=true loads the node, for its graphs alone."
+[[ "$qwen_pe" = false ]] || echo "The prompt enhancer is verified; the prompt arms probe loads it through CLIPLoader, and the bot never does."
