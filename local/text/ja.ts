@@ -486,6 +486,8 @@ export const ja: Messages = {
     truncated: '⚠️ このシーンは生成中に途切れました。',
     forkNote: name => `「ここから続ける」を押すと、この時点から新しいルートができます。ルート${name}はそのまま残ります。`,
     fork: '🌿 ここから続ける',
+    heldMove: move => `✍️ このシーンへの返信: ${move}`,
+    fromHere: '▶️ この行動でここから続ける',
     back: '◀️ チェックポイント',
   },
 

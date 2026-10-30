@@ -1073,6 +1073,12 @@ function checkpointScreen(state: State, storyId: string | undefined, checkpointI
     footer.push(busyNote(state, 'fork'));
     rows.push(cancelRow(state));
   } else {
+    // A reply to this scene (lib/library.ts `MoveInput`) comes first: it is what the reader is here for.
+    const held = state.ui?.input === 'move' && state.ui.storyId === story.id && state.ui.checkpointId === cp.id ? state.ui : undefined;
+    if (held) {
+      footer.push(t.checkpoint.heldMove(quote(t, held.move, 200)));
+      rows.push([btn(t.checkpoint.fromHere, `from-here:${cp.id}`)]);
+    }
     footer.push(t.checkpoint.forkNote(quote(t, branch.name)));
     rows.push([btn(t.checkpoint.fork, `fork:${story.id}:${cp.id}`)]);
   }

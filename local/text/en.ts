@@ -477,6 +477,8 @@ A new description or new changes are retold into the details and the short look,
     truncated: '⚠️ This scene was cut off during generation.',
     forkNote: name => `“Continue from here” starts a new branch at this point. Branch ${name} stays as it is.`,
     fork: '🌿 Continue from here',
+    heldMove: move => `✍️ Your reply to this scene: ${move}`,
+    fromHere: '▶️ Continue from here with this move',
     back: '◀️ Checkpoints',
   },
 

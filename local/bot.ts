@@ -73,7 +73,8 @@ export type BotOptions = {
 // Bot API updates are not validated in advance; these are the fields the bot reads.
 export type Update = {
   update_id: number;
-  message?: IncomingMessage & { from?: Sender; chat?: { id: number; type: string }; document?: TelegramDocument; photo?: unknown; caption?: unknown };
+  message?: IncomingMessage & { from?: Sender; chat?: { id: number; type: string }; document?: TelegramDocument; photo?: unknown; caption?: unknown;
+    reply_to_message?: { message_id?: number } };
   callback_query?: { id?: string; data?: string; from?: Sender; message?: { message_id?: number; chat?: { id: number; type: string } } };
 };
 type Sender = { id: number; is_bot?: boolean; language_code?: string };
@@ -106,7 +107,7 @@ type Plan = {
   // The screen is a person's card or profile, which a reader may want to read again: it goes out as a message of its
   // own and stays, as a scene does, and a screen opened from its buttons goes out as one of its own too.
   lasting?: boolean;
-  savedText?: { text: string; modelInfo: SceneNode['modelInfo'] }; job?: Job;
+  savedText?: { text: string; modelInfo: SceneNode['modelInfo']; shown?: { storyId: string; nodeId: string } }; job?: Job;
   // A sample of styles the reader asked for: what to draw, what to say under each picture and while they are drawn
   // (local/picture.ts `sample`).
   sample?: Pick<SampleRequest, 'storyId' | 'branchId' | 'nodeId' | 'styles' | 'status'>;
@@ -247,7 +248,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     const { story, branch, seed } = active(state);
     // A null head (no scenes yet) is never a node id, so the seed is shown.
     const node = story.nodes[branch.head as string];
-    return { text: node?.text ?? `${seed.startTime}\n\n${seed.text}`, modelInfo: node?.modelInfo };
+    return { text: node?.text ?? `${seed.startTime}\n\n${seed.text}`, modelInfo: node?.modelInfo, ...node ? { shown: { storyId: story.id, nodeId: node.id } } : {} };
   };
   // The scene whose picture a variant is drawn from, when its button is pressed and when its prompt arrives: one of
   // this reader's scenes, still in their library, with a picture still drawable the way it was drawn
@@ -272,7 +273,8 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     // as one by surprise (/last, /model or /typo would otherwise leave the next move to be taken for one).
     // Choosing where a look or a description lands is part of writing it (`edit-scope`, below).
     const scoping = action?.startsWith('edit-scope:') && member(['look', 'details'], state.ui?.input);
-    if (((action && !scoping) || text?.startsWith('/')) && member(['style', 'look', 'details', 'prompt', 'portrait-prompt', 'reference', 'pose-set', 'profile'], state.ui?.input)) state.ui = null;
+    const goingOn = action?.startsWith('from-here:') && state.ui?.input === 'move';
+    if (((action && !scoping && !goingOn) || text?.startsWith('/')) && member(['style', 'look', 'details', 'prompt', 'portrait-prompt', 'reference', 'pose-set', 'profile', 'move'], state.ui?.input)) state.ui = null;
     if (!action && !fileInput) {
       const command = text?.split(/[\s@]/)[0];
       const current = state.active;
@@ -723,9 +725,19 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       narrator = narratorsMove(state, story.id, node);
       const scenes = history(story, node.parent).length;
       from = { storyId: story.id, ...pointBefore(story, branch, node), name: t.labels.forkBranch(scenes ? t.labels.scene(scenes) : t.labels.seedCheckpoint) };
+    } else if (verb === 'from-here') {
+      const wait = state.ui?.input === 'move' && state.ui.checkpointId === a ? state.ui : undefined;
+      const cp = wait && state.stories[wait.storyId]?.checkpoints[wait.checkpointId];
+      if (!wait || !cp) throw refuse(t, 'staleButton');
+      input = wait.move;
+      from = { storyId: wait.storyId, head: cp.head, memory: cp.memory, name: t.labels.forkBranch(cp.label) };
     } else if (action) throw refuse(t, 'staleButton');
     if (!input) return { screen: { text: t.notices.textOnly } };
     if (!state.active) return { screen: render(state, 'home', pictureInfo) };
+    if (!action) {
+      const route = replied(state, update.message?.reply_to_message?.message_id, input);
+      if (route) return { screen: render(state, route, pictureInfo) };
+    }
     requireGpu(t);
     state.ui = null;
     state.interrupted = false;
@@ -734,6 +746,24 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     // The reader wrote nothing, so the move is the narrator's; a story with a pace tells it so (local/prompt.ts).
     if (narrator) job.move = 'narrator';
     return { job };
+  }
+
+  // A reply to a scene other than the last one of the branch being played: nothing runs and nothing forks by itself, the
+  // screen of that scene asks (`MoveInput`). A reply to the last scene, to a message that shows no scene, or to one of a
+  // scene with no checkpoint left to go on from is a move like any other. Returns the route of that screen.
+  function replied(state: Library, messageId: number | undefined, move: string) {
+    if (messageId === undefined) return undefined;
+    const lastScene = state.stories[state.active!.storyId]?.branches[state.active!.branchId]?.head;
+    for (const story of Object.values(state.stories)) {
+      const node = Object.values(story.nodes).find(one => one.messageId === messageId || one.shownAs?.includes(messageId));
+      if (!node) continue;
+      const here = Object.values(story.checkpoints).filter(cp => cp.head === node.id && Object.hasOwn(story.branches, cp.branchId));
+      const cp = here.find(one => one.kind === 'scene') ?? here[0];
+      if (node.id === lastScene || !cp) return undefined;
+      state.ui = { input: 'move', storyId: story.id, checkpointId: cp.id, move };
+      return `checkpoint:${story.id}:${cp.id}`;
+    }
+    return undefined;
   }
 
   // Whether the reader handed the move of this scene to the narrator. A scene from before `SceneNode.move` tells by its
@@ -1403,10 +1433,15 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       if (inPlace !== undefined) gone.delete(inPlace);
       let delivered = true;
       if (plan.savedText) {
-        const { text, modelInfo: shownInfo } = plan.savedText;
+        const { text, modelInfo: shownInfo, shown } = plan.savedText;
         try {
           const snapshot = store.read(userId);
-          await chat.final(scenePrefix(stats(snapshot), shownInfo, snapshot.language) + text, keyboardOf(userId, snapshot.active, true));
+          const sent = await chat.final(scenePrefix(stats(snapshot), shownInfo, snapshot.language) + text, keyboardOf(userId, snapshot.active, true)) as { message_id?: unknown } | undefined;
+          const messageId = sent?.message_id;
+          if (shown && typeof messageId === 'number') store.mutate(userId, state => {
+            const node = state.stories[shown.storyId]?.nodes[shown.nodeId];
+            if (node) node.shownAs = [...node.shownAs ?? [], messageId].slice(-8);
+          });
         } catch (error) {
           delivered = false;
           log('saved_scene_delivery_unconfirmed', errorCode(error));

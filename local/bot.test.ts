@@ -20,7 +20,7 @@ import type { TelegramPayload } from './telegram.ts';
 import { render, scenePrefix, sceneKeyboard } from './ui.ts';
 import { texts } from './text.ts';
 import { UserError, active, addSeed, history, newStory, beginJob, commitTurn, context } from '../lib/library.ts';
-import type { Job, SeedDraft, SentPicture } from '../lib/library.ts';
+import type { Job, MoveInput, SeedDraft, SentPicture } from '../lib/library.ts';
 
 // Scene and memory requests from the bot always pass a text callback.
 type TextControls = GenerateControls & Required<Pick<GenerateControls, 'onText'>>;
@@ -585,6 +585,65 @@ test('another version leaves the old scene whole, and a turn that writes no scen
   await f.bot.handle(f.click(`again:${old.story.id}:${old.branch.head}`));
   await f.bot.idle();
   assert.equal(here().story.nodes[here().branch.head!].move, 'narrator');
+});
+
+test('a reply to an earlier scene asks first and goes on from there; to the last scene it is a move', async t => {
+  const f = fixture(t);
+  await f.start();
+  await f.bot.handle(f.message('Второй ход'));
+  await f.bot.idle();
+  const replying = (text: string, to: number) => { const update = f.message(text); update.message.reply_to_message = { message_id: to }; return update; };
+  const here = () => {
+    const state = f.store.read(1);
+    const story = Object.values(state.stories)[0];
+    return { state, story, branch: story.branches[state.active!.branchId], nodes: Object.values(story.nodes) };
+  };
+  const [opening, lastOne] = here().nodes;
+
+  // To the last scene: a move like any other, and so to a message that shows no scene.
+  await f.bot.handle(replying('Ответ на последнюю', lastOne.messageId!));
+  await f.bot.idle();
+  await f.bot.handle(replying('Ответ не на сцену', 999_999));
+  await f.bot.idle();
+  assert.deepEqual(here().nodes.slice(-2).map(node => node.input), ['Ответ на последнюю', 'Ответ не на сцену']);
+
+  // To an earlier one: no model call and no branch until the reader says so.
+  const asked = f.requests.length;
+  await f.bot.handle(replying('Ход с первой сцены', opening.messageId!));
+  await f.bot.idle();
+  const before = here();
+  assert.deepEqual([f.requests.length, Object.keys(before.story.branches).length], [asked, 1]);
+  const screen = f.sent.at(-1)!.payload;
+  assert.ok(screen.text.includes('Ход с первой сцены'));
+  const { checkpointId } = before.state.ui as MoveInput;
+
+  // Another message ends the wait and the words it held, and the screen's button is stale from then on.
+  await f.bot.handle(f.message('Передумал'));
+  await f.bot.idle();
+  assert.equal(here().state.ui, null);
+  await f.bot.handle(f.click(`from-here:${checkpointId}`));
+  await f.bot.idle();
+  assert.equal(Object.keys(here().story.branches).length, 1, 'a stale button');
+
+  // The press goes on from that scene, and the branch the reader left stays whole. A scene shown again counts as itself.
+  const left = here().branch;
+  await f.bot.handle(f.message('/last'));
+  await f.bot.idle();
+  const again = here().story.nodes[left.head!];
+  assert.equal(again.shownAs?.length, 1);
+  await f.bot.handle(replying('Ход с первой сцены', opening.messageId!));
+  await f.bot.idle();
+  await f.bot.handle(f.click(`from-here:${(here().state.ui as MoveInput).checkpointId}`));
+  await f.bot.idle();
+  const after = here();
+  assert.equal(after.story.nodes[after.branch.head!].input, 'Ход с первой сцены');
+  assert.equal(after.story.nodes[after.branch.head!].parent, opening.id);
+  assert.equal(after.story.branches[left.id].head, left.head, 'the branch left stays');
+  const fresh = f.sent.filter(item => item.method === 'sendRichMessage').length;
+  await f.bot.handle(replying('Ответ на показанную снова', again.shownAs![0]));
+  await f.bot.idle();
+  assert.equal((here().state.ui as MoveInput).move, 'Ответ на показанную снова');
+  assert.equal(f.sent.filter(item => item.method === 'sendRichMessage').length, fresh);
 });
 
 test('a running job refuses another and /cancel keeps its late answer out; no status lands after the scene or a cancel', async t => {

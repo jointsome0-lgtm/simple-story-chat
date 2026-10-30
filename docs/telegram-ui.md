@@ -102,6 +102,15 @@ most 2.
 ### Branches and the story tree
 
 - **Rewind/fork:** Ветка → Чекпоинты (newest first, 8 per page) → preview (input + scene text; for a seed checkpoint, the seed) → «🌿 Продолжить отсюда» ("Continue from here"). The screen says the old branch stays unchanged.
+- **A reply to an earlier scene:** replying to the message of a scene that is not the last one of the branch being
+  played writes nothing and forks nothing by itself, the owner's list of 2026-10-30. It opens that scene's preview with
+  the reply on it and «▶️ Продолжить отсюда этим ходом» ("Continue from here with this move",
+  `from-here:<checkpointId>`), which runs the reply as a move from that scene on a new branch standing aside, as
+  [another version](#user-paths) does. The wait `{input:'move'}` is the one wait that holds text, since the reader wrote
+  it before anything could be asked; any button, command or next message ends it and the text with it. A reply to the
+  last scene is an ordinary move, and so is one to a message that shows no scene. The bot knows a scene by
+  `SceneNode.messageId` and, for a scene shown again, by the last eight messages in `SceneNode.shownAs`. A preview
+  on a passing screen is no scene's message, and a reply to it is an ordinary move.
 - **Story tree and scene log:** История → «🌳 Дерево истории» ("Story tree") draws the story the way a commit graph
   reads. Only the places that mean something are nodes: a memory compaction (🗜), a fork, a checkpoint the author saved
   (📍) and the head of a branch (🌿, ✅ for the active one). A straight run between them is one line with its scene

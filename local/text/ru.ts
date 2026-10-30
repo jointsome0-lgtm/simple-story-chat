@@ -656,6 +656,9 @@ export const ru = {
     // Names the Continue from here button.
     forkNote: (name: string) => `«Продолжить отсюда» создаст новую ветку с этого момента. Ветка ${name} останется как есть.`,
     fork: '🌿 Продолжить отсюда',
+    // A reply to an earlier scene: `move` is the quoted reply, and the button goes on from this scene with it.
+    heldMove: (move: string) => `✍️ Твой ответ на эту сцену: ${move}`,
+    fromHere: '▶️ Продолжить отсюда этим ходом',
     back: '◀️ Чекпоинты',
   },
 

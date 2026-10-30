@@ -496,6 +496,8 @@ export const ko: Messages = {
     truncated: '⚠️ 생성 도중 장면이 끊겼어요.',
     forkNote: name => `‘여기서 이어가기’를 누르면 이 시점부터 새 분기가 생겨요. 분기 ${name}${josa(name, '은', '는')} 그대로 남아요.`,
     fork: '🌿 여기서 이어가기',
+    heldMove: move => `✍️ 이 장면에 보낸 답장: ${move}`,
+    fromHere: '▶️ 이 행동으로 여기서 이어가기',
     back: '◀️ 체크포인트',
   },
 

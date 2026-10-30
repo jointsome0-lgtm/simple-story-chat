@@ -22,6 +22,9 @@ export type SceneNode = {
   id: string; parent: string | null; input: string; text: string; time: string; truncated: boolean; delivery: 'pending' | 'sent';
   usage?: Usage | null; requestContext?: RequestStamp; streamResultMismatch?: boolean;
   modelInfo?: { provider: string; model: string }; messageId?: number;
+  // The messages that showed this scene again (/last, a switch of branch, a fork), newest last, the last few only: a
+  // reply to one of them is a reply to the scene as well (local/bot.ts `replied`). Only the local bot writes it.
+  shownAs?: number[];
   // `Job.move` of the turn that wrote the scene, for another version of it to be the same move. A scene from before
   // this field does not say (local/bot.ts `narratorsMove`).
   move?: 'narrator';
@@ -217,6 +220,10 @@ export type PortraitPromptInput = { input: 'portrait-prompt'; storyId: string; n
 // (`profileHash`), which must still be the person's when the profile arrives. The text itself is not kept here. The
 // person is the one whose profile it was, by story and name.
 export type ProfileInput = { input: 'profile'; storyId: string; name: string; fields: string; hash: string; confirm?: undefined };
+// A reader who answered an earlier scene with a move, by replying to its message (local/bot.ts `replied`): the screen of
+// that scene asks whether to go on from there. Unlike the other waits this one holds text, since the reader wrote it
+// before anything could be asked; a button, a command or their next message ends it, and the text with it.
+export type MoveInput = { input: 'move'; storyId: string; checkpointId: string; move: string; confirm?: undefined };
 // One of the reader's own picture styles: the name on its button and the line that ends the prompt.
 export type OwnStyle = { id: string; name: string; line: string };
 // How a picture was drawn, all but its prompt (local/picture.ts): its seed, a hash of the graph, the checkpoint's file
@@ -241,7 +248,7 @@ export type Language = 'ru' | 'en' | 'zh' | 'ko' | 'ja';
 export type Library = {
   version: 1; seq: number; seeds: Record<string, Seed>; stories: Record<string, Story>;
   active: { storyId: string; branchId: string } | null; job: Job | null;
-  ui: SeedDraft | DeleteConfirmation | StyleInput | PromptInput | LookInput | ReferenceInput | PoseSetInput | PortraitPromptInput | ProfileInput | null;
+  ui: SeedDraft | DeleteConfirmation | StyleInput | PromptInput | LookInput | ReferenceInput | PoseSetInput | PortraitPromptInput | ProfileInput | MoveInput | null;
   seen: number[];
   interrupted?: boolean; language?: Language; lostMove?: LostMove;
   // The look of this reader's pictures: a preset's key or the id of one of their own styles, and those styles. Only

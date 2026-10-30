@@ -487,6 +487,8 @@ export const zh: Messages = {
     truncated: '⚠️ 这个场景在生成时中断了。',
     forkNote: name => `“从这里继续”会从这一刻创建一个新分支。分支${name}保持不变。`,
     fork: '🌿 从这里继续',
+    heldMove: move => `✍️ 你对这个场景的回复：${move}`,
+    fromHere: '▶️ 用这一步从这里继续',
     back: '◀️ 存档点',
   },
 
