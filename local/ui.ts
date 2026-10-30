@@ -1025,6 +1025,7 @@ function branchScreen(state: State, storyId: string | undefined, branchId: strin
     rows.push([btn(t.branch.play, `use:${story.id}:${branch.id}`)]);
   }
   rows.push([btn(t.branch.scenes, `view:log:${story.id}:${branch.id}:0`), btn(t.branch.checkpoints(checkpoints), `view:checkpoints:${story.id}:${branch.id}:0`)]);
+  if (last) rows.push([btn(t.branch.export, `export:${story.id}:${branch.id}`)]);
   if (!state.job) rows.push([btn(t.branch.delete, `view:delete-branch:${story.id}:${branch.id}`)]);
   rows.push([btn(t.branch.all, `view:story:${story.id}`), btn(t.buttons.menu, 'view:home')]);
   return payload(lines, rows);

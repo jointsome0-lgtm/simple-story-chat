@@ -471,6 +471,7 @@ export const ko: Messages = {
     play: '✅ 이 분기에서 플레이',
     scenes: '📜 분기의 장면',
     checkpoints: n => `🔖 체크포인트 (${n})`,
+    export: '📥 텍스트 받기',
     delete: '🗑 분기 삭제',
     all: '◀️ 모든 분기',
   },
@@ -714,6 +715,7 @@ export const ko: Messages = {
     modelUnavailable: '모델 서비스를 지금 사용할 수 없어요. 서비스가 다시 작동하면 이야기를 이어갈 수 있어요.',
     gpuPaused: 'GPU가 일시정지됐어요. /model 명령으로 GPU를 시작한 뒤 행동을 다시 보내 주세요.',
     drawing: '🎨 삽화를 그리는 중…',
+    exportFailed: '파일을 보내지 못했어요. 잠시 후 다시 시도해 주세요.',
     pictureFailed: '삽화를 그리지 못했어요. 장면은 저장되어 있어요.',
     promptSummary: (chars, tokens, style) =>
       `🖼 프롬프트: ${tokens === null ? '' : `${grouped(tokens)}토큰${style === null ? '' : ` (스타일 ${grouped(style)})`} · `}${grouped(chars)}자`,

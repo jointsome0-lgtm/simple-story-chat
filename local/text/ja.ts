@@ -461,6 +461,7 @@ export const ja: Messages = {
     play: '✅ このルートでプレイ',
     scenes: '📜 ルートのシーン',
     checkpoints: n => `🔖 チェックポイント（${n}）`,
+    export: '📥 テキストを保存',
     delete: '🗑 ルートを削除',
     all: '◀️ すべてのルート',
   },
@@ -704,6 +705,7 @@ export const ja: Messages = {
     modelUnavailable: 'モデルのサービスは今、利用できません。再び動くようになったら、物語を続けられます。',
     gpuPaused: 'GPUが一時停止しました。/model を開いて起動してから、行動をもう一度送ってください。',
     drawing: '🎨 挿絵を描いています…',
+    exportFailed: 'ファイルを送れませんでした。少し待ってからもう一度お試しください。',
     pictureFailed: '挿絵は描けませんでした。シーンは保存されています。',
     promptSummary: (chars, tokens, style) =>
       `🖼 プロンプト：${tokens === null ? '' : `${grouped(tokens)} トークン${style === null ? '' : `（うちスタイル ${grouped(style)}）`} · `}${grouped(chars)} 文字`,

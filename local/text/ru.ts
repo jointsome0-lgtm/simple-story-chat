@@ -628,6 +628,8 @@ export const ru = {
     play: '✅ Играть в этой ветке',
     scenes: '📜 Сцены ветки',
     checkpoints: (n: number) => `🔖 Чекпоинты (${n})`,
+    // Sends the branch's scenes as a text file (local/story-file.ts).
+    export: '📥 Скачать текст',
     delete: '🗑 Удалить ветку',
     all: '◀️ Все ветки',
   },
@@ -923,6 +925,7 @@ export const ru = {
     gpuPaused: 'GPU перешла на паузу. Открой /model и запусти её; затем отправь действие снова.',
     // Стоит под сценой, пока рисуется картинка, и исчезает вместе с ней.
     drawing: '🎨 Рисую иллюстрацию…',
+    exportFailed: 'Не получилось отправить файл. Попробуй ещё раз чуть позже.',
     pictureFailed: 'Иллюстрация не получилась. Сцена сохранена.',
     // The one line of the folded block under every picture that holds the prompt it was drawn from (local/picture.ts).
     // Raw counts: `chars` of the prompt; `tokens` as the picture model's text encoder reads it and `style` of them the

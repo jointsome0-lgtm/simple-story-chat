@@ -47,17 +47,21 @@ export class TelegramError extends Error {
 }
 
 // A payload with bytes in it is a file upload, which the Bot API takes as multipart/form-data and not as JSON.
-// Only sendPhoto uses it here: the picture of a scene is sent from memory and is never written to this disk, so
-// there is no file_id and no URL to send instead. Every other field of the payload travels beside the bytes as a
+// sendPhoto uses it: the picture of a scene is sent from memory and is never written to this disk, so there is no
+// file_id and no URL to send instead. So does sendDocument, for a branch as a text file (`document`), whose name goes in
+// `file_name` and not as a field of its own. Every other field of the payload travels beside the bytes as a
 // form field, numbers and objects as the API reads them back (JSON), which is what `reply_parameters` needs.
-export function multipartBody(payload: TelegramPayload, boundary: string): Buffer {
+export function multipartBody({ file_name: fileName, ...payload }: TelegramPayload, boundary: string): Buffer {
   const parts: Buffer[] = [];
   for (const [name, value] of Object.entries(payload)) {
     if (value === undefined) continue;
     const bytes = value instanceof Uint8Array;
-    // The file name is ours and says nothing: Telegram shows it to nobody and the picture is not a document.
+    // A picture's file name is ours and says nothing: Telegram shows it to nobody and the picture is not a document.
+    // A document's is shown; a character that could end the header goes.
+    const file = name === 'document' ? `; filename="${String(fileName).replace(/["\\\r\n]/g, '')}"\r\nContent-Type: text/plain; charset=utf-8`
+      : '; filename="scene.png"\r\nContent-Type: image/png';
     const head = `--${boundary}\r\nContent-Disposition: form-data; name="${name}"`
-      + (bytes ? '; filename="scene.png"\r\nContent-Type: image/png\r\n\r\n' : '\r\n\r\n');
+      + (bytes ? `${file}\r\n\r\n` : '\r\n\r\n');
     parts.push(Buffer.from(head, 'utf8'));
     parts.push(bytes ? Buffer.from(value.buffer, value.byteOffset, value.byteLength)
       : Buffer.from(typeof value === 'object' ? JSON.stringify(value) : String(value), 'utf8'));
@@ -205,21 +209,27 @@ export function createChat(api: TelegramApi, chatId: number | string, memory: Ch
     // lasted seconds. No answer does not mean the photo did not arrive, so in rare cases a retry shows the reader the
     // same photo twice, which is better than a lost picture. Any other failure throws at once, and so does a third
     // upload without an answer.
-    async photo(bytes: Uint8Array, replyTo?: number, caption?: Screen) {
+    async photo(bytes: Uint8Array, replyTo?: number, caption?: Screen, keepFile?: (fileId: string) => void) {
       const payload = { chat_id: chatId, photo: bytes,
         ...(caption ? { caption: caption.text, ...(caption.reply_markup ? { reply_markup: caption.reply_markup } : {}) } : {}),
         ...(replyTo ? { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } } : {}) };
       for (let attempt = 0; ; attempt++) {
         try {
-          const sent = await api('sendPhoto', payload);
-          // Bot API results are not validated; the id is read as returned.
-          return (sent as { message_id?: number } | undefined)?.message_id;
+          const sent = await api('sendPhoto', payload) as { message_id?: number; photo?: { file_id?: unknown }[] } | undefined;
+          // Bot API results are not validated; the ids are read as returned. The last size is the largest.
+          const fileId = sent?.photo?.at(-1)?.file_id;
+          if (typeof fileId === 'string') keepFile?.(fileId);
+          return sent?.message_id;
         } catch (error) {
           const noAnswer = error instanceof TelegramError && error.code === 'network';
           if (!noAnswer || attempt === PHOTO_RETRY_MS.length) throw error;
           await delay(PHOTO_RETRY_MS[attempt]);
         }
       }
+    },
+    // A file the reader asked for, a message that stays. `fileName` is shown with it.
+    async document(bytes: Uint8Array, fileName: string, caption: string) {
+      await api('sendDocument', { chat_id: chatId, document: bytes, file_name: fileName, caption });
     },
     // A rich message in HTML hung under another one: the folded prompt under a picture (local/picture.ts
     // `foldedPrompt`). Resolves to its own message id, by which a deletion of its scene takes it out of the chat too.

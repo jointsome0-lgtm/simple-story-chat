@@ -1088,7 +1088,9 @@ export function createIllustrator(config: ImageConfig, deps: {
       // The photo hangs under the scene it belongs to, and the status line goes only once the photo is there; the
       // prompt follows it, folded, even if the picture was stopped while the photo was on its way.
       const photoStarted = now();
-      const photo = await sendKept(request, () => chat.photo(drawn.bytes, request.sceneMessageId, withModel(undefined, drawn.model)), recipe);
+      const photo = await sendKept(request, () => chat.photo(drawn.bytes, request.sceneMessageId, withModel(undefined, drawn.model), fileId => {
+        store.mutate(request.userId, state => { const node = state.stories[request.storyId]?.nodes[request.nodeId]; if (node) node.pictureFile = fileId; });
+      }), recipe);
       const photoMs = Math.max(0, now() - photoStarted);
       await status.clear();
       const size = promptSize(assembled.prompt, assembled.line ?? line, drawn.referenceCount);

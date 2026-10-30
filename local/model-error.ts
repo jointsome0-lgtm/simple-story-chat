@@ -92,6 +92,11 @@ const SERVING_CODES = ['invalid_request', 'unsupported_field', 'limit_exceeded',
   'class_not_allowed', 'scope_not_allowed', 'forbidden', 'not_found', 'stale_boot', 'stale_generation', 'body_too_large',
   'queue_full', 'internal_error', 'starting', 'draining', 'drained', 'engine_unavailable', 'timeout',
   'graph_refused', 'graph_rejected', 'picture_failed', 'socket_unavailable', 'stop_unconfirmed'] as const;
+// Which screen a button or a command opened (local/bot.ts `Plan.opened`), by its name, without the ids of its route.
+// How often each is opened is what tells which of them a reader uses. A route this list does not know stays out.
+const SCREENS = ['home', 'model', 'language', 'pace', 'style', 'sample', 'characters', 'character', 'portrait-kept', 'profile', 'seeds', 'seed', 'story',
+  'tree', 'log', 'branch', 'checkpoints', 'checkpoint', 'bookmarks', 'forks', 'context', 'memory', 'fact', 'delete-seed', 'delete-branch', 'delete-style',
+  'delete-fact', 'pose-set-drop', 'new-seed'] as const;
 // Sizes, counts and durations. Each is kept only as a non-negative safe integer, so none can carry text.
 const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'repairSceneCount', 'requestBytes',
   'inputBytesBefore', 'inputBytesAfter', 'outputCharacters', 'inputTokens', 'outputTokens', 'elapsedMs',
@@ -209,6 +214,8 @@ export type ErrorDetails = {
   promptSource?: typeof PROMPT_SOURCES[number]; gFallback?: typeof G_FALLBACKS[number]; gTagMiss?: typeof G_TAG_MISSES[number];
   // A picture of a pose set: why it was refused; and an archive of one: why it was, and what its labels.csv was.
   poseSetRefusal?: typeof POSE_SET_REFUSALS[number]; poseArchiveRefusal?: ArchiveRefusal; poseLabels?: typeof ARCHIVE_LABELS[number];
+  // A screen a reader opened, by its name.
+  screen?: typeof SCREENS[number];
   // A failed Claude CLI run: how it ended and whether the CLI itself called the result an error.
   cliResult?: typeof CLI_RESULTS[number]; cliError?: boolean; stopReason?: typeof STOP_REASONS[number];
 } & { [Key in typeof COUNTS[number]]?: number };
@@ -269,6 +276,7 @@ export function safeErrorDetails(value: unknown = {}): ErrorDetails {
   if (member(POSE_SET_REFUSALS, input?.poseSetRefusal)) result.poseSetRefusal = input.poseSetRefusal;
   if (member(ARCHIVE_REFUSALS, input?.poseArchiveRefusal)) result.poseArchiveRefusal = input.poseArchiveRefusal;
   if (member(ARCHIVE_LABELS, input?.poseLabels)) result.poseLabels = input.poseLabels;
+  if (member(SCREENS, input?.screen)) result.screen = input.screen;
   if (member(CLI_RESULTS, input?.cliResult)) result.cliResult = input.cliResult;
   if (typeof input?.cliError === 'boolean') result.cliError = input.cliError;
   if (member(STOP_REASONS, input?.stopReason)) result.stopReason = input.stopReason;

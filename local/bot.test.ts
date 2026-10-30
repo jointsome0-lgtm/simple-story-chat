@@ -16,7 +16,9 @@ import type { Controls, GenerateControls, GenerationResult, ModelRequest, Provid
 import type { Illustrator, SampleRequest } from './picture.ts';
 import { personTag } from './picture.ts';
 import { OWN_STYLES_MAX, PRESETS } from './picture-style.ts';
+import { multipartBody } from './telegram.ts';
 import type { TelegramPayload } from './telegram.ts';
+import { storyFile } from './story-file.ts';
 import { render, scenePrefix, sceneKeyboard } from './ui.ts';
 import { texts } from './text.ts';
 import { UserError, active, addSeed, factsOf, history, newStory, beginJob, commitTurn, context } from '../lib/library.ts';
@@ -700,6 +702,37 @@ test('a fact the reader corrects reaches the next request, and the memory before
   assert.ok(asked.includes('Ворота пали на рассвете.'));
   assert.equal(asked.split(original).length - 1, first.facts.length - 2, 'the fact rewritten and the one taken out are not read');
   assert.equal(here().story.nodes[here().branch.head!].input, 'Дальше.');
+});
+
+test('a branch as a file holds its line and nothing of another, and goes to its reader alone', async t => {
+  const f = fixture(t);
+  await f.start();
+  await f.bot.handle(f.message('Мой ход\nв две строки'));
+  await f.bot.idle();
+  const state = f.store.read(1);
+  const { story, branch } = active(state);
+  const nodes = history(story, branch.head);
+
+  // The reader of another library has no such story, whatever the button says.
+  await f.bot.handle(f.click(`export:${story.id}:${branch.id}`, 2));
+  await f.bot.idle();
+  assert.equal(f.sent.filter(item => item.method === 'sendDocument').length, 0);
+
+  await f.bot.handle(f.click(`export:${story.id}:${branch.id}`));
+  await f.bot.idle();
+  const [{ payload }] = f.sent.filter(item => item.method === 'sendDocument') as unknown as { payload: { chat_id: number; document: Uint8Array; file_name: string } }[];
+  const text = Buffer.from(payload.document).toString('utf8');
+  assert.equal(payload.chat_id, 1);
+  assert.ok(nodes.every(node => text.includes(node.text)), 'every scene of the line');
+  assert.ok(text.indexOf(nodes[0].text) < text.indexOf('> Мой ход\n> в две строки') && text.indexOf('> в две строки') < text.indexOf(nodes[1].text), 'in order, each move above its scene');
+  assert.ok(!text.includes(nodes[0].input), 'the bot\'s own instruction is no words of the reader\'s');
+  assert.deepEqual(f.rows.filter(row => row.event === 'branch_exported').map(row => row.sceneCount), [2]);
+  assert.ok(!JSON.stringify(f.rows).includes('Мой ход'), 'no row says what the file holds');
+
+  // The name of a file travels in a header: nothing in a title can end that header.
+  assert.ok(!/[\r\n"]/.test(storyFile({ ...state, stories: { [story.id]: { ...story, title: 'Ма"як\r\nX-Evil: 1' } } }, story.id, branch.id).name));
+  const body = multipartBody({ chat_id: 1, document: new Uint8Array([1]), file_name: 'Ма"як\r\nX.txt' }, 'B').toString('utf8');
+  assert.ok(body.includes('filename="МаякX.txt"') && !body.includes('name="file_name"'));
 });
 
 test('a running job refuses another and /cancel keeps its late answer out; no status lands after the scene or a cancel', async t => {

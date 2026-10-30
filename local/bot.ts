@@ -5,7 +5,7 @@ import type { Job, Library, PendingPoseUpload, PoseSetInput, PoseUploadFile, Pro
 import { storyNarration } from './prompt.ts';
 import { chatMemory, createChat } from './telegram.ts';
 import type { Chat, ChatMemory, InlineKeyboard, Passing, SceneButtons, Screen, TelegramApi } from './telegram.ts';
-import { continueInput, contextStats } from './context.ts';
+import { continueInput, contextStats, narratorsMove } from './context.ts';
 import type { ContextSelection, ContextStats } from './context.ts';
 import { compactBranch, compactionThreshold } from './generation.ts';
 import type { Prepared } from './prepare.ts';
@@ -16,6 +16,7 @@ import type { IncomingMessage } from './incoming.ts';
 import { SEED_BYTES } from './seed-file.ts';
 import type { TelegramDocument } from './seed-file.ts';
 import { createProgress } from './progress.ts';
+import { storyFile } from './story-file.ts';
 import { renderCompaction } from './compact-view.ts';
 import type { CompactionStatus } from './compact-view.ts';
 import { etaText } from './eta.ts';
@@ -99,6 +100,10 @@ type PoseCount = { storyId: string; name: string; at: number; kept: number; labe
 // What to do after the library write; handle acts on each field that is set.
 type Plan = {
   screen?: Screen; cancel?: boolean; gpuAction?: string; modelStatus?: boolean;
+  // The name of the screen a button or a command opened, for its log row (`SCREENS` in local/model-error.ts).
+  opened?: string;
+  // A branch the reader asked for as a text file (local/story-file.ts).
+  exportBranch?: { storyId: string; branchId: string };
   // The screen goes out as a message of its own and leaves the one pressed as it is: a wait that asks for the text of
   // the message its button is under (docs/telegram-ui.md#passing-messages).
   apart?: boolean;
@@ -304,12 +309,12 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     }
     // Power controls remain available during a seed draft or a model job.
     if (action === 'gpu:pause' || action === 'gpu:start') return { gpuAction: action.slice(4) };
-    if (action === 'view:model') return { modelStatus: true };
+    if (action === 'view:model') return { modelStatus: true, opened: 'model' };
     // The language can be changed at any moment, also from a draft: a user who cannot read the screen has to get out.
     if (action === 'view:language' || action?.startsWith('lang:')) {
       const draft = state.ui?.input === 'seed';
       if (!draft) state.ui = null;
-      if (action === 'view:language') return { screen: render(state, 'language') };
+      if (action === 'view:language') return { screen: render(state, 'language'), opened: 'language' };
       const lang = action.slice(5);
       if (!isRegistered(lang)) throw refuse(t, 'staleButton');
       setLanguage(state, lang);
@@ -348,7 +353,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         : route.startsWith('delete-branch:') ? { confirm: route.replace('delete-branch:', 'remove-branch:') }
         : route.startsWith('delete-fact:') ? { confirm: route.replace('delete-fact:', 'remove-fact:') }
         : route.startsWith('delete-style:') ? { confirm: route.replace('delete-style:', 'remove-style:') } : null;
-      return { screen: screen(state, route, pictureInfo), lasting: /^(character|profile):/.test(route) };
+      return { screen: screen(state, route, pictureInfo), lasting: /^(character|profile):/.test(route), opened: route.split(':')[0] };
     }
     // A story's pace (lib/library.ts `Story.pace`). It changes at any moment, also while a scene is being written: only
     // the scene requests still to be built read it (local/prompt.ts). «Сцена» leaves the story without one.
@@ -672,6 +677,13 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       return factEdited(state, t, storyId, branchId, version, index, text);
     }
     if (action === 'last') return { savedText: last(state) };
+    // A branch as a text file only reads it, so it goes out at any moment, also while a scene is being written.
+    if (action?.startsWith('export:')) {
+      const [, storyId = '', branchId = ''] = action.split(':');
+      const story = ID.story.test(storyId) ? state.stories[storyId] : undefined;
+      if (!(ID.branch.test(branchId) && story?.branches[branchId]?.head)) throw refuse(t, 'staleButton');
+      return { exportBranch: { storyId, branchId } };
+    }
     if (action === 'new-seed') {
       if (state.job) throw refuse(t, 'busyNewSeed');
       state.ui = { input: 'seed', draftId: id(state, 'd'), parts: [] };
@@ -724,12 +736,12 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       if (!story?.branches[b]) throw refuse(t, 'branchGoneOpenSeeds');
       state.active = { storyId: a, branchId: b };
       state.ui = null;
-      return { savedText: last(state), screen: render(state, `branch:${a}:${b}`) };
+      return { savedText: last(state), screen: render(state, `branch:${a}:${b}`), logged: { event: 'branch_switched', details: {} } };
     }
     if (verb === 'fork') {
       const branch = fork(state, a, b, t.labels);
       state.ui = null;
-      return { savedText: last(state), screen: render(state, `branch:${a}:${branch.id}`) };
+      return { savedText: last(state), screen: render(state, `branch:${a}:${branch.id}`), logged: { event: 'branch_forked', details: {} } };
     }
     let input = text;
     // A lost move runs only here, on the reader's own press, and only where it was lost (lib/library.ts `LostMove`).
@@ -766,16 +778,17 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     if (!state.active) return { screen: render(state, 'home', pictureInfo) };
     if (!action) {
       const route = replied(state, update.message?.reply_to_message?.message_id, input);
-      if (route) return { screen: render(state, route, pictureInfo) };
+      if (route) return { screen: render(state, route, pictureInfo), logged: { event: 'scene_replied_to', details: {} } };
     }
     requireGpu(t);
     state.ui = null;
     state.interrupted = false;
-    delete state.lostMove;
     const job = from ? beginSideJob(state, from.storyId, from, from.name, input, Date.now(), t.labels) : beginTurn(state, input, Date.now());
+    delete state.lostMove;
     // The reader wrote nothing, so the move is the narrator's; a story with a pace tells it so (local/prompt.ts).
     if (narrator) job.move = 'narrator';
-    return { job };
+    const event = action === 'retry' ? 'move_repeated' : verb === 'again' ? 'scene_again' : verb === 'from-here' ? 'move_from_scene' : undefined;
+    return { job, ...event ? { logged: { event, details: {} } } : {} };
   }
 
   // Rewrites a fact of a branch's memory or takes it out, and shows the list at the place the fact held.
@@ -805,12 +818,6 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       return `checkpoint:${story.id}:${cp.id}`;
     }
     return undefined;
-  }
-
-  // Whether the reader handed the move of this scene to the narrator. A scene from before `SceneNode.move` tells by its
-  // input, which is then the bot's own.
-  function narratorsMove(state: Library, storyId: string, node: SceneNode) {
-    return node.move === 'narrator' || node.input === continueInput(state, storyId) || node.input === storyNarration(state, storyId).startStory;
   }
 
   // A profile sent back while one is awaited (`profile-edit`), inside the library write. It is taken whole or not at all:
@@ -1493,8 +1500,21 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       if (screen) {
         try {
           if (lasting) await chat.send(screen); else await chat.put(inPlace, screen, kind, kind === 'screen' ? wait : undefined);
-          log('screen_sent');
+          log('screen_sent', undefined, { screen: plan.opened });
         } catch (error) { delivered = false; log('telegram_send_failed', errorCode(error)); }
+      }
+      // Beside the next updates, as a deletion below is: an upload that takes its time holds up nobody.
+      if (plan.exportBranch) {
+        const { storyId, branchId } = plan.exportBranch;
+        const task: Promise<unknown> = (async () => {
+          const file = storyFile(store.read(userId), storyId, branchId);
+          await chat.document(Buffer.from(file.text, 'utf8'), file.name, file.caption);
+          log('branch_exported', undefined, { sceneCount: file.scenes });
+        })().catch(async error => {
+          log('telegram_send_failed', errorCode(error));
+          await pass(chat, { text: texts(store.read(userId).language).notices.exportFailed }, log);
+        }).finally(() => inFlight.delete(task));
+        inFlight.add(task);
       }
       // Beside the next updates and the job this one starts, as the pictures' deletion below is: a chat slow to answer
       // a deletion holds up nobody.

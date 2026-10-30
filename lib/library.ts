@@ -38,6 +38,10 @@ export type SceneNode = {
   // How this scene's own picture was drawn, all but its prompt: a variant of it is drawn with the same, for as long
   // as the scene is kept (local/picture.ts `variant`). Only the local bot writes it.
   picture?: PictureRecipe;
+  // Telegram's id of the file of this scene's own picture, by which it can be sent again without being drawn again: no
+  // picture is kept on this disk. Nothing reads it yet; it is written from now on, for an export or a thumbnail to have
+  // the pictures of the scenes before that day. Only the local bot writes it.
+  pictureFile?: string;
   // How people of the story's sheet look from this scene on, by their sheet name, where it is not what the sheet and
   // the scenes above say (local/picture-versions.ts): a version holds here and in every scene below this one, on every
   // line through it. Only the local bot writes it.

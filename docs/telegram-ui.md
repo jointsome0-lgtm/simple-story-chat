@@ -111,6 +111,18 @@ most 2.
   last scene is an ordinary move, and so is one to a message that shows no scene. The bot knows a scene by
   `SceneNode.messageId` and, for a scene shown again, by the last eight messages in `SceneNode.shownAs`. A preview
   on a passing screen is no scene's message, and a reply to it is an ordinary move.
+- **A branch as a text file:** «📥 Скачать текст» ("Download text", `export:<storyId>:<branchId>`) on a branch's screen
+  sends its scenes in order as a `.txt` document, each under the move that led to it as the reader wrote it, `> ` before
+  each line, from the owner's list of 2026-10-30. A move handed to the narrator has no words of the reader's to show,
+  and the seed stays out. It only reads, so it goes out at any moment, also while a scene is being written, beside the
+  next updates, and a reader who could not be sent it is told. Text alone for now, with no public link. From the same
+  day each scene's own picture keeps Telegram's file id (`SceneNode.pictureFile`), since no picture is kept on this
+  disk and an export or a thumbnail will need those of the scenes before it.
+- **What the log counts:** a reader's way through these has rows of its own, an event with `actor` and nothing of the
+  story: `branch_forked`, `branch_switched`, `scene_again`, `move_repeated`, `scene_replied_to`, `move_from_scene`,
+  `branch_exported` (`sceneCount`), `memory_fact_edited` and `memory_fact_removed` (`factCount`). `screen_sent` says
+  which screen a button or a command opened (`screen`, by name, without the ids of its route), so that what readers
+  actually open can be counted before a screen is changed or taken away.
 - **Story tree and scene log:** История → «🌳 Дерево истории» ("Story tree") draws the story the way a commit graph
   reads. Only the places that mean something are nodes: a memory compaction (🗜), a fork, a checkpoint the author saved
   (📍) and the head of a branch (🌿, ✅ for the active one). A straight run between them is one line with its scene
@@ -897,7 +909,8 @@ drawing and playing stay in the chat. The server is `local/mini-app.ts`, the pag
   fonts, no analytics. Its policy lets it run its own and Telegram's scripts, fetch from its own address alone and be
   framed by Telegram Web alone, and it takes the colours of the reader's theme (`--tg-theme-*`). The page keeps the
   launch data in memory; Telegram's script keeps its launch parameters in the window's session storage, as for any
-  Mini App. No Telegram client has opened it yet: it was checked in headless Chrome with synthetic launch data.
+  Mini App. It was first checked in headless Chrome with synthetic launch data; since then the readers' own Telegram
+  clients have opened it (`mini_app_served` rows of 2026-09-30, 10-01 and 10-28).
 - **Log:** `mini_app_ready`, or `mini_app_failed` with an errno, at start; `mini_app_served` (`stories`, `characters`,
   `card`, `picture`) and `mini_app_refused` (`no_init_data`, `malformed`, `forged`, `expired`, `not_listed`,
   `missing`, `picture_unavailable`, `library_too_large`, `busy`), with `actor` once the reader is known, each row at

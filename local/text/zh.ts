@@ -462,6 +462,7 @@ export const zh: Messages = {
     play: '✅ 玩这个分支',
     scenes: '📜 分支的场景',
     checkpoints: n => `🔖 存档点 (${n})`,
+    export: '📥 下载文本',
     delete: '🗑 删除分支',
     all: '◀️ 全部分支',
   },
@@ -705,6 +706,7 @@ export const zh: Messages = {
     modelUnavailable: '模型服务现在不可用。等它恢复工作后，就可以继续故事。',
     gpuPaused: 'GPU 已进入暂停。打开 /model 启动它，然后重新发送你的行动。',
     drawing: '🎨 正在绘制插图…',
+    exportFailed: '文件没能发出。请稍后再试。',
     pictureFailed: '插图没有画成。场景已保存。',
     promptSummary: (chars, tokens, style) =>
       `🖼 提示词：${tokens === null ? '' : `${grouped(tokens)} 个 token${style === null ? '' : `，其中风格 ${grouped(style)} 个`} · `}${grouped(chars)} 个字符`,

@@ -1,5 +1,5 @@
 import { UserError } from '../lib/library.ts';
-import type { Branch, Library, RequestStamp } from '../lib/library.ts';
+import type { Branch, Library, RequestStamp, SceneNode } from '../lib/library.ts';
 import { contextParts, makeRequest, storyNarration } from './prompt.ts';
 import type { StoryPoint } from './prompt.ts';
 import type { ChatMessage, ModelRequest } from './model.ts';
@@ -15,6 +15,10 @@ type Measure = { bytes: number; estimatedTokens: number };
 
 // The message the bot sends for "continue on your own", in the language of the story (story-text.ts).
 export const continueInput = (state: Library, storyId: string) => storyNarration(state, storyId).continueStory;
+// Whether the reader handed the move of this scene to the narrator. A scene from before `SceneNode.move` tells by its
+// input, which is then the bot's own.
+export const narratorsMove = (state: Library, storyId: string, node: SceneNode) => node.move === 'narrator'
+  || node.input === continueInput(state, storyId) || node.input === storyNarration(state, storyId).startStory;
 const CLI_RESERVE = 4096;
 const count = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
 // Missing keys, including null and undefined, are simply not found.
