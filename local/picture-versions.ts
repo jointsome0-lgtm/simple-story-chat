@@ -162,8 +162,8 @@ export function personHere(state: Partial<Library>, storyId: string, index: numb
 // the card on 2026-09-28 a field appended last to each person, after `action`, left 42 answers of 124 unparsed, every
 // one running away into whitespace right after `action`, while the same field right after `who` left none of 124
 // (~/simple-story-chat-runs/2026-09-28/openjev/view_position.mts), and the point of view's fields at the top level none
-// of 40. The point of view's viewer is left out of the list: their name must be nowhere in the answer
-// (local/picture-pov.ts), and their look is in none of those frames.
+// of 40. The point of view's viewer stays in the list since 2026-10-30: the lean frame of that mode may draw them from
+// outside (local/picture-lean.ts).
 const rule = (people: Character[]) => `
 - lasting_changes: постоянные перемены внешности людей из списка ниже, которые история уже сделала, в последней сцене или раньше, но которых нет ни в их внешности, ни в их переменах ниже: остриженные, выбритые или отросшие волосы, перекрашенные или поседевшие волосы, сбритая или отпущенная борода, шрам, татуировка, потерянный глаз, палец или рука. По записи на перемену: who — имя из списка, change — одной короткой фразой на языке истории, какой стала внешность («волосы коротко острижены», «шрам через левую бровь»). Не перемены: одежда, украшения и то, что в руках; то, что смоется или пройдёт (мокрые, грязные или растрёпанные волосы, кровь, синяки, свежие раны и повязки, румянец, слёзы, причёска на один раз); поза, выражение лица и настроение; и то, в чём внешность ниже просто расходится с историей, а не изменилась по её ходу. Перемену, которая уже есть в переменах человека ниже, не называй снова, даже если его внешность её ещё не показывает. Если сомневаешься, это не перемена. Обычно перемен нет, и lasting_changes — пустой массив.
   Внешность людей из списка сейчас:

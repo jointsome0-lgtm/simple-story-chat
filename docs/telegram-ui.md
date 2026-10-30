@@ -628,8 +628,13 @@ A second picture mode, asked for by the owner on 2026-09-27 for a tester («мо
 не делал такое ограничение, а просто то что он может увидеть глазами, это же реальный POV»). With it on, a frame shows
 what one person of the sheet sees from where they stand, given their pose and where they look: whatever of their own
 body falls into view (hands, arms, legs, chest or belly when they look down, their clothes, what they hold), their
-shadow, and their reflection in a mirror, water or glass. They are never drawn whole from outside. A scene they are not
-in is drawn as usual. The code is `local/picture-pov.ts`.
+shadow, and their reflection in a mirror, water or glass. The code is `local/picture-pov.ts`, `local/picture-lean.ts`
+and `local/picture-guide.ts`.
+
+Since 2026-10-30 every frame of such a story is a lean frame drawn by a recipe of its own, the owner's «поставить при
+режиме на пов B + guide + cfg=2 + step=33». The frame chooses for itself whether to look through the person's eyes,
+so a scene they are in may be drawn from outside as well, with them in it like anybody; in the text test of that day it
+looked through the eyes in 4 frames of 15. A story without the mode keeps its frames, prompts and recipe.
 
 - **Switch:** the card of a reader whose scenes are drawn has «👁 Вид от первого лица» ("First-person view",
   `pov:<storyId>:<index>:<tag>`), which stores the person's sheet name as `story.pov`. A story has one such person at
@@ -639,36 +644,44 @@ in is drawn as usual. The code is `local/picture-pov.ts`.
   marks them with 👁 in place of 👤. The name is compared as the sheet compares names, apart from spaces and case. A
   press draws nothing: the next frame takes it, and a sample describes its scene again if the mode or its person
   changed since the frame it would reuse. A library without `pov` loads and draws as before.
-- **Request:** `povRequest` adds the rule after the frame's instruction and four fields to its schema, at the call in
-  `local/picture.ts` rather than in `local/illustrate.ts`, whose request builders the action experiment pins by hash
-  (`textPins` in `local/action-text.ts`). `viewer_in_scene` comes first, so that the shot and the people are written
-  knowing it; `viewer_clothes`, `viewer` and `reflection` come after `people`. The rule names the person once and
-  names the last scene by its first ten words. It makes the person the camera rather than a person of the answer:
-  never in `people`, never named or called the viewer, a woman, he or she, their actions told through the parts of
-  them in view ("hands at the bottom of the frame hold the lantern"), and whoever faces them does it toward the
-  camera. `viewer` holds only the parts of their own body they see themselves, cut by the frame's edge and
-  foreshortened, with the clothes on those parts and their skin, and no face, hair, figure or age; `reflection` holds
-  their reflection when a mirror, water or glass is before their eyes. The shot is first-person from their eye height
-  and where they look. The answer's limit grows by 250 tokens. A person with no look on the sheet yet is not seen
+- **Request:** `leanRequest` asks for each person once, each touch once, and the frame's own `point` and `camera`, what
+  matters in it and where the camera stands, which stay out of the prompt. Its instruction and the rule after it name
+  the last scene by its first ten words: without that the frame's request drew another moment of the story in 13
+  answers of 13 on the frames it went wrong on, and with it none of 15. `eyesRule` adds `through_eyes` right after
+  `point`, and `viewer_clothes_as_before`, `viewer_clothes`, `viewer` and `reflection` last. With `through_eyes` true the
+  rule makes the person the camera, as `povRequest` did: never in `people`, never named or called the viewer, `viewer`
+  holding only the parts of their body they see themselves, `reflection` their reflection when a mirror, water or glass
+  is before their eyes. With it false they are described like anybody. The request is built apart from
+  `local/illustrate.ts`, whose request builders the action experiment pins by hash (`textPins` in
+  `local/action-text.ts`). The answer's limit grows by 650 tokens. A person with no look on the sheet yet is not seen
   through, and their frames are described and drawn as usual.
-- **Prompt:** when the answer says the viewer is in the scene, or lists them among its people anyway, `seenBy` takes
-  them out of `people`, under their name or as "the viewer", and puts a first-person clause in place of the shot, the
-  camera first and in positive words: «First-person POV shot through the eyes, the camera at eye height: <shot>. <what
-  of their body is in view>. <their reflection>». Their look from the sheet is never in it, not even with a
-  reflection: with it the pier drew the viewer whole beside the water in two pictures of two (below). Every field
-  loses the words "the viewer", should the model write them anyway: their hands become the hands, and they themselves
-  the camera. Being part of the shot, the
-  clause passes the nets for names and ages, opens the prompt, and in a prompt of the reference experiment follows the
-  reference instruction. What the viewer wears is kept for the next picture, as a person's clothes are.
+- **Prompt:** with `through_eyes` true, `leanSeen` takes the person out of `people`, under their name or as "the
+  viewer", and puts a first-person clause in place of the shot, the camera first and in positive words: «First-person
+  POV shot through the eyes, the camera at eye height: <shot>. <what of their body is in view>. <their reflection>».
+  Their look from the sheet is never in it, not even with a reflection: with it the pier drew the viewer whole beside
+  the water in two pictures of two (below). Every field loses their name and the words "the viewer": their hands
+  become the hands, and they themselves the camera. `leanPrompt` then assembles the frame, and in a prompt of the
+  reference experiment the clause follows the reference instruction. What the viewer wears is kept for the next
+  picture, as a person's clothes are. A frame from outside keeps them among its people.
+- **Recipe:** on Qwen-Image's graph, the only one it was measured on, `guided` rewrites the prompt, each image named by
+  `<image1>`, an age as a stage of life, the shot said again last as the composition, and a face a shot from behind
+  does not show said to be turned away. The sampler takes CFG 2 and 33 steps where the graph has 1 and 25, with the
+  negative empty as for every picture, which is the stand's arm `qwen-guide-cfg2-steps33`. The recipe saved with the
+  picture carries `frame: 'pov-guide-v1'`, so a variant keeps it, a sample of a frame from outside does not take it
+  over, and a sample in this mode does not reuse a recipe from before it. A prompt that `guided` will not rewrite, an
+  age left in number words ("aged fourteen") or the reference rule's end missing, is not drawn: nothing reaches the
+  card, the reader is told the picture failed, and the row has `picture_age_left` or `picture_rule_not_found`. On another
+  graph the lean frame is drawn by the graph's own settings and its prompt as it stands.
 - **The first version** (1d5bd2f, live as 27739b9 from 20:05 UTC on 2026-09-27) put the whole look and the clothes in
   the clause («The viewer's own body and clothes: …»), said the viewer "is never shown whole", and had the model call
   them the viewer in the moment and the props. The tester's first frame with it, which had the references of the two
   other people, was the usual scene from outside with one more person in it.
-- **References:** the viewer is not among the frame's people, so their kept portrait is never sent as a reference: it
-  would pull their whole figure into the frame. The others keep theirs. A reflection is therefore drawn from the
-  answer's words alone, without their look, and need not look like them.
+- **References:** seen through, the viewer is not among the frame's people, so their kept portrait is never sent as a
+  reference: it would pull their whole figure into the frame. The others keep theirs, but for somebody seen only on a
+  screen or through frosted glass, who gets none. A reflection is therefore drawn from the answer's words alone, without
+  their look, and need not look like them. From outside the viewer's portrait is sent like anybody's.
 - **Row:** `picture` and `picture_sample` rows carry `pov`, true for a frame drawn through the person's eyes and false
-  for one drawn as usual because they were not in the scene. A story without such a person leaves it out.
+  for one drawn from outside. A story without such a person leaves it out.
 - With the mode off every request, prompt, graph and recipe is byte for byte what it was before the mode came
   (checked on 2026-09-27 by a dry run against 40e11d1 with a fake model and a fake ComfyUI, with and without
   references).

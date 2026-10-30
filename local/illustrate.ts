@@ -26,8 +26,9 @@ export type Description = {
 };
 // What the assembly counts about one frame. `withoutLook` counts the people who reached the prompt with no
 // appearance at all, which is the way this assembly fails quietly; `namesStripped` counts the names the net below
-// caught in a field the instruction forbids them in.
-export type Assembled = { prompt: string; namesStripped: number; fromSheet: number; withoutLook: number };
+// caught in a field the instruction forbids them in. `line`, the style line as the prompt carries it, only where an
+// assembly changed the one it was given (local/picture-lean.ts).
+export type Assembled = { prompt: string; namesStripped: number; fromSheet: number; withoutLook: number; line?: string };
 
 // The style belongs to us, not to the describing model: step 1 measured it picking a different style every time.
 // Its faces are true to each person's age, not adult, since 2026-09-26: the sheet now gives a child's age as a word,
@@ -78,17 +79,19 @@ export function latinPattern(name: string): string | null {
 // catches the names the sheet knows in both alphabets. The Cyrillic spelling is matched in any case, with up to
 // three letters of a case ending; the transliterated one stands in English text, so it is matched as English writes
 // a name — capitalised, with at most a plural or a possessive after it. Three free letters there would swallow
-// ordinary words (Элин would eat "eliminate"), and matching in any case would swallow "roan" and "mat".
-export function stripNames(text: string, names: string[]): { text: string; removed: number } {
+// ordinary words ("Elim" would eat "eliminate"), and matching in any case would swallow "roan" and "mat". A name
+// becomes "the figure", or what `replace` makes of the name of the list and the words it caught (local/picture-lean.ts).
+export function stripNames(text: string, names: string[], replace: (name: string, found: string) => string = () => 'the figure'):
+{ text: string; removed: number } {
   let removed = 0;
   let value = text;
-  const cut = (pattern: RegExp) => { value = value.replace(pattern, () => { removed++; return 'the figure'; }); };
+  const cut = (pattern: RegExp, name: string) => { value = value.replace(pattern, found => { removed++; return replace(name, found); }); };
   for (const name of names) {
     const trimmed = name.trim();
     if (trimmed.length < 2) continue;
-    cut(new RegExp(`(?<!\\p{L})${escape(trimmed)}\\p{L}{0,3}(?!\\p{L})`, 'giu'));
+    cut(new RegExp(`(?<!\\p{L})${escape(trimmed)}\\p{L}{0,3}(?!\\p{L})`, 'giu'), name);
     const latin = latinPattern(trimmed);
-    if (latin) cut(new RegExp(`(?<!\\p{L})${latin}(?:'s|s)?(?!\\p{L})`, 'gu'));
+    if (latin) cut(new RegExp(`(?<!\\p{L})${latin}(?:'s|s)?(?!\\p{L})`, 'gu'), name);
   }
   return { text: value, removed };
 }

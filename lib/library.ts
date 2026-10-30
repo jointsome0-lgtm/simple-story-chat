@@ -212,6 +212,9 @@ export type OwnStyle = { id: string; name: string; line: string };
 // same recipe can draw another picture (docs/telegram-ui.md#picture-variants).
 export type PictureRecipe = { seed: number; graph: string; checkpoint: string; width: number; height: number;
   steps: number; cfg: number; sampler: string; scheduler: string;
+  // `pov-guide-v1`: drawn by the recipe of a story seen through a person's eyes (local/picture-guide.ts), which a frame
+  // from outside does not take over, nor it a recipe of those. No field means the usual recipe.
+  frame?: 'pov-guide-v1';
   // Ordered, immutable portrait inputs of the reference experiment. No field means the older text-only recipe.
   // The version fixes the reference graph; each file is scaled to its own shape, which keeps the card's portraits of
   // 720x1280 at the 352x640 they were first pinned at (local/picture-references.ts `referenceScale`). Hashes refuse a

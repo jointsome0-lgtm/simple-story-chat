@@ -53,9 +53,7 @@ const rule = (name: string, opening: string) => `
 export function povRequest(request: ModelRequest, viewer: Character): ModelRequest {
   const schema = request.outputSchema as { required: string[]; properties: Record<string, unknown> };
   const last = request.messages.at(-1)!;
-  // The scene is the narrator's message before the instruction, and its date line is not its words.
-  const scene = request.messages.at(-2)?.role === 'assistant' ? request.messages.at(-2)!.content : '';
-  const opening = scene.replace(/^\s*\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}\s*/, '').split(/\s+/).filter(Boolean).slice(0, 10).join(' ');
+  const opening = openingOf(request.messages.slice(0, -1));
   return { ...request, maxOutputTokens: request.maxOutputTokens + POV_TOKENS,
     outputSchema: { ...schema, required: ['viewer_in_scene', ...schema.required, 'viewer_clothes', 'viewer', 'reflection'],
       properties: { viewer_in_scene: { type: 'boolean' }, ...schema.properties, viewer_clothes: { type: 'string' }, viewer: { type: 'string' },
@@ -63,12 +61,26 @@ export function povRequest(request: ModelRequest, viewer: Character): ModelReque
     messages: [...request.messages.slice(0, -1), { ...last, content: last.content + rule(viewer.name, opening) }] };
 }
 
+// The first words of the last scene, by which the rule names it: the narrator's message last among `messages`, the
+// ones before the instruction, without its date line, which is not its words; empty when the last is not the narrator's.
+export function openingOf(messages: ModelRequest['messages']): string {
+  const scene = messages.at(-1)?.role === 'assistant' ? messages.at(-1)!.content : '';
+  return scene.replace(/^\s*\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}\s*/, '').split(/\s+/).filter(Boolean).slice(0, 10).join(' ');
+}
+
 const text = (value: unknown) => typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
 const part = (value: string) => value.trim().replace(/\.$/, '').trim();
 // A model that still calls the viewer "the viewer": their hands are the hands, and they themselves the camera.
-const unnamed = (value: string) => value.replace(/\b(t)he viewer's (?:own )?/gi, '$1he ').replace(/\b(t)he viewer\b/gi, '$1he camera');
+export const unnamed = (value: string) => value.replace(/\b(t)he viewer's (?:own )?/gi, '$1he ').replace(/\b(t)he viewer\b/gi, '$1he camera');
 const sentence = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
 type Person = Description['people'][number];
+
+// The clause that opens a first-person frame in place of its shot: the camera first in positive words, then only what
+// of the viewer's body is in view and their reflection, each as the answer words it, without the words "the viewer".
+export function firstPerson(shot: string, body: string, mirrored: string): string {
+  return [`First-person POV shot through the eyes, the camera at eye height: ${unnamed(text(shot)) || 'looking ahead'}`,
+    sentence(unnamed(text(body))), sentence(unnamed(text(mirrored)))].map(part).filter(Boolean).join('. ');
+}
 
 // The answer to `povRequest` as an ordinary description. `seen` when the viewer is in the scene, by the answer's word
 // or by being among its people anyway: then `description` has them out of `people` and a first-person clause in place
@@ -90,10 +102,7 @@ export function seenBy(answer: Description, viewer: Character, sheet: Character[
   if (!seen) return { description: plain, dressed: plain, seen };
   const others = people.filter(one => !own(one)).map(one => ({ ...one, state: unnamed(text(one.state)), action: unnamed(text(one.action)) }));
   const clothes = text(worn) || text(people.find(own)?.clothes) || text(viewer.outfit);
-  const visible = sentence(unnamed(text(body))), reflection = sentence(unnamed(text(mirrored)));
-  const clause = [`First-person POV shot through the eyes, the camera at eye height: ${unnamed(text(plain.shot)) || 'looking ahead'}`, visible,
-    reflection];
   const description = { ...plain, moment: unnamed(text(plain.moment)), props: unnamed(text(plain.props)), objects: unnamed(text(plain.objects)),
-    people: others, shot: clause.map(part).filter(Boolean).join('. ') };
+    people: others, shot: firstPerson(text(plain.shot), text(body), text(mirrored)) };
   return { description, dressed: { ...plain, people: [...others, { who: viewer.name, look: '', clothes, state: '', action: '' }] }, seen };
 }

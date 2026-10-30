@@ -65,7 +65,9 @@ import type { StyleChoice } from './picture-style.ts';
 import { REFERENCE_VERSION, frameReferences, pinReferences, readReference, referenceGraph, referenceOpening, referencePrompt,
   temporaryReferences } from './picture-references.ts';
 import { pictureSize } from './reference.ts';
-import { povRequest, seenBy, viewerOf } from './picture-pov.ts';
+import { POV_CFG, POV_RECIPE, POV_STEPS, guided } from './picture-guide.ts';
+import { isLean, leanOf, leanPrompt, leanReferences, leanRequest, leanSeen } from './picture-lean.ts';
+import { seenBy, viewerOf } from './picture-pov.ts';
 import { clothesRequest } from './picture-clothes.ts';
 import { gKept, gLine, gRequest, gTagged } from './picture-g.ts';
 import type { GCounts, GFallback, GKept, GTagMiss } from './picture-g.ts';
@@ -370,6 +372,9 @@ export function createIllustrator(config: ImageConfig, deps: {
   // The kitchen's attention is the card's software, as its torch is, and no part of the graph named above: it is added
   // to each job (`draw`), and only to Qwen-Image's graphs, the only ones it was measured on. Krea's draws plainly.
   const attends = textEncoderOf(graph) === 'qwen_image' && withAttention(graph) !== undefined;
+  // The recipe of a story seen through a person's eyes (local/picture-guide.ts) was measured on Qwen-Image's graph, and
+  // the `<image1>` of its prompt is that text encoder's tag.
+  const guides = textEncoderOf(graph) === 'qwen_image';
   // A portrait stands, so it is drawn on the graph's canvas turned upright: the smaller side across and the larger one
   // down, 720x1280 for a graph of 1280x720, which leaves more of the frame to a figure standing full length. Nothing
   // else of the graph changes.
@@ -642,14 +647,15 @@ export function createIllustrator(config: ImageConfig, deps: {
         return wornAt(story, nodeId, (current ? sheetAt(current, nodeId) : []).filter(one => one.look.trim()));
       };
       sheet = frameSheet();
-      // Seen through the eyes of a person of the sheet, when the reader chose one: the rule and its fields are added
-      // here, never in local/illustrate.ts, so that without it the request is the one the action experiment pins.
+      // Seen through the eyes of a person of the sheet, when the reader chose one, the frame is lean and chooses for
+      // itself whether to look through them (local/picture-lean.ts). Its request is its own, never in
+      // local/illustrate.ts, so that without a viewer the request is the one the action experiment pins.
       const viewer = viewerOf(story, sheet);
-      const request = frameRequest(context, sheet);
-      // For a reader who has versions the frame also names the lasting changes the story made to its people's looks,
-      // the viewer's apart. Each becomes a version at this scene, retold before this frame is drawn, so that the frame
-      // of the scene with the haircut already has it. Without them the request is as it was.
-      const named = versions ? sheet.filter(one => one !== viewer) : [];
+      const request = viewer ? leanRequest(context, sheet, viewer) : frameRequest(context, sheet);
+      // For a reader who has versions the frame also names the lasting changes the story made to its people's looks.
+      // Each becomes a version at this scene, retold before this frame is drawn, so that the frame of the scene with the
+      // haircut already has it. Without them the request is as it was.
+      const named = versions ? sheet : [];
       const changing = changesRequest(request, named);
       const asked = clothesFor(userId) ? clothesRequest(changing) : changing;
       // For a reader with pose sets, each person of the sheet with a captioned set, the viewer's apart, whose body the
@@ -660,11 +666,11 @@ export function createIllustrator(config: ImageConfig, deps: {
         const candidates = poseCandidates(current.sheet?.find(other => other.name === one.name) ?? {});
         return candidates.length ? [{ name: one.name, candidates }] : [];
       }) : [];
-      const reply = (await askJson(model, trusted(model, poseRequest(viewer ? povRequest(asked, viewer) : asked, viewed), anchor), { signal })).value;
+      const reply = (await askJson(model, trusted(model, poseRequest(asked, viewed), anchor), { signal })).value;
       const picked = viewed.length ? viewsOf(reply, viewed) : { answer: reply, views: {} };
       const answer = picked.answer;
       if (current) { views = picked.views; poseSetPeople = viewed.length; }
-      if (!versions) return answer as unknown as Description;
+      if (!versions) return viewer ? leanOf(answer, sheet, viewer) : answer as unknown as Description;
       const { lasting_changes: changes, ...plain } = answer;
       const found = lastingChangesOf(changes, named.map(one => one.name));
       const written = found.size ? store.mutate(userId, saved => {
@@ -678,7 +684,7 @@ export function createIllustrator(config: ImageConfig, deps: {
         await retellVersions(model, { userId, storyId, nodeId, signal, log }, 'picture_version_retold');
         sheet = frameSheet();
       }
-      return plain as unknown as Description;
+      return viewer ? leanOf(plain, sheet, viewer) : plain as unknown as Description;
     };
     // G's request continues the same one, in the same turn, with the sheet as the frame's answer left it. A frame seen
     // through somebody's eyes gets none: G has no rule for it, and today's prompt is drawn.
@@ -688,7 +694,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       return answer;
     }, sharesPrefix ? { holder: userId, sharesPrefix, work: 'description' } : { holder: userId, work: 'description' });
     const viewer = viewerOf(story, sheet);
-    const viewed = viewer && seenBy(description, viewer, sheet);
+    const viewed = viewer && (isLean(description) ? leanSeen(description, viewer) : seenBy(description, viewer, sheet));
     // What the sheet's people wear in this frame is what the next picture below this scene starts from. Somebody whose
     // clothes at this scene changed while the frame was being described, as a reader's profile sent back changes them
     // (local/profile.ts), keeps the new ones: the frame started from those before.
@@ -718,7 +724,11 @@ export function createIllustrator(config: ImageConfig, deps: {
       if (count) {
         const pictureTokens = count(prompt);
         if (line === undefined) return { promptCharacters, pictureTokens };
-        const described = count(prompt.slice(0, prompt.length - line.length).trimEnd());
+        // The line closes the prompt, or stands inside it in a lean frame with portraits (local/picture-lean.ts) or
+        // before the composition of the recipe of a story seen through someone's eyes (local/picture-guide.ts).
+        const inside = prompt.endsWith(line) ? -1 : prompt.lastIndexOf(line);
+        const described = count(inside < 0 ? prompt.slice(0, prompt.length - line.length).trimEnd()
+          : `${prompt.slice(0, inside)}${prompt.slice(inside + line.length)}`.trim());
         return { promptCharacters, pictureTokens, styleTokens: Math.max(0, pictureTokens - described) };
       }
     } catch { /* the characters alone */ }
@@ -821,7 +831,8 @@ export function createIllustrator(config: ImageConfig, deps: {
   }
 
   // A prompt a frame is drawn from: today's, assembled from its fields, or G's (`promptSource`, local/picture-g.ts).
-  type Prompt = { prompt: string; namesStripped: number; withoutLook?: number; clothesStated?: number; promptSource?: 'g'; gTagLoose?: number };
+  type Prompt = { prompt: string; namesStripped: number; withoutLook?: number; clothesStated?: number; promptSource?: 'g'; gTagLoose?: number;
+    line?: string };
   // One frame on the picture card with the story's seed. A sample reuses a compatible scene recipe, including the
   // original portrait inputs, and changes the style at the end and, for references, at the opening too.
   // A frame the story model wrote a prompt for (`g`) is drawn from it, with the line at the end and, for references,
@@ -829,20 +840,31 @@ export function createIllustrator(config: ImageConfig, deps: {
   // in it (`gTagged`) draws today's prompt, with or without the references, as does a frame that has no such prompt.
   async function drawFrame(userId: string, storyId: string, frame: { description: Description; sheet: Character[]; views?: PoseViews;
     g?: GKept }, line: string, signal: AbortSignal, log: Log, savedRecipe?: PictureRecipe, status?: Watching) {
-    const today = assemblePrompt(frame.description, frame.sheet, line);
+    // A lean frame is assembled by its own rules (local/picture-lean.ts), with the portraits or without them.
+    const lean = isLean(frame.description) ? { description: frame.description, sheet: frame.sheet } : undefined;
+    // On a graph that has it, it is drawn by its recipe (local/picture-guide.ts) from its prompt rewritten.
+    const pov = guides ? lean : undefined;
+    const today = lean ? leanPrompt(lean, [], line) : assemblePrompt(frame.description, frame.sheet, line);
     const written = frame.g && 'prose' in frame.g ? frame.g : undefined;
     let fallback: GFallback | undefined = frame.g && 'fallback' in frame.g ? frame.g.fallback : undefined;
     let plain: Prompt = written ? { prompt: gLine(written.prose, line), namesStripped: written.namesStripped, promptSource: 'g' } : today;
     let assembled: Prompt = plain;
     let gBound = 0, miss: GTagMiss | undefined;
-    // After a graph or checkpoint change, a sample uses today's recipe and portraits, as a new frame does.
-    const saved = savedRecipe && savedRecipe.graph === graphId && savedRecipe.checkpoint === config.checkpoint ? savedRecipe : undefined;
-    const recipe = saved ?? recipeOf(storyId);
+    const story = store.read(userId).stories[storyId];
+    // A lean frame binds no portrait of somebody on screen, blurred or seen through, nor of anybody it does not show:
+    // described anew so, it takes none of theirs from the recipe saved before.
+    const own = lean && story && !referenceGate(userId) ? leanReferences(story, lean.description, frame.views) : undefined;
+    const fits = (one: PictureRecipe) => one.frame === (pov ? POV_RECIPE : undefined)
+      && (!own || (one.references?.portraits ?? []).every(portrait => own.some(bound => bound.name === portrait.name)));
+    // After a graph or checkpoint change, a sample uses today's recipe and portraits, as a new frame does, and so does a
+    // frame the saved recipe was not drawn for, its mode changed since, or a lean frame the saved portraits no longer fit.
+    const saved = savedRecipe && savedRecipe.graph === graphId && savedRecipe.checkpoint === config.checkpoint && fits(savedRecipe) ? savedRecipe : undefined;
+    const recipe = saved ?? (pov ? { ...recipeOf(storyId), steps: POV_STEPS, cfg: POV_CFG, frame: POV_RECIPE } : recipeOf(storyId));
     let reason: ReferenceReason = referenceGate(userId) ?? (saved ? 'legacy' : 'no_portrait');
+    let portraits: { name: string }[] = [];
     if (!referenceGate(userId)) {
-      const story = store.read(userId).stories[storyId];
       if (!story) throw sceneGone();
-      const bound = saved ? saved.references?.portraits ?? [] : frameReferences(story, frame.description, frame.views);
+      const bound = saved ? saved.references?.portraits ?? [] : own ?? frameReferences(story, frame.description, frame.views);
       if (bound.length) {
         gBound = bound.length;
         reason = 'unsupported_graph';
@@ -855,12 +877,25 @@ export function createIllustrator(config: ImageConfig, deps: {
               assembled = { prompt: opening.text + gLine(tagged.text, line), namesStripped: written.namesStripped + (opening.worn?.namesStripped ?? 0),
                 ...opening.worn ? { clothesStated: opening.worn.stated } : {}, promptSource: 'g', gTagLoose: tagged.loose };
             } else {
-              assembled = referencePrompt(frame, bound, line, clothesFor(userId));
+              assembled = lean ? leanPrompt(lean, bound, line) : referencePrompt(frame, bound, line, clothesFor(userId));
+              portraits = bound;
               if (tagged) { plain = today; fallback = 'tag'; miss = tagged.miss; }
             }
           } catch { reason = 'unavailable'; }
         }
       }
+    }
+    // A prompt `guided` would not rewrite is not drawn, as the stand skipped it: a job is never paid for an age said in
+    // number words, the fallback without portraits included, so both are rewritten before the card hears of either.
+    if (pov) {
+      const said = (prompt: Prompt, bound: { name: string }[]) => {
+        const rewritten = guided(pov.description, prompt.prompt, bound);
+        if ('code' in rewritten) throw Object.assign(new Error(rewritten.code), { code: `picture_${rewritten.code}` });
+        return { ...prompt, prompt: rewritten.prompt };
+      };
+      const same = assembled === plain;
+      plain = said(plain, []);
+      assembled = same ? plain : said(assembled, portraits);
     }
     const files = !referenceGate(userId) ? recipe.references?.portraits.map(one => one.file) ?? [] : [];
     const unhold = files.length ? store.holdPortraits(userId, files) : undefined;
@@ -1056,10 +1091,10 @@ export function createIllustrator(config: ImageConfig, deps: {
       const photo = await sendKept(request, () => chat.photo(drawn.bytes, request.sceneMessageId, withModel(undefined, drawn.model)), recipe);
       const photoMs = Math.max(0, now() - photoStarted);
       await status.clear();
-      const size = promptSize(assembled.prompt, line, drawn.referenceCount);
+      const size = promptSize(assembled.prompt, assembled.line ?? line, drawn.referenceCount);
       await sendPrompt(request, photo, assembled.prompt, size, true);
       log('picture', undefined, { outcome: 'ready', cancelled: signal.aborted, describeMs, imageQueueMs: drawn.queueMs, imageMs: drawn.totalMs,
-        ...status.waited(), imageSteps: steps, pictureAttention: drawn.pictureAttention, photoMs, photoBytes: drawn.bytes.length,
+        ...status.waited(), imageSteps: recipe.steps, pictureAttention: drawn.pictureAttention, photoMs, photoBytes: drawn.bytes.length,
         namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook, clothesChanged: frame.clothesChanged,
         pictureStyle, ...pov === undefined ? {} : { pov }, ...frame.lastingChanges === undefined ? {} : { lastingChanges: frame.lastingChanges },
         ...frame.views ? { poseSetPeople: frame.poseSetPeople, poseViewsPicked: Object.keys(frame.views).length } : {},
@@ -1161,10 +1196,10 @@ export function createIllustrator(config: ImageConfig, deps: {
             const { assembled, drawn } = result;
             if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
             const photo = await sendKept(request, () => chat.photo(drawn.bytes, undefined, withModel(style.caption, drawn.model)));
-            const size = promptSize(assembled.prompt, style.line, drawn.referenceCount);
+            const size = promptSize(assembled.prompt, assembled.line ?? style.line, drawn.referenceCount);
             await sendPrompt(request, photo, assembled.prompt, size);
             log('picture_sample', undefined, { outcome: 'ready', cancelled: signal.aborted, frameReused, describeMs,
-              imageQueueMs: drawn.queueMs, imageMs: drawn.totalMs, ...status.waited(), imageSteps: steps,
+              imageQueueMs: drawn.queueMs, imageMs: drawn.totalMs, ...status.waited(), imageSteps: result.recipe.steps,
               pictureAttention: drawn.pictureAttention, namesStripped: assembled.namesStripped,
               withoutLook: assembled.withoutLook, pictureStyle, stylesAsked, ...frame.pov === undefined ? {} : { pov: frame.pov }, ...result.changed,
               ...gCounts, ...size });

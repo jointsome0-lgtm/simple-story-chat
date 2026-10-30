@@ -32,6 +32,8 @@ import { createServing, readerScope } from './serving.ts';
 import { PORTRAIT_CLOTHES, PORTRAIT_STYLE } from './image-portraits.ts';
 import { clothesOf, createIllustrator, foldedPrompt, personTag, rewrittenSheet, wornAt } from './picture.ts';
 import { PRESETS, PROMPT_CHARS } from './picture-style.ts';
+import { guided } from './picture-guide.ts';
+import type { LeanDescription } from './picture-lean.ts';
 import { frameReferences, pinReferences } from './picture-references.ts';
 import { POSE_VIEW_LABEL_CHARS, poseCandidates, poseRequest, viewsOf } from './pose-set.ts';
 import type { GpuController } from './gpu.ts';
@@ -1310,7 +1312,37 @@ test('git ignores the portraits beside a database of any name', t => {
 // without the key every job's preview gets (local/image-batch.ts `freshPreviews`).
 const unworded = (graph: Graph) => Object.fromEntries(Object.entries(graph).map(([id, node]) => [id, { ...node,
   inputs: Object.fromEntries(Object.entries(node.inputs).filter(([key]) => key !== 'nonce').map(([key, value]) => [key, key === 'text' ? '' : value])) }]));
-const samplerIn = (graph: Graph) => Object.values(graph).find(node => node.class_type === 'KSampler')!.inputs as { seed: number; steps: number };
+const samplerIn = (graph: Graph) => Object.values(graph).find(node => node.class_type === 'KSampler')!.inputs as { seed: number; steps: number; cfg: number };
+
+// An age in number words is what the recipe of a story seen through someone's eyes is not to send (local/picture-guide.ts).
+test('a frame seen through someone\'s eyes says an age as a stage of life, and one it cannot say is never drawn', async t => {
+  const frame = { shot: 'Wide shot' } as LeanDescription;
+  const said = (look: string) => { const out = guided({ ...frame, people: [] }, `Wide shot. ${look}. The style line.`, []); return 'code' in out ? out.code : out.prompt; };
+  for (const [look, words] of [['A little girl of seven', 'A little girl'], ['A boy of fifteen', 'A teenage boy'], ['A young woman of eighteen', 'A young adult woman'],
+    ['A woman who looks about ten', 'A woman who looks like a child'], ['A tower about fifteen metres high', 'A tower about fifteen metres high']]) {
+    assert.equal(said(look), `Wide shot. ${words}. The style line. Composition: wide shot.`);
+  }
+  for (const look of ['A boy aged fourteen', 'A man aged twenty-seven', 'A man of about thirty']) assert.equal(said(look), 'age_left');
+
+  const person = { who: 'the sailor', on_screen: false, blurred: false, hair: '', clothes_as_before: false, clothes: 'wearing a coat', face: 'calm', action: 'stands' };
+  const lean = (look: string) => ({ point: '', through_eyes: false, camera: '', shot: 'Wide shot', setting: 'A pier', people: [{ ...person, look }], touches: [], background: '',
+    objects: '', light: '', viewer_clothes_as_before: false, viewer_clothes: '', viewer: '', reflection: '' });
+  const f = await fixture(t, { card: {}, graphFile: 'gpu/image-workflow-qwen.json', frameReplies: [FRAME, lean('A boy of fifteen'), lean('A boy aged fourteen')] });
+  await f.start();
+  await f.bot.idle();
+  const { storyId } = f.store.read('1').active!;
+  await f.bot.handle(f.click(`pov:${elin(storyId)}`));
+  await f.bot.handle(f.message('Смотрю на море.'));
+  await f.bot.idle();
+  const drawn = f.comfy.submitted.at(-1)!;
+  assert.match(promptOf(drawn), /A teenage boy/);
+  assert.doesNotMatch(promptOf(drawn), /fifteen/);
+  assert.deepEqual([samplerIn(drawn).steps, samplerIn(drawn).cfg], [33, 2]);
+  await f.bot.handle(f.message('Иду дальше.'));
+  await f.bot.idle();
+  assert.equal(f.comfy.submitted.length, 2);
+  assert.equal(f.rows.findLast(row => row.event === 'picture')?.code, 'picture_age_left');
+});
 
 test('a variant is the reader\'s whole prompt drawn as it came, by the picture\'s own seed and settings, under its scene', async t => {
   // The language model's card, which notes every hold and every start.
