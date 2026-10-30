@@ -336,7 +336,7 @@ test('SQLite survives reopening, keeps update deduplication, and clears interrup
   assert.deepEqual([Object.values(story.branches).map(branch => branch.name), Object.values(story.checkpoints).map(cp => cp.label)],
     [['Start'], ['Seed', 'Scene 1']], 'names the bot creates');
   assert.ok(g.sent.findLast(item => item.method === 'sendRichMessage')!.payload.rich_message.markdown
-    .startsWith(`${scenePrefix(null, { provider: 'claude-code', model: 'test-model' }, 'en').slice(0, -3)} · 📏 Context`), 'the header of a scene');
+    .startsWith(`${scenePrefix(null, { provider: 'claude-code', model: 'test-model' }, 'en', { branch: 'Start', scene: 1 }).slice(0, -3)} · 📏 Context`), 'the header of a scene');
   assert.match(g.requests[0].messages.at(-1)!.content, /Начни историю из сида\. Покажи первую сцену\./, 'the request');
   assert.doesNotMatch(JSON.stringify(g.requests[0]), /Scene 1|"Start"|Menu/, 'the request');
   for (const stale of ['lang:xx', 'lang:constructor', 'lang:']) {
@@ -382,7 +382,7 @@ test('a replay or a delivery failure never regenerates a completed scene', async
   const [scene] = Object.values(Object.values(f.store.read(1).stories)[0].nodes);
   assert.deepEqual([scene.modelInfo, scene.text], [haiku, '2026-08-02 20:00\n\nСинтетическая сцена 1.'], 'a scene');
   for (const method of ['sendRichMessageDraft', 'sendRichMessage']) {
-    assert.ok(f.sent.find(m => m.method === method)!.payload.rich_message.markdown.startsWith(`${scenePrefix(null, haiku).slice(0, -3)} · 📏`), method);
+    assert.ok(f.sent.find(m => m.method === method)!.payload.rich_message.markdown.startsWith(`${scenePrefix(null, haiku, 'ru', { branch: 'Начало', scene: 1 }).slice(0, -3)} · 📏`), method);
   }
   await f.bot.handle(f.message('/context'));
   assert.match(said(f.sent)!.payload.text, /≈\d/, '/context');

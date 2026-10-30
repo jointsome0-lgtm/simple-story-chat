@@ -552,6 +552,7 @@ export const zh: Messages = {
   },
 
   scenePrefix: {
+    place: (branch, n) => `🌿 ${branch}${n ? ` · 第 ${n} 幕` : ''}`,
     context: (percent, rough) => `📏 上下文 ≈ ${percent}%${rough ? '，粗略估算' : ''}`,
     contextBelowOne: rough => `📏 上下文不到 1%${rough ? '，粗略估算' : ''}`,
   },

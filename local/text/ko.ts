@@ -561,6 +561,7 @@ export const ko: Messages = {
   },
 
   scenePrefix: {
+    place: (branch, n) => `🌿 ${branch}${n ? ` · 장면 ${n}` : ''}`,
     context: (percent, rough) => `📏 컨텍스트 ≈ ${percent}%${rough ? ', 대략적인 추정' : ''}`,
     contextBelowOne: rough => `📏 컨텍스트 1% 미만${rough ? ', 대략적인 추정' : ''}`,
   },

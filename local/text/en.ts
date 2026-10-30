@@ -542,6 +542,7 @@ A new description or new changes are retold into the details and the short look,
   },
 
   scenePrefix: {
+    place: (branch, n) => `🌿 ${branch}${n ? ` · scene ${n}` : ''}`,
     context: (percent, rough) => `📏 Context ≈ ${percent}%${rough ? ', rough estimate' : ''}`,
     contextBelowOne: rough => `📏 Context under 1%${rough ? ', rough estimate' : ''}`,
   },

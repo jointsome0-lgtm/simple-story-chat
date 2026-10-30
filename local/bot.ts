@@ -40,7 +40,7 @@ import { STYLE } from './illustrate.ts';
 import { OWN_STYLE_CHARS, OWN_STYLES_MAX, PROMPT_CHARS, choiceOf, lineOf, ownStyle, ownStyleInput, ownStyles, pickerKeys, styleKey, styleName } from './picture-style.ts';
 import type { Store } from './store.ts';
 import { fileErrorCode } from './store.ts';
-import type { GpuInfo, ModelInfo, RenderDetails } from './ui.ts';
+import type { GpuInfo, ModelInfo, RenderDetails, ScenePlace } from './ui.ts';
 import { bookmarkLabel } from './ui.ts';
 import { isRegistered, langFromTelegram, texts } from './text.ts';
 import type { Messages } from './text.ts';
@@ -65,7 +65,7 @@ export type BotOptions = {
   // has the button that opens it.
   miniApp?: { url: string; users: Set<string> };
   render: (state: Library, route: string, details: RenderDetails) => Screen;
-  scenePrefix?: (stats: ContextStats | null, provenance: ModelInfo | undefined, lang?: unknown) => string;
+  scenePrefix?: (stats: ContextStats | null, provenance: ModelInfo | undefined, lang?: unknown, place?: ScenePlace | null) => string;
   sceneKeyboard: (state: Library) => InlineKeyboard | undefined;
   allowedUsers: Set<string>; ownerId?: string; maxOutputTokens: number; contextTokens?: number; compactAtTokens?: number; keepScenes?: number;
   memoryMode?: 'plain' | 'sgr'; repairCoverage?: boolean; model?: string; providerName?: string; log?: Log;
@@ -215,6 +215,12 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     const [name, storyId, checkpointId] = route.split(':');
     const selection = checkpointId ? { storyId, checkpointId } : undefined;
     return render(state, route, { ...details, contextStats: name === 'context' || name === 'checkpoint' ? stats(state, selection) : undefined });
+  };
+  // What a scene's header says of where it stands: its branch and its number on that line, `ahead` for one being written.
+  const placeOf = (state: Library, storyId: string, branchId: string, head: string | null, ahead = 0) => {
+    const story = state.stories[storyId];
+    const branch = story?.branches[branchId];
+    try { return branch ? { branch: branch.name, scene: history(story, head).length + ahead } : null; } catch { return null; }
   };
   // A row about one user's request says whether that user is the owner, never who it is. Only the owner allowed
   // reading the owner's own stories for debugging, so a row without `owner` points at a library that stays closed.
@@ -1201,7 +1207,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
           const measured = stats(state, { storyId: current.storyId, branchId: current.branchId });
           // generateScene sets the estimate before it asks for a preview.
           if (measured) measured.request.estimatedTokens = request.estimatedInputTokens!;
-          const onText = chat.preview(current.id, scenePrefix(measured, modelInfo, state.language));
+          const onText = chat.preview(current.id, scenePrefix(measured, modelInfo, state.language, placeOf(state, current.storyId, current.branchId, current.head, 1)));
           return async delta => {
             if (!over) {
               await endStatus();
@@ -1229,7 +1235,8 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       const node = snapshot.stories[ref.storyId].nodes[ref.nodeId];
       try {
         // Persisted above. An ambiguous response must never trigger a new model run.
-        const prefix = scenePrefix(stats(snapshot, { storyId: ref.storyId, checkpointId: ref.checkpointId }), node.modelInfo, snapshot.language);
+        const prefix = scenePrefix(stats(snapshot, { storyId: ref.storyId, checkpointId: ref.checkpointId }), node.modelInfo, snapshot.language,
+          placeOf(snapshot, ref.storyId, ref.branchId, ref.nodeId));
         // Bot API results are not validated; the id of the sent message is stored as returned.
         const sent = await chat.final(prefix + node.text, keyboardOf(userId, ref)) as { message_id: number };
         store.mutate(userId, state => {
@@ -1436,7 +1443,8 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         const { text, modelInfo: shownInfo, shown } = plan.savedText;
         try {
           const snapshot = store.read(userId);
-          const sent = await chat.final(scenePrefix(stats(snapshot), shownInfo, snapshot.language) + text, keyboardOf(userId, snapshot.active, true)) as { message_id?: unknown } | undefined;
+          const place = snapshot.active && placeOf(snapshot, snapshot.active.storyId, snapshot.active.branchId, snapshot.stories[snapshot.active.storyId]?.branches[snapshot.active.branchId]?.head ?? null);
+          const sent = await chat.final(scenePrefix(stats(snapshot), shownInfo, snapshot.language, place) + text, keyboardOf(userId, snapshot.active, true)) as { message_id?: unknown } | undefined;
           const messageId = sent?.message_id;
           if (shown && typeof messageId === 'number') store.mutate(userId, state => {
             const node = state.stories[shown.storyId]?.nodes[shown.nodeId];

@@ -738,6 +738,8 @@ export const ru = {
 
   // One Markdown line above a scene: letters, digits, spaces and «≈ % ,» only, nothing Markdown would read as markup.
   scenePrefix: {
+    // Where the scene stands: `branch` is its branch's name with anything else taken out, `n` its number on that line, or 0.
+    place: (branch: string, n: number) => `🌿 ${branch}${n ? ` · сцена ${n}` : ''}`,
     context: (percent: number, rough: boolean) => `📏 Контекст ≈ ${percent}%${rough ? ', грубая оценка' : ''}`,
     contextBelowOne: (rough: boolean) => `📏 Контекст менее 1%${rough ? ', грубая оценка' : ''}`,
   },

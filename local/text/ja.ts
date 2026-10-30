@@ -551,6 +551,7 @@ export const ja: Messages = {
   },
 
   scenePrefix: {
+    place: (branch, n) => `🌿 ${branch}${n ? ` · シーン ${n}` : ''}`,
     context: (percent, rough) => `📏 コンテキスト ≈ ${percent}%${rough ? '、概算' : ''}`,
     contextBelowOne: rough => `📏 コンテキスト 1%未満${rough ? '、概算' : ''}`,
   },

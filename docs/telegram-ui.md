@@ -952,10 +952,12 @@ seed. With no more than the kept number of scenes uncompacted, the bot says that
 
 ## Context indicators
 
-- **Scene header** (`scenePrefix(stats)`): one Markdown line and a blank line above a scene, e.g. `_📏 Контекст ≈ 5%_`
-  ("Context ≈ 5%"), the next request's estimate over the window, «менее 1%» ("less than 1%") below 1%, and
+- **Scene header** (`scenePrefix`): one Markdown line and a blank line above a scene, e.g.
+  `_🌿 Начало · сцена 12 · 📏 Контекст ≈ 5%_` ("Start · scene 12 · Context ≈ 5%"): where the scene stands, added for
+  the owner's list of 2026-10-30, since a reader with branches could not tell which line a scene was on; then the
+  model, and the next request's estimate over the window, «менее 1%» ("less than 1%") below 1%, and
   «, грубая оценка» (", rough estimate") unless the estimate is anchored on a measured request. It has no absolute
-  numbers and nothing Markdown would need escaped, and with unknown stats it is empty. It stands above streaming
+  numbers and nothing Markdown would need escaped. It stands above streaming
   previews, the final scene and /last, is never saved as narrative or sent to the model, and the scene's date and time
   stay the first line below it.
 - **Detailed view**, only on request (/context, or «📏 Контекст» in the menu, under a scene being written and in a

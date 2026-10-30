@@ -53,6 +53,7 @@ export type RenderDetails = {
 // `unread`: the files of the wait still in the reader's queue; `finishing`: the wait is over, and they are still read.
 export type PoseTally = { storyId: string; name: string; at: number; kept: number; labeled: number; refused: Partial<Record<PoseSetRefusal, number>>;
   archives: (ArchiveLabels & { archive: string })[]; unread?: number; finishing?: boolean; done: boolean };
+export type ScenePlace = { branch: string; scene: number };
 // State is read defensively (docs/telegram-ui.md#renderer), so any library field may be missing.
 type State = Partial<Library>;
 type Row = (InlineButton | null)[];
@@ -89,11 +90,13 @@ export function renderContext(stats: ContextStats | null | undefined, lang?: unk
 
 // One-line Markdown header above a scene in Telegram. Never saved as narrative or sent to the model.
 // `provenance` is the scene's own {provider, model}; without it the scene is not labelled.
+// `place` is its branch and its number on the branch's line, 0 for a seed shown before any scene.
 // Uses only characters that need no escaping in Markdown flavours.
-export function scenePrefix(stats: ContextStats | null | undefined, provenance?: ModelInfo | null, lang?: unknown): string {
+export function scenePrefix(stats: ContextStats | null | undefined, provenance?: ModelInfo | null, lang?: unknown, place?: ScenePlace | null): string {
   try {
     const t = texts(lang);
     const parts = [];
+    if (place) parts.push(t.scenePrefix.place(markdownSafe(line(place.branch, 30)), place.scene));
     if (modelKnown(provenance)) {
       parts.push(`🤖 ${t.model.providers[provenance.provider].short} · ${markdownSafe(line(provenance.model, 60))}`);
     }
