@@ -117,7 +117,7 @@ test('each state offers only the actions it allows: the scene keyboard, compacti
   // [what, what is offered, what must be]
   const rows: Row[] = [
     // The scene's keyboard: going on while idle, cancel and a way around while busy, nothing without a story.
-    ['scene keyboard while idle', grid(sceneKeyboard(fixture()))?.flat(), ['continue', 'view:context', 'view:model', 'view:checkpoints:h2:b3:0', 'view:story:h2', 'view:home']],
+    ['scene keyboard while idle', grid(sceneKeyboard(fixture()))?.flat(), ['continue', 'again:h2:n6', 'view:checkpoints:h2:b3:0', 'view:story:h2', 'view:home']],
     ['scene keyboard while busy', grid(sceneKeyboard(at({ job: job() })))?.flat(), ['cancel', 'view:context', 'view:model', 'view:home']],
     ['scene keyboard without a story', sceneKeyboard(at({ active: null })), undefined],
     ['scene keyboard of a branch that is gone', sceneKeyboard(at({ active: { storyId: 'h2', branchId: 'gone' } })), undefined],
@@ -169,7 +169,7 @@ test('each state offers only the actions it allows: the scene keyboard, compacti
   ];
   for (const [label, got, want] of rows) assert.deepEqual(got, want, label);
   // All mutating story routes, especially a confirmation opened before the job began, become inert while busy.
-  const mutations = /^(start|use|fork|remove-seed|remove-branch):|^(continue|compact)$|^view:delete-/;
+  const mutations = /^(start|use|fork|again|remove-seed|remove-branch):|^(continue|retry|compact)$|^view:delete-/;
   for (const kind of ['scene', 'compact']) {
     const state = at({ job: job(kind) });
     for (const route of ['home', 'seed:s1', 'story:h2', 'branch:h2:b3', 'checkpoint:h2:c5', 'context',

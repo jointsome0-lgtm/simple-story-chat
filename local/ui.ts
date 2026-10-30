@@ -124,7 +124,7 @@ export function sceneKeyboard(state: Library | null | undefined): InlineKeyboard
   const { story, branch } = ref;
   return keyboard([
     lostMove(state) ? [btn(b.retry, 'retry')] : null,
-    [btn(b.continue, 'continue'), btn(b.context, 'view:context'), btn(b.model, 'view:model')],
+    [btn(b.continue, 'continue'), branch.head ? btn(b.again, `again:${story.id}:${branch.head}`) : null],
     [btn(b.checkpoints, `view:checkpoints:${story.id}:${branch.id}:0`), btn(b.branches, `view:story:${story.id}`), btn(b.menu, 'view:home')],
   ]);
 }

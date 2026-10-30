@@ -59,6 +59,8 @@ export const ru = {
     continue: '▶️ Продолжить',
     // Under a failure and in the menu: runs the reader's lost move again (lib/library.ts `LostMove`).
     retry: '🔄 Повторить',
+    // Under the last scene: its move again, from the scene before it, on a branch of its own.
+    again: '🔁 Другая версия',
     // Under a scene that is being written.
     stop: '✖️ Остановить',
     lastScene: '📄 Последняя сцена',

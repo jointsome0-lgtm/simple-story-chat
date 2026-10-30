@@ -1,4 +1,4 @@
-import { beginJob, commitTurn, history, saveCheckpoint } from '../lib/library.ts';
+import { beginJob, commitTurn, history, releaseJob, saveCheckpoint } from '../lib/library.ts';
 import type { Job, Library } from '../lib/library.ts';
 import { normalizeScene } from './prompt.ts';
 import { requestStamp } from './context.ts';
@@ -78,7 +78,7 @@ export async function runTurn({ store, userId, job, provider, config, signal, pr
     // the failure stays: it is a saved point of the branch, not part of the lost scene.
     const current = store.mutate(userId, state => {
       if (state.job?.id !== job.id) return false;
-      state.job = null;
+      releaseJob(state);
       if (!signal.aborted) operation?.settle(state, { error });
       return true;
     });

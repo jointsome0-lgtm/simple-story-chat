@@ -46,6 +46,7 @@ export const ja: Messages = {
     menu: '🏠 メニュー',
     continue: '▶️ 続ける',
     retry: '🔄 もう一度',
+    again: '🔁 別バージョン',
     stop: '✖️ 停止',
     lastScene: '📄 最後のシーン',
     context: '📏 コンテキスト',

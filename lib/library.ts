@@ -22,6 +22,9 @@ export type SceneNode = {
   id: string; parent: string | null; input: string; text: string; time: string; truncated: boolean; delivery: 'pending' | 'sent';
   usage?: Usage | null; requestContext?: RequestStamp; streamResultMismatch?: boolean;
   modelInfo?: { provider: string; model: string }; messageId?: number;
+  // `Job.move` of the turn that wrote the scene, for another version of it to be the same move. A scene from before
+  // this field does not say (local/bot.ts `narratorsMove`).
+  move?: 'narrator';
   // What each person of the story's sheet wore in this scene's picture, by their sheet name: the clothes the next
   // picture of this line of the story starts from (local/picture.ts). A reader who changes a person's clothes in the
   // person's whole profile while this scene is the head of the branch being played writes them here too
@@ -163,14 +166,17 @@ export type Job = {
   // The reader wrote nothing: «Продолжить» or the start of the story handed the move to the narrator. Without it the
   // input is the reader's own message, the hero's move. Only a story with a pace tells the narrator which it is.
   move?: 'narrator';
+  // A move from an earlier point (`beginSideJob`): the reader stays at `back` until its scene is saved. `memory` and
+  // `name` are what its branch started with, for the move to be repeated (`LostMove`).
+  side?: { back: Place; memory: string | null; name: string };
 };
 // Where the reader stands in a story: a branch and the scene it had reached.
 export type Place = { storyId: string; branchId: string; head: string | null };
 // The move of a turn that ended without a scene: the model failed, or the process died under it (`keepMove`). The
 // reader's words outlive the turn and nothing runs them again by itself: «🔄 Повторить» offers them for as long as the
 // reader stands where they stood (`lostMove`), and their next move takes their place. A story's deletion takes them.
-// Only the local bot writes it.
-export type LostMove = Place & { input: string; move?: 'narrator' };
+// `from`: the move was to leave an earlier point, and does so again. Only the local bot writes it.
+export type LostMove = Place & { input: string; move?: 'narrator'; from?: Point & { storyId: string; name: string } };
 // New drafts always have draftId and parts, but bot.ts and ui.ts also accept a stored draft without them;
 // keep those fallbacks for older or incomplete v1 data.
 export type SeedDraft = { input: 'seed'; draftId: string; parts: string[]; confirm?: undefined };
@@ -329,6 +335,17 @@ export function fork(state: Library, storyId: string, checkpointId: string, labe
   return branch;
 }
 
+// The point just before a scene of `branch`: its parent, and as much of the branch's memory as stops there.
+export function pointBefore(story: Story, branch: Branch, node: SceneNode): Point {
+  const before = new Set(history(story, node.parent).map(one => one.id));
+  return { head: node.parent, memory: memoryChain(story, branch.memory).filter(memory => before.has(memory.cutoff)).at(-1)?.id ?? null };
+}
+
+// Whether a point kept aside still exists: a branch that held it alone may have gone since.
+export function pointStands(story: Story | undefined, point: Point): boolean {
+  return !!story && (point.head === null || Object.hasOwn(story.nodes, point.head)) && (point.memory === null || Object.hasOwn(story.memories, point.memory));
+}
+
 export function history(story: Story, head: string | null): SceneNode[] {
   const nodes = [];
   while (head) {
@@ -360,18 +377,45 @@ export function context(story: Story, branch: Point): { memories: MemoryVersion[
   return { memories, recent: all.slice(index + 1) };
 }
 
-export function beginJob(state: Library, input: string, now: number): Job {
+export function beginJob(state: Library, input: string, now: number, where?: { story: Story; branch: Branch }): Job {
   if (state.job) throw new UserError('Продолжение уже готовится. /cancel отменит его, если запрос завис.', 'jobRunning');
-  const { story, branch } = active(state);
-  const job = { id: id(state, 'j'), storyId: story.id, branchId: branch.id, head: branch.head, memory: branch.memory, input, started: now };
+  const { story, branch } = where ?? active(state);
+  const job: Job = { id: id(state, 'j'), storyId: story.id, branchId: branch.id, head: branch.head, memory: branch.memory, input, started: now };
   state.job = job;
   return job;
+}
+
+// A move from an earlier point of a story. Its scene goes on a branch of its own, which stands aside until that scene
+// is saved (`commitTurn`): until then the reader stays where they are, at the scene their chat ends with, and a turn
+// that ends without a scene leaves no branch behind (`releaseJob`).
+export function beginSideJob(state: Library, storyId: string, point: Point, name: string, input: string, now: number, labels: Labels = LABELS): Job {
+  const here = active(state);
+  const story = state.stories[storyId];
+  const branch: Branch = { id: id(state, 'b'), name, ...point };
+  const job = beginJob(state, input, now, { story, branch });
+  job.side = { back: { storyId: here.story.id, branchId: here.branch.id, head: here.branch.head }, memory: point.memory, name };
+  story.branches[branch.id] = branch;
+  saveCheckpoint(state, story, branch, labels.forkCheckpoint, 'fork');
+  return job;
+}
+
+// Ends a job that left no scene. A branch that stood aside for the scene goes with it: it holds nothing else, and a
+// compaction made on the way is made again when it is needed.
+export function releaseJob(state: Library): void {
+  const job = state.job;
+  state.job = null;
+  if (!job?.side || !state.stories[job.storyId]?.branches[job.branchId]) return;
+  const { ui } = state;
+  deleteBranch(state, job.storyId, job.branchId);
+  state.ui = ui;
 }
 
 // Keeps the move of a scene turn that is about to end without a scene. A compaction has no move to keep.
 export function keepMove(state: Library, job: Job): void {
   if (job.kind === 'compact') return;
-  state.lostMove = { storyId: job.storyId, branchId: job.branchId, head: job.head, input: job.input, ...job.move ? { move: job.move } : {} };
+  const { side } = job;
+  state.lostMove = { ...side?.back ?? { storyId: job.storyId, branchId: job.branchId, head: job.head }, input: job.input,
+    ...job.move ? { move: job.move } : {}, ...side ? { from: { storyId: job.storyId, head: job.head, memory: side.memory, name: side.name } } : {} };
 }
 
 // The lost move the reader can repeat where they stand now, if there is one.
@@ -410,9 +454,11 @@ export function commitTurn(state: Library, jobId: string, text: string, truncate
   const { story, branch, job } = target;
   const time = text.split('\n')[0].trim();
   if (!validTime(time)) throw new UserError('Модель не указала корректные дату и время. Ответ не записан; отправь продолжение ещё раз.', 'sceneTime');
-  const node: SceneNode = { id: id(state, 'n'), parent: branch.head, input: job.input, text, time, truncated, delivery: 'pending' };
+  const node: SceneNode = { id: id(state, 'n'), parent: branch.head, input: job.input, text, time, truncated, delivery: 'pending',
+    ...job.move ? { move: job.move } : {} };
   story.nodes[node.id] = node;
   branch.head = node.id;
+  if (job.side) state.active = { storyId: story.id, branchId: branch.id };
   state.job = null;
   return { storyId: story.id, branchId: branch.id, nodeId: node.id };
 }
@@ -465,7 +511,7 @@ export function deleteSeed(state: Library, seedId: string): void {
 // The reader's words go with the story they were written for.
 function forgetLostMove(state: Library): void {
   const lost = state.lostMove;
-  if (lost && !state.stories[lost.storyId]?.branches[lost.branchId]) delete state.lostMove;
+  if (lost && (!state.stories[lost.storyId]?.branches[lost.branchId] || (lost.from && !state.stories[lost.from.storyId]))) delete state.lostMove;
 }
 
 // The checkpoint that holds the bookmark of the scene `head`, if the reader keeps one. Every checkpoint of a scene opens

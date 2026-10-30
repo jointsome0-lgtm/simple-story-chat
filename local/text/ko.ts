@@ -56,6 +56,7 @@ export const ko: Messages = {
     menu: '🏠 메뉴',
     continue: '▶️ 이어가기',
     retry: '🔄 다시 시도',
+    again: '🔁 다른 버전',
     stop: '✖️ 중지',
     lastScene: '📄 마지막 장면',
     context: '📏 컨텍스트',

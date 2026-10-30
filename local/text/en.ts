@@ -37,6 +37,7 @@ export const en: Messages = {
     menu: '🏠 Menu',
     continue: '▶️ Continue',
     retry: '🔄 Try again',
+    again: '🔁 Another version',
     stop: '✖️ Stop',
     lastScene: '📄 Last scene',
     context: '📏 Context',

@@ -47,6 +47,7 @@ export const zh: Messages = {
     menu: '🏠 菜单',
     continue: '▶️ 继续',
     retry: '🔄 重试',
+    again: '🔁 换个版本',
     stop: '✖️ 停止',
     lastScene: '📄 最新场景',
     context: '📏 上下文',

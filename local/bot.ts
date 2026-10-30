@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
-import { UserError, id, active, addSeed, newStory, fork, beginJob, addBookmark, removeBookmark,
-  deleteSeed, deleteBranch, forgetLostPictures, context, jobTarget, keepMove, lostMove, setLanguage, isPace, isPose } from '../lib/library.ts';
+import { UserError, id, active, addSeed, newStory, fork, beginJob, beginSideJob, addBookmark, removeBookmark,
+  deleteSeed, deleteBranch, forgetLostPictures, context, history, jobTarget, keepMove, lostMove, pointBefore, pointStands, releaseJob, setLanguage, isPace, isPose } from '../lib/library.ts';
 import type { Job, Library, PendingPoseUpload, PoseSetInput, PoseUploadFile, ProfileInput, ReferenceInput, SceneNode } from '../lib/library.ts';
 import { storyNarration } from './prompt.ts';
 import { chatMemory, createChat } from './telegram.ts';
@@ -142,7 +142,7 @@ type Plan = {
 // and the work it starts afterwards for the reader's next turn.
 type Running = { controller: AbortController; picture: AbortController };
 // Library IDs are a prefix and a sequence number, as id() in lib/library.ts creates them.
-const ID = { seed: /^s\d+$/, story: /^h\d+$/, branch: /^b\d+$/, checkpoint: /^c\d+$/ };
+const ID = { seed: /^s\d+$/, story: /^h\d+$/, branch: /^b\d+$/, checkpoint: /^c\d+$/, node: /^n\d+$/ };
 // The wait the reader is in, the input the next message is taken for or the deletion asked about, and for what. A
 // draft's parts, the scene a look is written from and a pose set's last picture change within one wait
 // (docs/telegram-ui.md#passing-messages).
@@ -289,7 +289,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     }
     if (action === 'cancel') {
       const hadJob = !!state.job;
-      state.job = null;
+      releaseJob(state);
       state.ui = null;
       const menu = render(state, 'home', pictureInfo);
       return { cancel: true, screen: { ...menu, text: (hadJob ? t.notices.cancelled + '\n\n' : '') + menu.text } };
@@ -676,7 +676,8 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     // the expected kind, such as `constructor`, could reach Object.prototype, so the button is stale; so is a missing ID.
     const validIds = verb === 'start' || verb === 'remove-seed' ? ID.seed.test(a)
       : verb === 'use' || verb === 'remove-branch' ? ID.story.test(a) && ID.branch.test(b)
-      : verb === 'fork' ? ID.story.test(a) && ID.checkpoint.test(b) : true;
+      : verb === 'fork' ? ID.story.test(a) && ID.checkpoint.test(b)
+      : verb === 'again' ? ID.story.test(a) && ID.node.test(b) : true;
     if (!validIds) throw refuse(t, 'staleButton');
     if (verb === 'remove-seed' || verb === 'remove-branch') {
       if (state.ui?.confirm !== action) throw refuse(t, 'staleConfirmation');
@@ -701,6 +702,8 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     let input = text;
     // A lost move runs only here, on the reader's own press, and only where it was lost (lib/library.ts `LostMove`).
     const lost = action === 'retry' ? lostMove(state) : undefined;
+    let from = lost?.from;
+    let narrator = verb === 'start' || action === 'continue' || !!lost?.move;
     if (verb === 'start') {
       requireGpu(t);
       const { story } = newStory(state, a, t.labels);
@@ -708,8 +711,18 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       input = storyNarration(state, story.id).startStory;
     } else if (action === 'continue') input = continueInput(state, active(state).story.id);
     else if (action === 'retry') {
-      if (!lost) throw refuse(t, 'nothingToRetry');
+      if (!lost || (from && !pointStands(state.stories[from.storyId], from))) throw refuse(t, 'nothingToRetry');
       input = lost.input;
+    } else if (verb === 'again') {
+      // Another version of the last scene: its move again from the point before it, and only of the scene the button
+      // came with, for a button that outlived its scene not to rewrite a newer one.
+      const { story, branch } = active(state);
+      const node = story.id === a && branch.head === b ? story.nodes[b] : undefined;
+      if (!node) throw refuse(t, 'staleButton');
+      input = node.input;
+      narrator = narratorsMove(state, story.id, node);
+      const scenes = history(story, node.parent).length;
+      from = { storyId: story.id, ...pointBefore(story, branch, node), name: t.labels.forkBranch(scenes ? t.labels.scene(scenes) : t.labels.seedCheckpoint) };
     } else if (action) throw refuse(t, 'staleButton');
     if (!input) return { screen: { text: t.notices.textOnly } };
     if (!state.active) return { screen: render(state, 'home', pictureInfo) };
@@ -717,10 +730,16 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     state.ui = null;
     state.interrupted = false;
     delete state.lostMove;
-    const job = beginTurn(state, input, Date.now());
+    const job = from ? beginSideJob(state, from.storyId, from, from.name, input, Date.now(), t.labels) : beginTurn(state, input, Date.now());
     // The reader wrote nothing, so the move is the narrator's; a story with a pace tells it so (local/prompt.ts).
-    if (verb === 'start' || action === 'continue' || lost?.move) job.move = 'narrator';
+    if (narrator) job.move = 'narrator';
     return { job };
+  }
+
+  // Whether the reader handed the move of this scene to the narrator. A scene from before `SceneNode.move` tells by its
+  // input, which is then the bot's own.
+  function narratorsMove(state: Library, storyId: string, node: SceneNode) {
+    return node.move === 'narrator' || node.input === continueInput(state, storyId) || node.input === storyNarration(state, storyId).startStory;
   }
 
   // A profile sent back while one is awaited (`profile-edit`), inside the library write. It is taken whole or not at all:
@@ -1149,7 +1168,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
           else if (queued) show(wait.next);
         },
         preview: (state, current, request) => {
-          const measured = stats(state);
+          const measured = stats(state, { storyId: current.storyId, branchId: current.branchId });
           // generateScene sets the estimate before it asks for a preview.
           if (measured) measured.request.estimatedTokens = request.estimatedInputTokens!;
           const onText = chat.preview(current.id, scenePrefix(measured, modelInfo, state.language));
@@ -1207,7 +1226,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       // A failed compaction; a failed scene comes back from runTurn with its job already released.
       const stillCurrent = store.mutate(userId, state => {
         if (state.job?.id !== job.id) return false;
-        state.job = null;
+        releaseJob(state);
         return true;
       });
       if (!stillCurrent || controller.signal.aborted) return;
@@ -1480,7 +1499,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         try { releaseGpu = gpu?.acquire(); }
         catch {
           // The plan is not changed after the write, so its job is still set.
-          store.mutate(userId, state => { if (state.job?.id === plan.job!.id) state.job = null; });
+          store.mutate(userId, state => { if (state.job?.id === plan.job!.id) releaseJob(state); });
           await pass(chat, { text: texts(store.read(userId).language).notices.gpuPaused }, log);
           return;
         }

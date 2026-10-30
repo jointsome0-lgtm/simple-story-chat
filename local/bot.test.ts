@@ -19,7 +19,7 @@ import { OWN_STYLES_MAX, PRESETS } from './picture-style.ts';
 import type { TelegramPayload } from './telegram.ts';
 import { render, scenePrefix, sceneKeyboard } from './ui.ts';
 import { texts } from './text.ts';
-import { UserError, addSeed, history, newStory, beginJob, commitTurn, context } from '../lib/library.ts';
+import { UserError, active, addSeed, history, newStory, beginJob, commitTurn, context } from '../lib/library.ts';
 import type { Job, SeedDraft, SentPicture } from '../lib/library.ts';
 
 // Scene and memory requests from the bot always pass a text callback.
@@ -513,6 +513,78 @@ test('a move that became no scene is kept for the reader to repeat, only on thei
   await f.bot.handle(f.click(`remove-seed:${Object.keys(f.store.read(1).seeds)[0]}`));
   assert.equal(lost(), undefined);
   assert.ok(!JSON.stringify(f.store.read(1)).includes('Ход на момент смерти'));
+});
+
+test('another version leaves the old scene whole, and a turn that writes no scene leaves the reader where they stood', async t => {
+  let mode: 'ok' | 'fail' | 'hold' = 'ok';
+  const f = fixture(t, { generate: async (_request, controls) => {
+    if (mode === 'fail') throw new ModelError('provider_failed');
+    if (mode === 'hold') await new Promise(resolve => controls.signal?.addEventListener('abort', resolve));
+    return { text: `2026-08-02 20:00\n\nСцена запроса ${f.requests.length}.`, finishReason: 'stop', usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 } };
+  } });
+  const update = await f.start();
+  await f.bot.handle(f.message('Мой ход'));
+  await f.bot.idle();
+  const here = () => {
+    const state = f.store.read(1);
+    const story = Object.values(state.stories)[0];
+    return { state, story, branch: story.branches[state.active!.branchId], branches: Object.keys(story.branches).length };
+  };
+  const first = here();
+  const again = `again:${first.story.id}:${first.branch.head}`;
+  const where = () => [here().branch.id, here().branch.head, here().branches];
+  const standing = [first.branch.id, first.branch.head, 1];
+
+  // A button of a scene that is no longer the last one rewrites nothing.
+  const asked = f.requests.length;
+  await f.bot.handle(f.click(`again:${first.story.id}:n999999`));
+  await f.bot.idle();
+  assert.deepEqual([f.requests.length, where()], [asked, standing], 'a stale button');
+
+  // A failure: the reader has not moved, no branch is left, and the kept move leaves the same point again.
+  mode = 'fail';
+  await f.bot.handle(f.click(again));
+  await f.bot.idle();
+  assert.deepEqual(where(), standing, 'a failed version');
+  assert.equal(here().state.lostMove?.input, 'Мой ход');
+  mode = 'ok';
+  await f.bot.handle(f.click('retry'));
+  await f.bot.idle();
+  const second = here();
+  const asks = JSON.stringify(f.requests.at(-1)!.messages);
+  assert.ok(second.branch.id !== first.branch.id && second.branches === 2, 'the reader is on a branch of its own');
+  assert.equal(second.story.nodes[second.branch.head!].input, 'Мой ход');
+  assert.equal(second.story.nodes[second.branch.head!].parent, first.story.nodes[first.branch.head!].parent);
+  assert.equal(second.story.branches[first.branch.id].head, first.branch.head, 'the old scene stays on its branch');
+  assert.ok(!asks.includes(first.story.nodes[first.branch.head!].text.split('\n').at(-1)!), 'the request is told nothing of the old version');
+
+  // While the scene is written the reader stands at the scene the chat ends with, and a stop leaves no branch.
+  mode = 'hold';
+  const standsNow = where();
+  await f.bot.handle(f.click(`again:${second.story.id}:${second.branch.head}`));
+  assert.deepEqual([where()[0], where()[1]], [standsNow[0], standsNow[1]], 'during a version');
+  assert.equal(here().branches, 3);
+  await f.bot.handle(f.message('/cancel'));
+  await f.bot.idle();
+  assert.deepEqual([where(), here().state.lostMove], [standsNow, undefined], 'a stopped version');
+
+  // A process that dies under one leaves no branch either, and the kept move still knows where it leaves from.
+  await f.bot.handle(f.click(`again:${second.story.id}:${second.branch.head}`));
+  f.store.offset(update.update_id + 1);
+  const dead = reopened(f.path, store => { const state = store.read(1); return [state.job, Object.keys(Object.values(state.stories)[0].branches).length, state.lostMove?.from?.head]; });
+  assert.deepEqual(dead, [null, 2, first.story.nodes[first.branch.head!].parent]);
+  await f.bot.handle(f.message('/cancel'));
+  await f.bot.idle();
+  mode = 'ok';
+
+  // The narrator's move stays the narrator's, also for a scene written before `SceneNode.move`.
+  await f.bot.handle(f.click('continue'));
+  await f.bot.idle();
+  f.store.mutate(1, state => { const { story, branch } = active(state); delete story.nodes[branch.head!].move; });
+  const old = here();
+  await f.bot.handle(f.click(`again:${old.story.id}:${old.branch.head}`));
+  await f.bot.idle();
+  assert.equal(here().story.nodes[here().branch.head!].move, 'narrator');
 });
 
 test('a running job refuses another and /cancel keeps its late answer out; no status lands after the scene or a cancel', async t => {

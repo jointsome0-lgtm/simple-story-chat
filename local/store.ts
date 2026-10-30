@@ -3,7 +3,7 @@ import { createHmac, randomBytes } from 'node:crypto';
 import { mkdirSync, chmodSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { Library } from '../lib/library.ts';
-import { emptyLibrary, keepMove, referenceFiles } from '../lib/library.ts';
+import { emptyLibrary, keepMove, referenceFiles, releaseJob } from '../lib/library.ts';
 import type { Log } from './model-error.ts';
 
 type AccessRequest = { userId: string; at: number };
@@ -86,7 +86,7 @@ export class Store {
       this.mutate(user_id as string, state => {
         if (!state.job) return;
         keepMove(state, state.job);
-        state.job = null;
+        releaseJob(state);
         state.interrupted = true;
         interrupted.push(user_id as string);
       });

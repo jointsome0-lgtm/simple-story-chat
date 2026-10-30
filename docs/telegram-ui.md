@@ -51,6 +51,13 @@ does the same in every registered language.
   runs them by itself. The reader's next move takes their place, /cancel keeps nothing, and a deleted story takes them
   with it. After a restart each reader whose job died gets one message with that button, before the bot reads its
   first update; a compaction that died is told the same way, with /compact.
+- **Another version:** «🔁 Другая версия» ("Another version", `again:<storyId>:<nodeId>`) under the last scene runs its
+  move again from the scene before it, in one press, the owner's list of 2026-10-30. The new scene goes on a new branch
+  and the old one stays on its branch, whole. That branch stands aside until the scene is saved: the reader stays on
+  the scene their chat ends with, a turn that fails or is stopped leaves no branch behind and no way of having moved
+  back a scene unnoticed, and only the saved scene moves them to it. The move stays the one it was, the reader's or
+  the narrator's (`SceneNode.move`). «📏 Контекст» and «🤖 Модель» left the scene keyboard for it: both are in the
+  menu, and the scene's header says the same.
 - **Browse:** the seeds, a seed's stories, a story's branches and a branch, 8 to a page. Opening a screen changes
   nothing in the story and generates nothing.
 
@@ -942,8 +949,8 @@ seed. With no more than the kept number of scenes uncompacted, the bot says that
   numbers and nothing Markdown would need escaped, and with unknown stats it is empty. It stands above streaming
   previews, the final scene and /last, is never saved as narrative or sent to the model, and the scene's date and time
   stay the first line below it.
-- **Detailed view**, only on request (/context, or «📏 Контекст» in the menu, the scene keyboard and a checkpoint's
-  preview): the window and the reply reserve; the next request's estimate and where it comes from; the input budget
+- **Detailed view**, only on request (/context, or «📏 Контекст» in the menu, under a scene being written and in a
+  checkpoint's preview): the window and the reply reserve; the next request's estimate and where it comes from; the input budget
   and what remains of it, a forecast, since the real input is checked again when the model starts answering, before
   any text is shown; the compaction threshold and how many scenes stay verbatim; the sizes of the seed, the memory,
   the uncompacted scenes and the whole snapshot; and the last measured request. Checkpoint sizes appear only here.
