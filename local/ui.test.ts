@@ -4,7 +4,7 @@ import type { Job, Library, SceneNode } from '../lib/library.ts';
 import type { ContextStats } from './context.ts';
 import type { InlineKeyboard, Screen } from './telegram.ts';
 import type { GpuInfo, ModelInfo, RenderDetails } from './ui.ts';
-import { render, renderContext, sceneKeyboard } from './ui.ts';
+import { FACT_CHARS, render, renderContext, sceneKeyboard } from './ui.ts';
 import { personTag } from './picture.ts';
 import { PRESETS } from './picture-style.ts';
 import { texts } from './text.ts';
@@ -230,6 +230,9 @@ test('long collections paginate and long texts fit', () => {
     parent = `n${i}`;
   }
   story.branches.b3.head = parent;
+  // Thirty facts as long as a reader may write them, each of which opens on a screen of its own.
+  story.memories.m300 = { id: 'm300', parent: null, cutoff: 'n200', covered: ['n200'], delta: { facts: Array.from({ length: 30 }, (_, i) => ({ kind: 'event', at: '2026-08-03 10:00', text: `Факт ${i} `.repeat(400).slice(0, FACT_CHARS), source: ['n200'] })) } };
+  story.branches.b3.memory = 'm300';
 
   const first = render(state, 'seeds:0');
   assert.equal(callbacks(first).filter(data => data.startsWith('view:seed:')).length, 8);
@@ -252,7 +255,7 @@ test('long collections paginate and long texts fit', () => {
   state.ui = null;
 
   // Every screen a button reaches fits one Telegram message.
-  const queue = ['home', 'new-seed'], seen = new Set<string>();
+  const queue = ['home', 'new-seed', 'memory:h2:b3:0'], seen = new Set<string>();
   while (queue.length) {
     const route = queue.shift()!;
     if (seen.has(route)) continue;

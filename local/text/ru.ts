@@ -65,6 +65,7 @@ export const ru = {
     stop: '✖️ Остановить',
     lastScene: '📄 Последняя сцена',
     context: '📏 Контекст',
+    memory: '🧠 Память',
     model: '🤖 Модель',
     checkpoints: '🔖 Чекпоинты',
     bookmarks: '🔖 Закладки',
@@ -736,6 +737,24 @@ export const ru = {
     compactNote: (keep: number | null) => `🗜 «Сжать сейчас» перескажет старые сцены в память, не дожидаясь порога. ${keep === null ? 'Последние сцены' : `Последние ${count(keep, 'сцена', 'сцены', 'сцен')}`} останутся целиком, исходные сцены сохранятся в архиве, до и после сжатия будут чекпоинты. Новую сцену сжатие не пишет.`,
   },
 
+  // What the model remembers of a branch (lib/library.ts `MemoryVersion`), which the reader may read and correct, a fact
+  // at a time. The facts themselves stay in the language of the story.
+  memory: {
+    title: (branch: string) => `🧠 Память ветки ${branch}`,
+    summary: (facts: number) => `${count(facts, 'факт', 'факта', 'фактов')}: так модель помнит сцены, которых уже не видит целиком.`,
+    none: 'Память пуста: ранние сцены ещё не сжимались.',
+    hint: 'Нажми на факт, чтобы исправить или убрать его. Прежняя память остаётся в чекпоинтах.',
+    gone: 'Этого факта уже нет в памяти.',
+    fact: (n: number) => `🧠 Факт ${n}`,
+    edit: '✏️ Исправить',
+    remove: '🗑 Убрать',
+    back: '◀️ К памяти',
+    inputHint: 'Пришли новый текст факта одним сообщением: скопируй его выше и исправь. Прежняя версия останется в чекпоинтах.',
+    removeAsk: 'Убрать этот факт из памяти ветки? Сцены не изменятся, а прежняя память останется в чекпоинтах.',
+    saved: '✅ Факт исправлен. Модель прочтёт его со следующей сцены.',
+    removed: '✅ Факт убран. Со следующей сцены модель его не прочтёт.',
+  },
+
   // One Markdown line above a scene: letters, digits, spaces and «≈ % ,» only, nothing Markdown would read as markup.
   scenePrefix: {
     // Where the scene stands: `branch` is its branch's name with anything else taken out, `n` its number on that line, or 0.
@@ -929,6 +948,9 @@ export const ru = {
     busyNewSeed: 'Сцена уже пишется. Дождись ответа или нажми /cancel, затем создай сид.',
     staleButton: 'Кнопка устарела. Открой /menu.',
     nothingToRetry: 'Повторять нечего: неудавшегося хода здесь нет. Просто напиши следующий.',
+    factNeedsText: 'Жду текст факта. Пришли его сообщением или нажми кнопку, чтобы выйти.',
+    factTooLong: 'Факт слишком длинный: до 3500 знаков.',
+    factChanged: 'Память уже изменилась, и этот факт не записан. Открой /context.',
     staleConfirmation: 'Это подтверждение устарело. Открой удаление заново через /seeds.',
     gpuNotReady: 'GPU сейчас не готова. Открой /model: там можно запустить её или проверить состояние. Затем отправь действие снова.',
     unsupportedContent: 'В сообщении есть неподдерживаемое содержимое. Пришли сид или продолжение текстом без вложений. Ничего не сохранено.',
@@ -1023,6 +1045,7 @@ export const ru = {
     scene: (n: number) => `Сцена ${n}`,
     beforeCompaction: 'До сжатия',
     afterCompaction: 'После сжатия',
+    memoryEdited: 'Память изменена',
   },
 
   // Descriptions in Telegram's command menu, 1–256 characters, no emoji needed.

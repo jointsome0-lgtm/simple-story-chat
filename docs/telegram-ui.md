@@ -966,6 +966,17 @@ seed. With no more than the kept number of scenes uncompacted, the bot says that
   any text is shown; the compaction threshold and how many scenes stay verbatim; the sizes of the seed, the memory,
   the uncompacted scenes and the whole snapshot; and the last measured request. Checkpoint sizes appear only here.
   Opening the view calls no model.
+- **Memory:** «🧠 Память» ("Memory", `view:memory:<storyId>:<branchId>:<page>`) under the current branch's detailed
+  view, once it has any, lists what the model remembers of the scenes it no longer reads whole, 8 facts to a page,
+  each with its time and kind as the request has them and without the scene ids behind them; until the owner's list
+  of 2026-10-30 a reader saw only its size. A fact opens on a screen of its own, in a `pre` block that copies in one
+  tap, with «✏️ Исправить» ("Correct", `fact-edit:…`), whose wait takes the next message as its new text, and
+  «🗑 Убрать» ("Take out", confirmed). A fact at a time and not the whole memory as a profile is, since a memory is
+  longer than a message and a reader's copy of it would come back in pieces. A version of the memory never changes:
+  `editFact` copies the one that holds the fact and every one after it, and the branch and a new checkpoint (`memory`,
+  🧠) point at the copies, so a checkpoint from before the edit still reads the memory as it was and forking from it is
+  the undo. An edited fact keeps its kind, time and scenes, the version says `edited`, and a later compaction
+  continues from it. Neither is offered while a job runs, and a fact of a memory that has changed since is refused.
 - **Labels:** byte sizes are exact, and every token estimate carries «≈». The last request is marked measured, and its
   output may include hidden reasoning. A missing number is shown as unknown, never 0. The model name is not shown.
 - **Matching stats:** stats are used only if they match the route: a checkpoint's view needs that checkpoint's, the

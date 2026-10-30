@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { UserError, id, active, addSeed, newStory, fork, beginJob, beginSideJob, addBookmark, removeBookmark,
-  deleteSeed, deleteBranch, forgetLostPictures, context, history, jobTarget, keepMove, lostMove, pointBefore, pointStands, releaseJob, setLanguage, isPace, isPose } from '../lib/library.ts';
+  deleteSeed, deleteBranch, editFact, forgetLostPictures, context, factsOf, history, jobTarget, keepMove, lostMove, pointBefore, pointStands, releaseJob, setLanguage, isPace, isPose } from '../lib/library.ts';
 import type { Job, Library, PendingPoseUpload, PoseSetInput, PoseUploadFile, ProfileInput, ReferenceInput, SceneNode } from '../lib/library.ts';
 import { storyNarration } from './prompt.ts';
 import { chatMemory, createChat } from './telegram.ts';
@@ -41,7 +41,7 @@ import { OWN_STYLE_CHARS, OWN_STYLES_MAX, PROMPT_CHARS, choiceOf, lineOf, ownSty
 import type { Store } from './store.ts';
 import { fileErrorCode } from './store.ts';
 import type { GpuInfo, ModelInfo, RenderDetails, ScenePlace } from './ui.ts';
-import { bookmarkLabel } from './ui.ts';
+import { FACT_CHARS, PAGE, bookmarkLabel } from './ui.ts';
 import { isRegistered, langFromTelegram, texts } from './text.ts';
 import type { Messages } from './text.ts';
 
@@ -143,7 +143,7 @@ type Plan = {
 // and the work it starts afterwards for the reader's next turn.
 type Running = { controller: AbortController; picture: AbortController };
 // Library IDs are a prefix and a sequence number, as id() in lib/library.ts creates them.
-const ID = { seed: /^s\d+$/, story: /^h\d+$/, branch: /^b\d+$/, checkpoint: /^c\d+$/, node: /^n\d+$/ };
+const ID = { seed: /^s\d+$/, story: /^h\d+$/, branch: /^b\d+$/, checkpoint: /^c\d+$/, node: /^n\d+$/, memory: /^m\d+$/, place: /^\d{1,4}$/ };
 // The wait the reader is in, the input the next message is taken for or the deletion asked about, and for what. A
 // draft's parts, the scene a look is written from and a pose set's last picture change within one wait
 // (docs/telegram-ui.md#passing-messages).
@@ -280,7 +280,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     // Choosing where a look or a description lands is part of writing it (`edit-scope`, below).
     const scoping = action?.startsWith('edit-scope:') && member(['look', 'details'], state.ui?.input);
     const goingOn = action?.startsWith('from-here:') && state.ui?.input === 'move';
-    if (((action && !scoping && !goingOn) || text?.startsWith('/')) && member(['style', 'look', 'details', 'prompt', 'portrait-prompt', 'reference', 'pose-set', 'profile', 'move'], state.ui?.input)) state.ui = null;
+    if (((action && !scoping && !goingOn) || text?.startsWith('/')) && member(['style', 'look', 'details', 'prompt', 'portrait-prompt', 'reference', 'pose-set', 'profile', 'move', 'fact'], state.ui?.input)) state.ui = null;
     if (!action && !fileInput) {
       const command = text?.split(/[\s@]/)[0];
       const current = state.active;
@@ -346,6 +346,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       const route = action.slice(5);
       state.ui = route.startsWith('delete-seed:') ? { confirm: route.replace('delete-seed:', 'remove-seed:') }
         : route.startsWith('delete-branch:') ? { confirm: route.replace('delete-branch:', 'remove-branch:') }
+        : route.startsWith('delete-fact:') ? { confirm: route.replace('delete-fact:', 'remove-fact:') }
         : route.startsWith('delete-style:') ? { confirm: route.replace('delete-style:', 'remove-style:') } : null;
       return { screen: screen(state, route, pictureInfo), lasting: /^(character|profile):/.test(route) };
     }
@@ -661,6 +662,15 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       if (look) return { screen: render(state, `character:${storyId}:${index}:${personTag(name)}`, pictureInfo), lasting: true, ...logged ? { logged } : {} };
       return { retell: { storyId, name }, ...logged ? { logged } : {} };
     }
+    // A fact of a branch's memory the reader rewrites (lib/library.ts `editFact`). A refusal leaves the wait for the next
+    // try, as for a look; a fact gone meanwhile ends it. The text itself reaches no log row.
+    if (state.ui?.input === 'fact' && !action) {
+      const { storyId, branchId, version, index } = state.ui;
+      if (!text) throw refuse(t, 'factNeedsText');
+      if ([...text].length > FACT_CHARS) throw refuse(t, 'factTooLong');
+      state.ui = null;
+      return factEdited(state, t, storyId, branchId, version, index, text);
+    }
     if (action === 'last') return { savedText: last(state) };
     if (action === 'new-seed') {
       if (state.job) throw refuse(t, 'busyNewSeed');
@@ -687,6 +697,20 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       : verb === 'fork' ? ID.story.test(a) && ID.checkpoint.test(b)
       : verb === 'again' ? ID.story.test(a) && ID.node.test(b) : true;
     if (!validIds) throw refuse(t, 'staleButton');
+    if (verb === 'fact-edit' || verb === 'remove-fact') {
+      const [storyId = '', branchId = '', version = '', index = ''] = action!.split(':').slice(1);
+      const story = ID.story.test(storyId) ? state.stories[storyId] : undefined;
+      const branch = story && ID.branch.test(branchId) ? story.branches[branchId] : undefined;
+      if (!story || !branch || !ID.memory.test(version) || !ID.place.test(index)) throw refuse(t, 'staleButton');
+      if (verb === 'remove-fact') {
+        if (state.ui?.confirm !== action) throw refuse(t, 'staleConfirmation');
+        state.ui = null;
+        return factEdited(state, t, storyId, branchId, version, Number(index), null);
+      }
+      if (!factsOf(story, branch).some(one => one.version === version && one.index === Number(index))) throw refuse(t, 'factChanged');
+      state.ui = { input: 'fact', storyId, branchId, version, index: Number(index) };
+      return { screen: render(state, 'fact-input') };
+    }
     if (verb === 'remove-seed' || verb === 'remove-branch') {
       if (state.ui?.confirm !== action) throw refuse(t, 'staleConfirmation');
       if (verb === 'remove-seed') deleteSeed(state, a);
@@ -752,6 +776,17 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     // The reader wrote nothing, so the move is the narrator's; a story with a pace tells it so (local/prompt.ts).
     if (narrator) job.move = 'narrator';
     return { job };
+  }
+
+  // Rewrites a fact of a branch's memory or takes it out, and shows the list at the place the fact held.
+  function factEdited(state: Library, t: Messages, storyId: string, branchId: string, version: string, index: number, text: string | null): Plan {
+    const story = state.stories[storyId];
+    const branch = story?.branches[branchId];
+    const place = branch ? factsOf(story, branch).findIndex(one => one.version === version && one.index === index) : -1;
+    if (place < 0 || !editFact(state, story, branch, version, index, text, t.labels.memoryEdited)) throw refuse(t, 'factChanged');
+    const view = render(state, `memory:${storyId}:${branchId}:${Math.floor(place / PAGE)}`);
+    return { screen: { ...view, text: `${text === null ? t.memory.removed : t.memory.saved}\n\n${view.text}` },
+      logged: { event: text === null ? 'memory_fact_removed' : 'memory_fact_edited', details: { factCount: factsOf(story, branch).length } } };
   }
 
   // A reply to a scene other than the last one of the branch being played: nothing runs and nothing forks by itself, the

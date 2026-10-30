@@ -60,6 +60,7 @@ export const ko: Messages = {
     stop: '✖️ 중지',
     lastScene: '📄 마지막 장면',
     context: '📏 컨텍스트',
+    memory: '🧠 기억',
     model: '🤖 모델',
     checkpoints: '🔖 체크포인트',
     bookmarks: '🔖 북마크',
@@ -560,6 +561,22 @@ export const ko: Messages = {
     compactNote: keep => `🗜 ‘지금 압축’은 기준치를 기다리지 않고 오래된 장면을 기억으로 요약해요. ${lastScenes(keep)} 원문 그대로 남고, 원본 장면은 보관함에 보존되며, 압축 전후로 체크포인트가 저장돼요. 압축은 새 장면을 쓰지 않아요.`,
   },
 
+  memory: {
+    title: branch => `🧠 분기 ${branch}의 기억`,
+    summary: facts => `사실 ${facts}개: 모델이 더 이상 전체를 보지 못하는 장면을 이렇게 기억해요.`,
+    none: '기억이 비어 있어요. 초반 장면은 아직 압축되지 않았어요.',
+    hint: '사실을 누르면 고치거나 뺄 수 있어요. 이전 기억은 체크포인트에 남아요.',
+    gone: '이 사실은 이제 기억에 없어요.',
+    fact: n => `🧠 사실 ${n}`,
+    edit: '✏️ 고치기',
+    remove: '🗑 빼기',
+    back: '◀️ 기억으로',
+    inputHint: '사실의 새 텍스트를 메시지 하나로 보내 주세요. 위에서 복사해 고치면 돼요. 이전 버전은 체크포인트에 남아요.',
+    removeAsk: '이 사실을 분기의 기억에서 뺄까요? 장면은 바뀌지 않고, 이전 기억은 체크포인트에 남아요.',
+    saved: '✅ 사실을 고쳤어요. 다음 장면부터 모델이 읽어요.',
+    removed: '✅ 사실을 뺐어요. 다음 장면부터 모델이 읽지 않아요.',
+  },
+
   scenePrefix: {
     place: (branch, n) => `🌿 ${branch}${n ? ` · 장면 ${n}` : ''}`,
     context: (percent, rough) => `📏 컨텍스트 ≈ ${percent}%${rough ? ', 대략적인 추정' : ''}`,
@@ -717,6 +734,9 @@ export const ko: Messages = {
     busyNewSeed: '이미 장면을 쓰고 있어요. 응답을 기다리거나 /cancel 명령으로 취소한 뒤 시드를 만들어 주세요.',
     staleButton: '오래된 버튼이에요. 메뉴 열기: /menu',
     nothingToRetry: '다시 시도할 것이 없어요. 여기에는 실패한 행동이 없어요. 다음 행동을 보내면 돼요.',
+    factNeedsText: '사실의 텍스트를 기다리고 있어요. 메시지로 보내거나 버튼을 눌러 나가세요.',
+    factTooLong: '사실이 너무 길어요. 3500자까지 가능해요.',
+    factChanged: '기억이 이미 바뀌어서 이 사실은 저장되지 않았어요. /context 를 열어 보세요.',
     staleConfirmation: '오래된 확인 화면이에요. /seeds 명령에서 삭제를 다시 시작해 주세요.',
     gpuNotReady: 'GPU가 아직 준비되지 않았어요. /model 명령으로 GPU를 시작하거나 상태를 확인한 뒤 행동을 다시 보내 주세요.',
     unsupportedContent: '메시지에 지원하지 않는 내용이 있어요. 시드나 이어갈 내용을 첨부 없이 텍스트로 보내 주세요. 아무것도 저장되지 않았어요.',
@@ -795,6 +815,7 @@ export const ko: Messages = {
     scene: n => `장면 ${n}`,
     beforeCompaction: '압축 전',
     afterCompaction: '압축 후',
+    memoryEdited: '기억 수정됨',
   },
 
   commands: {

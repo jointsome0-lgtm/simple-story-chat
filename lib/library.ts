@@ -17,6 +17,8 @@ export type MemoryVersion = {
   // `sgr` keeps the validated extraction stages for audit; prompts use only `facts`.
   delta: { facts: Fact[]; sgr?: { evidence: unknown[]; conflicts: unknown[]; facts: unknown[] } };
   method?: 'plain' | 'sgr'; repairScenes?: number; usage?: Usage;
+  // The reader rewrote or took out a fact of this version (`editFact`), which the model did not write as it stands.
+  edited?: boolean;
 };
 export type SceneNode = {
   id: string; parent: string | null; input: string; text: string; time: string; truncated: boolean; delivery: 'pending' | 'sent';
@@ -224,6 +226,9 @@ export type ProfileInput = { input: 'profile'; storyId: string; name: string; fi
 // that scene asks whether to go on from there. Unlike the other waits this one holds text, since the reader wrote it
 // before anything could be asked; a button, a command or their next message ends it, and the text with it.
 export type MoveInput = { input: 'move'; storyId: string; checkpointId: string; move: string; confirm?: undefined };
+// A reader rewriting one fact of a branch's memory (`editFact`): their next text message is that fact. The fact is the
+// one they opened, by the version that holds it and its place there, which the write must find still in the branch.
+export type FactInput = { input: 'fact'; storyId: string; branchId: string; version: string; index: number; confirm?: undefined };
 // One of the reader's own picture styles: the name on its button and the line that ends the prompt.
 export type OwnStyle = { id: string; name: string; line: string };
 // How a picture was drawn, all but its prompt (local/picture.ts): its seed, a hash of the graph, the checkpoint's file
@@ -248,7 +253,7 @@ export type Language = 'ru' | 'en' | 'zh' | 'ko' | 'ja';
 export type Library = {
   version: 1; seq: number; seeds: Record<string, Seed>; stories: Record<string, Story>;
   active: { storyId: string; branchId: string } | null; job: Job | null;
-  ui: SeedDraft | DeleteConfirmation | StyleInput | PromptInput | LookInput | ReferenceInput | PoseSetInput | PortraitPromptInput | ProfileInput | MoveInput | null;
+  ui: SeedDraft | DeleteConfirmation | StyleInput | PromptInput | LookInput | ReferenceInput | PoseSetInput | PortraitPromptInput | ProfileInput | MoveInput | FactInput | null;
   seen: number[];
   interrupted?: boolean; language?: Language; lostMove?: LostMove;
   // The look of this reader's pictures: a preset's key or the id of one of their own styles, and those styles. Only
@@ -373,6 +378,34 @@ export function memoryChain(story: Story, memory: string | null): MemoryVersion[
     memory = version.parent;
   }
   return versions.reverse();
+}
+
+// The facts of a point's memory, oldest first, each with the version that holds it and its place there.
+export function factsOf(story: Story, point: Point): { version: string; index: number; fact: Fact }[] {
+  return memoryChain(story, point.memory).flatMap(memory => memory.delta.facts.map((fact, index) => ({ version: memory.id, index, fact })));
+}
+
+// The reader rewrites one fact of a branch's memory, or takes it out with `text` null. A version never changes, since
+// earlier checkpoints read it: the one that holds the fact is copied with the change, and so is every version after it,
+// and the branch and a new checkpoint point at the copies. Going back to a checkpoint before it is going back to the
+// memory as it was. Returns false if the fact is no longer in the branch's memory.
+export function editFact(state: Library, story: Story, branch: Branch, version: string, index: number, text: string | null, label: string): boolean {
+  const chain = memoryChain(story, branch.memory);
+  const at = chain.findIndex(memory => memory.id === version);
+  if (at < 0 || !chain[at].delta.facts[index]) return false;
+  let parent = chain[at].parent;
+  for (const memory of chain.slice(at)) {
+    const copy: MemoryVersion = { ...memory, id: id(state, 'm'), parent };
+    if (memory.id === version) {
+      const facts = memory.delta.facts.flatMap((fact, place) => place !== index ? [fact] : text === null ? [] : [{ ...fact, text }]);
+      Object.assign(copy, { delta: { ...memory.delta, facts }, edited: true });
+    }
+    story.memories[copy.id] = copy;
+    parent = copy.id;
+  }
+  branch.memory = parent;
+  saveCheckpoint(state, story, branch, label, 'memory');
+  return true;
 }
 
 export function context(story: Story, branch: Point): { memories: MemoryVersion[]; recent: SceneNode[] } {

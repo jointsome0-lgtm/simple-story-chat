@@ -19,7 +19,7 @@ import { OWN_STYLES_MAX, PRESETS } from './picture-style.ts';
 import type { TelegramPayload } from './telegram.ts';
 import { render, scenePrefix, sceneKeyboard } from './ui.ts';
 import { texts } from './text.ts';
-import { UserError, active, addSeed, history, newStory, beginJob, commitTurn, context } from '../lib/library.ts';
+import { UserError, active, addSeed, factsOf, history, newStory, beginJob, commitTurn, context } from '../lib/library.ts';
 import type { Job, MoveInput, SeedDraft, SentPicture } from '../lib/library.ts';
 
 // Scene and memory requests from the bot always pass a text callback.
@@ -644,6 +644,62 @@ test('a reply to an earlier scene asks first and goes on from there; to the last
   await f.bot.idle();
   assert.equal((here().state.ui as MoveInput).move, 'Ответ на показанную снова');
   assert.equal(f.sent.filter(item => item.method === 'sendRichMessage').length, fresh);
+});
+
+test('a fact the reader corrects reaches the next request, and the memory before it stays with the checkpoints before it', async t => {
+  const f = fixture(t, { generate: async request => request.purpose === 'memory' ? compactResult(request)
+    : { text: '2026-08-02 21:00\n\nСинтетическая сцена.', finishReason: 'stop' } });
+  await battleFixture(f);
+  await f.bot.handle(f.message('/compact'));
+  await f.bot.idle();
+  const here = () => {
+    const state = f.store.read(1);
+    const { story, branch } = active(state);
+    return { state, story, branch, facts: factsOf(story, branch) };
+  };
+  const first = here();
+  const compacted = Object.values(first.story.checkpoints).find(cp => cp.kind === 'compaction')!;
+  const original = first.facts[1].fact.text;
+  const route = (one = first.facts[1]) => `${first.story.id}:${first.branch.id}:${one.version}:${one.index}`;
+
+  // The fact is offered to copy, and the wait takes the reader's next message for it, not for a move.
+  const scenes = Object.keys(first.story.nodes).length;
+  await f.bot.handle(f.click(`view:fact:${route()}`));
+  assert.ok(said(f.sent)!.payload.text.includes(original));
+  await f.bot.handle(f.click(`fact-edit:${route()}`));
+  await f.bot.handle(f.message('Ворота пали на рассвете.'));
+  await f.bot.idle();
+  const edited = here();
+  assert.deepEqual([Object.keys(edited.story.nodes).length, edited.state.job, edited.state.ui, edited.facts[1].fact.text],
+    [scenes, null, null, 'Ворота пали на рассвете.']);
+  assert.deepEqual(edited.facts[1].fact.source, first.facts[1].fact.source, 'the fact keeps the scenes it came from');
+  assert.equal(edited.facts.length, first.facts.length);
+
+  // The old memory stays what it was for the checkpoint before the edit, and a checkpoint marks the new one.
+  assert.equal(edited.story.memories[compacted.memory!].delta.facts[1].text, original);
+  assert.equal(Object.values(edited.story.checkpoints).at(-1)!.kind, 'memory');
+
+  // A button of the memory as it was changes nothing now; taking a fact out needs its question.
+  const count = Object.keys(edited.story.memories).length;
+  await f.bot.handle(f.click(`fact-edit:${route()}`));
+  await f.bot.handle(f.click(`view:delete-fact:${route()}`));
+  await f.bot.handle(f.click(`remove-fact:${route()}`));
+  assert.ok(said(f.sent)!.payload.text.includes('не записан'));
+  const fresh = route(edited.facts[0]);
+  await f.bot.handle(f.click(`remove-fact:${fresh}`));
+  assert.equal(here().facts.length, first.facts.length, 'no question, no removal');
+  assert.equal(Object.keys(here().story.memories).length, count);
+  await f.bot.handle(f.click(`view:delete-fact:${fresh}`));
+  await f.bot.handle(f.click(`remove-fact:${fresh}`));
+  assert.equal(here().facts.length, first.facts.length - 1);
+
+  // The next request reads the memory as the reader left it.
+  await f.bot.handle(f.message('Дальше.'));
+  await f.bot.idle();
+  const asked = JSON.stringify(f.requests.at(-1)!.messages);
+  assert.ok(asked.includes('Ворота пали на рассвете.'));
+  assert.equal(asked.split(original).length - 1, first.facts.length - 2, 'the fact rewritten and the one taken out are not read');
+  assert.equal(here().story.nodes[here().branch.head!].input, 'Дальше.');
 });
 
 test('a running job refuses another and /cancel keeps its late answer out; no status lands after the scene or a cancel', async t => {

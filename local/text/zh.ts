@@ -51,6 +51,7 @@ export const zh: Messages = {
     stop: '✖️ 停止',
     lastScene: '📄 最新场景',
     context: '📏 上下文',
+    memory: '🧠 记忆',
     model: '🤖 模型',
     checkpoints: '🔖 存档点',
     bookmarks: '🔖 书签',
@@ -551,6 +552,22 @@ export const zh: Messages = {
     compactNote: keep => `🗜 “立即压缩”会把较早的场景概括进记忆，不必等到阈值。${lastScenes(keep)}保留原文，原始场景留在归档中，压缩前后各有一个存档点。压缩不会写新场景。`,
   },
 
+  memory: {
+    title: branch => `🧠 分支${branch}的记忆`,
+    summary: facts => `${facts} 条事实：模型靠它们记住已经看不到全文的场景。`,
+    none: '记忆是空的：早期场景还没有压缩过。',
+    hint: '点一条事实可以修改或移除。之前的记忆保留在存档点里。',
+    gone: '这条事实已经不在记忆里了。',
+    fact: n => `🧠 事实 ${n}`,
+    edit: '✏️ 修改',
+    remove: '🗑 移除',
+    back: '◀️ 回到记忆',
+    inputHint: '用一条消息发来事实的新文本：从上面复制后修改。之前的版本保留在存档点里。',
+    removeAsk: '要把这条事实从分支的记忆里移除吗？场景不会改变，之前的记忆保留在存档点里。',
+    saved: '✅ 事实已修改，从下一个场景起模型会读到它。',
+    removed: '✅ 事实已移除，从下一个场景起模型不再读到它。',
+  },
+
   scenePrefix: {
     place: (branch, n) => `🌿 ${branch}${n ? ` · 第 ${n} 幕` : ''}`,
     context: (percent, rough) => `📏 上下文 ≈ ${percent}%${rough ? '，粗略估算' : ''}`,
@@ -708,6 +725,9 @@ export const zh: Messages = {
     busyNewSeed: '场景正在写。等它回复，或者点 /cancel 后再创建种子。',
     staleButton: '这个按钮已经过期。打开 /menu 看看。',
     nothingToRetry: '没有可重试的内容：这里没有失败的行动。直接发下一步就行。',
+    factNeedsText: '正在等事实的文本。用消息发来，或按按钮退出。',
+    factTooLong: '这条事实太长了：最多 3500 个字符。',
+    factChanged: '记忆已经变了，这条事实没有写入。打开 /context 看看。',
     staleConfirmation: '这个确认已经过期。通过 /seeds 重新打开删除页面。',
     gpuNotReady: 'GPU 现在还没准备好。打开 /model 可以启动它或查看状态，然后重新发送你的行动。',
     unsupportedContent: '消息里有不支持的内容。请用不带附件的纯文本发送种子或后续。什么都没有保存。',
@@ -786,6 +806,7 @@ export const zh: Messages = {
     scene: n => `场景 ${n}`,
     beforeCompaction: '压缩前',
     afterCompaction: '压缩后',
+    memoryEdited: '记忆已修改',
   },
 
   commands: {

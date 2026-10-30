@@ -50,6 +50,7 @@ export const ja: Messages = {
     stop: '✖️ 停止',
     lastScene: '📄 最後のシーン',
     context: '📏 コンテキスト',
+    memory: '🧠 記憶',
     model: '🤖 モデル',
     checkpoints: '🔖 チェックポイント',
     bookmarks: '🔖 ブックマーク',
@@ -550,6 +551,22 @@ export const ja: Messages = {
     compactNote: keep => `🗜 「今すぐ圧縮」を押すと、しきい値を待たずに、古いシーンを要約して記憶に移します。${lastScenes(keep)}はそのまま残り、元のシーンはアーカイブに保存され、圧縮の前後にチェックポイントが作られます。圧縮では新しいシーンは書かれません。`,
   },
 
+  memory: {
+    title: branch => `🧠 ルート${branch}の記憶`,
+    summary: facts => `事実 ${facts} 件: モデルは全文を見られなくなったシーンをこうして覚えています。`,
+    none: '記憶は空です。序盤のシーンはまだ圧縮されていません。',
+    hint: '事実を押すと、直したり外したりできます。以前の記憶はチェックポイントに残ります。',
+    gone: 'この事実はもう記憶にありません。',
+    fact: n => `🧠 事実 ${n}`,
+    edit: '✏️ 直す',
+    remove: '🗑 外す',
+    back: '◀️ 記憶へ',
+    inputHint: '事実の新しいテキストを1通のメッセージで送ってください。上からコピーして直せます。以前の版はチェックポイントに残ります。',
+    removeAsk: 'この事実をルートの記憶から外しますか？ シーンは変わらず、以前の記憶はチェックポイントに残ります。',
+    saved: '✅ 事実を直しました。次のシーンからモデルが読みます。',
+    removed: '✅ 事実を外しました。次のシーンからモデルは読みません。',
+  },
+
   scenePrefix: {
     place: (branch, n) => `🌿 ${branch}${n ? ` · シーン ${n}` : ''}`,
     context: (percent, rough) => `📏 コンテキスト ≈ ${percent}%${rough ? '、概算' : ''}`,
@@ -707,6 +724,9 @@ export const ja: Messages = {
     busyNewSeed: 'すでにシーンを執筆中です。応答を待つか、/cancel を押してから、シードを作成してください。',
     staleButton: 'このボタンは古くなっています。/menu を開いてください。',
     nothingToRetry: 'やり直すものはありません。ここに失敗した行動はありません。次の行動を送ってください。',
+    factNeedsText: '事実のテキストを待っています。メッセージで送るか、ボタンを押して抜けてください。',
+    factTooLong: '事実が長すぎます。3500文字までです。',
+    factChanged: '記憶がすでに変わっていて、この事実は保存されませんでした。/context を開いてください。',
     staleConfirmation: 'この確認は古くなっています。/seeds から削除をやり直してください。',
     gpuNotReady: 'GPUは今、準備ができていません。/model を開くと、起動や状態の確認ができます。その後、行動をもう一度送ってください。',
     unsupportedContent: 'メッセージに、対応していない内容が含まれています。シードや続きは、添付なしのテキストで送ってください。何も保存されていません。',
@@ -785,6 +805,7 @@ export const ja: Messages = {
     scene: n => `シーン ${n}`,
     beforeCompaction: '圧縮前',
     afterCompaction: '圧縮後',
+    memoryEdited: '記憶を修正',
   },
 
   commands: {

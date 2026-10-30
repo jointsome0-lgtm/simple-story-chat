@@ -1,8 +1,8 @@
 // Telegram interface for simple-story-chat: pure functions from a user's library to sendMessage payloads.
 // Plain text only (no parse_mode), inline keyboards, callbacks <= 64 UTF-8 bytes.
 
-import { lostMove } from '../lib/library.ts';
-import type { Branch, Checkpoint, Library, Pace, SceneNode, Story } from '../lib/library.ts';
+import { factsOf, lostMove } from '../lib/library.ts';
+import type { Branch, Checkpoint, Fact, Library, Pace, SceneNode, Story } from '../lib/library.ts';
 import type { ContextStats } from './context.ts';
 import type { GpuStatus } from './gpu.ts';
 import type { InlineButton, InlineKeyboard, Screen } from './telegram.ts';
@@ -20,6 +20,7 @@ import { editableFrom, ownVersions, personKey, sceneOf, sheetAt, versionsOf } fr
 import { CHANGES_CHARS, CLOTHES_CHARS, DETAILS_CHARS, fieldsMask, maskFields, profileBlock, profileHash, profileOf, roundTrips } from './profile.ts';
 import type { ProfileField } from './profile.ts';
 import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX, PRESETS, PROMPT_CHARS, lineOf, ownStyle, ownStyles, pickerKeys, presetOf, styleKey } from './picture-style.ts';
+import { seedNarration } from './story-text.ts';
 import { LANGS, LANGUAGE_BUTTON, REGISTERED, shownLang, texts } from './text.ts';
 import type { Messages } from './text.ts';
 
@@ -60,9 +61,11 @@ type Row = (InlineButton | null)[];
 type Page<T> = { page: number; pages: number; start: number; items: T[] };
 
 export const LIMIT = 4000; // Telegram allows 4096 characters; keep headroom
-const PAGE = 8;
+export const PAGE = 8;
+// How long a fact of a branch's memory the reader writes may be, and how much of one a screen shows to copy.
+export const FACT_CHARS = 3500;
 const encoder = new TextEncoder();
-const ICON: Record<string, string> = { start: '🌱', fork: '🌿', scene: '🎬', manual: '📌', compaction: '🗜' };
+const ICON: Record<string, string> = { start: '🌱', fork: '🌿', scene: '🎬', manual: '📌', compaction: '🗜', memory: '🧠' };
 // The paces in the picker's order (lib/library.ts `PACES`).
 const PACE_ICON: Record<Pace, string> = { moment: '⚡', scene: '🎬', chapter: '🗓' };
 
@@ -184,6 +187,11 @@ function screen(state: State, route: string, details: RenderDetails) {
     case 'bookmarks': return bookmarkList(state, args[0]);
     case 'forks': return forksScreen(state, args[0], args[1], bookmarkPage(args[2]), args[3]);
     case 'context': return args.length ? checkpointContextScreen(state, args[0], args[1], details.contextStats) : currentContextScreen(state, details.contextStats);
+    // What the model remembers of a branch, one fact of it, the wait for its new text, and the question before it goes.
+    case 'memory': return memoryScreen(state, args[0], args[1], args[2]);
+    case 'fact': return factScreen(state, args[0], args[1], args[2], args[3]);
+    case 'fact-input': return state.ui?.input === 'fact' ? factScreen(state, state.ui.storyId, state.ui.branchId, state.ui.version, String(state.ui.index), 'input') : home(state, null, details.modelInfo, gpuFor(details), details.pictures === true);
+    case 'delete-fact': return factScreen(state, args[0], args[1], args[2], args[3], 'delete');
     case 'delete-seed': return deleteSeedScreen(state, args[0]);
     case 'delete-branch': return deleteBranchScreen(state, args[0], args[1]);
     case 'new-seed': return newSeedScreen(state);
@@ -1269,10 +1277,65 @@ function contextView(t: Messages, stats: ContextStats, { state = null, canCompac
     ? [[stats.storyId && stats.checkpointId ? btn(t.buttons.toCheckpoint, `view:checkpoint:${stats.storyId}:${stats.checkpointId}`) : null, btn(t.buttons.menu, 'view:home')]]
     : [
       compact ? [btn(t.buttons.compactNow, 'compact')] : null,
+      memory?.count && stats.storyId && stats.branchId ? [btn(t.buttons.memory, `view:memory:${stats.storyId}:${stats.branchId}:0`)] : null,
       [btn(t.buttons.refresh, 'view:context'), stats.storyId && stats.branchId ? btn(t.buttons.checkpoints, `view:checkpoints:${stats.storyId}:${stats.branchId}:0`) : null],
       [btn(t.buttons.menu, 'view:home')],
     ];
   return payload(lines, rows);
+}
+
+// What the model remembers of a branch, as the reader may read and correct it: each fact with its time and kind in the
+// story's language, as the request has them, without the scene ids behind them. A fact opens to be rewritten or taken out.
+function memoryScreen(state: State, storyId: string | undefined, branchId: string | undefined, rawPage: string | undefined) {
+  const t = texts(state.language);
+  const story = own(state.stories, storyId);
+  const branch = own(story?.branches, branchId);
+  if (!story || !branch) return stale(t, t.branch.notFound);
+  const facts = factsOf(story, branch);
+  const p = paginate(facts, rawPage);
+  const lines: (string | null)[] = [t.memory.title(quote(t, branch.name)), `📖 ${storyName(state, story)}`, facts.length ? t.memory.summary(facts.length) : t.memory.none, pageNote(t, p), ''];
+  const rows: Row[] = [];
+  p.items.forEach(({ version, index, fact }, i) => {
+    const n = p.start + i + 1;
+    lines.push(`${n}. ${clip(factLine(state, story, fact), 330)}`);
+    rows.push([btn(`${n}. ${line(fact.text, 32) || '—'}`, `view:fact:${story.id}:${branch.id}:${version}:${index}`)]);
+  });
+  if (facts.length) lines.push('', state.job ? busyNote(state, 'compact') : t.memory.hint);
+  rows.push(pager(p, `memory:${story.id}:${branch.id}`, t.buttons.previous, t.buttons.next));
+  rows.push([btn(t.buttons.context, 'view:context'), btn(t.buttons.menu, 'view:home')]);
+  return payload(lines, rows);
+}
+
+// One fact, in a pre block that copies in one tap. `mode` is the same screen as a wait for its new text or as the
+// question before it goes (lib/library.ts `editFact`).
+function factScreen(state: State, storyId: string | undefined, branchId: string | undefined, version: string | undefined, rawIndex: string | undefined, mode?: 'input' | 'delete') {
+  const t = texts(state.language);
+  const story = own(state.stories, storyId);
+  const branch = own(story?.branches, branchId);
+  const facts = story && branch ? factsOf(story, branch) : [];
+  const place = facts.findIndex(one => one.version === version && String(one.index) === rawIndex);
+  if (!story || !branch || place < 0) return stale(t, t.memory.gone);
+  const { fact } = facts[place];
+  const text = clip(fact.text, FACT_CHARS);
+  const list = `view:memory:${story.id}:${branch.id}:${Math.floor(place / PAGE)}`;
+  const route = `${story.id}:${branch.id}:${version}:${rawIndex}`;
+  const note = mode === 'input' ? t.memory.inputHint : mode === 'delete' ? t.memory.removeAsk : state.job ? busyNote(state, 'compact') : null;
+  const rows: Row[] = mode === 'input' ? [[btn(t.memory.back, list)]]
+    : mode === 'delete' ? [[btn(t.memory.remove, `remove-fact:${route}`)], [btn(t.buttons.keep, `view:fact:${route}`)]]
+    : [state.job ? [] : [btn(t.memory.edit, `fact-edit:${route}`), btn(t.memory.remove, `view:delete-fact:${route}`)], [btn(t.memory.back, list), btn(t.buttons.menu, 'view:home')]];
+  const result: Screen = payload([t.memory.fact(place + 1), factLine(state, story, { ...fact, text: '' }).replace(/:\s*$/, ''), '', text, ...note ? ['', note] : []], rows);
+  // A pre entity copies in one tap. Offsets are UTF-16 units, as in a JS string.
+  const offset = result.text.indexOf(text);
+  if (offset >= 0) result.entities = [{ type: 'pre', offset, length: text.length }];
+  return result;
+}
+
+// A fact as a request has it (local/prompt.ts `memoryText`), without its sources.
+function factLine(state: State, story: Story, fact: Fact) {
+  const seed = own(state.seeds, story.seedId);
+  const n = seed ? seedNarration(seed) : null;
+  const label = (n && Object.hasOwn(n.factLabels, fact.kind) ? n.factLabels[fact.kind as keyof typeof n.factLabels] : n?.otherFact) ?? fact.kind;
+  return `${fact.at ? `[${fact.at}] ` : ''}${label}: ${fact.text}`;
 }
 
 function deleteSeedScreen(state: State, seedId: string | undefined) {
