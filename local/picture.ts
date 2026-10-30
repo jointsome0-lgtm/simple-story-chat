@@ -977,10 +977,10 @@ export function createIllustrator(config: ImageConfig, deps: {
   // (local/bot.ts). A deletion that lands while it is on its way finds no record of it yet; the record then finds no
   // scene, and the message is taken back at once. The two writes of the library cannot interleave, so one of them
   // always sees the other. A portrait has no scene and goes with its story alone. Resolves to the id of the message.
-  // The scene's own photo leaves the `recipe` it was drawn with on its scene in the same write, for a variant of it;
-  // its prompt is never written.
+  // The scene's own photo leaves the `recipe` it was drawn with on its scene in the same write, for a variant of it, and
+  // Telegram's id of its `file` (`SceneNode.pictureFile`); its prompt is never written.
   async function sendKept(request: { userId: string; chat: Chat; storyId: string; nodeId?: string },
-    send: () => Promise<number | undefined>, recipe?: PictureRecipe) {
+    send: () => Promise<number | undefined>, recipe?: PictureRecipe, file?: () => string | undefined) {
     const { userId, chat, storyId, nodeId } = request;
     const there = (state: Library) => !!state.stories[storyId] && (nodeId === undefined || !!state.stories[storyId].nodes[nodeId]);
     if (!there(store.read(userId))) throw sceneGone();
@@ -990,7 +990,7 @@ export function createIllustrator(config: ImageConfig, deps: {
     const kept = store.mutate(userId, state => {
       if (!there(state)) return false;
       recordPicture(state, { storyId, nodeId, messageId, at: now() });
-      if (recipe && nodeId !== undefined) state.stories[storyId].nodes[nodeId].picture = recipe;
+      if (recipe && nodeId !== undefined) Object.assign(state.stories[storyId].nodes[nodeId], { picture: recipe, pictureFile: file?.() });
       return true;
     });
     if (kept) return messageId;
@@ -1088,9 +1088,8 @@ export function createIllustrator(config: ImageConfig, deps: {
       // The photo hangs under the scene it belongs to, and the status line goes only once the photo is there; the
       // prompt follows it, folded, even if the picture was stopped while the photo was on its way.
       const photoStarted = now();
-      const photo = await sendKept(request, () => chat.photo(drawn.bytes, request.sceneMessageId, withModel(undefined, drawn.model), fileId => {
-        store.mutate(request.userId, state => { const node = state.stories[request.storyId]?.nodes[request.nodeId]; if (node) node.pictureFile = fileId; });
-      }), recipe);
+      let file: string | undefined;
+      const photo = await sendKept(request, () => chat.photo(drawn.bytes, request.sceneMessageId, withModel(undefined, drawn.model), id => { file = id; }), recipe, () => file);
       const photoMs = Math.max(0, now() - photoStarted);
       await status.clear();
       const size = promptSize(assembled.prompt, assembled.line ?? line, drawn.referenceCount);

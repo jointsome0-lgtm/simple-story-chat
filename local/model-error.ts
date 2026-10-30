@@ -94,7 +94,7 @@ const SERVING_CODES = ['invalid_request', 'unsupported_field', 'limit_exceeded',
   'graph_refused', 'graph_rejected', 'picture_failed', 'socket_unavailable', 'stop_unconfirmed'] as const;
 // Which screen a button or a command opened (local/bot.ts `Plan.opened`), by its name, without the ids of its route.
 // How often each is opened is what tells which of them a reader uses. A route this list does not know stays out.
-const SCREENS = ['home', 'model', 'language', 'pace', 'style', 'sample', 'characters', 'character', 'portrait-kept', 'profile', 'seeds', 'seed', 'story',
+const SCREENS = ['home', 'model', 'language', 'pace', 'style', 'sample', 'characters', 'character', 'portrait', 'portrait-kept', 'pose-set-status', 'profile', 'seeds', 'seed', 'story',
   'tree', 'log', 'branch', 'checkpoints', 'checkpoint', 'bookmarks', 'forks', 'context', 'memory', 'fact', 'delete-seed', 'delete-branch', 'delete-style',
   'delete-fact', 'pose-set-drop', 'new-seed'] as const;
 // Sizes, counts and durations. Each is kept only as a non-negative safe integer, so none can carry text.

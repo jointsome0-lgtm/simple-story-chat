@@ -405,6 +405,8 @@ export function editFact(state: Library, story: Story, branch: Branch, version: 
       Object.assign(copy, { delta: { ...memory.delta, facts }, edited: true });
     }
     story.memories[copy.id] = copy;
+    // A move kept from a point of this branch's memory reads it corrected too.
+    if (state.lostMove?.branchId === branch.id && state.lostMove.from?.memory === memory.id) state.lostMove.from.memory = copy.id;
     parent = copy.id;
   }
   branch.memory = parent;

@@ -1298,7 +1298,7 @@ function memoryScreen(state: State, storyId: string | undefined, branchId: strin
   const rows: Row[] = [];
   p.items.forEach(({ version, index, fact }, i) => {
     const n = p.start + i + 1;
-    lines.push(`${n}. ${clip(factLine(state, story, fact), 330)}`);
+    lines.push(`${n}. ${clip(`${factHead(state, story, fact)}: ${fact.text}`, 330)}`);
     rows.push([btn(`${n}. ${line(fact.text, 32) || '—'}`, `view:fact:${story.id}:${branch.id}:${version}:${index}`)]);
   });
   if (facts.length) lines.push('', state.job ? busyNote(state, 'compact') : t.memory.hint);
@@ -1324,19 +1324,19 @@ function factScreen(state: State, storyId: string | undefined, branchId: string 
   const rows: Row[] = mode === 'input' ? [[btn(t.memory.back, list)]]
     : mode === 'delete' ? [[btn(t.memory.remove, `remove-fact:${route}`)], [btn(t.buttons.keep, `view:fact:${route}`)]]
     : [state.job ? [] : [btn(t.memory.edit, `fact-edit:${route}`), btn(t.memory.remove, `view:delete-fact:${route}`)], [btn(t.memory.back, list), btn(t.buttons.menu, 'view:home')]];
-  const result: Screen = payload([t.memory.fact(place + 1), factLine(state, story, { ...fact, text: '' }).replace(/:\s*$/, ''), '', text, ...note ? ['', note] : []], rows);
+  const head = `${t.memory.fact(place + 1)}\n${factHead(state, story, fact)}\n\n`;
+  const result: Screen = payload([`${head}${text}`, ...note ? ['', note] : []], rows);
   // A pre entity copies in one tap. Offsets are UTF-16 units, as in a JS string.
-  const offset = result.text.indexOf(text);
-  if (offset >= 0) result.entities = [{ type: 'pre', offset, length: text.length }];
+  if (result.text.startsWith(`${head}${text}`)) result.entities = [{ type: 'pre', offset: head.length, length: text.length }];
   return result;
 }
 
-// A fact as a request has it (local/prompt.ts `memoryText`), without its sources.
-function factLine(state: State, story: Story, fact: Fact) {
+// A fact's time and kind as a request has them (local/prompt.ts `memoryText`).
+function factHead(state: State, story: Story, fact: Fact) {
   const seed = own(state.seeds, story.seedId);
   const n = seed ? seedNarration(seed) : null;
-  const label = (n && Object.hasOwn(n.factLabels, fact.kind) ? n.factLabels[fact.kind as keyof typeof n.factLabels] : n?.otherFact) ?? fact.kind;
-  return `${fact.at ? `[${fact.at}] ` : ''}${label}: ${fact.text}`;
+  const label = (n && Object.hasOwn(n.factLabels, fact.kind) ? n.factLabels[fact.kind as keyof typeof n.factLabels] : fact.kind) ?? n?.otherFact;
+  return `${fact.at ? `[${fact.at}] ` : ''}${label}`;
 }
 
 function deleteSeedScreen(state: State, seedId: string | undefined) {

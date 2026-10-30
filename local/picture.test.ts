@@ -311,7 +311,7 @@ async function fixture(t: TestContext, options: Options = {}) {
     // can answer here, which is the moment the bot has to get right.
     if (method === 'sendRichMessage' && !isNote({ method, payload }) && heldFinals++ < (options.holdFinal ?? 0)) await new Promise<void>(go => holding.push(go));
     if (method === 'sendPhoto' && heldPhotos++ < (options.holdPhotos ?? 0)) await new Promise<void>(go => holding.push(go));
-    return { message_id: id };
+    return { message_id: id, ...method === 'sendPhoto' ? { photo: [{ file_id: 'small' }, { file_id: `large-${id}` }] } : {} };
   };
   const counted: string[] = [];
   let frames = 0;
@@ -1527,6 +1527,7 @@ test('a scene keeps its picture\'s recipe as long as the scene is kept, and its 
   // How its picture was drawn stays on the scene, and never its prompt.
   assert.deepEqual(Object.keys(f.store.read('1').stories[storyId].nodes[nodeId].picture!).sort(),
     ['cfg', 'checkpoint', 'graph', 'height', 'sampler', 'scheduler', 'seed', 'steps', 'width']);
+  assert.match(f.store.read('1').stories[storyId].nodes[nodeId].pictureFile!, /^large-/, 'and the id of its largest size, which is on no disk here');
   const vary = async (prompt: string) => { await f.bot.handle(f.click(own)); await f.bot.handle(f.message(prompt)); await f.bot.idle(); };
   // The records of the photos go after two days, when Telegram lets the bot delete them no more; the recipe stays.
   f.store.mutate('1', state => { state.sentPictures = []; });

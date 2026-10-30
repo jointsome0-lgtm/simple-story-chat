@@ -664,7 +664,10 @@ test('a fact the reader corrects reaches the next request, and the memory before
   const original = first.facts[1].fact.text;
   const route = (one = first.facts[1]) => `${first.story.id}:${first.branch.id}:${one.version}:${one.index}`;
 
-  // The fact is offered to copy, and the wait takes the reader's next message for it, not for a move.
+  // The way in is under the branch's detailed view. The fact is offered to copy, and the wait takes the reader's next
+  // message for it, not for a move.
+  await f.bot.handle(f.message('/context'));
+  assert.ok(JSON.stringify(said(f.sent)!.payload.reply_markup).includes(`view:memory:${first.story.id}:${first.branch.id}:0`));
   const scenes = Object.keys(first.story.nodes).length;
   await f.bot.handle(f.click(`view:fact:${route()}`));
   assert.ok(said(f.sent)!.payload.text.includes(original));
