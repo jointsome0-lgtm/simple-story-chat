@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { UserError, id, active, addSeed, newStory, fork, beginJob, addBookmark, removeBookmark,
-  deleteSeed, deleteBranch, forgetLostPictures, context, jobTarget, setLanguage, isPace, isPose } from '../lib/library.ts';
+  deleteSeed, deleteBranch, forgetLostPictures, context, jobTarget, keepMove, lostMove, setLanguage, isPace, isPose } from '../lib/library.ts';
 import type { Job, Library, PendingPoseUpload, PoseSetInput, PoseUploadFile, ProfileInput, ReferenceInput, SceneNode } from '../lib/library.ts';
 import { storyNarration } from './prompt.ts';
 import { chatMemory, createChat } from './telegram.ts';
@@ -278,7 +278,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       const current = state.active;
       const commands: Record<string, string> = {
         '/start': 'view:home', '/menu': 'view:home', '/seeds': 'view:seeds:0',
-        '/new': 'new-seed', '/continue': 'continue', '/cancel': 'cancel', '/last': 'last',
+        '/new': 'new-seed', '/continue': 'continue', '/retry': 'retry', '/cancel': 'cancel', '/last': 'last',
         '/context': 'view:context', '/compact': 'compact', '/model': 'view:model', '/language': 'view:language', '/style': 'view:style',
         '/gpu': 'view:model', '/gpu_pause': 'gpu:pause', '/gpu_start': 'gpu:start',
         '/checkpoints': current ? `view:checkpoints:${current.storyId}:${current.branchId}:0` : 'view:seeds:0',
@@ -699,21 +699,27 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       return { savedText: last(state), screen: render(state, `branch:${a}:${branch.id}`) };
     }
     let input = text;
+    // A lost move runs only here, on the reader's own press, and only where it was lost (lib/library.ts `LostMove`).
+    const lost = action === 'retry' ? lostMove(state) : undefined;
     if (verb === 'start') {
       requireGpu(t);
       const { story } = newStory(state, a, t.labels);
       // Sent to the model and kept as the scene's input, so it follows the language of the seed, not of the menus.
       input = storyNarration(state, story.id).startStory;
     } else if (action === 'continue') input = continueInput(state, active(state).story.id);
-    else if (action) throw refuse(t, 'staleButton');
+    else if (action === 'retry') {
+      if (!lost) throw refuse(t, 'nothingToRetry');
+      input = lost.input;
+    } else if (action) throw refuse(t, 'staleButton');
     if (!input) return { screen: { text: t.notices.textOnly } };
     if (!state.active) return { screen: render(state, 'home', pictureInfo) };
     requireGpu(t);
     state.ui = null;
     state.interrupted = false;
+    delete state.lostMove;
     const job = beginTurn(state, input, Date.now());
     // The reader wrote nothing, so the move is the narrator's; a story with a pace tells it so (local/prompt.ts).
-    if (verb === 'start' || action === 'continue') job.move = 'narrator';
+    if (verb === 'start' || action === 'continue' || lost?.move) job.move = 'narrator';
     return { job };
   }
 
@@ -1089,7 +1095,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         Object.assign(modelInfo, { status: 'unavailable', checkedAt: new Date().toISOString() });
       }
       log('generation_failed', failure.code, error);
-      const retry = job.kind === 'compact' ? '/compact' : '/continue';
+      const retry = job.kind === 'compact' ? '/compact' : '/retry';
       if (failure.operation === 'compact' && compactionStatus?.stage === 'failed') {
         if (!await finishStatus()) await pass(chat, renderCompaction(compactionStatus, language), log);
         return;
@@ -1134,6 +1140,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       const endStatus = () => { over = true; return status; };
       const outcome = await runTurn({ store, userId, job, provider, config: contextConfig, signal: controller.signal,
         prepared: preparedFor(userId), onProgress, log, labels,
+        operation: { settle: (state, result) => { if (!result.ref) keepMove(state, job); } },
         waiting: (ahead, etaMs) => {
           if (reading) return;
           const t = texts(store.read(userId).language), wait = t.wait;
@@ -1504,6 +1511,16 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
             inFlight.delete(task);
           });
         inFlight.add(task);
+      }
+    },
+    // Tells the readers whose job died with the last process (local/store.ts `recover`), once, with the button that
+    // repeats their move. Nothing runs again by itself.
+    async interrupted(userIds: string[]) {
+      for (const userId of userIds) {
+        if (!allowedUsers.has(userId)) continue;
+        const state = store.read(userId);
+        const chat = createChat(api, Number(userId), chats.get(userId) ?? chats.set(userId, chatMemory()).get(userId));
+        await safeSend(chat, { text: texts(state.language).notices.interrupted(lostMove(state) ? '/retry' : '/compact'), reply_markup: sceneKeyboard(state) }, logFor(userId));
       }
     },
     async idle() { await Promise.all([...inFlight, ...preparing, ...uploading.values()]); },

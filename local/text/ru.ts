@@ -57,6 +57,8 @@ export const ru = {
   buttons: {
     menu: '🏠 Меню',
     continue: '▶️ Продолжить',
+    // Under a failure and in the menu: runs the reader's lost move again (lib/library.ts `LostMove`).
+    retry: '🔄 Повторить',
     // Under a scene that is being written.
     stop: '✖️ Остановить',
     lastScene: '📄 Последняя сцена',
@@ -135,6 +137,9 @@ export const ru = {
     current: (story: string) => `📖 Сейчас: ${story}`,
     // `progress` is count.scenes with the world time, or common.noScenes.
     branch: (name: string, progress: string) => `🌿 Ветка ${name} · ${progress}`,
+    // `input` is the quoted move; the second is for a move the reader handed to the narrator.
+    lostMove: (input: string) => `🔄 Ход ${input} не стал сценой: что-то помешало. Его можно повторить.`,
+    lostNarratorMove: '🔄 Продолжение не написалось: что-то помешало. Его можно повторить.',
     // Names the Continue button.
     howToContinue: 'Чтобы продолжить, просто напиши сообщение: реплику, действие героя или указание автора. «Продолжить» — следующая сцена без указаний.',
     noStory: 'История не выбрана.',
@@ -885,6 +890,8 @@ export const ru = {
     gpuNotConfigured: 'Управление арендой GPU пока не настроено. /model покажет текущую модель.',
     // /gpu_start and /gpu_pause when simple-serving runs the card: the bot neither starts nor pauses it.
     modelServiceSeparate: 'Сервис модели запускается отдельно, не из этого чата. /model покажет текущую модель.',
+    // Once after a restart, to a reader whose job died with the last process. `command` is /retry or /compact.
+    interrupted: (command: string) => `Бот перезапустился, и работа над твоим запросом прервалась. Готовые сцены и чекпоинты сохранены. Повторить: ${command}.`,
     // A model service that is starting, asleep or out of reach. The bot cannot tell which, so it names none.
     modelUnavailable: 'Сервис модели сейчас недоступен. Продолжить историю можно, когда он снова заработает.',
     gpuPaused: 'GPU перешла на паузу. Открой /model и запусти её; затем отправь действие снова.',
@@ -914,6 +921,7 @@ export const ru = {
     busy: 'Уже выполняется генерация или сжатие. Дождись ответа или нажми /cancel, затем отправь сообщение снова.',
     busyNewSeed: 'Сцена уже пишется. Дождись ответа или нажми /cancel, затем создай сид.',
     staleButton: 'Кнопка устарела. Открой /menu.',
+    nothingToRetry: 'Повторять нечего: неудавшегося хода здесь нет. Просто напиши следующий.',
     staleConfirmation: 'Это подтверждение устарело. Открой удаление заново через /seeds.',
     gpuNotReady: 'GPU сейчас не готова. Открой /model: там можно запустить её или проверить состояние. Затем отправь действие снова.',
     unsupportedContent: 'В сообщении есть неподдерживаемое содержимое. Пришли сид или продолжение текстом без вложений. Ничего не сохранено.',

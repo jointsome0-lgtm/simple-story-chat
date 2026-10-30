@@ -39,7 +39,7 @@ function view(t: Messages, p: CompactionStatus) {
   const elapsed = duration(t, p.elapsedMs);
   const scenes = whole(p.scenes);
   const kept = whole(p.keptScenes);
-  const retry = c.retry(automatic ? '/continue' : '/compact');
+  const retry = c.retry(automatic ? '/retry' : '/compact');
 
   if (isStep(p.stage)) {
     const lines = [
@@ -79,11 +79,13 @@ function view(t: Messages, p: CompactionStatus) {
   if (p.stage === 'failed') {
     const reason = p.reason !== undefined && Object.hasOwn(c.reasons, p.reason) ? c.reasons[p.reason as keyof typeof c.reasons] : null;
     return payload([c.failed(elapsed), reason ? c.reason(reason) : null, c.safe, retry],
-      [[btn(b.context, 'view:context'), btn(b.model, 'view:model')]]);
+      automatic ? [[btn(b.retry, 'retry')], [btn(b.context, 'view:context'), btn(b.model, 'view:model')]]
+        : [[btn(b.context, 'view:context'), btn(b.model, 'view:model')]]);
   }
 
   if (p.stage === 'cancelled') {
-    return payload([c.cancelled(elapsed), c.safe, retry], [[btn(b.context, 'view:context'), btn(b.menu, 'view:home')]]);
+    // A cancel takes the move of an automatic compaction with it: there is nothing to repeat.
+    return payload([c.cancelled(elapsed), c.safe, automatic ? null : retry], [[btn(b.context, 'view:context'), btn(b.menu, 'view:home')]]);
   }
 
   // Unrecognised or missing stage: say nothing about progress and offer no cancel.

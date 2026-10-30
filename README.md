@@ -75,7 +75,8 @@ These pages keep the evidence and the reasons behind decisions. They are dated r
   a GPU with several compactions in a row is still unfinished. Switching between GPU instances is not implemented yet.
 - The seed, the accumulated memory or the last scenes kept whole can fill the window by themselves; in that case the
   bot stops and keeps the archive ([context and memory](docs/model-providers.md#memory-and-context)).
-- The computer and the process must stay on while the bot runs. An interrupted generation does not repeat by itself.
+- The computer and the process must stay on while the bot runs. An interrupted generation does not repeat by itself:
+  the reader's move is kept, and «🔄 Повторить» runs it again on their press.
 
 ## Privacy
 

@@ -17,7 +17,8 @@ import { texts } from './text.ts';
 // Where a committed scene lives.
 export type TurnRef = { storyId: string; branchId: string; nodeId: string; checkpointId: string };
 // A receipt kept next to the story change it describes. Both hooks run inside the Store transaction that begins or
-// ends the turn, so the receipt can never say a turn committed when it did not, or the reverse. The bot passes none.
+// ends the turn, so the receipt can never say a turn committed when it did not, or the reverse. The bot's own `settle`
+// keeps the move of a turn that failed (local/bot.ts).
 export type TurnOperation = {
   begin(state: Library, job: Job): void;
   settle(state: Library, outcome: { ref: TurnRef; error?: undefined } | { error: unknown; ref?: undefined }): void;
@@ -43,7 +44,7 @@ export async function runTurn({ store, userId, job, provider, config, signal, pr
   onProgress?: (status: CompactionStatus) => void; log?: Log; labels?: CompactionLabels;
   preview?: (state: Library, job: Job, request: ModelRequest) => GenerateControls['onText']; waiting?: (ahead: number | null, etaMs?: number) => void;
   // Called once the model has answered, before the scene is saved.
-  onGenerated?: (result: GenerationResult) => void; operation?: TurnOperation;
+  onGenerated?: (result: GenerationResult) => void; operation?: Pick<TurnOperation, 'settle'>;
 }): Promise<TurnOutcome> {
   try {
     // The model calls of the turn end with the scene; saving it needs no model.

@@ -35,7 +35,7 @@ type FixtureOptions = {
 // A log row as main.ts writes it: the event, a code and the allowed details.
 type Row = { event: string; code?: string | number } & ErrorDetails;
 // Fields of sent payloads that the tests read; each is present for the methods where it is read.
-type Payload = { chat_id: number; message_id: number; message_ids: number[]; text: string; rich_message: { markdown: string }; draft_id: number };
+type Payload = { chat_id: number; message_id: number; message_ids: number[]; text: string; rich_message: { markdown: string }; draft_id: number; reply_markup?: unknown };
 // A synthetic private message; tests may replace its chat or add rich content, a document or a caption.
 type MessageUpdate = Update & { message: NonNullable<Update['message']> & { chat: { id: number; type: string }; caption?: string } };
 // Summary requests carry their scenes as JSON in the first message.
@@ -437,6 +437,82 @@ test('a replay or a delivery failure never regenerates a completed scene', async
     await g.bot.handle(g.message(command));
     assert.equal(said(g.sent)!.payload.text, notice, command);
   }
+});
+
+test('a move that became no scene is kept for the reader to repeat, only on their press and only where it was lost', async t => {
+  let fails = false;
+  const f = fixture(t, { generate: async request => {
+    if (fails) throw new ModelError('provider_failed');
+    return { text: `2026-08-02 20:00\n\nСцена ${f.requests.length}.`, finishReason: 'stop', usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 } };
+  } });
+  const update = await f.start();
+  const lost = () => f.store.read(1).lostMove;
+  const asked = () => f.requests.filter(request => JSON.stringify(request.messages).includes('Мой потерянный ход')).length;
+  const buttons = () => JSON.stringify(sceneKeyboard(f.store.read(1)));
+
+  // A failure keeps the words and offers them under the failure; nothing runs them by itself.
+  fails = true;
+  await f.bot.handle(f.message('Мой потерянный ход'));
+  await f.bot.idle();
+  assert.equal(lost()?.input, 'Мой потерянный ход');
+  assert.ok(JSON.stringify(f.sent.at(-1)!.payload.reply_markup).includes('"retry"') && f.sent.at(-1)!.payload.text.includes('/retry'));
+  assert.equal(asked(), 1, 'a failed move is not run again by itself');
+
+  // A press runs the same words as the reader's own move, here not the narrator's; a second failure keeps them still.
+  await f.bot.handle(f.click('retry'));
+  await f.bot.idle();
+  assert.equal(asked(), 2);
+  assert.equal(lost()?.input, 'Мой потерянный ход');
+  fails = false;
+  await f.bot.handle(f.message('/retry'));
+  await f.bot.idle();
+  const state = f.store.read(1);
+  const story = Object.values(state.stories)[0];
+  assert.deepEqual([asked(), state.lostMove, Object.values(story.nodes).at(-1)!.input], [3, undefined, 'Мой потерянный ход']);
+  assert.ok(!buttons().includes('"retry"'));
+
+  // A scene the reader took another way past it leaves nothing to repeat there, and an old button says so.
+  fails = true;
+  await f.bot.handle(f.message('Мой потерянный ход'));
+  await f.bot.idle();
+  fails = false;
+  await f.bot.handle(f.message('Другой ход'));
+  await f.bot.idle();
+  assert.equal(lost(), undefined, 'the next move takes its place');
+  const before = f.requests.length;
+  await f.bot.handle(f.click('retry'));
+  await f.bot.idle();
+  assert.equal(f.requests.length, before, 'nothing to repeat');
+  assert.ok(f.sent.at(-1)!.payload.text.includes('Повторять нечего'));
+
+  // Stopping a scene is the reader's own word, and keeps nothing.
+  fails = true;
+  await f.bot.handle(f.message('Мой потерянный ход'));
+  await f.bot.idle();
+  const held = f.store.read(1).lostMove!;
+  f.store.mutate(1, state => {
+    delete state.lostMove;
+    state.job = { id: 'j900', storyId: held.storyId, branchId: held.branchId, head: held.head, memory: null, input: 'Ход на момент остановки', started: 0 };
+  });
+  await f.bot.handle(f.message('/cancel'));
+  assert.equal(lost(), undefined);
+
+  // A process that dies under a turn keeps the move too and runs nothing; the reader is told once, and a compaction has
+  // no move to keep.
+  f.store.mutate(1, state => { state.job = { id: 'j901', storyId: held.storyId, branchId: held.branchId, head: held.head, memory: null, input: 'Ход на момент смерти', started: 0 }; });
+  f.store.offset(update.update_id + 1);
+  const after = f.requests.length;
+  assert.deepEqual(reopened(f.path, store => store.read(1).lostMove?.input), 'Ход на момент смерти');
+  assert.equal(f.requests.length, after);
+  await f.bot.interrupted(['1', '77']);
+  assert.ok(f.sent.at(-1)!.payload.text.includes('/retry') && JSON.stringify(f.sent.at(-1)!.payload.reply_markup).includes('"retry"'));
+  assert.equal(f.sent.at(-1)!.payload.chat_id, 1, 'a reader off the access list is told nothing');
+
+  // A deleted story takes the reader's words with it.
+  await f.bot.handle(f.click(`view:delete-seed:${Object.keys(f.store.read(1).seeds)[0]}`));
+  await f.bot.handle(f.click(`remove-seed:${Object.keys(f.store.read(1).seeds)[0]}`));
+  assert.equal(lost(), undefined);
+  assert.ok(!JSON.stringify(f.store.read(1)).includes('Ход на момент смерти'));
 });
 
 test('a running job refuses another and /cancel keeps its late answer out; no status lands after the scene or a cancel', async t => {

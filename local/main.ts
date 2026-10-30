@@ -81,7 +81,7 @@ try {
   const webhook = await api('getWebhookInfo') as { url?: string };
   if (webhook.url) throw new Error('webhook_configured');
   store = new Store(config.dbPath);
-  store.recover(log);
+  const interrupted = store.recover(log);
   if (gpu) background = await serveBackground({ socketPath: config.dbPath + '.model.sock', scheduler,
     status: () => ({ model: config.model, contextTokens: config.contextTokens, gpu: gpu!.snapshot() }) });
   // Pictures under the scenes, if this computer has a second card tunnelled for them (docs/gpu.md#picture-card).
@@ -117,6 +117,7 @@ try {
     keepScenes: config.keepScenes, memoryMode: config.memoryMode, repairCoverage: config.repairCoverage, model: config.model, log });
   // Telegram shows the list that matches the language of the user's app, and the first, English one to everyone else.
   for (const commands of commandSets(!!gpu, !!illustrator)) await api('setMyCommands', commands);
+  await bot.interrupted(interrupted);
   log('bot_ready');
   // This is bot processing, not a developer transcript export. Only authorized
   // private chats reach storage; no incoming text is printed or logged.

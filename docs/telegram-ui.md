@@ -43,6 +43,14 @@ does the same in every registered language.
   context and menu. /last shows the saved scene without generating it again. A reply that hit the output token limit
   is saved as it came, and a separate message says that it may be cut off. The narrator's rules ask for at most 12
   paragraphs; the bot does not cut a longer scene.
+- **A move that became no scene:** the owner's list of 2026-10-30, after «Повторить: /continue» had been offering the
+  narrator's move in place of the reader's. A scene turn the model failed, and one the process died under, leave
+  their words in `Library.lostMove` with the story, branch and scene they were made at. «🔄 Повторить» ("Try again",
+  `retry`, also /retry) stands first under the failure, under the scene keyboard and in the menu for as long as the
+  reader stands at that place, and runs those words again as the same move, the reader's or the narrator's. Nothing
+  runs them by itself. The reader's next move takes their place, /cancel keeps nothing, and a deleted story takes them
+  with it. After a restart each reader whose job died gets one message with that button, before the bot reads its
+  first update; a compaction that died is told the same way, with /compact.
 - **Browse:** the seeds, a seed's stories, a story's branches and a branch, 8 to a page. Opening a screen changes
   nothing in the story and generates nothing.
 

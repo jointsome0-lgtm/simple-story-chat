@@ -1,6 +1,7 @@
 // Telegram interface for simple-story-chat: pure functions from a user's library to sendMessage payloads.
 // Plain text only (no parse_mode), inline keyboards, callbacks <= 64 UTF-8 bytes.
 
+import { lostMove } from '../lib/library.ts';
 import type { Branch, Checkpoint, Library, Pace, SceneNode, Story } from '../lib/library.ts';
 import type { ContextStats } from './context.ts';
 import type { GpuStatus } from './gpu.ts';
@@ -122,6 +123,7 @@ export function sceneKeyboard(state: Library | null | undefined): InlineKeyboard
   if (!ref) return undefined;
   const { story, branch } = ref;
   return keyboard([
+    lostMove(state) ? [btn(b.retry, 'retry')] : null,
     [btn(b.continue, 'continue'), btn(b.context, 'view:context'), btn(b.model, 'view:model')],
     [btn(b.checkpoints, `view:checkpoints:${story.id}:${branch.id}:0`), btn(b.branches, `view:story:${story.id}`), btn(b.menu, 'view:home')],
   ]);
@@ -211,6 +213,11 @@ function home(state: State, note: string | null, modelInfo: ModelInfo | null | u
     const { story, branch } = ref;
     lines.push(t.home.current(storyName(state, story)), t.home.branch(quote(t, branch.name), progress(t, story, branch)));
     if (!state.job) {
+      const lost = lostMove(state);
+      if (lost) {
+        lines.push(lost.move ? t.home.lostNarratorMove : t.home.lostMove(quote(t, lost.input, 80)));
+        rows.push([btn(t.buttons.retry, 'retry')]);
+      }
       lines.push('', t.home.howToContinue);
       rows.push([btn(t.buttons.continue, 'continue'), branch.head ? btn(t.buttons.lastScene, 'last') : null]);
     } else if (branch.head) {

@@ -39,20 +39,22 @@ const stored: Library = {
 };
 const payload = JSON.stringify(stored);
 
-test('a stored v1 library is read and saved unchanged, and recovery only marks its pending job', t => {
+test('a stored v1 library is read and saved unchanged, and recovery only marks its pending job and keeps its move', t => {
   const store = new Store(':memory:');
   t.after(() => store.close());
   store.db.prepare('INSERT INTO libraries VALUES (?, ?)').run('1', payload);
   assert.equal(JSON.stringify(store.read('1')), payload);
   store.mutate('1', () => {});
   assert.equal(store.db.prepare('SELECT payload FROM libraries WHERE user_id = ?').get('1')!.payload, payload);
-  store.recover();
-  assert.deepEqual(store.read('1'), { ...structuredClone(stored), job: null, interrupted: true });
+  const { storyId, branchId, head, input } = stored.job!;
+  const recovered = { ...structuredClone(stored), job: null, interrupted: true, lostMove: { storyId, branchId, head, input } };
+  assert.deepEqual(store.recover(), ['1']);
+  assert.deepEqual(store.read('1'), recovered);
   // A library from before the language choice has none, like a new one, and a chosen language is stored with it.
   assert.equal(store.read('1').language, undefined);
   assert.equal(store.read('2').language, undefined);
   store.mutate('1', state => source.setLanguage(state, 'ja'));
-  assert.deepEqual(store.read('1'), { ...structuredClone(stored), job: null, interrupted: true, language: 'ja' });
+  assert.deepEqual(store.read('1'), { ...recovered, language: 'ja' });
 });
 
 // The versions of a person's look sit on the scenes (local/picture-versions.ts): nothing else holds them, so a save that

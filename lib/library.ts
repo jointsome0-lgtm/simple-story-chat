@@ -164,6 +164,13 @@ export type Job = {
   // input is the reader's own message, the hero's move. Only a story with a pace tells the narrator which it is.
   move?: 'narrator';
 };
+// Where the reader stands in a story: a branch and the scene it had reached.
+export type Place = { storyId: string; branchId: string; head: string | null };
+// The move of a turn that ended without a scene: the model failed, or the process died under it (`keepMove`). The
+// reader's words outlive the turn and nothing runs them again by itself: «🔄 Повторить» offers them for as long as the
+// reader stands where they stood (`lostMove`), and their next move takes their place. A story's deletion takes them.
+// Only the local bot writes it.
+export type LostMove = Place & { input: string; move?: 'narrator' };
 // New drafts always have draftId and parts, but bot.ts and ui.ts also accept a stored draft without them;
 // keep those fallbacks for older or incomplete v1 data.
 export type SeedDraft = { input: 'seed'; draftId: string; parts: string[]; confirm?: undefined };
@@ -230,7 +237,7 @@ export type Library = {
   active: { storyId: string; branchId: string } | null; job: Job | null;
   ui: SeedDraft | DeleteConfirmation | StyleInput | PromptInput | LookInput | ReferenceInput | PoseSetInput | PortraitPromptInput | ProfileInput | null;
   seen: number[];
-  interrupted?: boolean; language?: Language;
+  interrupted?: boolean; language?: Language; lostMove?: LostMove;
   // The look of this reader's pictures: a preset's key or the id of one of their own styles, and those styles. Only
   // the local bot reads them (local/picture-style.ts), and only for a reader it draws for; without a choice the bot's
   // own style is used.
@@ -361,6 +368,19 @@ export function beginJob(state: Library, input: string, now: number): Job {
   return job;
 }
 
+// Keeps the move of a scene turn that is about to end without a scene. A compaction has no move to keep.
+export function keepMove(state: Library, job: Job): void {
+  if (job.kind === 'compact') return;
+  state.lostMove = { storyId: job.storyId, branchId: job.branchId, head: job.head, input: job.input, ...job.move ? { move: job.move } : {} };
+}
+
+// The lost move the reader can repeat where they stand now, if there is one.
+export function lostMove(state: Partial<Library>): LostMove | undefined {
+  const lost = state.lostMove;
+  if (!lost || state.active?.storyId !== lost.storyId || state.active.branchId !== lost.branchId) return undefined;
+  return state.stories?.[lost.storyId]?.branches[lost.branchId]?.head === lost.head ? lost : undefined;
+}
+
 export function jobTarget(state: Library, jobId: string) {
   const job = state.job;
   if (job?.id !== jobId) return null;
@@ -425,6 +445,7 @@ export function deleteBranch(state: Library, storyId: string, branchId: string):
   if (!Object.keys(story.branches).length) delete state.stories[storyId];
   if (state.active?.storyId === storyId && state.active.branchId === branchId) state.active = null;
   if (state.job?.storyId === storyId && state.job.branchId === branchId) state.job = null;
+  forgetLostMove(state);
   state.ui = null;
 }
 
@@ -437,7 +458,14 @@ export function deleteSeed(state: Library, seedId: string): void {
     delete state.stories[story.id];
   }
   delete state.seeds[seedId];
+  forgetLostMove(state);
   state.ui = null;
+}
+
+// The reader's words go with the story they were written for.
+function forgetLostMove(state: Library): void {
+  const lost = state.lostMove;
+  if (lost && !state.stories[lost.storyId]?.branches[lost.branchId]) delete state.lostMove;
 }
 
 // The checkpoint that holds the bookmark of the scene `head`, if the reader keeps one. Every checkpoint of a scene opens
