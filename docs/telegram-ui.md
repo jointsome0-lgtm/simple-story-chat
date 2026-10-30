@@ -17,9 +17,10 @@ does the same in every registered language.
 ## User paths
 
 - **First run:** /start shows an empty menu that explains what a seed is. «➕ Новый сид» ("New seed") opens the
-  instructions with a sample, the user sends the seed in one or more parts and gets a receipt after each, and
-  «💾 Сохранить сид» ("Save seed", `save-seed:<draftId>`) creates the seed and shows its screen. No scene is written
-  until «▶️ Начать новую историю» ("Start a new story") there.
+  instructions with a sample, the user sends the seed in one or more parts and gets a receipt after each, which takes
+  the place of the one before ([passing messages](#passing-messages)), and «💾 Сохранить сид» ("Save seed",
+  `save-seed:<draftId>`) creates the seed and shows its screen. No scene is written until «▶️ Начать новую историю»
+  ("Start a new story") there.
 - **Seed draft** (`state.ui = {input:'seed', draftId, parts}`): the receipt says the draft is not saved yet, gives the
   part count and the characters of the parts joined with blank lines (never tokens), and says that no scenes are
   written, now or on save. It never shows draft text: no title, date, body or filename. The backend's seed parser
@@ -45,6 +46,42 @@ does the same in every registered language.
 - **Browse:** the seeds, a seed's stories, a story's branches and a branch, 8 to a page. Opening a screen changes
   nothing in the story and generates nothing.
 
+<a id='pace'></a>
+
+### Story pace
+
+The tester asked for it and the owner approved it on 2026-09-29. «⏱ Темп: …» ("Pace") on the menu
+(`view:pace:<storyId>`) picks the pace of the current story (`pace:<storyId>:<moment|scene|chapter>`), kept as
+`Story.pace`:
+
+- «⚡ Миг» ("Moment"): up to 15 minutes a turn, in at most 4 paragraphs against the rule's 12. The narrator shows how
+  the hero makes the written move and what came of it, adds no line, decision or action of the hero's, and stops at
+  the nearest point where the hero has to answer, choose or act.
+- «🎬 Сцена» ("Scene"): the default and the bot as it was. A story without a pace, in an older library too, has it.
+- «🗓 Глава» ("Chapter"): hours to days a turn, told briefly, stopping only at an important fork.
+
+The pace can change at any moment, also while a scene is being written, and counts from the next scene request, so a
+story's first scene is always at «Сцена». Under «Миг» and «Глава» a written message is the hero's move: the narrator
+shows what came of it and how the world answers, and makes no further decision for the hero (the owner's rule of
+2026-09-29). «▶️ Продолжить», /continue, the start of a story and an empty `act` of the agent interface hand the move
+to the narrator (`Job.move = 'narrator'`), which may then move the hero itself; under «Миг» by one small step, the
+most obvious continuation of what the hero is already doing. The pace reaches the model as one clause in the story's
+language (`Narration.pace` in `local/story-text/`), after the narrator's rule in the last message. The system prompt,
+the memory call and every request of «Сцена» stay as they were: a dry run with a fake model, with written messages,
+«Продолжить», /continue, compaction and a fork, showed them byte for byte those of 6cf7206. A scene's header is when
+the scene starts, so after a «Глава» turn the menu's world time and the next request's reference time stay at that
+turn's start.
+
+On 2026-09-30 the owner raised Moment's limit from 5 to 15 minutes. The probe below used the earlier limit.
+
+~/simple-story-chat-runs/2026-09-29/pace/probe.mts measured the clauses on 2026-09-29, with Gemma 4 31B writing 4
+synthetic stories of 4 turns and a blind GPT-6 Sol judging them, against criteria fixed before the data (its
+notes.md). «Глава» keeps its time scale and stops at a fork, but decides for the hero after 7 of 8 written moves.
+«Миг»'s first wording failed, and the owner rewrote it the same day. The rewrite passes the length, time and technical
+criteria and decides for the hero after 1 of 8 written moves. It still stops where the hero must act in only 7 of 16
+turns, against the 14 asked, and after «Продолжить» it decides 3 to 5 things for the hero in 5 of 8 turns, against at
+most 2.
+
 <a id='branching'></a>
 
 ### Branches and the story tree
@@ -59,6 +96,33 @@ does the same in every registered language.
   truncated scene) and the first words of the author's input. Each scene opens its checkpoint preview, where
   «🌿 Продолжить отсюда» forks.
 
+<a id='bookmarks'></a>
+
+- **Bookmarks:** the tester asked for them and the owner approved the scope on 2026-10-28. A scene's checkpoint
+  preview has «🔖 В закладки» ("Add to bookmarks", `mark:<storyId>:<checkpointId>`), which keeps that scene with a label of
+  the story, the branch, the scene's number on its line and its world time, written in the interface language of the
+  moment and never translated afterwards. A scene already kept says «🔖 Эта точка в закладках.» and offers
+  «🗑 Убрать закладку» ("Remove bookmark", `unmark:…`) instead, on every checkpoint of that scene. The menu's
+  «🔖 Закладки» ("Bookmarks", `view:bookmarks:<page>`) lists them across all stories, newest first, 8 per page; each
+  opens its preview, whose way back leads to the page of the list it came from
+  (`view:checkpoint:<storyId>:<checkpointId>:b<page>`). Opening a
+  bookmark switches neither the story nor the branch; only «🌿 Продолжить отсюда» does, as from any preview. Keeping
+  or removing one changes nothing a scene request reads, so both stay available while a scene is being written.
+- **Branches from here:** the same preview has «⚖️ Ветки отсюда» ("Branches from here",
+  `view:forks:<storyId>:<checkpointId>:<b<page>|c>:<page>`) when a branch goes on past its scene: every branch whose line
+  passes through that scene and goes on, grouped by the scene that follows, each group with that scene's number, world
+  time and first words as «📜 Сцены ветки» shows them, and each branch with its name and progress. From a story's
+  start it is every branch with a scene. A branch opens its scenes; 8 branches to a page.
+- **How a bookmark is kept:** as `Checkpoint.bookmark` (`{label, at}`) on the checkpoint it was saved from, since
+  only a checkpoint can be opened and forked from. It names that checkpoint's scene. Several checkpoints may name one
+  scene (its own, a fork made from it, a compaction after it), every one of them shows the bookmark, and one at most
+  holds it. Deleting a branch takes its checkpoints; a bookmark on one of them moves to a checkpoint of the same scene
+  that stays, one with the same memory where there is one, and goes only when none is left. A scene that stays only
+  as the history of another branch has no checkpoint, opens from no screen and keeps no bookmark. A deleted seed or
+  story takes its bookmarks with it, and both delete confirmations count the bookmarks they take. A build from before bookmarks reads and writes the field as it is and loses it
+  only with its checkpoint, so going back to it loses at most the bookmarks that would have moved; a bookmark on a
+  checkpoint whose scene or branch is gone is not shown.
+
 Stories made from the same seed share its title, so they are called «История N» (by creation order) within that seed.
 
 <a id='deletion'></a>
@@ -69,6 +133,83 @@ Stories made from the same seed share its title, so they are called «Истор
   - Every photo the bot sends, a scene's own picture, every sample, every variant and every portrait, is recorded in the library as `sentPictures`: its story, scene, message and the time it was sent. A portrait has no scene and goes with its story (see Characters). So is the prompt folded under a picture (see Picture styles), and the text folded under a portrait, with its story. Telegram lets a bot delete its own message for 48 hours only, so every write drops the older entries and keeps at most the newest 1000.
   - Once the screen after the deletion is out, the bot deletes the pictures whose scene or story is gone, 100 to a `deleteMessages` call, and message by message when a call fails. The reader is told nothing more: whatever Telegram answers, the screen stays as it is. A deleted branch takes only the pictures of the scenes that no other branch has.
   - A picture whose scene is deleted while it is being drawn is not sent, and one already on its way is deleted as soon as it lands.
+  - A deleted branch takes the bookmarks of the scenes no other branch's checkpoint names ([bookmarks](#bookmarks)).
+
+<a id='passing-messages'></a>
+
+## Passing messages
+
+The owner, 2026-10-30: «сделать некоторые сообщения изчезающими, что бы они не копились». A message the bot sends for
+the moment goes once it has done its job, and every other message stays (`createChat` in `local/telegram.ts`, the end
+of `handle` in `local/bot.ts`).
+
+- **What stays:** every scene, also one shown again (/last, a switch of branch, a fork), every photo and the note under
+  it, the message that counts a pose set's pictures, the notices that a scene may be cut off or that its delivery is unconfirmed, the failure of a scene or a job told
+  with the scene's own keyboard (it may be the one Continue in the chat), a person's card and profile, the reader's own
+  messages, and whatever the bot sent before it last started. The bot never deletes these or writes over them; only the
+  newest scene keeps its keyboard (below). A card or a profile goes out as a message of its own (`lasting` in
+  `local/bot.ts`), also when a button under a list, a card or a profile opened it, and so does every screen opened from
+  its buttons, Back included: a reader may want to read a card or a profile again. A card that a retelling's status line
+  turns into stays as well. If Telegram does not answer that edit, the line may have become the card, so it stays too
+  and the card is sent again; only an edit Telegram refused lets the line go. A scene's pictures still leave the chat
+  with their scene ([deletion](#deletion)).
+- **Screens:** a menu, a list or a wait opened by a button takes the place of the message the button is under, edited in
+  place, so browsing leaves one message and not one per press. The edit is asked for also when the screen looks the same
+  (Refresh): Telegram refuses it either way, and only its answer tells a message that shows that screen already, which
+  then stands for it, from one the reader deleted, when the screen is sent anew and the old one becomes a notice. A
+  screen opened by a command or a text message, or by a button under a scene, a photo or a note, is a message of its
+  own. When a scene goes out with the screen (switching to a branch, continuing from a checkpoint), the screen goes
+  below the scene and the one pressed is deleted. The wait for a profile sent back goes out below the profile, whose
+  block it asks for, and so does a profile that has changed since, which says it was sent above.
+- **Delivery first:** what answers an update (the scene shown again, the screen) goes out before anything is deleted,
+  and the deletions then run in the background: neither the update nor a scene it starts, nor any other reader's update,
+  waits for Telegram to answer them. A message on its way out is no longer written over: a button pressed on it answers
+  with a message of its own. When Telegram does not take the answer (a rate limit, a chat closed to the bot, the
+  network) nothing is deleted at all: the update is committed by then, and the screen pressed is how the reader asks
+  again. An answer that does not get out leaves everything in place and is logged, as before the passing messages: a
+  screen as `telegram_send_failed`, a scene shown again (/last, a switch of branch, a fork) as
+  `saved_scene_delivery_unconfirmed`, with no notice, since /last asks for it again. Only a new scene that does not get
+  out is followed by the notice that its delivery is unconfirmed, with /last, as before.
+- **Waits:** the screen of a wait (a seed draft, a style, a prompt, a description or a look, a profile, a picture of a
+  person, a pose set) or of a delete confirmation goes once the wait is over: the text it asked for arrived, a button or a command
+  ended it, or another wait began. A wait's newer screen sent as a message of its own takes the place of the earlier
+  ones but its first: a seed draft keeps the instructions with the example, and only its newest receipt.
+- **Notices** go with the reader's next message or button, once its answer is out: a message without buttons (a
+  refusal, an unknown command, a stale button, a limit, «busy»), the failure of a compaction told without Continue, a
+  compaction's status once it is over, a picture's failure line, and the confirmation that a portrait or a picture
+  was kept or a profile saved. A notice whose own button opened a screen in its place is that screen from then on. A
+  status line at work (a compaction's, a picture's, the retelling's) is never deleted from under it, and a picture's
+  goes once its photo is there, as before. A failure written into a status line becomes a notice only once the edit is
+  done, so an update arriving meanwhile cannot take it away unread.
+- **Scene keyboards:** only the newest scene keeps its buttons. The scene before it loses them when the next scene, or
+  a scene shown again, goes out (`editMessageReplyMarkup`): they act on the branch being played, so «▶️ Продолжить»
+  under an older scene continued the branch and not that scene. Each scene goes out at once, as before the passing
+  messages, with its keyboard built right before its own send (`final`); none waits for another, so a slow or hanging
+  send holds up nothing. The newest by message id, which Telegram gives a chat's messages in the order it takes them,
+  holds the buttons: a scene answered after a newer one took them over loses its own instead. A scene sent after the
+  reader moved to another story or branch goes out without buttons, since they would act on that other branch, and
+  one the reader left while it was on its way takes nothing over once it is out and loses its own, whatever its id:
+  the scene of the branch the reader is on keeps its buttons. Ids are compared only within one story and branch: the
+  bot remembers the story and branch of the scene that holds the buttons, and a scene of the reader's branch takes
+  them from a scene of another one whatever their ids. A
+  scene shown again while the next one is written gets the keyboard of that moment (Stop), takes nothing over and is
+  never stripped: the scene before it keeps its Continue, for a job cancelled or failed without a new scene, and the
+  Stop under the scene shown again stays, as before the passing messages. A new scene always gets the usual keyboard,
+  Continue, and takes the buttons over, also when it goes out while the reader's next job already runs, so that it
+  keeps Continue if that job is cancelled or fails.
+  Known limit: a scene's buttons act on the current branch, as before the passing messages, and in a rare race (a
+  removal Telegram refuses or loses, a restart) an older scene can keep them. Binding the buttons to their story and
+  branch would change their callback data, and is left for later.
+- **Memory:** which messages are passing is kept in memory per chat, at most the newest 200, and never in the library.
+  After a restart what was sent before it stays as any message does, and a button pressed on such a screen answers with
+  a message of its own. Telegram lets a bot delete a message for 48 hours only; an older one stays, and a deletion
+  Telegram refuses is not told. A passing message is forgotten only once it is deleted or Telegram has it no more; one
+  a rate limit, a closed chat or the network kept is tried again with the next tidying.
+- **The guard:** the tidying deletes only the ids the chat recorded when it sent them as passing (`tidy`), and a screen
+  takes the place only of such a message (`put`). Scenes, photos, notes and the messages that stay go out through
+  calls that record nothing; `telegram.test.ts` checks that whatever the bot asks, none of them is deleted or written
+  over. Not checked against live Telegram: the edits in place, `deleteMessages` on these messages, and the keyboard
+  removed from a rich message.
 
 <a id='picture-delivery'></a>
 
@@ -93,12 +234,20 @@ the access list ([the settings](setup.md#pictures)). For such a reader every sce
 4. The prompt is assembled in code, and ComfyUI on the picture card draws it through the loopback tunnel with the
    story's seed, derived from the story id, so one story keeps one visual family and a redraw repeats.
 5. The PNG is stripped of its text chunks, which hold the whole prompt and workflow (`stripPngMetadata` in
-   `local/image-batch.ts`), and the photo goes out as a reply to its scene, with no caption. The status line goes once
-   the photo is there, and the prompt follows it, folded ([the prompt under a picture](#picture-prompts)).
+   `local/image-batch.ts`), and the photo goes out as a reply to its scene, captioned with the model that drew it,
+   «🎨 Qwen-Image 2.1». The status line goes once the photo is there, and the prompt follows it, folded ([the prompt
+   under a picture](#picture-prompts)).
 6. One `picture` row records the outcome ([the log](gpu.md#bot-log)).
 
+Every photo the bot draws, a sample's, a variant's and a portrait's too, ends its caption with that line, as of
+2026-10-28 at the owner's request. The name is read from the graph that was submitted: the file of the loader the
+sampler's model comes from, by a published name for the files this base knows and by its base name otherwise, with each
+step-distillation LoRA on that way at a strength other than 0 after it (`pictureModelOf` in `local/image-batch.ts`). A
+way that cannot be followed, or a caption the line would take past 1024 characters, leaves the caption without it.
+
 A failure or a busy card leaves the story exactly as it was. The status line is rewritten to one line only when the
-picture really failed: a reader who has moved on gets no apology. The reader's next message and `/cancel` stop a
+picture really failed: a reader who has moved on gets no apology, and that line goes with the reader's next message or
+button ([passing messages](#passing-messages)). The reader's next message and `/cancel` stop a
 picture in flight. Moving around the menus does not, and there is no cancel button, because by then the job lock is
 clear. Every photo is recorded with its scene and leaves the chat with it ([deletion](#deletion)). What the card keeps
 of a picture, and for how long, is in [gpu.md](gpu.md#what-the-card-keeps-of-a-picture); why pictures are made this
@@ -356,11 +505,120 @@ a recipe chosen on purpose, and is now in plain sight under every portrait, and 
 
 A reader in the [reference experiment](setup.md#pictures), the owner or a tester named for it, may give a person a picture of their own (the owner, 2026-09-27: «мы можем просто добавить фичу менять на свой портрет?»). Nobody else has the button, and their cards, frames and files are as they were.
 
-- **Own portrait:** beside «🖼 Портрет» the card has «📎 Свой портрет» ("Own portrait", `ref-send:<storyId>:<index>:<tag>:front`). It waits half an hour for one picture of the person, sent as a photo or as a PNG, JPEG or WebP file of at most 10 MB, and says what it takes: a drawing, never a photo of a real person, whose shorter side is at least 320 pixels and whose longer side is at most 4096 and at most 2.5 times the shorter (`REFERENCE_SIDES` in `local/reference.ts`). Text meanwhile is answered with what the wait is for, and a button or a command, ↩️ and /cancel among them, ends it. Nothing is downloaded after the half hour or for a reader who lost access; a size Telegram declares over 10 MB is refused before the download, which is a seed file's, in memory and never on the disk (`downloadFile` in `local/seed-file.ts`).
+- **Own portrait:** beside «🖼 Портрет» the card has «📎 Свой портрет» ("Own portrait", `ref-send:<storyId>:<index>:<tag>:front`). It waits half an hour for one picture of the person, sent as a photo or as a PNG, JPEG or WebP file of at most 10 MB, and says what it takes: a drawing, never a photo of a real person, whose shorter side is at least 320 pixels and whose longer side is at most 4096 (`REFERENCE_SIDES` in `local/reference.ts`). A picture whose longer side is over 2.5 times the shorter was refused until 2026-09-28; since the owner's decision that day it is kept, and each frame's graph pads it to 2.5 with grey along its long sides on the card, where any other picture's graph is as it was (`referencePad` in `local/picture-references.ts`). Text meanwhile is answered with what the wait is for, and a button or a command, ↩️ and /cancel among them, ends it. Nothing is downloaded after the half hour or for a reader who lost access; a size Telegram declares over 10 MB is refused before the download, which is a seed file's, in memory and never on the disk (`downloadFile` in `local/seed-file.ts`).
   - A file is the format its first bytes say, whatever its name or type. The picture is not decoded and encoded again: it is taken apart by its format's structure and put together from the parts a picture needs — a PNG's critical chunks, a baseline or progressive JPEG's frame, tables and scans, a still WebP's pixels — so EXIF with the place and the camera, XMP, ICC profiles, text chunks, comments, thumbnails and whatever follows the picture's end all go. A file that walk does not get through is refused, as is an animation, an archive or a picture outside those sides, each with a short message in the reader's language, and the wait stays open for another. A caption in English is kept beside the picture, and any other is not.
   - The picture is kept in its own format beside the portraits, `<db>.portraits/<directory>/<random>.<png|jpg|webp>`, with a kept portrait's modes, rollback and sweep. The sheet refers to it as the person's front pose (`poses.front`: its file, format, size in pixels and time, `source: 'own'` and `pinned`), which stands over the kept portrait: the card names it the reader's own with its size, and frames take it where they took the portrait (`frameFile` in `local/picture-references.ts`). The drawn portrait stays under it, and keeping a newly drawn portrait takes the front back. The confirmation is a kept portrait's, with its line on retention. A frame's recipe pins the file and its hash as it pins a portrait's, so a replaced picture stays on the disk while a variant or a redraw needs it, and is swept once nothing refers to it.
   - A frame takes every reference at its own shape and never stretches it to another: the size its file's header gives is scaled to about the area of 352x640, the shorter side rounded to a multiple of 32 first and the longer following it (`referenceScale`). The bot's portraits of 720x1280 come out at 352x640 as before, a square picture at 480x480, a 3:4 one at 416x544 and a 16:9 one at 640x352.
-  - `reference_saved` logs how the picture came (`referenceSent`: `photo` or `document`), its format, its pose (`referencePlace`), the bytes sent and the bytes stripped, and its width and height; `reference_refused` logs the reason alone (`referenceRefusal`: `type`, `broken`, `small`, `huge`, `shape`, `too_large`, `incomplete` or `archive`). Neither has a name, a caption or a file name.
+  - `reference_saved` logs how the picture came (`referenceSent`: `photo` or `document`), its format, its pose (`referencePlace`), the bytes sent and the bytes stripped, and its width and height; `reference_refused` logs the reason alone (`referenceRefusal`: `type`, `broken`, `small`, `huge`, `too_large`, `incomplete` or `archive`, and in rows from before 2026-09-28 `shape`). Neither has a name, a caption or a file name.
+
+<a id='pose-set'></a>
+
+### Pose sets
+
+The tester, 2026-09-28, through the owner: about 80 pose pictures of one character, unsorted, to be put in as they are, since a LoRA is too dear to train. A reader named in `SIMPLE_CHAT_POSE_SET_USERS` ([setup](setup.md#pose-sets)), which takes only readers of the reference experiment and is empty by default, may give a person a set of pictures, and each frame then takes the one whose pose fits. The set works only while the reader's frames take references at all and while the story model is our own, `llama-cpp` or `simple-serving`, since the captions go into each frame's request. With the list empty every screen, request, graph, Telegram call and log row is as before (dry runs against 71a159f and against 101690f, below). The code is `local/pose-set.ts`, `local/pose-archive.ts` and `captioner/caption.py`.
+
+- **Upload:** the card has «🗂 Картинки поз» ("Pose pictures", `pose-set:<storyId>:<index>:<tag>`). It waits for pictures of the person, one by one or in albums, as photos or PNG, JPEG or WebP files, and takes each as «📎 Свой портрет» takes one ([references](#references)): a drawing and never a photo of a real person, the same sides and 10 MB, the same walk that strips the metadata, and an animation or a file that walk does not get through refused; a ZIP archive is read as below. One more drawn out than 2.5 to 1 is kept and padded with grey in each frame's graph, as an own portrait is. A set holds 200 pictures and 600 MB, and all of a reader's sets together 1 GB (`POSE_SET_PICTURES`, `POSE_SET_BYTES`, `POSE_SET_READER_BYTES`), as the owner set them on 2026-09-29 for the tester's 50 and more drawings of a character; they were 100, 300 MB and 600 MB before. A picture past a limit is refused, and the set stays as it is.
+  - A photo or a file is not read in the update that brought it. It goes into the reader's queue (`poseUploads` in their library) as Telegram described it, in the write that marks the update handled, and the update ends there (`queuedPoseUpload`). Each reader's queue is read apart from the updates, one file at a time in the order they came (`uploadNext`), and two files at most at once across readers (`READS_AT_ONCE`), so that the downloads of an album or an archive hold up nobody's requests, the owner's among them: the poll loop hands the updates over one by one, and it used to wait while each picture was downloaded inside its update. A file leaves the queue in the write that keeps its pictures, so a stop or a restart halfway reads it again and keeps it once, and the next start reads what was left, for a reader who has pose sets then; for one who has not, the queue waits unread. A file gets 45 s once its turn comes (`UPLOAD_MS`), Telegram's answer with its path included: after that its read is cut short, the question to Telegram or the download with it, and the file is refused as `incomplete`. A stop cuts short the read under way the same way, and its file stays queued. A queue as long as a set can be takes no more: the next file is refused as `full`, unread, and starts the queue's reading again if a write that failed had stopped it. A file whose set was removed meanwhile goes with it, and one whose person left the story's sheet is dropped; a person is known by their name apart from spaces and case, as a sheet written again knows them, so a name spelled anew keeps its files.
+  - No picture gets a message of its own, since an album of forty would be forty messages. One message counts them as they are read, sent at the first and edited at most every five seconds: «Принято: 12. Не принято: 2 (слишком мала: 1, не картинка: 1). В наборе 12 из 200.», with «✅ Готово» (`pose-set-done:…`) under it. That button, any other, a command, or half an hour after the last file (`POSE_SET_WAIT_MS`) ends the wait. The message then says the captions come in the background; while files sent in the wait are still being read, it says how many and that its last word is to come, «Ещё загружаются: 3. … Дозагружаю присланное; итог появится в этом сообщении.», with the card's button under it, and it gets that word with the last of them. Text meanwhile is answered with what the wait is for. The count is kept in memory, one a wait: after a restart the next file read starts a new one.
+  - Each picture is kept as a picture of the reader's own is, `<db>.portraits/<directory>/<random>.<png|jpg|webp>`, with its rollback and sweep, and the sheet lists it in the person's `poseSet` with its format, size in pixels, bytes and time, and later its caption. A sheet written again keeps the set, and a person with one whom the new sheet lost.
+- **Archives:** the tester keeps a character's drawings sorted, and labels them in a table (the owner, 2026-09-29), so the wait takes a ZIP archive as well (`local/pose-archive.ts`), from a reader on the list alone; for anybody else, and in the wait for an own portrait, an archive is refused as before. An archive may weigh 20 MB (`ARCHIVE_BYTES`), the most the Bot API lets a bot download: one Telegram declares larger is refused before a byte is fetched, with a message to split it. It is read in memory and never unpacked on the disk, its entries stored or deflated, each inflated never past the size its directory declares and checked against it and its CRC. It is refused whole, with a message of its own, when it is encrypted (`encrypted`), ZIP64, in parts or packed another way (`unsupported`), broken (`broken`), holds more than 200 files besides labels.csv (`files`, `ARCHIVE_FILES`), has a path out of it, by `..`, a leading `/` or a drive (`unsafe`), or is a bomb (`bomb`): entries that share their bytes, or that would unpack to more than 100 MB together. Directories, `__MACOSX` and names that start with a dot are skipped; a `./` before a name, which some tools write before every name, is the archive's own folder and hides nothing. Every other file is a picture sent alone: the same walk, sides and padding, 10 MB checked on its declared size before it is unpacked, the same limits and the same count, with its refusal's reason; an archive inside is refused as `archive` and never opened, and an entry of more than 64 KiB that says it unpacks to more than 20 times its packed size, which no PNG, JPEG or WebP does, is refused as `type` and never unpacked, so that one bomb, or one uncompressed file among the pictures, costs itself alone. Each picture is read in a turn of the event loop of its own, so that an archive holds the bot, and every reader's updates with it, no longer than one of its pictures does, and a read cut short, at its deadline or by a stop, ends between two pictures as a download cut short ends; and its walk goes through 16,384 chunks or segments at most (`ARCHIVE_PICTURE_PARTS`), where a PNG of 10 MB has 1,280 in the 8 KiB chunks libpng writes and 4,096 at most written a row a chunk, so that one made of empty chunks is refused as `broken`. Each picture is kept under a name of the bot's own; the names inside serve only to match labels.csv's rows, and nothing is ever written under them. An archive's pictures are kept in one library write, the one that takes it out of the queue, so a restart halfway keeps none of them, and the next start reads it again.
+  - **labels.csv**, at the archive's root or in the one folder that holds everything, as a folder zipped whole: UTF-8 with or without a BOM, or Windows' Cyrillic, which Excel saves a plain CSV in; cells apart by commas or semicolons, whichever the header has more of, quoted as a spreadsheet quotes them. The header names the columns, in any order: `file`, and any of `pose`, `side`, `framing` and `main`; without `file`, or with more than 1,000 rows filled (`LABEL_ROWS`), five for each picture an archive may hold, the file is not read. `file` is the picture's path from labels.csv's folder or from the archive's root, or its name alone where no other picture has it, compared in lower case and in NFC, so that a name a Mac wrote decomposed matches; a path over 260 characters or a value over 64 is compared as it came, since composing a run of combining marks takes time that grows with its square. A row that could name two pictures, by two of these ways or by paths apart only in case, names none and is counted among the rows without a picture. A value is the captioner's label in English or one of the tester's Russian words, compared without case, spaces, hyphens or the dots of ё: pose `стоя`, `сидя`, `идёт`, `лёжа`, `на коленях`, `присев`; side `спереди`, `вполоборота влево`, `вполоборота вправо`, `профиль влево`, `профиль вправо`, `спиной`; framing `в полный рост`, `по пояс`, `по плечи`. Left and right are the captioner's, the side of the picture the person faces. An empty or unknown value leaves its field to the captioner, and a picture with all three never goes to it: its caption is the reader's from the start, with a confidence of 1. The picture keeps the labels its reader gave (`given`), which its caption keeps over the captioner's, so each label's source is known. `main` (`yes`, `1` or `да`) prefers the picture within the same pose variant. Optional `specific_pose`, `pose_details`, `expression` and `face_visibility` columns add manual annotations. Their text limits are 64, 320 and 160 characters respectively; `face_visibility` is `visible`, `partial` or `hidden`. Invalid extra fields are reported and omitted; the CPU captioner does not fill them. Manual pose `all_fours`, or `на четвереньках`, is supported; the captioner still emits its measured six poses. The old five-column CSV remains valid. [setup](setup.md#pose-sets) has an example.
+  - The counting message adds, once a labels.csv came, how many pictures came labeled and how many go to the captioner, and for each labels.csv, by its archive's name, the rows that matched no picture and those with a value the bot does not know, as a spreadsheet numbers them with the header first, or that it could not be read: «Подписаны в labels.csv: 3; подпишет модель: 6. labels.csv в mira.zip: нет картинки для строк 6; в строках 5 есть значения, которых бот не знает, — эти поля подпишет модель.»
+- **Captions:** each picture is captioned once, in the background, by openjev 0.8B on this computer's CPU (`createPoseCaptioner`): its pose (standing, sitting, walking, lying, kneeling or crouching), the side it turns to the viewer (front, three-quarter left or right, profile left or right, or back; left and right are the sides of the picture it faces) and its framing (full body, half body, or head and shoulders), with a confidence. It is the captioner chosen on 2026-09-28 ([the measurement](knowledge/pose-captioner-2026-09-28.md)): on 190 pictures of the refs stands it put 87 of 94 whole figures in the right group and got the turn of 163 of the 190, each character scored with constants fitted on the others, and all three labels right for 83 of the 94. Qwen3.5 2B put 86 in the right group but misread the pose of 18 standing people, at twice the time and more than twice the memory, and SigLIP 2 and Qwen3.5 0.8B put 71 and 75. The bot starts it when a picture waits for a caption and ends it a minute after the last, so a set of 80 takes about five minutes of the CPU once, at about 4 s a picture, and nothing after. It runs niced, on four threads, offline and with none of the bot's environment, so no token or key reaches it, and reads each picture by its path in the reader's own directory; it answers with the labels alone, and an answer that is not labels is no caption. A picture gets two tries, the second at the end of the queue: one it cannot read stays uncaptioned and out of every group, and the card counts it. A captioner that does not start, as one never installed, or whose process ends or stalls on three pictures in a row, leaves the pictures waiting, and is started again ten minutes later or at the bot's next start, which queues every picture still waiting. A new process starts only once the last is gone, killed if it has not left ten seconds after its input closed, so two models never share the memory; and a caption is written to its picture by the picture's file, so a sheet written again in the meantime, with a name spelled anew, does not lose it. No picture and no caption leaves this computer for it.
+- **Variants:** frames use `poseCandidates`, one representative per combination of pose, side, framing and `specific_pose`. Without `specific_pose`, different `pose_details` distinguish variants. `main` prefers a picture only within that same variant; it never removes another pose from the choices. All distinct variants in a valid set are offered, up to the storage limit of 200 pictures. The model returns a short opaque ID immediately after `who` during the existing frame call. `viewsOf` resolves only this person's offered IDs to files; `frameReferences` checks that the file still belongs to their current set. Unknown IDs and removed pictures use the existing front fallback. Each person still gets one reference. The six-group `poseGroups` helper remains only for that fallback; the card counts the variants instead.
+- **Frame:** when the story's sheet has people with groups, the frame's description gets one more field, `view`, right after `who` in each person of `people`: an enum of every group's caption and the empty string, with 100 more output tokens and a rule after the frame's instruction that lists each person's captions (`poseRequest`). It is added at the call in `local/picture.ts` and not in `local/illustrate.ts`, which the action experiment pins. The field, its place and its rule, word for word, are the variant measured on the card on 2026-09-28 with synthetic frames: right after `who` the card's Gemma never ran its JSON away in 248 calls and picked the right view for 154 and 155 of 160 people, where the same field as a person's last key ran away in 34 to 43% of the calls ([view pick](knowledge/view-pick-measurements.md#gemma-card-2026-09-28)). That measurement had the bot's frame request alone, without what it gets for some readers: the lasting changes of versions of the sheet, and POV's fields. A field of POV's that goes right after `who` as well, `place`, follows it: `who`, `view`, `place`.
+  - The picked group's picture is the person's one reference (`frameReferences` in `local/picture-references.ts`): at the refs stands 3 and 4, a front and a view of each person together drew extra people in 3 of 6 frames of two. A person with no group picked, by the empty string or by a caption not theirs, has their front: the picture the reader sent for it, else the set's front, else the portrait they kept. The viewer of a first-person frame is not asked about and has none. The field never reaches the stored frame, and the recipe pins the chosen file as it pins a portrait, so a variant or a redraw takes the same picture, whatever the switch says by then. The `picture` row counts the people with groups (`poseSetPeople`) and those the frame picked one for (`poseViewsPicked`).
+- **Card:** a person with a set shows «🗂 Картинки поз: 94 из 200, 212 МБ.», how many wait for a caption and how many failed, «По позам: спереди 30, вполоборота 41, …», and whether frames take them now. «🗑 Убрать картинки поз» (`pose-set-drop:…`) asks first and then removes the whole set; the pictures frames were drawn with stay on the disk while a variant or a redraw needs them, and go once nothing does. The button is there whatever the switch says now, so that nobody is left with pictures they cannot remove: a reader taken off the list, or whose story model is hosted, sees the set, a line saying frames do not take it now, and that button alone. A set is the reader's own, in their library and their directory, and no card, button or frame of anybody else's reaches it.
+- **Rows:** `pose_set_saved` has how a picture came, its format, the bytes sent and stripped, its size in pixels and the set's count after it (`poseSetCount`); `pose_set_refused` the reason alone (`poseSetRefusal`: a reason of `reference_refused`, or `full`, `person_bytes` or `reader_bytes`); `pose_set_ended` how many the wait kept and refused (`poseSetKept`, `poseSetRefused`); `pose_captioned` whether the picture got a caption and the time, or `caption_refused`, never the labels, which are what the reader's picture shows; `pose_captioner_failed` its code (`captioner_unavailable`, `captioner_timeout`, `captioner_exited` or `captioner_protocol`); `pose_set_dropped` the count; `pose_upload_dropped` a queued file whose person left the sheet before it was read, and nothing else; `pose_upload_failed` the code of a read of the queue that failed, after which the queue waits for the reader's next file, one refused as past the full queue included, or the next start; `pose_archive_saved` how many pictures of an archive were kept and refused, how many of those kept had all three labels from labels.csv (`poseLabeled`) and how many were marked main (`poseMain`), whether labels.csv was there and read (`poseLabels`: `none`, `read` or `unread`), its rows (`poseLabelRows`) and those that matched no picture or had an unknown value (`poseRowsUnmatched`, `poseRowsUnknown`), and the set's count after it; `pose_archive_refused` why an archive was refused whole (`poseArchiveRefusal`: `too_large`, `incomplete`, `files`, `encrypted`, `broken`, `unsupported`, `bomb` or `unsafe`). None has a name, a file, a path, a label or a picture.
+- **Checked** on 2026-09-28 by a dry run of the bot, its store, screens, picture reader and picture code, with a fake Telegram, a fake model, a fake ComfyUI and a fake captioner that speaks the real one's protocol, on synthetic pictures: 101 pictures sent, 100 kept and the 101st refused as full, a small picture, an archive and a text file refused with no message of their own, the files stripped, the captioner given nothing of the bot's environment, a picture it could not read tried twice, a captioner whose process ended on every picture left alone after three, six groups with the right pictures standing for them, `view` right after `who` and before a `place`, the sitting group's bytes sent for a person the answer placed sitting and the front's for one it left empty, another reader's buttons reaching nothing of the set, the set shown and removable but unused once the reader was switched off, and every field of every row on the whitelist. With the list empty the new code and 71a159f gave the same hashes of 10 requests, 3 graphs, 37 Telegram calls and 26 rows. Apart from it, a real process that closed its input once it was ready, as a captioner gone between pictures leaves its pipe, cost that picture its two tries and left the bot running.
+- **Checked again** on 2026-09-29, with the two commits brought onto 101690f, the line the live bot ran then, with the sheet versions and the whole-profile edit. The dry run above passed its 44 checks there, and a second one over the sheet versions passed 60: pictures in albums, eleven refused, each with its reason (small, shape, huge, archive, type, too large, broken, incomplete, full, a person's bytes and a reader's), and one message counting them; `lasting_changes` first and `view` right after `who` in one request, with both rules; a lasting change, a whole-profile edit, a sheet written again and a look «only from this moment» each leaving the set as it was; the picked group's bytes sent and pinned; a variant and a style sample taking the pinned picture, and a variant after the set was removed too; the reader's own front before the set's when no view was picked; and no row with a word of a story, a look, a path or a caption's label. With the list empty the branch and 101690f gave the same hashes of requests, graphs, Telegram calls and rows in three dry runs, ComfyUI's random upload names and nonce apart: the one above (10, 3, 37 and 26), the sheet versions' own (19, 10, 98 and 50 with them off, 27, 12, 131 and 74 with them on, and 2, 1, 9 and 5 on a library 101690f wrote), and one with a reader's own portrait, variants, style samples, a whole-profile edit and a sheet written again (21, 11, 98 and 69, and 22, 11, 98 and 72 with versions on). With the list naming one reader and a captioner configured, two others off it, one with pictures and no references as the owner has, one in the reference experiment, got 101690f's 20 requests, 10 graphs, 104 Telegram calls and 84 rows; the only difference was the answer to a pose-set button no screen offers them, «Картинки поз тебе сейчас недоступны» in place of «Кнопка устарела». The real captioner, installed by `captioner/setup.sh` from uv's cache with the weights already on disk and started from a directory other than the code's, as the live bot starts, captioned one synthetic picture of the refs stands in 29 s with its load. After GPT-6 Astra's review the same day, with fake processes: one that closed its answers and ignored its closed input was killed ten seconds on and the next started only once it was gone, where before the next had started at once beside it; a caption that came back after its person's name was spelled anew reached its picture; and a stop while the next waited started none. The real captioner, on the reviewed code, captioned the same picture in 11 s, 5.6 GB at its peak.
+- **Archives checked** on 2026-09-29, by a dry run with the same fakes and synthetic archives: an album of three kept; one archive, a folder zipped on a Mac with its `__MACOSX` twins and a `.DS_Store`, and a labels.csv with a BOM, semicolons, English and Russian words and a name in NFD, kept its six pictures under the bot's own names and refused a picture over 10 MB and a text file, each by its reason; its three pictures labeled whole never reached the captioner, the two labeled in part got the captioner's label for what they lacked and kept the reader's for the rest, the picture marked main stood for the front over one labeled the same before it, and the count said 3 labeled and 6 for the captioner, row 6 without a picture and row 5 with a value the bot does not know; a bomb of one file was counted as no picture and not unpacked; an archive declared over 20 MB was refused before a byte was fetched, and one whose two files shared their bytes as a bomb, each with its message, and the wait stood; no row had a name, a file or a label. One test (`local/pose-archive.test.ts`) refuses a bomb's file without unpacking it, two files over the same bytes, five names out of an archive, an archive inside one by its name and by its bytes, and a picture over 10 MB before it is unpacked. Archives written by Info-ZIP, by Python and by a streaming writer with data descriptors were read; Info-ZIP streaming from a pipe writes ZIP64, and was refused. With the list empty the branch and 101690f gave the same hashes again: 10 requests, 3 graphs, 37 Telegram calls and 26 rows; 21, 11, 98 and 69, and 22, 11, 98 and 72 with versions on; the sheet versions' three runs; and, for readers off the list while it names one, 20, 10, 104 and 84, and 20, 10, 108 and 90 with a ZIP sent outside any wait and in the wait for an own portrait, which refuses it as ever. With the list on the earlier dry runs passed their 44 and 62 checks, where a ZIP that is none is now refused whole in a message of its own instead of being counted as `archive`.
+- **Queue checked** on 2026-09-29, by a dry run with the same fakes and a fake Telegram whose downloads take as long as a file is told to. Behind an album of five whose downloads took 1.5 s each, the owner's `/start`, handed over after it as the poll loop hands the updates over, was answered in 82 ms, where 6a81e91, which read each picture inside its update, answered it in 7,598 ms; the album's updates were handled in 15 to 68 ms, each file queued in the write that marked its update handled, and read in the order it came. An update delivered twice was kept once. «✅ Готово» with three files unread answered with the card at once; the count said «Ещё загружаются: 3» and that its last word was to come, under the card's button, and then gave it with all nine, and `pose_set_ended` came once. A stop while a file was being read kept nothing of it and left all three queued, and the next start read them, each once and in order, in a message of its own. Removing the set took its queued files with it, and the file being read was not kept; a person renamed meanwhile had their two files dropped, with rows that name nothing. A queue of 200 refused the next file as full at once, unread, and a queue of 200 files Telegram could not give was read through in 1.6 s, each refused. No row had a field off the whitelist. With the list empty the branch and 101690f gave the same hashes again in all the runs above, and with the list on the earlier dry runs passed their 44, 62, 23 and 7 checks.
+- **Queue checked again** on 2026-09-29, after GPT-6 Astra's third review of pose sets found that a name spelled anew by a sheet written again dropped its queued files, that the deadline left the question to Telegram and the download running, past a stop and the store's closing, and that a file refused as past a full queue did not start a queue a failed write had stopped. The same dry run, with a Telegram whose downloads end when destroyed and whose getFile may never answer, passed 21 checks where a99608b failed 5 of them: a stop cut the download under way at once, where a99608b waited 0.9 s for it, and left its file queued; two files whose person's name became « МИРА » were kept and counted under the person's card; a file whose path Telegram never gave had its question cut at 45 s and was refused as incomplete, and the next was read; a write that failed stopped the queue, and the next file, refused as past the full queue, started it again and all 200 were read; three readers' albums of three were read two files at a time, in 3.1 s, each in order. With the owner's `/start` handed over every 100 ms, as the poll loop hands updates over, while an album of ten whose downloads took 1.5 s each was read, the owner's 167 updates waited 6 ms at the median and 32 ms at most, where 6a81e91 kept them 7.0 s at the median and 14.8 s at most; every 50 ms while an archive of 20.2 MB, fourteen noisy pictures of 600 by 800, was downloaded in 4 s and read, the owner's 175 updates waited 6 ms at the median and 12 to 18 ms at most in four runs, the longest the reading held the bot being 48 to 54 ms, where 6a81e91 kept them up to 3.8 s. With the list empty the branch and 101690f gave the same hashes again in all the runs above, and with the list on the earlier dry runs passed their 44, 62, 23 and 7 checks. Real Telegram timings were not measured.
+- **Archives checked again** on 2026-09-29, after GPT-6 Astra's review of archives, 6a81e91's reader with the queue's reading of it, found seven things. Archives built within every limit above held the bot, and every reader's updates with it: a hundred empty files named with 32,000 combining marks each were still being read after 120 s, since composing such a run takes time that grows with its square; ten PNGs of 10 MB made of 750,000 empty chunks each, zipped in 6.2 MB, held it 4.1 s and took 722 MB; and a stored labels.csv of 524,280 rows took 534 ms and 297 MB, and the counting message kept every row number of every such archive. A row could label the wrong picture unnoticed: `a.png` for a row naming `A.png` beside it, and `outer/outer/a.png` for one naming `outer/a.png` from the root. And an archive whose names all began with `./` gave no pictures and no labels, without a word. These five are answered above, before archives are switched on, as the review asked. The other two wait, as it ranked them: the ratio that refuses a file as a bomb also refuses a real PNG whose pixels are stored uncompressed, which ZIP packs 487 times, and a name an old Windows wrote in a code page other than the Russian one, CP437's `é.png` among them, is read as CP866 and matches no row. Throwaway scripts on synthetic archives, f7b2cc5 against the branch: the hundred names, cut at 60 s on f7b2cc5, took 47 ms and were refused as no picture; a header cell of 300,000 marks, cut at 60 s, 33 ms; ten PNGs of empty chunks, which held the bot 4.3 s and took 333 MB, were refused as broken in 184 ms, holding it 26 ms at most, and ten JPEGs of 10 MB of empty segments, which held it 2.8 s, in 180 ms and 33 ms; the 524,280 rows, 422 ms and 303 MB, were not read, in 4 ms, and 1 MB of empty rows took 22 to 44 ms and 9 MB at most instead of 77 to 176 ms and up to 258 MB; 1,000 rows filled were read and 1,001 not, so that the counting message keeps 1,000 row numbers an archive at most, until its wait ends; both rows that could name two pictures named none and were counted without a picture, while a name alone that one picture has and a path from labels.csv's folder where two pictures share a name still matched; the archive of `./` names kept its picture with its label; real PNGs cut in 4,096 and in 1,280 chunks were kept; ten noisy PNGs of 1.9 MB held the bot 5 ms at most instead of 23; and a read cut short between two pictures ended as `incomplete`. The archive at the limits, 200 PNGs that unpack to 95 MB, was read in 109 to 139 ms as before and written in 37 ms, and the archives of Info-ZIP, Python and a streaming writer were read as before. With the owner's `/start` every 50 ms while the archive of 20.2 MB was downloaded and read, on a machine busier than at the runs above, the owner's updates waited 6 to 29 ms at the median and 12 to 298 ms at most in nine runs of the branch, and 6 to 30 ms and 14 to 324 ms in five runs of f7b2cc5 taken in turn with five of them, which had given 12 to 18 ms at most on a quieter one: its fourteen ordinary pictures hold the bot a few milliseconds each on either, and the spread was the machine's. With the list empty the branch and 101690f gave the same hashes again in all the runs above, and with the list on the earlier dry runs passed their 44, 62, 23 and 7 checks. A picture sent alone, into a pose set or as an own portrait as at 101690f, is still walked through all its chunks: one of 10 MB made of empty ones holds the bot about 0.5 s once, and a JPEG of empty segments takes about 450 MB meanwhile. Archives from Windows' Explorer, macOS's Finder or 7-Zip were not tried.
+- **Expanded selection, 2026-09-30:** synthetic tests cover old CSV and stored records, rich fields, append and reload, ten and 200 distinct variants, per-person ID validation and reuse of pinned recipes. Gemma's earlier measurement covered 4–8 choices; selection accuracy and context fit for ten or 200 are unmeasured. Captions are at most 240 characters each. A large bank increases the existing frame request, which remains subject to the provider's input budget; there is no silent shortlist or extra model call.
+- **Not checked:** what the pictures gain. Round one of the action measurement scored its views (V) 14 points below C on contacts and identity, with views that were edits of a portrait and may have drifted, so whether a fitting pose helps is open, and the switch stays per reader. The reference instruction still tells the picture model to take identity alone from a reference and not to copy its standing pose or framing; it was not changed. The combined schema, `view` and then POV's `place`, has not been asked of the card's Gemma. The captioner was measured on our own graph's pictures of five characters on a plain grey backdrop, standing and sitting, never walking, lying, kneeling or crouching; the tester's drawings may be read worse, and its weakest turn is the three-quarter, 62 of 84 on held-out characters.
+
+<a id='g-prompt'></a>
+
+### A prompt the story model writes
+
+For the readers named in `SIMPLE_CHAT_G_PROMPT_USERS` alone ([setup](setup.md)), which takes readers of
+`SIMPLE_CHAT_IMAGE_USERS` and is empty by default, a frame is drawn from a prompt the story model writes whole: the arm
+G of the prompt arms probe, P2 (`local/image-prompt-arms.ts` and `docs/action-experiment.md#prompt-arms` at 15f7f13 on
+the judge-lean branch). The owner decided on 2026-09-29 at about 21:55 UTC to put it in the live bot after a code
+review. The code is `local/picture-g.ts`; its instruction, schema, output limit and nets for names and ages are the
+probe's byte for byte.
+
+- **Request:** the frame's own request goes first, as for everybody, and its answer still chooses the reference
+  pictures, gives the clothes the next picture starts from and stands ready as today's prompt. Then, in the same
+  scheduler turn, the scene's request goes once more with G's instruction last (`gRequest`), an answer of at most 1,200
+  tokens and the bot's one retry: about 340 tokens more to write, some 3 to 6 s a frame by estimate, while the status
+  line stands alone as for the description. A frame seen through someone's eyes asks no G, which has no rule for it.
+- **Prompt:** names and ages in years come out as the probe takes them out (`gPrompt`), and the prompt ends with the
+  picture's style line as today's does, or with nothing for the empty style. A style sample draws the same prompt with
+  its own line and asks nothing; the prompt is kept in memory with the frame, never stored, and the folded prompt under
+  a picture is the one drawn.
+- **References:** the prompt begins with today's opening, clothes included, for the same pictures in the same order, and
+  code writes «The person from image N, » before each bound person's look, which G's instruction has the model copy
+  word for word (`gTagged`). Where the look stands once, letter for letter in whatever case, the look after the number
+  is the sheet's own, as before 2026-10-04. Where it does not but stands once with a hyphen for a space, a space for a
+  hyphen or the other apostrophe, the number goes before it and the prompt keeps its own words. Where it stands in
+  neither way, the look has five words or more and begins with an article, and G's `people` named the person, the
+  number goes where the look without the article stands once, behind another article with at most one word of the
+  model's own («the kneeling», not «the other») or at the start of a sentence; the prompt keeps its words there too.
+  A look that stands more than once gets no number, nor does one that owns the next word («the tall woman's
+  daughter»), nor a person whose words another person of the sheet has too, alone or inside a longer look.
+- **Today's prompt instead**, with its reason, when G's request failed (`failed`; a turn the scheduler ended for
+  somebody's scene is one, and the picture is then drawn, where a frame cut the same way is skipped), its answer did not
+  parse (`unparsed`) or ran into the limit (`truncated`), nothing was left once names and ages were out (`empty`), a
+  letter outside the Latin script was left (`non_latin`), or a bound person could not be given their number (`tag`).
+- **Rows:** the `picture` and `picture_sample` rows of these readers carry `promptSource`, `g` or `fields`, and after a
+  G request not drawn `gFallback`; a frame that asked G carries its time with the retry (`gMs`, inside `describeMs`) and
+  the tokens the server reported (`gInputTokens`, `gCachedTokens`, `gOutputTokens`). A frame with people bound to
+  reference pictures carries their count (`gBound`); drawn from G's prompt, how many of them got their number in one
+  of the two looser ways (`gTagLoose`, left out at 0); and beside `gFallback: tag` the rule that left the first of
+  them, in the pictures' order, without one (`gTagMiss`): the prompt already had such a label (`label`), the look was
+  not found and `people` did not name the person (`absent`) or did (`missing`), another person of the sheet has the
+  same words (`repeated`), the look stood more than once (`several`), or two places overlapped (`overlap`). Never a
+  prompt, an answer or a name.
+
+**Checked** on 2026-09-30 by a dry run against f92acf3 with a fake model, the real scheduler, a fake ComfyUI on a
+loopback port that takes uploads and a fake Telegram, the settings read through `local/config.ts`. With the list empty,
+and with it naming only a reader who writes nothing, a story with versions, clothes, two bound portraits, a sample and a
+variant gave f92acf3's 7 requests, 4 graphs with 12 uploads, 29 Telegram calls and 23 rows, random upload names, nonces
+and timings apart. Its 122 checks over 13 scenarios passed, the branch's two runs of each alike: G's request was the
+probe's `gRequest` on the frame's context and sheet, with a sheet version the frame had just written, and its
+instruction's hash the probe's and frozen.json's (0ab03469…); every other request stayed f92acf3's; the prompts drawn
+were the probe's `gPrompt` of the answer, with the film line and with none in the samples; the frame with both
+references kept today's opening and had each number once, right before its person's look; every fallback drew f92acf3's
+graphs with its reason in the rows; the frame seen through someone's eyes asked no G. P2 kept no raw answers; `gPrompt`
+gives back each of frozen.json's twelve G prompts from its own text.
+
+**Not checked:** G on the card's Gemma: P2's prompts were written by hosted Gemma 4 31B, and the card's quantized Gemma
+has never been asked G's instruction. G with references: P2 drew with none. In P2's twelve prompts 36 of the 39 sheet
+looks stand once word for word, case apart; two begin with another word and one is missing, so up to three of those
+frames would have fallen back as `tag`. The clothes the opening states come from the frame and the prompt's from G, and
+they may disagree. The owner decided to ship it without both measurements, told they were missing. No picture has been
+drawn from G by the bot.
+
+**The numbers' places, 2026-10-04:** from 2026-09-30 to 2026-10-04 the technical log has 215 `picture` rows of G's
+readers, 41 of them `gFallback: tag`, all 41 after a `picture_references` row that says references were used; nothing
+in a row said which rule failed, hence `gTagMiss`. Until then a look had to stand in the prompt exactly once, letter
+for letter, case apart. A first version also chose among several copies of a look and dropped any first word; GPT-6.1
+Sol's review showed both putting a number before another person, and both were taken out. A second one took a look's
+words over any punctuation; the second review showed it joining two sentences («a woman. In red light» for «a woman in
+red») and numbering an owner, so the looser match is now a hyphen, a space or an apostrophe and no more, and an owner
+gets no number even where the old rule gave one. A throwaway script over synthetic sheets and prompts gave each rule
+above its case, both reviews' inputs among them, 52 of 52 as expected. On 20,000 random synthetic prompts, none with an
+owner, the new rule gave the old rule's text wherever the old one had placed every number, except where another person
+of the sheet has the same words, which now gets none. Of the 38 looks of the checklists'
+participants in P2's twelve prompts the old rule places 36 and the new one 38 when `people` names the person, which P2
+did not keep, and 36 when it does not: the two others stand once after «a small», an extra word between the article
+and the look, and the number now goes before that article. The third review said to ship 216ddce and left two cases
+it called theoretical, since production numbers the same places when the look is exact: a look that ends in a bracket
+and then owns the next word, and a title's full stop («Mrs.») taken for the end of a sentence. Not checked: the
+tester's prompts, which stay closed, and any picture.
 
 <a id='seen-through-their-eyes'></a>
 
@@ -433,6 +691,48 @@ in is drawn as usual. The code is `local/picture-pov.ts`.
   the reflection, tried in between, drew the viewer whole beside the water on the pier in two of two. Not checked: a
   frame with two references, as the tester's was, whether the card's Gemma follows the rule on the pier and the
   workbench, and a reflection that looks like the viewer.
+
+<a id='what-they-wear'></a>
+
+### What they wear
+
+The tester reported on 2026-09-28 that people were drawn in their references' clothes whatever the story had them
+wear, naked or dressed. Every kept portrait wears the bot's dark grey suit ([a portrait's own
+prompt](#portrait-prompt)). The frame's rule asks for a phrase of clothes that begins with wearing and says nothing of
+bare skin, and a frame with references gives the scene's clothes only in each person's clause, after the reference
+wording and the look. For the readers named in `SIMPLE_CHAT_CLOTHES_USERS` alone ([setup](setup.md)), in
+`local/picture-clothes.ts`:
+
+- **The frame's rule:** its sentence on `clothes` becomes the action experiment's change 8 word for word ([the variant
+  frame](action-experiment.md#variant)): bare skin named outright («wearing only rolled-up linen trousers,
+  bare-chested and barefoot») and nothing bared that the scene does not bare. One sentence follows it, since the
+  tester also saw a person the story leaves naked drawn in the clothes of their profile: a person with nothing on is
+  «wearing nothing», and `clothes` is never left empty. An empty `clothes` gives the person the outfit they wore before
+  the scene, in this picture (`assemblePrompt`, and the words before the references below) and in the next ones, since
+  the frame then records no clothes for them (`clothesOf` and `wornAt` in `local/picture.ts`). The schema stays as it
+  is, and the sentences are replaced at the call, since `local/illustrate.ts` is pinned (`textPins` in
+  `local/action-text.ts`).
+- **Before the reference wording:** a frame with reference pictures says what each referenced person wears in this
+  scene, in the order of the pictures, right after «Create a brand-new scene…» and before «Use the reference images
+  only…»: «The person from image 3 in this scene: wearing only rolled-up canvas trousers, bare-chested and barefoot.»
+  These are the clothes the assembly gives the person, the frame's or else the sheet's outfit, through the same nets
+  for names and ages, and the person's clause keeps them too. A frame without references changes by the rule alone.
+- **Row:** the `picture` and `picture_sample` rows of such a frame carry `clothesStated`, how many people's clothes
+  came before the reference wording.
+
+The rule came to the tester's line on 2026-09-29, after the owner approved it at about 13:05 UTC, without the places
+of a frame seen through someone's eyes that came with it on the tester stand's line. With the list empty, and with it
+naming only a reader who writes nothing, every model request, graph with its uploads, Telegram call and row is
+01abf78's: a dry run that day with a fake model, a fake ComfyUI that takes uploads and a fake Telegram, over a story of
+three people of whom two had the reader's own fronts, gave 12 requests, 6 graphs, 56 calls and 44 rows the same for a
+frame with no reference yet, a frame with both, its style sample, a variant, and a second reader's two frames. With
+the reader on the list it passed 18 checks. The two frame requests are 01abf78's with the rule in place of the bot's
+sentence and the same schema. The frame with both references and its sample say «The person from image 1 in this
+scene: wearing a grey wool coat. The person from image 2 in this scene: wearing nothing.» right before «Use the
+reference images only…», and their rows carry `clothesStated` 2. The frame with no reference yet, the variant and the
+man bound to no picture get no such words. The second reader's requests, graphs, calls and rows stay 01abf78's, and
+nothing of the story reaches a row. The pose sets' and the sheet versions' dry runs give 01abf78's outputs as before.
+No picture has been drawn with the rule on this line.
 
 <a id='along-the-story'></a>
 
@@ -529,6 +829,43 @@ to a checkpoint before the change, shows the person as they were there. The code
   says the person is pending until then. The card's Gemma has not answered the field yet: the probe for the next
   rental is ~/simple-story-chat-runs/2026-09-28/sheet-versions/run.mts.
 
+<a id='mini-app'></a>
+
+## Mini App
+
+A first step, read-only (2026-09-29): a page inside Telegram with the reader's stories, a story's characters and one
+person's card, to see whether that is handier than the chat's screens. It is served only where the owner sets it up
+([setup](setup.md#mini-app)) and only to the readers of `SIMPLE_CHAT_MINI_APP_USERS`. It changes nothing: editing,
+drawing and playing stay in the chat. The server is `local/mini-app.ts`, the page `local/mini-app/`.
+
+- **Button:** a listed reader's list of a story's characters has «📱 Открыть в мини-приложении» ("Open in the Mini App"),
+  a `web_app` button to `<url>/?story=<storyId>`, which opens the page at that story's characters with the list of
+  stories under it. Nobody else's screens change. Telegram shows such a button in a private chat only.
+- **Screens:** the stories, the one being played first and then the newest, with their branches, scenes and
+  characters; a story's characters as the chat's list has them; a person's card with the chat card's fields and lines
+  (`characterCard` in `local/ui.ts`), less those about its buttons. The picture its portrait line speaks of, the
+  reader's own in the reference experiment or else the kept portrait, is full width, and a tap shows it whole.
+  A card with a stored pose set opens its reference gallery. The gallery lists 12 records per page, including pending or failed captions. A tap opens an image viewer with left/right swipes, previous/next buttons and a position counter for the whole set. Swipes cross page boundaries and stop at the first or last reference. Its base labels, manual pose details, expression, face visibility and main mark appear with the selected image, with the description below it. Vertical gestures scroll the page; a tap opens the full-size image. Back returns to the list page containing the selected reference. After the selected original loads, the page preloads one neighbor in the browsing direction, including its metadata across a page boundary. Up to five originals and 32 MiB stay in the open viewer's memory so a nearby return does not download them again. Selected downloads reuse a preload already in progress; obsolete transfers are aborted. Cached images cannot extend the signed launch's lifetime. Leaving the viewer, changing the character or closing the page aborts downloads and releases the blobs; no image is put in browser storage or an HTTP cache. The Telegram card also has "🗂 Смотреть референсы", opening this gallery directly with the full Back path.
+  Telegram's Back button goes back one screen. The words are the reader's interface language, from the bot's catalogs.
+- **Access:** each request carries the launch data Telegram signed (`Authorization: tma <initData>`), checked against
+  the key derived from the bot token in constant time (`initDataUser`). Launch data over an hour old
+  (`INIT_DATA_SECONDS`) or more than five minutes ahead of this clock is refused as a forged one is, with 401, and the
+  page asks to reopen it from the chat. The reader is the one the signed data names, never one an address names, and
+  the answer comes from that reader's library through a read-only connection of the server's own. A reader off the
+  list, anything missing and anything of another reader's answer alike: 404 with the same body. A picture comes with
+  the same header and is shown from memory; its file is the one the reader's library names, in the reader's own
+  directory, a plain file under 16 MB, read by `readReference`. Reference URLs carry opaque HMAC IDs scoped to the reader, story and person. Every image request rechecks the current character tag and set membership. Viewing retained sets is independent of the generation switch. Synthetic tests cover foreign users and characters, stale tags, removed membership, missing or oversized files, symlinks and expired signatures. Requests past the server's bounds
+  ([setup](setup.md#mini-app)) answer 429, and the page offers to try again.
+- **Page:** plain HTML, CSS and JavaScript, no build. Telegram's `telegram-web-app.js` is its only outside address: no
+  fonts, no analytics. Its policy lets it run its own and Telegram's scripts, fetch from its own address alone and be
+  framed by Telegram Web alone, and it takes the colours of the reader's theme (`--tg-theme-*`). The page keeps the
+  launch data in memory; Telegram's script keeps its launch parameters in the window's session storage, as for any
+  Mini App. No Telegram client has opened it yet: it was checked in headless Chrome with synthetic launch data.
+- **Log:** `mini_app_ready`, or `mini_app_failed` with an errno, at start; `mini_app_served` (`stories`, `characters`,
+  `card`, `picture`) and `mini_app_refused` (`no_init_data`, `malformed`, `forged`, `expired`, `not_listed`,
+  `missing`, `picture_unavailable`, `library_too_large`, `busy`), with `actor` once the reader is known, each row at
+  most once a minute.
+
 ## Interface language
 
 What the bot itself says (screens, buttons, refusals, the compaction status, the command menu) comes from a catalog per language in `local/text/`. The button labels quoted in this document are the Russian ones. The language of a story is a separate choice, made by its seed, not by this picker: see [story language](#story-language).
@@ -600,7 +937,61 @@ seed. With no more than the kept number of scenes uncompacted, the bot says that
 
 ## Busy state (`state.job`)
 
-Navigation, previews and «Последняя сцена» stay available. Buttons for `start`, `use`, `fork`, `continue` and delete confirmations are left out. Where one would normally appear, the screen says it will be available once the scene is done and shows «✖️ Отменить генерацию» ("Cancel generation", `cancel`). Seed entry stays available. There, the cancel button is the ordinary «✖️ Отмена» ("Cancel"); note that `cancel` also stops a running generation.
+Navigation, previews, bookmarks and «Последняя сцена» stay available. Buttons for `start`, `use`, `fork`, `continue` and delete confirmations are left out. Where one would normally appear, the screen says it will be available once the scene is done and shows «✖️ Отменить генерацию» ("Cancel generation", `cancel`). Seed entry stays available. There, the cancel button is the ordinary «✖️ Отмена» ("Cancel"); note that `cancel` also stops a running generation.
+
+<a id='waiting'></a>
+
+## Waiting for a model
+
+The bot shares its models. The language model serves every reader and the agents in turn, and the picture card draws
+every reader's pictures and, from the next rental on, an experiment's cells in the gaps, behind the readers' jobs
+([the bot's picture card](gpu.md#bot-card)). A reader whose request waits is told their place and, once the bot can
+tell, roughly when the request starts; never whose requests are ahead, or when theirs will end.
+
+- **Before a scene** the disappearing draft says «⏳ Очередь к модели: перед вами 2 запроса, начало примерно через
+  40 с.» ("Model queue: 2 requests ahead of you, starting in about 40 s"), then «⏳ Подошла ваша очередь.» ("Your turn
+  has come") and «📖 Модель читает историю, скоро начнёт писать…» ("The model is reading the story and will start
+  writing soon…").
+- **A compaction** that waits has a line in its status, «Перед вами в очереди к модели: 1 запрос, начало примерно
+  через 2 мин.» ("Ahead of you in the model queue: 1 request, starting in about 2 min").
+- **A picture**, a scene's, a sample, a variant or a portrait, that has waited 2 s on the card gets a second line under
+  its status line, «⏳ Очередь к модели картинок: перед вами 1 картинка, начало примерно через 20 с.» ("Picture model
+  queue: 1 picture ahead of you, starting in about 20 s"): the job the card is drawing and the jobs that go before this
+  one, read from the card's queue every 2 s. Once the job starts, the line goes and the steps take its place. The
+  frame's description before it waits for the language model and shows no place.
+
+Until the bot has timed enough of its own work, and whenever it cannot tell, the reader sees the place alone, as in
+«⏳ Очередь к модели: перед вами 2 запроса.». The start comes from what the bot itself sees (`local/eta.ts`):
+
+- **Its own durations**, in memory, from its work as it ends: a turn of the language model by what it does (a scene,
+  a compaction, a frame's description, a retelling of looks, an agent's turn), from the moment it takes a slot to its
+  end, and a job on the picture card from the server's own stamps of its start and end. The usual length of a kind is
+  the median of its last 15, and a kind timed fewer than 3 times has none. A turn with a failed or refused call is not
+  timed, and a restart starts over.
+- **Text** (`startIn` in `local/scheduler.ts`): each slot is free once the turn in it has run its usual length, less
+  what it has run already. Work that gives way to this reader counts for nothing: a probe, a turn that shares a prefix,
+  and work prepared ahead for somebody else. The requests before this one then take the first free slot each for their
+  usual length. Only a reader is given a start, and only while every kind of work in the way has a usual length.
+- **Pictures** (`statusLine` in `local/picture.ts`): the job the card is drawing counts as one of the bot's usual jobs
+  less the time this wait has seen it drawing, whoever's it is, and each job before this one as a whole one.
+- What is left of work already running counts as 5 s at least, so work past its usual length still counts as 5 s
+  more. The start is rounded up to tens of seconds, from «примерно через 10 с» to 50 s, and to whole minutes after
+  that, «примерно через 2 мин». The place and the start are told again when the place changes or the start has moved
+  by 5 s, or by a fifth of itself when that is more. A picture's line is edited at once for its first place and its
+  first steps and otherwise at most every 3 s, and a draft with the same text is not sent again.
+
+What the start cannot see:
+
+- Work that does not go through this bot: another process on the same language model, a gateway's other users, an
+  eval, and above all how long an experiment's cells take on the picture card, where each counts as one of the bot's
+  own jobs. A cell drawn larger or in more steps than the bot's pictures makes the start too early.
+- Readers who come later: every reader's picture goes to the head of the card's queue and the later of two goes first,
+  so a picture's place can grow while it waits. On the language model the readers keep their order.
+- A shared cache's admission by size and the choice of a slot by the prefix it holds. A scene's turn includes its
+  token count and a compaction before it when there is one, so its usual length mixes both kinds of scene.
+
+A row of a request that waited says what the reader was first told, `ahead` and `etaSeconds`, beside what it took in
+fact, `waitMs` in the model queue or `imageQueueMs` on the card ([the bot log](gpu.md#bot-log)).
 
 <a id='waiting'></a>
 

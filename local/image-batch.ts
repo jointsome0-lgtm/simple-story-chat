@@ -225,7 +225,9 @@ const promptKey = (node: Graph[string], role: 'positive' | 'negative') => {
 // that names a file in the server's input directory, which is what `--references` uploads. A slot may reach its loader
 // through one node that takes an image and hands one on, a scale node (the action run's references, at a size of their
 // own: docs/action-experiment.md#portraits-and-views): `scale` is that node, and the file is named on the loader behind it.
-export type Slot = { node: string; key: string; loader: string; scale?: string };
+// The bot's scale node of a picture more drawn out than the card takes has a pad node between it and its loader, `pad`
+// (local/picture-references.ts `referenceGraph`).
+export type Slot = { node: string; key: string; loader: string; scale?: string; pad?: string };
 export function referenceSlots(graph: Graph): Slot[] {
   const found: (Slot & { order: number })[] = [];
   for (const [node, { inputs }] of Object.entries(graph)) {
@@ -235,8 +237,11 @@ export function referenceSlots(graph: Graph): Slot[] {
       if (!slot || !linked || !graph[linked] || !('image' in graph[linked].inputs)) continue;
       const through = graph[linked].inputs.image;
       const behind = Array.isArray(through) ? String(through[0]) : null;
+      const pad = behind !== null && graph[behind]?.class_type === 'ImagePadForOutpaint' ? graph[behind].inputs.image : null;
+      const beyond = Array.isArray(pad) ? String(pad[0]) : null;
       if (behind === null) found.push({ node, key, order: Number(slot[1]), loader: linked });
       else if (graph[behind] && typeof graph[behind].inputs.image === 'string') found.push({ node, key, order: Number(slot[1]), loader: behind, scale: linked });
+      else if (beyond !== null && graph[beyond] && typeof graph[beyond].inputs.image === 'string') found.push({ node, key, order: Number(slot[1]), loader: beyond, scale: linked, pad: behind });
     }
   }
   return found.sort((a, b) => a.order - b.order).map(({ order, ...slot }) => slot);
@@ -275,6 +280,31 @@ export function textEncoderOf(graph: Graph): PictureEncoder | undefined {
   const loader = positive ? linkedTo(graph, positive.inputs, 'clip') : null;
   const type = loader?.class_type === 'CLIPLoader' ? loader.inputs.type : undefined;
   return type === 'qwen_image' || type === 'krea2' ? type : undefined;
+}
+
+// The public name of the model a graph draws with, for the line under a picture in the chat (local/picture.ts
+// `withModel`): the file of the loader the sampler's model comes from, by its published name if this base knows it and
+// by its base name if not, and after it each LoRA on that way, at a strength other than 0, that makes it a
+// step-distilled model of its own. A style LoRA is not named, and a way that cannot be followed names nothing.
+const MODEL_NAMES = new Map([['qwen_image_2.1_int8_convrot', 'Qwen-Image 2.1'], ['kreamania_variant8_fp8', 'Kreamania Variant 8'],
+  ['krea2_turbo_fp8_scaled', 'Krea 2 Turbo'], ['krea2_turbo_bf16', 'Krea 2 Turbo'],
+  ['Qwen-Image-2.1-viggle-turbo-v0.2.1-6step-lora-r128', 'Viggle Turbo']]);
+const DISTILLED = /lightning|turbo|hyper|lcm|distill|\d+-?steps?/i;
+export function pictureModelOf(graph: Graph): string | undefined {
+  const stem = (file: unknown) => typeof file === 'string' ? file.split(/[\\/]/).at(-1)!.replace(/\.[^.]*$/, '') : '';
+  const loras: string[] = [], seen = new Set<Graph[string]>();
+  let node = samplerOf(graph)?.[1];
+  while (node && !seen.has(node)) {
+    seen.add(node);
+    if ('ckpt_name' in node.inputs || 'unet_name' in node.inputs) {
+      const model = stem(node.inputs.ckpt_name ?? node.inputs.unet_name);
+      return model ? [model, ...loras.reverse()].map(name => MODEL_NAMES.get(name) ?? name).join(' + ') : undefined;
+    }
+    const lora = stem(node.inputs.lora_name), strength = node.inputs.strength_model ?? node.inputs.strength;
+    if (DISTILLED.test(lora) && strength !== 0) loras.push(lora);
+    node = linkedTo(graph, node.inputs, 'model') ?? undefined;
+  }
+  return undefined;
 }
 
 // Fills a graph by the role of each node rather than by its id, so a workflow pinned on the card keeps working as
@@ -328,8 +358,9 @@ export function applyToWorkflow(graph: Graph, values: WorkflowValues): Graph {
       else {
         delete filled[slot.node].inputs[slot.key];
         delete filled[slot.loader];
-        // The whole chain of a slot this frame does not use: a scale node left behind would read a loader that is gone.
+        // The whole chain of a slot this frame does not use: a scale or pad node left behind would read a loader that is gone.
         if (slot.scale) delete filled[slot.scale];
+        if (slot.pad) delete filled[slot.pad];
       }
     });
   }

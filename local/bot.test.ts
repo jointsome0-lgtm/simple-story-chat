@@ -27,7 +27,7 @@ type TextControls = GenerateControls & Required<Pick<GenerateControls, 'onText'>
 type FixtureOptions = {
   progressFailure?: boolean; contextFailure?: boolean; deliveryFailure?: boolean;
   generate?: (request: ModelRequest, controls: TextControls) => Promise<GenerationResult>;
-  gpu?: GpuController; readSeedFile?: BotOptions['readSeedFile'];
+  gpu?: GpuController; readSeedFile?: BotOptions['readSeedFile']; readPicture?: BotOptions['readPicture'];
   model?: string; providerName?: string; compactAtTokens?: number; ownerId?: string; illustrator?: Illustrator;
   // Holds a Telegram call until the returned promise settles.
   hold?: (method: string, payload: Payload) => Promise<void> | undefined;
@@ -41,6 +41,18 @@ type MessageUpdate = Update & { message: NonNullable<Update['message']> & { chat
 // Summary requests carry their scenes as JSON in the first message.
 type SummaryInput = { newScenes: { id: string }[] };
 
+// The last message the bot sent or edited, past its tidying after it (docs/telegram-ui.md#passing-messages), which the
+// reader must still see: one the bot deleted or wrote over later fails the test. The fake Telegram gives each call the
+// id of its place among the calls.
+function said<T extends { method: string; payload: { message_id?: number; message_ids?: number[] } }>(sent: T[]) {
+  const at = sent.findLastIndex(one => !['deleteMessage', 'deleteMessages', 'editMessageReplyMarkup'].includes(one.method));
+  const one = sent[at];
+  const id = one?.method === 'editMessageText' ? one.payload.message_id : at + 1;
+  const later = sent.slice(at + 1).filter(call => call.method !== 'editMessageReplyMarkup')
+    .flatMap(call => call.payload.message_ids ?? [call.payload.message_id]);
+  assert.ok(!later.includes(id), `message ${id} is still there`);
+  return one;
+}
 const seedText = 'Маяк\n2026-08-02 20:00\nСмотритель встречает лодку. Кодовая фраза: СЕВЕР.';
 function fixture(t: TestContext, options: FixtureOptions = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'simple-chat-test-'));
@@ -75,13 +87,14 @@ function fixture(t: TestContext, options: FixtureOptions = {}) {
       usage: { inputTokens: 100 + requests.length, outputTokens: 50, totalTokens: 150 + requests.length } };
   } };
   const bot = createBot({ store, api, provider, gpu: options.gpu, illustrator: options.illustrator, allowedUsers: new Set(['1', '2']), maxOutputTokens: 4096,
-    readSeedFile: options.readSeedFile, render, scenePrefix, sceneKeyboard, model: options.model ?? 'test-model',
+    readSeedFile: options.readSeedFile, readPicture: options.readPicture, render, scenePrefix, sceneKeyboard, model: options.model ?? 'test-model',
     providerName: options.providerName ?? 'claude-code', compactAtTokens: options.compactAtTokens ?? 54000, ownerId: options.ownerId,
     log: (event, code, details) => { rows.push({ event, ...(code === undefined ? {} : { code }), ...safeErrorDetails(details) }); } });
   const message = (text: string | undefined, user = 1, updateId = ++sequence): MessageUpdate => ({ update_id: updateId,
     message: { from: { id: user, language_code: 'ru' }, chat: { id: user, type: 'private' }, text } });
-  const click = (data: string, user = 1) => ({ update_id: ++sequence,
-    callback_query: { id: `q${sequence}`, from: { id: user, language_code: 'ru' }, message: { chat: { id: user, type: 'private' } }, data } });
+  // `on`: the message the button is under, as Telegram names it; without it the bot answers with a message of its own.
+  const click = (data: string, user = 1, on?: number) => ({ update_id: ++sequence,
+    callback_query: { id: `q${sequence}`, from: { id: user, language_code: 'ru' }, message: { message_id: on, chat: { id: user, type: 'private' } }, data } });
   async function seed(user = 1) {
     await bot.handle(click('new-seed', user));
     await bot.handle(message(seedText, user));
@@ -126,6 +139,7 @@ function speaking<T extends Update>(update: T, languageCode: string | undefined)
 // A card that draws nothing: the bot's side of the picture styles, with the samples it asks for kept here.
 function sketchbook(drawn: SampleRequest[]) {
   return { enabledFor: (userId: string) => userId === '1', standardStyle: PRESETS.semi, referencesFor: () => false, versionsFor: () => false,
+    poseSetFor: () => false,
     illustrate: async () => {}, sample: async (request: SampleRequest) => { drawn.push(request); } } as unknown as Illustrator;
 }
 
@@ -219,12 +233,12 @@ test('SQLite survives reopening, keeps update deduplication, and clears interrup
   await f.bot.handle(part);
   await f.bot.handle(part);
   await f.bot.handle(f.message('/language'));
-  assert.match(f.sent.at(-1)!.payload.text, /^🌐 Язык интерфейса/, 'the language picker from a draft');
+  assert.match(said(f.sent)!.payload.text, /^🌐 Язык интерфейса/, 'the language picker from a draft');
   for (const action of ['view:home', 'continue', 'new-seed', `start:${Object.keys(before.seeds)[0]}`, 'lang:en']) {
     await f.bot.handle(f.click(action));
     assert.equal((f.store.read(1).ui as SeedDraft).draftId, draftId, action);
   }
-  assert.match(f.sent.at(-1)!.payload.text, /^📝 Seed draft, not saved yet\nReceived: 1 part · /, 'a draft in English');
+  assert.match(said(f.sent)!.payload.text, /^📝 Seed draft, not saved yet\nReceived: 1 part · /, 'a draft in English');
   await f.bot.handle(f.message(second));
   assert.deepEqual(reopened(f.path, store => (store.read(1).ui as SeedDraft).parts), [first, second], 'a restart');
   await f.bot.handle(f.message('Последняя часть.'));
@@ -303,8 +317,8 @@ test('SQLite survives reopening, keeps update deduplication, and clears interrup
     if (old) g.store.mutate(1, state => { addSeed(state, seedText); });
     await g.bot.handle(speaking(g.message('/start'), code));
     assert.equal(g.store.read(1).language, language, label);
-    assert.match(g.sent.at(-1)!.payload.text, menu, label);
-    if (language === 'en') assert.doesNotMatch(g.sent.at(-1)!.payload.text, /[А-Яа-яЁё]/, label);
+    assert.match(said(g.sent)!.payload.text, menu, label);
+    if (language === 'en') assert.doesNotMatch(said(g.sent)!.payload.text, /[А-Яа-яЁё]/, label);
   }
 
   // The interface language names what the bot creates and never reaches the model; /language changes it, a stale
@@ -371,11 +385,11 @@ test('a replay or a delivery failure never regenerates a completed scene', async
     assert.ok(f.sent.find(m => m.method === method)!.payload.rich_message.markdown.startsWith(`${scenePrefix(null, haiku).slice(0, -3)} · 📏`), method);
   }
   await f.bot.handle(f.message('/context'));
-  assert.match(f.sent.at(-1)!.payload.text, /≈\d/, '/context');
+  assert.match(said(f.sent)!.payload.text, /≈\d/, '/context');
   // A provider without a check (a CLI) that has written nothing was never seen to answer.
   const cli = fixture(t);
   await cli.bot.handle(cli.click('view:model'));
-  assert.ok(cli.sent.at(-1)!.payload.text.includes(texts('ru').model.configured), 'a provider without a check');
+  assert.ok(said(cli.sent)!.payload.text.includes(texts('ru').model.configured), 'a provider without a check');
 
   // /model checks the selected server without generating and shows a failure; an archived scene keeps its label.
   let checks = 0;
@@ -385,12 +399,12 @@ test('a replay or a delivery failure never regenerates a completed scene', async
   }, async generate() { assert.fail('health checks must not generate'); } },
   allowedUsers: new Set(['1']), maxOutputTokens: 4096, render, scenePrefix, sceneKeyboard, model: 'gemma-4-test', providerName: 'llama-cpp' });
   await server.handle(f.message('/model'));
-  assert.match(f.sent.at(-1)!.payload.text, /gemma-4-test/, 'a server that answers');
-  assert.match(f.sent.at(-1)!.payload.text, /доступ|успеш|ответил/i, 'a server that answers');
+  assert.match(said(f.sent)!.payload.text, /gemma-4-test/, 'a server that answers');
+  assert.match(said(f.sent)!.payload.text, /доступ|успеш|ответил/i, 'a server that answers');
   await server.handle(f.click('view:model'));
-  assert.match(f.sent.at(-1)!.payload.text, /недоступ|не ответил|не удалось/i, 'a server that does not');
+  assert.match(said(f.sent)!.payload.text, /недоступ|не ответил|не удалось/i, 'a server that does not');
   await server.handle(f.message('/last'));
-  const last = f.sent.at(-1)!.payload.rich_message.markdown;
+  const last = said(f.sent)!.payload.rich_message.markdown;
   assert.ok(/Haiku|haiku/.test(last) && !/gemma|Gemma/.test(last), 'an archived scene');
   assert.equal(f.requests.length, 1, 'a check');
 
@@ -421,7 +435,7 @@ test('a replay or a delivery failure never regenerates a completed scene', async
   // GPU is configured.
   for (const [g, notice] of [[down, modelServiceSeparate], [cli, gpuNotConfigured]] as const) for (const command of ['/gpu_start', '/gpu_pause']) {
     await g.bot.handle(g.message(command));
-    assert.equal(g.sent.at(-1)!.payload.text, notice, command);
+    assert.equal(said(g.sent)!.payload.text, notice, command);
   }
 });
 
@@ -576,9 +590,10 @@ test('fork uses only the checkpoint past; a deletion takes only its own scenes a
   ] as const) {
     await f.bot.handle(f.click(`view:delete-${route}`));
     const sentBefore = f.sent.length, rowsBefore = f.rows.length;
-    await f.bot.handle(f.click(`remove-${route}`));
+    // Pressed on the confirmation, whose place the screen after the deletion takes.
+    await f.bot.handle(f.click(`remove-${route}`, 1, sentBefore));
     // The update is handled, the library written and the screen out while Telegram still holds the batch.
-    if (refuse) assert.deepEqual(f.sent.slice(sentBefore).map(call => call.method), ['answerCallbackQuery', 'sendMessage'], label);
+    if (refuse) assert.deepEqual(f.sent.slice(sentBefore).map(call => call.method), ['answerCallbackQuery', 'editMessageText'], label);
     refuse?.();
     await f.bot.idle();
     const out = f.sent.slice(sentBefore);
@@ -589,8 +604,9 @@ test('fork uses only the checkpoint past; a deletion takes only its own scenes a
     assert.deepEqual(f.rows.slice(rowsBefore).filter(row => row.event === 'pictures_removed'),
       removed ? [{ event: 'pictures_removed', picturesRemoved: removed[0], picturesNotRemoved: removed[1], actor: 'owner' }] : [], label);
   }
-  assert.deepEqual(f.sent.filter(call => call.method === 'deleteMessages').flatMap(call => call.payload.message_ids),
-    [502, 503, 501, 504, ...Array.from({ length: 250 }, (_, n) => 8000 + n)], 'the ids, in order');
+  // Apart from the bot's tidying of its own menus and waits, ordinary messages (docs/telegram-ui.md#passing-messages).
+  assert.deepEqual(f.sent.filter(call => call.method === 'deleteMessages' && !call.payload.message_ids.every(id => f.sent[id - 1]?.method === 'sendMessage'))
+    .flatMap(call => call.payload.message_ids), [502, 503, 501, 504, ...Array.from({ length: 250 }, (_, n) => 8000 + n)], 'the ids, in order');
   assert.deepEqual(f.store.read(2), theirs, 'another reader');
 });
 
@@ -615,13 +631,13 @@ test('/compact is explicit, deduplicated and never creates a scene; an automatic
     assert.deepEqual(story.nodes, before.stories[story.id].nodes, label);
     assert.equal(context(story, story.branches[state.active!.branchId]).recent.length, 4, label);
     assert.deepEqual(['pre-compaction', 'compaction'].map(kind => Object.values(story.checkpoints).filter(cp => cp.kind === kind).length), [1, 1], label);
-    assert.match(f.sent.at(-1)!.payload.text, /Сжатие готово/, label);
+    assert.match(said(f.sent)!.payload.text, /Сжатие готово/, label);
     assert.doesNotMatch(JSON.stringify(f.sent), /PRIVATE GENERATED MEMORY/, label);
     // The retained tail cannot be silently discarded.
     await f.bot.handle(f.click('compact'));
     await f.bot.idle();
     assert.equal(f.requests.length, 1, label);
-    assert.match(f.sent.at(-1)!.payload.text, /нечего сжимать/, label);
+    assert.match(said(f.sent)!.payload.text, /нечего сжимать/, label);
   }
   // Cut off at its limit, the memory is refused: the story stays as it was, and the status says why, never what the
   // model wrote.
@@ -633,7 +649,7 @@ test('/compact is explicit, deduplicated and never creates a scene; an automatic
   const whole = cut.store.read(1).stories;
   await cut.bot.handle(cut.message('/compact'));
   await cut.bot.idle();
-  assert.deepEqual([cut.store.read(1).stories, cut.requests.length, cut.sent.at(-1)!.payload.text.includes(texts('ru').compact.reasons.output_limit),
+  assert.deepEqual([cut.store.read(1).stories, cut.requests.length, said(cut.sent)!.payload.text.includes(texts('ru').compact.reasons.output_limit),
     JSON.stringify(cut.sent).includes('PRIVATE')], [whole, 1, true, false], 'a memory cut off at its limit');
 
   // A branch past the threshold is compacted before its next scene, which is written from the new memory, saved and
@@ -656,8 +672,13 @@ test('/compact is explicit, deduplicated and never creates a scene; an automatic
   const branch = story.branches[state.active!.branchId];
   assert.deepEqual([Object.keys(story.nodes).length, context(story, branch).memories.length, context(story, branch).recent.length], [9, 1, 5], 'automatic');
   assert.equal(story.nodes[branch.head!].requestContext!.memory, branch.memory, 'automatic');
-  assert.deepEqual([f.requests.length, f.sent.at(-1)!.method], [2, 'sendRichMessage'], 'automatic');
-  assert.match(f.sent.at(-1)!.payload.rich_message.markdown, /После сжатия зажгли фонарь/, 'automatic');
+  // The compaction's status may still be edited to its end after the scene, and nothing else is touched.
+  const status = f.sent.findIndex(call => call.method === 'sendMessage' && call.payload.text.startsWith('🗜')) + 1;
+  const at = f.sent.findLastIndex(call => !(call.method === 'editMessageText' && call.payload.message_id === status));
+  const last = f.sent[at];
+  assert.deepEqual([f.requests.length, status > 0, last.method], [2, true, 'sendRichMessage'], 'automatic');
+  assert.match(last.payload.rich_message.markdown, /После сжатия зажгли фонарь/, 'automatic');
+  assert.ok(!f.sent.some(call => call.payload.message_id === at + 1 || call.payload.message_ids?.includes(at + 1)), 'the scene untouched');
 });
 
 test('private state cannot be reached from another user, group or unconfirmed delete callback', async t => {
@@ -665,7 +686,7 @@ test('private state cannot be reached from another user, group or unconfirmed de
   const body = 'Описание синтетического острова. '.repeat(300);
   const drawn: SampleRequest[] = [];
   const f = fixture(t, { illustrator: sketchbook(drawn), readSeedFile: async () => { downloads++; return body; } });
-  const shown = () => f.sent.at(-1)!.payload.text;
+  const shown = () => said(f.sent)!.payload.text;
   const { staleButton, lookTooLong, lookNeedsText, lookGone, sampleOff, styleTooLong, styleNeedsText, stylesFull } = texts('ru').errors;
   await f.start();
   const { stories, active } = f.store.read(1);
@@ -904,4 +925,99 @@ test('paused GPU accepts seed drafts and model controls but never creates an unw
   await f.bot.handle(update); await gpu.tick();
   assert.deepEqual(writes, ['running']);
   assert.deepEqual(f.store.read(1).ui, before);
+});
+
+test('a pose-set file leaves the reader\'s queue only in the write that keeps its picture, so a stop halfway loses none', async t => {
+  const picture = { bytes: new Uint8Array([1, 2, 3]), format: 'png' as const, width: 480, height: 640, strippedBytes: 0, sent: 'photo' as const };
+  // The download waits until its read is cut short, as the stop cuts a real one (local/seed-file.ts).
+  const waiting = (_message: unknown, signal?: AbortSignal) =>
+    new Promise<never>((_resolve, reject) => signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true }));
+  const illustrator = { ...sketchbook([]), referencesFor: () => true, poseSetFor: (userId: string) => userId === '1' } as unknown as Illustrator;
+  const f = fixture(t, { illustrator, readPicture: waiting });
+  await f.start();
+  const storyId = Object.keys(f.store.read(1).stories)[0];
+  f.store.mutate('1', state => {
+    state.stories[storyId].sheet = [{ name: 'Мира', look: 'синтетическая' }];
+    state.ui = { input: 'pose-set', storyId, name: 'Мира', at: Date.now() };
+  });
+  const photo = f.message(undefined);
+  Object.assign(photo.message, { photo: [{ file_id: 'synthetic', width: 480, height: 640 }] });
+  // The update ends with the file queued, while its download still waits.
+  await f.bot.handle(photo);
+  assert.equal(f.store.read(1).poseUploads?.length, 1);
+  await f.bot.stop();
+  assert.equal(f.store.read(1).poseUploads?.length, 1, 'a stop halfway leaves the file queued');
+  assert.equal(f.store.read(1).stories[storyId].sheet![0].poseSet, undefined);
+  const again = createBot({ store: f.store, api: f.api, provider: f.provider, illustrator, allowedUsers: new Set(['1', '2']), maxOutputTokens: 4096,
+    render, scenePrefix, sceneKeyboard, readPicture: async () => picture });
+  await again.idle();
+  await again.handle(photo);
+  await again.idle();
+  assert.equal(f.store.read(1).stories[storyId].sheet![0].poseSet?.length, 1, 'the next start keeps it, once');
+  assert.equal(f.store.read(1).poseUploads, undefined);
+  await again.stop();
+});
+
+// A person's card and profile stay as a scene does, and an answer that did not get out leaves everything in place
+// (docs/telegram-ui.md#passing-messages): none of them is ever lost to the bot's tidying.
+test('a card, a profile and an answer that did not get out are never lost unnoticed', async t => {
+  // What Telegram refuses: the scene, every message, or an edit whose answer is lost; and every call asked of it.
+  let refusing: 'scene' | 'all' | 'edit' | undefined;
+  const asked: string[] = [];
+  const fail = (code: number | string) => Promise.reject(Object.assign(new Error('synthetic'), { code }));
+  const f = fixture(t, { illustrator: { ...sketchbook([]), retell: async () => {} } as unknown as Illustrator, hold: method => {
+    asked.push(method);
+    return refusing === 'scene' && method === 'sendRichMessage' ? fail(429)
+      : refusing === 'all' && ['sendMessage', 'editMessageText', 'sendRichMessage'].includes(method) ? fail(429)
+      : refusing === 'edit' && method === 'editMessageText' ? fail('network') : undefined;
+  } });
+  await f.start();
+  const { storyId, branchId } = f.store.read(1).active!;
+  f.store.mutate(1, library => { library.stories[storyId].sheet = [{ name: 'Мира', look: 'A tall woman with short grey hair.', outfit: 'a dark wool coat' }]; });
+  const ref = `${storyId}:0:${personTag('Мира')}`;
+  // The fake Telegram gives each call the id of its place among the calls.
+  const sentLast = () => f.sent.findLastIndex(one => one.method === 'sendMessage') + 1;
+  const told = (text: string) => f.sent.filter(one => one.method === 'sendMessage' && one.payload.text === text).length;
+  const touched = () => f.sent.filter(one => ['deleteMessage', 'deleteMessages', 'editMessageText'].includes(one.method))
+    .flatMap(one => one.payload.message_ids ?? [one.payload.message_id]);
+  await f.bot.handle(f.click(`view:characters:${storyId}`));
+  const list = sentLast();
+  await f.bot.handle(f.click(`view:character:${ref}`, 1, list));
+  const card = sentLast();
+  await f.bot.handle(f.click(`view:profile:${ref}`, 1, card));
+  const profile = sentLast();
+  await f.bot.handle(f.click(`view:character:${ref}`, 1, profile));
+  await f.bot.handle(f.message('/menu'));
+  assert.deepEqual(new Set([list, card, profile, sentLast()]).size, 4, 'each one a message of its own');
+  // A description retold, whose status line Telegram may have turned into the card without saying so: it stays, and
+  // the card is sent again.
+  await f.bot.handle(f.click(`details-edit:${ref}`));
+  await f.bot.handle(f.message('A tall woman with short grey hair and a scar.'));
+  const status = sentLast();
+  refusing = 'edit';
+  await f.bot.idle();
+  refusing = undefined;
+  assert.ok(sentLast() > status, 'the card sent again');
+  // A branch shown again whose scene Telegram refuses: the screen pressed stays, nothing is deleted and no notice is
+  // sent, as before the passing messages; the branch's own screen still goes out.
+  await f.bot.handle(f.click(`view:story:${storyId}`));
+  const pressed = sentLast();
+  refusing = 'scene';
+  asked.length = 0;
+  await f.bot.handle(f.click(`use:${storyId}:${branchId}`, 1, pressed));
+  refusing = undefined;
+  assert.deepEqual([asked, told(texts('ru').notices.deliveryUnconfirmed), touched().includes(pressed)],
+    [['answerCallbackQuery', 'sendRichMessage', 'sendMessage'], 0, false], 'the scene refused, the screen out, nothing else');
+  // A seed deleted whose result Telegram refuses: the deletion stands, the confirmation pressed stays, nothing is
+  // deleted and no notice is tried, as before the passing messages.
+  const seedId = Object.keys(f.store.read(1).seeds)[0];
+  await f.bot.handle(f.click(`view:delete-seed:${seedId}`));
+  const confirmation = sentLast();
+  refusing = 'all';
+  asked.length = 0;
+  await f.bot.handle(f.click(`remove-seed:${seedId}`, 1, confirmation));
+  refusing = undefined;
+  assert.deepEqual([Object.keys(f.store.read(1).seeds).length, asked, touched().includes(confirmation)],
+    [0, ['answerCallbackQuery', 'editMessageText'], false], 'deleted, the result refused, and nothing else asked');
+  assert.deepEqual([card, profile, status, pressed].filter(id => touched().includes(id)), [], 'none of these written over or deleted');
 });

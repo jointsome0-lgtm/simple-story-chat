@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createChat, multipartBody } from './telegram.ts';
+import { TelegramError, chatMemory, createChat, multipartBody } from './telegram.ts';
 import type { TelegramPayload } from './telegram.ts';
 
 // A Telegram that answers when told to, so a test can hold a request in flight the way the network does.
@@ -119,5 +119,45 @@ test('messages go a hundred to a call, one by one when a call fails, and no furt
     answer = () => refused(code);
     assert.equal(await chat.removeAll(ids), 0);
     assert.deepEqual(calls.map(call => call.method), ['deleteMessages', 'deleteMessage'], String(code));
+  }
+});
+
+// The bot tidies only what it sent for the moment (docs/telegram-ui.md#passing-messages). A scene, a photo, its note, a
+// message sent to stay or one from before the bot started is never deleted or written over, whatever it is asked.
+test('only the bot\'s passing messages are ever deleted or written over', async () => {
+  const calls: { method: string; payload: TelegramPayload }[] = [];
+  let refusal: TelegramError | undefined;
+  const api = (async (method: string, payload: TelegramPayload) => {
+    if (method === 'editMessageText' && refusal) throw refusal;
+    calls.push({ method, payload });
+    return { message_id: calls.length };
+  }) as unknown as Parameters<typeof createChat>[0];
+  const memory = chatMemory();
+  const chat = createChat(api, 7, memory);
+  const menu = { text: 'menu', reply_markup: { inline_keyboard: [[{ text: 'M', callback_data: 'view:home' }]] } };
+  const idOf = (sent: unknown) => (sent as { message_id: number }).message_id;
+  const lasting = [idOf(await chat.final('scene', () => ({ reply_markup: menu.reply_markup }))), (await chat.photo(Buffer.from([1]), 1))!,
+    (await chat.note('<b>prompt</b>', 2))!, idOf(await chat.send({ text: 'truncated' })), 9999];
+  const notice = (await chat.show({ text: 'refused' }, 'notice'))!;
+  const screen = (await chat.show(menu, 'screen'))!;
+  // The next update's chat remembers what this one sent.
+  const next = createChat(api, 7, memory);
+  for (const id of lasting) {
+    next.mark(id, 'screen');
+    assert.equal((await next.put(id, { ...menu, text: 'menu again' }, 'screen')).replaced, false, `a screen pressed under ${id}`);
+  }
+  assert.deepEqual(await next.put(screen, { ...menu, text: 'menu again' }, 'screen'), { id: screen, replaced: true });
+  assert.equal(await next.tidy([...lasting, notice]), 1);
+  const touched = calls.filter(call => ['deleteMessage', 'deleteMessages', 'editMessageText'].includes(call.method))
+    .flatMap(call => (call.payload.message_ids as number[] | undefined) ?? [call.payload.message_id as number]);
+  assert.deepEqual(touched, [screen, notice], 'the menu written over, the notice deleted, nothing else');
+  // The same screen asked for again: Telegram refuses the edit either way, and says whether the message is there
+  // showing it already, or gone, when the screen goes anew rather than nowhere.
+  for (const notModified of [true, false]) {
+    refusal = new TelegramError(400, undefined, notModified);
+    const shown = (await next.show(menu, 'screen'))!;
+    const put = await next.put(shown, menu, 'screen');
+    assert.equal(put.replaced, notModified, `not modified: ${notModified}`);
+    assert.equal(calls.at(-1)!.method === 'sendMessage' && put.id !== shown, !notModified, `sent anew: ${!notModified}`);
   }
 });

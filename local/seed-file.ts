@@ -21,13 +21,15 @@ const failed = () => new UserError('Не удалось прочитать фа�
 
 // One file a reader sent, downloaded from Telegram into memory whole or not at all, at most `limit` bytes: a seed here,
 // a picture in local/reference.ts. Fixed Telegram origin; never follow a redirect carrying the bot credential. Only the
-// caller's two refusals come out of it, so that no error names the token.
+// caller's two refusals come out of it, so that no error names the token. `signal`, once it aborts, ends Telegram's
+// answer or the download, whichever is under way, with `failed`, and starts neither after it.
 export async function downloadFile(token: string, api: TelegramApi, get: HttpsGet, fileId: unknown, limit: number,
-  refusals: { tooLarge: () => UserError; failed: () => UserError }): Promise<Buffer> {
+  refusals: { tooLarge: () => UserError; failed: () => UserError }, signal?: AbortSignal): Promise<Buffer> {
   const { tooLarge, failed } = refusals;
-  if (typeof fileId !== 'string' || !fileId) throw failed();
+  if (typeof fileId !== 'string' || !fileId || signal?.aborted) throw failed();
   try {
-    const file = await api('getFile', { file_id: fileId }) as TelegramFile;
+    const file = await api('getFile', { file_id: fileId }, { signal }) as TelegramFile;
+    if (signal?.aborted) throw failed();
     if ((file.file_size ?? 0) > limit) throw tooLarge();
     if (typeof file.file_path !== 'string' || !/^[A-Za-z0-9_-][A-Za-z0-9_./-]*$/.test(file.file_path)
         || file.file_path.split('/').some(p => !p || p === '.' || p === '..')) throw failed();
@@ -54,9 +56,11 @@ export async function downloadFile(token: string, api: TelegramApi, get: HttpsGe
         });
       });
       timer = setTimeout(() => { request.destroy(); reject(failed()); }, 20000);
+      const abort = () => { request.destroy(); reject(failed()); };
+      signal?.addEventListener('abort', abort, { once: true });
       request.on('timeout', () => { request.destroy(); reject(failed()); });
       request.on('error', () => reject(failed()));
-      request.on('close', () => clearTimeout(timer));
+      request.on('close', () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); });
     });
   } catch (error) {
     if (error instanceof UserError) throw error;

@@ -43,7 +43,14 @@ export type SceneNode = {
 // retelling that is out of date.
 export type SheetVersion = { changes?: string[]; description?: string; look?: string; retold?: { details: string; look: string; from: string } };
 export type Branch = { id: string; name: string; head: string | null; memory: string | null };
-export type Checkpoint = { id: string; branchId: string; label: string; kind: string; head: string | null; memory: string | null };
+// `bookmark`: the reader keeps this checkpoint's scene among their bookmarks (`addBookmark`). A build without bookmarks
+// keeps the field as it keeps any other, and loses it only with the checkpoint.
+export type Checkpoint = { id: string; branchId: string; label: string; kind: string; head: string | null; memory: string | null;
+  bookmark?: Bookmark };
+// A bookmark (docs/telegram-ui.md#bookmarks): the label it was saved with, stored as written and never translated
+// afterwards, and when, in milliseconds since the epoch. It names its checkpoint's scene, and one checkpoint of that
+// scene at most holds it.
+export type Bookmark = { label: string; at: number };
 // A portrait of one person of a sheet that the reader kept to pick a reference by (local/picture.ts): the name of its
 // file among the reader's portraits beside the database (local/store.ts), never the picture itself, and how it was
 // drawn — its recipe, on a canvas of its own, the text of the person it was drawn from as `look` (their `details` or
@@ -62,6 +69,12 @@ export type KeptPortrait = PictureRecipe & { source?: 'drawn'; file: string; loo
 export const POSES = ['front', 'three-quarter', 'profile', 'sitting', 'walking'] as const;
 export type Pose = typeof POSES[number];
 export const isPose = (value: unknown): value is Pose => (POSES as readonly unknown[]).includes(value);
+// How much story time a turn covers and when the reader gets the move again (the owner, 2026-09-29): «Миг», seconds
+// to minutes told closely, up to the next point where the hero must act; «Сцена», the default; «Глава», hours to days
+// told briefly, up to the next important fork. A story stores only `moment` or `chapter` (`Story.pace`).
+export const PACES = ['moment', 'scene', 'chapter'] as const;
+export type Pace = typeof PACES[number];
+export const isPace = (value: unknown): value is Pace => (PACES as readonly unknown[]).includes(value);
 // A picture of a person that a reader in the reference experiment sent (local/reference.ts): the name of its file
 // beside the portraits, stripped of its metadata and kept in the format it came in, its size in pixels, and the English
 // caption it came with, if any. Nothing drew it, so it has no recipe. Frames take it as they take a drawn portrait (the
@@ -69,6 +82,45 @@ export const isPose = (value: unknown): value is Pose => (POSES as readonly unkn
 // the poses are drawn, and every picture sent is pinned.
 export type OwnReference = { source: 'own'; file: string; format: 'png' | 'jpeg' | 'webp'; width: number; height: number;
   at: number; pinned: boolean; caption?: string };
+// The labels a captioner on this computer gives each picture of a pose set (local/pose-set.ts), one of each list: how
+// the person holds themselves, the side they turn to the viewer, with left and right the sides of the picture they
+// face, and how much of them the picture shows. English, as captions are.
+// Keep the CPU captioner's measured six-label protocol independent of manually supplied domain poses.
+export const CAPTIONER_POSE_LABELS = ['standing', 'sitting', 'walking', 'lying', 'kneeling', 'crouching'] as const;
+export const POSE_LABELS = [...CAPTIONER_POSE_LABELS, 'all_fours'] as const;
+export const SIDE_LABELS = ['front', 'three-quarter left', 'three-quarter right', 'profile left', 'profile right', 'back'] as const;
+export const FRAMING_LABELS = ['full body', 'half body', 'head and shoulders'] as const;
+// A caption: the three labels, and how sure the captioner was of the least sure of them, from 0 to 1, or 1 where the
+// reader gave all three.
+export type PoseCaption = { pose: typeof POSE_LABELS[number]; side: typeof SIDE_LABELS[number]; framing: typeof FRAMING_LABELS[number];
+  confidence: number };
+export const POSE_ANNOTATION_LIMITS = { specificPose: 64, poseDetails: 320, expression: 160 } as const;
+export const FACE_VISIBILITY_LABELS = ['visible', 'partial', 'hidden'] as const;
+export type PoseAnnotations = { specificPose?: string; poseDetails?: string; expression?: string;
+  faceVisibility?: typeof FACE_VISIBILITY_LABELS[number] };
+// Optional human labels. Overlong fields are omitted, not silently made into another variant; the importer reports
+// their row. Bound before Unicode normalisation, including for already saved records used in a model request.
+export function poseAnnotations(value: PoseAnnotations): PoseAnnotations {
+  const kept: PoseAnnotations = {};
+  for (const field of ['specificPose', 'poseDetails', 'expression'] as const) {
+    const raw = value[field];
+    if (typeof raw !== 'string' || raw.length > POSE_ANNOTATION_LIMITS[field]) continue;
+    const text = raw.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().normalize('NFC');
+    if (text && text.length <= POSE_ANNOTATION_LIMITS[field]) kept[field] = text;
+  }
+  if ((FACE_VISIBILITY_LABELS as readonly unknown[]).includes(value.faceVisibility)) kept.faceVisibility = value.faceVisibility;
+  return kept;
+}
+// One of many pictures of a person that a reader in the pose-set experiment sent (local/pose-set.ts; the tester,
+// 2026-09-28, has about 80 of one character), kept as a picture of their own is (`OwnReference`): its file, format, size
+// in pixels and bytes, and when it came. `caption` comes later, from the captioner, and `failed` counts the captioner's
+// attempts that gave none. A frame takes one picture of the set per person, the one its pose calls for. A picture that
+// came in an archive may have labels its reader gave in the archive's labels.csv (local/pose-archive.ts): `given`, the
+// labels of the three they gave, which its caption keeps whatever the captioner says, so that a label of the caption is
+// the reader's where `given` has it and the captioner's where not, and with all three the caption is theirs from the
+// start and the captioner never sees it; and `main`, which prefers it within the same pose variant.
+export type PoseSetPicture = PoseAnnotations & { file: string; format: OwnReference['format']; width: number; height: number; bytes: number; at: number;
+  caption?: PoseCaption; failed?: number; given?: Partial<Pick<PoseCaption, 'pose' | 'side' | 'framing'>>; main?: true };
 export type Story = {
   id: string; seedId: string; title: string; branches: Record<string, Branch>; checkpoints: Record<string, Checkpoint>;
   nodes: Record<string, SceneNode>; memories: Record<string, MemoryVersion>;
@@ -86,7 +138,8 @@ export type Story = {
   // reader's, and the look was compressed from them. That rewrite keeps what the reader wrote and the portrait they kept
   // (local/picture.ts `rewrittenSheet`), and their references with it.
   // A reader in the reference experiment may send a picture of a person of their own (docs/telegram-ui.md#references),
-  // which is kept in a pose (`poses`); the front's stands over the portrait.
+  // which is kept in a pose (`poses`); the front's stands over the portrait. One in the pose-set experiment may send
+  // many (`poseSet`), which frames choose from by pose (docs/telegram-ui.md#pose-set).
   // `portraitPrompt` is the whole prompt the reader wrote for this person's portraits, from the one folded under a
   // portrait (docs/telegram-ui.md#portrait-prompt): every portrait of them is drawn from it word for word until they
   // drop it, and without it from the bot's own (local/image-portraits.ts `portraitPrompt`).
@@ -95,15 +148,21 @@ export type Story = {
   // its own line (local/picture-versions.ts `sheetAt`); the portrait and the references stay here, one per person.
   sheet?: { name: string; description?: string; changes?: string; details?: string; look: string; outfit?: string;
     descriptionEdited?: boolean; edited?: boolean; lookPending?: boolean; detailsEdited?: boolean; portrait?: KeptPortrait;
-    poses?: Partial<Record<Pose, OwnReference>>; portraitPrompt?: string }[];
+    poses?: Partial<Record<Pose, OwnReference>>; portraitPrompt?: string; poseSet?: PoseSetPicture[] }[];
   // The person of the sheet, by name, whose eyes the frames of this story are seen through (the owner, 2026-09-27;
   // local/picture-pov.ts). At most one; without it, or while that person is not in the scene or not on the sheet, a
   // frame is drawn as usual. Only the local bot writes it, from the characters' card.
   pov?: string;
+  // The story's pace when it is not «Сцена», which a story without it has (`PACES`). Only the local bot writes it, from
+  // the pace picker of the menu, and only scene requests read it (local/prompt.ts).
+  pace?: Exclude<Pace, 'scene'>;
 };
 export type Job = {
   id: string; storyId: string; branchId: string; head: string | null; memory: string | null; input: string; started: number;
   kind?: 'compact';
+  // The reader wrote nothing: «Продолжить» or the start of the story handed the move to the narrator. Without it the
+  // input is the reader's own message, the hero's move. Only a story with a pace tells the narrator which it is.
+  move?: 'narrator';
 };
 // New drafts always have draftId and parts, but bot.ts and ui.ts also accept a stored draft without them;
 // keep those fallbacks for older or incomplete v1 data.
@@ -124,6 +183,16 @@ export type LookInput = { input: 'look' | 'details'; storyId: string; name: stri
 // their next photo or file is that, if it comes within half an hour of `at`, when the wait began. The person is the one
 // whose card they opened, by story and name.
 export type ReferenceInput = { input: 'reference'; storyId: string; name: string; pose: Pose; at: number; confirm?: undefined };
+// A reader in the pose-set experiment sending many pictures of one person of a story's sheet (local/pose-set.ts): every
+// photo or file that comes within half an hour of `last`, when the last one came, or of `at`, when the wait began,
+// joins the person's pose set, until a button or a command ends the wait. The person is the one whose card they opened,
+// by story and name.
+export type PoseSetInput = { input: 'pose-set'; storyId: string; name: string; at: number; last?: number; confirm?: undefined };
+// A photo or a file a reader sent while a wait for a pose set stood, as Telegram described it, until the bot has read it
+// (local/bot.ts `uploadNext`): the sizes of a photo, or the file, never a caption; the wait it answered, by its story,
+// person and start; and the update that brought it. The fields are Telegram's, not validated here.
+export type PoseUploadFile = { photo?: Record<string, unknown>[]; document?: Record<string, unknown> };
+export type PendingPoseUpload = { update: number; storyId: string; name: string; at: number; file: PoseUploadFile };
 // A reader writing the whole prompt of a portrait of one person of a story's sheet (local/picture.ts `portrait`): their
 // next text message is that prompt, which the person keeps as theirs, and a variant of the portrait whose note they
 // pressed is drawn from it with that portrait's `seed`, while the graph and the checkpoint are still the ones its
@@ -156,7 +225,8 @@ export type Language = 'ru' | 'en' | 'zh' | 'ko' | 'ja';
 export type Library = {
   version: 1; seq: number; seeds: Record<string, Seed>; stories: Record<string, Story>;
   active: { storyId: string; branchId: string } | null; job: Job | null;
-  ui: SeedDraft | DeleteConfirmation | StyleInput | PromptInput | LookInput | ReferenceInput | PortraitPromptInput | ProfileInput | null; seen: number[];
+  ui: SeedDraft | DeleteConfirmation | StyleInput | PromptInput | LookInput | ReferenceInput | PoseSetInput | PortraitPromptInput | ProfileInput | null;
+  seen: number[];
   interrupted?: boolean; language?: Language;
   // The look of this reader's pictures: a preset's key or the id of one of their own styles, and those styles. Only
   // the local bot reads them (local/picture-style.ts), and only for a reader it draws for; without a choice the bot's
@@ -165,6 +235,9 @@ export type Library = {
   // The pictures in this reader's chat that Telegram would still let the bot delete, so that deleting a seed or a
   // branch takes the pictures of its scenes out of the chat too (`forgetLostPictures`). Only the local bot writes them.
   sentPictures?: SentPicture[];
+  // The photos and files this reader sent for pose sets that the bot has not read yet, in the order they came. Only the
+  // local bot writes them.
+  poseUploads?: PendingPoseUpload[];
 };
 // Names the library gives to what it creates. They are stored as written and never translated afterwards.
 export type Labels = { firstBranch: string; seedCheckpoint: string; forkBranch: (from: string) => string; forkCheckpoint: string; afterCompaction: string };
@@ -336,7 +409,15 @@ export function deleteBranch(state: Library, storyId: string, branchId: string):
   const story = state.stories[storyId];
   if (!story?.branches[branchId]) throw new UserError('Ветка уже удалена.', 'branchGone');
   delete story.branches[branchId];
-  for (const cp of Object.values(story.checkpoints)) if (cp.branchId === branchId) delete story.checkpoints[cp.id];
+  const gone = Object.values(story.checkpoints).filter(cp => cp.branchId === branchId);
+  for (const cp of gone) delete story.checkpoints[cp.id];
+  // A bookmark names a scene, not the checkpoint it was saved on: while another checkpoint names that scene, the
+  // bookmark moves there, to one with the same memory if there is one, and it goes only with the scene's last checkpoint.
+  for (const cp of gone) {
+    const left = Object.values(story.checkpoints).filter(other => other.head === cp.head && Object.hasOwn(story.branches, other.branchId));
+    const heir = left.find(other => other.memory === cp.memory) ?? left[0];
+    if (cp.bookmark && heir && !bookmarkOf(story, cp.head)) heir.bookmark = cp.bookmark;
+  }
   collect(story);
   if (!Object.keys(story.branches).length) delete state.stories[storyId];
   if (state.active?.storyId === storyId && state.active.branchId === branchId) state.active = null;
@@ -354,6 +435,31 @@ export function deleteSeed(state: Library, seedId: string): void {
   }
   delete state.seeds[seedId];
   state.ui = null;
+}
+
+// The checkpoint that holds the bookmark of the scene `head`, if the reader keeps one. Every checkpoint of a scene opens
+// it and forks from it, whatever memory it has: the scene's own, a fork made from it, a compaction after it. One on a
+// checkpoint whose branch is gone, which no build leaves, holds nothing (local/ui.ts does not show it either).
+export function bookmarkOf(story: Story, head: string | null): Checkpoint | undefined {
+  return Object.values(story.checkpoints).find(cp => cp.bookmark && cp.head === head && Object.hasOwn(story.branches, cp.branchId));
+}
+
+// Keeps the scene of a checkpoint among the reader's bookmarks, once: a scene already kept keeps its bookmark.
+export function addBookmark(story: Story, checkpointId: string, label: string, at: number): Checkpoint {
+  const cp = story.checkpoints[checkpointId];
+  if (!cp) throw new UserError('Чекпоинт уже удалён.', 'checkpointGone');
+  const holder = bookmarkOf(story, cp.head);
+  if (holder) return holder;
+  for (const other of Object.values(story.checkpoints)) if (other.head === cp.head) delete other.bookmark;
+  cp.bookmark = { label: label.slice(0, 200), at };
+  return cp;
+}
+
+// Takes the scene of a checkpoint out of the bookmarks, whichever of its checkpoints holds it.
+export function removeBookmark(story: Story, checkpointId: string): void {
+  const cp = story.checkpoints[checkpointId];
+  if (!cp) throw new UserError('Чекпоинт уже удалён.', 'checkpointGone');
+  for (const other of Object.values(story.checkpoints)) if (other.head === cp.head) delete other.bookmark;
 }
 
 // Telegram lets a bot delete a message of its own for 48 hours after sending it and never later (Bot API
@@ -390,7 +496,8 @@ type SheetEntry = NonNullable<Story['sheet']>[number];
 export function poseReference(person: SheetEntry, pose: Pose): OwnReference | KeptPortrait | undefined {
   return person.poses?.[pose] ?? (pose === 'front' ? person.portrait : undefined);
 }
-// Every file a person's references hold, which the store keeps while the sheet refers to them (local/store.ts).
+// Every file a person's references hold, their pose set's among them, which the store keeps while the sheet refers to
+// them (local/store.ts).
 export function referenceFiles(person: SheetEntry): string[] {
-  return [person.portrait, ...Object.values(person.poses ?? {})].flatMap(one => one?.file ? [one.file] : []);
+  return [person.portrait, ...Object.values(person.poses ?? {}), ...person.poseSet ?? []].flatMap(one => one?.file ? [one.file] : []);
 }

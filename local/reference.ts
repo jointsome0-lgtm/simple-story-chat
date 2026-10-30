@@ -24,11 +24,11 @@ import { texts } from './text.ts';
 export const REFERENCE_BYTES = 10 * 1024 * 1024;
 // A picture's sides, in pixels. The card takes a reference at about 352x640 whatever its shape
 // (local/picture-references.ts `referenceScale`), so the shorter side of at least `min` enlarges a square one and a half
-// times at most. The longer side of at most `max` keeps it within what Telegram takes as a photo. And the longer side
-// is at most `ratio` times the shorter: a person fills too little of a picture more drawn out than that, and the sides
-// scaled to multiples of 32 would bend its shape by more than a few hundredths. A picture outside these is refused, never
-// cut or stretched to fit.
-export const REFERENCE_SIDES = { min: 320, max: 4096, ratio: 2.5 };
+// times at most. The longer side of at most `max` keeps it within what Telegram takes as a photo. A picture outside these
+// is refused, never cut or stretched to fit. One whose longer side is over 2.5 times the shorter was refused too, as its
+// sides scaled to multiples of 32 would bend its shape by more than a few hundredths; since the owner's decision of
+// 2026-09-28 the card pads it to 2.5 with grey instead (local/picture-references.ts `referencePad`).
+export const REFERENCE_SIDES = { min: 320, max: 4096 };
 // The wait for a picture, from the press of its button.
 export const REFERENCE_WAIT_MS = 30 * 60 * 1000;
 // A caption's most characters: a few words of English, to match a frame by.
@@ -46,7 +46,7 @@ const EXTENSIONS = { png: 'png', jpeg: 'jpg', webp: 'webp' } as const;
 // The refusals of a picture, by the key of their message in the interface catalogs (local/text/), where the bot finds
 // its translation, and by their code in a log row.
 export const REFUSAL_CODES = { referenceType: 'type', referenceBroken: 'broken', referenceSmall: 'small', referenceHuge: 'huge',
-  referenceShape: 'shape', referenceTooLarge: 'too_large', referenceIncomplete: 'incomplete', referenceArchive: 'archive' } as const;
+  referenceTooLarge: 'too_large', referenceIncomplete: 'incomplete', referenceArchive: 'archive' } as const;
 export type PictureRefusal = keyof typeof REFUSAL_CODES;
 const refusal = (key: PictureRefusal) => new UserError(texts('ru').errors[key], key);
 
@@ -66,19 +66,20 @@ export function imageFormat(bytes: Uint8Array): Format | undefined {
     : bytes.length >= 12 && ascii(bytes, 0, 4) === 'RIFF' && ascii(bytes, 8, 4) === 'WEBP' ? 'webp' : undefined;
 }
 
-// The picture as it will be kept, or a refusal. Its size comes from its own header.
-export function strippedReference(bytes: Uint8Array): ReferencePicture {
+// The picture as it will be kept, or a refusal. Its size comes from its own header. `parts` bounds the chunks or
+// segments the walk goes through, each of which costs it time and memory however small: a picture with more is broken
+// (local/pose-archive.ts, which walks the pictures of an archive).
+export function strippedReference(bytes: Uint8Array, parts = Infinity): ReferencePicture {
   if (bytes.length > REFERENCE_BYTES) throw refusal('referenceTooLarge');
   const format = imageFormat(bytes);
   if (!format) throw refusal('referenceType');
   let picture: Picture;
   // A file cut short, or lying about its lengths, is broken, whatever the reading tripped on.
-  try { picture = { png, jpeg, webp }[format](bytes); } catch (error) { throw error instanceof UserError ? error : refusal('referenceBroken'); }
-  const { min, max, ratio } = REFERENCE_SIDES;
+  try { picture = { png, jpeg, webp }[format](bytes, parts); } catch (error) { throw error instanceof UserError ? error : refusal('referenceBroken'); }
+  const { min, max } = REFERENCE_SIDES;
   const across = Math.min(picture.width, picture.height), along = Math.max(picture.width, picture.height);
   if (across < min) throw refusal('referenceSmall');
   if (along > max) throw refusal('referenceHuge');
-  if (along > across * ratio) throw refusal('referenceShape');
   return { ...picture, strippedBytes: Math.max(0, bytes.length - picture.bytes.length) };
 }
 
@@ -98,12 +99,12 @@ export function pictureSize(bytes: Uint8Array): { width: number; height: number 
 // and the rest, an animation's among them, which leaves its first frame — and a critical one the bot does not know
 // refuses the picture, since its pixels could not be read without it.
 const PNG_KEPT = ['IHDR', 'PLTE', 'tRNS', 'IDAT', 'IEND'];
-function png(bytes: Uint8Array): Picture {
+function png(bytes: Uint8Array, parts = Infinity): Picture {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const kept: Uint8Array[] = [bytes.subarray(0, 8)];
   const types: string[] = [];
   for (let at = 8; types.at(-1) !== 'IEND';) {
-    if (at + 12 > bytes.length) throw refusal('referenceBroken');
+    if (at + 12 > bytes.length || types.length >= parts) throw refusal('referenceBroken');
     const length = view.getUint32(at), end = at + 12 + length;
     const type = ascii(bytes, at + 4, 4);
     if (end > bytes.length || !/^[A-Za-z]{4}$/.test(type)
@@ -122,13 +123,13 @@ function png(bytes: Uint8Array): Picture {
 // quantization tables, the restart interval, and each scan with its data — and so are Adobe's 12 bytes, which say
 // whether three channels are RGB or YCbCr and nothing else. Every APPn segment (EXIF and XMP in APP1, ICC and MPF in
 // APP2, JFIF with its thumbnail, Photoshop's), every comment, and everything after the picture's end go.
-function jpeg(bytes: Uint8Array): Picture {
+function jpeg(bytes: Uint8Array, parts = Infinity): Picture {
   const kept: Uint8Array[] = [bytes.subarray(0, 2)];
   let size: { width: number; height: number } | undefined;
-  let scans = 0;
+  let scans = 0, segments = 0;
   let at = 2;
   for (;;) {
-    if (bytes[at] !== 0xff) throw refusal('referenceBroken');
+    if (bytes[at] !== 0xff || ++segments > parts) throw refusal('referenceBroken');
     // Any number of fill bytes may come before a marker.
     while (bytes[at + 1] === 0xff) at++;
     const marker = bytes[at + 1];
@@ -168,14 +169,15 @@ function jpeg(bytes: Uint8Array): Picture {
 // A still WebP, lossy or lossless, written anew around the chunk of its pixels, and for a lossy one with transparency
 // the chunk of that too and the header that announces it. ICC, EXIF and XMP chunks go, and so does any other; an
 // animation is refused.
-function webp(bytes: Uint8Array): Picture {
+function webp(bytes: Uint8Array, parts = Infinity): Picture {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const end = 8 + view.getUint32(4, true);
   if (end > bytes.length) throw refusal('referenceBroken');
   const found = new Map<string, Uint8Array>();
+  let chunks = 0;
   for (let at = 12; at < end; ) {
     const size = at + 8 <= end ? view.getUint32(at + 4, true) : Infinity;
-    if (at + 8 + size > end) throw refusal('referenceBroken');
+    if (at + 8 + size > end || ++chunks > parts) throw refusal('referenceBroken');
     const type = ascii(bytes, at, 4);
     if (type === 'ANIM' || type === 'ANMF') throw refusal('referenceType');
     if (['VP8X', 'ALPH', 'VP8 ', 'VP8L'].includes(type) && !found.has(type)) found.set(type, bytes.subarray(at + 8, at + 8 + size));
@@ -220,14 +222,14 @@ function webp(bytes: Uint8Array): Picture {
 
 // Bot API PhotoSize, not validated in advance.
 type PhotoSize = { file_id?: unknown; file_size?: unknown; width?: unknown; height?: unknown };
-const isArchive = (document: TelegramDocument) => /zip/i.test(String(document.mime_type ?? '')) || /\.zip$/i.test(document.file_name ?? '');
+export const isArchive = (document: TelegramDocument) => /zip/i.test(String(document.mime_type ?? '')) || /\.zip$/i.test(document.file_name ?? '');
 
 // Reads the picture a reader sent while the bot waited for one (local/bot.ts): the largest size of a photo, or a file,
 // which is whatever its first bytes say and not what its name or type says. A size Telegram declares over the limit is
 // refused before anything is downloaded; the download is seeds' own (local/seed-file.ts), in memory and never on this
 // disk; the rest is the picture's (`strippedReference`).
 export function createPictureReader(token: string, api: TelegramApi, { get = https.get }: { get?: HttpsGet } = {}) {
-  return async (message: { photo?: unknown; document?: TelegramDocument }): Promise<ReceivedPicture> => {
+  return async (message: { photo?: unknown; document?: TelegramDocument }, signal?: AbortSignal): Promise<ReceivedPicture> => {
     let file: { id: unknown; size: unknown; sent: ReceivedPicture['sent'] };
     if (Array.isArray(message.photo)) {
       const area = (size: PhotoSize | undefined) => typeof size?.width === 'number' && typeof size.height === 'number' ? size.width * size.height : -1;
@@ -241,7 +243,7 @@ export function createPictureReader(token: string, api: TelegramApi, { get = htt
     } else throw refusal('referenceType');
     if (typeof file.size === 'number' && file.size > REFERENCE_BYTES) throw refusal('referenceTooLarge');
     const bytes = await downloadFile(token, api, get, file.id, REFERENCE_BYTES,
-      { tooLarge: () => refusal('referenceTooLarge'), failed: () => refusal('referenceIncomplete') });
+      { tooLarge: () => refusal('referenceTooLarge'), failed: () => refusal('referenceIncomplete') }, signal);
     return { ...strippedReference(bytes), sent: file.sent };
   };
 }

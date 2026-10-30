@@ -7,7 +7,9 @@
 //
 // Two rules of docs/illustrations-plan.md hold the shape of this file:
 //   - the description is a second model call on OUR model, and the prompt for the image model is assembled in code
-//     from its fields (local/illustrate.ts). No name of a character reaches the image model.
+//     from its fields (local/illustrate.ts). No name of a character reaches the image model. For the readers of
+//     SIMPLE_CHAT_G_PROMPT_USERS a third call writes the prompt whole, and code takes the names out of it
+//     (local/picture-g.ts).
 //   - the picture is drawn on a SECOND card, reached through an ssh tunnel on loopback (local/image-batch.ts).
 //     The language model's card is 22-25 GB full; the image model needs its own, and `SIMPLE_CHAT_IMAGE_URL` is
 //     checked against the model's own server in local/config.ts.
@@ -47,8 +49,8 @@ import { recordPicture, referenceFiles } from '../lib/library.ts';
 import type { Library, PictureRecipe, SceneNode, Story } from '../lib/library.ts';
 import type { ImageConfig } from './config.ts';
 import { estimateTokens, requestStamp, sameContext } from './context.ts';
-import { SAMPLER_DEFAULTS, apiGraph, applyToWorkflow, attentionOffered, drawOne, latentSizeOf, previewOnly, referenceSlots, samplerSettingsOf,
-  serverPins, settled, textEncoderOf, withAttention } from './image-batch.ts';
+import { SAMPLER_DEFAULTS, apiGraph, applyToWorkflow, attentionOffered, drawOne, latentSizeOf, pictureModelOf, previewOnly, referenceSlots,
+  samplerSettingsOf, serverPins, settled, textEncoderOf, withAttention } from './image-batch.ts';
 import type { CardPlace, Comfy, Graph, Steps } from './image-batch.ts';
 import { etaText, left, moved, waited } from './eta.ts';
 import type { Durations } from './eta.ts';
@@ -57,12 +59,18 @@ import type { Character, Description, Excerpt } from './illustrate.ts';
 import { PORTRAIT_CLOTHES, PORTRAIT_STYLE, portraitPrompt, portraitText } from './image-portraits.ts';
 import type { ErrorDetails, Log } from './model-error.ts';
 import { errorCode, safeErrorDetails } from './model-error.ts';
-import type { ModelRequest, Provider } from './model.ts';
+import type { GenerationResult, ModelRequest, Provider } from './model.ts';
 import { styleChoice, styleLine } from './picture-style.ts';
 import type { StyleChoice } from './picture-style.ts';
-import { REFERENCE_VERSION, frameReferences, pinReferences, readReference, referenceGraph, referencePrompt, temporaryReferences } from './picture-references.ts';
+import { REFERENCE_VERSION, frameReferences, pinReferences, readReference, referenceGraph, referenceOpening, referencePrompt,
+  temporaryReferences } from './picture-references.ts';
 import { pictureSize } from './reference.ts';
 import { povRequest, seenBy, viewerOf } from './picture-pov.ts';
+import { clothesRequest } from './picture-clothes.ts';
+import { gKept, gLine, gRequest, gTagged } from './picture-g.ts';
+import type { GCounts, GFallback, GKept, GTagMiss } from './picture-g.ts';
+import { poseCandidates, poseRequest, viewsOf } from './pose-set.ts';
+import type { PoseViews, Viewed } from './pose-set.ts';
 import { addChanges, changesRequest, countVersions, descriptionOf, lastingChangesOf, laterRequest, ownDescription, personHere, personKey,
   sceneOf, sheetAt, staleAt } from './picture-versions.ts';
 import { createProgress } from './progress.ts';
@@ -117,6 +125,15 @@ export type Illustrator = ReturnType<typeof createIllustrator>;
 // provider's or a transport's own message can never become one. A Telegram failure keeps its numeric status.
 const safeCode = (value: unknown) =>
   typeof value === 'number' ? value : typeof value === 'string' && /^[a-z_]{1,40}$/.test(value) ? value : 'picture_failed';
+
+// The caption of a photo with the name of the model that drew it (`pictureModelOf`) as its last line: the whole
+// caption of a photo that has none, and one more line of one that has, unless that takes it past Telegram's 1024
+// characters. A name is not translated.
+function withModel(caption: Screen | undefined, model: string | undefined): Screen | undefined {
+  if (!model) return caption;
+  const text = `${caption ? `${caption.text}\n` : ''}🎨 ${model}`;
+  return text.length <= 1024 ? { ...caption, text } : caption;
+}
 
 // A description call that was stopped because somebody else needed the model (local/scheduler.ts): a picture is the
 // one thing here that may be given up, and giving it up is not a failure of the feature.
@@ -218,7 +235,7 @@ export function rewrittenSheet(before: SheetEntry[], written: Character[]): Shee
     return { ...one, ...mine && ownDescription(mine) ? { description: descriptionOf(mine), descriptionEdited: true } : {},
       ...mine?.edited ? { look: mine.look, edited: true } : {}, ...mine?.portrait ? { portrait: mine.portrait } : {},
       ...mine?.poses ? { poses: mine.poses } : {}, ...mine && ownPortraitPrompt(mine) ? { portraitPrompt: mine.portraitPrompt } : {},
-      lookPending: true };
+      ...mine?.poseSet ? { poseSet: mine.poseSet } : {}, lookPending: true };
   });
   const names = new Set(written.map(one => personKey(one.name)));
   return [...kept, ...before.filter(one => (one.edited || ownDescription(one) || referenceFiles(one).length || ownPortraitPrompt(one))
@@ -499,12 +516,56 @@ export function createIllustrator(config: ImageConfig, deps: {
   // changes the story makes, and they may write a person's text «only from this moment». Versions a story already has
   // are drawn for everybody.
   const versionsFor = (userId: string) => config.users.has(userId) && !!config.versionUsers?.has(userId);
+  // Whether a reader has pose sets (config SIMPLE_CHAT_POSE_SET_USERS, local/pose-set.ts): they may send a person's
+  // pictures by the dozen, and their frames choose one of them by pose. Only while the reader is in the reference
+  // experiment, whose frames take references at all (`referenceGate`, below), and while the story model runs on this
+  // computer or on our card: the captions go into each frame's description, and no hosted API is to see them.
+  const ownModel = deps.model?.provider === 'llama-cpp' || deps.model?.provider === 'simple-serving';
+  const poseSetFor = (userId: string) => ownModel && !referenceGate(userId) && !!config.poseSetUsers?.has(userId);
+  // The tester's frame change of 2026-09-28 for its own readers (SIMPLE_CHAT_CLOTHES_USERS): a frame names what each
+  // person wears and what of them is bare, and says it before the reference wording. Without it every request is as it was.
+  const clothesFor = (userId: string) => config.users.has(userId) && !!config.clothesUsers?.has(userId);
+  // Whether a reader's frames are drawn from a whole prompt the story model writes after the frame (config
+  // SIMPLE_CHAT_G_PROMPT_USERS, local/picture-g.ts). Without it every request is as it was.
+  const gFor = (userId: string) => config.users.has(userId) && !!config.gPromptUsers?.has(userId);
+
+  // G's request for a frame of a reader who has it, once the frame's answer is in (local/picture-g.ts): the scene's own
+  // request once more with G's instruction last, in the frame's turn, with its anchor and its one retry. Nothing is
+  // thrown: a failure, or the picture stopped meanwhile, leaves the reason today's prompt is drawn for, and the frame's
+  // answer stands as if G had not been asked. The counts are the time and the tokens of both tries, where the server
+  // reported them.
+  async function askG(model: Provider, context: Excerpt, sheet: Character[], anchor: number | null, signal: AbortSignal): Promise<{ kept: GKept; counts: GCounts }> {
+    const started = now();
+    let finish: GenerationResult['finishReason'] | undefined;
+    const tokens: Omit<GCounts, 'gMs'> = {};
+    const add = (key: keyof typeof tokens, value: number | null | undefined) => { if (typeof value === 'number') tokens[key] = (tokens[key] ?? 0) + value; };
+    const watched: Provider = { generate: async (request, controls) => {
+      const result = await model.generate(request, controls);
+      finish = result.finishReason;
+      add('gInputTokens', result.usage?.inputTokens);
+      add('gCachedTokens', result.usage?.cachedInputTokens);
+      add('gOutputTokens', result.usage?.outputTokens);
+      return result;
+    } };
+    let kept: GKept;
+    try {
+      const { value } = await askJson(watched, trusted(model, gRequest(context, sheet), anchor), { signal });
+      kept = finish === 'length' ? { fallback: 'truncated' } : gKept(value, sheet);
+    } catch (error) {
+      kept = { fallback: errorCode(error) === 'unparsed_description'
+        ? finish === 'length' ? 'truncated' : 'unparsed' : 'failed' };
+    }
+    return { kept, counts: { gMs: Math.max(0, now() - started), ...tokens } };
+  }
 
   // The frame of each reader's latest described scene, in memory only and only until the next one: a sample of a
   // style is drawn from it without asking the language model again. Never stored and never logged.
   // `viewer` is the person the frame was seen through, if the story had one then (local/picture-pov.ts), and `pov`
   // whether it was.
-  const frames = new Map<string, { storyId: string; nodeId: string; description: Description; sheet: Character[]; viewer?: string; pov?: boolean }>();
+  // `views` holds concrete reference files resolved from each person's offered pose candidates (local/pose-set.ts).
+  // `g` is the prompt the story model wrote for the frame, or why there is none, for a reader who has G (`askG`).
+  const frames = new Map<string, { storyId: string; nodeId: string; description: Description; sheet: Character[]; viewer?: string; pov?: boolean;
+    views?: PoseViews; g?: GKept }>();
   // The portrait each reader was shown last, for its keep button (`keepPortrait`), with the text it was drawn from as
   // `look` (`portraitText`), empty for one drawn from the reader's own prompt (`own`), and the whole `prompt`: in memory
   // only, one per reader, until the next one, the keep, a delivery that failed, or PORTRAIT_HELD_MS. That one timer is
@@ -544,10 +605,15 @@ export function createIllustrator(config: ImageConfig, deps: {
     // How many lasting changes this frame found in the story, for a reader who has versions of the sheet.
     const versions = versionsFor(userId);
     let lastingChanges = versions ? 0 : undefined;
+    // For a reader with pose sets: each chosen reference file and the number of people offered candidates.
+    let views: PoseViews | undefined;
+    let poseSetPeople: number | undefined;
+    // For a reader who has G: what the frame keeps of it, and its request's counts for the row (`askG`).
+    let g: { kept: GKept; counts: GCounts } | undefined;
     // Both calls continue the request the scene itself was written from, so right after the scene they belong in the
     // slot where that prefix is cached and nowhere else: `sharesPrefix` is the scheduler's word for it, and it also
     // ends this turn the moment its own reader asks for the next scene (local/scheduler.ts).
-    const description = await inTurn(provider, async model => {
+    const fields = async (model: Provider): Promise<Description> => {
       // One sheet per story, written from the whole history the first time a scene of it is illustrated and
       // kept beside the story's memory afterwards: every later frame of this story repeats these lines
       // verbatim, which is the only thing that made a character recognisable across pictures (step 6). A sheet
@@ -584,8 +650,20 @@ export function createIllustrator(config: ImageConfig, deps: {
       // the viewer's apart. Each becomes a version at this scene, retold before this frame is drawn, so that the frame
       // of the scene with the haircut already has it. Without them the request is as it was.
       const named = versions ? sheet.filter(one => one !== viewer) : [];
-      const asked = changesRequest(request, named);
-      const answer = (await askJson(model, trusted(model, viewer ? povRequest(asked, viewer) : asked, anchor), { signal })).value;
+      const changing = changesRequest(request, named);
+      const asked = clothesFor(userId) ? clothesRequest(changing) : changing;
+      // For a reader with pose sets, each person of the sheet with a captioned set, the viewer's apart, whose body the
+      // frame does not show, names a candidate ID right after `who`: added last, so
+      // that it stands before any other field that goes there. Without them the request is as it was.
+      const current = poseSetFor(userId) ? store.read(userId).stories[storyId] : undefined;
+      const viewed: Viewed[] = current ? sheet.filter(one => one !== viewer).flatMap(one => {
+        const candidates = poseCandidates(current.sheet?.find(other => other.name === one.name) ?? {});
+        return candidates.length ? [{ name: one.name, candidates }] : [];
+      }) : [];
+      const reply = (await askJson(model, trusted(model, poseRequest(viewer ? povRequest(asked, viewer) : asked, viewed), anchor), { signal })).value;
+      const picked = viewed.length ? viewsOf(reply, viewed) : { answer: reply, views: {} };
+      const answer = picked.answer;
+      if (current) { views = picked.views; poseSetPeople = viewed.length; }
       if (!versions) return answer as unknown as Description;
       const { lasting_changes: changes, ...plain } = answer;
       const found = lastingChangesOf(changes, named.map(one => one.name));
@@ -601,6 +679,13 @@ export function createIllustrator(config: ImageConfig, deps: {
         sheet = frameSheet();
       }
       return plain as unknown as Description;
+    };
+    // G's request continues the same one, in the same turn, with the sheet as the frame's answer left it. A frame seen
+    // through somebody's eyes gets none: G has no rule for it, and today's prompt is drawn.
+    const description = await inTurn(provider, async model => {
+      const answer = await fields(model);
+      if (gFor(userId) && !viewerOf(story, sheet)) g = await askG(model, context, sheet, anchor, signal);
+      return answer;
     }, sharesPrefix ? { holder: userId, sharesPrefix, work: 'description' } : { holder: userId, work: 'description' });
     const viewer = viewerOf(story, sheet);
     const viewed = viewer && seenBy(description, viewer, sheet);
@@ -616,8 +701,8 @@ export function createIllustrator(config: ImageConfig, deps: {
     });
     const pov = viewed ? viewed.seen : undefined;
     const frame = viewed ? viewed.description : description;
-    frames.set(userId, { storyId, nodeId, description: frame, sheet, viewer: viewer?.name, pov });
-    return { description: frame, sheet, clothesChanged: worn.changed, pov, lastingChanges };
+    frames.set(userId, { storyId, nodeId, description: frame, sheet, viewer: viewer?.name, pov, ...views ? { views } : {}, ...g ? { g: g.kept } : {} });
+    return { description: frame, sheet, clothesChanged: worn.changed, pov, lastingChanges, views, poseSetPeople, ...g ? { g: g.kept, gCounts: g.counts } : {} };
   }
 
   // The size of a prompt that ends with the style `line`: its characters, and, with a tokenizer, its tokens and how
@@ -675,7 +760,8 @@ export function createIllustrator(config: ImageConfig, deps: {
       const drawn = await drawOne(comfy, job, { waitMs: config.waitMs, pollMs, front: true, onSubmitted: () => { submitted = true; },
         onProgress: status?.progress, onPlace: status?.place });
       if (drawn.stamps) deps.durations?.add('frame', drawn.stamps.end - drawn.stamps.start);
-      return drawn;
+      // The model is read from the graph that drew the picture, never from a setting (`withModel`).
+      return { ...drawn, model: pictureModelOf(await job) };
     };
     try {
       let edited: Graph | undefined;
@@ -734,12 +820,21 @@ export function createIllustrator(config: ImageConfig, deps: {
     }
   }
 
+  // A prompt a frame is drawn from: today's, assembled from its fields, or G's (`promptSource`, local/picture-g.ts).
+  type Prompt = { prompt: string; namesStripped: number; withoutLook?: number; clothesStated?: number; promptSource?: 'g'; gTagLoose?: number };
   // One frame on the picture card with the story's seed. A sample reuses a compatible scene recipe, including the
   // original portrait inputs, and changes the style at the end and, for references, at the opening too.
-  async function drawFrame(userId: string, storyId: string, frame: { description: Description; sheet: Character[] },
-    line: string, signal: AbortSignal, log: Log, savedRecipe?: PictureRecipe, status?: Watching) {
-    const plain = assemblePrompt(frame.description, frame.sheet, line);
-    let assembled = plain;
+  // A frame the story model wrote a prompt for (`g`) is drawn from it, with the line at the end and, for references,
+  // today's opening before it and each bound person's number before their look. A bound person whose look is not found
+  // in it (`gTagged`) draws today's prompt, with or without the references, as does a frame that has no such prompt.
+  async function drawFrame(userId: string, storyId: string, frame: { description: Description; sheet: Character[]; views?: PoseViews;
+    g?: GKept }, line: string, signal: AbortSignal, log: Log, savedRecipe?: PictureRecipe, status?: Watching) {
+    const today = assemblePrompt(frame.description, frame.sheet, line);
+    const written = frame.g && 'prose' in frame.g ? frame.g : undefined;
+    let fallback: GFallback | undefined = frame.g && 'fallback' in frame.g ? frame.g.fallback : undefined;
+    let plain: Prompt = written ? { prompt: gLine(written.prose, line), namesStripped: written.namesStripped, promptSource: 'g' } : today;
+    let assembled: Prompt = plain;
+    let gBound = 0, miss: GTagMiss | undefined;
     // After a graph or checkpoint change, a sample uses today's recipe and portraits, as a new frame does.
     const saved = savedRecipe && savedRecipe.graph === graphId && savedRecipe.checkpoint === config.checkpoint ? savedRecipe : undefined;
     const recipe = saved ?? recipeOf(storyId);
@@ -747,13 +842,22 @@ export function createIllustrator(config: ImageConfig, deps: {
     if (!referenceGate(userId)) {
       const story = store.read(userId).stories[storyId];
       if (!story) throw sceneGone();
-      const bound = saved ? saved.references?.portraits ?? [] : frameReferences(story, frame.description);
+      const bound = saved ? saved.references?.portraits ?? [] : frameReferences(story, frame.description, frame.views);
       if (bound.length) {
+        gBound = bound.length;
         reason = 'unsupported_graph';
         if (referenceGraph(graph, bound.length)) {
           try {
             if (!saved) recipe.references = pinReferences(store, userId, bound);
-            assembled = referencePrompt(frame, bound, line);
+            const tagged = written && gTagged(written, frame.sheet, bound);
+            if (tagged && 'text' in tagged) {
+              const opening = referenceOpening(frame, bound, line, clothesFor(userId));
+              assembled = { prompt: opening.text + gLine(tagged.text, line), namesStripped: written.namesStripped + (opening.worn?.namesStripped ?? 0),
+                ...opening.worn ? { clothesStated: opening.worn.stated } : {}, promptSource: 'g', gTagLoose: tagged.loose };
+            } else {
+              assembled = referencePrompt(frame, bound, line, clothesFor(userId));
+              if (tagged) { plain = today; fallback = 'tag'; miss = tagged.miss; }
+            }
           } catch { reason = 'unavailable'; }
         }
       }
@@ -768,7 +872,15 @@ export function createIllustrator(config: ImageConfig, deps: {
     };
     try {
       const drawn = await draw(userId, recipe, assembled.prompt, signal, log, { fallbackPrompt: plain.prompt, reason, status });
-      return { assembled: drawn.referenceCount ? assembled : plain, recipe: drawn.recipe, drawn, releasePortraits };
+      const used = drawn.referenceCount ? assembled : plain;
+      // The row's word for what the clothes change did to this picture, where a reader has it, and for a reader who has
+      // G, which prompt it was drawn from and why not G's where it was not; and where people were bound to reference
+      // pictures, how many, how many of them got their number at a looser match, or which rule left one without.
+      const changed = { ...used.clothesStated === undefined ? {} : { clothesStated: used.clothesStated },
+        ...!gFor(userId) ? {} : { ...used.promptSource ? { promptSource: used.promptSource, ...used.gTagLoose ? { gTagLoose: used.gTagLoose } : {} }
+          : { promptSource: 'fields' as const, ...fallback ? { gFallback: fallback, ...miss ? { gTagMiss: miss } : {} } : {} },
+          ...gBound ? { gBound } : {} } };
+      return { assembled: used, recipe: drawn.recipe, drawn, releasePortraits, changed };
     } catch (error) { releasePortraits(); throw error; }
   }
 
@@ -782,7 +894,7 @@ export function createIllustrator(config: ImageConfig, deps: {
   // (local/progress.ts `close`): the removal, or the failure put in its place, is the line's last word.
   async function statusLine(chat: Chat, text: string, log: Log, t: Messages) {
     let messageId: number | undefined;
-    try { messageId = ((await chat.send({ text })) as { message_id?: number }).message_id; }
+    try { messageId = await chat.show({ text }, 'status'); }
     catch (error) { log('picture_status_unsent', errorCode(error)); }
     type Stage = 'queued' | 'drawing';
     const bar = messageId === undefined ? undefined : createProgress<{ stage: Stage; line: string }>({ chat, messageId, log,
@@ -817,6 +929,10 @@ export function createIllustrator(config: ImageConfig, deps: {
         if (messageId === undefined) return;
         await bar?.close();
         try { await (replacement === undefined ? chat.remove(messageId) : chat.edit(messageId, { text: replacement })); } catch { /* a hint, never needed */ }
+        // A failure told in its place, or a line Telegram would not remove, goes with the reader's next update
+        // (docs/telegram-ui.md#passing-messages): only now, so that an update arriving meanwhile cannot take the
+        // failure away before it is there to be read.
+        chat.mark(messageId, 'notice');
       },
     };
   }
@@ -901,6 +1017,8 @@ export function createIllustrator(config: ImageConfig, deps: {
     let releasePortraits: (() => void) | undefined;
     // Whether the frame was seen through a person's eyes, only for a story that has one (local/picture-pov.ts).
     let pov: boolean | undefined;
+    // G's request's time and tokens, for a reader who has G and a frame it was asked for (local/picture-g.ts).
+    let gCounts: GCounts | undefined;
     try {
       // The description call, on the language model's card, holding it the way a job holds it and no longer.
       const describeStarted = now();
@@ -911,16 +1029,19 @@ export function createIllustrator(config: ImageConfig, deps: {
         await status.clear();
         return;
       }
-      let frame: { description: Description; sheet: Character[]; clothesChanged: number; pov?: boolean; lastingChanges?: number };
+      let frame: { description: Description; sheet: Character[]; clothesChanged: number; pov?: boolean; lastingChanges?: number;
+        views?: PoseViews; poseSetPeople?: number; g?: GKept; gCounts?: GCounts };
       try { frame = await describeFrame(userId, storyId, nodeId, branchId, signal, log, true); }
       finally { release?.(); described(); }
       describeMs = Math.max(0, now() - describeStarted);
       pov = frame.pov;
+      gCounts = frame.gCounts;
       if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
 
       // The prompt is assembled from the fields, in the order the readers of step 3 asked for, and ends with one
       // style line: the reader's choice as it stands now, which they may have changed while the description was
       // written, or the bot's own. The names of the sheet select appearance lines and are cut out of every field.
+      // A reader who has G gets the story model's own prompt with the same line where it has one (`drawFrame`).
       const reader = store.read(userId);
       pictureStyle = styleChoice(reader, standard);
       const line = styleLine(reader, standard);
@@ -932,7 +1053,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       // The photo hangs under the scene it belongs to, and the status line goes only once the photo is there; the
       // prompt follows it, folded, even if the picture was stopped while the photo was on its way.
       const photoStarted = now();
-      const photo = await sendKept(request, () => chat.photo(drawn.bytes, request.sceneMessageId), recipe);
+      const photo = await sendKept(request, () => chat.photo(drawn.bytes, request.sceneMessageId, withModel(undefined, drawn.model)), recipe);
       const photoMs = Math.max(0, now() - photoStarted);
       await status.clear();
       const size = promptSize(assembled.prompt, line, drawn.referenceCount);
@@ -941,7 +1062,8 @@ export function createIllustrator(config: ImageConfig, deps: {
         ...status.waited(), imageSteps: steps, pictureAttention: drawn.pictureAttention, photoMs, photoBytes: drawn.bytes.length,
         namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook, clothesChanged: frame.clothesChanged,
         pictureStyle, ...pov === undefined ? {} : { pov }, ...frame.lastingChanges === undefined ? {} : { lastingChanges: frame.lastingChanges },
-        ...size, ...elapsed() });
+        ...frame.views ? { poseSetPeople: frame.poseSetPeople, poseViewsPicked: Object.keys(frame.views).length } : {},
+        ...result.changed, ...gCounts, ...size, ...elapsed() });
     } catch (error) {
       const code = errorCode(error);
       const cancelled = signal.aborted || code === 'cancelled' || code === 'scene_gone';
@@ -953,7 +1075,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       await status.clear(outcome === 'failed' ? t.notices.pictureFailed : undefined);
       log('picture', signal.aborted ? 'cancelled' : safeCode(code),
         { ...safeErrorDetails(error), outcome, cancelled, describeMs, ...status.waited(), pictureStyle,
-          ...pov === undefined ? {} : { pov }, ...elapsed() });
+          ...pov === undefined ? {} : { pov }, ...gCounts, ...elapsed() });
     } finally { releasePortraits?.(); }
   }
 
@@ -1012,9 +1134,12 @@ export function createIllustrator(config: ImageConfig, deps: {
         && viewerOf(story, kept.sheet)?.name === kept.viewer;
       const stylesAsked = styles.length;
       let describeMs = 0;
+      // G's request's, where the frame was described anew for a reader who has G, as `describeMs` is.
+      let gCounts: GCounts | undefined;
       let pictureStyle = styles[0].pictureStyle;
       try {
-        let frame: { description: Description; sheet: Character[]; pov?: boolean } | undefined = frameReused ? kept : undefined;
+        let frame: { description: Description; sheet: Character[]; pov?: boolean; views?: PoseViews; g?: GKept; gCounts?: GCounts } | undefined
+          = frameReused ? kept : undefined;
         if (!frame) {
           let release: (() => void) | undefined;
           try { release = request.hold?.(); }
@@ -1024,7 +1149,7 @@ export function createIllustrator(config: ImageConfig, deps: {
             return;
           }
           const describeStarted = now();
-          try { frame = await describeFrame(userId, storyId, nodeId, branchId, signal, log, false); }
+          try { frame = await describeFrame(userId, storyId, nodeId, branchId, signal, log, false); gCounts = frame.gCounts; }
           finally { release?.(); }
           describeMs = Math.max(0, now() - describeStarted);
         }
@@ -1035,17 +1160,19 @@ export function createIllustrator(config: ImageConfig, deps: {
           try {
             const { assembled, drawn } = result;
             if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
-            const photo = await sendKept(request, () => chat.photo(drawn.bytes, undefined, style.caption));
+            const photo = await sendKept(request, () => chat.photo(drawn.bytes, undefined, withModel(style.caption, drawn.model)));
             const size = promptSize(assembled.prompt, style.line, drawn.referenceCount);
             await sendPrompt(request, photo, assembled.prompt, size);
             log('picture_sample', undefined, { outcome: 'ready', cancelled: signal.aborted, frameReused, describeMs,
               imageQueueMs: drawn.queueMs, imageMs: drawn.totalMs, ...status.waited(), imageSteps: steps,
               pictureAttention: drawn.pictureAttention, namesStripped: assembled.namesStripped,
-              withoutLook: assembled.withoutLook, pictureStyle, stylesAsked, ...frame.pov === undefined ? {} : { pov: frame.pov }, ...size });
+              withoutLook: assembled.withoutLook, pictureStyle, stylesAsked, ...frame.pov === undefined ? {} : { pov: frame.pov }, ...result.changed,
+              ...gCounts, ...size });
           } finally { result.releasePortraits(); }
           // The styles after the first are drawn from the frame already in hand.
           frameReused = true;
           describeMs = 0;
+          gCounts = undefined;
         }
         await status.clear();
       } catch (error) {
@@ -1054,7 +1181,7 @@ export function createIllustrator(config: ImageConfig, deps: {
         const outcome = cancelled ? 'cancelled' : GAVE_WAY.includes(String(code)) ? 'skipped' : 'failed';
         await status.clear(cancelled ? undefined : t.notices.sampleFailed);
         log('picture_sample', signal.aborted ? 'cancelled' : safeCode(code),
-          { ...safeErrorDetails(error), outcome, cancelled, frameReused, describeMs, ...status.waited(), pictureStyle, stylesAsked });
+          { ...safeErrorDetails(error), outcome, cancelled, frameReused, describeMs, ...status.waited(), pictureStyle, stylesAsked, ...gCounts });
       }
       // As under a scene: over once the delete of its job's record has arrived too.
       await settled();
@@ -1088,7 +1215,7 @@ export function createIllustrator(config: ImageConfig, deps: {
         const { node } = target();
         const scene = { userId, chat, storyId, nodeId, log };
         const photoStarted = now();
-        const photo = await sendKept(scene, () => chat.photo(drawn.bytes, node.messageId));
+        const photo = await sendKept(scene, () => chat.photo(drawn.bytes, node.messageId, withModel(undefined, drawn.model)));
         const photoMs = Math.max(0, now() - photoStarted);
         await status.clear();
         const size = promptSize(prompt, undefined, drawn.referenceCount);
@@ -1172,7 +1299,7 @@ export function createIllustrator(config: ImageConfig, deps: {
         else letGo(userId);
         const photoStarted = now();
         let photo: number | undefined;
-        try { photo = await sendKept({ userId, chat, storyId }, () => chat.photo(drawn.bytes, undefined, request.caption)); }
+        try { photo = await sendKept({ userId, chat, storyId }, () => chat.photo(drawn.bytes, undefined, withModel(request.caption, drawn.model))); }
         catch (error) {
           letGo(userId, request.candidate);
           throw error;
@@ -1240,6 +1367,10 @@ export function createIllustrator(config: ImageConfig, deps: {
     // Whether a reader has versions of the sheet (`versionsFor`): their wait for a person's text offers «only from this
     // moment» (local/ui.ts).
     versionsFor(userId: string) { return versionsFor(userId); },
+
+    // Whether a reader has pose sets (`poseSetFor`): a person's card offers to send pictures by the dozen, and frames
+    // choose one of them by pose (local/pose-set.ts).
+    poseSetFor(userId: string) { return poseSetFor(userId); },
 
     // Lets a kept portrait go, once the write that refers to its file is committed (local/bot.ts). One whose write was
     // rolled back is still held, so the same button keeps it again.

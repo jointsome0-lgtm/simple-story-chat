@@ -45,6 +45,12 @@ The variables go in `.env`, and [.env.example](../.env.example) is the starting 
 | `SIMPLE_CHAT_IMAGE_PROVIDER` | Optional: `comfyui`, the default, draws on ComfyUI through its own tunnel; `simple-serving` draws through simple-serving's picture gateway ([through simple-serving](#pictures-through-simple-serving)). **Off by default** |
 | `SIMPLE_CHAT_IMAGE_API_KEY` | With `SIMPLE_CHAT_IMAGE_PROVIDER=simple-serving`: the gateway's client key, on one line. Required then, read nowhere else, and never logged |
 | `SIMPLE_CHAT_SHEET_VERSION_USERS` | Optional: numeric Telegram IDs separated by commas, all of them from `SIMPLE_CHAT_IMAGE_USERS`. **Empty by default.** Their frames name the lasting changes the story makes to a person's look, which then hold from that scene on down its line, and they may write a person's text «only from this moment» ([along the story](telegram-ui.md#along-the-story)). Everybody else's frames are as before |
+| `SIMPLE_CHAT_POSE_SET_USERS` | Optional: numeric Telegram IDs separated by commas, all of them from `SIMPLE_CHAT_IMAGE_REFERENCE_USERS`. **Empty by default.** They may give a person up to 200 pictures, which a small model on this computer sorts by pose, and each frame takes the one that fits ([pose sets](#pose-sets)). Everybody else's frames are as before |
+| `SIMPLE_CHAT_CLOTHES_USERS` | Optional: IDs from `SIMPLE_CHAT_IMAGE_USERS`. **Empty by default.** Their frames name what each person wears and what of them is bare, or that they wear nothing, and a frame with reference pictures says it before the words on what the pictures are for ([what they wear](telegram-ui.md#what-they-wear)). Everybody else's frames are as before |
+| `SIMPLE_CHAT_G_PROMPT_USERS` | Optional: IDs from `SIMPLE_CHAT_IMAGE_USERS`. **Empty by default.** For them the story model writes each frame's whole prompt in one more request after the frame's, and a frame it could not write one for is drawn from today's prompt ([a prompt the story model writes](telegram-ui.md#g-prompt)). Measured neither on the card's model nor with references. Everybody else's frames are as before |
+| `SIMPLE_CHAT_MINI_APP_URL` | Optional: the HTTPS root a tunnel of your choice forwards to the Mini App's port, such as `https://some-words.trycloudflare.com`. Without it there is no Mini App ([Mini App](#mini-app)) |
+| `SIMPLE_CHAT_MINI_APP_PORT` | The loopback port the bot serves the Mini App on, 8790 by default (1024 to 65535) |
+| `SIMPLE_CHAT_MINI_APP_USERS` | Numeric Telegram IDs separated by commas, all of them from `SIMPLE_CHAT_ALLOWED_USER_IDS`. **Empty by default: nobody gets the Mini App** |
 
 ### Model settings
 
@@ -109,10 +115,142 @@ upload used by experiments is never used here. See [the retention rules](gpu.md#
 was acknowledged. Neither row contains a name, path, hash, portrait or prompt. A failed cleanup leaves the sweeper's
 ten-minute cap in force.
 
+<a id='pose-sets'></a>
+
+#### Pose sets
+
+`SIMPLE_CHAT_POSE_SET_USERS` gives readers of the reference experiment pose sets ([what a reader gets](telegram-ui.md#pose-set)):
+up to 200 pictures of a person, sent at once and captioned by pose on this computer. Each frame chooses one
+reference from the distinct pose variants. Manual annotations distinguish positions such as supported standing,
+sitting with hanging legs and sitting on heels. Every listed ID must be in `SIMPLE_CHAT_IMAGE_REFERENCE_USERS`, the
+owner's too. A set works only while `SIMPLE_CHAT_IMAGE_REFERENCES=true` and `SIMPLE_CHAT_PROVIDER` is `llama-cpp` or
+`simple-serving`, since the captions go into each frame's request and no hosted API is to see them; otherwise a reader's
+sets stay and can be removed, and frames do not take them. With the list empty nothing changes for anybody.
+
+Pose sets are switched off by taking the reader off the list, or emptying it, and restarting: their sets stay, and new
+frames do not take them, while a variant or a style sample of a frame drawn with a set's picture still takes it, as its
+recipe says. Files they sent that the bot had not read yet wait unread, for a start that gives them pose sets again. Going back to code from before pose sets costs the readers their sets: its first start deletes the sets'
+files, all but those frames were drawn with, and it drops a person's set when it writes a sheet again. Back up first
+([Backup and restore](#backup-and-restore)) if the pictures are to be kept.
+
+The captioner runs beside the bot, on this computer's CPU, and the bot starts and ends it itself. Install it once, in
+the tree the bot's code runs from:
+
+```sh
+bash captioner/setup.sh
+```
+
+The bot looks for `captioner/.venv`, `captioner/caption.py` and `models/pose-captioner` beside its own `local/`, not in
+the directory it is started in, which holds `.env` and the data: a bot started in the main tree with its code from a
+worktree finds the captioner the worktree has.
+
+It makes a CPU-only Python environment in `captioner/.venv` (Python 3.14, torch 2.14.0, transformers 5.17.0, Pillow
+12.3.0, all pinned) and downloads openjev 0.8B (`AlexWortega/openjev` at revision
+`a298f274886c4676c42f1a4262401b6aa9653e6d`, MIT) into `models/pose-captioner`: six files, 1.73 GB, each checked
+against its SHA256 before it is kept. It needs uv and about 3.5 GB of disk with the environment. Without it the pictures
+are kept and wait uncaptioned, the bot logs `pose_captioner_failed` with `captioner_unavailable` and tries again every
+ten minutes, and frames take nobody's set until their pictures are captioned; nothing else is affected.
+
+The captioner reads each picture from the reader's directory beside the database and answers with three labels and a
+number; it opens no connection, gets none of the bot's environment, and runs niced on four threads. It takes about 4 s
+of the CPU a picture, once, and about 4 GB of memory while it runs (5.7 GB at its peak as it loads), and ends a minute
+after the last picture. It runs here rather than on the picture card: the pictures and their captions never leave this
+computer, no card is rented or woken for them, the card's memory stays ComfyUI's, and the bot itself gets no image
+library. What it was chosen by, and its limits, are in [the measurement](knowledge/pose-captioner-2026-09-28.md).
+
+The limits: 200 pictures and 600 MB a person, 1 GB a reader, and each picture as a picture of the reader's own
+([references](telegram-ui.md#references)): a drawing, PNG, JPEG or WebP, at most 10 MB, the shorter side at least 320
+pixels and the longer at most 4096, with its metadata stripped; one more drawn out than 2.5 to 1 is padded with grey on
+the card, as a reader's own portrait is. Frames take the chosen picture with the experiment's instruction unchanged,
+which tells the picture model to take identity alone from a reference; what a fitting pose does to the pictures has not
+been measured.
+
+A reader on the list may send a set as a ZIP archive too, of at most 20 MB, the most the Bot API lets a bot download; a
+larger set goes in several archives. It is read in memory, never unpacked on the disk, and every picture in it goes the
+way one sent alone goes, under a name of the bot's own. A plain ZIP of the pictures is what it takes: an archive with a
+password, ZIP64, one in parts, one of more than 200 files, or one whose files would unpack to more than 100 MB together
+is refused whole, with a message that says what to do; a file in it that would unpack to far more than it weighs, which
+no picture does, is refused alone, as not a picture. A `labels.csv` at the archive's root, or in the one folder
+everything is in, gives the pictures their labels, so that the captioner leaves them alone; a label left empty, or one
+the bot does not know, is the captioner's to give. For the tester, a small example:
+
+```csv
+file;pose;side;framing;main
+mira-01.png;стоя;спереди;в полный рост;да
+mira-02.png;standing;three-quarter left;full body;
+poses/mira-03.png;сидя;;по пояс;
+```
+
+Save it as CSV in UTF-8, with commas or semicolons. `file` is the picture's name, or its path from the file's own folder
+where two pictures share a name. `pose` is one of `стоя`, `сидя`, `идёт`, `лёжа`, `на коленях`, `присев` (or `standing`,
+`sitting`, `walking`, `lying`, `kneeling`, `crouching`), plus manual `на четвереньках` / `all_fours`; `side` one of `спереди`, `вполоборота влево`, `вполоборота
+вправо`, `профиль влево`, `профиль вправо`, `спиной` (`front`, `three-quarter left`, `three-quarter right`, `profile left`,
+`profile right`, `back`), where left and right are the side of the picture the character faces; and `framing` one of `в
+полный рост`, `по пояс`, `по плечи` (`full body`, `half body`, `head and shoulders`). `main` (`да`, `yes` or `1`) marks the
+picture to stand for its exact pose variant before the others. A row that could mean two pictures, `A.png` beside `a.png` among them,
+labels neither, and a file of more than 1,000 filled rows is not read. The message that counts the pictures says how
+many came labeled, how many the captioner will label, and which rows found no picture or had a value the bot does not
+know, or that the file could not be read ([archives](telegram-ui.md#pose-set)).
+To extend an existing character, open its card, press "🗂 Картинки поз", send only the new ZIP and press "✅ Готово".
+The old pictures stay. Re-sending the same archive creates duplicates; this upload flow does not deduplicate by image content.
+
+A richer CSV keeps the same file and adds optional columns. For example:
+
+```csv
+file;pose;side;framing;main;specific_pose;pose_details;expression;face_visibility
+mira-supported.png;standing;three-quarter right;full body;0;supported standing;One palm on a ledge, crossed lower legs.;neutral;visible
+mira-tabletop.png;all_fours;profile left;full body;0;neutral tabletop;Palms under shoulders, knees under hips.;neutral;partial
+mira-back.png;standing;back;full body;1;;;;hidden
+```
+
+`specific_pose` accepts up to 64 characters, `pose_details` up to 320, and `expression` up to 160.
+`face_visibility` is `visible`, `partial` or `hidden`; leave expression empty when no face is visible.
+These fields are manual, not inferred by the CPU captioner. Unknown or overlong fields are reported and omitted.
+The selector offers every distinct variant, with a 240-character caption per choice. Accuracy and context fit for a
+large bank have not been measured; existing provider context limits still apply. The image prompt and one-reference-per-person
+rule stay unchanged.
+
+<a id='mini-app'></a>
+
+### Mini App
+
+What a reader gets is in [telegram-ui.md](telegram-ui.md#mini-app). Without `SIMPLE_CHAT_MINI_APP_URL` the bot opens
+no port and shows no button. With it, the bot serves the page on `127.0.0.1` at `SIMPLE_CHAT_MINI_APP_PORT`, never on
+another interface, and the readers of `SIMPLE_CHAT_MINI_APP_USERS` get its button on their list of a story's
+characters and "🗂 Смотреть референсы" on a character card with a stored pose set. A port that is taken is logged as `mini_app_failed` (`eaddrinuse`), and the bot runs on without the Mini
+App. Telegram opens a Mini App only from an HTTPS address, and this computer has none: a tunnel forwards one to that
+port. A button under a message needs nothing in BotFather.
+
+1. Start a tunnel to `http://127.0.0.1:8790` and note the HTTPS root it prints.
+2. Put that root in `.env` as `SIMPLE_CHAT_MINI_APP_URL`, and the readers in `SIMPLE_CHAT_MINI_APP_USERS`, yours first.
+3. Restart the bot ([running](#running)), open a story's characters in the chat and press «📱 Открыть в мини-приложении».
+
+The address shows anybody the page itself, which holds no story. Everything else is answered only to launch data
+Telegram signed for this bot within the hour, from the library of the reader it names. The tunnel reaches this one
+port: not the database, the model's socket or the picture card. The server runs inside the bot's process, though, on
+its one thread. It takes at most 20 requests a second in all after a burst of 60, and a reader's requests to the API at
+most two a second after a burst of 40, holds at most 64 MB of answers not yet taken and gives each a minute; past that
+it answers 429. It parses no library over 64 MB. Within those bounds a flood to the address, or to the API with a copy
+of a reader's launch data for the rest of its hour, can still stall the bot and, at worst, stop it. A process of its own
+for the Mini App is the fix.
+
+Three ways to have the address, as their own pages described them on 2026-09-29. The choice is the owner's.
+
+| Tunnel | Cost | Address | Who sees the traffic |
+| --- | --- | --- | --- |
+| Cloudflare quick tunnel: `cloudflared tunnel --url http://127.0.0.1:8790` | Free, no account | A new random `*.trycloudflare.com` name on every start: set it again and restart the bot, and the buttons already sent lead nowhere. Meant for testing: no uptime promise, at most 200 requests in flight | Cloudflare ends TLS, so it sees the page, the stories, the pictures and the launch data in clear, and could change the page |
+| Tailscale Funnel: `tailscale funnel 8790` | Free on every plan, Personal included. Needs a Tailscale account, HTTPS certificates and MagicDNS on, and the `funnel` attribute in the tailnet's policy | Stable: `https://<machine>.<tailnet>.ts.net` | TLS ends on this computer, and Tailscale's relays pass it encrypted. The machine's name goes into the public Certificate Transparency logs |
+| ngrok: `ngrok http 8790` | A free account: one dev domain, 1 GB and 20,000 requests a month. The Hobbyist plan is $10 a month | Stable: the account's dev domain | ngrok ends TLS and sees everything in clear. On the free plan a reader first gets ngrok's warning page, again after a week |
+
+Wherever TLS ends off this computer, that company can read what the Mini App shows, keep it in its logs and copy a
+reader's launch data, which opens that reader's library for the rest of its hour; it could also serve a changed page
+that sends the launch data elsewhere each time. Tell a reader so before you list them, and keep the tunnel pointed at
+this one port.
+
 ### Backup and restore
 
 The database is the file at `SIMPLE_CHAT_DB_PATH`. The portraits readers keep lie beside it in `<path>.portraits/`, and only the database says whose each one is: a backup takes both, copied while the bot is stopped, so that no portrait is kept or swept in between.
-A picture a reader sends as a person's own portrait lies there too, in the format it came in and stripped of its metadata on its way in, and is kept and swept as a portrait is: while the sheet or a recipe refers to it, and no longer.
+A picture a reader sends as a person's own portrait lies there too, in the format it came in and stripped of its metadata on its way in, and is kept and swept as a portrait is: while the sheet or a recipe refers to it, and no longer. So do the pictures of a [pose set](#pose-sets), up to 1 GB a reader.
 Restore both from the same backup, also while the bot is stopped: at startup the bot deletes every portrait file that
 its library does not refer to (`sweepPortraits` in `local/store.ts`).
 

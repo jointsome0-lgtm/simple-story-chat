@@ -2,8 +2,9 @@
 
 Dated measurements of how a frame could choose, for each person, the kept reference view that best matches how the
 frame shows them: one of the standard poses (lib/library.ts `POSES`) or a reader's own picture. A new measurement gets
-a section of its own instead of an edit to an old one. Nothing here is built into the bot, which so far keeps the front
-alone and so has nothing to choose.
+a section of its own instead of an edit to an old one. The last of them, Gemma's pick inside the frame description, is
+what pose sets build on ([telegram-ui.md](../telegram-ui.md#pose-set)), with the captions of a reader's pictures as the
+views ([the captioner](pose-captioner-2026-09-28.md)); nothing else here is built into the bot.
 
 <a id='openjev-cpu-2026-09-28'></a>
 

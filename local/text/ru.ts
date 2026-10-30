@@ -63,6 +63,7 @@ export const ru = {
     context: '📏 Контекст',
     model: '🤖 Модель',
     checkpoints: '🔖 Чекпоинты',
+    bookmarks: '🔖 Закладки',
     branches: '🌿 Ветки',
     seeds: '📚 Сиды',
     seedsCount: (n: number) => `📚 Сиды (${n})`,
@@ -145,6 +146,23 @@ export const ru = {
   language: {
     title: '🌐 Язык интерфейса',
     note: 'Меняется только язык меню и сообщений бота. Язык историй задают сид и твои сообщения.',
+  },
+
+  // A story's pace (lib/library.ts `Story.pace`): the menu's button, which names the current pace, and the picker. Each
+  // name is a button after its emoji: keep it one word.
+  pace: {
+    // `name` is one of `names`.
+    button: (name: string) => `⏱ Темп: ${name}`,
+    names: { moment: 'Миг', scene: 'Сцена', chapter: 'Глава' },
+    title: '⏱ Темп истории',
+    // One line per pace, after its emoji.
+    lines: {
+      moment: 'Миг — до 15 минут за ход, до 4 абзацев. Ход кончается там, где герою пора ответить, выбрать или действовать.',
+      scene: 'Сцена — обычный темп, без особых указаний рассказчику.',
+      chapter: 'Глава — часы и дни за ход, коротко. Остановка только на важной развилке.',
+    },
+    move: 'При темпе «Миг» или «Глава» твоё сообщение — ход героя: рассказчик покажет, что из него вышло, и следующее решение оставит тебе. «▶️ Продолжить» отдаёт ход рассказчику, и тогда он ведёт героя сам.',
+    next: 'Темп действует со следующей сцены.',
   },
 
   // A variant of a scene's picture from a prompt the reader writes whole (local/picture.ts `variant`): the button under
@@ -334,13 +352,53 @@ export const ru = {
     // A portrait of the reader's own in place of the drawn one (local/reference.ts), for a reader in the reference
     // experiment: the button on the card, the wait for it, the line under the wait for a person who has a portrait, and
     // the card's line once it is kept. `width` and `height` are its size in pixels; `min`, `max` and `megabytes` are
-    // REFERENCE_SIDES and REFERENCE_BYTES there, and 2.5 is REFERENCE_SIDES.ratio. Once it is kept, the reader gets
+    // REFERENCE_SIDES and REFERENCE_BYTES there. Once it is kept, the reader gets
     // `kept` and `retention` above.
     ownPortrait: '📎 Свой портрет',
     ownPortraitTitle: (person: string, story: string) => `📎 Свой портрет: ${person} · ${story}`,
-    ownPortraitNote: (min: number, max: number, megabytes: number) => `Пришли картинку этого персонажа фотографией или файлом PNG, JPEG или WebP, до ${megabytes} МБ: короткая сторона от ${min} пикселей, длинная до ${max} и не больше чем в 2,5 раза длиннее короткой. Бот не обрезает и не растягивает картинку. Только рисунок: фотографию реального человека присылать нельзя. Бот удалит из файла метаданные (место, камеру, подписи) и сохранит картинку как портрет персонажа: кадры будут брать её так же, как нарисованный портрет. Бот ждёт полчаса; выйти без изменений можно кнопкой «↩️» или командой /cancel.`,
+    ownPortraitNote: (min: number, max: number, megabytes: number) => `Пришли картинку этого персонажа фотографией или файлом PNG, JPEG или WebP, до ${megabytes} МБ: короткая сторона от ${min} пикселей, длинная до ${max}. Бот не обрезает и не растягивает картинку. Только рисунок: фотографию реального человека присылать нельзя. Бот удалит из файла метаданные (место, камеру, подписи) и сохранит картинку как портрет персонажа: кадры будут брать её так же, как нарисованный портрет. Бот ждёт полчаса; выйти без изменений можно кнопкой «↩️» или командой /cancel.`,
     ownPortraitReplaces: 'Новая картинка заменит сохранённый портрет. Если потом нарисуешь и оставишь портрет, он снова займёт это место.',
     ownPortraitKept: (width: number, height: number) => `🖼 Портрет сохранён: твоя картинка, ${width}×${height}. Кадры берут её так же, как нарисованный портрет.`,
+    // A person's pictures in many poses (local/pose-set.ts), for a reader in SIMPLE_CHAT_POSE_SET_USERS: the button that
+    // waits for them and the one that removes them all, the wait's title and note, how many the set holds already, the
+    // button that ends the wait, the message that counts them as they come (the reasons are local/model-error.ts
+    // `POSE_SET_REFUSALS`), the card's lines and the question before they go. `min`, `max` and `fileMegabytes` are
+    // REFERENCE_SIDES and REFERENCE_BYTES in local/reference.ts, and `pictures`,
+    // `megabytes` and `readerMegabytes` are POSE_SET_PICTURES, POSE_SET_BYTES and POSE_SET_READER_BYTES in
+    // local/pose-set.ts, as are the numbers of the reasons. The half hour is POSE_SET_WAIT_MS there. `archiveMegabytes`
+    // is ARCHIVE_BYTES in local/pose-archive.ts; labels.csv's columns are its own, and are not translated. The rows of
+    // labels.csv come as a list already, or as the empty string.
+    poseSet: '🗂 Картинки поз',
+    poseSetDrop: '🗑 Убрать картинки поз',
+    poseSetTitle: (person: string, story: string) => `🗂 Картинки поз: ${person} · ${story}`,
+    poseSetNote: (min: number, max: number, fileMegabytes: number, pictures: number, megabytes: number, readerMegabytes: number, archiveMegabytes: number) => `Пришли картинки этого персонажа в разных позах: по одной или альбомами, фотографиями или файлами PNG, JPEG или WebP, до ${fileMegabytes} МБ каждая; короткая сторона от ${min} пикселей, длинная до ${max}. Только рисунки: фотографии реальных людей присылать нельзя. Можно и архивом ZIP до ${archiveMegabytes} МБ; если положить в него файл labels.csv с колонками file, pose, side, framing и main, бот возьмёт подписи из него, а модель подпишет только то, чего в нём нет. Бот удалит из файлов метаданные и сохранит до ${pictures} картинок и ${megabytes} МБ на персонажа, а всего у тебя — до ${readerMegabytes} МБ. Каждую картинку подпишет маленькая модель на компьютере бота: поза, сторона к зрителю и охват (весь рост, по пояс или голова и плечи). Ни картинки, ни подписи не уходят в сторонние сервисы. По подписям бот разложит картинки по позам, и каждый кадр возьмёт одну: ту, что ближе всего к тому, как персонаж в нём показан. Когда пришлёшь все, нажми «✅ Готово». Бот ждёт полчаса после последней картинки; выйти можно любой кнопкой или командой /cancel.`,
+    poseSetHeld: (n: number) => `В наборе уже ${count(n, 'картинка', 'картинки', 'картинок')}; новые добавятся к ним.`,
+    poseSetDone: '✅ Готово',
+    poseSetKept: (n: number) => `Принято: ${n}.`,
+    poseSetRefused: (reasons: { reason: string; count: number }[]) => `Не принято: ${reasons.reduce((sum, one) => sum + one.count, 0)} (${reasons.map(one => `${one.reason}: ${one.count}`).join(', ')}).`,
+    poseSetReasons: { type: 'не картинка', broken: 'не читается', small: 'слишком мала', huge: 'слишком велика',
+      too_large: 'тяжелее 10 МБ', incomplete: 'не загрузилась', archive: 'архив', full: 'сверх 200 на персонажа',
+      person_bytes: 'сверх 600 МБ на персонажа', reader_bytes: 'сверх 1024 МБ у тебя' },
+    poseSetHolds: (n: number, max: number) => `В наборе ${n} из ${max}.`,
+    poseSetLabeled: (labeled: number, captioner: number) => `Подписаны в labels.csv: ${labeled}; подпишет модель: ${captioner}.`,
+    poseSetRows: (archive: string, unmatched: string, unknown: string) => `labels.csv${archive ? ` в ${archive}` : ''}: ${[unmatched ? `нет картинки для строк ${unmatched}` : '', unknown ? `в строках ${unknown} есть значения, которых бот не знает, — эти поля подпишет модель` : ''].filter(Boolean).join('; ')}.`,
+    poseSetLabelsUnread: (archive: string) => `labels.csv${archive ? ` в ${archive}` : ''} не прочитан: первой строкой в нём нужен заголовок file,pose,side,framing, через запятую или точку с запятой. Картинки из этого архива подпишет модель.`,
+    poseSetMore: 'Присылай ещё или нажми «✅ Готово».',
+    // The files of the wait the bot has not read yet (local/bot.ts `uploadNext`), and, once the wait is over, that this
+    // message gets its last word when they are read.
+    poseSetUnread: (n: number) => `Ещё загружаются: ${n}.`,
+    poseSetFinishing: 'Дозагружаю присланное; итог появится в этом сообщении.',
+    poseSetEnded: 'Готово. Модель подпишет картинки в фоне; как они разложены по позам, покажет карточка персонажа.',
+    poseSetLine: (n: number, max: number, megabytes: number) => `🗂 Картинки поз: ${n} из ${max}, ${megabytes} МБ.`,
+    poseSetCaptions: (pending: number, failed: number) => [pending ? `Ждут подписи: ${pending}.` : '', failed ? `Не удалось подписать: ${failed}, в кадры они не попадут.` : ''].filter(Boolean).join(' '),
+    poseSetGroups: (groups: { name: string; count: number }[]) => `По позам: ${groups.map(one => `${one.name} ${one.count}`).join(', ')}.`,
+    poseSetVariants: (n: number) => `Вариантов для выбора: ${n}.`,
+    poseGroupNames: { front: 'спереди', 'three-quarter': 'вполоборота', profile: 'в профиль', back: 'спиной', sitting: 'сидя', walking: 'в движении' },
+    poseSetFrames: 'Каждый кадр берёт одну из них: ту, что ближе всего к тому, как персонаж в нём показан; если ни одна не подходит — вид спереди.',
+    poseSetUnused: 'Кадры их сейчас не берут.',
+    poseSetDropTitle: (person: string, story: string) => `🗑 Убрать картинки поз: ${person} · ${story}`,
+    poseSetDropNote: (n: number) => `В наборе ${count(n, 'картинка', 'картинки', 'картинок')}; бот удалит весь набор. Те, с которыми уже нарисованы кадры, останутся на диске, пока нужны для вариантов этих кадров. Вернуть набор можно, только прислав картинки снова.`,
+    poseSetDropConfirm: '🗑 Да, убрать все',
     // The whole profile of the person as one block to copy, edit and send back (local/profile.ts): the button on the card
     // and the title of the message.
     profile: '📋 Профиль целиком',
@@ -391,6 +449,26 @@ export const ru = {
     profileHeading: (heading: string) => `Не знаю такого заголовка: «${heading}». Заголовки полей оставь как в профиле, а строки внутри полей не начинай с «#». Поправь и пришли снова.`,
     profileEmpty: (field: string) => `Поле «${field}» нельзя оставить пустым. Верни прежний текст или напиши новый и пришли снова.`,
     profileLong: (field: string, max: number) => `Слишком длинно: в поле «${field}» можно не больше ${max} знаков. Сократи и пришли снова.`,
+  },
+
+  // The Mini App (local/mini-app.ts, docs/telegram-ui.md#mini-app): a page inside Telegram where a reader it serves
+  // looks through their stories' characters and their pictures. It only shows: nothing is written or drawn there.
+  miniApp: {
+    references: '🗂 Смотреть референсы',
+    // On the list of a story's characters: opens the Mini App at that list.
+    open: '📱 Открыть в мини-приложении',
+    // Above the reader's stories in the Mini App, and instead of them when there are none.
+    stories: '📖 Твои истории',
+    noStories: 'Историй пока нет: их начинают из сида в чате с ботом.',
+    // How many people a story's sheet has, beside the count of its scenes.
+    people: (n: number) => count(n, 'персонаж', 'персонажа', 'персонажей'),
+    // The page's own lines for what it cannot show. `notFound` answers anything missing and anything this reader may not
+    // see here alike; `expired`, a window whose launch data Telegram signed failed the check, most often by being over
+    // an hour old; `outside`, a page opened without Telegram.
+    notFound: 'Не найдено: это удалено или тебе здесь недоступно.',
+    expired: 'Не удалось проверить это окно, или оно открыто слишком давно. Закрой его и открой снова из чата с ботом.',
+    failed: 'Не удалось загрузить. Проверь связь и попробуй ещё раз.',
+    outside: 'Эта страница открывается из чата с ботом в Telegram.',
   },
 
   model: {
@@ -574,6 +652,27 @@ export const ru = {
     back: '◀️ Чекпоинты',
   },
 
+  // Points of the reader's stories kept as bookmarks, across all their stories (docs/telegram-ui.md#bookmarks).
+  bookmarks: {
+    title: (n: number) => `🔖 Закладки: ${n}`,
+    hint: 'Открой закладку, чтобы перечитать сцену, продолжить с неё новой веткой или сравнить ветки, которые из неё выходят. Сверху — самые новые.',
+    none: 'Закладок пока нет. Открой сцену в «📜 Сценах ветки» или в чекпоинтах и нажми «🔖 В закладки».',
+    // The label a bookmark is saved with and keeps: `story` and `branch` arrive quoted, `n` is the scene's number on
+    // its line, `time` its world time.
+    label: (story: string, branch: string, n: number, time: string) => `${story} · ветка ${branch} · сцена ${n} · ${time}`,
+    add: '🔖 В закладки',
+    remove: '🗑 Убрать закладку',
+    // On a checkpoint preview whose point is kept.
+    saved: '🔖 Эта точка в закладках.',
+    back: '◀️ Закладки',
+    forks: '⚖️ Ветки отсюда',
+    forksTitle: '⚖️ Ветки отсюда',
+    // `branches` go on past the point, into `scenes` different next scenes.
+    forksSummary: (branches: number, scenes: number) => `Дальше этой точки: ${count(branches, 'ветка', 'ветки', 'веток')}, ${count(scenes, 'следующая сцена', 'следующие сцены', 'следующих сцен')}`,
+    forksNone: 'Ни одна ветка не идёт дальше этой точки.',
+    forksHint: 'Ветки собраны по сцене, которая идёт следом. Открой ветку, чтобы прочитать её сцены.',
+  },
+
   context: {
     title: '📏 Контекст',
     // `label` is a branch name or a checkpoint label, not quoted.
@@ -652,6 +751,8 @@ export const ru = {
     // Heads a bulleted list of the next two or three entries.
     forever: 'Навсегда удалятся:',
     checkpointsOfBranch: (n: number) => `${count(n, 'чекпоинт', 'чекпоинта', 'чекпоинтов')} этой ветки`,
+    // Bookmarks the deletion takes with it (docs/telegram-ui.md#bookmarks), on both confirmations.
+    bookmarks: (n: number) => count(n, 'закладка', 'закладки', 'закладок'),
     scenesOnlyHere: (n: number) => `${count(n, 'сцена', 'сцены', 'сцен')}, ${n % 10 === 1 && n % 100 !== 11 ? 'которой' : 'которых'} нет в других ветках`,
     scenesStay: 'сцены останутся: все они есть в других ветках',
     kept: (n: number) => `Сохранятся: ${count(n, 'другая ветка', 'другие ветки', 'других веток')} этой истории.`,
@@ -876,13 +977,24 @@ export const ru = {
     referenceBroken: 'Не получилось разобрать картинку: файл повреждён или записан так, как бот не читает. Пересохрани её и пришли снова.',
     referenceSmall: 'Картинка слишком маленькая: короткая сторона должна быть не меньше 320 пикселей. Пришли побольше.',
     referenceHuge: 'Картинка слишком большая: длинная сторона должна быть не больше 4096 пикселей. Пришли поменьше.',
-    referenceShape: 'Картинка слишком вытянута: длинная сторона может быть не больше чем в 2,5 раза длиннее короткой. Бот её не обрезает и не растягивает; обрежь её ближе к персонажу и пришли снова.',
     referenceTooLarge: 'Файл слишком большой: картинка может весить до 10 МБ. Пришли поменьше.',
     referenceIncomplete: 'Не удалось получить картинку целиком. Ничего не изменилось; пришли её ещё раз.',
     referenceArchive: 'Это архив, а нужна одна картинка: фотография или файл PNG, JPEG или WebP.',
     referenceExpired: 'Бот уже не ждёт картинку: прошло больше получаса. Открой персонажа и нажми кнопку снова.',
     referenceGone: 'Этого персонажа уже нет в истории, картинка не сохранена. Открой /menu.',
     referenceChanged: 'Пока картинка загружалась, ожидание сменилось, и она не сохранена. Пришли её снова.',
+    // A pose set (local/pose-set.ts). The half hour is POSE_SET_WAIT_MS there, and the button characters.poseSet.
+    poseSetOff: 'Картинки поз тебе сейчас недоступны. Открой /menu.',
+    poseSetNeedsPictures: 'Жду картинки: присылай их фотографиями, файлами PNG, JPEG или WebP или архивом ZIP, а когда закончишь, нажми «✅ Готово». Выйти можно любой кнопкой или командой /cancel.',
+    poseSetExpired: 'Бот уже не ждёт картинки: после последней прошло больше получаса. Открой персонажа и нажми «🗂 Картинки поз» снова.',
+    poseSetGone: 'Этого персонажа уже нет в истории, картинка не сохранена. Открой /menu.',
+    poseSetChanged: 'Пока картинка загружалась, ожидание сменилось, и она не сохранена. Пришли её снова.',
+    // An archive of a pose set refused whole (local/pose-archive.ts). 20 MB is ARCHIVE_BYTES there, and 200 ARCHIVE_FILES.
+    poseArchiveTooLarge: 'Архив тяжелее 20 МБ, а больше бот скачать не может. Разложи картинки на несколько архивов до 20 МБ и пришли их по очереди; labels.csv положи в каждый, со строками его картинок.',
+    poseArchiveIncomplete: 'Не удалось получить архив целиком. Ничего не изменилось; пришли его ещё раз.',
+    poseArchiveFiles: 'В архиве больше 200 файлов, а в набор помещается 200 картинок. Раздели его на несколько архивов.',
+    poseArchiveEncrypted: 'Архив защищён паролем, и бот не может его открыть. Собери его без пароля.',
+    poseArchiveUnread: 'Бот не может открыть этот архив: он повреждён или собран не как обычный ZIP (ZIP64, из нескольких частей, сжат не методом deflate, распаковывается во много раз больше своего веса или хранит пути вне архива). Собери обычный ZIP из самих картинок и labels.csv.',
   },
 
   // Names the bot gives to branches and checkpoints it creates. They are stored with the story and keep the language

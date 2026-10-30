@@ -10,6 +10,9 @@ import { eraseUpload, putUpload } from './image-serving.ts';
 import { assemblePrompt, matchSheet } from './illustrate.ts';
 import type { Character, Description } from './illustrate.ts';
 import type { Log } from './model-error.ts';
+import { clothesStatement } from './picture-clothes.ts';
+import { poseGroups } from './pose-set.ts';
+import type { PoseViews } from './pose-set.ts';
 import { imageFormat } from './reference.ts';
 import type { Store } from './store.ts';
 
@@ -18,13 +21,19 @@ type Bound = { name: string; file: string };
 
 // Unlike the old experiment's binding, a missing portrait does not stop later people from getting theirs.
 // Every bound clause names its image explicitly, so image order need not be person order.
-export function frameReferences(story: Story, description: Description): Bound[] {
+// `views`, for a reader with pose sets (local/pose-set.ts), holds concrete files resolved from their offered IDs.
+// Check that each still belongs to that person's set; a missing or invalid pick uses their front, the reader's
+// own before the bot's: the picture sent for it, else the set's front, else the portrait they kept.
+export function frameReferences(story: Story, description: Description, views?: PoseViews): Bound[] {
   const sheet = story.sheet ?? [], names = sheet.map(one => one.name);
   const bound: Bound[] = [];
   for (const person of description.people ?? []) {
     const name = matchSheet(person.who ?? '', names);
     const one = sheet.find(other => other.name === name);
-    const file = one && frameFile(one);
+    const groups = one && views ? poseGroups(one) : [];
+    const picked = name !== null && views && Object.hasOwn(views, name)
+      ? one?.poseSet?.find(picture => picture.file === views[name]) : undefined;
+    const file = one && (picked?.file ?? one.poses?.front?.file ?? groups.find(group => group.group === 'front')?.file ?? frameFile(one));
     if (name !== null && file && !bound.some(other => other.name === name)) bound.push({ name, file });
   }
   return bound;
@@ -36,7 +45,9 @@ export function frameFile(person: NonNullable<Story['sheet']>[number]) {
   return poseReference(person, 'front')?.file;
 }
 
-export function referencePrompt(frame: { description: Description; sheet: Character[] }, bound: Bound[], line: string) {
+// With `clothes` (a reader of SIMPLE_CHAT_CLOTHES_USERS), what each bound person wears in the scene comes before the
+// words on what the pictures are for (local/picture-clothes.ts), and `clothesStated` counts them.
+export function referencePrompt(frame: { description: Description; sheet: Character[] }, bound: Bound[], line: string, clothes = false) {
   const tag = (name: string | null, look: string) => {
     const slot = bound.findIndex(one => one.name === name);
     return slot < 0 ? look : `The person from image ${slot + 1}, ${look}`;
@@ -46,15 +57,24 @@ export function referencePrompt(frame: { description: Description; sheet: Charac
   const description = { ...frame.description, people: (frame.description.people ?? []).map(one => ({ ...one,
     look: tag(matchSheet(one.who ?? '', names), one.look ?? '') })) };
   const assembled = assemblePrompt(description, sheet, line);
-  // ROLE's medium first and identity-only instruction, with the full look left in every clause as in W.
-  // The chosen style also stays last, including a reader's own wording. An empty style adds no medium of ours.
-  const opening = `${line ? `${line} ` : ''}Create a brand-new scene${line ? ' in this medium and style' : ''}. `
+  const { text: opening, worn } = referenceOpening(frame, bound, line, clothes);
+  return { ...assembled, prompt: opening + assembled.prompt,
+    ...worn ? { namesStripped: assembled.namesStripped + worn.namesStripped, clothesStated: worn.stated } : {} };
+}
+
+// What a prompt with reference pictures says before the scene, `referencePrompt`'s and G's alike (local/picture-g.ts):
+// ROLE's medium first and identity-only instruction, with the full look left in every clause as in W.
+// The chosen style also stays last, including a reader's own wording. An empty style adds no medium of ours.
+// `worn` is what `clothesStatement` said, for a reader with `clothes`.
+export function referenceOpening(frame: { description: Description; sheet: Character[] }, bound: Bound[], line: string, clothes = false) {
+  const worn = clothes ? clothesStatement(frame, bound) : undefined;
+  const text = `${line ? `${line} ` : ''}Create a brand-new scene${line ? ' in this medium and style' : ''}. ` + (worn?.text ?? '')
     + 'Use the reference images only as identity sources for the people identified below by image number. '
     + 'Keep each referenced person\'s face, hair, skin, age, body proportions and relative body volumes. '
     + 'Do not slim down, enlarge, age or idealize them. Take nothing else from the references: '
     + 'do not copy their rendering, backdrop, lighting, clothes, standing poses or framing. '
     + 'Use the scene\'s clothes, actions, poses, places, light and relative heights described below. ';
-  return { ...assembled, prompt: opening + assembled.prompt };
+  return { text, worn };
 }
 
 type Size = { width: number; height: number };
@@ -83,12 +103,31 @@ export function referenceGraph(base: Graph, references: number | Size[]): Graph 
   encoder.inputs.vae = [vae[0], 0];
   encoder.inputs.resolution = 0;
   for (let slot = 1; slot <= count; slot++) {
-    const image = add({ class_type: 'LoadImage', inputs: { image: '' } });
+    let image = add({ class_type: 'LoadImage', inputs: { image: '' } }), size = sizes[slot - 1];
+    const pad = referencePad(size);
+    if (pad) {
+      image = add({ class_type: 'ImagePadForOutpaint', inputs: { image, ...pad, feathering: 0 } });
+      size = { width: size.width + pad.left + pad.right, height: size.height + pad.top + pad.bottom };
+    }
     encoder.inputs[`images.image_${slot}`] = add({ class_type: 'ImageScale', inputs: {
-      image, upscale_method: 'area', ...referenceScale(sizes[slot - 1]), crop: 'disabled',
+      image, upscale_method: 'area', ...referenceScale(size), crop: 'disabled',
     } });
   }
   return graph;
+}
+
+// A picture more drawn out than REFERENCE_RATIO, which the bot refused until the owner's decision of 2026-09-28, is
+// padded to that shape on the card before it is scaled: grey along both of its long sides, half of what is missing on
+// each. ImagePadForOutpaint (nodes.py at 73c9bad4) fills what it adds with 0.5; its feathering only shapes the mask,
+// which this graph drops, by a Python loop over every pixel, so it is 0. The server checks the node's sides against
+// their min and max alone, not their step of 8 (execution.py). A picture within the ratio gets no pad node, and its
+// graph is the one it always was.
+const REFERENCE_RATIO = 2.5;
+function referencePad({ width, height }: Size) {
+  const missing = Math.ceil(Math.max(width, height) / REFERENCE_RATIO) - Math.min(width, height);
+  if (missing <= 0) return undefined;
+  const before = Math.floor(missing / 2), after = missing - before;
+  return width < height ? { left: before, top: 0, right: after, bottom: 0 } : { left: 0, top: before, right: 0, bottom: after };
 }
 
 // The size a reference is scaled to before the encoder, which at resolution 0 takes a picture at its own size in

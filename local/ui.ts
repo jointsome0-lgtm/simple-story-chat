@@ -1,7 +1,7 @@
 // Telegram interface for simple-story-chat: pure functions from a user's library to sendMessage payloads.
 // Plain text only (no parse_mode), inline keyboards, callbacks <= 64 UTF-8 bytes.
 
-import type { Branch, Checkpoint, Library, SceneNode, Story } from '../lib/library.ts';
+import type { Branch, Checkpoint, Library, Pace, SceneNode, Story } from '../lib/library.ts';
 import type { ContextStats } from './context.ts';
 import type { GpuStatus } from './gpu.ts';
 import type { InlineButton, InlineKeyboard, Screen } from './telegram.ts';
@@ -9,8 +9,13 @@ import { STYLE } from './illustrate.ts';
 import { portraitFromDetails, portraitText } from './image-portraits.ts';
 import { DESCRIPTION_CHARS, LOOK_CHARS, descriptionOf, ownDescription, ownPortraitPrompt, personAt, personTag, wornAt } from './picture.ts';
 import { REFERENCE_BYTES, REFERENCE_SIDES } from './reference.ts';
+import { POSE_SET_BYTES, POSE_SET_PICTURES, POSE_SET_READER_BYTES, poseCandidates, poseSetState } from './pose-set.ts';
+import { POSE_SET_REFUSALS } from './model-error.ts';
+import type { PoseSetRefusal } from './model-error.ts';
+import { ARCHIVE_BYTES } from './pose-archive.ts';
+import type { ArchiveLabels } from './pose-archive.ts';
 import { seesThrough } from './picture-pov.ts';
-import { editableFrom, ownVersions, sceneOf, sheetAt, versionsOf } from './picture-versions.ts';
+import { editableFrom, ownVersions, personKey, sceneOf, sheetAt, versionsOf } from './picture-versions.ts';
 import { CHANGES_CHARS, CLOTHES_CHARS, DETAILS_CHARS, fieldsMask, maskFields, profileBlock, profileHash, profileOf, roundTrips } from './profile.ts';
 import type { ProfileField } from './profile.ts';
 import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX, PRESETS, PROMPT_CHARS, lineOf, ownStyle, ownStyles, pickerKeys, presetOf, styleKey } from './picture-style.ts';
@@ -32,11 +37,21 @@ export type GpuInfo = {
 // to send a portrait of their own; anybody else is shown the card as if they could not.
 // `versions`: the reader has versions of the sheet (local/picture.ts `versionsFor`), so the wait for a person's text
 // offers to write it «only from this moment», and a person's card says where such an edit holds.
+// `poseSet`: the reader has pose sets (local/picture.ts `poseSetFor`), so a person's card offers to send one and says
+// that frames take it; a set a person has is shown, with the button that removes it, whatever this says. `poseTally`:
+// the pictures of a set counted as they come (local/bot.ts), for the message that counts them: those kept, those of them
+// the reader labeled whole in an archive's labels.csv, those refused by reason, and each labels.csv that came, by the
+// name of its archive (local/pose-archive.ts `ArchiveLabels`).
+// `miniApp`: the Mini App's address, for a reader it serves (local/mini-app.ts), so that the list of a story's characters
+// has a button that opens it there.
 export type RenderDetails = {
   modelInfo?: ModelInfo | null; gpuInfo?: GpuInfo | null; contextStats?: ContextStats | null; pictures?: boolean; standardStyle?: string;
   textTokens?: (text: string) => number | null;
-  retainsPortraits?: boolean; references?: boolean; versions?: boolean;
+  retainsPortraits?: boolean; references?: boolean; versions?: boolean; poseSet?: boolean; poseTally?: PoseTally; miniApp?: string;
 };
+// `unread`: the files of the wait still in the reader's queue; `finishing`: the wait is over, and they are still read.
+export type PoseTally = { storyId: string; name: string; at: number; kept: number; labeled: number; refused: Partial<Record<PoseSetRefusal, number>>;
+  archives: (ArchiveLabels & { archive: string })[]; unread?: number; finishing?: boolean; done: boolean };
 // State is read defensively (docs/telegram-ui.md#renderer), so any library field may be missing.
 type State = Partial<Library>;
 type Row = (InlineButton | null)[];
@@ -46,6 +61,8 @@ export const LIMIT = 4000; // Telegram allows 4096 characters; keep headroom
 const PAGE = 8;
 const encoder = new TextEncoder();
 const ICON: Record<string, string> = { start: '🌱', fork: '🌿', scene: '🎬', manual: '📌', compaction: '🗜' };
+// The paces in the picker's order (lib/library.ts `PACES`).
+const PACE_ICON: Record<Pace, string> = { moment: '⚡', scene: '🎬', chapter: '🗓' };
 
 // The interface language is state.language (lib/library.ts); functions that get no state take it as `lang`.
 export function render(state?: Library | null, route: string | null = 'home', details: RenderDetails | null = {}): Screen {
@@ -120,6 +137,7 @@ function screen(state: State, route: string, details: RenderDetails) {
     case 'home': return home(state, null, details.modelInfo, gpuFor(details), details.pictures === true);
     case 'model': return modelScreen(texts(state.language), details.modelInfo, gpuFor(details));
     case 'language': return languageScreen(state);
+    case 'pace': return paceScreen(state, args[0]);
     case 'style': return args.length ? styleCard(state, args[0], details) : styleScreen(state, details);
     // Only while the reader is writing a style: otherwise their next message would be taken as a move in the story.
     case 'style-input': return styleInputScreen(state, details);
@@ -127,7 +145,7 @@ function screen(state: State, route: string, details: RenderDetails) {
     case 'prompt-input': return promptInputScreen(state, details);
     case 'delete-style': return deleteStyleScreen(state, args[0], details);
     case 'sample': return sampleScreen(state, args[0], details);
-    case 'characters': return charactersScreen(state, args[0]);
+    case 'characters': return charactersScreen(state, args[0], details);
     case 'character': return characterScreen(state, args[0], args[1], args[2], details);
     // Only while the reader is writing a look or a description, as for a style.
     case 'look-input': return sheetInputScreen(state, 'look', details);
@@ -138,10 +156,15 @@ function screen(state: State, route: string, details: RenderDetails) {
     case 'portrait-prompt-input': return portraitPromptInputScreen(state, details);
     // Only while the reader is to send a picture of a person of their own (local/reference.ts), as for a look.
     case 'reference-input': return referenceInputScreen(state, details);
+    // Only while the reader is to send the pictures of a pose set (local/pose-set.ts), as for a look; the message that
+    // counts them as they come; and the question before a set is removed.
+    case 'pose-set-input': return poseSetInputScreen(state, details);
+    case 'pose-set-status': return poseSetStatus(state, details);
+    case 'pose-set-drop': return poseSetDropScreen(state, args[0], args[1], args[2], details);
     // A person's whole profile to copy and send back (local/profile.ts); the same with a line on top when the one the
     // reader edited had changed since (local/bot.ts); the wait for it, as for a look; and what a profile sent back changed.
-    case 'profile': return profileScreen(state, args[0], args[1], args[2]);
-    case 'profile-changed': return profileScreen(state, args[0], args[1], args[2], texts(state.language).characters.profileChanged);
+    case 'profile': return profileScreen(state, args[0], args[1], args[2], details);
+    case 'profile-changed': return profileScreen(state, args[0], args[1], args[2], details, texts(state.language).characters.profileChanged);
     case 'profile-input': return profileInputScreen(state, details);
     case 'profile-saved': return profileSaved(state, args[0], args[1], args[2], args[3]);
     case 'seeds': return seedList(state, args[0]);
@@ -151,7 +174,10 @@ function screen(state: State, route: string, details: RenderDetails) {
     case 'log': return logScreen(state, args[0], args[1], args[2]);
     case 'branch': return branchScreen(state, args[0], args[1]);
     case 'checkpoints': return checkpointList(state, args[0], args[1], args[2]);
-    case 'checkpoint': return checkpointScreen(state, args[0], args[1]);
+    // A preview opened from a page of the bookmarks (`b<page>`) leads back to that page.
+    case 'checkpoint': return checkpointScreen(state, args[0], args[1], bookmarkPage(args[2]));
+    case 'bookmarks': return bookmarkList(state, args[0]);
+    case 'forks': return forksScreen(state, args[0], args[1], bookmarkPage(args[2]), args[3]);
     case 'context': return args.length ? checkpointContextScreen(state, args[0], args[1], details.contextStats) : currentContextScreen(state, details.contextStats);
     case 'delete-seed': return deleteSeedScreen(state, args[0]);
     case 'delete-branch': return deleteBranchScreen(state, args[0], args[1]);
@@ -190,6 +216,7 @@ function home(state: State, note: string | null, modelInfo: ModelInfo | null | u
     } else if (branch.head) {
       rows.push([btn(t.buttons.lastScene, 'last')]);
     }
+    rows.push([btn(t.pace.button(t.pace.names[paceOf(story)]), `view:pace:${story.id}`)]);
     rows.push([
       btn(t.buttons.checkpoints, `view:checkpoints:${story.id}:${branch.id}:0`),
       btn(t.buttons.branches, `view:story:${story.id}`),
@@ -200,6 +227,7 @@ function home(state: State, note: string | null, modelInfo: ModelInfo | null | u
   } else {
     lines.push(t.home.empty, t.common.whatIsSeed, '', t.home.createFirst);
   }
+  if (values(state.stories).length) rows.push([btn(t.buttons.bookmarks, 'view:bookmarks:0')]);
   rows.push([seedCount ? btn(t.buttons.seedsCount(seedCount), 'view:seeds:0') : null, btn(t.buttons.newSeed, 'new-seed'), btn(t.buttons.model, 'view:model')]);
   rows.push([btn(LANGUAGE_BUTTON, 'view:language'), pictures ? btn(t.buttons.pictureStyle, 'view:style') : null,
     pictures && ref ? btn(t.buttons.characters, `view:characters:${ref.story.id}`) : null]);
@@ -212,6 +240,21 @@ function languageScreen(state: State) {
   const current = shownLang(state.language);
   return payload([t.language.title, '', t.language.note], [
     ...REGISTERED.map(lang => [btn(`${lang === current ? '✅ ' : ''}${LANGS[lang]}`, `lang:${lang}`)]),
+    [btn(t.buttons.menu, 'view:home')],
+  ]);
+}
+
+// A story's pace (lib/library.ts `Story.pace`), from the menu: what each pace does and who moves the hero, and the three
+// to choose from. A press only stores the choice; the next scene request reads it (local/prompt.ts).
+function paceScreen(state: State, storyId: string | undefined) {
+  const t = texts(state.language);
+  const p = t.pace;
+  const story = own(state.stories, storyId);
+  if (!story) return stale(t, t.story.notFound);
+  const current = paceOf(story);
+  const paces = Object.keys(PACE_ICON) as Pace[];
+  return payload([p.title, `📖 ${storyName(state, story)}`, '', ...paces.map(pace => `${PACE_ICON[pace]} ${p.lines[pace]}`), '', p.move, p.next], [
+    paces.map(pace => btn(`${pace === current ? '✅ ' : ''}${PACE_ICON[pace]} ${p.names[pace]}`, `pace:${story.id}:${pace}`)),
     [btn(t.buttons.menu, 'view:home')],
   ]);
 }
@@ -481,23 +524,32 @@ function storyScreen(state: State, storyId: string | undefined, rawPage: string 
 }
 
 // The people of a story's sheet (local/picture.ts): who its pictures draw, and from what look. A sheet is written with
-// the story's first picture, never on a press here, so a story without one says when it comes.
-function charactersScreen(state: State, storyId: string | undefined) {
+// the story's first picture, never on a press here, so a story without one says when it comes. A reader the Mini App
+// serves may open the same list there.
+function charactersScreen(state: State, storyId: string | undefined, details: RenderDetails) {
   const t = texts(state.language);
   const c = t.characters;
   const story = own(state.stories, storyId);
   if (!story) return stale(t, t.story.notFound);
-  const sheet = people(story);
-  // Each as they are at the scene the reader stands at in this story (local/picture-versions.ts), as their card shows them.
-  const here = sheetAt(story, sceneOf(state, story.id));
+  const sheet = charactersOf(state, story);
   return payload([c.title(storyName(state, story)), '', sheet.length ? c.note : c.none, sheet.length ? '' : null,
-    ...sheet.map((one, n) => {
-      const now = here[one.index] ?? one;
-      return `${n + 1}. ${line(one.name, 40)} — ${line(now.look || descriptionOf(now), 90)}`;
-    })], [
-    ...sheet.map(one => [btn(`${seesThrough(story, one.name) ? '👁' : '👤'} ${line(one.name, 30) || t.format.untitledButton}`, `view:character:${personRef(story, one)}`)]),
+    ...sheet.map((one, n) => `${n + 1}. ${line(one.name, 40)} — ${line(one.summary, 90)}`)], [
+    ...sheet.map(one => [btn(`${one.viewer ? '👁' : '👤'} ${line(one.name, 30) || t.format.untitledButton}`, `view:character:${personRef(story, one)}`)]),
+    details.miniApp ? [appButton(t.miniApp.open, `${details.miniApp}/?story=${encodeURIComponent(story.id)}`)] : null,
     [btn(c.toStory, `view:story:${story.id}`), btn(t.buttons.menu, 'view:home')],
   ]);
+}
+
+// The people of a story's sheet as the list of them shows them, here and in the Mini App (local/mini-app.ts): each at
+// their place on the sheet, with their look, or their description where they have no look, as they are at the scene the
+// reader stands at in this story (local/picture-versions.ts), as their card shows them, and whether the story's frames
+// are seen through their eyes.
+export function charactersOf(state: State, story: Story) {
+  const here = sheetAt(story, sceneOf(state, story.id));
+  return people(story).map(one => {
+    const now = here[one.index] ?? one;
+    return { ...one, summary: now.look || descriptionOf(now), viewer: seesThrough(story, one.name) };
+  });
 }
 
 // One person (docs/illustrations-plan.md#three-layers): their description, the story's changes to it, the look and the
@@ -522,7 +574,51 @@ function characterScreen(state: State, storyId: string | undefined, rawIndex: st
   if (!story) return stale(t, t.story.notFound);
   // A button of somebody whose place on the sheet another person took since opens the list, not that other person.
   const found = personAt(story, rawIndex, tag);
-  if (!found) return charactersScreen(state, story.id);
+  if (!found) return charactersScreen(state, story.id, details);
+  const { person, described, descriptionTitle, descriptionSize, changes, along, lookSize, whose, clothes, clothesTitle, clothesSize,
+    portrait, source, frames, viewer, pov, prompt } = characterCard(state, story, found, details);
+  // A set of the person's pictures in many poses (local/pose-set.ts): how many and how heavy, those still without a
+  // caption, how the captioned ones were sorted, and whether frames take them now.
+  const set = person.poseSet?.length ? poseSetState(person) : undefined;
+  const candidates = set ? poseCandidates(person) : [];
+  const poses = !set ? [] : ['', c.poseSetLine(set.count, POSE_SET_PICTURES, megabytes(set.bytes)),
+    ...set.pending || set.failed ? [c.poseSetCaptions(set.pending, set.failed)] : [],
+    ...candidates.length ? [c.poseSetVariants(candidates.length)] : [],
+    details.poseSet && details.pictures ? c.poseSetFrames : c.poseSetUnused];
+  const result = payload([c.cardTitle(line(person.name, 60), storyName(state, story)), '',
+    ...described ? [descriptionTitle, described, descriptionSize, ''] : [],
+    ...changes ? [c.changes, changes, ''] : [], ...along ? [along, ''] : [],
+    c.look, person.look, lookSize, whose, '',
+    ...clothes ? [clothesTitle, clothes, clothesSize] : [c.noClothes], c.clothesNote, '',
+    c.sizeNote, '', details.versions ? c.scopeVersions : c.scope, portrait === null ? null : '', portrait, source, frames, ...poses,
+    pov === null ? null : '', pov], [
+    [btn(c.editDetails, `details-edit:${personRef(story, person)}`)],
+    [btn(c.edit, `look-edit:${personRef(story, person)}`)],
+    [btn(c.profile, `view:profile:${personRef(story, person)}`)],
+    details.pictures ? [btn(c.portrait, `portrait:${personRef(story, person)}`),
+      details.references ? btn(c.ownPortrait, `ref-send:${personRef(story, person)}:front`) : null] : null,
+    details.pictures && prompt !== undefined ? [btn(c.defaultPrompt, `portrait-default:${personRef(story, person)}`)] : null,
+    (details.pictures && details.poseSet) || set ? [details.pictures && details.poseSet ? btn(c.poseSet, `pose-set:${personRef(story, person)}`) : null,
+      set ? btn(c.poseSetDrop, `pose-set-drop:${personRef(story, person)}`) : null] : null,
+    details.miniApp && set ? [appButton(t.miniApp.references,
+      `${details.miniApp}/?story=${encodeURIComponent(story.id)}&index=${person.index}&tag=${personTag(person.name)}&references=1`)] : null,
+    details.pictures ? [btn(viewer ? c.povOff : c.povOn, `${viewer ? 'pov-off' : 'pov'}:${personRef(story, person)}`)] : null,
+    [btn(c.back, `view:characters:${story.id}`)],
+  ]);
+  const pre = (text: string, after: string) => {
+    const offset = result.text.indexOf(text, result.text.indexOf(after) + after.length);
+    return text && offset >= 0 ? [{ type: 'pre' as const, offset, length: text.length }] : [];
+  };
+  result.entities = [...described ? pre(described, descriptionTitle) : [], ...pre(person.look, c.look), ...clothes ? pre(clothes, clothesTitle) : []];
+  return result;
+}
+
+// What a person's card says of them, in the chat (`characterScreen`) and in the Mini App (local/mini-app.ts): each field
+// with its title and size, and the lines on their portrait and on the frames seen through their eyes. `picture` is the
+// one the portrait's line speaks of, a picture of the reader's own or the portrait they kept.
+export function characterCard(state: State, story: Story, found: NonNullable<ReturnType<typeof personAt>>, details: RenderDetails) {
+  const t = texts(state.language);
+  const c = t.characters;
   const ref = activeRef(state);
   const branch = ref?.story === story && ref.branch.head ? ref.branch : null;
   // The person as they are at the scene the reader stands at, with the versions of its line (local/picture-versions.ts),
@@ -564,27 +660,9 @@ function characterScreen(state: State, storyId: string | undefined, rawIndex: st
   const viewer = seesThrough(story, person.name);
   const other = people(story).find(one => seesThrough(story, one.name));
   const pov = !details.pictures ? null : viewer ? c.povNote : other ? c.povOther(line(other.name, 60)) : null;
-  const result = payload([c.cardTitle(line(person.name, 60), storyName(state, story)), '',
-    ...described ? [descriptionTitle, described, c.descriptionSize([...described].length), ''] : [],
-    ...changes ? [c.changes, changes, ''] : [], ...changed ? [c.along(changed), ''] : [],
-    c.look, person.look, c.lookSize(...size(person.look)), whose, '',
-    ...clothes ? [clothesTitle, clothes, c.clothesSize(...size(clothes))] : [c.noClothes], c.clothesNote, '',
-    c.sizeNote, '', details.versions ? c.scopeVersions : c.scope, portrait === null ? null : '', portrait, source, frames, pov === null ? null : '', pov], [
-    [btn(c.editDetails, `details-edit:${personRef(story, person)}`)],
-    [btn(c.edit, `look-edit:${personRef(story, person)}`)],
-    [btn(c.profile, `view:profile:${personRef(story, person)}`)],
-    details.pictures ? [btn(c.portrait, `portrait:${personRef(story, person)}`),
-      details.references ? btn(c.ownPortrait, `ref-send:${personRef(story, person)}:front`) : null] : null,
-    details.pictures && prompt !== undefined ? [btn(c.defaultPrompt, `portrait-default:${personRef(story, person)}`)] : null,
-    details.pictures ? [btn(viewer ? c.povOff : c.povOn, `${viewer ? 'pov-off' : 'pov'}:${personRef(story, person)}`)] : null,
-    [btn(c.back, `view:characters:${story.id}`)],
-  ]);
-  const pre = (text: string, after: string) => {
-    const offset = result.text.indexOf(text, result.text.indexOf(after) + after.length);
-    return text && offset >= 0 ? [{ type: 'pre' as const, offset, length: text.length }] : [];
-  };
-  result.entities = [...described ? pre(described, descriptionTitle) : [], ...pre(person.look, c.look), ...clothes ? pre(clothes, clothesTitle) : []];
-  return result;
+  return { person, described, descriptionTitle, descriptionSize: c.descriptionSize([...described].length), changes,
+    along: changed ? c.along(changed) : null, lookSize: c.lookSize(...size(person.look)), whose, clothes, clothesTitle,
+    clothesSize: clothes ? c.clothesSize(...size(clothes)) : null, portrait, source, frames, viewer, pov, prompt, picture: mine ?? kept };
 }
 
 // Waiting for a look or a description the reader writes for the person `state.ui` names, with the text as it is now to
@@ -633,13 +711,14 @@ function sheetInputScreen(state: State, input: 'look' | 'details', details: Rend
 // one of a sheet the next picture writes anew, and one of a person whose look changed along the branch being played,
 // shown as at its last scene (local/profile.ts `versioned`), are shown without the button, with a line on why. `notice`
 // goes on top: the profile the reader edited had changed since.
-function profileScreen(state: State, storyId: string | undefined, rawIndex: string | undefined, tag: string | undefined, notice?: string) {
+function profileScreen(state: State, storyId: string | undefined, rawIndex: string | undefined, tag: string | undefined, details: RenderDetails,
+  notice?: string) {
   const t = texts(state.language);
   const c = t.characters;
   const story = own(state.stories, storyId);
   if (!story) return stale(t, t.story.notFound);
   const person = personAt(story, rawIndex, tag);
-  if (!person) return charactersScreen(state, story.id);
+  if (!person) return charactersScreen(state, story.id, details);
   const ref = personRef(story, person);
   const profile = profileOf(state, story, person);
   const title = c.profileTitle(line(person.name, 60), storyName(state, story));
@@ -707,6 +786,68 @@ function referenceInputScreen(state: State, details: RenderDetails) {
   return payload([c.ownPortraitTitle(line(person.name, 60), storyName(state, story)), '',
     c.ownPortraitNote(min, max, REFERENCE_BYTES / 1024 / 1024), ...person.portrait || person.poses?.front ? ['', c.ownPortraitReplaces] : []],
     [[btn(c.backToCard, `view:character:${personRef(story, person)}`)]]);
+}
+
+// Waiting for the pictures of the pose set of the person `state.ui` names (local/pose-set.ts), one by one or in albums,
+// until the reader says they are done. Without the wait, or for a reader without pose sets, this is the menu, as for a
+// look.
+function poseSetInputScreen(state: State, details: RenderDetails) {
+  const t = texts(state.language);
+  const c = t.characters;
+  const ui = state.ui?.input === 'pose-set' ? state.ui : null;
+  const story = own(state.stories, ui?.storyId);
+  const person = story && people(story).find(one => one.name === ui?.name);
+  if (!story || !person || !details.poseSet) return home(state, null, details.modelInfo, gpuFor(details), details.pictures === true);
+  const { min, max } = REFERENCE_SIDES;
+  const held = person.poseSet?.length ?? 0;
+  return payload([c.poseSetTitle(line(person.name, 60), storyName(state, story)), '',
+    c.poseSetNote(min, max, REFERENCE_BYTES / 1024 / 1024, POSE_SET_PICTURES, POSE_SET_BYTES / 1024 / 1024, POSE_SET_READER_BYTES / 1024 / 1024,
+      ARCHIVE_BYTES / 1024 / 1024),
+    ...held ? ['', c.poseSetHeld(held)] : []],
+    [[btn(c.poseSetDone, `pose-set-done:${personRef(story, person)}`)], [btn(c.backToCard, `view:character:${personRef(story, person)}`)]]);
+}
+
+// The message that counts the pictures of a pose set as they are read (local/bot.ts): those kept, those refused and why,
+// how many files are still to be read, and how many the set holds now, with «✅ Готово» under it until the reader is
+// done, and after that, while files are still read, that its last word is to come. Once an archive with labels.csv came,
+// how many the reader labeled and how many are left to the captioner, and for each labels.csv the rows that matched no
+// picture or had a value the bot does not know, or that it could not be read. The person is found by the key a sheet
+// written again keeps (local/picture.ts `rewrittenSheet`).
+function poseSetStatus(state: State, details: RenderDetails) {
+  const t = texts(state.language);
+  const c = t.characters;
+  const tally = details.poseTally;
+  const story = own(state.stories, tally?.storyId);
+  const person = story && tally && people(story).find(one => personKey(one.name) === personKey(tally.name));
+  if (!tally || !story || !person) return payload([c.poseSetTitle(line(tally?.name ?? '', 60), '…'), '', c.poseSetKept(tally?.kept ?? 0)], []);
+  const refused = POSE_SET_REFUSALS.flatMap(reason => tally.refused[reason] ? [{ reason: c.poseSetReasons[reason], count: tally.refused[reason]! }] : []);
+  const ref = personRef(story, person);
+  const archives = tally.archives ?? [];
+  const labels = !archives.length ? [] : [c.poseSetLabeled(tally.labeled ?? 0, tally.kept - (tally.labeled ?? 0)),
+    ...archives.flatMap(one => one.unread ? [c.poseSetLabelsUnread(line(one.archive, 40))]
+      : one.unmatched.length || one.unknown.length ? [c.poseSetRows(line(one.archive, 40), rowList(one.unmatched), rowList(one.unknown))] : [])];
+  return payload([c.poseSetTitle(line(person.name, 60), storyName(state, story)), '', c.poseSetKept(tally.kept),
+    ...refused.length ? [c.poseSetRefused(refused)] : [], ...labels, ...tally.unread ? [c.poseSetUnread(tally.unread)] : [],
+    c.poseSetHolds(person.poseSet?.length ?? 0, POSE_SET_PICTURES), '',
+    tally.done ? c.poseSetEnded : tally.finishing ? c.poseSetFinishing : c.poseSetMore],
+    [tally.done || tally.finishing ? [btn(c.backToCard, `view:character:${ref}`)] : [btn(c.poseSetDone, `pose-set-done:${ref}`)]]);
+}
+
+// Row numbers of labels.csv as a message lists them: the first twenty, and how many more.
+const rowList = (rows: number[]) => rows.length > 20 ? `${rows.slice(0, 20).join(', ')}… (+${rows.length - 20})` : rows.join(', ');
+
+// Before every picture of a person's pose set goes: how many, and that frames already drawn with them keep them.
+function poseSetDropScreen(state: State, storyId: string | undefined, rawIndex: string | undefined, tag: string | undefined,
+  details: RenderDetails) {
+  const t = texts(state.language);
+  const c = t.characters;
+  const story = own(state.stories, storyId);
+  const person = story && personAt(story, rawIndex, tag);
+  if (!story || !person) return stale(t, t.story.notFound);
+  const ref = personRef(story, person);
+  if (!person.poseSet?.length) return characterScreen(state, story.id, rawIndex, tag, details);
+  return payload([c.poseSetDropTitle(line(person.name, 60), storyName(state, story)), '', c.poseSetDropNote(person.poseSet.length)],
+    [[btn(c.poseSetDropConfirm, `pose-set-dropped:${ref}`)], [btn(c.backToCard, `view:character:${ref}`)]]);
 }
 
 // Waiting for the whole prompt of the portraits of the person `state.ui` names (local/bot.ts), which the reader copies
@@ -889,7 +1030,7 @@ function checkpointList(state: State, storyId: string | undefined, branchId: str
   return payload(lines, rows);
 }
 
-function checkpointScreen(state: State, storyId: string | undefined, checkpointId: string | undefined) {
+function checkpointScreen(state: State, storyId: string | undefined, checkpointId: string | undefined, fromBookmarks: number | null) {
   const t = texts(state.language);
   const story = own(state.stories, storyId);
   const cp = own(story?.checkpoints, checkpointId);
@@ -900,6 +1041,9 @@ function checkpointScreen(state: State, storyId: string | undefined, checkpointI
 
   const header = [checkpointTitle(t, cp), t.checkpoint.branch(quote(t, branch.name), storyName(state, story))];
   if (cp.head && cp.head === branch.head && isActive(state, story, branch)) header.push(t.checkpoint.isHead);
+  // A scene may be kept as a bookmark; the start of a story is not a scene, and a scene that is gone is none.
+  const marked = node ? markOf(story, cp) : undefined;
+  if (marked) header.push(t.bookmarks.saved);
 
   let body: (string | null)[];
   if (!cp.head) {
@@ -925,10 +1069,18 @@ function checkpointScreen(state: State, storyId: string | undefined, checkpointI
     footer.push(t.checkpoint.forkNote(quote(t, branch.name)));
     rows.push([btn(t.checkpoint.fork, `fork:${story.id}:${cp.id}`)]);
   }
+  // A bookmark changes nothing a scene request reads, so it is offered while a scene is being written too.
+  const origin = fromBookmarks === null ? 'c' : `b${fromBookmarks}`;
+  const from = fromBookmarks === null ? '' : `:${origin}`;
+  rows.push([
+    !node ? null : marked ? btn(t.bookmarks.remove, `unmark:${story.id}:${cp.id}${from}`) : btn(t.bookmarks.add, `mark:${story.id}:${cp.id}${from}`),
+    branchesFrom(story, cp.head).length ? btn(t.bookmarks.forks, `view:forks:${story.id}:${cp.id}:${origin}:0`) : null,
+  ]);
   const newest = checkpointsOf(story, branch.id).reverse();
   const page = Math.max(0, Math.floor(newest.indexOf(cp) / PAGE));
   rows.push([
-    btn(t.checkpoint.back, `view:checkpoints:${story.id}:${branch.id}:${page}`),
+    // The bookmarks' page is clamped there, so one taken away from the last page still leads back near it.
+    fromBookmarks !== null ? btn(t.bookmarks.back, `view:bookmarks:${fromBookmarks}`) : btn(t.checkpoint.back, `view:checkpoints:${story.id}:${branch.id}:${page}`),
     btn(t.buttons.context, `view:context:${story.id}:${cp.id}`),
     btn(t.buttons.menu, 'view:home'),
   ]);
@@ -938,6 +1090,57 @@ function checkpointScreen(state: State, storyId: string | undefined, checkpointI
   const fixed = [...header, ...body, ...footer].filter(l => l != null).join('\n').length;
   body.push(clip(long, Math.max(200, LIMIT - fixed - 20)));
   return payload([...header, ...body, ...footer], rows);
+}
+
+// The reader's bookmarks across their stories, newest first (lib/library.ts `Checkpoint.bookmark`). Each opens its
+// checkpoint's preview, which leads back here; opening one changes neither the story nor the branch being played.
+function bookmarkList(state: State, rawPage: string | undefined) {
+  const t = texts(state.language);
+  const all = bookmarksOf(state);
+  const p = paginate(all, rawPage);
+  const lines: (string | null)[] = [t.bookmarks.title(all.length), pageNote(t, p), ''];
+  const rows: Row[] = [];
+  p.items.forEach(({ story, cp, node, mark }, i) => {
+    const n = p.start + i + 1;
+    const words = line(node.input, 48) || line(sceneBody(node.text), 48);
+    lines.push(`${n}. ${line(mark.label, 200) || checkpointTitle(t, cp)}`, `   ✍️ ${words || '—'}`);
+    rows.push([btn(`🔖 ${n}. ${line(node.input, 28) || t.log.scene} · ${node.time}`, `view:checkpoint:${story.id}:${cp.id}:b${p.page}`)]);
+  });
+  lines.push('', all.length ? t.bookmarks.hint : t.bookmarks.none);
+  rows.push(pager(p, 'bookmarks', t.buttons.previous, t.buttons.next));
+  rows.push([btn(t.buttons.menu, 'view:home')]);
+  return payload(lines, rows);
+}
+
+// The branches that leave a checkpoint's scene, grouped by the scene that follows it there, each scene shown as the
+// branch's scene log shows it. Each branch opens its scenes. A branch whose head is that scene does not leave it.
+function forksScreen(state: State, storyId: string | undefined, checkpointId: string | undefined, fromBookmarks: number | null, rawPage: string | undefined) {
+  const t = texts(state.language);
+  const story = own(state.stories, storyId);
+  const cp = own(story?.checkpoints, checkpointId);
+  if (!story || !cp) return stale(t, t.checkpoint.notFound);
+  const leaving = branchesFrom(story, cp.head);
+  const p = paginate(leaving, rawPage);
+  const time = checkpointTime(state, story, cp);
+  const lines: (string | null)[] = [t.bookmarks.forksTitle, `${checkpointTitle(t, cp)}${time ? ` · ${time}` : ''}`, `📖 ${storyName(state, story)}`,
+    t.bookmarks.forksSummary(leaving.length, new Set(leaving.map(one => one.next.id)).size), pageNote(t, p)];
+  const rows: Row[] = [];
+  let group: string | null = null;
+  for (const { branch, next, number } of p.items) {
+    if (next.id !== group) {
+      group = next.id;
+      const words = line(next.input, 48) || line(sceneBody(next.text), 48);
+      lines.push('', `${number}. ${next.time}${next.truncated ? ` · ${t.log.truncated}` : ''}`, `   ✍️ ${words || '—'}`);
+    }
+    lines.push(`   🌿 ${quote(t, branch.name)} · ${progress(t, story, branch)}${isActive(state, story, branch) ? ` · ${t.common.current}` : ''}`);
+    rows.push([btn(`🌿 ${line(branch.name, 24) || t.format.untitledButton} · ${t.count.scenes(chain(story, branch.head).length)}`, `view:log:${story.id}:${branch.id}:0`)]);
+  }
+  if (!leaving.length) lines.push('', t.bookmarks.forksNone);
+  lines.push('', t.bookmarks.forksHint);
+  const origin = fromBookmarks === null ? 'c' : `b${fromBookmarks}`;
+  rows.push(pager(p, `forks:${story.id}:${cp.id}:${origin}`, t.buttons.previous, t.buttons.next));
+  rows.push([btn(t.buttons.toCheckpoint, `view:checkpoint:${story.id}:${cp.id}${fromBookmarks === null ? '' : `:${origin}`}`), btn(t.buttons.menu, 'view:home')]);
+  return payload(lines, rows);
 }
 
 function currentContextScreen(state: State, stats: ContextStats | null | undefined) {
@@ -1064,9 +1267,11 @@ function deleteSeedScreen(state: State, seedId: string | undefined) {
   const stories = storiesOf(state, seed.id);
   const branches = stories.reduce((sum, story) => sum + values(story.branches).length, 0);
   const scenes = stories.reduce((sum, story) => sum + Object.keys(story.nodes ?? {}).length, 0);
-  const lines = [d.seedTitle(quote(t, seed.title, 60)), ''];
+  const lines: (string | null)[] = [d.seedTitle(quote(t, seed.title, 60)), ''];
   if (stories.length) {
-    lines.push(d.withSeed, `• ${t.count.stories(stories.length)}`, `• ${t.count.branches(branches)}`, `• ${d.scenesAndCheckpoints(scenes)}`);
+    const marks = stories.reduce((sum, story) => sum + bookmarksOf({ ...state, stories: { [story.id]: story } }).length, 0);
+    lines.push(d.withSeed, `• ${t.count.stories(stories.length)}`, `• ${t.count.branches(branches)}`, `• ${d.scenesAndCheckpoints(scenes)}`,
+      marks ? `• ${d.bookmarks(marks)}` : null);
     if (stories.some(story => story.id === state.active?.storyId)) lines.push(`• ${d.includesCurrent}`);
   } else {
     lines.push(d.onlySeed);
@@ -1094,13 +1299,18 @@ function deleteBranchScreen(state: State, storyId: string | undefined, branchId:
   const checkpoints = checkpointsOf(story, branch.id);
   const kept = reach(story, [...others, ...values(story.checkpoints).filter(cp => cp?.branchId !== branch.id)]);
   const lost = [...reach(story, [branch, ...checkpoints])].filter(nodeId => !kept.has(nodeId)).length;
+  // The bookmarks this branch's checkpoints hold whose scene no checkpoint of another branch names (lib/library.ts
+  // `deleteBranch`).
+  const named = new Set(values(story.checkpoints).filter(cp => cp?.branchId !== branch.id && own(story.branches, cp.branchId)).map(cp => cp.head));
+  const marks = bookmarksOf({ ...state, stories: { [story.id]: story } }).filter(one => one.cp.branchId === branch.id && !named.has(one.cp.head)).length;
 
   const lines: (string | null)[] = [d.branchTitle(quote(t, branch.name, 60)), `📖 ${storyName(state, story)}`, ''];
   if (!others.length) {
-    lines.push(d.onlyBranch, `• ${t.count.scenes(lost)}`, `• ${t.count.checkpoints(checkpoints.length)}`, '',
+    lines.push(d.onlyBranch, `• ${t.count.scenes(lost)}`, `• ${t.count.checkpoints(checkpoints.length)}`, marks ? `• ${d.bookmarks(marks)}` : null, '',
       seed ? d.seedStays(quote(t, seed.title)) : null);
   } else {
-    lines.push(d.forever, `• ${d.checkpointsOfBranch(checkpoints.length)}`, `• ${lost ? d.scenesOnlyHere(lost) : d.scenesStay}`, '', d.kept(others.length));
+    lines.push(d.forever, `• ${d.checkpointsOfBranch(checkpoints.length)}`, `• ${lost ? d.scenesOnlyHere(lost) : d.scenesStay}`,
+      marks ? `• ${d.bookmarks(marks)}` : null, '', d.kept(others.length));
   }
   if (isActive(state, story, branch)) lines.push('', d.isCurrent);
   lines.push('', d.note);
@@ -1191,7 +1401,12 @@ function personRef(story: Story, person: { name: string; index: number }) {
   return `${story.id}:${person.index}:${personTag(person.name)}`;
 }
 
-function storyName(state: State, story: Story) {
+// A stored pace that is not one of the others is «Сцена», as a story without one.
+function paceOf(story: Story): Pace {
+  return story.pace === 'moment' || story.pace === 'chapter' ? story.pace : 'scene';
+}
+
+export function storyName(state: State, story: Story) {
   const t = texts(state.language);
   const n = storiesOf(state, story.seedId).indexOf(story) + 1;
   return n ? t.common.storyName(quote(t, story.title), n) : quote(t, story.title);
@@ -1221,6 +1436,52 @@ function progress(t: Messages, story: Story, branch: Branch) {
   if (!scenes) return t.common.noScenes;
   const time = own(story.nodes, branch.head)?.time;
   return `${t.count.scenes(scenes)}${time ? ` · ${time}` : ''}`;
+}
+
+// The page of the bookmarks a preview was opened from, `b<page>` on its route, or null for one opened elsewhere.
+function bookmarkPage(origin: string | undefined) {
+  const match = /^b(\d{1,4})$/.exec(origin ?? '');
+  return match ? Number(match[1]) : null;
+}
+
+// The bookmark of a checkpoint's scene, whichever checkpoint of the scene holds it (lib/library.ts `bookmarkOf`).
+function markOf(story: Story, cp: Checkpoint) {
+  const holder = values(story.checkpoints).find(one => one?.bookmark && one.head === cp.head && own(story.branches, one.branchId));
+  return holder && typeof holder.bookmark?.label === 'string' ? holder.bookmark : undefined;
+}
+
+// Every bookmark of the reader's whose checkpoint opens, newest first. One left on a checkpoint whose branch or scene is
+// gone, which no build writes, opens nothing and is not shown.
+function bookmarksOf(state: State) {
+  const found = ordered(values(state.stories)).flatMap(story => ordered(values(story.checkpoints)).flatMap(cp => {
+    const node = cp?.bookmark && own(story.branches, cp.branchId) ? own(story.nodes, cp.head) : undefined;
+    return node && typeof cp.bookmark?.label === 'string' ? [{ story, cp, node, mark: cp.bookmark }] : [];
+  }));
+  const at = (one: (typeof found)[number]) => known(one.mark.at) ? one.mark.at : 0;
+  return found.map((one, i) => ({ one, i })).sort((a, b) => (at(b.one) - at(a.one)) || (b.i - a.i)).map(({ one }) => one);
+}
+
+// The branches whose line passes through `head` and goes on past it, with the scene that follows it on each and that
+// scene's number, ordered by that scene and then by branch. From the start of a story (a null head) that is every
+// branch with a scene.
+function branchesFrom(story: Story, head: string | null | undefined) {
+  const leaving = ordered(values(story.branches)).flatMap(branch => {
+    const scenes = chain(story, branch.head);
+    const at = head ? scenes.findIndex(node => node.id === head) : -1;
+    const next = head && at < 0 ? undefined : scenes[at + 1];
+    return next ? [{ branch, next, number: at + 2 }] : [];
+  });
+  const order = new Map(ordered(leaving.map(one => one.next)).map((node, i) => [node.id, i]));
+  return leaving.map((one, i) => ({ one, i })).sort((a, b) => (order.get(a.one.next.id)! - order.get(b.one.next.id)!) || (a.i - b.i)).map(({ one }) => one);
+}
+
+// The label a new bookmark is saved with (lib/library.ts `addBookmark`): the story, the branch, the scene's number on
+// its line and its world time, in the reader's language of the moment.
+export function bookmarkLabel(state: State, story: Story, cp: Checkpoint) {
+  const t = texts(state.language);
+  const branch = own(story.branches, cp.branchId);
+  const scenes = chain(story, cp.head);
+  return t.bookmarks.label(storyName(state, story), quote(t, branch?.name), scenes.length, scenes.at(-1)?.time ?? '—');
 }
 
 function checkpointsOf(story: Story, branchId: string) {
@@ -1253,6 +1514,9 @@ function clip(value: unknown, max: number) {
 function line(value: unknown, max = 40) {
   return clip(String(value ?? '').replace(/\s+/g, ' ').trim(), max);
 }
+
+// Bytes as whole megabytes, a started one counted.
+const megabytes = (bytes: number) => Math.ceil(bytes / 1024 / 1024);
 
 function quote(t: Messages, value: unknown, max = 40) {
   return t.format.quote(line(value, max) || t.format.untitled);
@@ -1327,6 +1591,11 @@ function pager(p: Page<unknown>, route: string, previous: string, next: string):
 
 function btn(text: string, data: string): InlineButton | null {
   return encoder.encode(data).length <= 64 ? { text, callback_data: data } : null;
+}
+
+// Opens the Mini App at `url` (local/mini-app.ts) instead of asking the bot for a screen.
+function appButton(text: string, url: string): InlineButton {
+  return { text, web_app: { url } };
 }
 
 function keyboard(rows: (Row | null)[]): InlineKeyboard | undefined {

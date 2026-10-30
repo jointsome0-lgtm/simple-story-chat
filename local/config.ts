@@ -2,6 +2,7 @@ import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { parseEnv } from 'node:util';
 import { basename, dirname, join, resolve } from 'node:path';
 import { memoryOutputTokens } from './memory.ts';
+import type { CaptionerConfig } from './pose-set.ts';
 
 export type Env = NodeJS.Dict<string>;
 export type ModelConfig = {
@@ -25,10 +26,24 @@ export type ImageConfig = {
   // The readers who have versions of a story's sheet (local/picture-versions.ts): their frames name the lasting changes
   // the story makes to a person's look, and they may write a person's text «only from this moment». Nobody by default.
   versionUsers?: Set<string>;
+  // The readers of the reference experiment who may send a person's pictures by the dozen, for each frame to take the one
+  // whose pose fits (local/pose-set.ts), and the captioner on this computer that labels them. Nobody by default.
+  poseSetUsers?: Set<string>; captioner?: CaptionerConfig;
+  // The tester's complaint of 2026-09-28 about clothes, for these readers alone and nobody by default: a frame names what
+  // each person wears and what of them is bare, and says it before the reference wording (local/picture-clothes.ts).
+  clothesUsers?: Set<string>;
+  // The readers whose frames are drawn from a whole prompt the story model writes in one more request after the frame's
+  // (local/picture-g.ts), as the owner decided on 2026-09-29. Nobody by default.
+  gPromptUsers?: Set<string>;
   // Only with SIMPLE_CHAT_IMAGE_PROVIDER=simple-serving: the picture gateway's client key (local/image-serving.ts).
   serving?: { key: string };
 };
-export type Config = ModelConfig & { gpu: GpuConfig | undefined; images: ImageConfig | undefined; token: string; allowedUsers: Set<string>; ownerId: string; dbPath: string };
+// The Mini App (local/mini-app.ts, docs/telegram-ui.md#mini-app), off unless SIMPLE_CHAT_MINI_APP_URL is set: the public
+// HTTPS root the owner exposes `port` at, the loopback port the bot serves it on, and the readers it serves and shows
+// its button to, nobody by default.
+export type MiniAppConfig = { url: string; port: number; users: Set<string> };
+export type Config = ModelConfig & { gpu: GpuConfig | undefined; images: ImageConfig | undefined; miniApp: MiniAppConfig | undefined;
+  token: string; allowedUsers: Set<string>; ownerId: string; dbPath: string };
 // The agent interface (docs/agent-interface.md#privacy-a-separate-library): its own library file, and the bot's model
 // queue if the bot serves one. `agentId` names the library inside that file when the client does not pass one.
 export type AgentConfig = ModelConfig & { dbPath: string; modelSocket: string; waitSeconds: number; agentId: string | undefined };
@@ -157,6 +172,9 @@ export function gpuConfig(env: Env, provider: string): GpuConfig | undefined {
 //   SIMPLE_CHAT_IMAGE_STYLE=...                               # optional; the measured style line is the default
 //   SIMPLE_CHAT_IMAGE_WAIT_SECONDS=180                        # optional; how long one picture may take
 //   SIMPLE_CHAT_SHEET_VERSION_USERS=123456789                 # optional; readers whose people change along the story
+//   SIMPLE_CHAT_POSE_SET_USERS=123456789                      # optional; readers who send many pictures of a person
+//   SIMPLE_CHAT_CLOTHES_USERS=123456789                       # optional; a frame says what each person wears and bares
+//   SIMPLE_CHAT_G_PROMPT_USERS=123456789                      # optional; the story model writes a frame's whole prompt
 //   SIMPLE_CHAT_IMAGE_PROVIDER=simple-serving                 # optional; comfyui by default
 //   SIMPLE_CHAT_IMAGE_API_KEY=...                             # the picture gateway's client key, with simple-serving
 //
@@ -227,11 +245,60 @@ export function imageConfig(env: Env, directory: string, allowedUsers: Set<strin
   for (const user of versionUsers) if (!users.has(user)) {
     throw new Error('Every SIMPLE_CHAT_SHEET_VERSION_USERS entry must be one of SIMPLE_CHAT_IMAGE_USERS');
   }
+  // Pose sets (local/pose-set.ts) are a part of the reference experiment, so a reader outside it is a typo too. Their
+  // captioner is the one captioner/setup.sh installs beside the bot, on this computer: its interpreter, its script and
+  // its weights, found where that script puts them, and a picture that waits for it while they are missing waits on.
+  // That is the tree this code is in, not `directory`, which holds the .env and the data: the live bot runs in the main
+  // tree while its code, and so its captioner, comes from a worktree of its own.
+  const poseSetUsers = new Set((env.SIMPLE_CHAT_POSE_SET_USERS || '').split(',').map(one => one.trim()).filter(Boolean));
+  for (const user of poseSetUsers) if (!referenceUsers.has(user)) {
+    throw new Error('Every SIMPLE_CHAT_POSE_SET_USERS entry must be one of SIMPLE_CHAT_IMAGE_REFERENCE_USERS');
+  }
+  // The tester's clothes change (local/picture-clothes.ts), read as the versions: a stray ID is a typo.
+  const clothesUsers = new Set((env.SIMPLE_CHAT_CLOTHES_USERS || '').split(',').map(one => one.trim()).filter(Boolean));
+  for (const user of clothesUsers) if (!users.has(user)) {
+    throw new Error('Every SIMPLE_CHAT_CLOTHES_USERS entry must be one of SIMPLE_CHAT_IMAGE_USERS');
+  }
+  // G (local/picture-g.ts), read as the versions: a stray ID is a typo.
+  const gPromptUsers = new Set((env.SIMPLE_CHAT_G_PROMPT_USERS || '').split(',').map(one => one.trim()).filter(Boolean));
+  for (const user of gPromptUsers) if (!users.has(user)) {
+    throw new Error('Every SIMPLE_CHAT_G_PROMPT_USERS entry must be one of SIMPLE_CHAT_IMAGE_USERS');
+  }
+  const root = resolve(import.meta.dirname, '..');
+  const captioner = poseSetUsers.size ? { python: resolve(root, 'captioner/.venv/bin/python'), script: resolve(root, 'captioner/caption.py'),
+    model: resolve(root, 'models/pose-captioner'), threads: 4 } : undefined;
   // One HTTP request of the picture lane is a submit, a poll or a download through the tunnel, never the drawing
   // itself: it may be short even when a picture may take minutes.
   return { url: url.origin, workflow: resolve(directory, workflow), checkpoint, style, users,
     waitMs: seconds * 1000, timeoutMs: Math.min(60000, seconds * 1000), references: references === 'true', referenceUsers, versionUsers,
+    clothesUsers, ...poseSetUsers.size ? { poseSetUsers, captioner } : {}, ...gPromptUsers.size ? { gPromptUsers } : {},
     ...(provider === 'simple-serving' ? { serving: { key } } : {}) };
+}
+
+// The Mini App's switch. Telegram opens a Mini App only from an HTTPS address, and the bot has none of its own: the owner
+// forwards one to the loopback port through a tunnel of their choice (docs/setup.md#mini-app). The page and its API are
+// served from the root of that address.
+//
+//   SIMPLE_CHAT_MINI_APP_URL=https://some-words.trycloudflare.com
+//   SIMPLE_CHAT_MINI_APP_PORT=8790                            # optional; the loopback port the tunnel forwards to
+//   SIMPLE_CHAT_MINI_APP_USERS=123456789                      # the readers it serves; nobody by default
+export function miniAppConfig(env: Env, allowedUsers: Set<string>): MiniAppConfig | undefined {
+  const raw = env.SIMPLE_CHAT_MINI_APP_URL?.trim();
+  if (!raw) return undefined;
+  let url;
+  try { url = new URL(raw); } catch { throw new Error('Set SIMPLE_CHAT_MINI_APP_URL to the HTTPS root the Mini App is reached at'); }
+  if (url.protocol !== 'https:' || url.pathname !== '/' || url.search || url.hash || url.username || url.password) {
+    throw new Error('SIMPLE_CHAT_MINI_APP_URL must be an HTTPS root without a path, query or credentials');
+  }
+  const port = Number(env.SIMPLE_CHAT_MINI_APP_PORT || 8790);
+  if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new Error('Invalid SIMPLE_CHAT_MINI_APP_PORT');
+  // As for pictures: a reader not on the access list has no library to show, so a stray ID is a typo.
+  const users = new Set((env.SIMPLE_CHAT_MINI_APP_USERS || '').split(',').map(one => one.trim()).filter(Boolean));
+  for (const user of users) {
+    if (!/^\d+$/.test(user)) throw new Error('SIMPLE_CHAT_MINI_APP_USERS must be numeric Telegram IDs');
+    if (!allowedUsers.has(user)) throw new Error('Every SIMPLE_CHAT_MINI_APP_USERS entry must be one of SIMPLE_CHAT_ALLOWED_USER_IDS');
+  }
+  return { url: url.origin, port, users };
 }
 
 // A hosted API or a consumer Codex account may log requests and train on them. By default they serve synthetic probes
@@ -285,6 +352,7 @@ export function loadConfig(directory = process.cwd(), inherited: Env = process.e
   // The bot log marks the owner's rows with this ID. A mistyped one would mark them as someone else's without a word.
   const ownerId = env.SIMPLE_CHAT_OWNER_ID?.trim() || '';
   if (ownerId && !allowedUsers.has(ownerId)) throw new Error('SIMPLE_CHAT_OWNER_ID must be one of SIMPLE_CHAT_ALLOWED_USER_IDS');
-  return { ...model, gpu, images: imageConfig(env, directory, allowedUsers, model.baseUrl), token, allowedUsers, ownerId,
+  return { ...model, gpu, images: imageConfig(env, directory, allowedUsers, model.baseUrl), miniApp: miniAppConfig(env, allowedUsers),
+    token, allowedUsers, ownerId,
     dbPath: resolve(directory, env.SIMPLE_CHAT_DB_PATH || 'data/simple-chat.sqlite') };
 }

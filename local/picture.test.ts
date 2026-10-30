@@ -4,6 +4,7 @@ import test from 'node:test';
 import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -31,14 +32,15 @@ import { createServing, readerScope } from './serving.ts';
 import { PORTRAIT_CLOTHES, PORTRAIT_STYLE } from './image-portraits.ts';
 import { clothesOf, createIllustrator, foldedPrompt, personTag, rewrittenSheet, wornAt } from './picture.ts';
 import { PRESETS, PROMPT_CHARS } from './picture-style.ts';
-import { pinReferences } from './picture-references.ts';
+import { frameReferences, pinReferences } from './picture-references.ts';
+import { POSE_VIEW_LABEL_CHARS, poseCandidates, poseRequest, viewsOf } from './pose-set.ts';
 import type { GpuController } from './gpu.ts';
 import { Store } from './store.ts';
 import type { TelegramPayload } from './telegram.ts';
 import { REGISTERED, texts } from './text.ts';
 import { render, scenePrefix, sceneKeyboard } from './ui.ts';
 import { addSeed, newStory } from '../lib/library.ts';
-import type { SeedDraft, Story } from '../lib/library.ts';
+import type { PoseCaption, PoseSetPicture, SeedDraft, Story } from '../lib/library.ts';
 
 // A real PNG, written the way ComfyUI writes one: the whole prompt in a text chunk beside the pixels.
 const RAW = Buffer.from([0, 10, 20, 30, 40, 50, 60, 0, 70, 80, 90, 100, 110, 120]);
@@ -69,7 +71,7 @@ function fakeComfy(options: Card = {}) {
   const submitted: Graph[] = [];
   const done = new Set<string>();
   // `interrupted`: the job each interrupt named.
-  const seen = { interrupted: [] as unknown[], queueDeletes: 0, cleared: [] as string[], uploads: 0 };
+  const seen = { interrupted: [] as unknown[], queueDeletes: 0, cleared: [] as string[], uploads: 0, uploadHashes: [] as string[] };
   const finishAt = new Map<string, number>();
   const server = createServer((request, response) => {
     const url = new URL(request.url!, 'http://127.0.0.1');
@@ -81,6 +83,7 @@ function fakeComfy(options: Card = {}) {
         for await (const part of request) parts.push(part as Buffer);
         const form = await new Response(Buffer.concat(parts), { headers: { 'content-type': request.headers['content-type']! } }).formData();
         seen.uploads++;
+        seen.uploadHashes.push(createHash('sha256').update(Buffer.from(await (form.get('image') as File).arrayBuffer())).digest('hex'));
         return json({ name: (form.get('image') as File).name, subfolder: form.get('subfolder'), type: form.get('type') });
       }
       if (request.method === 'POST' && url.pathname === '/prompt') {
@@ -170,6 +173,18 @@ const seedText = 'Маяк\n2026-08-02 20:00\nСмотритель встреч�
 // counts and words of its own, and none of these.
 const PRIVATE = /Элин|Тарек|Мира|Маяк|Смотритель|Кодовая|СЕВЕР|Синтетическ|Уголь|hair|braid|coat|door|lighthouse|Charcoal|[Ss]ynthetic|Photorealistic|Semi-realistic|Watercolor|Hand-painted|athletic suit|\breference\b|127\.0\.0\.1|safetensors/;
 // A tokenizer of whole words, so that what a note or a card says can be counted by hand.
+// The last message the bot sent or edited, past its tidying after it (docs/telegram-ui.md#passing-messages), which the
+// reader must still see: one the bot deleted or wrote over later fails the test. The fake Telegram gives each call the
+// id of its place among the calls.
+function said<T extends { method: string; payload: { message_id?: number; message_ids?: number[] } }>(sent: T[]) {
+  const at = sent.findLastIndex(one => !['deleteMessage', 'deleteMessages', 'editMessageReplyMarkup'].includes(one.method));
+  const one = sent[at];
+  const id = one?.method === 'editMessageText' ? one.payload.message_id : at + 1;
+  const later = sent.slice(at + 1).filter(call => call.method !== 'editMessageReplyMarkup')
+    .flatMap(call => call.payload.message_ids ?? [call.payload.message_id]);
+  assert.ok(!later.includes(id), `message ${id} is still there`);
+  return one;
+}
 const words = (text: string) => text.split(/\s+/).filter(Boolean).length;
 type Row = { event: string; code?: string | number } & ErrorDetails;
 type Payload = { chat_id: number; message_id: number; message_ids?: number[]; text: string; rich_message: { markdown?: string; html?: string }; photo: Uint8Array;
@@ -396,6 +411,10 @@ const isNote = (one: Sent) => one.method === 'sendRichMessage' && typeof one.pay
 const htmlOf = (one: Sent) => one.payload.rich_message.html!;
 const notes = (sent: Sent[]) => sent.filter(isNote);
 const idOf = (sent: Sent[], one: Sent) => sent.indexOf(one) + 1;
+// The deletions of pictures and their notes, apart from the bot's tidying of its own menus and waits, which are
+// ordinary messages (docs/telegram-ui.md#passing-messages).
+const pictureDeletions = (sent: Sent[]) => sent.filter(one => one.method === 'deleteMessages'
+  && !one.payload.message_ids!.every(id => sent[id - 1]?.method === 'sendMessage'));
 // The data of the button under a photo's prompt, as the reader presses it.
 const editOf = (note: Sent) => note.payload.reply_markup!.inline_keyboard[0][0].callback_data;
 // The numbers a note's summary gives, in order.
@@ -415,6 +434,9 @@ test('reference frames read and send portraits only for the owner or named teste
     const userId = String(user), storyId = f.store.read(userId).active!.storyId;
     const file = f.store.writePortrait(userId, pngCarrying('synthetic portrait'));
     const pinned = pinReferences(f.store, userId, [{ name: 'Элин', file }]);
+    const replacement = f.store.writePortrait(userId,
+      Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'));
+    const releaseReplacement = f.store.holdPortraits(userId, [replacement]);
     f.store.mutate(userId, state => {
       const story = state.stories[storyId], node = story.nodes[story.branches[state.active!.branchId].head!];
       story.sheet![0].portrait = { ...node.picture!, file, look: DETAILS, clothes: PORTRAIT_CLOTHES, style: PORTRAIT_STYLE, at: Date.now() };
@@ -430,7 +452,14 @@ test('reference frames read and send portraits only for the owner or named teste
     await f.bot.handle(f.click('style-sample:film', user));
     await f.bot.idle();
     // A crafted/imported recipe cannot bypass the access gate on the prompt-variant path.
-    f.store.mutate(userId, state => { state.stories[storyId].nodes[nodeId].picture!.references = pinned; });
+    f.store.mutate(userId, state => {
+      const story = state.stories[storyId], person = story.sheet![0];
+      story.nodes[nodeId].picture!.references = pinned;
+      person.poses = { front: { source: 'own', file: replacement, format: 'png', width: 1, height: 1, at: 2, pinned: true } };
+      person.poseSet = [{ file: replacement, format: 'png', width: 1, height: 1, bytes: 68, at: 2,
+        caption: { pose: 'all_fours', side: 'profile left', framing: 'full body', confidence: 1 }, specificPose: 'arched_back' }];
+    });
+    releaseReplacement();
     await f.bot.handle(f.click(`prompt-edit:${storyId}:${nodeId}`, user));
     await f.bot.handle(f.message('A quiet room. Hand-painted illustration.', user));
     await f.bot.idle();
@@ -439,9 +468,79 @@ test('reference frames read and send portraits only for the owner or named teste
     assert.deepEqual(frames.map(graph => referenceSlots(graph).length), permitted ? [1, 1, 1] : [0, 0, 0]);
     assert.equal(reads > 0, permitted, 'the access check precedes even a local portrait read');
     assert.equal(f.comfy.seen.uploads, permitted ? 6 : 0, 'one private upload and one blank overwrite per permitted frame');
+    if (permitted) assert.equal(f.comfy.seen.uploadHashes.at(-2), pinned.portraits[0].sha256,
+      'a saved variant uploads its pinned bytes despite a replaced front and a new pose set');
     assert.doesNotMatch(JSON.stringify(f.rows), PRIVATE);
     await f.bot.stop();
   }
+});
+
+// A wrong binding silently sends somebody else's reference to the image model; collapsing distinct variants also
+// loses the reader's labels. No model calls: this checks routing and preservation, not selection/image quality.
+test('pose variants remain selectable and opaque IDs cannot select another person or an obsolete file', () => {
+  const picture = (at: number, pose: PoseCaption['pose'], side: PoseCaption['side'], extra: Partial<PoseSetPicture> = {}): PoseSetPicture => ({
+    file: `synthetic-a-${at}.png`, format: 'png', width: 320, height: 480, bytes: 100, at,
+    caption: { pose, side, framing: 'full body', confidence: 1 }, ...extra,
+  });
+  const set = [picture(1, 'standing', 'front', { main: true }), picture(2, 'standing', 'three-quarter right', { main: true }),
+    picture(3, 'standing', 'profile left', { main: true }), picture(4, 'standing', 'back', { main: true }),
+    picture(5, 'sitting', 'front', { main: true }), picture(6, 'walking', 'front', { main: true }),
+    picture(7, 'standing', 'three-quarter right', { specificPose: 'supported' }),
+    picture(8, 'sitting', 'three-quarter right', { specificPose: 'edge' }),
+    picture(9, 'kneeling', 'three-quarter right', { specificPose: 'sitting_on_heels' }),
+    picture(10, 'all_fours', 'profile left', { specificPose: 'arched_back', poseDetails: 'palms down; back arched',
+      expression: 'gallery only expression', faceVisibility: 'partial' })];
+  const own = { source: 'own' as const, file: 'own-front.png', format: 'png' as const, width: 320, height: 480, at: 0, pinned: true };
+  const person: NonNullable<Story['sheet']>[number] = { name: 'Synthetic A', look: 'adult', poseSet: set,
+    poses: { front: own }, portrait: keptOf('adult', 'portrait.png') };
+  const other = { name: 'Synthetic B', look: 'adult', poseSet: [picture(101, 'standing', 'front')] };
+  const story = { sheet: [person, other] } as Story;
+  const candidates = poseCandidates(person);
+  assert.equal(candidates.length, 10, 'main never removes another pose, side or specific pose');
+  const viewed = [{ name: person.name, candidates }, { name: other.name, candidates: poseCandidates(other) }];
+  const description = { ...FRAME, people: [{ who: person.name, look: 'adult', state: '', action: 'moving' }] };
+  for (const candidate of candidates) {
+    const result = viewsOf({ people: [{ ...description.people[0], view: candidate.id }] }, viewed);
+    assert.equal(result.views[person.name], candidate.file);
+    assert.equal(Object.hasOwn(result.answer.people[0], 'view'), false);
+    assert.deepEqual(frameReferences(story, description, result.views), [{ name: person.name, file: candidate.file }]);
+  }
+  const bad = viewsOf({ people: [{ who: person.name, view: viewed[1].candidates[0].id }] }, viewed);
+  assert.deepEqual(bad.views, {});
+  for (const invalid of [{}, { [person.name]: 'gone.png' }, { [person.name]: other.poseSet[0].file }]) {
+    assert.deepEqual(frameReferences(story, description, invalid), [{ name: person.name, file: own.file }]);
+  }
+  delete person.poses;
+  assert.deepEqual(frameReferences(story, description, {}), [{ name: person.name, file: set[0].file }]);
+  person.poseSet = set.filter(one => one.caption!.side !== 'front');
+  assert.deepEqual(frameReferences(story, description, {}), [{ name: person.name, file: 'portrait.png' }]);
+  person.poseSet = [...set, picture(11, 'standing', 'front', { caption: { ...set[0].caption!, confidence: 1 } })];
+  assert.equal(poseCandidates(person).length, 10);
+  assert.equal(poseCandidates(person).find(one => one.file === set[0].file)?.count, 2, 'main wins only among duplicates');
+  person.poseSet = [picture(20, 'standing', 'front', { poseDetails: 'arms raised' }),
+    picture(21, 'standing', 'front', { poseDetails: 'arms folded' }), picture(22, 'standing', 'front', { specificPose: 'arms raised' })];
+  assert.equal(poseCandidates(person).length, 3, 'details distinguish unnamed variants, independently of a named variant');
+  person.poseSet = Array.from({ length: 200 }, (_, at) => picture(at, 'standing', 'front', {
+    specificPose: `variant-${at}`, poseDetails: 'x'.repeat(320), expression: 'not sent to the selector', faceVisibility: 'hidden' }));
+  const all = poseCandidates(person);
+  assert.equal(all.length, 200, 'storage limit, no hidden candidate cutoff');
+  assert.throws(() => poseCandidates({ poseSet: [...person.poseSet!, picture(201, 'sitting', 'front')] }), /pose_set_limit/,
+    'an imported library over the upload cap is refused before it can produce an unbounded model request');
+  assert.ok(all.every(one => one.caption.length <= POSE_VIEW_LABEL_CHARS));
+  assert.deepEqual(poseCandidates({ poseSet: person.poseSet.toReversed() }).map(one => one.id).sort(), all.map(one => one.id).sort());
+  const request: ModelRequest = { system: 'Synthetic frame description.', messages: [{ role: 'user', content: 'Synthetic scene.' }],
+    maxOutputTokens: 900, outputSchema: { properties: { people: { items: { required: ['who', 'action'],
+      properties: { who: { type: 'string' }, action: { type: 'string' } } } } } } };
+  const asked = poseRequest(request, [{ name: person.name, candidates: all }]);
+  const schema = asked.outputSchema as { properties: { people: { items: { required: string[]; properties: { view: { enum: string[] } } } } } };
+  assert.deepEqual(schema.properties.people.items.required, ['who', 'view', 'action']);
+  assert.equal(schema.properties.people.items.properties.view.enum.length, 201);
+  const sent = JSON.stringify(asked);
+  for (const one of all) assert.equal(sent.includes(one.file), false);
+  assert.equal(sent.includes('not sent to the selector'), false);
+  assert.equal(sent.includes('faceVisibility'), false);
+  assert.equal(request.messages[0].content, 'Synthetic scene.');
+  assert.equal(poseRequest(request, []), request, 'readers without pose sets keep the original request');
 });
 
 // Off by default and per reader: the story of a reader who did not ask for pictures is never drawn, not even on a card
@@ -473,7 +572,7 @@ test('a reader who is not on the picture list gets the scene and nothing else', 
   for (const [data, refusal] of [['style-sample:film', off('пример')], [`portrait:${theirs}:0:${personTag('Мира')}`, off('портрет')],
     [keep, off('портрет')], [editOf(notes(f.sent)[0]), off('вариант')]]) {
     await f.bot.handle(f.click(data, 2));
-    assert.equal(f.sent.at(-1)!.payload.text, refusal, data);
+    assert.equal(said(f.sent)!.payload.text, refusal, data);
   }
   await f.bot.idle();
   assert.deepEqual([f.comfy.submitted.length, f.store.read('2').ui], [drawn, null], 'nothing of this reader reached the card, and no wait is open');
@@ -590,7 +689,7 @@ test('a sample of a style is the last scene drawn once more: its frame and seed,
     return f.rows.filter(one => one.event === 'picture_sample').at(-1)!;
   };
   await sampled('style-sample:film');
-  assert.equal(f.sent.at(-1)!.payload.text, 'Пример рисуется по последней сцене. Начни историю, и после первой сцены его можно будет попросить.', 'before any scene');
+  assert.equal(said(f.sent)!.payload.text, 'Пример рисуется по последней сцене. Начни историю, и после первой сцены его можно будет попросить.', 'before any scene');
   await f.start();
   await f.bot.idle();
   const row = await sampled('style-sample:film');
@@ -661,7 +760,7 @@ test('the reader\'s next message ends the picture of the scene they have read pa
   const waits = async (g: Fixture, label: string, text: string, ...updates: Update[]) => {
     const drawn = g.comfy.submitted.length;
     for (const update of updates) await g.bot.handle(update);
-    assert.deepEqual([g.sent.at(-1)!.payload.text, g.comfy.submitted.length], [text, drawn], `${label}: the next one waits`);
+    assert.deepEqual([said(g.sent)!.payload.text, g.comfy.submitted.length], [text, drawn], `${label}: the next one waits`);
   };
   const asked: { label: string; jobs: string[]; stopped: unknown[][]; ask: (g: Fixture, label: string) => Promise<void>; after?: (g: Fixture, label: string) => void }[] = [
     { label: 'a sample', jobs: ['p2'], stopped: [['picture_sample', 'cancelled', 'cancelled', 'film', 1, undefined]], ask: async (g, label) => {
@@ -767,7 +866,7 @@ test('the reader\'s next message ends the picture of the scene they have read pa
   await h.bot.handle(h.click(`portrait:${elin(h.store.read('1').active!.storyId)}`));
   await stopOnItsWay(4, 'a portrait');
   await h.bot.handle(h.click(photos(h.sent)[3].payload.reply_markup!.inline_keyboard[0][1].callback_data));
-  assert.equal(h.sent.at(-1)!.payload.text, KEPT);
+  assert.equal(said(h.sent)!.payload.text, KEPT);
   assert.deepEqual(h.rows.filter(one => /^picture(_variant|_sample|_portrait)?$/.test(one.event)).map(row => [row.event, row.outcome, row.cancelled]),
     [['picture', 'ready', true], ['picture_variant', 'ready', true], ['picture_sample', 'ready', true], ['picture_portrait', 'ready', true]]);
 
@@ -846,7 +945,7 @@ test('the description a reader writes survives a failed retelling, a look of the
   await f.bot.handle(f.message(mine));
   await f.bot.idle();
   const status = f.sent.find(one => one.payload.text === '⏳ Пересказываю описание для картинок…')!;
-  const card = f.sent.at(-1)!;
+  const card = said(f.sent)!;
   assert.deepEqual([card.method, card.payload.message_id, person()], ['editMessageText', idOf(f.sent, status),
     { ...WRITTEN[0], description: kept, descriptionEdited: true, details: DETAILS, look: LOOK, lookPending: true }], 'the card takes the place of the status line');
   assert.ok(card.payload.text.includes(`\nОписание внешности, твоё (нажми, чтобы скопировать):\n${kept}\n`), card.payload.text);
@@ -928,7 +1027,7 @@ test('keeping a portrait writes the very one shown into a private file beside th
   await drawnOn(f, 1);
   const calls = f.requests.length;
   const storyId = f.store.read('1').active!.storyId;
-  const shown = () => f.sent.at(-1)!.payload.text;
+  const shown = () => said(f.sent)!.payload.text;
   // A portrait with `meanwhile` done while it is on the card. The test keeps a copy of the photo and lets go of the one
   // sent: past this, only the bot can hold it.
   const draw = async (meanwhile?: () => void) => {
@@ -968,7 +1067,7 @@ test('keeping a portrait writes the very one shown into a private file beside th
   const note = notes(f.sent).at(-1)!;
   assert.deepEqual([first.photo.payload.caption, first.again, first.back, f.requests.length, note.payload.reply_parameters?.message_id,
     note.payload.reply_markup!.inline_keyboard.flat().map(button => [button.text, button.callback_data.split(':').slice(0, 5).join(':')]), htmlOf(note)],
-  ['🖼 Портрет: Элин. Лицо и фигура в полный рост, в простой нейтральной одежде.', `portrait:${elin(storyId)}`, `view:character:${elin(storyId)}`, calls,
+  ['🖼 Портрет: Элин. Лицо и фигура в полный рост, в простой нейтральной одежде.\n🎨 synthetic', `portrait:${elin(storyId)}`, `view:character:${elin(storyId)}`, calls,
     idOf(f.sent, first.photo), [[texts('ru').variant.button, `portrait-edit:${elin(storyId)}:${first.seed}`]],
     foldedPrompt(texts('ru').notices.promptSummary([...prompt].length, null, null), prompt)]);
   assert.match(first.keep, /^portrait-keep:[0-9a-f]{8}$/);
@@ -1040,7 +1139,7 @@ test('keeping a portrait writes the very one shown into a private file beside th
     const sheet = state.stories[storyId].sheet!;
     state.stories[storyId].sheet = [sheet[1], sheet[0]];
   }));
-  assert.equal(moved.photo.payload.caption, '🖼 Портрет: Элин. Лицо и фигура в полный рост, в простой нейтральной одежде.');
+  assert.equal(moved.photo.payload.caption, '🖼 Портрет: Элин. Лицо и фигура в полный рост, в простой нейтральной одежде.\n🎨 synthetic');
   await f.bot.handle(f.click(moved.again));
   assert.equal(shown(), 'Кнопка устарела. Открой /menu.');
   await f.bot.handle(f.click(moved.back));
@@ -1082,7 +1181,7 @@ test('a portrait whose story is deleted while it is drawn is not sent, and a del
     await deleteTheSeed(f);
     f.comfy.finish();
     await f.bot.idle();
-    assert.deepEqual(f.sent.filter(one => one.method === 'deleteMessages').map(one => one.payload.message_ids), own, label);
+    assert.deepEqual(pictureDeletions(f.sent).map(one => one.payload.message_ids), own, label);
     assert.deepEqual([photos(f.sent).length, f.comfy.submitted.length], ask ? [1, 2] : [0, 1], `${label}: the card finished it, and nothing more was sent or drawn`);
     assert.ok(f.deleted.includes(idOf(f.sent, statuses(f.sent).at(-1)!)) && !f.sent.some(one => one.method === 'editMessageText'),
       `${label}: its status line goes without a word`);
@@ -1097,7 +1196,7 @@ test('a portrait whose story is deleted while it is drawn is not sent, and a del
   await deleteTheSeed(g);
   g.release();
   await g.bot.idle();
-  assert.deepEqual([g.deleted.includes(idOf(g.sent, photos(g.sent)[0])), g.sent.some(one => one.method === 'deleteMessages'), g.store.read('1').sentPictures],
+  assert.deepEqual([g.deleted.includes(idOf(g.sent, photos(g.sent)[0])), pictureDeletions(g.sent).length > 0, g.store.read('1').sentPictures],
     [true, false, undefined], 'the photo on its way is taken back');
   const taken = g.rows.find(one => one.event === 'picture')!;
   assert.deepEqual([taken.outcome, taken.code, taken.picturesRemoved, taken.picturesNotRemoved], ['cancelled', 'scene_gone', 1, 0]);
@@ -1126,9 +1225,9 @@ test('a portrait whose story is deleted while it is drawn is not sent, and a del
   f.store.db.exec('DROP TRIGGER refuse_portrait');
   await f.bot.handle(f.click(keep));
   const kept = f.store.read('1').stories[storyId].sheet![0].portrait!;
-  assert.deepEqual([f.sent.at(-1)!.payload.text, kept.seed, readdirSync(directory)], [KEPT, seedIn(f.comfy.submitted.at(-1)!), [kept.file]]);
+  assert.deepEqual([said(f.sent)!.payload.text, kept.seed, readdirSync(directory)], [KEPT, seedIn(f.comfy.submitted.at(-1)!), [kept.file]]);
   await f.bot.handle(f.click(keep));
-  assert.equal(f.sent.at(-1)!.payload.text, STALE);
+  assert.equal(said(f.sent)!.payload.text, STALE);
   // Each photo and note recorded by its message beside its scene, and the portrait and its note beside its story alone.
   const ids = [...photos(f.sent), ...notes(f.sent)].map(one => idOf(f.sent, one)).sort((one, other) => one - other);
   const state = f.store.read('1');
@@ -1138,7 +1237,7 @@ test('a portrait whose story is deleted while it is drawn is not sent, and a del
   assert.ok(ids.length === 20 && state.sentPictures!.every(picture => Number.isSafeInteger(picture.at) && Math.abs(Date.now() - picture.at) < 60_000));
   await deleteTheSeed(f);
   await f.bot.idle();
-  assert.deepEqual([f.sent.filter(one => one.method === 'deleteMessages').map(one => one.payload.message_ids), f.store.read('1').sentPictures, readdirSync(directory)],
+  assert.deepEqual([pictureDeletions(f.sent).map(one => one.payload.message_ids), f.store.read('1').sentPictures, readdirSync(directory)],
     [[ids], [], []], 'every photo and note out of the chat, and the kept portrait off the disk');
   assert.deepEqual(f.rows.filter(one => one.event === 'pictures_removed'), [{ event: 'pictures_removed', picturesRemoved: 20, picturesNotRemoved: 0, actor: 'owner' }]);
 
@@ -1153,16 +1252,20 @@ test('a portrait whose story is deleted while it is drawn is not sent, and a del
   store.writePortrait('1', bytes);
   assert.deepEqual([store.sweepPortraits('1'), readdirSync(mine)], [1, []], 'after a write');
   const file = store.writePortrait('1', bytes);
+  // A picture of a pose set (local/pose-set.ts) is kept as a portrait is: a reader's 80 would otherwise go at once.
+  const posed = store.writePortrait('1', bytes, 'webp');
   store.mutate('1', state => {
     const { story } = newStory(state, addSeed(state, seedText).id);
-    story.sheet = [{ name: 'Элин', look: 'lean', outfit: '', portrait: keptOf('lean', file) }];
+    story.sheet = [{ name: 'Элин', look: 'lean', outfit: '', portrait: keptOf('lean', file),
+      poseSet: [{ file: posed, format: 'webp', width: 400, height: 600, bytes: bytes.length, at: 1 }] }];
   });
   store.writePortrait('1', bytes);
   store.close();
   store = new Store(path);
   t.after(() => store.close());
   store.recover();
-  assert.deepEqual([store.portraits('1'), readdirSync(mine), store.sweepPortraits('2')], [mine, [file], 0], 'at start; a reader with no portraits has no directory');
+  assert.deepEqual([store.portraits('1'), readdirSync(mine).sort(), store.sweepPortraits('2')], [mine, [file, posed].sort(), 0],
+    'at start; a reader with no portraits has no directory');
   const memory = new Store(':memory:');
   assert.equal(memory.sweepPortraits('1'), 0);
   assert.throws(() => memory.writePortrait('1', bytes), /database file/);
@@ -1235,7 +1338,7 @@ test('a variant is the reader\'s whole prompt drawn as it came, by the picture\'
 
   // It asks for the whole prompt, style and all; the reader's next message is that prompt, and none of it is kept.
   await f.bot.handle(f.click(editOf(ownNote)));
-  assert.match(f.sent.at(-1)!.payload.text, /Это весь промпт вместе со стилем/);
+  assert.match(said(f.sent)!.payload.text, /Это весь промпт вместе со стилем/);
   assert.deepEqual(f.store.read('1').ui, { input: 'prompt', storyId, nodeId });
   const prompt = 'Элин, 48 years old, waits at the lighthouse door at dawn. <b>Charcoal</b> & ink, no colour.';
   await f.bot.handle(f.message(prompt));
@@ -1253,7 +1356,7 @@ test('a variant is the reader\'s whole prompt drawn as it came, by the picture\'
   const variant = photos(f.sent)[2];
   const note = notes(f.sent)[2];
   assert.deepEqual([variant.payload.reply_parameters?.message_id, variant.payload.caption, note.payload.reply_parameters?.message_id,
-    note.payload.reply_markup?.inline_keyboard.flat().map(button => button.callback_data)], [idOf(f.sent, scene), undefined, idOf(f.sent, variant), [editOf(ownNote)]]);
+    note.payload.reply_markup?.inline_keyboard.flat().map(button => button.callback_data)], [idOf(f.sent, scene), '🎨 synthetic', idOf(f.sent, variant), [editOf(ownNote)]]);
   assert.ok(f.deleted.includes(idOf(f.sent, f.sent.find(one => one.payload.text === '🎨 Рисую вариант…')!)));
   const summary = htmlOf(note).match(/^<details><summary>(.*)<\/summary>/)![1];
   assert.equal(htmlOf(note), foldedPrompt(summary, prompt));
@@ -1349,7 +1452,7 @@ test('a variant is drawn only for a scene of the reader\'s own that has its pict
   for (const wait of ['style-new', edit, `look-edit:${elin(storyId)}`]) {
     await press(wait);
     await send('/charcoal');
-    assert.deepEqual([f.sent.at(-1)!.payload.text, f.store.read('1').ui], [texts('ru').notices.unknownCommand, null], wait);
+    assert.deepEqual([said(f.sent)!.payload.text, f.store.read('1').ui], [texts('ru').notices.unknownCommand, null], wait);
     const before = scenes();
     await send('Осмотреться');
     await f.bot.idle();
@@ -1485,7 +1588,7 @@ test('a failure on the way to a picture costs what failed, and the scene stays a
   const rows: Row[] = [];
   const sent: string[] = [];
   let freed = 0;
-  const chat = { send: async () => { sent.push('send'); throw Object.assign(new Error('forbidden'), { code: 403 }); },
+  const chat = { show: async () => { sent.push('send'); throw Object.assign(new Error('forbidden'), { code: 403 }); },
     edit: async () => { sent.push('edit'); }, remove: async () => { sent.push('remove'); },
     photo: async () => { sent.push('photo'); } } as unknown as Parameters<NonNullable<typeof f.illustrator>['illustrate']>[0]['chat'];
   await f.illustrator!.illustrate({ userId: '1', chat, storyId: 'h1', nodeId: 'n1', branchId: 'b1',
@@ -1524,7 +1627,8 @@ test('on the real queue a description keeps its reader\'s slot ahead of the comp
   await g.bot.idle();
   const row = g.rows.find(one => one.event === 'picture_sample')!;
   assert.deepEqual([row.outcome, row.code, row.frameReused], ['ready', undefined, false], 'a sample after a restart');
-  assert.equal(photos(g.sent).filter(one => one.payload.chat_id === 1 && one.payload.caption).length, 1);
+  assert.deepEqual(photos(g.sent).filter(one => one.payload.chat_id === 1 && one.payload.reply_markup).map(one => one.payload.caption),
+    ['Пример стиля: 🖋 Графический роман\n🎨 synthetic']);
   assert.ok(promptOf(g.comfy.submitted.at(-1)!).endsWith(PRESETS.graphic));
 
   // Nine tenths of what a description may take, 65536 less its answer, is 55742 for the sheet, which may answer 3600

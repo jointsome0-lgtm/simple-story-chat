@@ -1,10 +1,10 @@
 import { randomBytes } from 'node:crypto';
-import { UserError, id, active, addSeed, newStory, fork, beginJob,
-  deleteSeed, deleteBranch, forgetLostPictures, context, jobTarget, setLanguage, isPose } from '../lib/library.ts';
-import type { Job, Library, ProfileInput, ReferenceInput, SceneNode } from '../lib/library.ts';
+import { UserError, id, active, addSeed, newStory, fork, beginJob, addBookmark, removeBookmark,
+  deleteSeed, deleteBranch, forgetLostPictures, context, jobTarget, setLanguage, isPace, isPose } from '../lib/library.ts';
+import type { Job, Library, PendingPoseUpload, PoseSetInput, PoseUploadFile, ProfileInput, ReferenceInput, SceneNode } from '../lib/library.ts';
 import { storyNarration } from './prompt.ts';
-import { createChat } from './telegram.ts';
-import type { Chat, InlineKeyboard, Screen, TelegramApi } from './telegram.ts';
+import { chatMemory, createChat } from './telegram.ts';
+import type { Chat, ChatMemory, InlineKeyboard, Passing, SceneButtons, Screen, TelegramApi } from './telegram.ts';
 import { continueInput, contextStats } from './context.ts';
 import type { ContextSelection, ContextStats } from './context.ts';
 import { compactBranch, compactionThreshold } from './generation.ts';
@@ -23,13 +23,17 @@ import type { GpuController } from './gpu.ts';
 import type { Illustrator, PictureRequest, PortraitRequest, SampleRequest, VariantRequest } from './picture.ts';
 import { DESCRIPTION_CHARS, LOOK_CHARS, ownPortraitPrompt, personAt, personTag } from './picture.ts';
 import { seesThrough } from './picture-pov.ts';
-import { countVersions, editableFrom, landEdit, personHere } from './picture-versions.ts';
+import { countVersions, editableFrom, landEdit, personHere, personKey } from './picture-versions.ts';
 import { portraitText } from './image-portraits.ts';
 import { MAY_BE_EMPTY, PROFILE_CHARS, applyProfile, changedFields, fieldsMask, maskFields, parseProfile, profileHash, profileOf } from './profile.ts';
 import type { ProfileField } from './profile.ts';
-import type { ErrorDetails, Log } from './model-error.ts';
+import type { ArchiveRefusal, ErrorDetails, Log } from './model-error.ts';
 import { errorCode, member, safeErrorDetails, unavailable } from './model-error.ts';
-import { REFERENCE_WAIT_MS, REFUSAL_CODES, captionOf, keepReference } from './reference.ts';
+import { REFERENCE_WAIT_MS, REFUSAL_CODES, captionOf, isArchive, keepReference } from './reference.ts';
+import { POSE_SET_PICTURES, POSE_SET_WAIT_MS, createPoseCaptioner, keepPoseSetPicture, poseSetLimit, poseSetState } from './pose-set.ts';
+import type { CaptionerConfig, PoseSetLimit } from './pose-set.ts';
+import { ArchiveError } from './pose-archive.ts';
+import type { ArchiveLabels, PoseArchive } from './pose-archive.ts';
 import type { ReceivedPicture } from './reference.ts';
 import type { GenerationResult, Provider } from './model.ts';
 import { STYLE } from './illustrate.ts';
@@ -37,6 +41,7 @@ import { OWN_STYLE_CHARS, OWN_STYLES_MAX, PROMPT_CHARS, choiceOf, lineOf, ownSty
 import type { Store } from './store.ts';
 import { fileErrorCode } from './store.ts';
 import type { GpuInfo, ModelInfo, RenderDetails } from './ui.ts';
+import { bookmarkLabel } from './ui.ts';
 import { isRegistered, langFromTelegram, texts } from './text.ts';
 import type { Messages } from './text.ts';
 
@@ -47,8 +52,18 @@ export type BotOptions = {
   illustrator?: Illustrator;
   readSeedFile?: (document: TelegramDocument) => Promise<string>;
   // A picture a reader in the reference experiment sent of a person (local/reference.ts), read before the library write
-  // as a seed file is. Without it, a wait for one refuses whatever comes.
-  readPicture?: (message: { photo?: unknown; document?: TelegramDocument }) => Promise<ReceivedPicture>;
+  // as a seed file is. Without it, a wait for one refuses whatever comes. `signal` cuts short the read of a file of a
+  // pose set (`uploadNext`), as it does an archive's.
+  readPicture?: (message: { photo?: unknown; document?: TelegramDocument }, signal?: AbortSignal) => Promise<ReceivedPicture>;
+  // The captioner of pose sets on this computer (local/pose-set.ts), for readers the illustrator gives them. Without it a
+  // picture of a set waits for its caption.
+  captioner?: CaptionerConfig;
+  // A ZIP archive of a pose set (local/pose-archive.ts), read before the library write as a picture is. Without it, an
+  // archive is refused as one.
+  readArchive?: (document: TelegramDocument, signal?: AbortSignal) => Promise<PoseArchive>;
+  // The Mini App (local/mini-app.ts) where it is served: its address and the readers whose list of a story's characters
+  // has the button that opens it.
+  miniApp?: { url: string; users: Set<string> };
   render: (state: Library, route: string, details: RenderDetails) => Screen;
   scenePrefix?: (stats: ContextStats | null, provenance: ModelInfo | undefined, lang?: unknown) => string;
   sceneKeyboard: (state: Library) => InlineKeyboard | undefined;
@@ -59,7 +74,7 @@ export type BotOptions = {
 export type Update = {
   update_id: number;
   message?: IncomingMessage & { from?: Sender; chat?: { id: number; type: string }; document?: TelegramDocument; photo?: unknown; caption?: unknown };
-  callback_query?: { id?: string; data?: string; from?: Sender; message?: { chat?: { id: number; type: string } } };
+  callback_query?: { id?: string; data?: string; from?: Sender; message?: { message_id?: number; chat?: { id: number; type: string } } };
 };
 type Sender = { id: number; is_bot?: boolean; language_code?: string };
 // A seed file read before the library write: its text for the draft, or the error to show instead.
@@ -68,9 +83,29 @@ type FileInput = { draftId: string; text: string; error?: undefined } | { error:
 // as a seed file is: the picture as it will be kept, or the refusal to show instead, beside the wait it answered, which
 // the write must find still standing.
 type Upload = { wait: ReferenceInput; picture?: ReceivedPicture; error?: UserError };
+// A photo or a file for a pose set (local/pose-set.ts), beside the wait it answered, which the write must find still
+// standing: it goes into the reader's queue as Telegram described it, unread (`queuedPoseUpload`).
+type PoseUpload = { wait: PoseSetInput; file: PoseUploadFile };
+// What the bot read of one (`readPoseFile`): the picture, or the refusal's code for the count of refusals; or an
+// archive of them (local/pose-archive.ts), with its name as the reader's chat shows it, or why it was refused whole.
+type PoseRead = { picture?: ReceivedPicture; refused?: PoseRefusal; archive?: PoseArchive & { name: string }; archiveRefused?: ArchiveRefusal };
+type PoseRefusal = typeof REFUSAL_CODES[keyof typeof REFUSAL_CODES] | PoseSetLimit;
+// The pictures of a pose set, one or an archive's, kept or refused, for the message that counts those of the wait they
+// came in: how many were kept and how many of those the reader labeled whole, why the others were not, and what became
+// of an archive's labels.csv.
+type PoseCount = { storyId: string; name: string; at: number; kept: number; labeled: number; refused: Partial<Record<PoseRefusal, number>>;
+  labels?: ArchiveLabels & { archive: string } };
 // What to do after the library write; handle acts on each field that is set.
 type Plan = {
   screen?: Screen; cancel?: boolean; gpuAction?: string; modelStatus?: boolean;
+  // The screen goes out as a message of its own and leaves the one pressed as it is: a wait that asks for the text of
+  // the message its button is under (docs/telegram-ui.md#passing-messages).
+  apart?: boolean;
+  // The screen only confirms what the update did, and goes with the reader's next update like a notice.
+  done?: boolean;
+  // The screen is a person's card or profile, which a reader may want to read again: it goes out as a message of its
+  // own and stays, as a scene does, and a screen opened from its buttons goes out as one of its own too.
+  lasting?: boolean;
   savedText?: { text: string; modelInfo: SceneNode['modelInfo'] }; job?: Job;
   // A sample of styles the reader asked for: what to draw, what to say under each picture and while they are drawn
   // (local/picture.ts `sample`).
@@ -94,6 +129,9 @@ type Plan = {
   // A row for the log once the write is committed: what a picture a reader sent became, a profile they sent back, or
   // where a person's text the reader wrote landed (local/picture-versions.ts).
   logged?: { event: string; details: ErrorDetails };
+  // The reader's queue of pose-set files to read apart from this update, which a photo or a file joined, or refused as
+  // past its length; the refusal, for the message that counts them (local/pose-set.ts).
+  poseQueue?: boolean; poseCount?: PoseCount;
 };
 // One reader's turn, for as long as it can still be cancelled. What it leaves behind — a picture being stopped on
 // the other card — outlives the entry and is awaited through `inFlight` instead.
@@ -105,13 +143,39 @@ type Plan = {
 type Running = { controller: AbortController; picture: AbortController };
 // Library IDs are a prefix and a sequence number, as id() in lib/library.ts creates them.
 const ID = { seed: /^s\d+$/, story: /^h\d+$/, branch: /^b\d+$/, checkpoint: /^c\d+$/ };
+// The wait the reader is in, the input the next message is taken for or the deletion asked about, and for what. A
+// draft's parts, the scene a look is written from and a pose set's last picture change within one wait
+// (docs/telegram-ui.md#passing-messages).
+const waitOf = (ui: Library['ui']) => ui ? JSON.stringify({ ...ui, parts: undefined, from: undefined, last: undefined }) : undefined;
 // A refusal in the user's language. The key stays on the error, so it can still be shown in another language.
 const refuse = (t: Messages, key: keyof Messages['errors']) => new UserError(t.errors[key], key);
 // Errors thrown below the bot (library, seed files, incoming messages) carry Russian text and a catalog key.
 const errorText = (t: Messages, error: UserError) =>
   (error.key !== undefined && Object.hasOwn(t.errors, error.key) ? t.errors[error.key as keyof Messages['errors']] : error.message);
+// What a reader's queue keeps of a photo or a file sent for a pose set: the sizes of a photo, or the file, as Telegram
+// described them and as the picture and archive readers take them (local/reference.ts, local/pose-archive.ts); never a
+// caption.
+function poseFileOf(message: NonNullable<Update['message']>): PoseUploadFile {
+  const fields = (value: unknown, keys: string[]) => Object.fromEntries(keys.flatMap(key =>
+    value && typeof value === 'object' && Object.hasOwn(value, key) ? [[key, (value as Record<string, unknown>)[key]]] : []));
+  return Array.isArray(message.photo) ? { photo: message.photo.map(size => fields(size, ['file_id', 'file_size', 'width', 'height'])) }
+    : { document: fields(message.document, ['file_id', 'file_size', 'mime_type', 'file_name']) };
+}
+// How long a file of a pose set may take to be read, Telegram's answer with its path, its download (20 s at most,
+// local/seed-file.ts) and an archive's reading together: after it the read is cut short, its requests with it
+// (`uploadNext`).
+const UPLOAD_MS = 45_000;
+// How many files of pose sets are read at once, across readers (`readTurn`).
+const READS_AT_ONCE = 2;
 
-export function createBot({ store, api, provider, gpu, illustrator, readSeedFile, readPicture, render: renderUi, scenePrefix = () => '', sceneKeyboard, allowedUsers, ownerId = '', maxOutputTokens,
+// Whether this reader's scenes are illustrated, so that their menu offers the picture style, the bot's own style line,
+// and the counter of a text's tokens for the characters' card, and whether they may send a portrait of their own
+// (local/ui.ts `RenderDetails`). The Mini App's card has the same (local/mini-app.ts).
+export const pictureInfo = (illustrator: Illustrator | undefined, userId: string) => ({ pictures: illustrator?.enabledFor(userId) ?? false,
+  standardStyle: illustrator?.standardStyle, textTokens: illustrator?.textTokens, references: illustrator?.referencesFor(userId) ?? false,
+  versions: illustrator?.versionsFor(userId) ?? false, ...illustrator?.poseSetFor(userId) ? { poseSet: true } : {} });
+
+export function createBot({ store, api, provider, gpu, illustrator, readSeedFile, readPicture, captioner: captionerConfig, readArchive, miniApp, render: renderUi, scenePrefix = () => '', sceneKeyboard, allowedUsers, ownerId = '', maxOutputTokens,
   contextTokens = 65536, compactAtTokens = 54000, keepScenes = 4, memoryMode = 'plain', repairCoverage = false, model = 'unknown', providerName = 'claude-code', log = () => {} }: BotOptions) {
   const running = new Map<string, Running>();
   // One drawing on request at a time per reader, a sample of a style or a portrait (local/picture.ts `sample`,
@@ -134,12 +198,8 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
   // The GPU snapshot must provide every field the renderer reads.
   const render = (state: Library, route: string, details: RenderDetails = {}) =>
     renderUi(state, route, { ...details, modelInfo: { ...modelInfo }, gpuInfo: gpu?.snapshot() satisfies Required<GpuInfo> | undefined });
-  // Whether this reader's scenes are illustrated, so that their menu offers the picture style, the bot's own style
-  // line, and the counter of a text's tokens for the characters' card, and whether they may send a portrait of their
-  // own (local/ui.ts `RenderDetails`).
-  const pictureInfoOf = (userId: string) => ({ pictures: illustrator?.enabledFor(userId) ?? false,
-    standardStyle: illustrator?.standardStyle, textTokens: illustrator?.textTokens, references: illustrator?.referencesFor(userId) ?? false,
-    versions: illustrator?.versionsFor(userId) ?? false });
+  // What the reader's screens show of pictures (`pictureInfo`), and the Mini App's address if it serves them.
+  const pictureInfoOf = (userId: string) => ({ ...pictureInfo(illustrator, userId), miniApp: miniApp?.users.has(userId) ? miniApp.url : undefined });
   const requireGpu = (t: Messages) => {
     if (!gpu) return;
     try { gpu.assertReady(); }
@@ -160,8 +220,28 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
   // With no owner configured every row is `other`.
   const logFor = (userId: string): Log => (event, code, details) =>
     log(event, code, { ...safeErrorDetails(details), actor: userId === ownerId ? 'owner' : 'other' });
+  // A message that stays, as a scene does (`send`), and one for the moment (`pass`, docs/telegram-ui.md#passing-messages).
   const safeSend = async (chat: Chat, screen: Screen, log: Log) => {
     try { await chat.send(screen); log('screen_sent'); } catch (error) { log('telegram_send_failed', errorCode(error)); }
+  };
+  const pass = async (chat: Chat, screen: Screen, log: Log) => {
+    try { await chat.show(screen, 'notice'); log('screen_sent'); } catch (error) { log('telegram_send_failed', errorCode(error)); }
+  };
+  // What the bot remembers of each reader's chat (local/telegram.ts `ChatMemory`).
+  const chats = new Map<string, ChatMemory>();
+  // The keyboard of a scene of this story and branch, built when the scene goes out (local/telegram.ts `final`): none
+  // once the reader is on another one, whose buttons would act on that other branch, and none kept if the reader left
+  // it while the scene was on its way (`current`). A new scene gets the usual one, Continue, also while the reader's
+  // next job already runs. A scene shown again while a job runs gets the one of the moment (Stop), which leaves the
+  // keyboard of the scene before it for when the job ends without a scene.
+  const keyboardOf = (userId: string, where: { storyId: string; branchId: string } | null, again = false) => (): SceneButtons => {
+    const on = (state: Library) => !!where && state.active?.storyId === where.storyId && state.active.branchId === where.branchId;
+    const state = store.read(userId);
+    if (!where || !on(state)) return {};
+    const current = () => on(store.read(userId));
+    const branch = `${where.storyId}:${where.branchId}`;
+    return again ? { reply_markup: sceneKeyboard(state), passing: !!state.job, current, branch }
+      : { reply_markup: sceneKeyboard({ ...state, job: null }), current, branch };
   };
   const last = (state: Library) => {
     const { story, branch, seed } = active(state);
@@ -178,19 +258,21 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
   };
   // `pictureInfo`: whether this reader's scenes are illustrated, so that their menu offers the picture style, and the
   // bot's own style line (local/ui.ts `RenderDetails`).
-  function prepare(state: Library, update: Update, fileInput: FileInput | undefined, pictureInfo: RenderDetails, upload?: Upload): Plan {
+  function prepare(state: Library, update: Update, fileInput: FileInput | undefined, pictureInfo: RenderDetails, upload?: Upload,
+    poseUpload?: PoseUpload): Plan {
     let action = update.callback_query?.data;
     const t = texts(state.language);
     if (fileInput?.error) throw fileInput.error;
     if (fileInput && (state.ui?.input !== 'seed' || state.ui.draftId !== fileInput.draftId)) throw refuse(t, 'draftChanged');
     if (upload) return keptUpload(state, update, upload, t, pictureInfo);
+    if (poseUpload) return queuedPoseUpload(state, update, poseUpload, t, pictureInfo);
     const text = fileInput ? fileInput.text : messageText(update.message);
     // Writing a picture style, a look, details or the prompt of a variant or of a portrait, sending a profile back, and the
     // wait for a picture, end with any button or command, an unknown command included, so that no later message is kept
     // as one by surprise (/last, /model or /typo would otherwise leave the next move to be taken for one).
     // Choosing where a look or a description lands is part of writing it (`edit-scope`, below).
     const scoping = action?.startsWith('edit-scope:') && member(['look', 'details'], state.ui?.input);
-    if (((action && !scoping) || text?.startsWith('/')) && member(['style', 'look', 'details', 'prompt', 'portrait-prompt', 'reference', 'profile'], state.ui?.input)) state.ui = null;
+    if (((action && !scoping) || text?.startsWith('/')) && member(['style', 'look', 'details', 'prompt', 'portrait-prompt', 'reference', 'pose-set', 'profile'], state.ui?.input)) state.ui = null;
     if (!action && !fileInput) {
       const command = text?.split(/[\s@]/)[0];
       const current = state.active;
@@ -257,7 +339,31 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       state.ui = route.startsWith('delete-seed:') ? { confirm: route.replace('delete-seed:', 'remove-seed:') }
         : route.startsWith('delete-branch:') ? { confirm: route.replace('delete-branch:', 'remove-branch:') }
         : route.startsWith('delete-style:') ? { confirm: route.replace('delete-style:', 'remove-style:') } : null;
-      return { screen: screen(state, route, pictureInfo) };
+      return { screen: screen(state, route, pictureInfo), lasting: /^(character|profile):/.test(route) };
+    }
+    // A story's pace (lib/library.ts `Story.pace`). It changes at any moment, also while a scene is being written: only
+    // the scene requests still to be built read it (local/prompt.ts). «Сцена» leaves the story without one.
+    if (action?.startsWith('pace:')) {
+      const [, storyId, pace] = action.split(':');
+      const story = ID.story.test(storyId) ? state.stories[storyId] : undefined;
+      if (!story || !isPace(pace)) throw refuse(t, 'staleButton');
+      if (pace === 'scene') delete story.pace; else story.pace = pace;
+      state.ui = null;
+      return { screen: render(state, `pace:${storyId}`) };
+    }
+    // A bookmark on a scene (lib/library.ts `Checkpoint.bookmark`), from its checkpoint's preview, which comes
+    // back as it is now, opened from a page of the bookmarks (`b<page>`) or not. Nothing a scene request reads changes, so it is kept or
+    // taken away at any moment, also while a scene is being written, and the story being played stays as it is.
+    if (action?.startsWith('mark:') || action?.startsWith('unmark:')) {
+      const [verb, storyId, checkpointId, from] = action.split(':');
+      const story = ID.story.test(storyId) ? state.stories[storyId] : undefined;
+      const cp = story && ID.checkpoint.test(checkpointId) ? story.checkpoints[checkpointId] : undefined;
+      if (!story || !cp?.head || !Object.hasOwn(story.nodes, cp.head) || !Object.hasOwn(story.branches, cp.branchId)
+        || (from !== undefined && !/^b\d{1,4}$/.test(from))) throw refuse(t, 'staleButton');
+      if (verb === 'mark') addBookmark(story, cp.id, bookmarkLabel(state, story, cp), Date.now());
+      else removeBookmark(story, cp.id);
+      state.ui = null;
+      return { screen: render(state, `checkpoint:${storyId}:${checkpointId}${from ? `:${from}` : ''}`) };
     }
     // The picture style is the reader's own setting (local/picture-style.ts). It changes at any moment, also while a
     // scene is being written, and only the pictures still to come follow it.
@@ -360,7 +466,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         const story = state.stories[storyId];
         if (verb === 'pov') story.pov = person.name;
         else if (seesThrough(story, person.name)) delete story.pov;
-        return { screen: render(state, `character:${storyId}:${index}:${tag}`, pictureInfo) };
+        return { screen: render(state, `character:${storyId}:${index}:${tag}`, pictureInfo), lasting: true };
       }
       if (verb === 'look-edit' || verb === 'details-edit') {
         const input = verb === 'look-edit' ? 'look' : 'details';
@@ -370,7 +476,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       // The prompt the reader wrote for this person's portraits goes, and the bot's own is theirs again.
       if (verb === 'portrait-default') {
         delete state.stories[storyId].sheet![person.index].portraitPrompt;
-        return { screen: render(state, `character:${storyId}:${index}:${tag}`, pictureInfo) };
+        return { screen: render(state, `character:${storyId}:${index}:${tag}`, pictureInfo), lasting: true };
       }
       if (!pictureInfo.pictures) throw refuse(t, 'portraitOff');
       // A portrait is drawn from the prompt the reader wrote for the person, if they did. Otherwise a person of a sheet
@@ -395,9 +501,10 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       const fields = maskFields(mask);
       if (!story || !person || !fields || !/^[0-9a-f]{8}$/.test(hash ?? '')) throw refuse(t, 'staleButton');
       const profile = profileOf(state, story, person);
-      if (profile.older || profile.versioned || profileHash(person.name, profile, fields) !== hash) return { screen: render(state, `profile-changed:${storyId}:${index}:${tag}`, pictureInfo) };
+      // Apart: the wait asks for the block of the profile above it, and a profile changed since says it was sent above.
+      if (profile.older || profile.versioned || profileHash(person.name, profile, fields) !== hash) return { screen: render(state, `profile-changed:${storyId}:${index}:${tag}`, pictureInfo), lasting: true };
       state.ui = { input: 'profile', storyId, name: person.name, fields: mask, hash };
-      return { screen: render(state, 'profile-input', pictureInfo) };
+      return { screen: render(state, 'profile-input', pictureInfo), apart: true };
     }
     if (state.ui?.input === 'profile' && !action) return profileSent(state, state.ui, text, t, pictureInfo);
     // The whole prompt of a person's portraits, from the note under one of them (local/picture.ts `portrait`), as a
@@ -438,7 +545,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       if (!pictureInfo.pictures || !illustrator) throw refuse(t, 'portraitOff');
       const kept = illustrator.keepPortrait(String(update.callback_query?.from?.id), action.slice(14), state);
       if (!kept) throw refuse(t, 'portraitStale');
-      return { screen: render(state, `portrait-kept:${kept.storyId}:${kept.index}`, { retainsPortraits: kept.retainsPortraits }),
+      return { screen: render(state, `portrait-kept:${kept.storyId}:${kept.index}`, { retainsPortraits: kept.retainsPortraits }), done: true,
         sweep: true, portraitKept: action.slice(14) };
     }
     // A picture of a person of the reader's own for a pose, the front being their portrait (local/reference.ts): the
@@ -454,6 +561,47 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     }
     // While a picture is awaited, text is no move in the story either; a button or a command leaves (above).
     if (state.ui?.input === 'reference' && !action) throw refuse(t, 'referenceNeedsPicture');
+    // A person's pictures by the dozen, for frames to choose from by pose (local/pose-set.ts): the button waits for them,
+    // and every photo or file that comes goes into the reader's queue, to be read apart from the updates
+    // (`queuedPoseUpload`, `uploadNext`), until «✅ Готово», any other button or a command. One message counts them as
+    // they are read.
+    if (action?.startsWith('pose-set:')) {
+      if (!pictureInfo.poseSet) throw refuse(t, 'poseSetOff');
+      const [, storyId, index, tag] = action.split(':');
+      const person = ID.story.test(storyId) ? personAt(state.stories[storyId], index, tag) : undefined;
+      if (!person) throw refuse(t, 'staleButton');
+      state.ui = { input: 'pose-set', storyId, name: person.name, at: Date.now() };
+      return { screen: render(state, 'pose-set-input', pictureInfo) };
+    }
+    if (state.ui?.input === 'pose-set' && !action) throw refuse(t, 'poseSetNeedsPictures');
+    // The wait ended above, as by any button: the message that counted the pictures gets its last word once the files sent
+    // in it are read (`closing`), and the person's card shows how they were sorted.
+    if (action?.startsWith('pose-set-done:')) {
+      const [, storyId, index, tag] = action.split(':');
+      return { screen: render(state, `character:${storyId}:${index}:${tag}`, pictureInfo), lasting: true };
+    }
+    // Every picture of a person's set goes at once, after the reader says so; a frame's recipe keeps the files it drew
+    // with while a variant may need them (local/store.ts). Offered for a set whatever the switch says now, so that
+    // nobody is left with pictures they cannot remove.
+    if (action?.startsWith('pose-set-drop:') || action?.startsWith('pose-set-dropped:')) {
+      const [kind, storyId, index, tag] = action.split(':');
+      const person = ID.story.test(storyId) ? personAt(state.stories[storyId], index, tag) : undefined;
+      if (!person) throw refuse(t, 'staleButton');
+      const sheetPerson = state.stories[storyId].sheet![person.index];
+      const dropped = sheetPerson.poseSet?.length ?? 0;
+      // Files of the set still in the reader's queue go with it, unread: those of the person as a sheet written again
+      // spells them (`personKey`).
+      const theirs = (one: PendingPoseUpload) => one.storyId === storyId && personKey(one.name) === personKey(sheetPerson.name);
+      if (kind === 'pose-set-dropped' && state.poseUploads?.some(theirs)) {
+        const rest = state.poseUploads.filter(one => !theirs(one));
+        if (rest.length) state.poseUploads = rest; else delete state.poseUploads;
+      }
+      // The question first; a set already gone shows the card.
+      if (kind === 'pose-set-drop' || !dropped) return { screen: render(state, `pose-set-drop:${storyId}:${index}:${tag}`, pictureInfo), lasting: !dropped };
+      delete sheetPerson.poseSet;
+      return { screen: render(state, `character:${storyId}:${index}:${tag}`, pictureInfo), lasting: true, sweep: true,
+        logged: { event: 'pose_set_dropped', details: { poseSetCount: dropped } } };
+    }
     // Where the look or the description being written lands, for a reader who has versions of the sheet
     // (local/picture-versions.ts): the whole story, as always, or «only from this moment», the scene the reader stands at
     // now, kept in the wait. It is chosen on the wait itself, before the text is sent, so that the text is taken as it
@@ -502,7 +650,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         ? { event: 'sheet_version_written', details: { versionSource: 'reader', versionField, versionPeople: 1, storyVersions: countVersions(story) } } as const
         : landed.cleared ? { event: 'sheet_versions_cleared', details: { versionField, versionsCleared: landed.cleared, storyVersions: countVersions(story) } } as const
         : undefined;
-      if (look) return { screen: render(state, `character:${storyId}:${index}:${personTag(name)}`, pictureInfo), ...logged ? { logged } : {} };
+      if (look) return { screen: render(state, `character:${storyId}:${index}:${personTag(name)}`, pictureInfo), lasting: true, ...logged ? { logged } : {} };
       return { retell: { storyId, name }, ...logged ? { logged } : {} };
     }
     if (action === 'last') return { savedText: last(state) };
@@ -564,6 +712,8 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     state.ui = null;
     state.interrupted = false;
     const job = beginTurn(state, input, Date.now());
+    // The reader wrote nothing, so the move is the narrator's; a story with a pace tells it so (local/prompt.ts).
+    if (verb === 'start' || action === 'continue') job.move = 'narrator';
     return { job };
   }
 
@@ -592,7 +742,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     const profile = profileOf(state, story, person);
     if (profile.older || profile.versioned || profileHash(person.name, profile, fields) !== wait.hash) {
       state.ui = null;
-      return refused(render(state, `profile-changed:${story.id}:${index}:${personTag(person.name)}`, pictureInfo), 'changed');
+      return { ...refused(render(state, `profile-changed:${story.id}:${index}:${personTag(person.name)}`, pictureInfo), 'changed'), lasting: true };
     }
     if (!text?.trim()) return refused({ text: t.errors.profileNeedsText }, 'no_text');
     const parsed = parseProfile(text, person.name, fields);
@@ -611,7 +761,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     const retell = applyProfile(story, index, profile, changed);
     const has = (field: ProfileField) => changed[field] !== undefined;
     const size = (field: ProfileField) => has(field) ? [...changed[field]!].length : undefined;
-    return { screen: render(state, `profile-saved:${story.id}:${index}:${personTag(person.name)}:${fieldsMask(Object.keys(changed) as ProfileField[])}`, pictureInfo),
+    return { screen: render(state, `profile-saved:${story.id}:${index}:${personTag(person.name)}:${fieldsMask(Object.keys(changed) as ProfileField[])}`, pictureInfo), done: true,
       ...retell ? { retell: { storyId: story.id, name: person.name } } : {},
       logged: { event: 'profile_edited', details: { outcome: Object.keys(changed).length ? 'ready' : 'skipped',
         profileFit: !fields.includes('description') ? 'no_description' : profile.present.length > fields.length ? 'no_prompt' : 'whole',
@@ -660,11 +810,234 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     if (index < 0) throw refuse(t, 'referenceGone');
     const caption = typeof update.message?.caption === 'string' ? captionOf(update.message.caption) : undefined;
     keepReference(store, String(update.message?.from?.id), sheet[index], picture, pose, caption, Date.now());
-    return { screen: render(state, `portrait-kept:${storyId}:${index}`, { retainsPortraits: true }), sweep: true,
+    return { screen: render(state, `portrait-kept:${storyId}:${index}`, { retainsPortraits: true }), done: true, sweep: true,
       logged: { event: 'reference_saved', details: { referenceSent: picture.sent, referenceFormat: picture.format, referencePlace: pose,
         referenceBytes: picture.bytes.length + picture.strippedBytes, strippedBytes: picture.strippedBytes,
         referenceWidth: picture.width, referenceHeight: picture.height } } };
   }
+
+  // Where a photo or a file of a pose set goes in the library write: into the reader's queue (`poseUploads`), unread, if
+  // the wait it answered still stands, with pose sets and within its half hour, and its person is still on the story's
+  // sheet, by the person's key, which a sheet written again keeps (local/picture.ts `rewrittenSheet`). The update ends
+  // there, and the queue is read apart from the updates (`uploadNext`), so that the downloads of an album or an archive
+  // hold up nobody's requests, the owner's among them. A queue as long as a set can be counts the next file as past the
+  // limit, unread. Either way the queue's reading goes on, or starts again after a write that failed.
+  function queuedPoseUpload(state: Library, update: Update, upload: PoseUpload, t: Messages, pictureInfo: RenderDetails): Plan {
+    const { storyId, name, at } = upload.wait;
+    const wait = state.ui?.input === 'pose-set' ? state.ui : undefined;
+    if (wait?.storyId !== storyId || wait.name !== name || wait.at !== at) throw refuse(t, 'poseSetChanged');
+    if (!pictureInfo.poseSet || Date.now() - (wait.last ?? at) > POSE_SET_WAIT_MS) {
+      state.ui = null;
+      throw refuse(t, pictureInfo.poseSet ? 'poseSetExpired' : 'poseSetOff');
+    }
+    if (!state.stories[storyId]?.sheet?.some(one => one && personKey(one.name) === personKey(name))) { state.ui = null; throw refuse(t, 'poseSetGone'); }
+    const queue = state.poseUploads ?? [];
+    if (queue.length >= POSE_SET_PICTURES) return { poseQueue: true, poseCount: { storyId, name, at, kept: 0, labeled: 0, refused: { full: 1 } },
+      logged: { event: 'pose_set_refused', details: { poseSetRefusal: 'full' } } };
+    state.poseUploads = [...queue, { update: update.update_id, storyId, name, at, file: upload.file }];
+    wait.last = Date.now();
+    return { poseQueue: true };
+  }
+
+  // Reads a photo or a file of a pose set as `readUpload` reads a picture of the reader's own. A refusal is kept by its
+  // code alone, for the message that counts the pictures, never shown on its own: an album of forty would be forty
+  // messages. A ZIP archive is read whole, every picture in it, and one refused whole says why in a message of its own.
+  // One cut short by `signal` is refused as `incomplete`.
+  async function readPoseFile(file: PoseUploadFile, signal: AbortSignal): Promise<PoseRead> {
+    const document = file.document as TelegramDocument | undefined;
+    if (document && isArchive(document)) {
+      try {
+        if (!readArchive) throw new Error('archive_reader_unavailable');
+        return { archive: { ...await readArchive(document, signal), name: String(document.file_name ?? '') } };
+      } catch (error) {
+        return { archiveRefused: error instanceof ArchiveError ? error.code : 'incomplete' };
+      }
+    }
+    try {
+      if (!readPicture) throw new Error('picture_reader_unavailable');
+      return { picture: await readPicture(file as { photo?: unknown; document?: TelegramDocument }, signal) };
+    } catch (error) {
+      const key = error instanceof UserError && error.key !== undefined && Object.hasOwn(REFUSAL_CODES, error.key)
+        ? error.key as keyof typeof REFUSAL_CODES : 'referenceIncomplete';
+      return { refused: REFUSAL_CODES[key] };
+    }
+  }
+
+  // What a file of the queue becomes inside the library write that takes it out of the queue: nothing if it left
+  // meanwhile, with its set, and nothing either if its person left the story's sheet; otherwise its pictures, each kept
+  // as one sent alone within the set's and the reader's limits (`poseSetLimit`), its caption to come, or its refusal
+  // counted. An archive's pictures are kept in this one write, with the labels its labels.csv gave them.
+  type PoseKept = { count?: PoseCount; captions?: boolean; refusal?: ArchiveError; logged: NonNullable<Plan['logged']> };
+  // The person of the story's sheet a file of the queue is for, by the key a sheet written again keeps.
+  const personOf = (state: Library, job: PendingPoseUpload) =>
+    state.stories[job.storyId]?.sheet?.find(one => one && personKey(one.name) === personKey(job.name));
+  function keptPoseFile(state: Library, userId: string, job: PendingPoseUpload, read: PoseRead): PoseKept | undefined {
+    const queue = state.poseUploads ?? [];
+    if (!queue.some(one => one.update === job.update)) return undefined;
+    const rest = queue.filter(one => one.update !== job.update);
+    if (rest.length) state.poseUploads = rest; else delete state.poseUploads;
+    const { storyId, name, at } = job;
+    const person = personOf(state, job);
+    if (!person) return { logged: { event: 'pose_upload_dropped', details: {} } };
+    if (read.archiveRefused) {
+      const refusal = new ArchiveError(read.archiveRefused);
+      return { refusal, logged: { event: 'pose_archive_refused', details: { poseArchiveRefusal: refusal.code } } };
+    }
+    if (read.archive) {
+      const { pictures, labels, name: archive } = read.archive;
+      const count: PoseCount = { storyId, name, at, kept: 0, labeled: 0, refused: {}, ...labels.found ? { labels: { ...labels, archive } } : {} };
+      let main = 0;
+      const now = Date.now();
+      for (const one of pictures) {
+        const refused = one.picture ? poseSetLimit(state, person, one.picture.bytes.length) : one.refused ?? 'incomplete';
+        if (refused) { count.refused[refused] = (count.refused[refused] ?? 0) + 1; continue; }
+        keepPoseSetPicture(store, userId, person, one.picture!, now, one);
+        count.kept++;
+        if (one.given?.pose && one.given.side && one.given.framing) count.labeled++;
+        if (one.main) main++;
+      }
+      return { count, captions: count.kept > count.labeled,
+        logged: { event: 'pose_archive_saved', details: { poseSetKept: count.kept, poseSetRefused: pictures.length - count.kept,
+          poseLabeled: count.labeled, poseMain: main, poseLabels: labels.unread ? 'unread' : labels.found ? 'read' : 'none',
+          poseLabelRows: labels.rows, poseRowsUnmatched: labels.unmatched.length, poseRowsUnknown: labels.unknown.length,
+          poseSetCount: poseSetState(person).count } } };
+    }
+    const picture = read.picture;
+    const refused = picture ? poseSetLimit(state, person, picture.bytes.length) : read.refused ?? 'incomplete';
+    const count: PoseCount = { storyId, name, at, kept: refused ? 0 : 1, labeled: 0, refused: refused ? { [refused]: 1 } : {} };
+    if (refused || !picture) return { count, logged: { event: 'pose_set_refused', details: { poseSetRefusal: refused } } };
+    keepPoseSetPicture(store, userId, person, picture, Date.now());
+    return { count, captions: true,
+      logged: { event: 'pose_set_saved', details: { referenceSent: picture.sent, referenceFormat: picture.format,
+        referenceBytes: picture.bytes.length + picture.strippedBytes, strippedBytes: picture.strippedBytes,
+        referenceWidth: picture.width, referenceHeight: picture.height, poseSetCount: poseSetState(person).count } } };
+  }
+
+  // The message that counts the pictures of one wait for a pose set, one per wait, in memory: the first picture read sends
+  // it and the next ones edit it, at most every few seconds (local/progress.ts), with «✅ Готово» under it while the wait
+  // stands. Once the wait is over it says how many of its files are still being read, and it gets its last word with the
+  // last of them (`closing`). A restart starts a new one at the next picture read.
+  type Counts = { storyId: string; name: string; at: number; kept: number; labeled: number; refused: Partial<Record<PoseRefusal, number>>;
+    archives: NonNullable<PoseCount['labels']>[] };
+  type Stage = { stage: 'receiving' | 'finishing' | 'done' };
+  type Tally = { counts: Counts; progress: ReturnType<typeof createProgress<Stage>> };
+  const tallies = new Map<string, Map<string, Tally>>();
+  const waitKey = (wait: Pick<PoseSetInput, 'storyId' | 'name' | 'at'>) => JSON.stringify([wait.storyId, wait.name, wait.at]);
+  const openWait = (state: Library) => state.ui?.input === 'pose-set' ? waitKey(state.ui) : undefined;
+  const unread = (state: Library, key: string) => (state.poseUploads ?? []).filter(job => waitKey(job) === key).length;
+  function counted(userId: string, chat: Chat, count: PoseCount, log: Log) {
+    const key = waitKey(count);
+    const mine = tallies.get(userId) ?? new Map<string, Tally>();
+    tallies.set(userId, mine);
+    let tally = mine.get(key);
+    if (!tally) {
+      const counts: Counts = { storyId: count.storyId, name: count.name, at: count.at, kept: 0, labeled: 0, refused: {}, archives: [] };
+      const progress = createProgress<Stage>({ chat, log, rows: { failed: 'pose_set_status_failed' }, render: status => {
+        const state = store.read(userId);
+        return render(state, 'pose-set-status', { ...pictureInfoOf(userId), poseTally: { ...counts, refused: { ...counts.refused },
+          archives: [...counts.archives], unread: unread(state, key), finishing: status.stage === 'finishing', done: status.stage === 'done' } });
+      } });
+      mine.set(key, tally = { counts, progress });
+    }
+    tally.counts.kept += count.kept;
+    tally.counts.labeled += count.labeled;
+    for (const [reason, n] of Object.entries(count.refused) as [PoseRefusal, number][]) tally.counts.refused[reason] = (tally.counts.refused[reason] ?? 0) + n;
+    if (count.labels) tally.counts.archives.push(count.labels);
+    tally.progress.update({ stage: openWait(store.read(userId)) === key ? 'receiving' : 'finishing' });
+  }
+  // The counts of `userId`'s whose wait is over: those whose files are all read, taken out to get their last word
+  // (`endTally`), while the others say that files of theirs are still being read.
+  function closing(userId: string): Tally[] {
+    const mine = tallies.get(userId);
+    if (!mine) return [];
+    const state = store.read(userId);
+    const ended: Tally[] = [];
+    for (const [key, tally] of mine) {
+      if (key === openWait(state)) continue;
+      if (unread(state, key)) { tally.progress.update({ stage: 'finishing' }); continue; }
+      mine.delete(key);
+      ended.push(tally);
+    }
+    if (!mine.size) tallies.delete(userId);
+    return ended;
+  }
+  async function endTally(tally: Tally, log: Log) {
+    await tally.progress.finish({ stage: 'done' });
+    log('pose_set_ended', undefined, { poseSetKept: tally.counts.kept,
+      poseSetRefused: Object.values(tally.counts.refused).reduce((sum, one) => sum + (one ?? 0), 0) });
+  }
+  // The captions of pose sets, on this computer, one picture at a time; those a restart left waiting start again.
+  const captioner = captionerConfig ? createPoseCaptioner(captionerConfig, { store, log: logFor }) : undefined;
+  if (captioner) for (const userId of allowedUsers) if (illustrator?.poseSetFor(userId)) captioner.enqueue(userId);
+
+  // Each reader's queue of pose-set files, read one file at a time in the order they came, apart from the updates that
+  // brought them, while the reader's worker runs, and READS_AT_ONCE files at most across readers. A file leaves the queue
+  // in the write that keeps its pictures, so that a stop or a restart halfway reads it again and keeps it once, and a
+  // restart reads what it left. A file gets UPLOAD_MS to be read once its turn comes, the question to Telegram for its
+  // path included: after that its read is cut short, its requests with it, and it is refused as `incomplete`. A stop
+  // cuts short the read in flight, and the file stays queued.
+  const uploading = new Map<string, Promise<void>>();
+  let uploadsStopped = false;
+  // The reads under way, which a stop cuts short; how many turns to read are taken, and the workers waiting for one, in
+  // the order they asked.
+  const reads = new Set<AbortController>();
+  let turnsTaken = 0;
+  const turnsAwaited: (() => void)[] = [];
+  // A turn to read a file: at once while fewer than READS_AT_ONCE are taken, or when one ends (`endTurn`), which hands it
+  // on to the worker that has waited longest.
+  function readTurn(): Promise<void> {
+    if (turnsTaken < READS_AT_ONCE) { turnsTaken++; return Promise.resolve(); }
+    return new Promise(resolve => turnsAwaited.push(resolve));
+  }
+  function endTurn() {
+    const next = turnsAwaited.shift();
+    if (next) next(); else turnsTaken--;
+  }
+  // Reads `file` in a turn of its own, cut short once UPLOAD_MS pass or the bot stops.
+  async function readInTurn(file: PoseUploadFile): Promise<PoseRead> {
+    await readTurn();
+    const controller = new AbortController();
+    const deadline = setTimeout(() => controller.abort(), UPLOAD_MS);
+    reads.add(controller);
+    try { return uploadsStopped ? {} : await readPoseFile(file, controller.signal); }
+    finally { clearTimeout(deadline); reads.delete(controller); endTurn(); }
+  }
+  function readPoseQueue(userId: string) {
+    if (uploadsStopped || uploading.has(userId)) return;
+    let failed = false;
+    uploading.set(userId, (async () => { while (await uploadNext(userId)) { /* the next file */ } })()
+      .catch(error => { failed = true; logFor(userId)('pose_upload_failed', fileErrorCode(error)); })
+      .finally(() => {
+        uploading.delete(userId);
+        // A file that came as the last one was read is read as well; after a write that failed, the queue waits for the
+        // reader's next file or the next start.
+        if (!failed && !uploadsStopped && store.read(userId).poseUploads?.length) readPoseQueue(userId);
+      }));
+  }
+  // Reads the first file of `userId`'s queue and keeps what it holds; says whether to go on.
+  async function uploadNext(userId: string): Promise<boolean> {
+    if (uploadsStopped) return false;
+    const before = store.read(userId);
+    const job = before.poseUploads?.[0];
+    if (!job) return false;
+    const person = personOf(before, job);
+    const document = job.file.document as TelegramDocument | undefined;
+    // A picture that the set's limits refuse already is not downloaded to be refused.
+    const full = person && !(document && isArchive(document)) ? poseSetLimit(before, person, 0) : undefined;
+    const read: PoseRead = !person ? {} : full ? { refused: full } : await readInTurn(job.file);
+    if (uploadsStopped) return false;
+    const log = logFor(userId);
+    const kept = store.mutate(userId, state => keptPoseFile(state, userId, job, read));
+    if (kept) log(kept.logged.event, undefined, kept.logged.details);
+    const chat = createChat(api, userId, chats.get(userId) ?? chats.set(userId, chatMemory()).get(userId));
+    if (kept?.count) counted(userId, chat, kept.count, log);
+    if (kept?.captions) captioner?.enqueue(userId);
+    const ended = closing(userId);
+    if (kept?.refusal) await pass(chat, { text: errorText(texts(store.read(userId).language), kept.refusal) }, log);
+    for (const tally of ended) await endTally(tally, log);
+    return true;
+  }
+  for (const userId of allowedUsers) if (illustrator?.poseSetFor(userId) && store.read(userId).poseUploads?.length) readPoseQueue(userId);
 
   // Prepares the compaction of this person's active branch while they read (local/prepare.ts). Their own work: it keeps
   // the GPU like a job, and runs only on a GPU that is already up.
@@ -695,7 +1068,15 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     const language = store.read(userId).language;
     const labels = texts(language).labels;
     const notices = () => texts(store.read(userId).language).notices;
-    const progress = createProgress({ chat, render: status => renderCompaction(status, language), signal: controller.signal, log });
+    // A compaction's status is a passing status line while it runs, and a notice once it has said its last word.
+    let statusId: number | undefined;
+    const progress = createProgress({ render: status => renderCompaction(status, language), signal: controller.signal, log,
+      chat: { edit: chat.edit, send: async screen => { statusId = await chat.show(screen, 'status'); return { message_id: statusId }; } } });
+    const finishStatus = async () => {
+      const shown = await progress.finish();
+      if (statusId !== undefined) chat.mark(statusId, 'notice');
+      return shown;
+    };
     let compactionStatus: CompactionStatus | undefined;
     const onProgress = (event: CompactionStatus) => {
       compactionStatus = { ...compactionStatus, ...event, automatic: job.kind !== 'compact' };
@@ -710,7 +1091,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       log('generation_failed', failure.code, error);
       const retry = job.kind === 'compact' ? '/compact' : '/continue';
       if (failure.operation === 'compact' && compactionStatus?.stage === 'failed') {
-        if (!await progress.finish()) await safeSend(chat, renderCompaction(compactionStatus, language), log);
+        if (!await finishStatus()) await pass(chat, renderCompaction(compactionStatus, language), log);
         return;
       }
       const snapshot = store.read(userId);
@@ -720,6 +1101,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         : failure.code === 'invalid_memory' || failure.code === 'memory_not_smaller' ? t.notices.compactionUnverified(retry)
         : unavailable(failure) ? t.notices.modelUnavailable
         : t.notices.failed(retry);
+      // With the scene's own keyboard, it may be the one Continue in the chat: it stays, as a scene does.
       await safeSend(chat, { text, reply_markup: sceneKeyboard(snapshot) }, log);
     };
     try {
@@ -734,7 +1116,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         });
         if (!completed) return;
         modelResponded();
-        if (!await progress.finish()) await safeSend(chat, renderCompaction({ ...compactionStatus, stage: 'done', ...result }, language), log);
+        if (!await finishStatus()) await pass(chat, renderCompaction({ ...compactionStatus, stage: 'done', ...result }, language), log);
         return;
       }
       let usage: GenerationResult['usage'];
@@ -793,7 +1175,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         // Persisted above. An ambiguous response must never trigger a new model run.
         const prefix = scenePrefix(stats(snapshot, { storyId: ref.storyId, checkpointId: ref.checkpointId }), node.modelInfo, snapshot.language);
         // Bot API results are not validated; the id of the sent message is stored as returned.
-        const sent = await chat.final(prefix + node.text, sceneKeyboard(snapshot)) as { message_id: number };
+        const sent = await chat.final(prefix + node.text, keyboardOf(userId, ref)) as { message_id: number };
         store.mutate(userId, state => {
           const saved = state.stories[ref.storyId]?.nodes[ref.nodeId];
           if (saved) { saved.delivery = 'sent'; saved.messageId = sent.message_id; }
@@ -824,7 +1206,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       if (!stillCurrent || controller.signal.aborted) return;
       await reportFailure(error);
     } finally {
-      await progress.finish();
+      await finishStatus();
       releaseGpu?.();
       if (prepare && !controller.signal.aborted && !picture) prepareNext(userId);
     }
@@ -832,8 +1214,8 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
   }
 
   // The details and the look retold from the description a reader has just written (local/picture.ts `retell`), then
-  // the person's card in place of the status line that stood meanwhile: the new look, or the word that it is still to
-  // be retold. Only for a reader who is drawn for, and only while the language model's GPU is up, which it keeps up as a
+  // the person's card in place of the status line that stood meanwhile, a card that stays (`Plan.lasting`): the new
+  // look, or the word that it is still to be retold. Only for a reader who is drawn for, and only while the language model's GPU is up, which it keeps up as a
   // job does and never wakes; the two are otherwise retold before the next picture of the story, and the card says so
   // at once.
   async function retold(userId: string, chat: Chat, { storyId, name }: { storyId: string; name: string }, signal: AbortSignal) {
@@ -850,7 +1232,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       }
       if (held) {
         try {
-          try { status = (await chat.send({ text: texts(store.read(userId).language).characters.retelling }) as { message_id?: number }).message_id; }
+          try { status = await chat.show({ text: texts(store.read(userId).language).characters.retelling }, 'status'); }
           catch (error) { log('telegram_send_failed', errorCode(error)); }
           await illustrator.retell({ userId, storyId, signal, log });
         } finally { release?.(); }
@@ -861,8 +1243,13 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     // A person gone meanwhile opens the story's people, and a story gone says so (local/ui.ts).
     const card = render(state, `character:${storyId}:${index}:${personTag(name)}`, pictureInfoOf(userId));
     if (status !== undefined) {
-      try { await chat.edit(status, card); log('screen_sent'); return; }
-      catch { try { await chat.remove(status); } catch { /* a hint, never needed */ } }
+      try { await chat.edit(status, card); chat.keep(status); log('screen_sent'); return; }
+      catch (error) {
+        // An edit Telegram answered did not land, and the status line goes. One without an answer may have made the
+        // line the card, so it stays as any card does, and the card is sent again below.
+        if (typeof (error as { code?: unknown }).code !== 'number') chat.keep(status);
+        else try { await chat.remove(status); } catch { chat.mark(status, 'notice'); }
+      }
     }
     await safeSend(chat, card, log);
   }
@@ -881,13 +1268,16 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         }
         return;
       }
-      const chat = createChat(api, chatInfo.id);
+      const chat = createChat(api, chatInfo.id, chats.get(userId) ?? chats.set(userId, chatMemory()).get(userId));
       const log = logFor(userId);
+      // The notices out when this update came, which it takes away once it is handled (below).
+      const noticed = chat.passing('notice');
       if (update.callback_query?.id) {
         try { await api('answerCallbackQuery', { callback_query_id: update.callback_query.id }); } catch {}
       }
       let fileInput: FileInput | undefined;
       let upload: Upload | undefined;
+      let poseUpload: PoseUpload | undefined;
       const message = update.message;
       // A photo or a file is a picture of a person while one is awaited, and a file is otherwise a seed file. A photo
       // nobody asked for goes to the write, which answers it as any message without text.
@@ -896,6 +1286,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         if (state.seen.includes(update.update_id)) return;
         const t = texts(state.language);
         if (state.ui?.input === 'reference') upload = await readUpload(userId, state.ui, message, t);
+        else if (state.ui?.input === 'pose-set') poseUpload = { wait: state.ui, file: poseFileOf(message) };
         else if (message.document) {
           if (state.ui?.input !== 'seed') {
             fileInput = { error: refuse(t, 'fileNeedsDraft') };
@@ -916,7 +1307,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         // already exists keeps what it has; without a stored language it stays Russian (text.ts).
         if (state.language === undefined && !state.seen.length && !state.seq) setLanguage(state, langFromTelegram(from?.language_code));
         state.seen = [...state.seen.slice(-511), update.update_id];
-        try { return prepare(state, update, fileInput, pictureInfoOf(userId), upload); }
+        try { return prepare(state, update, fileInput, pictureInfoOf(userId), upload, poseUpload); }
         catch (error) {
           if (error instanceof UserError) return { screen: { text: errorText(texts(state.language), error) } };
           throw error;
@@ -924,21 +1315,27 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       });
       if (!plan) return;
       if (plan.logged) log(plan.logged.event, undefined, plan.logged.details);
+      if (plan.poseCount) counted(userId, chat, plan.poseCount, log);
+      if (plan.poseQueue) readPoseQueue(userId);
+      // A wait for a pose set that «✅ Готово», another button or a command ended ends its count as well, once the files
+      // sent in it are read.
+      for (const tally of closing(userId)) await endTally(tally, log);
       if (plan.portraitKept) illustrator?.portraitKept(userId, plan.portraitKept);
       if (plan.sweep) {
         try { store.sweepPortraits(userId); } catch (error) { log('portraits_unswept', fileErrorCode(error)); }
       }
+      let screen = plan.screen;
       if (plan.gpuAction) {
         // simple-serving starts and sleeps its own card, so there is nothing here to start
         // (docs/model-providers.md#simple-serving-our-gateway).
         const notices = texts(store.read(userId).language).notices;
-        if (!gpu) await safeSend(chat, { text: providerName === 'simple-serving' ? notices.modelServiceSeparate : notices.gpuNotConfigured }, log);
+        if (!gpu) screen = { text: providerName === 'simple-serving' ? notices.modelServiceSeparate : notices.gpuNotConfigured };
         else {
           try {
             if (plan.gpuAction === 'pause') gpu.pause(); else gpu.resume();
             void gpu.tick();
           } catch { /* Current controller state is rendered below. */ }
-          await safeSend(chat, render(store.read(userId), 'model'), log);
+          screen = render(store.read(userId), 'model');
         }
       }
       if (plan.modelStatus) {
@@ -954,15 +1351,53 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
             Object.assign(modelInfo, { status: 'unavailable', checkedAt: new Date().toISOString() });
           }
         }
-        await safeSend(chat, render(store.read(userId), 'model'), log);
+        screen = render(store.read(userId), 'model');
       }
       if (plan.cancel) { running.get(userId)?.controller.abort(); sampling.get(userId)?.abort(); varying.get(userId)?.abort(); }
+      // Passing messages (docs/telegram-ui.md#passing-messages). A screen with buttons, answering a button pressed on a
+      // passing message, takes that message's place, unless it is to go apart or a scene goes out before it: then it
+      // goes below the scene and the pressed message goes. A screen without buttons is a notice, and never takes the
+      // place of the screen it answers; a card or a profile goes as a message that stays (`Plan.lasting`). Once all
+      // that is out, the notices out when this update came go, and so do the screens of a wait that is over; an open
+      // wait's newer screen sent anew takes the place of the ones before it but its first, which says what the wait is
+      // for. Only passing messages are ever deleted (`tidy`), and none when the answer did not get out: the update is
+      // committed by then, and the screen pressed is how the reader asks again. It is only logged, a scene shown again
+      // as well: /last is how the reader asks for that one again.
+      const pressed = update.callback_query?.message?.message_id;
+      const wait = waitOf(store.read(userId).ui);
+      const lasting = !!plan.lasting;
+      const kind: Passing = plan.done || !screen?.reply_markup ? 'notice' : 'screen';
+      const replaces = !lasting && kind === 'screen' && !plan.apart && chat.replaceable(pressed);
+      const inPlace = replaces && !plan.savedText ? pressed : undefined;
+      const gone = new Set(noticed);
+      if (replaces && plan.savedText) gone.add(pressed!);
+      const waits = chat.waits();
+      for (const one of waits) if (one.wait !== wait) gone.add(one.id);
+      if (screen && !lasting && kind === 'screen' && inPlace === undefined) waits.filter(one => one.wait === wait).slice(1).forEach(one => gone.add(one.id));
+      if (inPlace !== undefined) gone.delete(inPlace);
+      let delivered = true;
       if (plan.savedText) {
-        const snapshot = store.read(userId);
-        try { await chat.final(scenePrefix(stats(snapshot), plan.savedText.modelInfo, snapshot.language) + plan.savedText.text, sceneKeyboard(snapshot)); }
-        catch (error) { log('saved_scene_delivery_unconfirmed', errorCode(error)); }
+        const { text, modelInfo: shownInfo } = plan.savedText;
+        try {
+          const snapshot = store.read(userId);
+          await chat.final(scenePrefix(stats(snapshot), shownInfo, snapshot.language) + text, keyboardOf(userId, snapshot.active, true));
+        } catch (error) {
+          delivered = false;
+          log('saved_scene_delivery_unconfirmed', errorCode(error));
+        }
       }
-      if (plan.screen) await safeSend(chat, plan.screen, log);
+      if (screen) {
+        try {
+          if (lasting) await chat.send(screen); else await chat.put(inPlace, screen, kind, kind === 'screen' ? wait : undefined);
+          log('screen_sent');
+        } catch (error) { delivered = false; log('telegram_send_failed', errorCode(error)); }
+      }
+      // Beside the next updates and the job this one starts, as the pictures' deletion below is: a chat slow to answer
+      // a deletion holds up nobody.
+      if (gone.size && delivered) {
+        const task: Promise<unknown> = chat.tidy([...gone]).finally(() => inFlight.delete(task));
+        inFlight.add(task);
+      }
       // After the deletion screen and apart from it: the reader has seen the deletion whatever Telegram answers, and
       // is told nothing more. It runs beside the next updates, which local/main.ts handles one at a time, so that a
       // chat slow to answer for a hundred messages holds up nobody.
@@ -975,7 +1410,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       }
       if (plan.sample && illustrator) {
         const t = texts(store.read(userId).language);
-        if (sampling.has(userId)) await safeSend(chat, { text: t.errors.sampleInFlight }, log);
+        if (sampling.has(userId)) await pass(chat, { text: t.errors.sampleInFlight }, log);
         else {
           const stop = new AbortController();
           sampling.set(userId, stop);
@@ -991,7 +1426,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       }
       // A portrait takes the place of a sample: one drawing on request at a time, stopped the same way.
       if (plan.portrait && illustrator) {
-        if (sampling.has(userId)) await safeSend(chat, { text: texts(store.read(userId).language).errors.portraitInFlight }, log);
+        if (sampling.has(userId)) await pass(chat, { text: texts(store.read(userId).language).errors.portraitInFlight }, log);
         else {
           const stop = new AbortController();
           sampling.set(userId, stop);
@@ -1020,7 +1455,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       // Beside a sample or a portrait, and with nothing held on the language model's card: a variant never asks it
       // anything.
       if (plan.variant && illustrator) {
-        if (varying.has(userId)) await safeSend(chat, { text: texts(store.read(userId).language).errors.variantInFlight }, log);
+        if (varying.has(userId)) await pass(chat, { text: texts(store.read(userId).language).errors.variantInFlight }, log);
         else {
           const stop = new AbortController();
           varying.set(userId, stop);
@@ -1039,7 +1474,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         catch {
           // The plan is not changed after the write, so its job is still set.
           store.mutate(userId, state => { if (state.job?.id === plan.job!.id) state.job = null; });
-          await safeSend(chat, { text: texts(store.read(userId).language).notices.gpuPaused }, log);
+          await pass(chat, { text: texts(store.read(userId).language).notices.gpuPaused }, log);
           return;
         }
         const controller = new AbortController();
@@ -1071,13 +1506,18 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         inFlight.add(task);
       }
     },
-    async idle() { await Promise.all([...inFlight, ...preparing]); },
+    async idle() { await Promise.all([...inFlight, ...preparing, ...uploading.values()]); },
     async stop() {
       for (const entry of prepared.values()) entry.stop();
       for (const entry of running.values()) entry.controller.abort();
       for (const stop of sampling.values()) stop.abort();
       for (const stop of varying.values()) stop.abort();
       for (const stop of retelling) stop.abort();
+      // The file being read is left in its queue for the next start, its read cut short.
+      uploadsStopped = true;
+      for (const controller of reads) controller.abort();
+      for (const mine of tallies.values()) for (const tally of mine.values()) await tally.progress.close();
+      await captioner?.stop();
       await this.idle();
     },
   };

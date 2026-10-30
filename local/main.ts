@@ -1,10 +1,10 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { loadConfig } from './config.ts';
-import { Store } from './store.ts';
+import { Store, fileErrorCode } from './store.ts';
 import { createApi } from './telegram.ts';
 import { createModel } from './model.ts';
 import type { GenerationResult, ModelRequest } from './model.ts';
-import { createBot } from './bot.ts';
+import { createBot, pictureInfo } from './bot.ts';
 import type { Update } from './bot.ts';
 import { fileURLToPath } from 'node:url';
 import { createIllustrator, encoderTokens, textTokens } from './picture.ts';
@@ -13,6 +13,7 @@ import { render, scenePrefix, sceneKeyboard } from './ui.ts';
 import { commandSets } from './text.ts';
 import { createSeedFileReader } from './seed-file.ts';
 import { createPictureReader } from './reference.ts';
+import { createPoseArchiveReader } from './pose-archive.ts';
 import { createVast } from './vast.ts';
 import { createGpu, queueOptions } from './gpu.ts';
 import type { GpuController } from './gpu.ts';
@@ -21,6 +22,7 @@ import { createScheduler } from './scheduler.ts';
 import { createDurations } from './eta.ts';
 import type { Scheduler } from './scheduler.ts';
 import { serveBackground } from './background.ts';
+import { initDataKey, serveMiniApp } from './mini-app.ts';
 import type { Log } from './model-error.ts';
 import { safeErrorDetails, unavailable } from './model-error.ts';
 
@@ -38,6 +40,7 @@ let gpu: GpuController | undefined;
 let gpuTimer: NodeJS.Timeout | undefined;
 let scheduler: Scheduler<ModelRequest, GenerationResult> | undefined;
 let background: Awaited<ReturnType<typeof serveBackground>> | undefined;
+let miniApp: Awaited<ReturnType<typeof serveMiniApp>> | undefined;
 let stopped = false;
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => { stopped = true; void bot?.stop(); });
 try {
@@ -98,8 +101,17 @@ try {
     model: { model: config.model, provider: config.provider, contextTokens: config.contextTokens },
     promptTokens: counter(encoderTokens), textTokens: counter(textTokens) }) : undefined;
   if (config.images) log('pictures_configured');
-  bot = createBot({ store, api, provider, gpu, illustrator, providerName: config.provider, readSeedFile: createSeedFileReader(config.token, api),
-    readPicture: createPictureReader(config.token, api), render, scenePrefix, sceneKeyboard,
+  // The Mini App on loopback, where it is configured (docs/telegram-ui.md#mini-app), with the key that checks its launch
+  // data and not the token. A port that is taken costs the Mini App alone: the bot runs on without its button.
+  if (config.miniApp) {
+    try {
+      miniApp = await serveMiniApp({ dbPath: config.dbPath, port: config.miniApp.port, key: initDataKey(config.token),
+        users: config.miniApp.users, ownerId: config.ownerId, details: userId => pictureInfo(illustrator, userId), log });
+      log('mini_app_ready');
+    } catch (error) { log('mini_app_failed', fileErrorCode(error)); }
+  }
+  bot = createBot({ store, api, provider, gpu, illustrator, captioner: config.images?.captioner, providerName: config.provider, readSeedFile: createSeedFileReader(config.token, api),
+    readPicture: createPictureReader(config.token, api), readArchive: createPoseArchiveReader(config.token, api), miniApp: miniApp && config.miniApp, render, scenePrefix, sceneKeyboard,
     allowedUsers: config.allowedUsers, ownerId: config.ownerId, maxOutputTokens: config.maxOutputTokens,
     contextTokens: config.contextTokens, compactAtTokens: config.compactAtTokens,
     keepScenes: config.keepScenes, memoryMode: config.memoryMode, repairCoverage: config.repairCoverage, model: config.model, log });
@@ -131,9 +143,13 @@ try {
   const failure = error as Failure;
   log('startup_failed', failure.code || (/^[a-z_]+$/.test(failure.message) ? failure.message : undefined));
   process.exitCode = 1;
+  // A bot made before the failure may have started work of its own, as the pose sets' captioner (local/bot.ts): it ends
+  // before the store it writes to closes, and no process of it keeps this one from exiting to be started again.
+  await bot?.stop().catch(() => {});
 } finally {
   clearInterval(gpuTimer);
   await background?.close();
+  await miniApp?.close();
   await scheduler?.close();
   await gpu?.close();
   store?.close();

@@ -93,7 +93,7 @@ test('registered languages keep bounded messages, callbacks and copyable fields'
       assert.equal((screen as { parse_mode?: unknown }).parse_mode, undefined, label);
       for (const row of screen.reply_markup?.inline_keyboard ?? []) {
         assert.ok(row.length > 0, label);
-        for (const button of row) assert.ok(button.text.trim() && Buffer.byteLength(button.callback_data, 'utf8') <= 64, label);
+        for (const button of row) assert.ok(button.text.trim() && Buffer.byteLength(button.callback_data ?? '', 'utf8') <= 64, label);
       }
       for (const entity of screen.entities ?? []) {
         assert.ok(Number.isInteger(entity.offset) && Number.isInteger(entity.length) && entity.offset >= 0 && entity.length > 0

@@ -82,7 +82,7 @@ export function contextStats(state: Library, config: ContextConfig, selection: C
   const memory = { ...measure(parts.memory), count: parts.memoryCount };
   const tail = { ...measure(parts.tail), count: parts.sceneCount };
   const prefix = sum(seed, memory);
-  const request = makeRequest(state, { ...ref, input: continueInput(state, storyId) }, config.maxOutputTokens);
+  const request = makeRequest(state, { ...ref, input: continueInput(state, storyId), move: 'narrator' }, config.maxOutputTokens);
   const estimate = estimateRequest(state, ref, request, config);
   request.estimatedInputTokens = estimate.tokens;
   const budget = requestBudget(request, config.contextTokens);
