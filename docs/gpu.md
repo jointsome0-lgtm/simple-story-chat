@@ -114,21 +114,21 @@ The gateway logged the scenes as `reader` with a reader's scope and the probes' 
 `internal`; `/v1/state` had a reader active beside internal calls in 82 of 296 samples, an internal one waiting in
 each, and a reader waiting in none.
 
-**Before the rental.** simple-serving's branch `next-card` is `mtp-min-p` (8672e62, pushed): phase2 with the drafter
-and the gateway's refusal of a `min_p` that vLLM refuses while it drafts. Its tests pass, and so does
-`npm run test:serving` against it. Within the day's $3 the main session rents without asking, once a fresh Astra
+**Before the rental.** A text card runs simple-serving's `main` (ded50d4 or later): `next-card` was retired on
+2026-09-30, and since 2026-10-30 the bot's scenes ask `min_p` 0.05, which the gateway refuses unless the card's manifest
+has `MIN_P_WHILE_DRAFTING=1`, as main's does. Within the day's $3 the main session rents without asking, once a fresh Astra
 session has backed the queue ([rule 4](#while-the-cards-are-paid-for)); a card past the cap needs the owner's «да».
 A card's trial guard deletes it at most three hours after its first start (`--hours`), so a longer session is a
 second rental with its own preparation.
 
 **The text card**, prepared as round two's text card was on 2026-09-27. `HOST` is its alias in `~/.ssh/config`, and
-`git archive` and the `uv run` lines run in simple-serving's checkout at `next-card`:
+`git archive` and the `uv run` lines run in simple-serving's checkout at `main`:
 
 ```sh
 SIMPLE_CHAT_RENT_DRY_RUN=1 npm run gpu:rent -- --lane text --hours 3    # each offer's session
 npm run gpu:rent -- --lane text --hours 3    # with the «да»; `rented` names ID, the host and destroyBy
 npm run gpu:rent -- --show ID                # ssh.direct: HostName and Port of HOST
-git archive next-card | ssh HOST 'mkdir -p /workspace/simple-serving && tar -xf - -C /workspace/simple-serving'
+git archive main | ssh HOST 'mkdir -p /workspace/simple-serving && tar -xf - -C /workspace/simple-serving'
 uv run python -m simple_serving.cli keys | ssh HOST bash /workspace/simple-serving/card/bootstrap.sh
 uv run python -m simple_serving.cli trial --ssh-host HOST
 uv run python -m simple_serving.cli up       # in a terminal of its own, until it says ready
