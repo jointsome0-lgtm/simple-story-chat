@@ -111,12 +111,14 @@ export function poseSetState(person: Pick<SheetEntry, 'poseSet'>) {
   const failed = set.filter(one => !one.caption && (one.failed ?? 0) >= CAPTION_ATTEMPTS).length;
   return { count: set.length, captioned, pending: set.length - captioned - failed, failed, bytes: set.reduce((sum, one) => sum + one.bytes, 0) };
 }
-const readerBytes = (state: Library) => Object.values(state.stories).flatMap(story => story.sheet ?? [])
-  .reduce((sum, person) => sum + (person?.poseSet ?? []).reduce((one, picture) => one + picture.bytes, 0), 0);
+// Every set of a reader's: those on the sheets, a person's own under a link among them, and those of their presets.
+const everySet = (state: Library) => [...Object.values(state.stories).flatMap(story => story.sheet ?? []),
+  ...Object.values(state.characterPresets ?? {})].flatMap(person => person?.poseSet ?? []);
+const readerBytes = (state: Library) => everySet(state).reduce((sum, picture) => sum + picture.bytes, 0);
 
 // Why a picture was not added to a set it could otherwise join: the set is full, or its bytes, or the reader's.
 export type PoseSetLimit = 'full' | 'person_bytes' | 'reader_bytes';
-export function poseSetLimit(state: Library, person: SheetEntry, bytes: number): PoseSetLimit | undefined {
+export function poseSetLimit(state: Library, person: Pick<SheetEntry, 'poseSet'>, bytes: number): PoseSetLimit | undefined {
   const { count, bytes: held } = poseSetState(person);
   return count >= POSE_SET_PICTURES ? 'full' : held + bytes > POSE_SET_BYTES ? 'person_bytes'
     : readerBytes(state) + bytes > POSE_SET_READER_BYTES ? 'reader_bytes' : undefined;
@@ -125,9 +127,9 @@ export function poseSetLimit(state: Library, person: SheetEntry, bytes: number):
 // Adds a picture to `person`'s set inside the library write `person` belongs to: the file is written first and the sheet
 // refers to it once that write commits, and a rollback deletes it (local/store.ts). It is uncaptioned unless its reader
 // gave all three labels in an archive's labels.csv, and keeps those they gave and their mark (lib/library.ts
-// `PoseSetPicture`).
+// `PoseSetPicture`). `person` is a person of a sheet or a preset.
 const EXTENSIONS = { png: 'png', jpeg: 'jpg', webp: 'webp' } as const;
-export function keepPoseSetPicture(store: Store, userId: string, person: SheetEntry, picture: ReferencePicture, at: number,
+export function keepPoseSetPicture(store: Store, userId: string, person: Pick<SheetEntry, 'poseSet'>, picture: ReferencePicture, at: number,
   labels: Pick<PoseSetPicture, 'given' | 'main'> & PoseAnnotations = {}) {
   const { given, main } = labels;
   const { bytes, format, width, height } = picture;
@@ -192,7 +194,7 @@ const IDLE_MS = 60_000;
 const RETRY_MS = 10 * 60_000;
 const CRASHES = 3;
 export type CaptionerConfig = { python: string; script: string; model: string; threads: number };
-type Job = { userId: string; storyId: string; file: string };
+type Job = { userId: string; file: string };
 type Answer = { id?: unknown; pose?: unknown; side?: unknown; framing?: unknown; confidence?: unknown; error?: unknown; ready?: unknown };
 export function createPoseCaptioner(config: CaptionerConfig, { store, log, spawnProcess = spawn }: {
   store: Store; log: (userId: string) => Log; spawnProcess?: typeof spawn;
@@ -266,12 +268,12 @@ export function createPoseCaptioner(config: CaptionerConfig, { store, log, spawn
       ? { pose: one.pose, side: one.side, framing: one.framing, confidence } : undefined;
   }
   // Writes what became of one picture into its reader's library, its caption, with the labels its reader gave in their
-  // place, or one more failed try, if the picture is still in its story and uncaptioned; and says whether it was written,
+  // place, or one more failed try, if the picture is still in a set and uncaptioned; and says whether it was written,
   // and whether the picture has a try left. The picture is found by its file, which is its own for good: a sheet written
-  // again may spell its person's name anew.
+  // again may spell its person's name anew, and a set may have moved into a preset meanwhile.
   function settle(job: Job, caption: PoseCaption | undefined) {
     return store.mutate(job.userId, state => {
-      const picture = state.stories[job.storyId]?.sheet?.flatMap(one => one?.poseSet ?? []).find(one => one.file === job.file);
+      const picture = everySet(state).find(one => one.file === job.file);
       if (!picture || picture.caption) return { written: false, again: false };
       if (caption) picture.caption = { ...caption, ...picture.given }; else picture.failed = (picture.failed ?? 0) + 1;
       return { written: true, again: !caption && (picture.failed ?? 0) < CAPTION_ATTEMPTS };
@@ -353,9 +355,8 @@ export function createPoseCaptioner(config: CaptionerConfig, { store, log, spawn
     enqueue(userId: string) {
       if (stopped) return;
       if (blocked) { waiting.add(userId); return; }
-      const state = store.read(userId);
-      for (const story of Object.values(state.stories)) for (const person of story.sheet ?? []) for (const picture of person?.poseSet ?? []) {
-        const job = { userId, storyId: story.id, file: picture.file };
+      for (const picture of everySet(store.read(userId))) {
+        const job = { userId, file: picture.file };
         if (picture.caption || (picture.failed ?? 0) >= CAPTION_ATTEMPTS || queued.has(key(job)) || !/^[a-f0-9]{32}\.(png|jpg|webp)$/.test(picture.file)) continue;
         queued.add(key(job));
         queue.push(job);

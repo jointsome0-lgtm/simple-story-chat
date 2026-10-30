@@ -23,6 +23,7 @@
 // SIMPLE_CHAT_SHEET_VERSION_USERS) are added here, at the call, as local/picture-pov.ts adds its own: local/illustrate.ts
 // stays as it is, since the action experiment pins what its request builders return (local/action-text.ts `textPins`).
 import { createHash } from 'node:crypto';
+import { describePreset, linkedStory } from '../lib/library.ts';
 import type { Library, SheetVersion, Story } from '../lib/library.ts';
 import { matchSheet } from './illustrate.ts';
 import type { Character } from './illustrate.ts';
@@ -152,7 +153,7 @@ export function sceneOf(state: Partial<Library>, storyId: string): string | null
 // The person at the sheet's place `index` of the story `storyId` as its reader has them now: at the scene they stand at.
 export function personHere(state: Partial<Library>, storyId: string, index: number): SheetEntry | undefined {
   const story = state.stories && Object.hasOwn(state.stories, storyId) ? state.stories[storyId] : undefined;
-  return story ? sheetAt(story, sceneOf(state, storyId))[index] : undefined;
+  return story ? sheetAt(linkedStory(state, story), sceneOf(state, storyId))[index] : undefined;
 }
 
 // The frame's field, for a reader who has versions. The rule is appended to the frame's instruction in its language,
@@ -271,8 +272,10 @@ export function ownVersions(story: Story, name: string): number {
 // have its own retold look stand there. The changes the story made stay where they are and are retold over it. With
 // `from`, a scene of the story, in a version at that scene, where it holds and in every scene below it, and nowhere above
 // it or on another line. `edit` may carry both texts, the description taken first. Returns whether a retelling is due,
-// and how many versions the edit for the whole story changed; undefined when the person or the scene is gone.
-export function landEdit(story: Story, name: string, edit: { description?: string; look?: string }, from?: string):
+// and how many versions the edit for the whole story changed; undefined when the person or the scene is gone. A
+// description for the whole story of a person linked to a preset goes to the preset, and reaches everybody linked to it
+// (lib/library.ts `describePreset`); a version is the story's own, linked or not. `story` is the one stored in `state`.
+export function landEdit(state: Library, story: Story, name: string, edit: { description?: string; look?: string }, from?: string):
 { retell: boolean; cleared: number } | undefined {
   const sheet = story.sheet ?? [];
   const index = sheet.findIndex(one => one.name === name);
@@ -303,7 +306,8 @@ export function landEdit(story: Story, name: string, edit: { description?: strin
   if (edit.description !== undefined) {
     // A description the reader wrote replaces their own look, and details they wrote before 2026-09-27 go (local/bot.ts).
     const { edited, detailsEdited, details, ...person } = sheet[index];
-    sheet[index] = { ...person, ...!detailsEdited && details ? { details } : {}, description: edit.description, descriptionEdited: true, lookPending: true };
+    const linked = describePreset(state, person, edit.description);
+    sheet[index] = { ...person, ...!detailsEdited && details ? { details } : {}, ...linked ? {} : { description: edit.description, descriptionEdited: true }, lookPending: true };
   }
   if (edit.look !== undefined) sheet[index] = { ...sheet[index], look: edit.look, edited: true };
   return { retell, cleared };

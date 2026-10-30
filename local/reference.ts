@@ -251,8 +251,8 @@ export function createPictureReader(token: string, api: TelegramApi, { get = htt
 // Keeps a picture of `person` in `pose`, pinned there, in the place of what the reader had sent for it, with its English
 // caption if it came with one, inside the library write that `person` belongs to. The file is written first and the
 // sheet refers to it once that write commits; a rollback deletes it, and the caller sweeps the one it replaced
-// (local/store.ts).
-export function keepReference(store: Store, userId: string, person: SheetEntry, picture: ReferencePicture, pose: Pose,
+// (local/store.ts). `person` is where their appearance is written (lib/library.ts `appearanceOf`).
+export function keepReference(store: Store, userId: string, person: Pick<SheetEntry, 'poses'>, picture: ReferencePicture, pose: Pose,
   caption: string | undefined, at: number) {
   const { bytes, format, width, height } = picture;
   const own: OwnReference = { source: 'own', file: store.writePortrait(userId, bytes, EXTENSIONS[format]), format, width, height, at,

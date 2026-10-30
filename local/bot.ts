@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { UserError, id, active, addSeed, newStory, fork, beginJob, beginSideJob, addBookmark, removeBookmark,
-  deleteSeed, deleteBranch, editFact, forgetLostPictures, interruptJob, context, factsOf, history, jobTarget, keepMove, lostMove, pointBefore, pointStands, releaseJob, setLanguage, isPace, isPose } from '../lib/library.ts';
+  deleteSeed, deleteBranch, editFact, forgetLostPictures, interruptJob, context, factsOf, history, jobTarget, keepMove, lostMove, pointBefore, pointStands, releaseJob, setLanguage, isPace, isPose,
+  appearanceOf, linkPreset, linkedPeople, linkedPreset, linkedStory, presetPicture, referenceFiles, savePreset, unlinkPreset } from '../lib/library.ts';
 import type { Job, Library, PendingPoseUpload, PoseSetInput, PoseUploadFile, ProfileInput, ReferenceInput, SceneNode } from '../lib/library.ts';
 import { storyNarration } from './prompt.ts';
 import { chatMemory, createChat } from './telegram.ts';
@@ -24,12 +25,13 @@ import type { GpuController } from './gpu.ts';
 import type { Illustrator, PictureRequest, PortraitRequest, SampleRequest, VariantRequest } from './picture.ts';
 import { DESCRIPTION_CHARS, LOOK_CHARS, ownPortraitPrompt, personAt, personTag } from './picture.ts';
 import { seesThrough } from './picture-pov.ts';
-import { countVersions, editableFrom, landEdit, personHere, personKey } from './picture-versions.ts';
+import { countVersions, descriptionOf, editableFrom, landEdit, personHere, personKey } from './picture-versions.ts';
 import { portraitText } from './image-portraits.ts';
 import { MAY_BE_EMPTY, PROFILE_CHARS, applyProfile, changedFields, fieldsMask, maskFields, parseProfile, profileHash, profileOf } from './profile.ts';
 import type { ProfileField } from './profile.ts';
 import type { ArchiveRefusal, ErrorDetails, Log } from './model-error.ts';
 import { errorCode, member, safeErrorDetails, unavailable } from './model-error.ts';
+import { readReference } from './picture-references.ts';
 import { REFERENCE_WAIT_MS, REFUSAL_CODES, captionOf, isArchive, keepReference } from './reference.ts';
 import { POSE_SET_PICTURES, POSE_SET_WAIT_MS, createPoseCaptioner, keepPoseSetPicture, poseSetLimit, poseSetState } from './pose-set.ts';
 import type { CaptionerConfig, PoseSetLimit } from './pose-set.ts';
@@ -138,6 +140,9 @@ type Plan = {
   // The reader's queue of pose-set files to read apart from this update, which a photo or a file joined, or refused as
   // past its length; the refusal, for the message that counts them (local/pose-set.ts).
   poseQueue?: boolean; poseCount?: PoseCount;
+  // A preset opened (docs/telegram-ui.md#presets): the picture it is shown by, from the reader's own directory, with its
+  // screen as the caption. A message of its own, as a portrait is.
+  presetPhoto?: { file: string; caption: Screen };
 };
 // One reader's turn, for as long as it can still be cancelled. What it leaves behind — a picture being stopped on
 // the other card — outlives the entry and is awaited through `inFlight` instead.
@@ -148,7 +153,7 @@ type Plan = {
 // and the work it starts afterwards for the reader's next turn.
 type Running = { controller: AbortController; picture: AbortController };
 // Library IDs are a prefix and a sequence number, as id() in lib/library.ts creates them.
-const ID = { seed: /^s\d+$/, story: /^h\d+$/, branch: /^b\d+$/, checkpoint: /^c\d+$/, node: /^n\d+$/, memory: /^m\d+$/, place: /^\d{1,4}$/ };
+const ID = { seed: /^s\d+$/, story: /^h\d+$/, branch: /^b\d+$/, checkpoint: /^c\d+$/, node: /^n\d+$/, memory: /^m\d+$/, place: /^\d{1,4}$/, preset: /^p\d+$/ };
 // The wait the reader is in, the input the next message is taken for or the deletion asked about, and for what. A
 // draft's parts, the scene a look is written from and a pose set's last picture change within one wait
 // (docs/telegram-ui.md#passing-messages).
@@ -349,10 +354,19 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     if (action?.startsWith('save-seed:')) throw refuse(t, 'draftClosed');
     if (action?.startsWith('view:')) {
       const route = action.slice(5);
+      // A preset's screens stand for a person of this reader's and a preset of theirs, with references on: any other button
+      // shows no question, and so leaves none to answer.
+      const [, storyId, index, tag, presetId] = route.split(':');
+      const shown = /^(delete-)?preset:/.test(route) && pictureInfo.references && personAt(state.stories[storyId], index, tag)
+        ? linkedPreset(state, { preset: presetId }) : undefined;
       state.ui = route.startsWith('delete-seed:') ? { confirm: route.replace('delete-seed:', 'remove-seed:') }
         : route.startsWith('delete-branch:') ? { confirm: route.replace('delete-branch:', 'remove-branch:') }
         : route.startsWith('delete-fact:') ? { confirm: route.replace('delete-fact:', 'remove-fact:') }
-        : route.startsWith('delete-style:') ? { confirm: route.replace('delete-style:', 'remove-style:') } : null;
+        : route.startsWith('delete-style:') ? { confirm: route.replace('delete-style:', 'remove-style:') }
+        : route.startsWith('delete-preset:') && shown && !linkedPeople(state, presetId).length ? { confirm: route.replace('delete-preset:', 'remove-preset:') } : null;
+      // A preset is opened under its picture where it has one (`Plan.presetPhoto`).
+      const file = route.startsWith('preset:') && shown && presetPicture(shown);
+      if (file) return { presetPhoto: { file, caption: screen(state, route, pictureInfo) }, opened: 'preset' };
       return { screen: screen(state, route, pictureInfo), lasting: /^(character|profile):/.test(route), opened: route.split(':')[0] };
     }
     // A story's pace (lib/library.ts `Story.pace`). It changes at any moment, also while a scene is being written: only
@@ -471,8 +485,8 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     // and details are written the way a style is, and a portrait is drawn on request only, for a reader who is drawn for.
     if (action?.startsWith('look-edit:') || action?.startsWith('details-edit:') || action?.startsWith('portrait:')
       || action?.startsWith('pov:') || action?.startsWith('pov-off:') || action?.startsWith('portrait-default:')) {
-      const [verb, storyId, index, tag] = action.split(':');
-      const person = ID.story.test(storyId) ? personAt(state.stories[storyId], index, tag) : undefined;
+      const [verb, storyId, index, tag, asked] = action.split(':');
+      const person = ID.story.test(storyId) ? personAt(linkedStory(state, state.stories[storyId]), index, tag) : undefined;
       if (!person) throw refuse(t, 'staleButton');
       // The frames of the story seen through this person's eyes, or as usual again (local/picture-pov.ts). A story has
       // one such person at most, so choosing another switches; the way back ends it only while it is this person's.
@@ -487,9 +501,11 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         state.ui = { input, storyId, name: person.name };
         return { screen: render(state, `${input}-input`, pictureInfo) };
       }
+      // These buttons name the preset their screen showed, if any, as the question of `pose-set-dropped:` does.
+      if ((verb === 'portrait' || verb === 'portrait-default') && asked !== person.preset) throw refuse(t, 'staleButton');
       // The prompt the reader wrote for this person's portraits goes, and the bot's own is theirs again.
       if (verb === 'portrait-default') {
-        delete state.stories[storyId].sheet![person.index].portraitPrompt;
+        delete appearanceOf(state, state.stories[storyId].sheet![person.index]).portraitPrompt;
         return { screen: render(state, `character:${storyId}:${index}:${tag}`, pictureInfo), lasting: true };
       }
       if (!pictureInfo.pictures) throw refuse(t, 'portraitOff');
@@ -530,10 +546,10 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     // that arrives while another portrait or a sample is being drawn (`sampling`): the variant could not be drawn then,
     // and the prompt is not kept without it, where it would have been the person's for the next portrait unseen.
     if (action?.startsWith('portrait-edit:')) {
-      const [, storyId, index, tag, seed, recipe] = action.split(':');
+      const [, storyId, index, tag, seed, recipe, asked] = action.split(':');
       if (!pictureInfo.pictures || !illustrator) throw refuse(t, 'portraitOff');
       const person = ID.story.test(storyId) ? personAt(state.stories[storyId], index, tag) : undefined;
-      if (!person || !/^\d{1,10}$/.test(seed ?? '') || Number(seed) >= 2 ** 32 || !/^[0-9a-f]{8}$/.test(recipe ?? '')) throw refuse(t, 'staleButton');
+      if (!person || asked !== person.preset || !/^\d{1,10}$/.test(seed ?? '') || Number(seed) >= 2 ** 32 || !/^[0-9a-f]{8}$/.test(recipe ?? '')) throw refuse(t, 'staleButton');
       if (!illustrator.portraitVariant(recipe)) throw refuse(t, 'variantChanged');
       state.ui = { input: 'portrait-prompt', storyId, name: person.name, seed: Number(seed), recipe };
       return { screen: render(state, 'portrait-prompt-input', pictureInfo) };
@@ -550,7 +566,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       const index = sheet.findIndex(one => one.name === wait.name);
       if (index < 0) throw refuse(t, 'portraitPromptGone');
       if (sampling.has(String(update.message?.from?.id))) throw again('portraitPromptInFlight');
-      sheet[index].portraitPrompt = text;
+      appearanceOf(state, sheet[index]).portraitPrompt = text;
       const candidate = randomBytes(4).toString('hex');
       return { portrait: { storyId: wait.storyId, name: wait.name, candidate, status: t.characters.drawing, prompt: text, seed: wait.seed,
         caption: render(state, `portrait:${wait.storyId}:${index}:${personTag(wait.name)}:${candidate}`, pictureInfo) } };
@@ -584,7 +600,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       const [, storyId, index, tag] = action.split(':');
       const person = ID.story.test(storyId) ? personAt(state.stories[storyId], index, tag) : undefined;
       if (!person) throw refuse(t, 'staleButton');
-      state.ui = { input: 'pose-set', storyId, name: person.name, at: Date.now() };
+      state.ui = { input: 'pose-set', storyId, name: person.name, at: Date.now(), ...person.preset ? { preset: person.preset } : {} };
       return { screen: render(state, 'pose-set-input', pictureInfo) };
     }
     if (state.ui?.input === 'pose-set' && !action) throw refuse(t, 'poseSetNeedsPictures');
@@ -596,25 +612,81 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     }
     // Every picture of a person's set goes at once, after the reader says so; a frame's recipe keeps the files it drew
     // with while a variant may need them (local/store.ts). Offered for a set whatever the switch says now, so that
-    // nobody is left with pictures they cannot remove.
+    // nobody is left with pictures they cannot remove. The question names the preset it asked about, if any: a link, an
+    // unlink or a save since then has put another set behind this person, and the answer does not reach that one.
     if (action?.startsWith('pose-set-drop:') || action?.startsWith('pose-set-dropped:')) {
-      const [kind, storyId, index, tag] = action.split(':');
+      const [kind, storyId, index, tag, asked] = action.split(':');
       const person = ID.story.test(storyId) ? personAt(state.stories[storyId], index, tag) : undefined;
       if (!person) throw refuse(t, 'staleButton');
       const sheetPerson = state.stories[storyId].sheet![person.index];
-      const dropped = sheetPerson.poseSet?.length ?? 0;
+      if (kind === 'pose-set-dropped' && asked !== sheetPerson.preset) throw refuse(t, 'staleButton');
+      const shared = appearanceOf(state, sheetPerson);
+      const dropped = shared.poseSet?.length ?? 0;
       // Files of the set still in the reader's queue go with it, unread: those of the person as a sheet written again
-      // spells them (`personKey`).
-      const theirs = (one: PendingPoseUpload) => one.storyId === storyId && personKey(one.name) === personKey(sheetPerson.name);
+      // spells them (`personKey`), or those of the preset, from whichever story they came.
+      const theirs = (one: PendingPoseUpload) => sheetPerson.preset ? one.preset === sheetPerson.preset
+        : one.preset === undefined && one.storyId === storyId && personKey(one.name) === personKey(sheetPerson.name);
       if (kind === 'pose-set-dropped' && state.poseUploads?.some(theirs)) {
         const rest = state.poseUploads.filter(one => !theirs(one));
         if (rest.length) state.poseUploads = rest; else delete state.poseUploads;
       }
       // The question first; a set already gone shows the card.
       if (kind === 'pose-set-drop' || !dropped) return { screen: render(state, `pose-set-drop:${storyId}:${index}:${tag}`, pictureInfo), lasting: !dropped };
-      delete sheetPerson.poseSet;
+      delete shared.poseSet;
       return { screen: render(state, `character:${storyId}:${index}:${tag}`, pictureInfo), lasting: true, sweep: true,
         logged: { event: 'pose_set_dropped', details: { poseSetCount: dropped } } };
+    }
+    // A preset of a person (docs/telegram-ui.md#presets), from their card: their appearance saved once, for people of any
+    // story to link to. The buttons name the person as the card's do; the preset is looked for in this reader's library
+    // alone, so a button made up for another reader's reaches nothing. Saving moves the pictures in this one write, copies
+    // the description and leaves the person as they read, so nothing is retold; a person with no description is not
+    // saved, since everybody linked is retold from it. A link is retold from the preset's description, and an unlink from
+    // the person's own, each as a description written on the card is (`retold`). Saving and linking are for a reader
+    // of the reference experiment. Unlinking is there whatever the switch says now, so that nobody is left linked. None of
+    // them happens while a picture of the reader's is on its way (`relinkable`), nor does deleting a preset.
+    if (action?.startsWith('preset-save:') || action?.startsWith('preset-link:') || action?.startsWith('preset-unlink:')) {
+      const [verb, storyId, index, tag, presetId] = action.split(':');
+      const found = ID.story.test(storyId) ? personAt(state.stories[storyId], index, tag) : undefined;
+      if (!found) throw refuse(t, 'staleButton');
+      if (illustrator && !illustrator.relinkable(String(update.callback_query?.from?.id))) throw refuse(t, 'presetBusy');
+      const person = state.stories[storyId].sheet![found.index];
+      if (verb === 'preset-unlink') {
+        if (!person.preset) throw refuse(t, 'staleButton');
+        const presetPeople = linkedPeople(state, person.preset).length - 1;
+        unlinkPreset(person);
+        return { retell: { storyId, name: person.name }, logged: { event: 'preset_unlinked', details: { presetPeople } } };
+      }
+      if (!pictureInfo.references) throw refuse(t, 'referencesOff');
+      if (verb === 'preset-save') {
+        if (person.preset) throw refuse(t, 'staleButton');
+        if (!descriptionOf(person).trim()) throw refuse(t, 'presetNeedsText');
+        const queued = (one: PendingPoseUpload) => one.preset === undefined && one.storyId === storyId && personKey(one.name) === personKey(person.name);
+        const presetPictures = referenceFiles(person).length;
+        const saved = savePreset(state, person, person.name.trim(), Date.now());
+        // The set moved, and the files still on their way to it follow.
+        for (const one of state.poseUploads ?? []) if (queued(one)) one.preset = saved;
+        return { screen: render(state, `character:${storyId}:${index}:${tag}`, pictureInfo), lasting: true,
+          logged: { event: 'preset_saved', details: { presetPictures } } };
+      }
+      if (!ID.preset.test(presetId ?? '') || !linkedPreset(state, { preset: presetId })) throw refuse(t, 'staleButton');
+      linkPreset(person, presetId);
+      return { retell: { storyId, name: person.name }, logged: { event: 'preset_linked', details: { presetPeople: linkedPeople(state, presetId).length } } };
+    }
+    // A preset goes only with nobody linked to it, and after a question (`view:delete-preset:`). Linked meanwhile, it stays
+    // and the question says why. Its files go with the sweep, those a frame's recipe needs apart.
+    if (action?.startsWith('remove-preset:')) {
+      if (state.ui?.confirm !== action || !pictureInfo.references) throw refuse(t, 'staleButton');
+      if (illustrator && !illustrator.relinkable(String(update.callback_query?.from?.id))) throw refuse(t, 'presetBusy');
+      const [, storyId, index, tag, presetId, page] = action.split(':');
+      const preset = linkedPreset(state, { preset: presetId });
+      if (!preset || !state.characterPresets) throw refuse(t, 'staleButton');
+      state.ui = null;
+      if (linkedPeople(state, presetId).length) return { screen: render(state, `delete-preset:${storyId}:${index}:${tag}:${presetId}:${page}`, pictureInfo) };
+      const presetPictures = referenceFiles(preset).length;
+      delete state.characterPresets[presetId];
+      if (!Object.keys(state.characterPresets).length) delete state.characterPresets;
+      return { screen: render(state, `presets:${storyId}:${index}:${tag}:${page}`, pictureInfo), sweep: true,
+        logged: { event: 'preset_deleted', details: { presetPictures } } };
     }
     // Where the look or the description being written lands, for a reader who has versions of the sheet
     // (local/picture-versions.ts): the whole story, as always, or «only from this moment», the scene the reader stands at
@@ -657,7 +729,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       // and both are retold from it once this write is committed. Until then a portrait is drawn from the details retold
       // before, while details the reader wrote before that day, which no retelling ever read, go. Where it lands, the
       // whole story or a version from the scene `from` on, is local/picture-versions.ts `landEdit`'s to say.
-      const landed = landEdit(story, name, look ? { look: written } : { description: written }, from);
+      const landed = landEdit(state, story, name, look ? { look: written } : { description: written }, from);
       if (!landed) throw refuse(t, look ? 'lookGone' : 'detailsGone');
       const versionField = look ? 'look' : 'description';
       const logged = from !== undefined
@@ -863,7 +935,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       if ([...value].length > PROFILE_CHARS[field]) return refused({ text: c.profileLong(c.profileHeadings[field], PROFILE_CHARS[field]) }, 'too_long');
     }
     state.ui = null;
-    const retell = applyProfile(story, index, profile, changed);
+    const retell = applyProfile(state, story, index, profile, changed);
     const has = (field: ProfileField) => changed[field] !== undefined;
     const size = (field: ProfileField) => has(field) ? [...changed[field]!].length : undefined;
     return { screen: render(state, `profile-saved:${story.id}:${index}:${personTag(person.name)}:${fieldsMask(Object.keys(changed) as ProfileField[])}`, pictureInfo), done: true,
@@ -914,7 +986,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     const index = sheet.findIndex(one => one.name === name);
     if (index < 0) throw refuse(t, 'referenceGone');
     const caption = typeof update.message?.caption === 'string' ? captionOf(update.message.caption) : undefined;
-    keepReference(store, String(update.message?.from?.id), sheet[index], picture, pose, caption, Date.now());
+    keepReference(store, String(update.message?.from?.id), appearanceOf(state, sheet[index]), picture, pose, caption, Date.now());
     return { screen: render(state, `portrait-kept:${storyId}:${index}`, { retainsPortraits: true }), done: true, sweep: true,
       logged: { event: 'reference_saved', details: { referenceSent: picture.sent, referenceFormat: picture.format, referencePlace: pose,
         referenceBytes: picture.bytes.length + picture.strippedBytes, strippedBytes: picture.strippedBytes,
@@ -939,7 +1011,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     const queue = state.poseUploads ?? [];
     if (queue.length >= POSE_SET_PICTURES) return { poseQueue: true, poseCount: { storyId, name, at, kept: 0, labeled: 0, refused: { full: 1 } },
       logged: { event: 'pose_set_refused', details: { poseSetRefusal: 'full' } } };
-    state.poseUploads = [...queue, { update: update.update_id, storyId, name, at, file: upload.file }];
+    state.poseUploads = [...queue, { update: update.update_id, storyId, name, at, ...wait.preset ? { preset: wait.preset } : {}, file: upload.file }];
     wait.last = Date.now();
     return { poseQueue: true };
   }
@@ -973,16 +1045,20 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
   // as one sent alone within the set's and the reader's limits (`poseSetLimit`), its caption to come, or its refusal
   // counted. An archive's pictures are kept in this one write, with the labels its labels.csv gave them.
   type PoseKept = { count?: PoseCount; captions?: boolean; refusal?: ArchiveError; logged: NonNullable<Plan['logged']> };
-  // The person of the story's sheet a file of the queue is for, by the key a sheet written again keeps.
-  const personOf = (state: Library, job: PendingPoseUpload) =>
-    state.stories[job.storyId]?.sheet?.find(one => one && personKey(one.name) === personKey(job.name));
+  // Where a file of the queue goes, whatever has been linked since its wait opened: the preset it was sent for, or else
+  // the person of the story's sheet it was for, by the key a sheet written again keeps, into their own set even if a
+  // preset stands in for it now. A file is taken as the queue has it at that write, not as its read began: a save while it
+  // was read has sent it after the set it moved (`preset-save:`).
+  const personOf = (state: Library, job: PendingPoseUpload) => job.preset !== undefined ? linkedPreset(state, job)
+    : state.stories[job.storyId]?.sheet?.find(one => one && personKey(one.name) === personKey(job.name));
   function keptPoseFile(state: Library, userId: string, job: PendingPoseUpload, read: PoseRead): PoseKept | undefined {
     const queue = state.poseUploads ?? [];
-    if (!queue.some(one => one.update === job.update)) return undefined;
+    const queued = queue.find(one => one.update === job.update);
+    if (!queued) return undefined;
     const rest = queue.filter(one => one.update !== job.update);
     if (rest.length) state.poseUploads = rest; else delete state.poseUploads;
     const { storyId, name, at } = job;
-    const person = personOf(state, job);
+    const person = personOf(state, queued);
     if (!person) return { logged: { event: 'pose_upload_dropped', details: {} } };
     if (read.archiveRefused) {
       const refusal = new ArchiveError(read.archiveRefused);
@@ -1504,6 +1580,19 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
           if (lasting) await chat.send(screen); else await chat.put(inPlace, screen, kind, kind === 'screen' ? wait : undefined);
           log('screen_sent', undefined, { screen: plan.opened });
         } catch (error) { delivered = false; log('telegram_send_failed', errorCode(error)); }
+      }
+      // Beside the next updates, as a branch's file below is. A picture that cannot be read or sent leaves the screen
+      // alone, which has the same buttons.
+      if (plan.presetPhoto) {
+        const { file, caption } = plan.presetPhoto;
+        const task: Promise<unknown> = (async () => {
+          await chat.photo(readReference(store, userId, file).bytes, undefined, caption);
+          log('screen_sent', undefined, { screen: plan.opened });
+        })().catch(async error => {
+          log('telegram_send_failed', errorCode(error));
+          await pass(chat, caption, log);
+        }).finally(() => inFlight.delete(task));
+        inFlight.add(task);
       }
       // Beside the next updates, as a deletion below is: an upload that takes its time holds up nobody.
       if (plan.exportBranch) {

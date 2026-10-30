@@ -96,9 +96,11 @@ const SERVING_CODES = ['invalid_request', 'unsupported_field', 'limit_exceeded',
 // How often each is opened is what tells which of them a reader uses. A route this list does not know stays out.
 const SCREENS = ['home', 'model', 'language', 'pace', 'style', 'sample', 'characters', 'character', 'portrait', 'portrait-kept', 'pose-set-status', 'profile', 'seeds', 'seed', 'story',
   'tree', 'log', 'branch', 'checkpoints', 'checkpoint', 'bookmarks', 'forks', 'context', 'memory', 'fact', 'delete-seed', 'delete-branch', 'delete-style',
-  'delete-fact', 'pose-set-drop', 'new-seed'] as const;
+  'delete-fact', 'pose-set-drop', 'new-seed', 'presets', 'preset', 'delete-preset'] as const;
 // Sizes, counts and durations. Each is kept only as a non-negative safe integer, so none can carry text.
 const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'repairSceneCount', 'requestBytes',
+  // A preset of a person: the pictures it holds, and the people linked to it.
+  'presetPictures', 'presetPeople',
   'inputBytesBefore', 'inputBytesAfter', 'outputCharacters', 'inputTokens', 'outputTokens', 'elapsedMs',
   // A failed quote check: all quotes, and the failed ones by the loosest comparison that would have matched them.
   'quoteCount', 'quoteWhitespace', 'quoteTypography', 'quotePunctuation', 'quoteOther',

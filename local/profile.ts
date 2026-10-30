@@ -6,6 +6,7 @@
 // the text sent differs from the person's, and only while what the message showed is still what the person has: its
 // button and the wait carry a hash of it (`profileHash`), never the text.
 import { createHash } from 'node:crypto';
+import { appearanceOf, describePreset, linkedPerson, linkedStory } from '../lib/library.ts';
 import type { Library, Story } from '../lib/library.ts';
 import { olderSheet } from './illustrate.ts';
 import { DESCRIPTION_CHARS, LOOK_CHARS, descriptionOf, ownDescription, ownPortraitPrompt, wornAt } from './picture.ts';
@@ -54,7 +55,10 @@ export const profileText = (field: ProfileField, text: string) => MULTILINE.incl
 // (`versioned`, local/picture-versions.ts): it shows them as the card does at that scene, while a profile sent back
 // writes the sheet, for the whole story; the card's own edits offer «only from this moment» instead.
 export type Profile = { values: Record<ProfileField, string>; present: ProfileField[]; clothesAt: string | null; older: boolean; versioned: boolean };
-export function profileOf(state: Partial<Library>, story: Story, entry: SheetEntry): Profile {
+export function profileOf(state: Partial<Library>, stored: Story, shown: SheetEntry): Profile {
+  // A person linked to a preset shows the preset's description and prompt, as the card does.
+  const story = linkedStory(state, stored);
+  const entry = linkedPerson(state, shown);
   const where = state.active?.storyId === story.id ? state.active : null;
   const branch = where && Object.hasOwn(story.branches ?? {}, where.branchId) ? story.branches[where.branchId] : undefined;
   const clothesAt = branch?.head && Object.hasOwn(story.nodes ?? {}, branch.head) ? branch.head : null;
@@ -175,15 +179,16 @@ export function roundTrips(block: string, name: string, profile: Profile, fields
 // person is dropped, and a new description beside them is not retold. A new look is the reader's (`edited`), which a
 // retelling keeps, whether it is one this write asks for or one still to come. A description retold without a new look
 // replaces a look the reader wrote before, as on the card. New clothes go where the profile said (`clothesAt`), and an
-// emptied prompt drops the reader's own.
-export function applyProfile(story: Story, index: number, profile: Profile, changed: Partial<Record<ProfileField, string>>): boolean {
+// emptied prompt drops the reader's own. A description and a prompt of a person linked to a preset go to the preset, as
+// the card's do, and the rest is the story's. `story` is the one stored in `state`.
+export function applyProfile(state: Library, story: Story, index: number, profile: Profile, changed: Partial<Record<ProfileField, string>>): boolean {
   const one = story.sheet![index];
   const has = (field: ProfileField) => changed[field] !== undefined;
   const retell = (has('description') || has('changes')) && !has('details') && !!(changed.description ?? profile.values.description);
   if (has('description')) {
     // Details the reader wrote before 2026-09-27 were the description that this one replaces.
     if (one.detailsEdited) { delete one.details; delete one.detailsEdited; }
-    Object.assign(one, { description: changed.description, descriptionEdited: true });
+    if (!describePreset(state, one, changed.description!)) Object.assign(one, { description: changed.description, descriptionEdited: true });
   }
   if (has('changes')) one.changes = changed.changes;
   if (retell) {
@@ -193,7 +198,7 @@ export function applyProfile(story: Story, index: number, profile: Profile, chan
   if (has('look')) Object.assign(one, { look: changed.look, edited: true });
   if (has('details')) {
     // Such details stand for the person's description until then, and stay it.
-    if (one.description === undefined && descriptionOf(one).trim()) {
+    if (one.preset === undefined && one.description === undefined && descriptionOf(one).trim()) {
       Object.assign(one, { description: descriptionOf(one) }, ownDescription(one) ? { descriptionEdited: true } : {});
     }
     one.details = changed.details;
@@ -205,7 +210,8 @@ export function applyProfile(story: Story, index: number, profile: Profile, chan
     if (node) node.clothes = { ...node.clothes, [one.name]: changed.clothes! };
     else one.outfit = changed.clothes;
   }
-  if (changed.prompt) one.portraitPrompt = changed.prompt;
-  else if (has('prompt')) delete one.portraitPrompt;
+  const shared = appearanceOf(state, one);
+  if (changed.prompt) shared.portraitPrompt = changed.prompt;
+  else if (has('prompt')) delete shared.portraitPrompt;
   return retell;
 }

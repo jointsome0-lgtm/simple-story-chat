@@ -117,6 +117,9 @@ upload used by experiments is never used here. See [the retention rules](gpu.md#
 was acknowledged. Neither row contains a name, path, hash, portrait or prompt. A failed cleanup leaves the sweeper's
 ten-minute cap in force.
 
+A reader of this experiment may keep a person's appearance once and link it to people in other stories
+([presets](telegram-ui.md#presets)). There is no setting of its own, and it needs no migration.
+
 <a id='pose-sets'></a>
 
 #### Pose sets
@@ -255,6 +258,8 @@ The database is the file at `SIMPLE_CHAT_DB_PATH`. The portraits readers keep li
 A picture a reader sends as a person's own portrait lies there too, in the format it came in and stripped of its metadata on its way in, and is kept and swept as a portrait is: while the sheet or a recipe refers to it, and no longer. So do the pictures of a [pose set](#pose-sets), up to 1 GB a reader.
 Restore both from the same backup, also while the bot is stopped: at startup the bot deletes every portrait file that
 its library does not refer to (`sweepPortraits` in `local/store.ts`).
+The files of a [preset](telegram-ui.md#presets) lie there as well, and only `characterPresets` in the library refers to
+them: back up before going back to a version without presets, whose first start would delete them.
 
 ## Running
 

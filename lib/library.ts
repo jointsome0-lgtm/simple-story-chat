@@ -133,6 +133,16 @@ export function poseAnnotations(value: PoseAnnotations): PoseAnnotations {
 // start and the captioner never sees it; and `main`, which prefers it within the same pose variant.
 export type PoseSetPicture = PoseAnnotations & { file: string; format: OwnReference['format']; width: number; height: number; bytes: number; at: number;
   caption?: PoseCaption; failed?: number; given?: Partial<Pick<PoseCaption, 'pose' | 'side' | 'framing'>>; main?: true };
+// What people of different stories may share of a person: the text they are retold from and every picture of them. Their
+// name, clothes and changes, their scenes' versions, and the details and the look retold from all that stay on the sheet,
+// since a haircut in one story must not reach another.
+export type Appearance = Pick<SheetEntry, 'description' | 'descriptionEdited' | 'portrait' | 'poses' | 'portraitPrompt' | 'poseSet'>;
+// A person's appearance saved once, in the reader's library, for any story's sheet to link to (the owner, 2026-10-31:
+// «разве не логичнее иметь библиотеку, и просто привязывать их к персонажу?»; docs/telegram-ui.md#presets): a label,
+// which a reader's list shows, and when it was made. A link is never a copy, so a picture added reaches every person
+// linked, and a caption is made once. It always has a description, the text everybody linked is retold from: a person
+// with none is not saved (local/bot.ts), and nothing writes an empty one.
+export type CharacterPreset = Appearance & { label: string; at: number; description: string };
 export type Story = {
   id: string; seedId: string; title: string; branches: Record<string, Branch>; checkpoints: Record<string, Checkpoint>;
   nodes: Record<string, SceneNode>; memories: Record<string, MemoryVersion>;
@@ -158,9 +168,11 @@ export type Story = {
   // The sheet is each person as the story's first scene has them. Where the story or the reader changed their text from
   // some scene on, that scene holds the change (`SceneNode.appearance`), and a scene is drawn with what is in force on
   // its own line (local/picture-versions.ts `sheetAt`); the portrait and the references stay here, one per person.
+  // `preset` links the person to one of the reader's presets (`CharacterPreset`), whose appearance stands in for their
+  // own while it does (`linkedStory`).
   sheet?: { name: string; description?: string; changes?: string; details?: string; look: string; outfit?: string;
     descriptionEdited?: boolean; edited?: boolean; lookPending?: boolean; detailsEdited?: boolean; portrait?: KeptPortrait;
-    poses?: Partial<Record<Pose, OwnReference>>; portraitPrompt?: string; poseSet?: PoseSetPicture[] }[];
+    poses?: Partial<Record<Pose, OwnReference>>; portraitPrompt?: string; poseSet?: PoseSetPicture[]; preset?: string }[];
   // The person of the sheet, by name, whose eyes the frames of this story are seen through (the owner, 2026-09-27;
   // local/picture-pov.ts). At most one; without it, or while that person is not in the scene or not on the sheet, a
   // frame is drawn as usual. Only the local bot writes it, from the characters' card.
@@ -209,13 +221,14 @@ export type ReferenceInput = { input: 'reference'; storyId: string; name: string
 // A reader in the pose-set experiment sending many pictures of one person of a story's sheet (local/pose-set.ts): every
 // photo or file that comes within half an hour of `last`, when the last one came, or of `at`, when the wait began,
 // joins the person's pose set, until a button or a command ends the wait. The person is the one whose card they opened,
-// by story and name.
-export type PoseSetInput = { input: 'pose-set'; storyId: string; name: string; at: number; last?: number; confirm?: undefined };
+// by story and name, and `preset` the preset they were linked to then, which the pictures join whatever is linked later.
+export type PoseSetInput = { input: 'pose-set'; storyId: string; name: string; at: number; last?: number; preset?: string; confirm?: undefined };
 // A photo or a file a reader sent while a wait for a pose set stood, as Telegram described it, until the bot has read it
 // (local/bot.ts `uploadNext`): the sizes of a photo, or the file, never a caption; the wait it answered, by its story,
-// person and start; and the update that brought it. The fields are Telegram's, not validated here.
+// person and start, with the preset it was for; and the update that brought it. The fields are Telegram's, not validated
+// here.
 export type PoseUploadFile = { photo?: Record<string, unknown>[]; document?: Record<string, unknown> };
-export type PendingPoseUpload = { update: number; storyId: string; name: string; at: number; file: PoseUploadFile };
+export type PendingPoseUpload = { update: number; storyId: string; name: string; at: number; preset?: string; file: PoseUploadFile };
 // A reader writing the whole prompt of a portrait of one person of a story's sheet (local/picture.ts `portrait`): their
 // next text message is that prompt, which the person keeps as theirs, and a variant of the portrait whose note they
 // pressed is drawn from it with that portrait's `seed`, while the graph and the checkpoint are still the ones its
@@ -277,6 +290,8 @@ export type Library = {
   // The photos and files this reader sent for pose sets that the bot has not read yet, in the order they came. Only the
   // local bot writes them.
   poseUploads?: PendingPoseUpload[];
+  // This reader's presets of people, by id (`CharacterPreset`). Only the local bot writes them.
+  characterPresets?: Record<string, CharacterPreset>;
 };
 // Names the library gives to what it creates. They are stored as written and never translated afterwards.
 export type Labels = { firstBranch: string; seedCheckpoint: string; forkBranch: (from: string) => string; forkCheckpoint: string; afterCompaction: string };
@@ -632,11 +647,96 @@ export function forgetLostPictures(state: Library, now: number): number[] {
 type SheetEntry = NonNullable<Story['sheet']>[number];
 // What a pose of a person holds: the picture the reader sent for it over the one the card drew, which only the front
 // has until the other poses are drawn (the kept portrait).
-export function poseReference(person: SheetEntry, pose: Pose): OwnReference | KeptPortrait | undefined {
+export function poseReference(person: Pick<SheetEntry, 'poses' | 'portrait'>, pose: Pose): OwnReference | KeptPortrait | undefined {
   return person.poses?.[pose] ?? (pose === 'front' ? person.portrait : undefined);
 }
-// Every file a person's references hold, their pose set's among them, which the store keeps while the sheet refers to
-// them (local/store.ts).
-export function referenceFiles(person: SheetEntry): string[] {
+// Every file a person's references hold, their pose set's among them, which the store keeps while the sheet or a preset
+// refers to them (local/store.ts).
+export function referenceFiles(person: Pick<SheetEntry, 'portrait' | 'poses' | 'poseSet'>): string[] {
   return [person.portrait, ...Object.values(person.poses ?? {}), ...person.poseSet ?? []].flatMap(one => one?.file ? [one.file] : []);
+}
+
+// The preset a person is linked to. A preset linked anywhere cannot be deleted, so a link that finds none comes from a
+// library edited by hand, and the person then has their own appearance.
+export function linkedPreset(state: Pick<Partial<Library>, 'characterPresets'>, person: Pick<SheetEntry, 'preset'>): CharacterPreset | undefined {
+  const { preset: id } = person;
+  return id !== undefined && state.characterPresets && Object.hasOwn(state.characterPresets, id) ? state.characterPresets[id] : undefined;
+}
+// A person as everything but a write reads them: their preset's appearance in the place of their own, which stays on the
+// sheet underneath for an unlink to bring back. A view, whose lists are the preset's own and not to be written.
+export function linkedPerson(state: Pick<Partial<Library>, 'characterPresets'>, person: SheetEntry): SheetEntry {
+  const preset = person && linkedPreset(state, person);
+  if (!preset) return person;
+  const { description, descriptionEdited, portrait, poses, portraitPrompt, poseSet, ...rest } = person;
+  const { label, at, ...shared } = preset;
+  return { ...rest, ...shared };
+}
+// A story as everything but a write reads it (`linkedPerson`), which is the story itself where nobody on its sheet is
+// linked: a reader without a preset reads what they always read. Every reader of a person's appearance starts here, and
+// every write of it goes to `appearanceOf`, so that the sheet's places, a story's versions and the stored library stay
+// what they are. Taken twice it is what it is once.
+export function linkedStory<T extends Story | undefined>(state: Pick<Partial<Library>, 'characterPresets'>, story: T): T {
+  if (!story?.sheet?.some(one => one?.preset !== undefined)) return story;
+  return { ...story, sheet: story.sheet.map(one => linkedPerson(state, one)) };
+}
+// Where an edit of a person's appearance goes: their preset while they are linked to one, or else the person. `person` is
+// the entry stored on the sheet.
+export function appearanceOf(state: Pick<Partial<Library>, 'characterPresets'>, person: SheetEntry): Appearance {
+  return linkedPreset(state, person) ?? person;
+}
+// The picture a preset is shown by: its front, or else the first of its pose set.
+export const presetPicture = (preset: CharacterPreset) => poseReference(preset, 'front')?.file ?? preset.poseSet?.[0]?.file;
+// Everybody linked to the preset `id`, in every story of the reader's.
+export function linkedPeople(state: Pick<Library, 'stories'>, id: string): SheetEntry[] {
+  return Object.values(state.stories).flatMap(story => (story.sheet ?? []).filter(one => one?.preset === id));
+}
+// A new description of a person who is linked is every linked person's, each of them retold from it in their own story.
+// A look a reader wrote in another story stays there, as the retelling keeps it. Returns whether `person` was linked.
+export function describePreset(state: Library, person: SheetEntry, description: string): boolean {
+  const preset = linkedPreset(state, person);
+  if (!preset) return false;
+  Object.assign(preset, { description, descriptionEdited: true });
+  for (const one of linkedPeople(state, person.preset!)) one.lookPending = true;
+  return true;
+}
+// Somebody from before the descriptions has one made of what they do have, the details that stand for it (local/picture-
+// versions.ts `descriptionOf`) or else their look, so that their own text is there for an unlink to retell them from.
+function ownText(person: SheetEntry) {
+  if (person.preset !== undefined || person.description?.trim()) return;
+  const own = person.details?.trim() ? person.details : person.look.trim() ? person.look : undefined;
+  if (own !== undefined) Object.assign(person, { description: own }, own === person.details && person.detailsEdited ? { descriptionEdited: true } : {});
+}
+// Moves a person's pictures and portrait prompt into a new preset and links them to it, inside one write: none of them
+// stays on the sheet. Their description is copied, since a text is not what a preset is there not to multiply: theirs
+// stays, as it stands now, for an unlink to bring back, and the preset's is the reader's from then on, whoever wrote it
+// first. The person is not retold: their text is what it was. `person` has a description (local/bot.ts). Returns the
+// preset's id.
+export function savePreset(state: Library, person: SheetEntry, label: string, at: number): string {
+  ownText(person);
+  const { description, portrait, poses, portraitPrompt, poseSet } = person;
+  const presetId = id(state, 'p');
+  state.characterPresets = { ...state.characterPresets, [presetId]: { label, at, description: description!, descriptionEdited: true,
+    ...portrait ? { portrait } : {}, ...poses ? { poses } : {}, ...portraitPrompt === undefined ? {} : { portraitPrompt }, ...poseSet ? { poseSet } : {} } };
+  for (const key of ['portrait', 'poses', 'portraitPrompt', 'poseSet'] as const) delete person[key];
+  person.preset = presetId;
+  return presetId;
+}
+// Links a person to a preset, or to another one. Their own appearance stays under the link, and they are retold from the
+// preset's description, which writes over their details and look.
+export function linkPreset(person: SheetEntry, presetId: string) {
+  ownText(person);
+  person.preset = presetId;
+  person.lookPending = true;
+}
+// Takes a person off their preset, and their own text is theirs again, as it stood, with whatever pictures they had left:
+// one saved as a preset left theirs there. Somebody with no text of their own takes nothing of a preset: the details and
+// the look retold under the link go with it, what the reader wrote apart, and there is nothing to retell them from.
+export function unlinkPreset(person: SheetEntry) {
+  delete person.preset;
+  if (person.description?.trim()) person.lookPending = true;
+  else {
+    delete person.lookPending;
+    if (!person.detailsEdited) delete person.details;
+    if (!person.edited) person.look = '';
+  }
 }

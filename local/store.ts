@@ -93,7 +93,7 @@ export class Store {
   // random name for each file, so that no path says whose it is or whom it shows. The library refers to a file by that
   // name alone. A file is written before the library write that refers to it, and `sweepPortraits` deletes every file of
   // a reader's that their library does not refer to — a portrait or a picture replaced or removed, one whose story is
-  // deleted, and one whose write was rolled back or never came.
+  // deleted, and one whose write was rolled back or never came. A preset refers to its files, linked or not.
   portraits(userId: string) {
     if (this.path === ':memory:') throw new Error('Portraits need a database file to sit beside');
     const key = this.db.prepare("SELECT value FROM metadata WHERE key='portrait_key'").get()!.value as string;
@@ -122,10 +122,11 @@ export class Store {
     // No directory yet is no portrait yet. A directory that cannot be read is another matter, for the caller to tell.
     try { files = readdirSync(directory); }
     catch (error) { if ((error as { code?: unknown }).code === 'ENOENT') return 0; throw error; }
-    const kept = new Set(Object.values(this.read(userId).stories).flatMap(story => [
+    const state = this.read(userId);
+    const kept = new Set([...Object.values(state.characterPresets ?? {}).flatMap(referenceFiles), ...Object.values(state.stories).flatMap(story => [
       ...(story.sheet ?? []).flatMap(one => one ? referenceFiles(one) : []),
       ...Object.values(story.nodes).flatMap(node => node.picture?.references?.portraits.map(one => one.file) ?? []),
-    ]));
+    ])]);
     for (const held of this.heldPortraits) if (held.userId === userId) for (const file of held.files) kept.add(file);
     const lost = files.filter(file => !kept.has(file));
     for (const file of lost) rmSync(join(directory, file), { force: true });

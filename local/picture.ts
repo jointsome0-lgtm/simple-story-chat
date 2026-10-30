@@ -45,7 +45,7 @@
 // text from some scene on (local/picture-versions.ts).
 import { createHash, randomInt } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { recordPicture, referenceFiles } from '../lib/library.ts';
+import { appearanceOf, linkedStory, recordPicture, referenceFiles } from '../lib/library.ts';
 import type { Library, PictureRecipe, SceneNode, Story } from '../lib/library.ts';
 import type { ImageConfig } from './config.ts';
 import { estimateTokens, requestStamp, sameContext } from './context.ts';
@@ -226,7 +226,9 @@ export function personAt(story: Story | undefined, index: string | undefined, ta
 // of it, under the same name, or with the person on their own if the new sheet lost the name: a description they
 // wrote, which wins over the one the new sheet took from the story (the owner, 2026-09-27), details they wrote before
 // that day counting as one; a look of their own; a portrait they kept, with the other references, the pictures they
-// sent and which one is the main; and the prompt they wrote for the portraits. Everybody on it with a description is
+// sent and which one is the main; the prompt they wrote for the portraits; and their link to a preset, which is what the
+// reader made of them however empty their own lists are, with the description under it, for an unlink to bring back.
+// `before` is the sheet as stored, and every field of the preset stays in the preset. Everybody on it with a description is
 // then to be retold (`lookPending`), a look of the reader's own staying as it is. A person kept on their own has their
 // fields brought to the three layers, and the changes and the outfit of a sheet of this kind, even empty. The card
 // shows a portrait as drawn from another text if the person's text differs now (local/ui.ts).
@@ -234,19 +236,21 @@ export function rewrittenSheet(before: SheetEntry[], written: Character[]): Shee
   const old = new Map(before.map(one => [personKey(one.name), one]));
   const kept = written.map((one): SheetEntry => {
     const mine = old.get(personKey(one.name));
-    return { ...one, ...mine && ownDescription(mine) ? { description: descriptionOf(mine), descriptionEdited: true } : {},
+    return { ...one, ...mine?.preset && mine.description !== undefined ? { description: mine.description } : {},
+      ...mine && ownDescription(mine) ? { description: descriptionOf(mine), descriptionEdited: true } : {},
       ...mine?.edited ? { look: mine.look, edited: true } : {}, ...mine?.portrait ? { portrait: mine.portrait } : {},
       ...mine?.poses ? { poses: mine.poses } : {}, ...mine && ownPortraitPrompt(mine) ? { portraitPrompt: mine.portraitPrompt } : {},
-      ...mine?.poseSet ? { poseSet: mine.poseSet } : {}, lookPending: true };
+      ...mine?.poseSet ? { poseSet: mine.poseSet } : {}, ...mine?.preset ? { preset: mine.preset } : {}, lookPending: true };
   });
   const names = new Set(written.map(one => personKey(one.name)));
-  return [...kept, ...before.filter(one => (one.edited || ownDescription(one) || referenceFiles(one).length || ownPortraitPrompt(one))
+  return [...kept, ...before.filter(one => (one.edited || ownDescription(one) || referenceFiles(one).length || ownPortraitPrompt(one) || one.preset)
     && !names.has(personKey(one.name)))
     .map(person => {
       const { detailsEdited, details, description, descriptionEdited, lookPending, ...one } = person;
-      const text = descriptionOf(person);
+      // Details retold under a link are the preset's, and stand for nothing of the person's.
+      const text = one.preset ? description ?? '' : descriptionOf(person);
       return { ...one, ...text ? { description: text } : {}, ...ownDescription(person) ? { descriptionEdited: true } : {},
-        ...!detailsEdited && details ? { details } : {}, changes: one.changes ?? '', outfit: one.outfit ?? '', ...text.trim() ? { lookPending: true } : {} };
+        ...!detailsEdited && details ? { details } : {}, changes: one.changes ?? '', outfit: one.outfit ?? '', ...text.trim() || one.preset ? { lookPending: true } : {} };
     })];
 }
 
@@ -429,7 +433,8 @@ export function createIllustrator(config: ImageConfig, deps: {
   // this one all the same. Returns how many people were written.
   async function retellPending(model: Provider, { userId, storyId, signal, log }: { userId: string; storyId: string; signal: AbortSignal; log: Log },
     event: string): Promise<number> {
-    const sheet = store.read(userId).stories[storyId]?.sheet ?? [];
+    const read = store.read(userId);
+    const sheet = linkedStory(read, read.stories[storyId])?.sheet ?? [];
     const people = sheet.map(one => ({ name: one.name, description: descriptionOf(one), changes: one.changes ?? '', look: one.look }));
     const asked = sheet.flatMap((one, index) => one.lookPending && people[index].description.trim() ? [index] : []).slice(0, RETELL_PEOPLE);
     if (!asked.length) return 0;
@@ -441,11 +446,13 @@ export function createIllustrator(config: ImageConfig, deps: {
       const words = asked.filter(index => retold.has(index) && inWords(retold.get(index)!));
       const written = store.mutate(userId, state => {
         const current = state.stories[storyId]?.sheet ?? [];
+        const seen = linkedStory(state, state.stories[storyId])?.sheet ?? [];
         return words.filter(index => {
-          const one = current.find(other => personKey(other.name) === personKey(people[index].name));
-          if (!one?.lookPending || descriptionOf(one) !== people[index].description || (one.changes ?? '') !== people[index].changes) return false;
+          const at = current.findIndex(other => personKey(other.name) === personKey(people[index].name));
+          const one = current[at], shown = seen[at];
+          if (!one?.lookPending || descriptionOf(shown) !== people[index].description || (one.changes ?? '') !== people[index].changes) return false;
           // Details the reader wrote before 2026-09-27 are what was retold, and become the description they stood for.
-          if (one.description === undefined) Object.assign(one, { description: descriptionOf(one) }, ownDescription(one) ? { descriptionEdited: true } : {});
+          if (one.description === undefined && one.preset === undefined) Object.assign(one, { description: descriptionOf(one) }, ownDescription(one) ? { descriptionEdited: true } : {});
           delete one.detailsEdited;
           one.details = retold.get(index)!.details;
           if (!one.edited) one.look = retold.get(index)!.look;
@@ -475,7 +482,8 @@ export function createIllustrator(config: ImageConfig, deps: {
   // Its row gives what `retellPending`'s gives, and nothing is thrown. Returns how many people were written.
   async function retellVersions(model: Provider, { userId, storyId, nodeId, signal, log }: { userId: string; storyId: string;
     nodeId: string | null; signal: AbortSignal; log: Log }, event: string): Promise<number> {
-    const story = store.read(userId).stories[storyId];
+    const read = store.read(userId);
+    const story = linkedStory(read, read.stories[storyId]);
     const due = story && nodeId ? staleAt(story, nodeId).slice(0, RETELL_PEOPLE) : [];
     if (!story || !nodeId || !due.length) return 0;
     const people = sheetAt(story, nodeId).map((one, index) => {
@@ -494,7 +502,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       const words = asked.filter(index => retold.has(index) && inWords(retold.get(index)!));
       const written = store.mutate(userId, state => {
         const saved = state.stories[storyId];
-        const current = saved?.nodes[nodeId] ? staleAt(saved, nodeId) : [];
+        const current = saved?.nodes[nodeId] ? staleAt(linkedStory(state, saved), nodeId) : [];
         return words.filter(index => {
           const was = due.find(one => one.index === index)!;
           const still = current.some(one => one.node === was.node && one.key === was.key && one.stamp === was.stamp);
@@ -573,11 +581,12 @@ export function createIllustrator(config: ImageConfig, deps: {
     views?: PoseViews; g?: GKept }>();
   // The portrait each reader was shown last, for its keep button (`keepPortrait`), with the text it was drawn from as
   // `look` (`portraitText`), empty for one drawn from the reader's own prompt (`own`), and the whole `prompt`: in memory
-  // only, one per reader, until the next one, the keep, a delivery that failed, or PORTRAIT_HELD_MS. That one timer is
+  // only, one per reader, until the next one, the keep, a delivery that failed, or PORTRAIT_HELD_MS. `preset` is the
+  // preset the person was linked to when it was asked for, or none: it is kept only while that still holds. That one timer is
   // cleared with it, and knows the reader and the id alone, so that the map is the only holder of the picture: a timer
   // that held it would keep every picture replaced or kept alive for the whole half hour.
   type Candidate = { id: string; storyId: string; name: string; look: string; prompt: string; own: boolean; recipe: PictureRecipe;
-    bytes: Uint8Array; at: number };
+    bytes: Uint8Array; at: number; preset: string | undefined };
   const candidates = new Map<string, Candidate & { timer: ReturnType<typeof setTimeout> }>();
   function letGo(userId: string, id?: string) {
     const held = candidates.get(userId);
@@ -642,8 +651,12 @@ export function createIllustrator(config: ImageConfig, deps: {
       // The people as they are at this scene, with the versions of its own line (local/picture-versions.ts), retold
       // first where anything they rest on was written anew since; without versions, as the sheet has them.
       await retellVersions(model, { userId, storyId, nodeId, signal, log }, 'picture_version_retold');
+      const storyNow = () => {
+        const read = store.read(userId);
+        return linkedStory(read, read.stories[storyId]);
+      };
       const frameSheet = () => {
-        const current = store.read(userId).stories[storyId];
+        const current = storyNow();
         return wornAt(story, nodeId, (current ? sheetAt(current, nodeId) : []).filter(one => one.look.trim()));
       };
       sheet = frameSheet();
@@ -661,7 +674,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       // For a reader with pose sets, each person of the sheet with a captioned set, the viewer's apart, whose body the
       // frame does not show, names a candidate ID right after `who`: added last, so
       // that it stands before any other field that goes there. Without them the request is as it was.
-      const current = poseSetFor(userId) ? store.read(userId).stories[storyId] : undefined;
+      const current = poseSetFor(userId) ? storyNow() : undefined;
       const viewed: Viewed[] = current ? sheet.filter(one => one !== viewer).flatMap(one => {
         const candidates = poseCandidates(current.sheet?.find(other => other.name === one.name) ?? {});
         return candidates.length ? [{ name: one.name, candidates }] : [];
@@ -850,7 +863,8 @@ export function createIllustrator(config: ImageConfig, deps: {
     let plain: Prompt = written ? { prompt: gLine(written.prose, line), namesStripped: written.namesStripped, promptSource: 'g' } : today;
     let assembled: Prompt = plain;
     let gBound = 0, miss: GTagMiss | undefined;
-    const story = store.read(userId).stories[storyId];
+    const read = store.read(userId);
+    const story = linkedStory(read, read.stories[storyId]);
     // A lean frame binds no portrait of somebody on screen, blurred or seen through, nor of anybody it does not show:
     // described anew so, it takes none of theirs from the recipe saved before.
     const own = lean && story && !referenceGate(userId) ? leanReferences(story, lean.description, frame.views) : undefined;
@@ -1028,10 +1042,11 @@ export function createIllustrator(config: ImageConfig, deps: {
   // The button under a portrait's prompt, the same as under a scene's picture: the reader writes the whole prompt anew,
   // the person keeps it, and a variant of this portrait is drawn from it with its seed (local/bot.ts). It names the
   // person as the card's buttons do, by their place on the sheet and a tag of their name, with the seed and the recipe's
-  // tag, well inside the 64 bytes of a button's data; a longer one leaves the note without it.
-  function portraitEdit(userId: string, storyId: string, name: string, seed: number, label: string): InlineKeyboard | undefined {
+  // tag, well inside the 64 bytes of a button's data; a longer one leaves the note without it. A person's prompt is their
+  // preset's while they are linked, so the button also names the preset the portrait was drawn for, if any (local/bot.ts).
+  function portraitEdit(userId: string, storyId: string, name: string, seed: number, label: string, preset?: string): InlineKeyboard | undefined {
     const index = store.read(userId).stories[storyId]?.sheet?.findIndex(one => one.name === name) ?? -1;
-    const data = `portrait-edit:${storyId}:${index}:${personTag(name)}:${seed}:${portraitRecipe}`;
+    const data = `portrait-edit:${storyId}:${index}:${personTag(name)}:${seed}:${portraitRecipe}${preset ? `:${preset}` : ''}`;
     return index >= 0 && Buffer.byteLength(data) <= 64 ? { inline_keyboard: [[{ text: label, callback_data: data }]] } : undefined;
   }
 
@@ -1127,7 +1142,20 @@ export function createIllustrator(config: ImageConfig, deps: {
     return recipe.graph === graphId && recipe.checkpoint === config.checkpoint ? { node, recipe } : 'changed';
   }
 
-  return {
+  // The picture jobs each reader has running, a scene's picture, a sample, a variant or a portrait, each from before it
+  // first reads a sheet until it is over. Updates are handled one at a time (local/main.ts), so a portrait's prompt, read
+  // where the button is answered, is read under the same link as the job that starts in that update.
+  const jobs = new Map<string, number>();
+  const drawing = <T extends { userId: string }>(job: (request: T) => Promise<void>) => async (request: T) => {
+    jobs.set(request.userId, (jobs.get(request.userId) ?? 0) + 1);
+    try { await job(request); }
+    finally {
+      const left = jobs.get(request.userId)! - 1;
+      if (left) jobs.set(request.userId, left); else jobs.delete(request.userId);
+    }
+  };
+
+  const methods = {
     // Off by default and per reader: the story text of a reader who did not ask for this is never drawn, not even
     // on a card we run (AGENTS.md, and the plan's second constraint).
     enabledFor(userId: string) { return config.users.has(userId); },
@@ -1162,7 +1190,8 @@ export function createIllustrator(config: ImageConfig, deps: {
       // while its people have the looks it was described with: a look the reader edited since is described anew, and
       // so is one edited while that frame was still being described.
       const kept = frames.get(userId);
-      const story = store.read(userId).stories[storyId];
+      const read = store.read(userId);
+      const story = linkedStory(read, read.stories[storyId]);
       // The looks are those of the scene, with the versions of its line (local/picture-versions.ts).
       const here = story ? sheetAt(story, nodeId) : [];
       let frameReused = kept?.storyId === storyId && kept.nodeId === nodeId && !!story?.nodes[nodeId]
@@ -1287,7 +1316,7 @@ export function createIllustrator(config: ImageConfig, deps: {
     // story made. Anywhere else they are retold before the next frame of their line.
     async retell({ userId, storyId, signal, log }: { userId: string; storyId: string; signal: AbortSignal; log: Log }) {
       const state = store.read(userId);
-      const story = state.stories[storyId];
+      const story = linkedStory(state, state.stories[storyId]);
       const at = sceneOf(state, storyId);
       if (!(story?.sheet ?? []).some(one => one.lookPending) && !(story && at && staleAt(story, at).length)) return false;
       return inTurn(provider, async model => await retellPending(model, { userId, storyId, signal, log }, 'look_retold')
@@ -1322,6 +1351,7 @@ export function createIllustrator(config: ImageConfig, deps: {
         return person && (own ? '' : portraitText(person));
       };
       try {
+        const preset = personNow()?.preset;
         const look = lookNow();
         if (look === undefined || (!own && !look.trim())) throw sceneGone();
         const prompt = request.prompt ?? portraitPrompt(name, look, (sheetNow() ?? []).map(one => one.name)).prompt;
@@ -1331,7 +1361,7 @@ export function createIllustrator(config: ImageConfig, deps: {
         if (lookNow() !== look) throw sceneGone();
         // Held before it is sent, so that its button finds it however soon it is pressed, and let go if it never
         // arrives. The one shown before goes either way: its button keeps nothing once a newer one is shown.
-        if (drawn.bytes.length <= PORTRAIT_BYTES) hold(userId, { id: request.candidate, storyId, name, look, prompt, own, recipe, bytes: drawn.bytes, at: now() });
+        if (drawn.bytes.length <= PORTRAIT_BYTES) hold(userId, { id: request.candidate, storyId, name, look, prompt, own, recipe, bytes: drawn.bytes, at: now(), preset });
         else letGo(userId);
         const photoStarted = now();
         let photo: number | undefined;
@@ -1347,7 +1377,7 @@ export function createIllustrator(config: ImageConfig, deps: {
         const size = promptSize(prompt, own ? undefined : PORTRAIT_STYLE);
         const summary = t.notices.promptSummary(size.promptCharacters, size.pictureTokens ?? null, size.styleTokens ?? null);
         await sendNote({ userId, chat, storyId, log }, photo, foldedPrompt(summary, prompt),
-          photo === undefined ? undefined : portraitEdit(userId, storyId, name, recipe.seed, t.variant.button));
+          photo === undefined ? undefined : portraitEdit(userId, storyId, name, recipe.seed, t.variant.button, preset));
         // A photo handed to Telegram is delivered: a stop that lands while it is on its way does not take it back, and
         // it stays there to keep. The row then says both, that it is ready and that it was stopped.
         log('picture_portrait', undefined, { outcome: 'ready', cancelled: signal.aborted, ownPrompt: own, imageQueueMs: drawn.queueMs, imageMs: drawn.totalMs,
@@ -1375,7 +1405,8 @@ export function createIllustrator(config: ImageConfig, deps: {
     // it was drawn from. It is the front's drawing, and kept by hand it takes the front from a picture of the reader's
     // own, pinned or not: pinning holds a pose against the poses drawn for the reader (lib/library.ts `OwnReference`),
     // never against a portrait they chose. The caller sweeps that picture's file as well. Returns where that person is
-    // on the sheet, or null for a stale button. The portrait stays held until `portraitKept`.
+    // on the sheet, or null for a stale button. The portrait stays held until `portraitKept`. A person linked to a preset
+    // keeps it in the preset, and one linked or unlinked since it was asked for keeps nothing: it was not drawn for that.
     keepPortrait(userId: string, candidateId: string, state: Library) {
       const held = candidates.get(userId);
       if (!held || held.id !== candidateId || now() - held.at > PORTRAIT_HELD_MS) return null;
@@ -1384,8 +1415,8 @@ export function createIllustrator(config: ImageConfig, deps: {
       // The text is the person's at the scene the reader stands at, as it was drawn from (`portrait`); the portrait is
       // the person's own for the whole story.
       const here = index < 0 ? undefined : personHere(state, held.storyId, index);
-      if (!here || (!held.own && portraitText(here) !== held.look)) return null;
-      const person = sheet[index];
+      if (!here || here.preset !== held.preset || (!held.own && portraitText(here) !== held.look)) return null;
+      const person = appearanceOf(state, sheet[index]);
       person.portrait = { source: 'drawn', file: store.writePortrait(userId, held.bytes), ...held.recipe, look: held.look,
         clothes: held.own ? '' : PORTRAIT_CLOTHES, style: held.own ? '' : PORTRAIT_STYLE, prompt: held.prompt,
         ...held.own ? { ownPrompt: true } : {}, at: now() };
@@ -1394,6 +1425,15 @@ export function createIllustrator(config: ImageConfig, deps: {
         if (Object.keys(poses).length) person.poses = poses; else delete person.poses;
       }
       return { storyId: held.storyId, index, retainsPortraits: !referenceGate(userId) };
+    },
+
+    // Whether a reader's links may move and their presets go now (docs/telegram-ui.md#presets): not while a picture job of
+    // theirs runs, in any story, since a preset spans them. Asked inside the library write that moves one, so that a job
+    // started after it reads the new link. The frame kept for a sample was described from the old one, and goes.
+    relinkable(userId: string) {
+      if (jobs.has(userId)) return false;
+      frames.delete(userId);
+      return true;
     },
 
     // Whether a reader may send a picture of a person of their own, which frames then take as they take a portrait: the
@@ -1412,4 +1452,6 @@ export function createIllustrator(config: ImageConfig, deps: {
     // rolled back is still held, so the same button keeps it again.
     portraitKept(userId: string, candidateId: string) { letGo(userId, candidateId); },
   };
+  return { ...methods, illustrate: drawing(methods.illustrate), sample: drawing(methods.sample), variant: drawing(methods.variant),
+    portrait: drawing(methods.portrait) };
 }

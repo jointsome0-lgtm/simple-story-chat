@@ -11,7 +11,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Library, Story } from '../lib/library.ts';
-import { poseAnnotations } from '../lib/library.ts';
+import { linkedStory, poseAnnotations } from '../lib/library.ts';
 import type { Log } from './model-error.ts';
 import { personAt, personTag } from './picture.ts';
 import { readReference } from './picture-references.ts';
@@ -148,6 +148,7 @@ function cardView(state: Library, story: Story, found: NonNullable<ReturnType<ty
   const size = card.picture && [card.picture.width, card.picture.height].every(side => Number.isSafeInteger(side) && side > 0)
     ? { width: card.picture.width, height: card.picture.height } : null;
   const blocks: { heading?: string; text?: string; notes: (string | null)[] }[] = [
+    ...card.preset ? [{ notes: [card.preset] }] : [],
     ...card.described ? [{ heading: card.descriptionTitle, text: card.described, notes: [card.descriptionSize] }] : [],
     ...card.changes ? [{ heading: c.changes, text: card.changes, notes: [] }] : [],
     ...card.along ? [{ notes: [card.along] }] : [],
@@ -219,7 +220,8 @@ export async function serveMiniApp({ dbPath, port, key, users, ownerId = '', det
     if (store.size(userId) > LIBRARY_BYTES) return missing('library_too_large');
     const state = store.read(userId);
     if (storyId === undefined) return served('stories', json(200, storiesView(state)));
-    const story = Object.hasOwn(state.stories, storyId) ? state.stories[storyId] : undefined;
+    // A linked person's card, set and pictures are their preset's, read like their own: this reader's alone.
+    const story = linkedStory(state, Object.hasOwn(state.stories, storyId) ? state.stories[storyId] : undefined);
     if (!story) return missing('missing');
     if (index === undefined) return served('characters', json(200, charactersView(state, story)));
     const found = personAt(story, index, tag);

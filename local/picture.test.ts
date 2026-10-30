@@ -925,9 +925,42 @@ test('the rewrite of an old sheet keeps what the reader wrote and the portraits 
   const renamed = { name: 'Элин Вос', description: 'Худая седая женщина.', changes: '', look: '', outfit: 'wearing a grey wool coat' };
   const hers = { name: 'Элин', description: 'Моё описание.', descriptionEdited: true, changes: '', look: 'Mine', outfit: '', edited: true, portrait };
   assert.deepEqual(rewrittenSheet([hers], [renamed]), [{ ...renamed, lookPending: true }, { ...hers, lookPending: true }], 'a person renamed is somebody new');
+  // A person saved into a preset has no list of their own, and the link is all that says what the reader made of them.
+  const gone = { name: 'Synthetic B', look: 'Old', outfit: '', changes: '', preset: 'p1' };
+  assert.deepEqual(rewrittenSheet([{ name: WRITTEN[0].name, look: 'Lean', description: 'Under the link.', preset: 'p1' }, gone], WRITTEN),
+    [{ ...WRITTEN[0], description: 'Under the link.', preset: 'p1', lookPending: true }, { ...gone, lookPending: true }],
+    'a link stays with the description under it, and so does a linked person the new sheet lost');
   // So are the buttons: they name her by the hash of the name she has.
   assert.equal(personTag(' ЭЛИН '), personTag('Элин'));
   assert.notEqual(personTag('Элин Вос'), personTag('Элин'));
+});
+
+// Two ways a link could lose what a reader made without a word (docs/telegram-ui.md#presets): the answer to a question
+// about one set reaching the set behind the person now, and a description from before 2026-09-27, which stands in the
+// details the retelling writes over.
+test('a link leaves alone the set a question did not ask about, and a description that stood in the details', async t => {
+  const f = await fixture(t, { card: {}, graphFile: 'gpu/image-workflow-qwen.json', references: true });
+  await f.start();
+  await f.bot.idle();
+  const storyId = f.store.read('1').active!.storyId, first = elin(storyId), set = () => Object.values(f.store.read('1').characterPresets ?? {})[0]?.poseSet?.length;
+  f.store.mutate('1', state => { state.stories[storyId].sheet![0].poseSet = [{ file: f.store.writePortrait('1', pngCarrying('synthetic pose')), format: 'png', width: 400, height: 600, bytes: 9, at: 1 }]; });
+  await f.bot.handle(f.click(`pose-set-drop:${first}`));
+  await f.bot.handle(f.click(`preset-save:${first}`));
+  await f.bot.handle(f.click(`pose-set-dropped:${first}`));
+  assert.equal(set(), 1, 'asked about their own set, the set moved into the preset stays');
+  await f.bot.handle(f.click(`pose-set-drop:${first}`));
+  await f.bot.handle(f.click(`pose-set-dropped:${first}:${Object.keys(f.store.read('1').characterPresets!)[0]}`));
+  assert.equal(set(), undefined, 'asked about the preset, it goes');
+
+  const presetId = Object.keys(f.store.read('1').characterPresets!)[0];
+  const old = { name: 'Synthetic A', look: 'lean', details: 'Old words of the reader.', detailsEdited: true };
+  const person = `${storyId}:1:${personTag(old.name)}`, second = () => f.store.read('1').stories[storyId].sheet![1];
+  f.store.mutate('1', state => { state.stories[storyId].sheet!.push(old); });
+  await f.bot.handle(f.click(`preset-link:${person}:${presetId}`));
+  await f.bot.idle();
+  assert.equal(second().details, DETAILS, 'retold from the preset');
+  await f.bot.handle(f.click(`preset-unlink:${person}`));
+  assert.deepEqual([second().description, second().descriptionEdited], [old.details, true]);
 });
 
 // The description is the person's own text (docs/illustrations-plan.md#three-layers), and what the reader writes there
@@ -1256,17 +1289,22 @@ test('a portrait whose story is deleted while it is drawn is not sent, and a del
   const file = store.writePortrait('1', bytes);
   // A picture of a pose set (local/pose-set.ts) is kept as a portrait is: a reader's 80 would otherwise go at once.
   const posed = store.writePortrait('1', bytes, 'webp');
+  // A preset's files are nobody's on a sheet, and nobody may be linked to it: they stay until it goes.
+  const saved = [store.writePortrait('1', bytes), store.writePortrait('1', bytes, 'jpg'), store.writePortrait('1', bytes, 'webp')];
   store.mutate('1', state => {
     const { story } = newStory(state, addSeed(state, seedText).id);
     story.sheet = [{ name: 'Элин', look: 'lean', outfit: '', portrait: keptOf('lean', file),
       poseSet: [{ file: posed, format: 'webp', width: 400, height: 600, bytes: bytes.length, at: 1 }] }];
+    state.characterPresets = { p9: { label: 'Saved', at: 1, description: 'Saved.', portrait: keptOf('lean', saved[0]),
+      poses: { front: { source: 'own', file: saved[1], format: 'jpeg', width: 400, height: 600, at: 1, pinned: true } },
+      poseSet: [{ file: saved[2], format: 'webp', width: 400, height: 600, bytes: bytes.length, at: 1 }] } };
   });
   store.writePortrait('1', bytes);
   store.close();
   store = new Store(path);
   t.after(() => store.close());
   store.recover();
-  assert.deepEqual([store.portraits('1'), readdirSync(mine).sort(), store.sweepPortraits('2')], [mine, [file, posed].sort(), 0],
+  assert.deepEqual([store.portraits('1'), readdirSync(mine).sort(), store.sweepPortraits('2')], [mine, [file, posed, ...saved].sort(), 0],
     'at start; a reader with no portraits has no directory');
   const memory = new Store(':memory:');
   assert.equal(memory.sweepPortraits('1'), 0);
