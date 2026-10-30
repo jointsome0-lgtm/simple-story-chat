@@ -3,7 +3,7 @@ import { createHmac, randomBytes } from 'node:crypto';
 import { mkdirSync, chmodSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { Library } from '../lib/library.ts';
-import { emptyLibrary, keepMove, referenceFiles, releaseJob } from '../lib/library.ts';
+import { emptyLibrary, interruptJob, referenceFiles } from '../lib/library.ts';
 import type { Log } from './model-error.ts';
 
 type AccessRequest = { userId: string; at: number };
@@ -77,19 +77,12 @@ export class Store {
     const next = [...pending.filter(item => item.userId !== userId), { userId, at: Date.now() }].slice(-100);
     this.db.prepare("INSERT INTO metadata VALUES ('access_requests', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(next));
   }
-  // Returns the readers whose job died with the last process.
+  // Returns the readers to tell that a job of theirs ended with a process: the one that died just now, and any an
+  // earlier start did not manage to tell (local/bot.ts `interrupted`).
   recover(log?: Log) {
     const interrupted: string[] = [];
-    // No model or Telegram write is retried automatically after process death. The move of a scene is kept for the
-    // reader to repeat (lib/library.ts `LostMove`).
     for (const { user_id } of this.db.prepare('SELECT user_id FROM libraries').all()) {
-      this.mutate(user_id as string, state => {
-        if (!state.job) return;
-        keepMove(state, state.job);
-        releaseJob(state);
-        state.interrupted = true;
-        interrupted.push(user_id as string);
-      });
+      if (this.mutate(user_id as string, state => { interruptJob(state); return state.jobInterrupted; })) interrupted.push(user_id as string);
       // A portrait file that cannot go now goes with a later sweep; it never keeps the bot from starting.
       try { this.sweepPortraits(user_id as string); } catch (error) { log?.('portraits_unswept', fileErrorCode(error)); }
     }

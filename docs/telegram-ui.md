@@ -44,13 +44,15 @@ does the same in every registered language.
   is saved as it came, and a separate message says that it may be cut off. The narrator's rules ask for at most 12
   paragraphs; the bot does not cut a longer scene.
 - **A move that became no scene:** the owner's list of 2026-10-30, after «Повторить: /continue» had been offering the
-  narrator's move in place of the reader's. A scene turn the model failed, and one the process died under, leave
-  their words in `Library.lostMove` with the story, branch and scene they were made at. «🔄 Повторить» ("Try again",
-  `retry`, also /retry) stands first under the failure, under the scene keyboard and in the menu for as long as the
-  reader stands at that place, and runs those words again as the same move, the reader's or the narrator's. Nothing
-  runs them by itself. The reader's next move takes their place, /cancel keeps nothing, and a deleted story takes them
-  with it. After a restart each reader whose job died gets one message with that button, before the bot reads its
-  first update; a compaction that died is told the same way, with /compact.
+  narrator's move in place of the reader's. A scene turn the model failed, and one the process stopped or died under,
+  leave their words in `Library.lostMove` with the story, branch and scene they were made at. «🔄 Повторить» ("Try
+  again", `retry:<job>`, also /retry) stands first under the failure, under the scene keyboard and in the menu for as
+  long as the reader stands at that place, and runs those words again as the same move, the reader's or the narrator's.
+  A button left under an older failure answers that it is stale and does not repeat a newer move. Nothing runs them by
+  itself. The reader's next move takes their place, /cancel keeps nothing, and a deleted story takes them with it. At
+  the next start each reader whose job ended with the process gets one message with that button, before the bot reads
+  its first update; a compaction is told the same way, with /compact. `Library.jobInterrupted` holds that until the
+  message is out, so a start that fails or a message that does not get through tells them at the start after it.
 - **Another version:** «🔁 Другая версия» ("Another version", `again:<storyId>:<nodeId>`) under the last scene runs its
   move again from the scene before it, in one press, the owner's list of 2026-10-30. The new scene goes on a new branch
   and the old one stays on its branch, whole. That branch stands aside until the scene is saved: the reader stays on
@@ -105,9 +107,10 @@ most 2.
 - **A reply to an earlier scene:** replying to the message of a scene that is not the last one of the branch being
   played writes nothing and forks nothing by itself, the owner's list of 2026-10-30. It opens that scene's preview with
   the reply on it and «▶️ Продолжить отсюда этим ходом» ("Continue from here with this move",
-  `from-here:<checkpointId>`), which runs the reply as a move from that scene on a new branch standing aside, as
+  `from-here:<checkpointId>:<update>`), which runs the reply as a move from that scene on a new branch standing aside, as
   [another version](#user-paths) does. The wait `{input:'move'}` is the one wait that holds text, since the reader wrote
-  it before anything could be asked; any button, command or next message ends it and the text with it. A reply to the
+  it before anything could be asked; any button, command or next message ends it and the text with it. The button
+  carries the update of the reply, so a screen a restart left in the chat cannot send a later reply's text. A reply to the
   last scene is an ordinary move, and so is one to a message that shows no scene. The bot knows a scene by
   `SceneNode.messageId` and, for a scene shown again, by the last eight messages in `SceneNode.shownAs`. A preview
   on a passing screen is no scene's message, and a reply to it is an ordinary move.
@@ -984,8 +987,10 @@ seed. With no more than the kept number of scenes uncompacted, the bot says that
   each with its time and kind as the request has them and without the scene ids behind them; until the owner's list
   of 2026-10-30 a reader saw only its size. A fact opens on a screen of its own, in a `pre` block that copies in one
   tap, with «✏️ Исправить» ("Correct", `fact-edit:…`), whose wait takes the next message as its new text, and
-  «🗑 Убрать» ("Take out", confirmed). A fact at a time and not the whole memory as a profile is, since a memory is
-  longer than a message and a reader's copy of it would come back in pieces. A version of the memory never changes:
+  «🗑 Убрать» ("Take out", confirmed). A fact the model wrote longer than the 3500 characters a screen shows can only
+  be taken out, since a copy of what shows would bring back less than it. A fact at a time and not the whole memory as
+  a profile is, since a memory is longer than a message and a reader's copy of it would come back in pieces. A version
+  of the memory never changes:
   `editFact` copies the one that holds the fact and every one after it, and the branch and a new checkpoint (`memory`,
   🧠) point at the copies, so a checkpoint from before the edit still reads the memory as it was and forking from it is
   the undo. An edited fact keeps its kind, time and scenes, the version says `edited`, and a later compaction

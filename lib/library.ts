@@ -181,11 +181,12 @@ export type Job = {
 };
 // Where the reader stands in a story: a branch and the scene it had reached.
 export type Place = { storyId: string; branchId: string; head: string | null };
-// The move of a turn that ended without a scene: the model failed, or the process died under it (`keepMove`). The
-// reader's words outlive the turn and nothing runs them again by itself: «🔄 Повторить» offers them for as long as the
-// reader stands where they stood (`lostMove`), and their next move takes their place. A story's deletion takes them.
-// `from`: the move was to leave an earlier point, and does so again. Only the local bot writes it.
-export type LostMove = Place & { input: string; move?: 'narrator'; from?: Point & { storyId: string; name: string } };
+// The move of a turn that ended without a scene: the model failed, or the process stopped or died under it (`keepMove`).
+// The reader's words outlive the turn and nothing runs them again by itself: «🔄 Повторить» offers them for as long as
+// the reader stands where they stood (`lostMove`), and their next move takes their place. A story's deletion takes them.
+// `job` is the turn's id, by which a button left under an older failure does not repeat a newer move. `from`: the move
+// was to leave an earlier point, and does so again. Only the local bot writes it.
+export type LostMove = Place & { job: string; input: string; move?: 'narrator'; from?: Point & { storyId: string; name: string } };
 // New drafts always have draftId and parts, but bot.ts and ui.ts also accept a stored draft without them;
 // keep those fallbacks for older or incomplete v1 data.
 export type SeedDraft = { input: 'seed'; draftId: string; parts: string[]; confirm?: undefined };
@@ -228,8 +229,10 @@ export type PortraitPromptInput = { input: 'portrait-prompt'; storyId: string; n
 export type ProfileInput = { input: 'profile'; storyId: string; name: string; fields: string; hash: string; confirm?: undefined };
 // A reader who answered an earlier scene with a move, by replying to its message (local/bot.ts `replied`): the screen of
 // that scene asks whether to go on from there. Unlike the other waits this one holds text, since the reader wrote it
-// before anything could be asked; a button, a command or their next message ends it, and the text with it.
-export type MoveInput = { input: 'move'; storyId: string; checkpointId: string; move: string; confirm?: undefined };
+// before anything could be asked; a button, a command or their next message ends it, and the text with it. `asked` is
+// the update that brought the reply, by which the screen of an earlier reply, which a restart leaves in the chat, cannot
+// send this text.
+export type MoveInput = { input: 'move'; storyId: string; checkpointId: string; move: string; asked: number; confirm?: undefined };
 // A reader rewriting one fact of a branch's memory (`editFact`): their next text message is that fact. The fact is the
 // one they opened, by the version that holds it and its place there, which the write must find still in the branch.
 export type FactInput = { input: 'fact'; storyId: string; branchId: string; version: string; index: number; confirm?: undefined };
@@ -259,7 +262,11 @@ export type Library = {
   active: { storyId: string; branchId: string } | null; job: Job | null;
   ui: SeedDraft | DeleteConfirmation | StyleInput | PromptInput | LookInput | ReferenceInput | PoseSetInput | PortraitPromptInput | ProfileInput | MoveInput | FactInput | null;
   seen: number[];
-  interrupted?: boolean; language?: Language; lostMove?: LostMove;
+  language?: Language; lostMove?: LostMove;
+  // A job of this reader's ended with the process and they have not been told yet (`interruptJob`, local/bot.ts
+  // `interrupted`): it stays through a start that fails or a message that does not get through. Only the local bot
+  // writes it. The `interrupted` of older libraries said only that a job had died, and may be long past.
+  jobInterrupted?: boolean;
   // The look of this reader's pictures: a preset's key or the id of one of their own styles, and those styles. Only
   // the local bot reads them (local/picture-style.ts), and only for a reader it draws for; without a choice the bot's
   // own style is used.
@@ -460,8 +467,17 @@ export function releaseJob(state: Library): void {
 export function keepMove(state: Library, job: Job): void {
   if (job.kind === 'compact') return;
   const { side } = job;
-  state.lostMove = { ...side?.back ?? { storyId: job.storyId, branchId: job.branchId, head: job.head }, input: job.input,
+  state.lostMove = { ...side?.back ?? { storyId: job.storyId, branchId: job.branchId, head: job.head }, job: job.id, input: job.input,
     ...job.move ? { move: job.move } : {}, ...side ? { from: { storyId: job.storyId, head: job.head, memory: side.memory, name: side.name } } : {} };
+}
+
+// A job that will not finish, since the process died under it or is stopping: its move is kept, and its reader is told
+// at the next start. No model or Telegram write is retried by itself.
+export function interruptJob(state: Library): void {
+  if (!state.job) return;
+  keepMove(state, state.job);
+  releaseJob(state);
+  state.jobInterrupted = true;
 }
 
 // The lost move the reader can repeat where they stand now, if there is one.

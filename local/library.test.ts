@@ -46,8 +46,8 @@ test('a stored v1 library is read and saved unchanged, and recovery only marks i
   assert.equal(JSON.stringify(store.read('1')), payload);
   store.mutate('1', () => {});
   assert.equal(store.db.prepare('SELECT payload FROM libraries WHERE user_id = ?').get('1')!.payload, payload);
-  const { storyId, branchId, head, input } = stored.job!;
-  const recovered = { ...structuredClone(stored), job: null, interrupted: true, lostMove: { storyId, branchId, head, input } };
+  const { id: job, storyId, branchId, head, input } = stored.job!;
+  const recovered = { ...structuredClone(stored), job: null, jobInterrupted: true, lostMove: { storyId, branchId, head, job, input } };
   assert.deepEqual(store.recover(), ['1']);
   assert.deepEqual(store.read('1'), recovered);
   // A library from before the language choice has none, like a new one, and a chosen language is stored with it.

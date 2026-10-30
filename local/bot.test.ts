@@ -220,7 +220,7 @@ test('SQLite survives reopening, keeps update deduplication, and clears interrup
   // Recovery clears any job, so a partial one is enough.
   f.store.mutate(1, state => { state.job = { id: 'j999', input: 'synthetic unfinished input' } as Job; });
   f.store.offset(update.update_id + 1);
-  assert.deepEqual(reopened(f.path, store => [store.read(1).job, store.read(1).interrupted, store.read(1).seen.includes(update.update_id),
+  assert.deepEqual(reopened(f.path, store => [store.read(1).job, store.read(1).jobInterrupted, store.read(1).seen.includes(update.update_id),
     Object.keys(Object.values(store.read(1).stories)[0].nodes).length, store.offset()]), [null, true, true, 1, update.update_id + 1], 'a restart mid-job');
 
   // A seed pasted in parts stays a draft through navigation, a change of language and a restart, and never continues
@@ -457,7 +457,7 @@ test('a move that became no scene is kept for the reader to repeat, only on thei
   await f.bot.handle(f.message('Мой потерянный ход'));
   await f.bot.idle();
   assert.equal(lost()?.input, 'Мой потерянный ход');
-  assert.ok(JSON.stringify(f.sent.at(-1)!.payload.reply_markup).includes('"retry"') && f.sent.at(-1)!.payload.text.includes('/retry'));
+  assert.ok(JSON.stringify(f.sent.at(-1)!.payload.reply_markup).includes(`"retry:${lost()!.job}"`) && f.sent.at(-1)!.payload.text.includes('/retry'));
   assert.equal(asked(), 1, 'a failed move is not run again by itself');
 
   // A press runs the same words as the reader's own move, here not the narrator's; a second failure keeps them still.
@@ -471,7 +471,7 @@ test('a move that became no scene is kept for the reader to repeat, only on thei
   const state = f.store.read(1);
   const story = Object.values(state.stories)[0];
   assert.deepEqual([asked(), state.lostMove, Object.values(story.nodes).at(-1)!.input], [3, undefined, 'Мой потерянный ход']);
-  assert.ok(!buttons().includes('"retry"'));
+  assert.ok(!buttons().includes('"retry:'));
 
   // A scene the reader took another way past it leaves nothing to repeat there, and an old button says so.
   fails = true;
@@ -506,9 +506,17 @@ test('a move that became no scene is kept for the reader to repeat, only on thei
   const after = f.requests.length;
   assert.deepEqual(reopened(f.path, store => store.read(1).lostMove?.input), 'Ход на момент смерти');
   assert.equal(f.requests.length, after);
+  assert.deepEqual(reopened(f.path, store => store.recover()), ['1'], 'a start that did not get to tell them leaves it to the next');
   await f.bot.interrupted(['1', '77']);
-  assert.ok(f.sent.at(-1)!.payload.text.includes('/retry') && JSON.stringify(f.sent.at(-1)!.payload.reply_markup).includes('"retry"'));
+  assert.ok(f.sent.at(-1)!.payload.text.includes('/retry') && JSON.stringify(f.sent.at(-1)!.payload.reply_markup).includes('"retry:j901"'));
   assert.equal(f.sent.at(-1)!.payload.chat_id, 1, 'a reader off the access list is told nothing');
+  assert.deepEqual(reopened(f.path, store => store.recover()), []);
+
+  // A button left under an older failure does not repeat a newer move.
+  const moves = f.requests.length;
+  await f.bot.handle(f.click('retry:j1'));
+  await f.bot.idle();
+  assert.deepEqual([f.requests.length, f.store.read(1).lostMove?.input], [moves, 'Ход на момент смерти']);
 
   // A deleted story takes the reader's words with it.
   await f.bot.handle(f.click(`view:delete-seed:${Object.keys(f.store.read(1).seeds)[0]}`));
@@ -579,6 +587,19 @@ test('another version leaves the old scene whole, and a turn that writes no scen
   await f.bot.idle();
   mode = 'ok';
 
+  // A stop of the bot cuts a move short as a death does: it is kept, and its reader is told at the next start.
+  let stopping = false;
+  const stopped = fixture(t, { generate: async (_request, controls) => {
+    if (stopping) await new Promise((_resolve, reject) => controls?.signal?.addEventListener('abort', () => reject(new ModelError('provider_failed'))));
+    return { text: '2026-08-02 20:00\n\nСинтетическая сцена.', finishReason: 'stop' };
+  } });
+  await stopped.start();
+  stopping = true;
+  await stopped.bot.handle(stopped.message('Ход под остановку'));
+  await stopped.bot.stop();
+  const kept = stopped.store.read(1);
+  assert.deepEqual([kept.job, kept.lostMove?.input, kept.jobInterrupted], [null, 'Ход под остановку', true]);
+
   // The narrator's move stays the narrator's, also for a scene written before `SceneNode.move`.
   await f.bot.handle(f.click('continue'));
   await f.bot.idle();
@@ -623,7 +644,7 @@ test('a reply to an earlier scene asks first and goes on from there; to the last
   await f.bot.handle(f.message('Передумал'));
   await f.bot.idle();
   assert.equal(here().state.ui, null);
-  await f.bot.handle(f.click(`from-here:${checkpointId}`));
+  await f.bot.handle(f.click(`from-here:${checkpointId}:${(before.state.ui as MoveInput).asked}`));
   await f.bot.idle();
   assert.equal(Object.keys(here().story.branches).length, 1, 'a stale button');
 
@@ -635,7 +656,13 @@ test('a reply to an earlier scene asks first and goes on from there; to the last
   assert.equal(again.shownAs?.length, 1);
   await f.bot.handle(replying('Ход с первой сцены', opening.messageId!));
   await f.bot.idle();
-  await f.bot.handle(f.click(`from-here:${(here().state.ui as MoveInput).checkpointId}`));
+  const waiting = here().state.ui as MoveInput;
+  // A screen of an earlier reply, left in the chat by a restart, does not send this one's words.
+  await f.bot.handle(f.click(`from-here:${waiting.checkpointId}:1`));
+  await f.bot.idle();
+  assert.equal(Object.keys(here().story.branches).length, 1, 'a stale screen');
+  assert.equal((here().state.ui as MoveInput).move, 'Ход с первой сцены');
+  await f.bot.handle(f.click(`from-here:${waiting.checkpointId}:${waiting.asked}`));
   await f.bot.idle();
   const after = here();
   assert.equal(after.story.nodes[after.branch.head!].input, 'Ход с первой сцены');
@@ -683,6 +710,13 @@ test('a fact the reader corrects reaches the next request, and the memory before
   // The old memory stays what it was for the checkpoint before the edit, and a checkpoint marks the new one.
   assert.equal(edited.story.memories[compacted.memory!].delta.facts[1].text, original);
   assert.equal(Object.values(edited.story.checkpoints).at(-1)!.kind, 'memory');
+
+  // A fact longer than a screen shows cannot come back whole from a copy of it, so it can only be taken out.
+  const long = { ...edited.facts[1].fact, text: 'д'.repeat(3704) };
+  f.store.mutate(1, state => { active(state).story.memories[edited.facts[1].version].delta.facts[1] = long; });
+  await f.bot.handle(f.click(`view:fact:${route(edited.facts[1])}`));
+  assert.ok(!JSON.stringify(said(f.sent)!.payload.reply_markup).includes('fact-edit') && JSON.stringify(said(f.sent)!.payload.reply_markup).includes('delete-fact'));
+  f.store.mutate(1, state => { active(state).story.memories[edited.facts[1].version].delta.facts[1] = edited.facts[1].fact; });
 
   // A button of the memory as it was changes nothing now; taking a fact out needs its question.
   const count = Object.keys(edited.story.memories).length;

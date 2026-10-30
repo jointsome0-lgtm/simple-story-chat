@@ -16,6 +16,8 @@ export type CompactionStatus = {
   outputCharacters?: number; repairScenes?: number; facts?: number; reason?: string | number;
   // Calls ahead in the model queue while queued, and roughly in how many milliseconds this one starts.
   ahead?: number; etaMs?: number;
+  // The turn an automatic compaction ran in, whose move a failure offers to repeat (lib/library.ts `LostMove`).
+  job?: string;
 };
 
 const STEPS = ['queued', 'extracting', 'validating', 'saving'] as const;
@@ -79,7 +81,7 @@ function view(t: Messages, p: CompactionStatus) {
   if (p.stage === 'failed') {
     const reason = p.reason !== undefined && Object.hasOwn(c.reasons, p.reason) ? c.reasons[p.reason as keyof typeof c.reasons] : null;
     return payload([c.failed(elapsed), reason ? c.reason(reason) : null, c.safe, retry],
-      automatic ? [[btn(b.retry, 'retry')], [btn(b.context, 'view:context'), btn(b.model, 'view:model')]]
+      automatic ? [[btn(b.retry, p.job ? `retry:${p.job}` : 'retry')], [btn(b.context, 'view:context'), btn(b.model, 'view:model')]]
         : [[btn(b.context, 'view:context'), btn(b.model, 'view:model')]]);
   }
 

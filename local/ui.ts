@@ -128,8 +128,9 @@ export function sceneKeyboard(state: Library | null | undefined): InlineKeyboard
   const ref = activeRef(state);
   if (!ref) return undefined;
   const { story, branch } = ref;
+  const lost = lostMove(state);
   return keyboard([
-    lostMove(state) ? [btn(b.retry, 'retry')] : null,
+    lost ? [btn(b.retry, `retry:${lost.job}`)] : null,
     [btn(b.continue, 'continue'), branch.head ? btn(b.again, `again:${story.id}:${branch.head}`) : null],
     [btn(b.checkpoints, `view:checkpoints:${story.id}:${branch.id}:0`), btn(b.branches, `view:story:${story.id}`), btn(b.menu, 'view:home')],
   ]);
@@ -227,7 +228,7 @@ function home(state: State, note: string | null, modelInfo: ModelInfo | null | u
       const lost = lostMove(state);
       if (lost) {
         lines.push(lost.move ? t.home.lostNarratorMove : t.home.lostMove(quote(t, lost.input, 80)));
-        rows.push([btn(t.buttons.retry, 'retry')]);
+        rows.push([btn(t.buttons.retry, `retry:${lost.job}`)]);
       }
       lines.push('', t.home.howToContinue);
       rows.push([btn(t.buttons.continue, 'continue'), branch.head ? btn(t.buttons.lastScene, 'last') : null]);
@@ -1089,7 +1090,7 @@ function checkpointScreen(state: State, storyId: string | undefined, checkpointI
     const held = state.ui?.input === 'move' && state.ui.storyId === story.id && state.ui.checkpointId === cp.id ? state.ui : undefined;
     if (held) {
       footer.push(t.checkpoint.heldMove(quote(t, held.move, 200)));
-      rows.push([btn(t.checkpoint.fromHere, `from-here:${cp.id}`)]);
+      rows.push([btn(t.checkpoint.fromHere, `from-here:${cp.id}:${held.asked}`)]);
     }
     footer.push(t.checkpoint.forkNote(quote(t, branch.name)));
     rows.push([btn(t.checkpoint.fork, `fork:${story.id}:${cp.id}`)]);
@@ -1318,12 +1319,14 @@ function factScreen(state: State, storyId: string | undefined, branchId: string 
   if (!story || !branch || place < 0) return stale(t, t.memory.gone);
   const { fact } = facts[place];
   const text = clip(fact.text, FACT_CHARS);
+  // What a copy of a clipped fact would bring back is less than the fact, so such a fact can only be taken out.
+  const whole = text === fact.text;
   const list = `view:memory:${story.id}:${branch.id}:${Math.floor(place / PAGE)}`;
   const route = `${story.id}:${branch.id}:${version}:${rawIndex}`;
-  const note = mode === 'input' ? t.memory.inputHint : mode === 'delete' ? t.memory.removeAsk : state.job ? busyNote(state, 'compact') : null;
+  const note = mode === 'input' ? t.memory.inputHint : mode === 'delete' ? t.memory.removeAsk : state.job ? busyNote(state, 'compact') : whole ? null : t.memory.tooLong;
   const rows: Row[] = mode === 'input' ? [[btn(t.memory.back, list)]]
     : mode === 'delete' ? [[btn(t.memory.remove, `remove-fact:${route}`)], [btn(t.buttons.keep, `view:fact:${route}`)]]
-    : [state.job ? [] : [btn(t.memory.edit, `fact-edit:${route}`), btn(t.memory.remove, `view:delete-fact:${route}`)], [btn(t.memory.back, list), btn(t.buttons.menu, 'view:home')]];
+    : [state.job ? [] : [whole ? btn(t.memory.edit, `fact-edit:${route}`) : null, btn(t.memory.remove, `view:delete-fact:${route}`)], [btn(t.memory.back, list), btn(t.buttons.menu, 'view:home')]];
   const head = `${t.memory.fact(place + 1)}\n${factHead(state, story, fact)}\n\n`;
   const result: Screen = payload([`${head}${text}`, ...note ? ['', note] : []], rows);
   // A pre entity copies in one tap. Offsets are UTF-16 units, as in a JS string.

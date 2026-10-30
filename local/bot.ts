@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { UserError, id, active, addSeed, newStory, fork, beginJob, beginSideJob, addBookmark, removeBookmark,
-  deleteSeed, deleteBranch, editFact, forgetLostPictures, context, factsOf, history, jobTarget, keepMove, lostMove, pointBefore, pointStands, releaseJob, setLanguage, isPace, isPose } from '../lib/library.ts';
+  deleteSeed, deleteBranch, editFact, forgetLostPictures, interruptJob, context, factsOf, history, jobTarget, keepMove, lostMove, pointBefore, pointStands, releaseJob, setLanguage, isPace, isPose } from '../lib/library.ts';
 import type { Job, Library, PendingPoseUpload, PoseSetInput, PoseUploadFile, ProfileInput, ReferenceInput, SceneNode } from '../lib/library.ts';
 import { storyNarration } from './prompt.ts';
 import { chatMemory, createChat } from './telegram.ts';
@@ -672,7 +672,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     if (state.ui?.input === 'fact' && !action) {
       const { storyId, branchId, version, index } = state.ui;
       if (!text) throw refuse(t, 'factNeedsText');
-      if ([...text].length > FACT_CHARS) throw refuse(t, 'factTooLong');
+      if (text.length > FACT_CHARS) throw refuse(t, 'factTooLong');
       state.ui = null;
       return factEdited(state, t, storyId, branchId, version, index, text);
     }
@@ -745,7 +745,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     }
     let input = text;
     // A lost move runs only here, on the reader's own press, and only where it was lost (lib/library.ts `LostMove`).
-    const lost = action === 'retry' ? lostMove(state) : undefined;
+    const lost = verb === 'retry' ? lostMove(state) : undefined;
     let from = lost?.from;
     let narrator = verb === 'start' || action === 'continue' || !!lost?.move;
     if (verb === 'start') {
@@ -754,8 +754,10 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       // Sent to the model and kept as the scene's input, so it follows the language of the seed, not of the menus.
       input = storyNarration(state, story.id).startStory;
     } else if (action === 'continue') input = continueInput(state, active(state).story.id);
-    else if (action === 'retry') {
+    else if (verb === 'retry') {
       if (!lost || (from && !pointStands(state.stories[from.storyId], from))) throw refuse(t, 'nothingToRetry');
+      // /retry is the move lost here; a button, the move it came with.
+      if (a !== undefined && a !== lost.job) throw refuse(t, 'staleButton');
       input = lost.input;
     } else if (verb === 'again') {
       // Another version of the last scene: its move again from the point before it, and only of the scene the button
@@ -768,7 +770,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       const scenes = history(story, node.parent).length;
       from = { storyId: story.id, ...pointBefore(story, branch, node), name: t.labels.forkBranch(scenes ? t.labels.scene(scenes) : t.labels.seedCheckpoint) };
     } else if (verb === 'from-here') {
-      const wait = state.ui?.input === 'move' && state.ui.checkpointId === a ? state.ui : undefined;
+      const wait = state.ui?.input === 'move' && state.ui.checkpointId === a && String(state.ui.asked) === b ? state.ui : undefined;
       const cp = wait && state.stories[wait.storyId]?.checkpoints[wait.checkpointId];
       if (!wait || !cp) throw refuse(t, 'staleButton');
       input = wait.move;
@@ -777,17 +779,17 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     if (!input) return { screen: { text: t.notices.textOnly } };
     if (!state.active) return { screen: render(state, 'home', pictureInfo) };
     if (!action) {
-      const route = replied(state, update.message?.reply_to_message?.message_id, input);
+      const route = replied(state, update.message?.reply_to_message?.message_id, input, update.update_id);
       if (route) return { screen: render(state, route, pictureInfo), logged: { event: 'scene_replied_to', details: {} } };
     }
     requireGpu(t);
     state.ui = null;
-    state.interrupted = false;
     const job = from ? beginSideJob(state, from.storyId, from, from.name, input, Date.now(), t.labels) : beginTurn(state, input, Date.now());
     delete state.lostMove;
+    delete state.jobInterrupted;
     // The reader wrote nothing, so the move is the narrator's; a story with a pace tells it so (local/prompt.ts).
     if (narrator) job.move = 'narrator';
-    const event = action === 'retry' ? 'move_repeated' : verb === 'again' ? 'scene_again' : verb === 'from-here' ? 'move_from_scene' : undefined;
+    const event = verb === 'retry' ? 'move_repeated' : verb === 'again' ? 'scene_again' : verb === 'from-here' ? 'move_from_scene' : undefined;
     return { job, ...event ? { logged: { event, details: {} } } : {} };
   }
 
@@ -805,7 +807,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
   // A reply to a scene other than the last one of the branch being played: nothing runs and nothing forks by itself, the
   // screen of that scene asks (`MoveInput`). A reply to the last scene, to a message that shows no scene, or to one of a
   // scene with no checkpoint left to go on from is a move like any other. Returns the route of that screen.
-  function replied(state: Library, messageId: number | undefined, move: string) {
+  function replied(state: Library, messageId: number | undefined, move: string, asked: number) {
     if (messageId === undefined) return undefined;
     const lastScene = state.stories[state.active!.storyId]?.branches[state.active!.branchId]?.head;
     for (const story of Object.values(state.stories)) {
@@ -814,7 +816,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       const here = Object.values(story.checkpoints).filter(cp => cp.head === node.id && Object.hasOwn(story.branches, cp.branchId));
       const cp = here.find(one => one.kind === 'scene') ?? here[0];
       if (node.id === lastScene || !cp) return undefined;
-      state.ui = { input: 'move', storyId: story.id, checkpointId: cp.id, move };
+      state.ui = { input: 'move', storyId: story.id, checkpointId: cp.id, move, asked };
       return `checkpoint:${story.id}:${cp.id}`;
     }
     return undefined;
@@ -1182,7 +1184,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     };
     let compactionStatus: CompactionStatus | undefined;
     const onProgress = (event: CompactionStatus) => {
-      compactionStatus = { ...compactionStatus, ...event, automatic: job.kind !== 'compact' };
+      compactionStatus = { ...compactionStatus, ...event, automatic: job.kind !== 'compact', job: job.id };
       progress.update(compactionStatus);
     };
     const reportFailure = async (error: unknown) => {
@@ -1630,19 +1632,27 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         inFlight.add(task);
       }
     },
-    // Tells the readers whose job died with the last process (local/store.ts `recover`), once, with the button that
-    // repeats their move. Nothing runs again by itself.
+    // Tells the readers whose job ended with the last process (local/store.ts `recover`), with the button that repeats
+    // their move. Nothing runs again by itself. A reader no message reached is told at the next start.
     async interrupted(userIds: string[]) {
       for (const userId of userIds) {
         if (!allowedUsers.has(userId)) continue;
         const state = store.read(userId);
         const chat = createChat(api, Number(userId), chats.get(userId) ?? chats.set(userId, chatMemory()).get(userId));
-        await safeSend(chat, { text: texts(state.language).notices.interrupted(lostMove(state) ? '/retry' : '/compact'), reply_markup: sceneKeyboard(state) }, logFor(userId));
+        const log = logFor(userId);
+        try {
+          await chat.send({ text: texts(state.language).notices.interrupted(lostMove(state) ? '/retry' : '/compact'), reply_markup: sceneKeyboard(state) });
+          log('screen_sent');
+          store.mutate(userId, state => { delete state.jobInterrupted; });
+        } catch (error) { log('telegram_send_failed', errorCode(error)); }
       }
     },
     async idle() { await Promise.all([...inFlight, ...preparing, ...uploading.values()]); },
     async stop() {
       for (const entry of prepared.values()) entry.stop();
+      // A job this stop cuts short ends as one the process died under. That comes before the abort, after which a turn
+      // lets go of its job and keeps no move, as for the reader's own /cancel. A write that fails leaves it to `recover`.
+      for (const userId of running.keys()) try { store.mutate(userId, interruptJob); } catch { /* Found at the next start. */ }
       for (const entry of running.values()) entry.controller.abort();
       for (const stop of sampling.values()) stop.abort();
       for (const stop of varying.values()) stop.abort();
