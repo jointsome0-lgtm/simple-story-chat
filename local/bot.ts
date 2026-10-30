@@ -1641,7 +1641,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         const chat = createChat(api, Number(userId), chats.get(userId) ?? chats.set(userId, chatMemory()).get(userId));
         const log = logFor(userId);
         try {
-          await chat.send({ text: texts(state.language).notices.interrupted(lostMove(state) ? '/retry' : '/compact'), reply_markup: sceneKeyboard(state) });
+          await chat.send({ text: texts(state.language).notices.interrupted(state.lostMove ? '/retry' : '/compact'), reply_markup: sceneKeyboard(state) });
           log('screen_sent');
           store.mutate(userId, state => { delete state.jobInterrupted; });
         } catch (error) { log('telegram_send_failed', errorCode(error)); }
@@ -1651,9 +1651,11 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     async stop() {
       for (const entry of prepared.values()) entry.stop();
       // A job this stop cuts short ends as one the process died under. That comes before the abort, after which a turn
-      // lets go of its job and keeps no move, as for the reader's own /cancel. A write that fails leaves it to `recover`.
-      for (const userId of running.keys()) try { store.mutate(userId, interruptJob); } catch { /* Found at the next start. */ }
-      for (const entry of running.values()) entry.controller.abort();
+      // lets go of its job and keeps no move, as for the reader's own /cancel; if that write fails, its turn runs on.
+      for (const [userId, entry] of running) {
+        try { store.mutate(userId, interruptJob); } catch { continue; }
+        entry.controller.abort();
+      }
       for (const stop of sampling.values()) stop.abort();
       for (const stop of varying.values()) stop.abort();
       for (const stop of retelling) stop.abort();
