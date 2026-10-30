@@ -13,7 +13,7 @@ type Sent = { path: string; method: string; headers: Headers; body: { [field: st
 type Respond = (path: string, sent: Sent) => Response;
 type Serving = ReturnType<typeof createServing>;
 
-const config = { baseUrl: 'http://127.0.0.1:8080', model: 'test-model', contextTokens: 65536, apiKey: 'synthetic-key', temperature: 0.8 };
+const config = { baseUrl: 'http://127.0.0.1:8080', model: 'test-model', contextTokens: 65536, apiKey: 'synthetic-key', temperature: 0.8, minP: 0.05, repetitionPenalty: 1.05 };
 const state = { contract: '2', boot_id: 'synthetic-boot', status: 'ready', model: 'test-model', context_tokens: 65536, drain_generation: 0 };
 const models = { object: 'list', data: [{ id: 'other-model', object: 'model', max_model_len: 65536 }, { id: 'test-model', object: 'model', max_model_len: 65536 }] };
 const request = (): ModelRequest => ({ system: 'Синтетические правила.', messages: [
@@ -72,10 +72,11 @@ test('every call says whose it is: a reader with a scope of their own, the agent
   // request's schema goes as it is, lengths included: the gateway passes it to the engine unread (contract section 4).
   const body = { model: 'test-model', messages: [{ role: 'system', content: r.system }, { role: 'user', content: 'Синтетический сид.\n\nПамять.' },
     ...r.messages.slice(2)], max_tokens: 4096, stream: true, stream_options: { include_usage: true }, temperature: 0.8,
-    top_p: 0.95, top_k: 64, min_p: 0, repetition_penalty: 1, chat_template_kwargs: { enable_thinking: false } };
+    top_p: 0.95, top_k: 64, min_p: 0.05, repetition_penalty: 1.05, chat_template_kwargs: { enable_thinking: false } };
   const schema = { type: 'object', properties: { facts: { type: 'array', items: { type: 'string', maxLength: 200 } } }, required: ['facts'], additionalProperties: false };
   const memory: ModelRequest = { ...request(), outputSchema: schema, purpose: 'memory' };
   const own = (...routes: string[]) => routes.map(route => [route, 'internal', 'internal']);
+  const flat = { min_p: 0, repetition_penalty: 1 };
   const calls: [string, Partial<typeof config>, (provider: Serving) => Promise<unknown>, (string | null)[][], object][] = [
     // A pool's slot means nothing to the gateway and is never sent.
     ['a reader\'s count and scene', {}, async p => { assert.equal(await p.countInput(r, reading), 120); await p.generate(r, { ...reading, slot: 2 }); },
@@ -87,9 +88,14 @@ test('every call says whose it is: a reader with a scope of their own, the agent
     ['a request that names a reader', {}, async p => { await p.generate({ ...trusted(), ...reading } as ModelRequest);
       await p.countInput({ ...request(), ...reading } as ModelRequest); }, own(GENERATE, COUNT), body],
     ['a memory request, which samples cold', {}, async p => { await p.countInput(memory); await p.generate(memory); }, own(COUNT, GENERATE),
-      { ...body, temperature: 0.2, response_format: { type: 'json_schema', json_schema: { name: 'reply', strict: true, schema } } }],
+      { ...body, ...flat, temperature: 0.2, response_format: { type: 'json_schema', json_schema: { name: 'reply', strict: true, schema } } }],
+    // Only a scene has `min_p` and the penalty: a wrong value in either of these would break memory or a frame silently.
+    ['a memory request without a schema', {}, p => p.generate({ ...trusted(), purpose: 'memory' }), own(GENERATE), { ...body, ...flat, temperature: 0.2 }],
+    ['a schema that is not memory', {}, p => p.generate({ ...trusted(), outputSchema: schema }), own(GENERATE),
+      { ...body, ...flat, response_format: { type: 'json_schema', json_schema: { name: 'reply', strict: true, schema } } }],
+    ['both turned off', { minP: 0, repetitionPenalty: 1 }, p => p.generate(trusted()), own(GENERATE), { ...body, ...flat }],
     ['the configured temperature', { temperature: 1.1 }, p => p.generate(trusted()), own(GENERATE), { ...body, temperature: 1.1 }],
-    ['the default temperature', { temperature: undefined }, p => p.generate(trusted()), own(GENERATE), body],
+    ['the default temperature and sampling', { temperature: undefined, minP: undefined, repetitionPenalty: undefined }, p => p.generate(trusted()), own(GENERATE), body],
   ];
   for (const [label, options, act, expected, sent] of calls) {
     const f = fixture(undefined, options);

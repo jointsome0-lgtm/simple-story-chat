@@ -6,7 +6,7 @@ import type { CaptionerConfig } from './pose-set.ts';
 
 export type Env = NodeJS.Dict<string>;
 export type ModelConfig = {
-  provider: 'claude-code' | 'codex-cli' | 'llama-cpp' | 'openai-compatible' | 'simple-serving'; model: string; baseUrl: string | undefined; apiKey: string; temperature: number;
+  provider: 'claude-code' | 'codex-cli' | 'llama-cpp' | 'openai-compatible' | 'simple-serving'; model: string; baseUrl: string | undefined; apiKey: string; temperature: number; minP: number; repetitionPenalty: number;
   memoryMode: 'plain' | 'sgr'; repairCoverage: boolean; memoryThinking: boolean; timeoutMs: number; contextTokens: number; maxOutputTokens: number;
   compactAtTokens: number; keepScenes: number;
   // The scheduler's lanes: llama.cpp's slots, or the calls simple-serving takes from the bot at once. For llama.cpp
@@ -96,6 +96,10 @@ function modelConfig(env: Env): ModelConfig {
   if (baseUrl?.startsWith('https:') && !apiKey) throw new Error('Set SIMPLE_CHAT_API_KEY for a remote HTTPS server');
   const temperature = Number(env.SIMPLE_CHAT_TEMPERATURE || '0.8');
   if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) throw new Error('Invalid SIMPLE_CHAT_TEMPERATURE');
+  const minP = Number(env.SIMPLE_CHAT_MIN_P || '0.05');
+  if (!Number.isFinite(minP) || minP < 0 || minP > 1) throw new Error('Invalid SIMPLE_CHAT_MIN_P');
+  const repetitionPenalty = Number(env.SIMPLE_CHAT_REPETITION_PENALTY || '1.05');
+  if (!Number.isFinite(repetitionPenalty) || repetitionPenalty < 1 || repetitionPenalty > 2) throw new Error('Invalid SIMPLE_CHAT_REPETITION_PENALTY');
   if (provider === 'openai-compatible' && !env.SIMPLE_CHAT_MODEL) throw new Error('Set SIMPLE_CHAT_MODEL for the hosted API');
   // Which models a Codex account may use depends on its plan, so there is no safe default.
   if (provider === 'codex-cli' && !env.SIMPLE_CHAT_MODEL) throw new Error('Set SIMPLE_CHAT_MODEL for the Codex CLI');
@@ -130,7 +134,7 @@ function modelConfig(env: Env): ModelConfig {
   const poolTokens = slots > 1 && sharedCache ? integer('SIMPLE_CHAT_POOL_TOKENS', contextTokens, contextTokens, 131072) : contextTokens;
   return {
     slots, poolTokens, sharedCache,
-    provider, model, baseUrl, apiKey, temperature, memoryMode, repairCoverage: repairCoverage === 'true', memoryThinking: memoryThinking === 'true',
+    provider, model, baseUrl, apiKey, temperature, minP, repetitionPenalty, memoryMode, repairCoverage: repairCoverage === 'true', memoryThinking: memoryThinking === 'true',
     timeoutMs: integer('SIMPLE_CHAT_MODEL_TIMEOUT_MS', 300000, 1000, 1800000),
     contextTokens, maxOutputTokens,
     compactAtTokens: integer('SIMPLE_CHAT_COMPACT_AT_TOKENS', Math.min(provider === 'claude-code' || provider === 'codex-cli' ? 54000 : 44000, maxInput), 2048, maxInput),

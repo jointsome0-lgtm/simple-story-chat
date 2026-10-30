@@ -33,6 +33,8 @@ The variables go in `.env`, and [.env.example](../.env.example) is the starting 
 | `SIMPLE_CHAT_API_KEY`, `SIMPLE_CHAT_BASE_URL` | The key and the root address of llama.cpp, of our gateway or of a hosted API; empty for Claude Code and Codex CLI. The gateway (`simple-serving`) needs its key even over a tunnel |
 | `SIMPLE_CHAT_MODEL_TIMEOUT_MS` | The timeout of a model call through the CLI or HTTP; 300000 ms by default, 600000 ms in the GPU example |
 | `SIMPLE_CHAT_TEMPERATURE` | The temperature of a fiction reply over HTTP, 0.8 by default; `api.openai.com` gets none |
+| `SIMPLE_CHAT_MIN_P` | `min_p` of a scene on `llama-cpp` and `simple-serving`, 0.05 by default, from 0 to 1; 0 turns it off. A request with a schema and memory stay at 0, and a hosted API gets none. A gateway whose card drafts refuses anything above 0 unless the card runs with `MIN_P_WHILE_DRAFTING=1` |
+| `SIMPLE_CHAT_REPETITION_PENALTY` | The repetition penalty of a scene on `llama-cpp` and `simple-serving`, 1.05 by default, from 1 to 2; 1 turns it off. A request with a schema and memory stay at 1, and a hosted API gets none |
 | `SIMPLE_CHAT_MEMORY_MODE` | `plain` (the default) or the experimental `sgr` ([context and memory](model-providers.md#memory-and-context)) |
 | `SIMPLE_CHAT_BUDGET_REQUESTS`, `SIMPLE_CHAT_BUDGET_TOKENS` | Daily limits for `openai-compatible`; without them the channel's [defaults](eval.md#daily-limits) apply |
 | `SIMPLE_CHAT_VAST_INSTANCE_ID`, `SIMPLE_CHAT_VAST_API_KEY` | Optional: the Vast.ai instance that the bot starts and stops by itself, with `llama-cpp` only ([instructions](llama-cpp.md#managed-gpu)) |

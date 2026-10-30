@@ -4,7 +4,7 @@ import { ModelError, member } from './model-error.ts';
 import type { ModelConfig } from './config.ts';
 import { modelBaseUrl } from './config.ts';
 import type { Controls, GenerateControls, GenerationResult, ModelRequest, Timings } from './model.ts';
-import { MAX_BODY, events, messagesFor, streamLimit } from './llama.ts';
+import { MAX_BODY, events, messagesFor, samplesAsScene, streamLimit } from './llama.ts';
 
 // simple-serving: our own gateway in front of vLLM on a rented card, built to contract v2 (docs/contract-v2.md in
 // jointsome0-lgtm/simple-serving; the cases both sides test are pinned in local/serving-contract/). Unlike llama-server
@@ -12,7 +12,7 @@ import { MAX_BODY, events, messagesFor, streamLimit } from './llama.ts';
 // refusal comes with a code of the contract rather than a bare status.
 
 // Only the fields this provider reads; tests pass a partial configuration.
-export type ServingConfig = Pick<ModelConfig, 'baseUrl' | 'model' | 'contextTokens' | 'apiKey'> & Partial<Pick<ModelConfig, 'temperature' | 'timeoutMs'>>;
+export type ServingConfig = Pick<ModelConfig, 'baseUrl' | 'model' | 'contextTokens' | 'apiKey'> & Partial<Pick<ModelConfig, 'temperature' | 'minP' | 'repetitionPenalty' | 'timeoutMs'>>;
 // Thrown values are not checked; these fields are read if present and filtered by ModelError.
 type Thrown = { phase?: unknown; httpStatus?: unknown; servingCode?: unknown; code?: unknown; cause?: { code?: unknown } | null } | null | undefined;
 type Options = { fetch?: (url: string, init: RequestInit) => Promise<Response> };
@@ -80,7 +80,8 @@ export function createServing(config: ServingConfig, { fetch: fetcher = globalTh
     messages: messagesFor(request),
     max_tokens: request.maxOutputTokens, stream: true, stream_options: { include_usage: true },
     temperature: request.purpose === 'memory' ? 0.2 : config.temperature ?? 0.8,
-    top_p: 0.95, top_k: 64, min_p: 0, repetition_penalty: 1,
+    top_p: 0.95, top_k: 64, min_p: samplesAsScene(request) ? config.minP ?? 0.05 : 0,
+    repetition_penalty: samplesAsScene(request) ? config.repetitionPenalty ?? 1.05 : 1,
     chat_template_kwargs: { enable_thinking: request.thinking === true },
     ...(request.outputSchema ? { response_format: { type: 'json_schema',
       json_schema: { name: 'reply', strict: true, schema: request.outputSchema } } } : {}),

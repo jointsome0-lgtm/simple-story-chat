@@ -6,7 +6,7 @@ import { ModelError } from './model-error.ts';
 import type { GenerateControls, GenerationResult, ModelRequest } from './model.ts';
 
 // The request body fields these tests read.
-type SentBody = { messages: unknown; chat_template_kwargs: { enable_thinking: unknown }; response_format?: unknown; id_slot?: unknown };
+type SentBody = { messages: unknown; chat_template_kwargs: { enable_thinking: unknown }; response_format?: unknown; id_slot?: unknown; min_p?: unknown; repeat_penalty?: unknown };
 type Answer = (init: RequestInit) => Response | Promise<Response>;
 type Provider = ReturnType<typeof createLlama>;
 
@@ -153,6 +153,20 @@ const cases: Case[] = [
   // A request counted before it was sent is not counted again.
   { label: 'a counted request refused', answer: () => refusal(400), stages: whole, error: { code: 'provider_failed', phase: 'generate', httpStatus: 400 } },
 ];
+
+test('only a scene has min_p and the penalty: a wrong value on a schema or a memory request would break it silently', async () => {
+  const sampled = async (one: ModelRequest) => {
+    const f = fixture();
+    await f.provider.generate({ ...one, trustEstimate: true });
+    const { min_p: minP, repeat_penalty: penalty } = f.calls.at(-1)!.body!;
+    return [minP, penalty];
+  };
+  const outputSchema = { type: 'object' };
+  assert.deepEqual(await sampled(request()), [0.05, 1.05]);
+  assert.deepEqual(await sampled({ ...request(), outputSchema }), [0, 1]);
+  assert.deepEqual(await sampled({ ...request(), purpose: 'memory' }), [0, 1]);
+  assert.deepEqual(await sampled({ ...request(), purpose: 'memory', outputSchema }), [0, 1]);
+});
 
 test('a request is counted and reserved before it is sent, and the server\'s stream is held to that count', async () => {
   for (const c of cases) {

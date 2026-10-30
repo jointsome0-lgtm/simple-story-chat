@@ -112,7 +112,8 @@ reconnects the card, and the label after the colon only names the run.
   context 65536, the gateway's 900 s for class `internal`, and the bot's default output limit and temperature.
 
 Both tunnels hold local port 8080, so a card serves one of them at a time. The two adapters send the same sampling:
-the temperature, `top_p` 0.95, `top_k` 64, `min_p` 0, no repetition penalty, thinking off. A comparison therefore
+the temperature, `top_p` 0.95, `top_k` 64, thinking off, and `min_p` 0.05 and a repetition penalty of 1.05 for a scene,
+0 and 1 for every other request; runs before 2026-10-30 had 0 and 1 for scenes too. A comparison therefore
 holds while `.env.gpu` keeps the context at 65536, the output limit at 4096 and the temperature at 0.8. The two routes
 still differ in the engine, in the weights and in the KV cache, q8_0 on llama.cpp and fp8 on vLLM, and eval measures
 the three together without telling one from another.

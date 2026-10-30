@@ -6,7 +6,7 @@ import type { Controls, GenerateControls, GenerationResult, ModelRequest, Timing
 import type { Budget } from './budget.ts';
 
 // Only the fields this provider reads; tests pass a partial configuration.
-export type LlamaConfig = Pick<ModelConfig, 'baseUrl' | 'model' | 'contextTokens'> & Partial<Pick<ModelConfig, 'apiKey' | 'temperature' | 'timeoutMs'>>;
+export type LlamaConfig = Pick<ModelConfig, 'baseUrl' | 'model' | 'contextTokens'> & Partial<Pick<ModelConfig, 'apiKey' | 'temperature' | 'minP' | 'repetitionPenalty' | 'timeoutMs'>>;
 // Thrown values are not checked; these fields are read if present and filtered by ModelError.
 type Thrown = { phase?: unknown; httpStatus?: unknown; code?: unknown; cause?: { code?: unknown } | null } | null | undefined;
 // llama.cpp JSON is not validated in advance. Fields the provider checks are unknown; a body or
@@ -51,6 +51,11 @@ function withoutLengths(schema: unknown): unknown {
   return Object.fromEntries(Object.entries(schema).filter(([key]) => key !== 'minLength' && key !== 'maxLength')
     .map(([key, value]) => [key, withoutLengths(value)]));
 }
+// A scene, the prose a reader gets, is the one request with `min_p` and a repetition penalty, on the bot's own servers:
+// the owner's «в main тогда дефолт для чата» of 2026-10-30, after the card's proof at `min_p` 0.08 and a penalty of 1.5
+// (1.05 itself was not measured). A request with a schema, and memory, stay at 0 and 1.
+export const samplesAsScene = (request: ModelRequest) => !request.outputSchema && request.purpose !== 'memory';
+
 export function messagesFor(request: ModelRequest) {
   const messages: { role: string; content: string }[] = [];
   for (const message of [{ role: 'system', content: request.system }, ...request.messages]) {
@@ -131,7 +136,8 @@ function createChat(config: LlamaConfig, { fetch: fetcher = globalThis.fetch, bu
     messages: messagesFor(request),
     max_tokens: request.maxOutputTokens, stream: true, stream_options: { include_usage: true },
     temperature: request.purpose === 'memory' ? 0.2 : config.temperature ?? 0.8,
-    top_p: 0.95, top_k: 64, min_p: 0, repeat_penalty: 1,
+    top_p: 0.95, top_k: 64, min_p: samplesAsScene(request) ? config.minP ?? 0.05 : 0,
+    repeat_penalty: samplesAsScene(request) ? config.repetitionPenalty ?? 1.05 : 1,
     // The pinned server lets `reasoning_effort: 'none'` turn thinking off over the template's switch.
     ...(request.thinking === true ? {} : { reasoning_effort: 'none' }), reasoning_format: 'deepseek',
     chat_template_kwargs: { enable_thinking: request.thinking === true }, cache_prompt: true,
