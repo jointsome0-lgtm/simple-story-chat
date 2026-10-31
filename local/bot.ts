@@ -25,6 +25,7 @@ import type { GpuController } from './gpu.ts';
 import type { Illustrator, PictureRequest, PortraitRequest, SampleRequest, VariantRequest } from './picture.ts';
 import { DESCRIPTION_CHARS, LOOK_CHARS, ownPortraitPrompt, personAt, personTag } from './picture.ts';
 import { seesThrough } from './picture-pov.ts';
+import { noteKeyboard, ratingPress, ratingRow } from './picture-rating.ts';
 import { countVersions, descriptionOf, editableFrom, landEdit, personHere, personKey } from './picture-versions.ts';
 import { portraitText } from './image-portraits.ts';
 import { MAY_BE_EMPTY, PROFILE_CHARS, WORN_CLOTHES_CHARS, applyProfile, changedFields, fieldsMask, maskFields, parseProfile, profileHash, profileOf } from './profile.ts';
@@ -1476,6 +1477,18 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       const noticed = chat.passing('notice');
       if (update.callback_query?.id) {
         try { await api('answerCallbackQuery', { callback_query_id: update.callback_query.id }); } catch {}
+      }
+      // A press under a picture's prompt is a row of the log and that note's own buttons (local/picture-rating.ts). It is
+      // no move in the story: the library, a wait for the reader's text, a job and the chat's notices stay as they are.
+      const rating = ratingPress(update.callback_query?.data);
+      if (rating) {
+        log('picture_rating', undefined, ratingRow(rating));
+        const pressedOn = update.callback_query?.message?.message_id;
+        if (pressedOn !== undefined) {
+          const reply_markup = noteKeyboard(texts(store.read(userId).language), rating.storyId, rating.nodeId, rating.ref, rating.value);
+          try { await api('editMessageReplyMarkup', { chat_id: chatInfo.id, message_id: pressedOn, reply_markup }); } catch {}
+        }
+        return;
       }
       let fileInput: FileInput | undefined;
       let upload: Upload | undefined;

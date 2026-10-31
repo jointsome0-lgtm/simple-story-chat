@@ -128,6 +128,8 @@ export const en: Messages = {
     next: 'The pace applies from the next scene.',
   },
 
+  rating: { pose: 'Pose', people: 'People', face: 'Face', clothes: 'Clothes', other: 'Other' },
+
   variant: {
     button: '✏️ Edit the prompt and draw a variant',
     title: '✏️ Your own prompt for the picture',

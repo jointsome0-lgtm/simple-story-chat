@@ -66,6 +66,7 @@ assistant, so the rule lives here too.
 - **Do not open `data/`, `backups/`, `.env` or `.env.gpu`** with file tools, `sqlite3` or a throwaway script. When you
   need a fact from them, write code that prints booleans, counts and sizes, never values. Example: whether
   `SIMPLE_CHAT_OWNER_ID` is set and is on the access list.
+- **Do not open `simple-chat-private/`, beside this checkout, in any way.** It holds what the tester sends about pictures, which may be adult, for the owner and a local model alone. Its code is in the `simple-tuning` repository, so there is no reason to go in. Work from a neutral retelling the owner passes on.
 - **Diagnose from the technical logs in `logs/`.** A row is an event, a code and the fields that pass
   `safeErrorDetails` in `local/model-error.ts`. A row about a user request carries `actor: owner` or `actor: other`,
   never an ID. Add a new log field to that whitelist first, as an enum, a boolean or a non-negative integer.

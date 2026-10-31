@@ -147,6 +147,8 @@ export const ko: Messages = {
     next: '템포는 다음 장면부터 적용돼요.',
   },
 
+  rating: { pose: '포즈', people: '인물', face: '얼굴', clothes: '옷', other: '기타' },
+
   variant: {
     button: '✏️ 프롬프트를 고쳐 변형 그리기',
     title: '✏️ 삽화에 쓸 내 프롬프트',

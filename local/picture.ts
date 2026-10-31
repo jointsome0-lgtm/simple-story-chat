@@ -88,6 +88,7 @@ import type { Store } from './store.ts';
 import { patiently, refused } from './telegram.ts';
 import type { Chat, InlineKeyboard, Screen } from './telegram.ts';
 import { texts } from './text.ts';
+import { PICTURE_REFS, noteKeyboard } from './picture-rating.ts';
 import type { Messages } from './text.ts';
 import { qwenPromptTokens } from './tokenizer.ts';
 import type { QwenTokenizer } from './tokenizer.ts';
@@ -562,6 +563,9 @@ export function createIllustrator(config: ImageConfig, deps: {
   // Whether a reader's frames keep each person's things from scene to scene (SIMPLE_CHAT_WEAR_USERS,
   // local/picture-wear.ts). Without it every request is as it was.
   const wearFor = (userId: string) => clothesFor(userId) && !!config.wearUsers?.has(userId);
+  // The number of one picture a reader may rate, in its row and in its buttons (SIMPLE_CHAT_RATING_USERS,
+  // local/picture-rating.ts); nobody else's picture has one.
+  const ratable = (userId: string): { pictureRef?: number } => config.ratingUsers?.has(userId) ? { pictureRef: randomInt(PICTURE_REFS) } : {};
   // Whether a reader's frames are drawn from a whole prompt the story model writes after the frame (config
   // SIMPLE_CHAT_G_PROMPT_USERS, local/picture-g.ts). Without it every request is as it was.
   const gFor = (userId: string) => config.users.has(userId) && !!config.gPromptUsers?.has(userId);
@@ -1115,11 +1119,10 @@ export function createIllustrator(config: ImageConfig, deps: {
   // may have.
   async function sendPrompt(request: { userId: string; chat: Chat; storyId: string; nodeId: string; log: Log; signal?: AbortSignal },
     photo: number | undefined, prompt: string, size: { promptCharacters: number; pictureTokens?: number; styleTokens?: number },
-    editable = false, place?: number) {
+    editable = false, place?: number, ref?: number) {
     const t = texts(store.read(request.userId).language);
     const summary = t.notices.promptSummary(size.promptCharacters, size.pictureTokens ?? null, size.styleTokens ?? null);
-    const keyboard = editable && photo !== undefined
-      ? { inline_keyboard: [[{ text: t.variant.button, callback_data: `prompt-edit:${request.storyId}:${request.nodeId}` }]] } : undefined;
+    const keyboard = editable && photo !== undefined ? noteKeyboard(t, request.storyId, request.nodeId, ref) : undefined;
     await sendNote(request, photo, foldedPrompt(summary, prompt), keyboard, place);
   }
 
@@ -1331,13 +1334,14 @@ export function createIllustrator(config: ImageConfig, deps: {
       }
       const photoMs = Math.max(0, now() - photoStarted);
       const size = promptSize(assembled.prompt, assembled.line ?? line, drawn.referenceCount);
-      await sendPrompt(framed, photo, assembled.prompt, size, true, frame.note);
-      log('picture', undefined, { outcome: 'ready', cancelled: signal.aborted, describeMs: frame.describeMs, imageQueueMs: drawn.queueMs, imageMs: drawn.totalMs,
+      const rated = ratable(userId);
+      await sendPrompt(framed, photo, assembled.prompt, size, true, frame.note, rated.pictureRef);
+      log('picture', undefined, { ...rated, outcome: 'ready', cancelled: signal.aborted, describeMs: frame.describeMs, imageQueueMs: drawn.queueMs, imageMs: drawn.totalMs,
         ...frame.line.waited(), imageSteps: recipe.steps, pictureAttention: drawn.pictureAttention, photoMs, photoBytes: drawn.bytes.length,
         namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook, clothesChanged: described!.clothesChanged, ...described!.wear,
         pictureStyle, ...pov === undefined ? {} : { pov }, ...described!.lastingChanges === undefined ? {} : { lastingChanges: described!.lastingChanges },
         ...described!.views ? { poseSetPeople: described!.poseSetPeople, poseViewsPicked: Object.keys(described!.views).length } : {},
-        ...result.changed, ...gCounts, ...size, ...frame.retries ? { describeRetries: frame.retries } : {}, ...elapsedOf(frame) });
+        framePeople: described!.description.people.length, ...result.changed, ...gCounts, ...size, ...frame.retries ? { describeRetries: frame.retries } : {}, ...elapsedOf(frame) });
     } catch (error) { await endFrame(frame, error, { pictureStyle, pov, gCounts }); }
     finally {
       releasePortraits?.();
@@ -1558,8 +1562,9 @@ export function createIllustrator(config: ImageConfig, deps: {
         const photoMs = Math.max(0, now() - photoStarted);
         await status.clear();
         const size = promptSize(prompt, undefined, drawn.referenceCount);
-        await sendPrompt(scene, photo, prompt, size, true);
-        log('picture_variant', undefined, { outcome: 'ready', cancelled: signal.aborted, edited: true, imageQueueMs: drawn.queueMs,
+        const rated = ratable(userId);
+        await sendPrompt(scene, photo, prompt, size, true, undefined, rated.pictureRef);
+        log('picture_variant', undefined, { ...rated, outcome: 'ready', cancelled: signal.aborted, edited: true, imageQueueMs: drawn.queueMs,
           imageMs: drawn.totalMs, ...status.waited(),
           imageSteps: recipe.steps, pictureAttention: drawn.pictureAttention, photoMs, photoBytes: drawn.bytes.length, ...size });
       } catch (error) {

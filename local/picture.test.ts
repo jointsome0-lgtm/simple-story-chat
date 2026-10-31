@@ -269,6 +269,7 @@ type Options = {
   saveImage?: boolean; graphFile?: string; references?: boolean; pictureOwner?: string; referenceUsers?: string[];
   // Reader 1 has the things of each person (local/picture-wear.ts).
   wear?: boolean;
+  rating?: boolean;
   // How long a description waits past the scenes that keep it from a slot, and how often it asks, and what holds the
   // frame's call.
   describeWaitMs?: number; describeRetryMs?: number; frameGate?: () => Promise<void>;
@@ -361,6 +362,7 @@ async function fixture(t: TestContext, options: Options = {}) {
     url, workflow, checkpoint: 'synthetic.safetensors', style: options.style,
     users: new Set(options.users ?? ['1']), waitMs: 5000, timeoutMs: 5000, references: options.references,
     referenceUsers: new Set(options.referenceUsers), ...options.wear ? { clothesUsers: new Set(['1']), wearUsers: new Set(['1']) } : {},
+    ...options.rating ? { ratingUsers: new Set(['1']) } : {},
   };
   // A test that wants whole seconds of wait moves the bot's clock forward by `offsetMs`. `restart` builds the bot and
   // its illustrator again over the same store and Telegram, and so forgets whatever they kept in memory.
@@ -2000,4 +2002,24 @@ test('the picture configuration is off by default, loopback only, and never the 
     if (content !== undefined) writeFileSync(join(directory, file), content);
     assert.throws(() => createIllustrator({ ...config, workflow: join(directory, file) }, { store, provider }), refused, file);
   }
+});
+
+// A rating nobody can tie to its picture is lost without anybody noticing, and a press is no move in the story.
+test('a press under a picture is a row of the log with the picture\'s number, and changes nothing else', async t => {
+  const f = await fixture(t, { card: {}, style: STYLE_LINE, rating: true });
+  await f.start();
+  await f.bot.idle();
+  const buttons = (keyboard?: { inline_keyboard: { text: string; callback_data: string }[][] }) => keyboard!.inline_keyboard.flat();
+  const ref = f.rows.find(row => row.event === 'picture')!.pictureRef;
+  const down = buttons(notes(f.sent)[0].payload.reply_markup).find(button => button.text === '👎')!;
+  assert.ok(down.callback_data.startsWith(`rate:${ref}:down:`) && Buffer.byteLength(down.callback_data) <= 64);
+  const library = JSON.stringify(f.store.read('1'));
+  const press = (data: string) => f.bot.handle({ ...f.click(data), callback_query: { ...f.click(data).callback_query!, message: { message_id: 7, chat: { id: 1, type: 'private' } } } });
+  const edited = () => f.sent.filter(one => one.method === 'editMessageReplyMarkup').at(-1)!.payload.reply_markup;
+  await press(down.callback_data);
+  await press(buttons(edited()).find(button => button.text === 'Поза')!.callback_data);
+  assert.deepEqual(f.rows.filter(row => row.event === 'picture_rating').map(row => [row.pictureRef, row.pictureRating, row.ratingReason]),
+    [[ref, 'down', undefined], [ref, 'down', 'pose']]);
+  assert.deepEqual(buttons(edited()).map(button => button.text), ['👍', '👎 Поза', '✏️ Изменить промпт и нарисовать вариант']);
+  assert.equal(JSON.stringify(f.store.read('1')), library);
 });

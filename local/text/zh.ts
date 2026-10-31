@@ -138,6 +138,8 @@ export const zh: Messages = {
     next: '节奏从下一个场景开始生效。',
   },
 
+  rating: { pose: '姿势', people: '人物', face: '面部', clothes: '服装', other: '其他' },
+
   variant: {
     button: '✏️ 修改提示词并画一个变体',
     title: '✏️ 你自己的插图提示词',

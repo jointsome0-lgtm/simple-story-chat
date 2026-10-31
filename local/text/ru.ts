@@ -175,6 +175,9 @@ export const ru = {
 
   // A variant of a scene's picture from a prompt the reader writes whole (local/picture.ts `variant`): the button under
   // the picture's folded prompt, the screen while the reader writes, and the status line while it is drawn.
+  // The reasons under a thumb down (local/picture-rating.ts). Each is a button: keep it one word.
+  rating: { pose: 'Поза', people: 'Люди', face: 'Лицо', clothes: 'Одежда', other: 'Другое' },
+
   variant: {
     button: '✏️ Изменить промпт и нарисовать вариант',
     title: '✏️ Свой промпт для картинки',

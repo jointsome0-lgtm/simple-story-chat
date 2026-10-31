@@ -137,6 +137,8 @@ export const ja: Messages = {
     next: 'テンポは次のシーンから適用されます。',
   },
 
+  rating: { pose: 'ポーズ', people: '人物', face: '顔', clothes: '服', other: 'その他' },
+
   variant: {
     button: '✏️ プロンプトを直してバリエーションを描く',
     title: '✏️ 挿絵の自分のプロンプト',

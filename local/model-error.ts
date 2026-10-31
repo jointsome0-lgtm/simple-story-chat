@@ -81,6 +81,9 @@ const G_FALLBACKS = ['failed', 'unparsed', 'truncated', 'empty', 'non_latin', 't
 // person of the sheet has the same words; the look stood in the prompt more than once; or two people's places
 // overlapped.
 const G_TAG_MISSES = ['label', 'absent', 'missing', 'repeated', 'several', 'overlap'] as const;
+// What a reader thinks of a picture (local/picture-rating.ts): the two thumbs, and after a thumb down what was wrong.
+const PICTURE_RATINGS = ['up', 'down'] as const;
+export const RATING_REASONS = ['pose', 'people', 'face', 'clothes', 'other'] as const;
 // Why the model's last message ended, as the API names it, for the row of a failed Claude CLI run: `max_tokens` there
 // means the run's output cap was hit, which the CLI reports as an error rather than a truncation.
 export const STOP_REASONS = ['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'refusal', 'other'] as const;
@@ -170,6 +173,9 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   // one wait kept and refused; and in a frame, how many people of the sheet had groups to choose from and how many of
   // them the frame chose one for.
   'poseSetCount', 'poseSetKept', 'poseSetRefused', 'poseSetPeople', 'poseViewsPicked',
+  // How many people a frame shows, and the number that ties a picture's row to the rows of its rating
+  // (local/picture-rating.ts), which is random and names nothing.
+  'framePeople', 'pictureRef',
   // A pose set's archive (local/pose-archive.ts): of the pictures it kept, how many had all three labels from its
   // labels.csv and how many were marked main; and that file's rows, those that matched no picture and those with a value
   // the bot does not know.
@@ -223,6 +229,8 @@ export type ErrorDetails = {
   promptSource?: typeof PROMPT_SOURCES[number]; gFallback?: typeof G_FALLBACKS[number]; gTagMiss?: typeof G_TAG_MISSES[number];
   // A picture of a pose set: why it was refused; and an archive of one: why it was, and what its labels.csv was.
   poseSetRefusal?: typeof POSE_SET_REFUSALS[number]; poseArchiveRefusal?: ArchiveRefusal; poseLabels?: typeof ARCHIVE_LABELS[number];
+  // A press under a picture's prompt: the thumb, and what was wrong.
+  pictureRating?: typeof PICTURE_RATINGS[number]; ratingReason?: typeof RATING_REASONS[number];
   // A screen a reader opened, by its name.
   screen?: typeof SCREENS[number];
   // A failed Claude CLI run: how it ended and whether the CLI itself called the result an error.
@@ -286,6 +294,8 @@ export function safeErrorDetails(value: unknown = {}): ErrorDetails {
   if (member(POSE_SET_REFUSALS, input?.poseSetRefusal)) result.poseSetRefusal = input.poseSetRefusal;
   if (member(ARCHIVE_REFUSALS, input?.poseArchiveRefusal)) result.poseArchiveRefusal = input.poseArchiveRefusal;
   if (member(ARCHIVE_LABELS, input?.poseLabels)) result.poseLabels = input.poseLabels;
+  if (member(PICTURE_RATINGS, input?.pictureRating)) result.pictureRating = input.pictureRating;
+  if (member(RATING_REASONS, input?.ratingReason)) result.ratingReason = input.ratingReason;
   if (member(SCREENS, input?.screen)) result.screen = input.screen;
   if (member(CLI_RESULTS, input?.cliResult)) result.cliResult = input.cliResult;
   if (typeof input?.cliError === 'boolean') result.cliError = input.cliError;

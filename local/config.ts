@@ -34,6 +34,7 @@ export type ImageConfig = {
   clothesUsers?: Set<string>;
   // The readers of `clothesUsers` whose frames keep each person's things from scene to scene (local/picture-wear.ts).
   wearUsers?: Set<string>;
+  ratingUsers?: Set<string>;
   // The readers whose frames are drawn from a whole prompt the story model writes in one more request after the frame's
   // (local/picture-g.ts), as the owner decided on 2026-09-29. Nobody by default.
   gPromptUsers?: Set<string>;
@@ -182,6 +183,7 @@ export function gpuConfig(env: Env, provider: string): GpuConfig | undefined {
 //   SIMPLE_CHAT_CLOTHES_USERS=123456789                       # optional; a frame says what each person wears and bares
 //   SIMPLE_CHAT_WEAR_USERS=123456789                          # optional; each person's things are kept from scene to scene
 //   SIMPLE_CHAT_G_PROMPT_USERS=123456789                      # optional; the story model writes a frame's whole prompt
+//   SIMPLE_CHAT_RATING_USERS=123456789                        # optional; 👍 and 👎 under a picture's prompt
 //   SIMPLE_CHAT_IMAGE_PROVIDER=simple-serving                 # optional; comfyui by default
 //   SIMPLE_CHAT_IMAGE_API_KEY=...                             # the picture gateway's client key, with simple-serving
 //
@@ -276,6 +278,11 @@ export function imageConfig(env: Env, directory: string, allowedUsers: Set<strin
   for (const user of gPromptUsers) if (!users.has(user)) {
     throw new Error('Every SIMPLE_CHAT_G_PROMPT_USERS entry must be one of SIMPLE_CHAT_IMAGE_USERS');
   }
+  // 👍 and 👎 under a picture's prompt (local/picture-rating.ts), read as the versions: a stray ID is a typo.
+  const ratingUsers = new Set((env.SIMPLE_CHAT_RATING_USERS || '').split(',').map(one => one.trim()).filter(Boolean));
+  for (const user of ratingUsers) if (!users.has(user)) {
+    throw new Error('Every SIMPLE_CHAT_RATING_USERS entry must be one of SIMPLE_CHAT_IMAGE_USERS');
+  }
   const root = resolve(import.meta.dirname, '..');
   const captioner = poseSetUsers.size ? { python: resolve(root, 'captioner/.venv/bin/python'), script: resolve(root, 'captioner/caption.py'),
     model: resolve(root, 'models/pose-captioner'), threads: 4 } : undefined;
@@ -284,6 +291,7 @@ export function imageConfig(env: Env, directory: string, allowedUsers: Set<strin
   return { url: url.origin, workflow: resolve(directory, workflow), checkpoint, style, users,
     waitMs: seconds * 1000, timeoutMs: Math.min(60000, seconds * 1000), references: references === 'true', referenceUsers, versionUsers,
     clothesUsers, ...wearUsers.size ? { wearUsers } : {}, ...poseSetUsers.size ? { poseSetUsers, captioner } : {}, ...gPromptUsers.size ? { gPromptUsers } : {},
+    ...ratingUsers.size ? { ratingUsers } : {},
     ...(provider === 'simple-serving' ? { serving: { key } } : {}) };
 }
 
