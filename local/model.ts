@@ -53,7 +53,9 @@ export type GenerationResult = {
 // prefix is cached and gives way to its holder's next turn as well; it yields whether or not `yields` is set.
 // `work`: what the turn does, by which the queue times it for the start times it tells the people who wait
 // (local/eta.ts); it changes nothing of how the turn is run.
-export type TurnOptions = { holder?: string; yields?: boolean; sharesPrefix?: boolean; work?: Work };
+// `beside`: a turn that yields, and that runs beside its holder's next scene and gives way to it as well, which work
+// prepared ahead for that very scene does not (local/scheduler.ts).
+export type TurnOptions = { holder?: string; yields?: boolean; sharesPrefix?: boolean; beside?: boolean; work?: Work };
 export type Provider = {
   generate(request: ModelRequest, controls?: GenerateControls): Promise<GenerationResult>;
   countInput?(request: ModelRequest, controls?: Controls): Promise<number>;

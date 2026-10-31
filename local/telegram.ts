@@ -34,6 +34,10 @@ const PASSED_MAX = 200;
 const DELETE_BATCH = 100;
 // The pauses before a photo's second and third upload (`photo`).
 const PHOTO_RETRY_MS = [2000, 5000];
+// How many times a picture drawn already waits out Telegram's limit (`patiently`), and the longest of those waits: past
+// them a picture is put down as failed rather than hold up the bot's stop.
+const FLOOD_TRIES = 3;
+const FLOOD_WAIT_MS = 30_000;
 
 export class TelegramError extends Error {
   declare code: number | string;
@@ -48,7 +52,7 @@ export class TelegramError extends Error {
 
 // A payload with bytes in it is a file upload, which the Bot API takes as multipart/form-data and not as JSON.
 // sendPhoto uses it: the picture of a scene is sent from memory and is never written to this disk, so there is no
-// file_id and no URL to send instead. So does sendDocument, for a branch as a text file (`document`), whose name goes in
+// file_id and no URL to send instead. So does editMessageMedia, whose `media` names its bytes by `attach://`. So does sendDocument, for a branch as a text file (`document`), whose name goes in
 // `file_name` and not as a field of its own. Every other field of the payload travels beside the bytes as a
 // form field, numbers and objects as the API reads them back (JSON), which is what `reply_parameters` needs.
 export function multipartBody({ file_name: fileName, ...payload }: TelegramPayload, boundary: string): Buffer {
@@ -104,6 +108,36 @@ export function createApi(token: string): TelegramApi {
   };
 }
 
+// Whether Telegram said no, as far as anybody can tell: an answer of its own, to a request with none unanswered before
+// it (`patiently`). Anything else may have landed.
+export function refused(error: unknown) {
+  const { code, uncertain } = error as { code?: unknown; uncertain?: unknown };
+  return typeof code === 'number' && code >= 400 && code < 500 && !uncertain;
+}
+
+// An edit of a picture already paid for, which must not be lost to the network or to a flood limit: an edit asked for
+// twice lands once, so it is asked again after a failure with no answer, as `photo` does, and after the pause a 429 asks
+// for. An edit that finds the message showing it already has landed, and then there is no answer to read a file id from.
+// A stop asks nothing again. What it throws says whether any of these requests may have landed (`refused`).
+export async function patiently(edit: () => Promise<unknown>, signal?: AbortSignal) {
+  let uncertain = false;
+  for (let network = 0, flood = 0; ;) {
+    try { return await edit(); }
+    catch (error) {
+      if (error instanceof TelegramError && error.notModified) return undefined;
+      uncertain ||= !refused(error);
+      const noAnswer = error instanceof TelegramError && error.code === 'network' && network < PHOTO_RETRY_MS.length;
+      const limited = error instanceof TelegramError && error.code === 429 && flood < FLOOD_TRIES - 1;
+      if (noAnswer || limited) {
+        await delay(noAnswer ? PHOTO_RETRY_MS[network++] : (flood++, Math.min(FLOOD_WAIT_MS, ((error as TelegramError).retryAfter || 5) * 1000)),
+          undefined, { signal }).catch(() => {});
+        if (!signal?.aborted) continue;
+      }
+      throw Object.assign(error as object, { uncertain });
+    }
+  }
+}
+
 export function createChat(api: TelegramApi, chatId: number | string, memory: ChatMemory = chatMemory()) {
   const { passed } = memory;
   // Messages of this chat, a hundred to a call (`deleteMessages`, which skips any message it cannot find). A call
@@ -130,8 +164,9 @@ export function createChat(api: TelegramApi, chatId: number | string, memory: Ch
   }
   const removeAll = async (messageIds: number[]) => (await removeEach(messageIds)).removed;
   // A passing message (`Passing`), remembered under the id it resolves to; one Telegram gave no id for is not.
-  async function show(screen: Screen, kind: Passing, wait?: string) {
-    const sent = await api('sendMessage', { chat_id: chatId, ...screen }) as { message_id?: unknown } | null | undefined;
+  async function show(screen: Screen, kind: Passing, wait?: string, replyTo?: number) {
+    const sent = await api('sendMessage', { chat_id: chatId, ...screen,
+      ...(replyTo ? { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } } : {}) }) as { message_id?: unknown } | null | undefined;
     const id = sent?.message_id;
     if (typeof id !== 'number' || !Number.isSafeInteger(id)) return undefined;
     passed.set(id, { kind, wait });
@@ -148,6 +183,7 @@ export function createChat(api: TelegramApi, chatId: number | string, memory: Ch
       return result;
     },
     removeAll,
+    removeEach,
     show,
     // A screen in the place of the passing message `messageId`, the one whose button was pressed, or a message of its
     // own when that is none: a scene, a photo or a note is never written over. The edit is always asked for, also of a
@@ -200,16 +236,25 @@ export function createChat(api: TelegramApi, chatId: number | string, memory: Ch
       for (const messageId of left) if (!passed.has(messageId)) passed.set(messageId, taken.get(messageId)!);
       return removed;
     },
-    // The picture of a scene, uploaded from memory as PNG bytes and hung under the message it belongs to. A text
-    // message cannot become a photo by an edit — editMessageMedia needs a message that already carries media — so
-    // the status line that stood here is a message of its own, and the caller removes it once this one lands.
+    // The picture of a scene in the place of the status line that kept it, which `editMessageMedia` turns from text into
+    // a photo, uploaded from memory as `photo` is. It holds the reader's picture now, so it is theirs and passes no
+    // more. A message Telegram has no more, or will not turn, answers 400, for the caller to send the picture anew.
+    async media(messageId: number, bytes: Uint8Array, caption?: Screen, keepFile?: (fileId: string) => void, signal?: AbortSignal) {
+      const sent = await patiently(() => api('editMessageMedia', { chat_id: chatId, message_id: messageId,
+        media: { type: 'photo', media: 'attach://picture', ...(caption ? { caption: caption.text } : {}) }, picture: bytes }), signal) as
+        { photo?: { file_id?: unknown }[] } | undefined;
+      passed.delete(messageId);
+      const fileId = sent?.photo?.at(-1)?.file_id;
+      if (typeof fileId === 'string') keepFile?.(fileId);
+    },
+    // The picture of a scene, uploaded from memory as PNG bytes and hung under the message it belongs to.
     // Resolves to the photo's own message id, by which a deletion of its scene takes it out of the chat again.
     // An upload that got no answer (`network`: the connection dropped or went silent) is sent again 2 s after the
     // failure and once more 5 s after a second one, since the picture is drawn already and the drops seen so far
     // lasted seconds. No answer does not mean the photo did not arrive, so in rare cases a retry shows the reader the
     // same photo twice, which is better than a lost picture. Any other failure throws at once, and so does a third
     // upload without an answer.
-    async photo(bytes: Uint8Array, replyTo?: number, caption?: Screen, keepFile?: (fileId: string) => void) {
+    async photo(bytes: Uint8Array, replyTo?: number, caption?: Screen, keepFile?: (fileId: string) => void, signal?: AbortSignal) {
       const payload = { chat_id: chatId, photo: bytes,
         ...(caption ? { caption: caption.text, ...(caption.reply_markup ? { reply_markup: caption.reply_markup } : {}) } : {}),
         ...(replyTo ? { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } } : {}) };
@@ -223,7 +268,8 @@ export function createChat(api: TelegramApi, chatId: number | string, memory: Ch
         } catch (error) {
           const noAnswer = error instanceof TelegramError && error.code === 'network';
           if (!noAnswer || attempt === PHOTO_RETRY_MS.length) throw error;
-          await delay(PHOTO_RETRY_MS[attempt]);
+          await delay(PHOTO_RETRY_MS[attempt], undefined, { signal }).catch(() => {});
+          if (signal?.aborted) throw error;
         }
       }
     },
@@ -238,6 +284,11 @@ export function createChat(api: TelegramApi, chatId: number | string, memory: Ch
         ...(replyTo ? { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } } : {}),
         ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
       return (sent as { message_id?: number } | undefined)?.message_id;
+    },
+    // A note kept for a prompt (`note`) with its prompt at last, and the buttons it has now.
+    async noteEdit(messageId: number, html: string, replyMarkup?: InlineKeyboard, signal?: AbortSignal) {
+      await patiently(() => api('editMessageText', { chat_id: chatId, message_id: messageId, rich_message: { html },
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {}) }), signal);
     },
     // A scene, the newest of the story or one shown again. Only the newest scene keyboard stays: the one before it loses
     // its buttons, which act on the branch being played and not on the scene above them, so that «Продолжить» under

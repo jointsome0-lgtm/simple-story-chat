@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { UserError, id, active, addSeed, newStory, fork, beginJob, beginSideJob, addBookmark, removeBookmark,
-  deleteSeed, deleteBranch, editFact, forgetLostPictures, interruptJob, context, factsOf, history, jobTarget, keepMove, lostMove, pointBefore, pointStands, releaseJob, setLanguage, isPace, isPose,
+  deleteSeed, deleteBranch, editFact, forgetLostPictures, interruptJob, MESSAGE_DELETABLE_MS, memoryChain, recoverPictures, releaseReserved, context, factsOf, history, jobTarget, keepMove, lostMove, pointBefore, pointStands, releaseJob, setLanguage, isPace, isPose,
   appearanceOf, linkPreset, linkedPeople, linkedPreset, linkedStory, presetPicture, referenceFiles, savePreset, unlinkPreset } from '../lib/library.ts';
 import type { Job, Library, PendingPoseUpload, PoseSetInput, PoseUploadFile, ProfileInput, ReferenceInput, SceneNode } from '../lib/library.ts';
 import { storyNarration } from './prompt.ts';
@@ -147,11 +147,14 @@ type Plan = {
 // One reader's turn, for as long as it can still be cancelled. What it leaves behind — a picture being stopped on
 // the other card — outlives the entry and is awaited through `inFlight` instead.
 //
-// `picture` is the stop of that picture alone. The turn's own controller feeds it — a /cancel or a shutdown ends
-// both — but the reader's next message ends only the picture, because by then the turn itself is over in every way
-// that matters: the scene is committed, the job lock is clear, and what is left of it is a message being delivered
-// and the work it starts afterwards for the reader's next turn.
-type Running = { controller: AbortController; picture: AbortController };
+// `picture` keeps a turn that is still delivering its scene from asking for that scene's picture. The turn's own
+// controller feeds it, a /cancel or a shutdown ending both, and a /cancel reaches it through `earlier`, the turn this one
+// came after while that one is still delivering: the reader's next message leaves the turn behind it as it is, since
+// the job lock is clear by then, and a /cancel means every picture of theirs. Once a picture is asked for it is in the
+// reader's queue (local/picture.ts `illustrate`), which /cancel reaches as a whole and nothing here holds.
+// `settled` is over once the turn has delivered its scene and kept the place of its picture: the next scene goes out
+// after that, so that each picture's place stands right under its scene, whatever Telegram's answers take.
+type Running = { controller: AbortController; picture: AbortController; settled: Promise<void>; earlier?: Running };
 // Library IDs are a prefix and a sequence number, as id() in lib/library.ts creates them.
 const ID = { seed: /^s\d+$/, story: /^h\d+$/, branch: /^b\d+$/, checkpoint: /^c\d+$/, node: /^n\d+$/, memory: /^m\d+$/, place: /^\d{1,4}$/, preset: /^p\d+$/ };
 // The wait the reader is in, the input the next message is taken for or the deletion asked about, and for what. A
@@ -1241,10 +1244,11 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
   // Runs the turn and, when the scene has been delivered, says what its picture would be drawn from. The picture
   // itself is not made here: it must not hold the model slot or the GPU of this turn (see `handle`).
   async function generate(userId: string, chat: Chat, job: Job, controller: AbortController, releaseGpu: (() => void) | undefined,
-    pictureSignal: AbortSignal): Promise<PictureRequest | undefined> {
+    pictureSignal: AbortSignal, earlier?: Promise<void>): Promise<PictureRequest | undefined> {
     const log = logFor(userId);
     let prepare = false;
     let picture: PictureRequest | undefined;
+    let memory: PictureRequest['memory'];
     // The language at the start of the job serves its status message and the labels it stores; later messages read it again.
     const language = store.read(userId).language;
     const labels = texts(language).labels;
@@ -1315,7 +1319,13 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
       const endStatus = () => { over = true; return status; };
       const outcome = await runTurn({ store, userId, job, provider, config: contextConfig, signal: controller.signal,
         prepared: preparedFor(userId), onProgress, log, labels,
-        operation: { settle: (state, result) => { if (!result.ref) keepMove(state, job); } },
+        // The picture reads the memory of the scene, taken in the write that commits it: the job lock goes with that write,
+        // and the reader's next request may compact the branch before this turn is over.
+        operation: { settle: (state, result) => {
+          if (!result.ref) return keepMove(state, job);
+          const story = state.stories[result.ref.storyId], id = story.branches[result.ref.branchId]?.memory ?? null;
+          memory = { id, chain: memoryChain(story, id) };
+        } },
         waiting: (ahead, etaMs) => {
           if (reading) return;
           const t = texts(store.read(userId).language), wait = t.wait;
@@ -1357,6 +1367,12 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         // Persisted above. An ambiguous response must never trigger a new model run.
         const prefix = scenePrefix(stats(snapshot, { storyId: ref.storyId, checkpointId: ref.checkpointId }), node.modelInfo, snapshot.language,
           placeOf(snapshot, ref.storyId, ref.branchId, ref.nodeId));
+        // The picture of the scene before it has its place in the chat before this scene does (`Running`). The model's
+        // work is over, so the card is not held up for a slow answer from Telegram.
+        if (earlier && illustrator?.enabledFor(userId)) {
+          releaseGpu?.();
+          await earlier;
+        }
         // Bot API results are not validated; the id of the sent message is stored as returned.
         const sent = await chat.final(prefix + node.text, keyboardOf(userId, ref)) as { message_id: number };
         store.mutate(userId, state => {
@@ -1368,7 +1384,8 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         // delivered is not illustrated: the photo would hang under nothing.
         if (illustrator?.enabledFor(userId) && !pictureSignal.aborted) {
           picture = { userId, chat, storyId: ref.storyId, nodeId: ref.nodeId, branchId: ref.branchId,
-            sceneMessageId: sent.message_id, sceneAt: Date.now(), signal: pictureSignal, log, hold: () => gpu?.acquire(),
+            memory, sceneMessageId: sent.message_id, sceneAt: Date.now(),
+            signal: pictureSignal, log, hold: () => gpu?.acquire(),
             // Work prepared ahead opens a turn of its own that takes this reader's slot and leaves it marked for
             // nobody (local/scheduler.ts `start`), and the description continues the scene that is cached there. So
             // it waits for the description to be over — which is before the drawing, not after it.
@@ -1497,6 +1514,8 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         }
       });
       if (!plan) return;
+      // The deletion is written: what the card draws for it stops now, ahead of everything Telegram is asked below.
+      if (plan.lostPictures) illustrator?.forgetGone(userId);
       if (plan.logged) log(plan.logged.event, undefined, plan.logged.details);
       if (plan.poseCount) counted(userId, chat, plan.poseCount, log);
       if (plan.poseQueue) readPoseQueue(userId);
@@ -1536,7 +1555,14 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         }
         screen = render(store.read(userId), 'model');
       }
-      if (plan.cancel) { running.get(userId)?.controller.abort(); sampling.get(userId)?.abort(); varying.get(userId)?.abort(); }
+      if (plan.cancel) {
+        const entry = running.get(userId);
+        entry?.controller.abort();
+        for (let one = entry?.earlier; one; one = one.earlier) one.picture.abort();
+        illustrator?.cancel(userId);
+        sampling.get(userId)?.abort();
+        varying.get(userId)?.abort();
+      }
       // Passing messages (docs/telegram-ui.md#passing-messages). A screen with buttons, answering a button pressed on a
       // passing message, takes that message's place, unless it is to go apart or a scene goes out before it: then it
       // goes below the scene and the pressed message goes. A screen without buttons is a notice, and never takes the
@@ -1695,20 +1721,18 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         const controller = new AbortController();
         const picture = new AbortController();
         controller.signal.addEventListener('abort', () => picture.abort(), { once: true });
-        const entry: Running = { controller, picture };
+        let settle = () => {};
+        const settled = new Promise<void>(done => { settle = done; });
         const earlier = running.get(userId);
+        const entry: Running = { controller, picture, settled, earlier };
         running.set(userId, entry);
-        // This reader's own previous turn is over — the job lock saw to that — but its picture may still be on the
-        // other card. They have answered, so that picture belongs to a scene they have read past: it is dropped,
-        // and the card is told to stop drawing it (local/picture.ts, local/image-batch.ts `stopJob`). Only the
-        // picture: the turn behind it may still be delivering a message, and its own controller stands for a scene
-        // the reader was never given, which this is not.
-        earlier?.picture.abort();
+        // This reader's own previous turn is over, as the job lock saw to, and the picture of its scene goes on behind
+        // them (local/picture.ts `illustrate`): only a sample and a variant, which are looks and no more, end here.
         sampling.get(userId)?.abort();
         varying.get(userId)?.abort();
         // The picture is made after the turn's model work is over and its GPU hold released: the second call takes
         // a slot again, and the drawing takes none at all, so neither may sit inside the turn.
-        const task: Promise<unknown> = generate(userId, chat, plan.job, controller, releaseGpu, picture.signal)
+        const task: Promise<unknown> = generate(userId, chat, plan.job, controller, releaseGpu, picture.signal, earlier?.settled)
           .then(picture => picture && illustrator?.illustrate(picture))
           // The net under the whole chain, so that one throw cannot take the shutdown of the bot (`idle`) with it.
           // The turn reports its own failures to the reader and the picture its own outcomes, so a row here is
@@ -1716,9 +1740,33 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
           .catch(error => log('turn_task_failed', errorCode(error)))
           .finally(() => {
             if (running.get(userId) === entry) running.delete(userId);
+            entry.earlier = undefined;
+            settle();
             inFlight.delete(task);
           });
         inFlight.add(task);
+      }
+    },
+    // Removes the places a stopped process kept in the chat for pictures it never finished (`Library.reservedPictures`),
+    // the queue they stood for being gone with it, and tells nobody. One left there by a failure that ended the attempt
+    // stays recorded for the next start, and one past the 48 hours in which it could go is forgotten here. One a picture or
+    // its prompt went into may be that by now and stays in the chat, a line left standing being better than a picture
+    // deleted, on record as a picture, so that it goes with its scene.
+    async unreserve() {
+      for (const { userId, places } of store.reservations()) {
+        const log = logFor(userId);
+        const chat = createChat(api, Number(userId), chats.get(userId) ?? chats.set(userId, chatMemory()).get(userId));
+        const now = Date.now();
+        const deletable = places.filter(one => now - one.at < MESSAGE_DELETABLE_MS);
+        store.mutate(userId, state => {
+          releaseReserved(state, places.filter(one => !deletable.includes(one)).map(one => one.messageId));
+          recoverPictures(state, deletable.filter(one => one.delivering).map(({ delivering, ...place }) => place), now);
+        });
+        const messageIds = deletable.filter(one => !one.delivering).map(one => one.messageId);
+        if (!messageIds.length) continue;
+        const { removed, left } = await chat.removeEach(messageIds);
+        log('pictures_removed', undefined, { picturesRemoved: removed, picturesNotRemoved: messageIds.length - removed });
+        store.mutate(userId, state => releaseReserved(state, messageIds.filter(one => !left.includes(one))));
       }
     },
     // Tells the readers whose job ended with the last process (local/store.ts `recover`), with the button that repeats
@@ -1736,7 +1784,10 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         } catch (error) { log('telegram_send_failed', errorCode(error)); }
       }
     },
-    async idle() { await Promise.all([...inFlight, ...preparing, ...uploading.values()]); },
+    async idle() {
+      await Promise.all([...inFlight, ...preparing, ...uploading.values()]);
+      await illustrator?.idle();
+    },
     async stop() {
       for (const entry of prepared.values()) entry.stop();
       // A job this stop cuts short ends as one the process died under. That comes before the abort, after which a turn
@@ -1745,6 +1796,7 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
         try { store.mutate(userId, interruptJob); } catch { continue; }
         entry.controller.abort();
       }
+      illustrator?.stop();
       for (const stop of sampling.values()) stop.abort();
       for (const stop of varying.values()) stop.abort();
       for (const stop of retelling) stop.abort();

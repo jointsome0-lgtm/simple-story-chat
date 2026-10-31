@@ -264,6 +264,9 @@ type Options = {
   holdFinal?: number; holdPhotos?: number; scheduler?: boolean; compactAtTokens?: number; keepScenes?: number;
   // A workflow that ends in SaveImage, as the ones pinned in gpu/ do, or one of those pinned graphs itself.
   saveImage?: boolean; graphFile?: string; references?: boolean; pictureOwner?: string; referenceUsers?: string[];
+  // How long a description waits past the scenes that keep it from a slot, and how often it asks, and what holds the
+  // frame's call.
+  describeWaitMs?: number; describeRetryMs?: number; frameGate?: () => Promise<void>;
   // A model that refuses the sheet or the retelling with this code, and a Telegram that will not delete a message or
   // send a photo's note.
   sheetError?: string; retellError?: string; refuseDelete?: boolean; refuseNote?: boolean;
@@ -298,7 +301,9 @@ async function fixture(t: TestContext, options: Options = {}) {
   const holding: (() => void)[] = [];
   let heldFinals = 0, heldPhotos = 0;
   const api = async (method: string, fields?: TelegramPayload) => {
-    const payload = fields as Payload;
+    // A picture in the place kept for it reads here as a photo does, its bytes and caption where a photo has them.
+    const { picture, media, ...plain } = fields as Payload & { picture?: Uint8Array; media?: { caption?: string } };
+    const payload = (method === 'editMessageMedia' ? { ...plain, photo: picture, caption: media?.caption } : fields) as Payload;
     if (method === 'deleteMessage') {
       deleted.push(payload.message_id);
       // Telegram refuses to delete a message that is gone, too old, or was never the bot's.
@@ -310,8 +315,9 @@ async function fixture(t: TestContext, options: Options = {}) {
     // A scene that is still being delivered: the story is already committed and its job lock clear, so the reader
     // can answer here, which is the moment the bot has to get right.
     if (method === 'sendRichMessage' && !isNote({ method, payload }) && heldFinals++ < (options.holdFinal ?? 0)) await new Promise<void>(go => holding.push(go));
-    if (method === 'sendPhoto' && heldPhotos++ < (options.holdPhotos ?? 0)) await new Promise<void>(go => holding.push(go));
-    return { message_id: id, ...method === 'sendPhoto' ? { photo: [{ file_id: 'small' }, { file_id: `large-${id}` }] } : {} };
+    if (isPhoto({ method, payload }) && heldPhotos++ < (options.holdPhotos ?? 0)) await new Promise<void>(go => holding.push(go));
+    return { message_id: method === 'editMessageMedia' ? payload.message_id : id,
+      ...method === 'sendPhoto' || method === 'editMessageMedia' ? { photo: [{ file_id: 'small' }, { file_id: `large-${id}` }] } : {} };
   };
   const counted: string[] = [];
   let frames = 0;
@@ -323,6 +329,7 @@ async function fixture(t: TestContext, options: Options = {}) {
     if (kind === 'retell' && options.retellError) throw Object.assign(new Error(options.retellError), { code: options.retellError });
     if (kind === 'retell') return { text: JSON.stringify(retoldFor(request.messages.at(-1)!.content, options.retold)), finishReason: 'stop' };
     if (kind === 'frame') {
+      await options.frameGate?.();
       const replies = options.frameReplies ?? [FRAME];
       return { text: JSON.stringify(replies[Math.min(frames++, replies.length - 1)]), finishReason: 'stop' };
     }
@@ -354,6 +361,7 @@ async function fixture(t: TestContext, options: Options = {}) {
   // its illustrator again over the same store and Telegram, and so forgets whatever they kept in memory.
   const boot = () => {
     const illustrator = images && createIllustrator(images, { store, provider, ownerId: options.pictureOwner ?? '1', pollMs: 2, now: () => Date.now() + (options.offsetMs ?? 0),
+      describeWaitMs: options.describeWaitMs, describeRetryMs: options.describeRetryMs,
       model: { model: options.llama?.illustratorModel ?? 'test-model', provider: 'claude-code', contextTokens: 65536 },
       promptTokens: () => options.promptTokens, textTokens: () => options.textTokens });
     const bot = createBot({ store, api, provider, gpu: options.gpu, illustrator, allowedUsers: new Set(['1', '2']), maxOutputTokens: 4096,
@@ -404,15 +412,27 @@ async function deleteTheSeed(f: Fixture) {
   await f.bot.handle(f.click(`view:delete-seed:${seedId}`));
   await f.bot.handle(f.click(`remove-seed:${seedId}`));
 }
-const statuses = (sent: Sent[]) => sent.filter(one => one.method === 'sendMessage' && one.payload.text?.includes('Рисую'));
+// The status line that keeps a picture's place.
+const isPlace = (one: Pick<Sent, 'method' | 'payload'>) => one.method === 'sendMessage' && !!one.payload.text?.includes('Рисую');
+const statuses = (sent: Sent[]) => sent.filter(isPlace);
 const told = (sent: Sent[], text: string) => sent.some(one => one.payload.text === text);
 const seedIn = (graph: Graph) => (Object.values(graph).find(node => node.class_type === 'KSampler')!.inputs as { seed: number }).seed;
-const photos = (sent: Sent[]) => sent.filter(one => one.method === 'sendPhoto');
-// The prompt folded under a photo is a rich message like a scene, and the only one written in HTML.
-const isNote = (one: Sent) => one.method === 'sendRichMessage' && typeof one.payload.rich_message?.html === 'string';
+const isPhoto = (one: Pick<Sent, 'method' | 'payload'>) => one.method === 'editMessageMedia' || one.method === 'sendPhoto';
+const photos = (sent: Sent[]) => sent.filter(isPhoto);
+// The prompt folded under a photo is a rich message like a scene, and the only one written in HTML: sent, or written
+// into the note that kept its place.
+const isNote = (one: Pick<Sent, 'method' | 'payload'>) => (one.method === 'sendRichMessage' || one.method === 'editMessageText')
+  && !!one.payload.rich_message?.html?.startsWith('<details>');
 const htmlOf = (one: Sent) => one.payload.rich_message.html!;
 const notes = (sent: Sent[]) => sent.filter(isNote);
-const idOf = (sent: Sent[], one: Sent) => sent.indexOf(one) + 1;
+const idOf = (sent: Sent[], one: Sent) => isPhoto(one) || isNote(one) ? one.payload.message_id ?? sent.indexOf(one) + 1 : sent.indexOf(one) + 1;
+const isPendingNote = (one: Pick<Sent, 'method' | 'payload'>) => one.method === 'sendRichMessage' && !!one.payload.rich_message?.html && !one.payload.rich_message.html.startsWith('<details>');
+// The message a note hangs under, the one that kept its place having been sent as a reply to it.
+const underOf = (sent: Sent[], note: Sent) => (note.method === 'editMessageText' ? sent[note.payload.message_id - 1] : note).payload.reply_parameters?.message_id;
+// Whether the bot wrote over a status line with text, a failure told in its place, and not with its steps.
+const rewritten = (one: Sent) => one.method === 'editMessageText' && !isNote(one) && !one.payload.text?.includes('Рисую');
+// Every message taken out of the chat.
+const removed = (f: Fixture) => [...f.deleted, ...f.sent.flatMap(one => one.method === 'deleteMessages' ? one.payload.message_ids! : [])];
 // The deletions of pictures and their notes, apart from the bot's tidying of its own menus and waits, which are
 // ordinary messages (docs/telegram-ui.md#passing-messages).
 const pictureDeletions = (sent: Sent[]) => sent.filter(one => one.method === 'deleteMessages'
@@ -596,12 +616,12 @@ test('an illustrated scene: a status line, one description call, a prompt with o
   const f = await fixture(t, { card: {}, style: STYLE_LINE, offsetMs: 3000, promptTokens: words });
   await f.start();
   await f.bot.idle();
-  // The scene, one status line under it, then the photo under the scene, and the status line alone goes.
+  // The scene, the status line under it, and then the photo in the place of the line.
   const scene = f.sent.find(one => one.method === 'sendRichMessage')!;
   const [status, ...more] = statuses(f.sent);
   const photo = photos(f.sent)[0];
-  assert.deepEqual([more, f.sent.indexOf(scene) < f.sent.indexOf(status), photo.payload.reply_parameters?.message_id, f.deleted],
-    [[], true, idOf(f.sent, scene), [idOf(f.sent, status)]]);
+  assert.deepEqual([more, f.sent.indexOf(scene) < f.sent.indexOf(status), status.payload.reply_parameters?.message_id, photo.payload.message_id, f.deleted],
+    [[], true, idOf(f.sent, scene), idOf(f.sent, status), []]);
   // Three model calls after the scene, each with its schema: the sheet and the frame continue the scene's own request,
   // instruction last, and the retelling between them carries no story.
   assert.deepEqual([f.requests.map(kindOf), f.requests[2].system, f.requests[2].messages.length], [['scene', 'sheet', 'retell', 'frame'], '', 1]);
@@ -624,7 +644,7 @@ test('an illustrated scene: a status line, one description call, a prompt with o
   // The prompt the card drew goes to the reader alone, folded under the photo (docs/telegram-ui.md#picture-prompts),
   // with its tokens in the picture model's tokenizer, the style line's share of them, and its characters.
   const note = notes(f.sent)[0];
-  assert.deepEqual([note.payload.reply_parameters?.message_id, idOf(f.sent, note) > idOf(f.sent, photo)], [idOf(f.sent, photo), true]);
+  assert.deepEqual([underOf(f.sent, note), idOf(f.sent, note) > idOf(f.sent, photo)], [idOf(f.sent, photo), true]);
   const summary = htmlOf(note).match(/^<details><summary>(.*)<\/summary>/)![1];
   assert.equal(htmlOf(note), foldedPrompt(summary, prompt));
   assert.match(summary, /^🖼 Промпт: \d+ токен\S*, из них стиль \d+ · [\d ]+ знак\S*$/u);
@@ -735,26 +755,32 @@ test('a sample of a style is the last scene drawn once more: its frame and seed,
   assert.doesNotMatch(JSON.stringify(f.rows), PRIVATE);
 });
 
-// A picture of a scene the reader has read past is worse than none, and so is a drawing asked for at a scene they have
-// left: their next message ends it, the card is told to stop each job by its id, and the reader is told nothing.
-test('the reader\'s next message ends the picture of the scene they have read past', async t => {
+// The picture of a scene goes on behind the reader's next message, which paid for neither: only a stop reaches it, and
+// the card is told to stop the job by its id. A drawing asked for at a scene they have left is a look and no more: their
+// next message ends it, and the reader is told nothing.
+test('the reader\'s next message leaves the picture of the scene before it and ends a drawing they asked for', async t => {
   const f = await fixture(t, { card: { jobMs: 60000 } });
   await f.start();
   await until(() => f.comfy.submitted.length === 1, 'the picture to reach the card');
-  const status = idOf(f.sent, statuses(f.sent)[0]);
   await f.bot.handle(f.message('Осмотреться'));
-  // The second scene starts its own picture on the same slow card; stopping the bot ends that one the same way.
-  await until(() => f.comfy.submitted.length === 2, 'the next scene\'s picture to reach the card');
+  await until(() => statuses(f.sent).length === 2, 'the next scene\'s place');
+  assert.deepEqual([f.comfy.seen.interrupted, f.comfy.submitted.length], [[], 1], 'the first picture stays on the card, and the next one waits for it');
+  f.comfy.finish();
+  await drawnOn(f, 2);
+  assert.deepEqual(photos(f.sent).map(one => one.payload.message_id), statuses(f.sent).map(one => idOf(f.sent, one)), 'each picture in its own place, in order');
+  // Stopping the bot ends a picture on the card.
+  await f.bot.handle(f.message('Осмотреться'));
+  await until(() => f.comfy.submitted.length === 3, 'the third picture to reach the card');
+  const place = idOf(f.sent, statuses(f.sent)[2]);
   await f.bot.stop();
-  assert.equal(photos(f.sent).length, 0, 'no picture of a scene the reader has read past');
-  assert.ok(f.deleted.includes(status), 'the status line under the first scene goes without a word');
-  assert.ok(f.comfy.seen.interrupted.includes('p1') && f.comfy.seen.queueDeletes >= 1 && f.comfy.seen.cleared.includes('p1'),
+  assert.ok(removed(f).includes(place), 'its place goes without a word');
+  assert.ok(f.comfy.seen.interrupted.includes('p3') && f.comfy.seen.queueDeletes >= 1 && f.comfy.seen.cleared.includes('p3'),
     'the card is told to stop drawing it, and the job is off its history');
   assert.deepEqual(f.rows.filter(one => one.event === 'picture').map(row => [row.outcome, row.code, row.cancelled, Number.isSafeInteger(row.pictureSeconds)]),
-    [['cancelled', 'cancelled', true, true], ['cancelled', 'cancelled', true, true]]);
-  // The turn the reader asked for ran, and the second scene is theirs as usual.
+    [['ready', undefined, false, true], ['ready', undefined, false, true], ['cancelled', 'cancelled', true, true]]);
+  // The turns the reader asked for ran, and the scenes are theirs as usual.
   const state = f.store.read('1');
-  assert.deepEqual([f.requests.filter(request => kindOf(request) === 'scene').length, Object.keys(state.stories[state.active!.storyId].nodes).length], [2, 2]);
+  assert.deepEqual([f.requests.filter(request => kindOf(request) === 'scene').length, Object.keys(state.stories[state.active!.storyId].nodes).length], [3, 3]);
 
   // A drawing the reader asked for, one of a kind at a time, stops the same way. `jobs` are its jobs on the card,
   // `stopped` its rows as [event, outcome, code, style, styles asked, edited].
@@ -812,7 +838,8 @@ test('the reader\'s next message ends the picture of the scene they have read pa
     await g.bot.stop();
     assert.deepEqual(rows().map(row => [row.event, row.outcome, row.code, row.pictureStyle, row.stylesAsked, row.edited]).sort(), stopped, label);
     assert.equal(photos(g.sent).length, 1, `${label}: nothing of it is sent once the reader moved on`);
-    assert.ok(statuses(g.sent).every(one => g.deleted.includes(idOf(g.sent, one))) && !g.sent.some(one => one.method === 'editMessageText'),
+    const taken = photos(g.sent).map(one => one.payload.message_id);
+    assert.ok(statuses(g.sent).every(one => taken.includes(idOf(g.sent, one)) || removed(g).includes(idOf(g.sent, one))) && !g.sent.some(rewritten),
       `${label}: its status line goes without a word`);
     assert.ok(jobs.every(id => g.comfy.seen.interrupted.includes(id) && g.comfy.seen.cleared.includes(id)), `${label}: each job stopped and cleared`);
     after?.(g, label);
@@ -855,7 +882,7 @@ test('the reader\'s next message ends the picture of the scene they have read pa
     const photo = photos(h.sent)[count - 1];
     const after = h.sent.slice(stopped).filter(one => one.method !== 'deleteMessage');
     assert.ok(!h.deleted.includes(idOf(h.sent, photo)), `${label}: the photo stays`);
-    assert.deepEqual(after.map(one => [isNote(one), one.payload.reply_parameters?.message_id]), [[true, idOf(h.sent, photo)]], `${label}: its note alone follows`);
+    assert.deepEqual(after.map(one => [isNote(one), underOf(h.sent, one)]), [[true, idOf(h.sent, photo)]], `${label}: its note alone follows`);
     return after[0];
   };
   await h.start();
@@ -1216,15 +1243,17 @@ test('a portrait whose story is deleted while it is drawn is not sent, and a del
     await deleteTheSeed(f);
     f.comfy.finish();
     await f.bot.idle();
+    // A picture still being drawn has its two places to go with the seed.
+    if (!ask) own = [[idOf(f.sent, statuses(f.sent)[0]), idOf(f.sent, statuses(f.sent)[0]) + 1]];
     assert.deepEqual(pictureDeletions(f.sent).map(one => one.payload.message_ids), own, label);
     assert.deepEqual([photos(f.sent).length, f.comfy.submitted.length], ask ? [1, 2] : [0, 1], `${label}: the card finished it, and nothing more was sent or drawn`);
-    assert.ok(f.deleted.includes(idOf(f.sent, statuses(f.sent).at(-1)!)) && !f.sent.some(one => one.method === 'editMessageText'),
+    assert.ok(removed(f).includes(idOf(f.sent, statuses(f.sent).at(-1)!)) && !f.sent.some(rewritten),
       `${label}: its status line goes without a word`);
     const row = f.rows.find(one => one.event === event) as Record<string, unknown>;
     const expected = { outcome: 'cancelled', code: 'scene_gone', cancelled: true, ...also };
     assert.deepEqual(Object.fromEntries(Object.keys(expected).map(key => [key, row[key]])), expected, label);
   }
-  // A photo Telegram has when the deletion lands has no record yet to delete by: it is taken back once it is there.
+  // A photo Telegram has when the deletion lands goes with its place, which is on record, and once more by itself.
   const g = await fixture(t, { card: {}, holdPhotos: 1 });
   await g.start();
   await until(() => photos(g.sent).length === 1, 'the photo to be on its way');
@@ -1232,7 +1261,7 @@ test('a portrait whose story is deleted while it is drawn is not sent, and a del
   g.release();
   await g.bot.idle();
   assert.deepEqual([g.deleted.includes(idOf(g.sent, photos(g.sent)[0])), pictureDeletions(g.sent).length > 0, g.store.read('1').sentPictures],
-    [true, false, undefined], 'the photo on its way is taken back');
+    [true, true, undefined], 'the photo on its way is taken back');
   const taken = g.rows.find(one => one.event === 'picture')!;
   assert.deepEqual([taken.outcome, taken.code, taken.picturesRemoved, taken.picturesNotRemoved], ['cancelled', 'scene_gone', 1, 0]);
 
@@ -1621,14 +1650,16 @@ test('a failure on the way to a picture costs what failed, and the scene stays a
   };
   const cases: { label: string; options: Options; outcome: string; code?: string; drawn: number; check?: (f: Fixture, label: string) => void }[] = [
     { label: 'a card that cannot draw the frame', options: { card: { failing: true } }, outcome: 'failed', code: 'image_failed', drawn: 0, check: (f, label) => {
-      // The status line is not removed but rewritten.
-      const edit = f.sent.find(one => one.method === 'editMessageText')!;
-      assert.deepEqual([f.deleted, edit.payload.message_id], [[], idOf(f.sent, statuses(f.sent)[0])], label);
+      // The line stays, rewritten, and the place of the note goes.
+      const edit = f.sent.find(rewritten)!;
+      const place = idOf(f.sent, statuses(f.sent)[0]);
+      assert.deepEqual([f.deleted, edit.payload.message_id, removed(f).includes(place), removed(f).includes(place + 1)], [[], place, false, true], label);
       assert.match(edit.payload.text, /Иллюстрация не получилась/, label);
+      assert.deepEqual(f.store.read('1').reservedPictures, undefined, `${label}: no place is left recorded`);
     } },
-    { label: 'a description given away to somebody waiting for a scene', options: { card: {}, sheetError: 'background_preempted' }, outcome: 'skipped',
+    { label: 'a description given away past its wait', options: { card: {}, sheetError: 'background_preempted', describeWaitMs: 20, describeRetryMs: 2 }, outcome: 'skipped',
       code: 'background_preempted', drawn: 0, check: (f, label) => {
-        assert.deepEqual([f.comfy.submitted.length, f.deleted], [0, [idOf(f.sent, statuses(f.sent)[0])]], `${label}: nothing on the card, and the status line goes`);
+        assert.deepEqual([f.comfy.submitted.length, removed(f).includes(idOf(f.sent, statuses(f.sent)[0]))], [0, true], `${label}: nothing on the card, and the status line goes`);
       } },
     { label: 'a status line Telegram will not take back', options: { card: {}, refuseDelete: true }, outcome: 'ready', drawn: 1 },
     { label: 'a note Telegram refuses', options: { card: {}, refuseNote: true }, outcome: 'ready', drawn: 1, check: (f, label) => {
@@ -1649,7 +1680,7 @@ test('a failure on the way to a picture costs what failed, and the scene stays a
     const row = f.rows.find(one => one.event === 'picture')!;
     assert.deepEqual([row.outcome, row.code, photos(f.sent).length], [outcome, code, drawn], label);
     assert.ok(Number.isSafeInteger(row.pictureSeconds!) && row.pictureSeconds! >= 0, label);
-    if (outcome !== 'failed') assert.ok(!f.sent.some(one => one.method === 'editMessageText'), `${label}: and the reader is told nothing`);
+    if (outcome !== 'failed') assert.ok(!f.sent.some(rewritten), `${label}: and the reader is told nothing`);
     check?.(f, label);
   }
 
@@ -1660,15 +1691,93 @@ test('a failure on the way to a picture costs what failed, and the scene stays a
   const sent: string[] = [];
   let freed = 0;
   const chat = { show: async () => { sent.push('send'); throw Object.assign(new Error('forbidden'), { code: 403 }); },
-    edit: async () => { sent.push('edit'); }, remove: async () => { sent.push('remove'); },
+    edit: async () => { sent.push('edit'); }, removeAll: async () => { sent.push('remove'); return 0; },
     photo: async () => { sent.push('photo'); } } as unknown as Parameters<NonNullable<typeof f.illustrator>['illustrate']>[0]['chat'];
   await f.illustrator!.illustrate({ userId: '1', chat, storyId: 'h1', nodeId: 'n1', branchId: 'b1',
     sceneMessageId: 5, sceneAt: Date.now(), signal: new AbortController().signal,
     log: (event, code, details) => rows.push({ event, ...(code === undefined ? {} : { code }), ...safeErrorDetails(details) }),
     hold: () => { throw Object.assign(new Error('gpu paused'), { code: 'gpu_paused' }); },
     afterDescribe: () => { freed++; } });
+  await f.illustrator!.idle();
   assert.deepEqual([sent, freed], [['send'], 1], 'no photo, nothing to take away, and the model freed once');
   assert.deepEqual(rows.map(row => [row.event, row.code, row.outcome]), [['picture_status_unsent', 403, undefined], ['picture', 'gpu_not_ready', 'skipped']]);
+});
+
+// A reader who moves faster than the card has paid for every picture of their way: each is written from the story as it
+// stood at its scene, a compaction past that scene notwithstanding, and lands in the place kept for it. The sixth gives up
+// the oldest that has not started, and until the last is over nothing that a frame reads may be relinked.
+test('every picture behind the reader lands in its own place, in order, whatever moved on, and the sixth gives the oldest up', async t => {
+  let open = () => {};
+  const gate = new Promise<void>(go => { open = go; });
+  let held = true;
+  const f = await fixture(t, { card: { jobMs: 60000 }, frameGate: () => held ? gate : Promise.resolve() });
+  await f.start();
+  const scenes = () => f.sent.filter(one => one.method === 'sendRichMessage' && !isNote(one) && !isPendingNote(one)).length;
+  await until(() => f.requests.some(request => kindOf(request) === 'frame'), 'the first description');
+  for (const scene of [2, 3]) {
+    await f.bot.handle(f.message('Осмотреться'));
+    await until(() => scenes() === scene && statuses(f.sent).length === scene, `the place of scene ${scene}`);
+  }
+  const places = statuses(f.sent).map(one => idOf(f.sent, one));
+  const order = f.sent.filter(one => isPlace(one) || one.method === 'sendRichMessage').map(one => isPlace(one) ? 'place' : isPendingNote(one) ? 'note' : 'scene');
+  assert.deepEqual(order, ['scene', 'place', 'note', 'scene', 'place', 'note', 'scene', 'place', 'note'], 'each scene, its place and its note, before the next scene');
+  // The compaction that finished meanwhile reaches past the first scene: its description still reads the story as it was.
+  f.store.mutate('1', state => {
+    const story = state.stories[state.active!.storyId], branch = story.branches[state.active!.branchId];
+    story.memories.m9 = { id: 'm9', parent: null, cutoff: branch.head!, covered: [], delta: { facts: [] } };
+    branch.memory = 'm9';
+  });
+  assert.equal(f.illustrator!.relinkable('1'), false, 'no preset moves under a queued picture');
+  assert.equal(f.requests.filter(request => kindOf(request) === 'frame').length, 1, 'the frames are described one by one, as each starts from the one before');
+  held = false;
+  open();
+  for (const job of [1, 2]) { await until(() => f.comfy.submitted.length === job, `job ${job}`); f.comfy.finish(); await until(() => photos(f.sent).length === job, `photo ${job}`); }
+  await drawnOn(f, 3);
+  assert.deepEqual(photos(f.sent).map(one => one.payload.message_id), places, 'every picture in its own place, in order');
+  assert.deepEqual(f.rows.filter(one => one.event === 'picture').map(row => row.outcome), ['ready', 'ready', 'ready']);
+  const state = f.store.read('1');
+  assert.deepEqual([state.reservedPictures, state.sentPictures!.length, f.illustrator!.relinkable('1'),
+    Object.values(state.stories[state.active!.storyId].nodes).every(node => node.picture && node.pictureFile)], [undefined, 6, true, true], 'all on record, none left held');
+
+  const g = await fixture(t, { card: { jobMs: 60000 } });
+  await g.start();
+  await until(() => g.comfy.submitted.length === 1, 'the first picture to reach the card');
+  for (const move of [2, 3, 4, 5, 6]) {
+    await g.bot.handle(g.message('Осмотреться'));
+    await until(() => statuses(g.sent).length === move, `place ${move}`);
+  }
+  await until(() => g.rows.some(row => row.event === 'picture'), 'the sixth to give the oldest up');
+  const [first, second, ...rest] = statuses(g.sent).map(one => idOf(g.sent, one));
+  assert.deepEqual([g.rows.filter(one => one.event === 'picture').map(row => [row.outcome, row.code]), removed(g).includes(second), removed(g).includes(first)],
+    [[['skipped', 'picture_queue_full']], true, false], 'the frame on the card stays, and the oldest behind it goes');
+  for (const job of [1, 2, 3, 4]) { await until(() => g.comfy.submitted.length === job, `job ${job}`); g.comfy.finish(); await until(() => photos(g.sent).length === job, `photo ${job}`); }
+  await drawnOn(g, 5);
+  assert.deepEqual(photos(g.sent).map(one => one.payload.message_id), [first, ...rest]);
+});
+
+// A reader's /cancel ends what the card is paid to draw and everything behind it; a stopped process leaves its places in
+// the chat, recorded, and the next start takes them out and carries nothing over.
+test('/cancel stops the card and the whole queue, and a start removes the places left behind and tells nobody', async t => {
+  const f = await fixture(t, { card: { jobMs: 60000 } });
+  await f.start();
+  await until(() => f.comfy.submitted.length === 1, 'the first picture to reach the card');
+  await f.bot.handle(f.message('Осмотреться'));
+  await until(() => statuses(f.sent).length === 2, 'the second place');
+  await f.bot.handle(f.message('/cancel'));
+  await f.bot.idle();
+  assert.ok(f.comfy.seen.interrupted.includes('p1') && f.comfy.seen.cleared.includes('p1'), 'the card is told to stop drawing');
+  assert.deepEqual([f.comfy.submitted.length, f.store.read('1').reservedPictures, statuses(f.sent).every(one => removed(f).includes(idOf(f.sent, one)))],
+    [1, undefined, true], 'nothing behind it reaches the card, and no place stays');
+
+  const g = await fixture(t, { card: { jobMs: 60000 } });
+  await g.start();
+  await until(() => g.comfy.submitted.length === 1, 'the first picture to reach the card');
+  const held = g.store.read('1').reservedPictures!.map(one => one.messageId);
+  const before = g.sent.filter(one => one.method.startsWith('send')).length;
+  assert.equal(held.length, 2, 'the photo and the note are recorded the moment they are out');
+  await g.bot.unreserve();
+  assert.deepEqual([g.store.read('1').reservedPictures, held.every(one => removed(g).includes(one)), g.sent.filter(one => one.method.startsWith('send')).length],
+    [undefined, true, before], 'taken out, and nothing is said');
 });
 
 // The bot prepares the next compaction while the reader reads, on a turn that takes the reader's slot (local/bot.ts

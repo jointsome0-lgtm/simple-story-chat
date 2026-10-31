@@ -12,12 +12,14 @@ type Slot = { signal: AbortSignal; slot?: number };
 // counting, the scene). Opened by `openTurn`, closed by `end` in the caller's finally. `ended` is the code later calls
 // are refused with.
 // `sharesPrefix`: the turn continues its holder's own last request, so it runs in that holder's slot or nowhere.
+// `beside`: a picture's description of a scene the reader may have moved on from. It takes a slot that keeps nobody's
+// scenes where there is one, as a yielding turn does, and a person kept waiting by it ends it, its own holder too.
 // `open`: its calls that have not settled yet. A turn that ends while some have not keeps its hold on the GPU,
 // `release`, until the last of them has.
 // `work`, `since` and `failed` only time it (`durations`): what it does, when it took its slot, and whether a call of
 // it failed or was refused, which leaves its length out.
 type Turn = { priority: Priority; ended: AbortCode | null; idleSince: number; holder?: string; yields?: boolean;
-  sharesPrefix?: boolean; open: number; release?: () => void; work: Work; since?: number; failed?: boolean };
+  sharesPrefix?: boolean; beside?: boolean; open: number; release?: () => void; work: Work; since?: number; failed?: boolean };
 export type SchedulerOptions<Request = unknown> = {
   // Agent work starts under `agentCanStart` and is stopped only when `agentCanRun` turns false (the GPU is paused).
   backgroundAllowed?: () => boolean; agentCanStart?: () => boolean; agentCanRun?: () => boolean;
@@ -189,7 +191,7 @@ export function createScheduler<Request, Result>(provider: {
   // A person kept from the model ends the yielding turns of anybody else, and a prefix-sharing one of their own too:
   // that turn sits in the very slot their call wants, and its result is nothing they wait for.
   const yieldTo = (turn: Turn | null) =>
-    preempt(other => other !== turn && (!!other.sharesPrefix || !turn || other.holder !== turn.holder));
+    preempt(other => other !== turn && (!!other.sharesPrefix || !!other.beside || !turn || other.holder !== turn.holder));
   // A prefix-sharing turn ends as soon as its holder calls again, however free the pool is: their next scene matters
   // more than the picture, `yieldTo` would reach it only once the pool kept them waiting, and they share a slot.
   const endSharedSlot = (turn: Turn | null) =>
@@ -336,7 +338,7 @@ export function createScheduler<Request, Result>(provider: {
     if (!durations || item.priority !== 'foreground') return undefined;
     const at = now();
     const givesWay = (turn: Turn | null) => !!turn?.yields && turn !== item.turn
-      && (!!turn.sharesPrefix || !item.turn || turn.holder !== item.turn.holder);
+      && (!!turn.sharesPrefix || !!turn.beside || !item.turn || turn.holder !== item.turn.holder);
     const usual = (turn: Turn | null, call?: Item<Request>) =>
       durations.typical(turn?.work ?? (call?.priority === 'agent' ? 'agent' : 'other'));
     const free: number[] = [];
@@ -535,9 +537,9 @@ export function createScheduler<Request, Result>(provider: {
   const wrap = (priority: 'foreground' | 'agent') => ({ ...calls(priority, null),
     // The calls of one turn, until `end`. `end` after a normal finish frees the slot; after a lost owner it also stops
     // the turn's call in the slot, though not a count it runs beside the slots (endTurn).
-    openTurn({ holder, yields = false, sharesPrefix = false, work }: TurnOptions = {}) {
+    openTurn({ holder, yields = false, sharesPrefix = false, beside = false, work }: TurnOptions = {}) {
       // A call that continues its holder's last request is prepared ahead of need too, so it yields like the rest.
-      const turn: Turn = { priority, ended: null, idleSince: Infinity, holder, yields: yields || sharesPrefix, sharesPrefix, open: 0,
+      const turn: Turn = { priority, ended: null, idleSince: Infinity, holder, yields: yields || sharesPrefix || beside, sharesPrefix, beside, open: 0,
         work: work ?? (priority === 'agent' ? 'agent' : 'other') };
       if (turn.yields) yielding.add(turn);
       return { ...calls(priority, turn), end: () => endTurn(turn, 'cancelled') };

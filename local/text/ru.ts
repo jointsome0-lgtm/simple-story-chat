@@ -945,6 +945,7 @@ export const ru = {
     // Стоит под сценой, пока рисуется картинка, и исчезает вместе с ней.
     drawing: '🎨 Рисую иллюстрацию…',
     exportFailed: 'Не получилось отправить файл. Попробуй ещё раз чуть позже.',
+    promptPending: '🖼 Здесь будет промпт, когда картинка будет готова.',
     pictureFailed: 'Иллюстрация не получилась. Сцена сохранена.',
     // The one line of the folded block under every picture that holds the prompt it was drawn from (local/picture.ts).
     // Raw counts: `chars` of the prompt; `tokens` as the picture model's text encoder reads it and `style` of them the

@@ -22,7 +22,7 @@ const IMAGE_ROLES = ['primary', 'alternate'] as const;
 // this list does not know. Together with `exitCode` this tells a stalled CLI from a refused structured output.
 export const CLI_RESULTS = ['success', 'error_max_turns', 'error_during_execution', 'error_max_budget_usd',
   'error_max_structured_output_retries', 'no_init', 'missing', 'other'] as const;
-// How one scene's picture ended (local/picture.ts): sent, failed with a code, ended by the reader's next message,
+// How one scene's picture ended (local/picture.ts): sent, failed with a code, ended by the reader's /cancel,
 // or not attempted at all because the card was paused. Four words; the scene and the picture stay out. A retelling
 // of the people's descriptions ends the same ways: written, failed, stopped, or given up with a code.
 const OUTCOMES = ['ready', 'failed', 'cancelled', 'skipped'] as const;
@@ -131,6 +131,8 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   // holds (one for a whole story is almost certainly a wrong sheet), how many names the assembly had to cut out of
   // a field the instruction forbids them in, and how many people reached the prompt with no appearance at all.
   'describeMs', 'imageQueueMs', 'imageMs', 'imageSteps', 'pictureAfterSceneMs', 'pictureSeconds',
+  // How many times a picture's description gave way to a scene and was asked again (local/picture.ts `describeStage`).
+  'describeRetries',
   'sheetCharacters', 'namesStripped', 'withoutLook',
   // The clothes of a frame (local/picture.ts): how many people of the sheet it shows in other clothes than the
   // picture before it in that line of the story, which is how a change of clothes in the story is seen to arrive.
@@ -186,7 +188,7 @@ export type ErrorDetails = {
   exitCode?: number; signal?: typeof SIGNALS[number]; sshReason?: typeof SSH_REASONS[number];
   // Whose request a bot log row belongs to. Only the owner allowed reading the owner's own stories for debugging.
   actor?: typeof ACTORS[number]; automatic?: boolean; agentCall?: typeof AGENT_CALLS[number]; stage?: typeof STAGES[number];
-  // A picture: which checkpoint drew it, how it ended, whether the reader's next message ended it before it arrived,
+  // A picture: which checkpoint drew it, how it ended, whether the reader ended it before it arrived,
   // in which style, for a sample of a style whether the scene's frame was still in memory, and with which attention.
   imageRole?: typeof IMAGE_ROLES[number]; outcome?: typeof OUTCOMES[number]; cancelled?: boolean;
   pictureStyle?: typeof PICTURE_STYLES[number]; frameReused?: boolean; pictureAttention?: typeof PICTURE_ATTENTION[number];

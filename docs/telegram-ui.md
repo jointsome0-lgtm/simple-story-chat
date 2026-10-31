@@ -171,7 +171,7 @@ Stories made from the same seed share its title, so they are called «Истор
 - **Delete:** «🗑 Удалить сид/ветку» ("Delete seed/branch") opens a confirmation that shows the scope: stories, branches and scenes for a seed. For a branch it shows its checkpoints, the scenes found in no other branch, and how many branches stay. If it is the only branch, it says the whole story will be deleted. «↩️ Не удалять» ("Do not delete") returns to the item. The screen also says that the deletion cannot be undone, that the bot removes the pictures of the deleted scenes from this chat if they were sent less than two days ago, and that the texts of the scenes stay in the chat.
   - Every photo the bot sends, a scene's own picture, every sample, every variant and every portrait, is recorded in the library as `sentPictures`: its story, scene, message and the time it was sent. A portrait has no scene and goes with its story (see Characters). So is the prompt folded under a picture (see Picture styles), and the text folded under a portrait, with its story. Telegram lets a bot delete its own message for 48 hours only, so every write drops the older entries and keeps at most the newest 1000.
   - Once the screen after the deletion is out, the bot deletes the pictures whose scene or story is gone, 100 to a `deleteMessages` call, and message by message when a call fails. The reader is told nothing more: whatever Telegram answers, the screen stays as it is. A deleted branch takes only the pictures of the scenes that no other branch has.
-  - A picture whose scene is deleted while it is being drawn is not sent, and one already on its way is deleted as soon as it lands.
+  - A picture whose scene is deleted while it is queued or drawn is not sent, its place and note go with the pictures, and one already on its way is deleted as soon as it lands.
   - A deleted branch takes the bookmarks of the scenes no other branch's checkpoint names ([bookmarks](#bookmarks)).
 
 <a id='passing-messages'></a>
@@ -217,8 +217,8 @@ of `handle` in `local/bot.ts`).
   refusal, an unknown command, a stale button, a limit, «busy»), the failure of a compaction told without Continue, a
   compaction's status once it is over, a picture's failure line, and the confirmation that a portrait or a picture
   was kept or a profile saved. A notice whose own button opened a screen in its place is that screen from then on. A
-  status line at work (a compaction's, a picture's, the retelling's) is never deleted from under it, and a picture's
-  goes once its photo is there, as before. A failure written into a status line becomes a notice only once the edit is
+  status line at work (a compaction's, a picture's, the retelling's) is never deleted from under it, and the line of a
+  scene's picture becomes that picture. A failure written into a status line becomes a notice only once the edit is
   done, so an update arriving meanwhile cannot take it away unread.
 - **Scene keyboards:** only the newest scene keeps its buttons. The scene before it loses them when the next scene, or
   a scene shown again, goes out (`editMessageReplyMarkup`): they act on the branch being played, so «▶️ Продолжить»
@@ -255,28 +255,51 @@ of `handle` in `local/bot.ts`).
 ## Pictures under scenes
 
 Pictures are off by default. Only the readers in `SIMPLE_CHAT_IMAGE_USERS` get them, and each of those must also be on
-the access list ([the settings](setup.md#pictures)). For such a reader every scene gets a picture after it:
+the access list ([the settings](setup.md#pictures)). For such a reader every scene gets a picture after it, which they
+need not wait for: the place of the picture is kept under the scene, the story goes on, and the picture comes to its
+place behind them (the owner's words of 2026-10-31: «ведь мы можем не ждать, а зарезервировать место для фотки и
+промпт, и продолжить историю, и потом увидеть изображения»):
 
 1. The scene is saved and sent first. Nothing of the picture delays or changes it.
-2. A status line of its own goes up under the scene. While ComfyUI's sampler runs, a second line under it shows the
-   steps done, «▰▰▰▰▱▱▱▱▱▱ 12/25», as the card's websocket reports them, in an edit at most every 3 s (`statusLine`
-   in `local/picture.ts`). While the job waits on the card behind other jobs, the second line shows its place instead
-   ([waiting](#waiting)). Before that and before the first step (the description, the model loading) the line stands
-   alone. An edit Telegram refuses leaves a `picture_status_failed` row with Telegram's code, and the next one waits
-   as long as Telegram asks. No edit lands after the line is removed or rewritten to a failure. A sample, a variant
-   and a portrait show the same place and steps under their own lines, and the line of all styles shows each
-   picture's in turn.
-3. On the language model's card, in one scheduler turn that shares the scene's prefix and holds the GPU no longer than
-   a job would, the bot writes the story's character sheet if it has none, then the frame of this scene
-   ([from the sheet to the prompt](#picture-pipeline)). When that card is not ready, or the scheduler gives the slot to
-   somebody waiting for a scene, the picture is skipped.
+2. A status line of its own goes up as a reply to the scene and keeps the picture's place, and a note under it the place
+   of the prompt (`reserve` in `local/picture.ts`). The next scene waits for both, so the chat always reads scene, line,
+   note, next scene. While ComfyUI's sampler runs, a second line shows the steps done, «▰▰▰▰▱▱▱▱▱▱ 12/25», as the card's
+   websocket reports them, in an edit at most every 3 s (`statusLine` in `local/picture.ts`). While the job waits on the
+   card behind other jobs, the second line shows its place instead ([waiting](#waiting)). Before that and before the
+   first step (the description, the model loading) the line stands alone. An edit Telegram refuses leaves a
+   `picture_status_failed` row with Telegram's code, and the next one waits as long as Telegram asks. No edit lands
+   after the line is removed or rewritten to a failure. A sample, a variant and a portrait show the same place and
+   steps under status lines of their own, and the line of all styles shows each picture's in turn.
+3. A reader's frames go in scene order, as each starts from the clothes of the one before it and the first writes the
+   sheet. On the language model's card, in one scheduler turn that holds the GPU no longer than a job would, the bot
+   writes the story's character sheet if it has none, then the frame of this scene ([from the sheet to the
+   prompt](#picture-pipeline)), from the memory the story had at that scene. While nothing is being written for the
+   reader it continues the scene in the slot where that is cached, sharing its prefix. Otherwise it goes in a lane of its
+   own beside their next scene, and it is never in that scene's way: a scene that needs the slot ends it. It is asked
+   again every 5 s, by turns each way, for at most 10 minutes (`DESCRIBE_WAIT_MS`), and the picture is skipped only past
+   that. When that card is not ready, the picture is skipped at once.
 4. The prompt is assembled in code, and ComfyUI on the picture card draws it through the loopback tunnel with the
-   story's seed, derived from the story id, so one story keeps one visual family and a redraw repeats.
+   story's seed, derived from the story id, so one story keeps one visual family and a redraw repeats. A reader has one
+   picture on the card at a time, in scene order, so another reader's goes between theirs.
 5. The PNG is stripped of its text chunks, which hold the whole prompt and workflow (`stripPngMetadata` in
-   `local/image-batch.ts`), and the photo goes out as a reply to its scene, captioned with the model that drew it,
-   «🎨 Qwen-Image 2.1». The status line goes once the photo is there, and the prompt follows it, folded ([the prompt
-   under a picture](#picture-prompts)).
+   `local/image-batch.ts`), and replaces the status line by `editMessageMedia`, which turns a text message into a photo,
+   captioned with the model that drew it, «🎨 Qwen-Image 2.1». The note becomes the prompt, folded ([the prompt under a
+   picture](#picture-prompts)). A line the reader deleted or Telegram will not turn leaves a `picture_place_gone` row:
+   the photo goes out anew as a reply to its scene, and the line and the note go. A synthetic pass over real Telegram on
+   2026-10-31 showed the line keeps its reply to the scene and the note its reply to the line. Answers to edits carry no
+   `reply_to_message`, so only the chat shows that, and the same bytes uploaded again answer `message is not modified`,
+   which `patiently` takes for an edit that landed.
 6. One `picture` row records the outcome ([the log](gpu.md#bot-log)).
+
+At most five frames wait for a reader, the running ones included (`QUEUE_FRAMES`). A sixth takes the place of the
+oldest that is neither being described nor drawn: its line and note leave the chat, and its row says `skipped` with
+the code `picture_queue_full`. So a reader who moves faster than the card keeps the pictures nearest to where they are.
+A queued picture holds no job lock and is nothing a next message waits for or stops. The places are recorded as they go
+out (`Library.reservedPictures`), and the queue lives in memory: a stopped bot's places are removed at the next start,
+the pictures are not made, and nobody is told. Only a place a picture or its prompt was already going into stays, as it
+may be that by now, and goes with its scene: a line left standing is better than a picture deleted. A failure is not
+written over such a line either, as the picture may still land after it. One past its 48 hours can no longer be deleted
+and is forgotten. Until a frame is over a preset's links do not move (`relinkable`).
 
 Every photo the bot draws, a sample's, a variant's and a portrait's too, ends its caption with that line, as of
 2026-10-28 at the owner's request. The name is read from the graph that was submitted: the file of the loader the
@@ -285,10 +308,14 @@ step-distillation LoRA on that way at a strength other than 0 after it (`picture
 way that cannot be followed, or a caption the line would take past 1024 characters, leaves the caption without it.
 
 A failure or a busy card leaves the story exactly as it was. The status line is rewritten to one line only when the
-picture really failed: a reader who has moved on gets no apology, and that line goes with the reader's next message or
-button ([passing messages](#passing-messages)). The reader's next message and `/cancel` stop a
-picture in flight. Moving around the menus does not, and there is no cancel button, because by then the job lock is
-clear. Every photo is recorded with its scene and leaves the chat with it ([deletion](#deletion)). What the card keeps
+picture really failed, its note goes, and that line goes with the reader's next message or button ([passing
+messages](#passing-messages)). A picture skipped or stopped takes its line and note out without a word. `/cancel` stops
+every picture of the reader's, the one on the card told to stop and those behind it; a deletion stops its scenes' own
+the moment it is written. A picture being sent when `/cancel` lands is not asked for again. Whatever stops or fails, a
+message a picture or its prompt went into leaves the chat only if Telegram refused that edit, as with no answer it may
+hold them by now.
+The reader's next message stops only a sample or a variant. Moving around the menus stops nothing, and there is no
+cancel button. Every photo is recorded with its scene and leaves the chat with it ([deletion](#deletion)). What the card keeps
 of a picture, and for how long, is in [gpu.md](gpu.md#what-the-card-keeps-of-a-picture); why pictures are made this
 way is in [illustrations-plan.md](illustrations-plan.md).
 
@@ -357,7 +384,7 @@ Only a reader whose scenes are drawn (`SIMPLE_CHAT_IMAGE_USERS`) has «🎨 Ст
 - **Prompt under a picture:** every photo, the scene's own, every sample and every variant, gets a reply right after it: a rich message folded to one line, «🖼 Промпт: 243 токена, из них стиль 53 · 1 204 знака» ("Prompt: 243 tokens, 53 of them the style · 1,204 characters"). Opened, it shows the prompt the picture was drawn from as plain text, which wraps to the width of a phone, for the reader to read, copy and tune a style line against (`foldedPrompt` in `local/picture.ts`). It was a code block at first, and on a phone that meant scrolling sideways. A portrait's note holds its whole prompt too, the bot's own or the reader's ([a portrait's own prompt](#portrait-prompt)).
   - The tokens are the ones the graph's text encoder conditions the picture on, Qwen Image 2.1's or Krea 2's: the prompt and the few tokens of the encoder's template that stay (`encoderTokens` in `local/picture.ts`, [tokenizers.md](tokenizers.md)). The style's share is what the style line adds to the description before it. Without `tokenizers/qwen-2.5.json.gz` (`npm run tokenizers`), or for a graph with another encoder, the line gives the characters alone.
   - The note is deleted with its photo when their scene is. A note Telegram refuses leaves the photo as it is, and the reader is told nothing; the log gets a `picture_prompt_unsent` row.
-  - A photo already on its way to Telegram when the reader's next move or /cancel stops its picture goes out with its note all the same, and nothing of that picture follows the note. Its log row is `ready` with `cancelled: true`.
+  - A photo already on its way to Telegram when /cancel stops its picture, or the reader's next move stops a sample or a variant, goes out with its note all the same, and nothing of that picture follows the note. Its log row is `ready` with `cancelled: true`.
 
 The owner decided the last rule on 2026-09-25, because such a photo is in the chat either way and of no use there
 without the prompt it was drawn from ([the record](illustrations-plan.md#prompt-under-picture)). The note is a rich

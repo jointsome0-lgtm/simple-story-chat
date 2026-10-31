@@ -88,6 +88,13 @@ export class Store {
     }
     return interrupted;
   }
+  // The places in the chat a process that stopped left kept for pictures, reader by reader (local/bot.ts `unreserve`).
+  reservations() {
+    return (this.db.prepare('SELECT user_id FROM libraries').all() as { user_id: string }[]).flatMap(({ user_id: userId }) => {
+      const places = this.read(userId).reservedPictures;
+      return places?.length ? [{ userId, places }] : [];
+    });
+  }
   // The portraits a reader kept (local/picture.ts), and the pictures of their people they sent (local/reference.ts), are
   // files beside the database, never in it: one directory for each reader, named by a keyed hash of their id, and a
   // random name for each file, so that no path says whose it is or whom it shows. The library refers to a file by that

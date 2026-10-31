@@ -735,6 +735,7 @@ export const ko: Messages = {
     gpuPaused: 'GPU가 일시정지됐어요. /model 명령으로 GPU를 시작한 뒤 행동을 다시 보내 주세요.',
     drawing: '🎨 삽화를 그리는 중…',
     exportFailed: '파일을 보내지 못했어요. 잠시 후 다시 시도해 주세요.',
+    promptPending: '🖼 그림이 완성되면 여기에 프롬프트가 나타나요.',
     pictureFailed: '삽화를 그리지 못했어요. 장면은 저장되어 있어요.',
     promptSummary: (chars, tokens, style) =>
       `🖼 프롬프트: ${tokens === null ? '' : `${grouped(tokens)}토큰${style === null ? '' : ` (스타일 ${grouped(style)})`} · `}${grouped(chars)}자`,

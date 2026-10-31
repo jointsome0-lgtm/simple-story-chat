@@ -21,9 +21,11 @@
 // (`previewOnly`), whose file is in RAM and is deleted by gpu/image-sweeper.py seconds later. The server's node cache
 // still holds the last job in memory until the next one runs (docs/gpu.md#what-the-card-keeps-of-a-picture).
 //
-// A picture in flight is stopped by the reader's next message and by `/cancel`. It is not offered as a button of
+// A scene's picture keeps its place in the chat and is made behind the reader, in a queue of their own: their next
+// message leaves it be (the owner, 2026-10-31: «зарезервировать место для фотки и промпт, и продолжить историю, и потом
+// увидеть изображения»). `/cancel` stops all of it, and a deletion its scene's. It is not offered as a button of
 // its own: by the time it is being drawn the job lock is clear, so the bot shows no cancel control, and moving
-// around the menus does not stop it either — it ends with the next scene the reader asks for, or with the photo.
+// around the menus does not stop it either. A sample, a variant and a portrait do end with the next scene.
 // A photo already handed to Telegram when the stop comes goes out with its note all the same: it is in the chat
 // either way, and is of no use there without the prompt it was drawn from. Nothing of the picture follows the note,
 // and its row is `ready` with `cancelled: true`.
@@ -45,8 +47,9 @@
 // text from some scene on (local/picture-versions.ts).
 import { createHash, randomInt } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { appearanceOf, linkedStory, recordPicture, referenceFiles } from '../lib/library.ts';
-import type { Library, PictureRecipe, SceneNode, Story } from '../lib/library.ts';
+import { setTimeout as delay } from 'node:timers/promises';
+import { appearanceOf, linkedStory, markDelivering, recordPicture, referenceFiles, releaseReserved, reservePicture } from '../lib/library.ts';
+import type { Library, MemoryVersion, PictureRecipe, SceneNode, Story } from '../lib/library.ts';
 import type { ImageConfig } from './config.ts';
 import { estimateTokens, requestStamp, sameContext } from './context.ts';
 import { SAMPLER_DEFAULTS, apiGraph, applyToWorkflow, attentionOffered, drawOne, latentSizeOf, pictureModelOf, previewOnly, referenceSlots,
@@ -80,6 +83,7 @@ import { contextParts, storyNarration } from './prompt.ts';
 import { readerScope } from './serving.ts';
 import { fileErrorCode } from './store.ts';
 import type { Store } from './store.ts';
+import { patiently, refused } from './telegram.ts';
 import type { Chat, InlineKeyboard, Screen } from './telegram.ts';
 import { texts } from './text.ts';
 import type { Messages } from './text.ts';
@@ -89,8 +93,12 @@ import { inTurn } from './turn.ts';
 
 // What the bot knows when the scene is on its way out. `sceneAt` is the moment the scene's own message was sent:
 // the wait this feature is judged by starts there and ends at the photo.
+// The memory a scene was written under, with its versions in hand: a description may run after the branch has been
+// compacted past the scene, and after a deletion took those versions out of the library.
+export type HeldMemory = { id: string | null; chain: MemoryVersion[] };
 export type PictureRequest = {
   userId: string; chat: Chat; storyId: string; nodeId: string; branchId: string;
+  memory?: HeldMemory;
   sceneMessageId: number | undefined; sceneAt: number; signal: AbortSignal; log: Log;
   // The GPU of the language model, held for the description call alone, as local/prepare.ts holds it for work done
   // ahead of need. It throws when the card is paused, and then nothing is described and nothing is drawn.
@@ -140,9 +148,16 @@ function withModel(caption: Screen | undefined, model: string | undefined): Scre
 // A description call that was stopped because somebody else needed the model (local/scheduler.ts): a picture is the
 // one thing here that may be given up, and giving it up is not a failure of the feature.
 const GAVE_WAY = ['background_preempted', 'background_unavailable', 'background_timeout'];
+// How long one frame's description waits for a slot past the scenes that keep it from one, asked again this often, before
+// its picture is skipped (`describeStage`). Long enough for a run of two readers' scenes on both lanes, and short
+// enough that a card the reader has left does not stay up for a picture nobody is waiting for.
+const DESCRIBE_WAIT_MS = 10 * 60 * 1000;
+const DESCRIBE_RETRY_MS = 5000;
+// How many of a reader's frames may be under way at once, the running ones included (`illustrate`).
+const QUEUE_FRAMES = 5;
 
 // The scene of a picture is no longer in its reader's library: they deleted it, with its seed or its branch. That
-// ends the picture the way their next message does, without a word; the row keeps this code, so that the two can
+// ends the picture the way a /cancel does, without a word; the row keeps this code, so that the two can
 // still be told apart. `details` are the counts of a message that had to be taken back (`sendKept`).
 const sceneGone = (details?: object) => Object.assign(new Error('scene_gone'), { code: 'scene_gone', ...details });
 
@@ -331,6 +346,8 @@ export function createIllustrator(config: ImageConfig, deps: {
   promptTokens?: (graph: Graph) => ((prompt: string) => number) | undefined;
   // The same for one field of a sheet on its own (`textTokens`), for the characters' card.
   textTokens?: (graph: Graph) => ((text: string) => number) | undefined;
+  // How long a description waits for a slot and how often it asks (`DESCRIBE_WAIT_MS`), for a test.
+  describeWaitMs?: number; describeRetryMs?: number;
   // How long the bot's jobs on the card usually take (`frame`), timed here as they end, from which a reader whose
   // picture waits behind other jobs is told roughly when it starts (`statusLine`). Without it, the place alone.
   durations?: Durations;
@@ -390,8 +407,10 @@ export function createIllustrator(config: ImageConfig, deps: {
 
   // The scene's own request, once more: the same system prompt and the same history up to this scene, so that a
   // server with a prefix cache pays for the appended instruction alone (the plan's "What the second call costs").
-  const excerpt = (state: Library, storyId: string, nodeId: string, branchId: string) => {
-    const memory = state.stories[storyId].branches[branchId]?.memory ?? null;
+  const excerpt = (state: Library, storyId: string, nodeId: string, branchId: string, kept?: HeldMemory) => {
+    // A queued frame's memory goes with it, as a deletion may have taken it out of the library since: `state` is a copy.
+    for (const one of kept?.chain ?? []) state.stories[storyId].memories[one.id] ??= one;
+    const memory = kept ? kept.id : state.stories[storyId].branches[branchId]?.memory ?? null;
     const parts = contextParts(state, { storyId, head: nodeId, memory });
     return { system: storyNarration(state, storyId).system, messages: [...parts.seed, ...parts.memory, ...parts.tail], memory };
   };
@@ -603,17 +622,18 @@ export function createIllustrator(config: ImageConfig, deps: {
   }
 
   // The description of one scene: the story's sheet first if it has none yet, then the frame, both on the language
-  // model's card. `sharesPrefix` holds it to the slot where the scene's own request is cached, which is where the
-  // picture that follows the scene belongs; a sample asked for later may find that slot gone, after a restart or under
+  // model's card. `slot` 'shared' holds it to the slot where the scene's own request is cached, which is where the
+  // picture that follows the scene belongs, and 'beside' puts it next to the reader's next scene, reading the story
+  // afresh there (`describeStage`); a sample asked for later may find that slot gone, after a restart or under
   // another reader's scene, and is described like any request of its reader instead. The people are drawn as they are at
   // this scene (local/picture-versions.ts), and a lasting change the frame names costs one more call, a retelling after
   // it; the slot's cached story is then read once more by the next request that continues it.
   async function describeFrame(userId: string, storyId: string, nodeId: string, branchId: string, signal: AbortSignal, log: Log,
-    sharesPrefix: boolean) {
+    slot?: 'shared' | 'beside', memory?: HeldMemory) {
     const state = store.read(userId);
     const story = state.stories[storyId];
     if (!story?.nodes[nodeId]) throw sceneGone();
-    const context = excerpt(state, storyId, nodeId, branchId);
+    const context = excerpt(state, storyId, nodeId, branchId, memory);
     const anchor = anchorOf(story.nodes[nodeId], context);
     let sheet: Character[] = [];
     // How many lasting changes this frame found in the story, for a reader who has versions of the sheet.
@@ -705,7 +725,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       const answer = await fields(model);
       if (gFor(userId) && !viewerOf(story, sheet)) g = await askG(model, context, sheet, anchor, signal);
       return answer;
-    }, sharesPrefix ? { holder: userId, sharesPrefix, work: 'description' } : { holder: userId, work: 'description' });
+    }, { holder: userId, ...slot === 'shared' ? { sharesPrefix: true } : slot === 'beside' ? { beside: true } : {}, work: 'description' });
     const viewer = viewerOf(story, sheet);
     const viewed = viewer && (isLean(description) ? leanSeen(description, viewer) : seenBy(description, viewer, sheet));
     // What the sheet's people wear in this frame is what the next picture below this scene starts from. Somebody whose
@@ -941,10 +961,27 @@ export function createIllustrator(config: ImageConfig, deps: {
   // edited in at once, and anything else at most every PROGRESS_MS. An edit Telegram refuses leaves a
   // `picture_status_failed` row and waits for the next one, and none lands once the line is being cleared
   // (local/progress.ts `close`): the removal, or the failure put in its place, is the line's last word.
-  async function statusLine(chat: Chat, text: string, log: Log, t: Messages) {
+  async function statusLine(chat: Chat, text: string, log: Log, t: Messages, replyTo?: number) {
     let messageId: number | undefined;
-    try { messageId = await chat.show({ text }, 'status'); }
+    try { messageId = await chat.show({ text }, 'status', undefined, replyTo); }
     catch (error) { log('picture_status_unsent', errorCode(error)); }
+    const line = watched(chat, text, log, t, messageId);
+    return {
+      ...line,
+      messageId,
+      async clear(replacement?: string) {
+        if (messageId === undefined) return;
+        await line.close();
+        try { await (replacement === undefined ? chat.remove(messageId) : chat.edit(messageId, { text: replacement })); } catch { /* a hint, never needed */ }
+        // A failure told in its place, or a line Telegram would not remove, goes with the reader's next update
+        // (docs/telegram-ui.md#passing-messages): only now, so that an update arriving meanwhile cannot take the
+        // failure away before it is there to be read.
+        chat.mark(messageId, 'notice');
+      },
+    };
+  }
+  // What a status says while a job waits on the card and while it draws, edited into the message `messageId` by `chat`.
+  function watched(chat: Pick<Chat, 'send' | 'edit'>, text: string, log: Log, t: Messages, messageId: number | undefined) {
     type Stage = 'queued' | 'drawing';
     const bar = messageId === undefined ? undefined : createProgress<{ stage: Stage; line: string }>({ chat, messageId, log,
       intervalMs: PROGRESS_MS, rows: { failed: 'picture_status_failed' },
@@ -974,15 +1011,7 @@ export function createIllustrator(config: ImageConfig, deps: {
     return {
       progress, place,
       waited: () => { const row = waited(shown); shown = undefined; return row; },
-      async clear(replacement?: string) {
-        if (messageId === undefined) return;
-        await bar?.close();
-        try { await (replacement === undefined ? chat.remove(messageId) : chat.edit(messageId, { text: replacement })); } catch { /* a hint, never needed */ }
-        // A failure told in its place, or a line Telegram would not remove, goes with the reader's next update
-        // (docs/telegram-ui.md#passing-messages): only now, so that an update arriving meanwhile cannot take the
-        // failure away before it is there to be read.
-        chat.mark(messageId, 'notice');
-      },
+      close: async () => { await bar?.close(); },
     };
   }
 
@@ -1013,15 +1042,35 @@ export function createIllustrator(config: ImageConfig, deps: {
     throw sceneGone({ picturesRemoved: removed, picturesNotRemoved: 1 - removed });
   }
 
+  // The one rule of a place an edit went into: it stays marked and recorded whatever became of the edit, as the message
+  // may hold the picture or its prompt by now, and a stale line is better than either deleted. Only Telegram's refusal
+  // says the message is still empty, and clears the mark. Says whether it did.
+  function emptied(userId: string, place: number, error: unknown) {
+    if (!refused(error)) return false;
+    store.mutate(userId, state => markDelivering(state, place, false));
+    return true;
+  }
+
   // A note folded under a photo: the prompt of a picture, a portrait's among them. The photo is what the
   // reader waited for: a note that does not go out costs them the note alone and is told by a row of its own, unless
   // its scene or story is gone, which ends the picture.
-  async function sendNote(request: { userId: string; chat: Chat; storyId: string; nodeId?: string; log: Log },
-    photo: number | undefined, html: string, keyboard?: InlineKeyboard) {
-    try { await sendKept(request, () => request.chat.note(html, photo, keyboard)); }
-    catch (error) {
+  // A note with a place kept for it takes that place, and one Telegram refuses leaves no empty place behind: a place that
+  // stays there stays recorded, for the next start.
+  async function sendNote(request: { userId: string; chat: Chat; storyId: string; nodeId?: string; log: Log; signal?: AbortSignal },
+    photo: number | undefined, html: string, keyboard?: InlineKeyboard, place?: number) {
+    const { chat, userId, signal } = request;
+    try {
+      await sendKept(request, place === undefined ? () => chat.note(html, photo, keyboard) : async () => {
+        store.mutate(userId, state => markDelivering(state, place, true));
+        await chat.noteEdit(place, html, keyboard, signal);
+        return place;
+      });
+    } catch (error) {
       if (errorCode(error) === 'scene_gone') throw error;
       request.log('picture_prompt_unsent', errorCode(error));
+      if (place === undefined || !emptied(userId, place, error)) return;
+      const removed = await chat.remove(place).then(() => true, () => false);
+      if (removed) store.mutate(userId, state => releaseReserved(state, [place]));
     }
   }
 
@@ -1029,14 +1078,14 @@ export function createIllustrator(config: ImageConfig, deps: {
   // sample, the note is `editable`: its button asks for a variant of the scene's picture from a prompt the reader
   // writes (`variant`, local/bot.ts), and names the scene, whose ids keep it well inside the 64 bytes a button's data
   // may have.
-  async function sendPrompt(request: { userId: string; chat: Chat; storyId: string; nodeId: string; log: Log },
+  async function sendPrompt(request: { userId: string; chat: Chat; storyId: string; nodeId: string; log: Log; signal?: AbortSignal },
     photo: number | undefined, prompt: string, size: { promptCharacters: number; pictureTokens?: number; styleTokens?: number },
-    editable = false) {
+    editable = false, place?: number) {
     const t = texts(store.read(request.userId).language);
     const summary = t.notices.promptSummary(size.promptCharacters, size.pictureTokens ?? null, size.styleTokens ?? null);
     const keyboard = editable && photo !== undefined
       ? { inline_keyboard: [[{ text: t.variant.button, callback_data: `prompt-edit:${request.storyId}:${request.nodeId}` }]] } : undefined;
-    await sendNote(request, photo, foldedPrompt(summary, prompt), keyboard);
+    await sendNote(request, photo, foldedPrompt(summary, prompt), keyboard, place);
   }
 
   // The button under a portrait's prompt, the same as under a scene's picture: the reader writes the whole prompt anew,
@@ -1050,44 +1099,166 @@ export function createIllustrator(config: ImageConfig, deps: {
     return index >= 0 && Buffer.byteLength(data) <= 64 ? { inline_keyboard: [[{ text: label, callback_data: data }]] } : undefined;
   }
 
-  // One picture, from the status line to the photo. `described` is called the moment the language model is out
-  // of it, so that the caller may start the work that was waiting for its slot while the card still draws.
-  async function drawPicture(request: PictureRequest, described: () => void): Promise<void> {
-    const { userId, chat, storyId, nodeId, branchId, signal, log } = request;
-    if (signal.aborted) return;
-    const elapsed = () => {
-      const waited = Math.max(0, now() - request.sceneAt);
-      return { pictureAfterSceneMs: waited, pictureSeconds: Math.round(waited / 1000) };
-    };
-    const t = texts(store.read(userId).language);
-    const status = await statusLine(chat, t.notices.drawing, log, t);
+  // A scene's picture on its way, from the status line that keeps its place in the chat to the photo there, in its reader's
+  // queue (docs/telegram-ui.md#picture-delivery). Their next move leaves it be: `stop` is its own, so that only /cancel, a
+  // deletion, the queue's limit and the bot's stop reach it, and it is `drawn` from a description ahead of the drawing.
+  type Frame = { request: PictureRequest; stop: AbortController; stage: 'reserving' | 'waiting' | 'describing' | 'described' | 'drawing' | 'ending';
+    place?: number; note?: number; line: ReturnType<typeof watched>; t: Messages; dropped?: string; retries: number; describeMs: number;
+    drawn?: Awaited<ReturnType<typeof describeFrame>> };
+  // Each reader's frames in scene order, the running ones included, none of which holds a job lock. They are in memory
+  // alone: the places they kept stay recorded in the library until they are over (`Library.reservedPictures`).
+  const queues = new Map<string, Frame[]>();
+  // What the queues are running now, for `idle`, and whether the bot has stopped taking pictures.
+  const stages = new Set<Promise<void>>();
+  let stopped = false;
 
-    let describeMs = 0;
+  // Keeps the place of a picture in the chat: its status line under the scene and a note under the line, each recorded
+  // the moment it is sent, as a picture is (`sendKept`), so that a deletion finds them and a restart removes them. Neither
+  // is needed: a chat that refuses them costs the place and no picture. Resolves once both are out, and the reader's next
+  // scene waits for that (local/bot.ts).
+  async function reserve(frame: Frame) {
+    const { userId, chat, storyId, nodeId, sceneMessageId, log } = frame.request;
+    const there = (state: Library) => !!state.stories[storyId]?.nodes[nodeId];
+    const keep = async (messageId: number) => {
+      if (store.mutate(userId, state => there(state) && (reservePicture(state, { storyId, nodeId, messageId, at: now() }), true))) return messageId;
+      await chat.remove(messageId).catch(() => {});
+      throw sceneGone();
+    };
+    const line = await statusLine(chat, frame.t.notices.drawing, log, frame.t, sceneMessageId);
+    frame.line = line;
+    if (line.messageId === undefined) return;
+    frame.place = await keep(line.messageId);
+    try {
+      const sent = await chat.note(frame.t.notices.promptPending, frame.place);
+      if (sent !== undefined) frame.note = await keep(sent);
+    } catch (error) {
+      if (errorCode(error) === 'scene_gone') throw error;
+      log('picture_prompt_unsent', errorCode(error));
+    }
+  }
+  // Takes a frame's places out of the chat, those a deletion has not taken already and none an edit went into (`emptied`).
+  // One that stays there, as far as the bot can tell, stays recorded for the next start.
+  async function clearPlaces(frame: Frame, ...messageIds: (number | undefined)[]) {
+    const { userId, chat } = frame.request;
+    const held = store.read(userId).reservedPictures ?? [];
+    const places = messageIds.filter(one => held.some(place => place.messageId === one && !place.delivering)) as number[];
+    if (!places.length) return;
+    const { left } = await chat.removeEach(places);
+    for (const one of places) chat.keep(one);
+    store.mutate(userId, state => releaseReserved(state, places.filter(one => !left.includes(one))));
+  }
+  // A frame's last word in the chat: a failure told in its place, which goes as a notice does, or none at all. A line a
+  // picture went into takes no failure, as the picture may land after it and would then go as that notice (`emptied`).
+  async function clearFrame(frame: Frame, failure?: string) {
+    const { userId, chat } = frame.request, place = frame.place, signal = frame.stop.signal;
+    await frame.line.close();
+    const marked = store.read(userId).reservedPictures?.some(one => one.messageId === place && one.delivering);
+    if (failure === undefined || place === undefined || marked || signal.aborted) return await clearPlaces(frame, place, frame.note);
+    const told = await patiently(() => chat.edit(place, { text: failure }), signal).then(() => true, () => false);
+    if (!told && signal.aborted) return await clearPlaces(frame, place, frame.note);
+    chat.mark(place, 'notice');
+    store.mutate(userId, state => releaseReserved(state, [place]));
+    await clearPlaces(frame, frame.note);
+  }
+  const elapsedOf = ({ request }: Frame) => {
+    const waited = Math.max(0, now() - request.sceneAt);
+    return { pictureAfterSceneMs: waited, pictureSeconds: Math.round(waited / 1000) };
+  };
+  // Takes a frame out of its queue, once, whichever way it ended: its reader's links may move once nothing of theirs is
+  // left (`jobs`), the work waiting for the slot it may have held goes on, and so does the queue.
+  function leave(frame: Frame) {
+    const { userId } = frame.request;
+    const queue = queues.get(userId);
+    if (!queue?.includes(frame)) return;
+    queue.splice(queue.indexOf(frame), 1);
+    if (!queue.length) queues.delete(userId);
+    const left = jobs.get(userId)! - 1;
+    if (left) jobs.set(userId, left); else jobs.delete(userId);
+    told(frame);
+    advance(userId);
+  }
+  // `afterDescribe`, once.
+  function told({ request }: Frame) {
+    const after = request.afterDescribe;
+    request.afterDescribe = undefined;
+    try { after?.(); } catch { /* the caller's own */ }
+  }
+  // How a frame's failure ends it, whichever stage it reached, one to one with what a reader who waited was told: nothing,
+  // since they stopped it or moved past it, or the failure in its place. The row keeps the code.
+  async function endFrame(frame: Frame, error: unknown, details: { pictureStyle?: StyleChoice; pov?: boolean; gCounts?: GCounts } = {}) {
+    const { log } = frame.request, signal = frame.stop.signal;
+    // The scheduler gave the slot to somebody who is waiting for a scene for as long as `describeStage` waits, or a newer
+    // frame took its place in the queue: nothing failed, this reader simply gets no picture for this scene.
+    const verdict = () => {
+      const code = frame.dropped ?? errorCode(error);
+      const full = code === 'picture_queue_full';
+      const cancelled = !full && (signal.aborted || code === 'cancelled' || code === 'scene_gone');
+      return { code, cancelled, outcome: cancelled ? 'cancelled' : full || GAVE_WAY.includes(String(code)) ? 'skipped' : 'failed' };
+    };
+    await clearFrame(frame, verdict().outcome === 'failed' ? frame.t.notices.pictureFailed : undefined);
+    // A stop may have come while the failure was being told.
+    const { code, cancelled, outcome } = verdict();
+    const { pictureStyle, pov, gCounts } = details;
+    log('picture', frame.dropped ?? (signal.aborted ? 'cancelled' : safeCode(code)),
+      { ...safeErrorDetails(error), outcome, cancelled, describeMs: frame.describeMs, ...frame.line.waited(), pictureStyle,
+        ...pov === undefined ? {} : { pov }, ...gCounts, ...frame.retries ? { describeRetries: frame.retries } : {}, ...elapsedOf(frame) });
+  }
+
+  // The description of a frame, on the language model's card, holding it the way a job holds it and no longer. It is
+  // written in scene order, whatever the reader does meanwhile, as each frame starts from the clothes of the one before
+  // it (`wornAt`) and the first writes the story's sheet. While the reader is not being written for it continues
+  // the scene in the slot where that is cached, as it always did; otherwise it goes beside their next scene, which it is
+  // never in the way of (`beside`). A scene that takes the slot ends it, and it is asked again every DESCRIBE_RETRY_MS, each
+  // way by turns, since a slot lost and a pool too full may each let only the other through, until DESCRIBE_WAIT_MS have
+  // gone. Only then is it skipped, as a reader waiting for a scene comes first.
+  async function describeStage(frame: Frame) {
+    const { userId, storyId, nodeId, branchId, memory, log, hold } = frame.request, signal = frame.stop.signal;
+    frame.stage = 'describing';
+    const started = now();
+    const bound = AbortSignal.timeout(deps.describeWaitMs ?? DESCRIBE_WAIT_MS);
+    const waiting = AbortSignal.any([signal, bound]);
+    try {
+      for (let attempt = 0; ; attempt++) {
+        let release: (() => void) | undefined;
+        try { release = hold?.(); }
+        catch {
+          log('picture', 'gpu_not_ready', { outcome: 'skipped', ...elapsedOf(frame) });
+          await clearFrame(frame);
+          return;
+        }
+        try {
+          const slot = attempt % 2 === 0 && !store.read(userId).job ? 'shared' : 'beside';
+          frame.drawn = await describeFrame(userId, storyId, nodeId, branchId, waiting, log, slot, memory);
+          break;
+        } catch (error) {
+          // The bound as the scheduler's waiting calls hear it: a stop that is the reader's is no giving way.
+          const waited = bound.aborted && !signal.aborted;
+          if (signal.aborted || !waited && !GAVE_WAY.includes(String(errorCode(error)))) throw error;
+          if (waited) throw GAVE_WAY.includes(String(errorCode(error))) ? error : Object.assign(new Error('background_timeout'), { code: 'background_timeout' });
+        } finally { release?.(); told(frame); }
+        frame.retries++;
+        await delay(deps.describeRetryMs ?? DESCRIBE_RETRY_MS, undefined, { signal: waiting }).catch(() => {});
+        if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
+      }
+      frame.describeMs = Math.max(0, now() - started);
+      if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
+      frame.stage = 'described';
+    } catch (error) { await endFrame(frame, error); }
+  }
+
+  // The drawing of a described frame, and the photo in the place kept for it. One at a time for a reader, in scene order
+  // (`advance`): nothing of a drawing rests on the one before it but the order the reader sees them in. So that a reader
+  // with a full queue holds one job on the card at a time, as a reader who waits does, and another reader's picture goes
+  // between theirs.
+  async function drawStage(frame: Frame) {
+    const { request, drawn: described } = frame;
+    const { userId, chat, storyId, nodeId, log } = request, signal = frame.stop.signal;
+    const framed = { ...request, signal };
+    frame.stage = 'drawing';
     let pictureStyle: StyleChoice | undefined;
     let releasePortraits: (() => void) | undefined;
-    // Whether the frame was seen through a person's eyes, only for a story that has one (local/picture-pov.ts).
-    let pov: boolean | undefined;
-    // G's request's time and tokens, for a reader who has G and a frame it was asked for (local/picture-g.ts).
-    let gCounts: GCounts | undefined;
+    const { pov, gCounts } = described!;
     try {
-      // The description call, on the language model's card, holding it the way a job holds it and no longer.
-      const describeStarted = now();
-      let release: (() => void) | undefined;
-      try { release = request.hold?.(); }
-      catch {
-        log('picture', 'gpu_not_ready', { outcome: 'skipped', ...elapsed() });
-        await status.clear();
-        return;
-      }
-      let frame: { description: Description; sheet: Character[]; clothesChanged: number; pov?: boolean; lastingChanges?: number;
-        views?: PoseViews; poseSetPeople?: number; g?: GKept; gCounts?: GCounts };
-      try { frame = await describeFrame(userId, storyId, nodeId, branchId, signal, log, true); }
-      finally { release?.(); described(); }
-      describeMs = Math.max(0, now() - describeStarted);
-      pov = frame.pov;
-      gCounts = frame.gCounts;
-      if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
-
       // The prompt is assembled from the fields, in the order the readers of step 3 asked for, and ends with one
       // style line: the reader's choice as it stands now, which they may have changed while the description was
       // written, or the bot's own. The names of the sheet select appearance lines and are cut out of every field.
@@ -1095,39 +1266,73 @@ export function createIllustrator(config: ImageConfig, deps: {
       const reader = store.read(userId);
       pictureStyle = styleChoice(reader, standard);
       const line = styleLine(reader, standard);
-      const result = await drawFrame(userId, storyId, frame, line, signal, log, reader.stories[storyId]?.nodes[nodeId]?.picture,
-        status);
+      const result = await drawFrame(userId, storyId, described!, line, signal, log, reader.stories[storyId]?.nodes[nodeId]?.picture,
+        frame.line);
       releasePortraits = result.releasePortraits;
       const { assembled, recipe, drawn } = result;
       if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
-      // The photo hangs under the scene it belongs to, and the status line goes only once the photo is there; the
-      // prompt follows it, folded, even if the picture was stopped while the photo was on its way.
+      // The photo takes the place of the status line under the scene, or is sent there anew if Telegram will not have it;
+      // the prompt follows it, even if the picture was stopped while the photo was on its way.
       const photoStarted = now();
+      await frame.line.close();
+      if (signal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
       let file: string | undefined;
-      const photo = await sendKept(request, () => chat.photo(drawn.bytes, request.sceneMessageId, withModel(undefined, drawn.model), id => { file = id; }), recipe, () => file);
+      const caption = withModel(undefined, drawn.model), keepFile = (id: string) => { file = id; };
+      const sendAnew = () => chat.photo(drawn.bytes, request.sceneMessageId, caption, keepFile, signal);
+      let photo: number | undefined;
+      const place = frame.place;
+      try {
+        photo = await sendKept(framed, place === undefined ? sendAnew : async () => {
+          store.mutate(userId, state => markDelivering(state, place, true));
+          await chat.media(place, drawn.bytes, caption, keepFile, signal);
+          return place;
+        }, recipe, () => file);
+      } catch (error) {
+        if (place === undefined || !emptied(userId, place, error) || (error as { code?: unknown }).code !== 400 || signal.aborted) throw error;
+        log('picture_place_gone', errorCode(error));
+        photo = await sendKept(framed, sendAnew, recipe, () => file);
+        await clearPlaces(frame, place, frame.note);
+        frame.place = frame.note = undefined;
+      }
       const photoMs = Math.max(0, now() - photoStarted);
-      await status.clear();
       const size = promptSize(assembled.prompt, assembled.line ?? line, drawn.referenceCount);
-      await sendPrompt(request, photo, assembled.prompt, size, true);
-      log('picture', undefined, { outcome: 'ready', cancelled: signal.aborted, describeMs, imageQueueMs: drawn.queueMs, imageMs: drawn.totalMs,
-        ...status.waited(), imageSteps: recipe.steps, pictureAttention: drawn.pictureAttention, photoMs, photoBytes: drawn.bytes.length,
-        namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook, clothesChanged: frame.clothesChanged,
-        pictureStyle, ...pov === undefined ? {} : { pov }, ...frame.lastingChanges === undefined ? {} : { lastingChanges: frame.lastingChanges },
-        ...frame.views ? { poseSetPeople: frame.poseSetPeople, poseViewsPicked: Object.keys(frame.views).length } : {},
-        ...result.changed, ...gCounts, ...size, ...elapsed() });
-    } catch (error) {
-      const code = errorCode(error);
-      const cancelled = signal.aborted || code === 'cancelled' || code === 'scene_gone';
-      // The scheduler gave the slot to somebody who is waiting for a scene, which is the order the plan asks for:
-      // nothing failed, this reader simply gets no picture for this scene.
-      const gaveWay = GAVE_WAY.includes(String(code));
-      const outcome = cancelled ? 'cancelled' : gaveWay ? 'skipped' : 'failed';
-      // A reader who has moved on gets no apology, only their own next scene; a reader still waiting is told once.
-      await status.clear(outcome === 'failed' ? t.notices.pictureFailed : undefined);
-      log('picture', signal.aborted ? 'cancelled' : safeCode(code),
-        { ...safeErrorDetails(error), outcome, cancelled, describeMs, ...status.waited(), pictureStyle,
-          ...pov === undefined ? {} : { pov }, ...gCounts, ...elapsed() });
-    } finally { releasePortraits?.(); }
+      await sendPrompt(framed, photo, assembled.prompt, size, true, frame.note);
+      log('picture', undefined, { outcome: 'ready', cancelled: signal.aborted, describeMs: frame.describeMs, imageQueueMs: drawn.queueMs, imageMs: drawn.totalMs,
+        ...frame.line.waited(), imageSteps: recipe.steps, pictureAttention: drawn.pictureAttention, photoMs, photoBytes: drawn.bytes.length,
+        namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook, clothesChanged: described!.clothesChanged,
+        pictureStyle, ...pov === undefined ? {} : { pov }, ...described!.lastingChanges === undefined ? {} : { lastingChanges: described!.lastingChanges },
+        ...described!.views ? { poseSetPeople: described!.poseSetPeople, poseViewsPicked: Object.keys(described!.views).length } : {},
+        ...result.changed, ...gCounts, ...size, ...frame.retries ? { describeRetries: frame.retries } : {}, ...elapsedOf(frame) });
+    } catch (error) { await endFrame(frame, error, { pictureStyle, pov, gCounts }); }
+    finally {
+      releasePortraits?.();
+      // The delete of the job's record went out before the photo did and nobody waited for it (local/image-batch.ts
+      // `settled`); the picture is over once it has arrived as well, so that stopping the bot cannot drop it.
+      try { await settled(); } finally { leave(frame); }
+    }
+  }
+
+  // Starts what a reader's queue can run now: the first frame not described yet, unless one is being described, and
+  // the first frame of all once it is described, which keeps the drawings in order. A stage runs beside the updates and
+  // holds no job lock; `idle` waits for it, and `stop` ends it.
+  function advance(userId: string) {
+    const queue = queues.get(userId);
+    if (!queue) return;
+    const run = (stage: Promise<void>) => { const task: Promise<void> = stage.catch(() => {}).finally(() => { stages.delete(task); advance(userId); }); stages.add(task); };
+    const next = queue.find(frame => frame.stage === 'waiting');
+    if (next && !queue.some(frame => frame.stage === 'describing')) run(describeStage(next).finally(() => { if (next.stage === 'describing') leave(next); }));
+    if (queue[0]?.stage === 'described') run(drawStage(queue[0]));
+  }
+  // Ends a frame ahead of its time. A stage running stops by itself, the card told to stop drawing it (local/image-batch.ts
+  // `stopJob`), a frame still keeping its place ends once that is out (`illustrate`), and any other goes at once.
+  function drop(frame: Frame, code: string) {
+    frame.dropped = code;
+    frame.stop.abort();
+    if (frame.stage !== 'waiting' && frame.stage !== 'described') return;
+    frame.stage = 'ending';
+    const left = endFrame(frame, undefined).finally(() => leave(frame));
+    const task: Promise<void> = left.catch(() => {}).finally(() => stages.delete(task));
+    stages.add(task);
   }
 
   // A reader's scene as a variant of its picture is drawn from it: the scene, with the recipe its own picture was
@@ -1142,9 +1347,10 @@ export function createIllustrator(config: ImageConfig, deps: {
     return recipe.graph === graphId && recipe.checkpoint === config.checkpoint ? { node, recipe } : 'changed';
   }
 
-  // The picture jobs each reader has running, a scene's picture, a sample, a variant or a portrait, each from before it
-  // first reads a sheet until it is over. Updates are handled one at a time (local/main.ts), so a portrait's prompt, read
-  // where the button is answered, is read under the same link as the job that starts in that update.
+  // The picture jobs each reader has: a scene's picture from the place kept for it until it is over in the queue
+  // (`leave`), or a sample, a variant or a portrait, each from before it first reads a sheet until it is over. Updates are
+  // handled one at a time (local/main.ts), so a portrait's prompt, read where the button is answered, is read under the
+  // same link as the job that starts in that update.
   const jobs = new Map<string, number>();
   const drawing = <T extends { userId: string }>(job: (request: T) => Promise<void>) => async (request: T) => {
     jobs.set(request.userId, (jobs.get(request.userId) ?? 0) + 1);
@@ -1162,17 +1368,50 @@ export function createIllustrator(config: ImageConfig, deps: {
     // The line of a reader who has not chosen a style; the picker marks the preset it is (local/ui.ts).
     standardStyle: standard,
 
+    // Keeps a scene's picture's place in the chat and puts it in its reader's queue. Resolves once the place is out, for
+    // the reader's next scene to come after it (local/bot.ts); the picture itself goes on from here without them. At most
+    // QUEUE_FRAMES frames wait for a reader, the running ones included: past that the oldest that is neither being
+    // described nor being drawn gives its place up, so that a reader who moves faster than the card keeps the pictures
+    // nearest to where they are.
     async illustrate(request: PictureRequest): Promise<void> {
-      // Runs once, however this ends: the caller has work that waits for the model's slot, not for the picture.
-      let told = false;
-      const described = () => { if (!told) { told = true; try { request.afterDescribe?.(); } catch { /* the caller's own */ } } };
-      try { await drawPicture(request, described); }
-      finally {
-        described();
-        // The delete of the job's record went out before the photo did and nobody waited for it (local/image-batch.ts
-        // `settled`); the picture is over once it has arrived as well, so that stopping the bot cannot drop it.
-        await settled();
+      const { userId, chat, log } = request;
+      if (request.signal.aborted || stopped) { try { request.afterDescribe?.(); } catch { /* the caller's own */ } return; }
+      const t = texts(store.read(userId).language);
+      const stop = new AbortController();
+      const frame: Frame = { request, stop, stage: 'reserving', t, retries: 0, describeMs: 0, line: watched(chat, t.notices.drawing, log, t, undefined) };
+      jobs.set(userId, (jobs.get(userId) ?? 0) + 1);
+      const queue = queues.get(userId) ?? [];
+      queues.set(userId, queue);
+      // In the queue from now, for /cancel and a deletion to find, and started once its place is out.
+      queue.push(frame);
+      if (queue.filter(one => one.stage !== 'ending').length > QUEUE_FRAMES) {
+        const oldest = queue.find(one => one.stage === 'waiting' || one.stage === 'described');
+        if (oldest) drop(oldest, 'picture_queue_full');
       }
+      try {
+        await reserve(frame);
+        if (stop.signal.aborted || request.signal.aborted || stopped) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
+      } catch (error) {
+        if (!frame.dropped) { frame.dropped = errorCode(error) === 'scene_gone' ? 'scene_gone' : 'cancelled'; stop.abort(); }
+        try { await endFrame(frame, error); } finally { leave(frame); }
+        return;
+      }
+      frame.stage = 'waiting';
+      advance(userId);
+    },
+    // A reader's /cancel: every picture of theirs, those waiting and the one on the card.
+    cancel(userId: string) { for (const frame of [...queues.get(userId) ?? []]) drop(frame, 'cancelled'); },
+    // After a deletion: the frames of the scenes that went, whose places the deletion takes out of the chat.
+    forgetGone(userId: string) {
+      const state = store.read(userId);
+      for (const frame of [...queues.get(userId) ?? []]) if (!state.stories[frame.request.storyId]?.nodes[frame.request.nodeId]) drop(frame, 'scene_gone');
+    },
+    // Every stage running and everything they start, for the bot's stop and for a test: the bot's stop comes after `stop`.
+    async idle() { while (stages.size) await Promise.all(stages); },
+    // The bot's stop: nothing of the queue is carried over, and the places left go with the next start (local/bot.ts).
+    stop() {
+      stopped = true;
+      for (const queue of queues.values()) for (const frame of [...queue]) drop(frame, 'cancelled');
     },
 
     // A sample of styles (`SampleRequest`). The frame of the scene is the one described for its own picture while
@@ -1214,7 +1453,7 @@ export function createIllustrator(config: ImageConfig, deps: {
             return;
           }
           const describeStarted = now();
-          try { frame = await describeFrame(userId, storyId, nodeId, branchId, signal, log, false); gCounts = frame.gCounts; }
+          try { frame = await describeFrame(userId, storyId, nodeId, branchId, signal, log); gCounts = frame.gCounts; }
           finally { release?.(); }
           describeMs = Math.max(0, now() - describeStarted);
         }
@@ -1452,6 +1691,6 @@ export function createIllustrator(config: ImageConfig, deps: {
     // rolled back is still held, so the same button keeps it again.
     portraitKept(userId: string, candidateId: string) { letGo(userId, candidateId); },
   };
-  return { ...methods, illustrate: drawing(methods.illustrate), sample: drawing(methods.sample), variant: drawing(methods.variant),
+  return { ...methods, sample: drawing(methods.sample), variant: drawing(methods.variant),
     portrait: drawing(methods.portrait) };
 }

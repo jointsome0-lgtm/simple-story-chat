@@ -287,6 +287,12 @@ export type Library = {
   // The pictures in this reader's chat that Telegram would still let the bot delete, so that deleting a seed or a
   // branch takes the pictures of its scenes out of the chat too (`forgetLostPictures`). Only the local bot writes them.
   sentPictures?: SentPicture[];
+  // The places kept in the chat for pictures still being made, a status line and a pending note each, until the picture
+  // takes them over (`recordPicture`) or they are removed (local/picture.ts). Deleting a scene takes them out of the chat
+  // as it does its pictures, and those a stopped process left behind go at the next start (local/bot.ts `unreserve`).
+  // `delivering`: the picture or its prompt went into this message and no answer is on record yet, so that the message
+  // may be it (`markDelivering`). They are no pictures: nothing that shows a reader's pictures reads them.
+  reservedPictures?: (SentPicture & { delivering?: boolean })[];
   // The photos and files this reader sent for pose sets that the bot has not read yet, in the order they came. Only the
   // local bot writes them.
   poseUploads?: PendingPoseUpload[];
@@ -623,24 +629,57 @@ export const MESSAGE_DELETABLE_MS = 48 * 60 * 60 * 1000;
 // A thousand pictures is some five hours of the picture card drawing without a pause.
 export const SENT_PICTURES_MAX = 1000;
 
-// Records a picture the moment it is sent, beside the others that may still be deleted, newest last.
+// Records a picture the moment it is sent, beside the others that may still be deleted, newest last. A picture that
+// took over a place kept for it (`reservePicture`) leaves that place's record in the same write.
 export function recordPicture(state: Library, picture: SentPicture): void {
   const deletable = (state.sentPictures ?? []).filter(one => picture.at - one.at < MESSAGE_DELETABLE_MS);
   state.sentPictures = [...deletable, picture].slice(-SENT_PICTURES_MAX);
+  releaseReserved(state, [picture.messageId]);
 }
 
-// After a deletion: forgets the pictures whose story or scene is gone and returns their messages, for the caller to
-// delete from the chat. A record too old to be deleted is dropped and not returned.
+// Records places a picture may have gone into, once a restart finds them (`markDelivering`). Newer pictures may have been
+// recorded since, so these go where their time and message put them, and the limit takes the oldest, one of these or not.
+export function recoverPictures(state: Library, places: SentPicture[], now: number): void {
+  if (!places.length) return;
+  const deletable = (state.sentPictures ?? []).filter(one => now - one.at < MESSAGE_DELETABLE_MS);
+  state.sentPictures = [...deletable, ...places].sort((a, b) => a.at - b.at || a.messageId - b.messageId).slice(-SENT_PICTURES_MAX);
+  releaseReserved(state, places.map(one => one.messageId));
+}
+
+// Records a message that keeps a picture's place in the chat, beside the others that may still be deleted.
+export function reservePicture(state: Library, place: SentPicture): void {
+  const deletable = (state.reservedPictures ?? []).filter(one => place.at - one.at < MESSAGE_DELETABLE_MS);
+  state.reservedPictures = [...deletable, place];
+}
+// Says that a place is being written over with what it was kept for, in a write of its own before the edit, or that the
+// edit was refused. A message marked so may hold a picture by now, and is not removed as an empty place.
+export function markDelivering(state: Library, messageId: number, delivering: boolean): void {
+  const place = state.reservedPictures?.find(one => one.messageId === messageId);
+  if (!place) return;
+  if (delivering) place.delivering = true;
+  else delete place.delivering;
+}
+// Forgets places kept in the chat: they have left it, or a picture took them over.
+export function releaseReserved(state: Library, messageIds: number[]): void {
+  if (!state.reservedPictures) return;
+  const left = state.reservedPictures.filter(one => !messageIds.includes(one.messageId));
+  if (left.length) state.reservedPictures = left;
+  else delete state.reservedPictures;
+}
+
+// After a deletion: forgets the pictures, and the places kept for pictures, whose story or scene is gone and returns
+// their messages, for the caller to delete from the chat. A record too old to be deleted is dropped and not returned.
 export function forgetLostPictures(state: Library, now: number): number[] {
-  if (!state.sentPictures) return [];
   const lost: number[] = [];
-  state.sentPictures = state.sentPictures.filter(picture => {
+  const kept = (picture: SentPicture) => {
     if (now - picture.at >= MESSAGE_DELETABLE_MS) return false;
     const story = state.stories[picture.storyId];
     if (story && (picture.nodeId === undefined || story.nodes[picture.nodeId])) return true;
     lost.push(picture.messageId);
     return false;
-  });
+  };
+  if (state.sentPictures) state.sentPictures = state.sentPictures.filter(kept);
+  if (state.reservedPictures) releaseReserved(state, state.reservedPictures.filter(one => !kept(one)).map(one => one.messageId));
   return lost;
 }
 

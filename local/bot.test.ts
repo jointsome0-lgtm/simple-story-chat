@@ -142,7 +142,7 @@ function speaking<T extends Update>(update: T, languageCode: string | undefined)
 function sketchbook(drawn: SampleRequest[]) {
   return { enabledFor: (userId: string) => userId === '1', standardStyle: PRESETS.semi, referencesFor: () => false, versionsFor: () => false,
     poseSetFor: () => false,
-    illustrate: async () => {}, sample: async (request: SampleRequest) => { drawn.push(request); } } as unknown as Illustrator;
+    illustrate: async () => {}, cancel: () => {}, forgetGone: () => {}, idle: async () => {}, stop: () => {}, sample: async (request: SampleRequest) => { drawn.push(request); } } as unknown as Illustrator;
 }
 
 // What a restarted bot finds: a second Store on the same file, recovered as local/main.ts recovers it at a start.

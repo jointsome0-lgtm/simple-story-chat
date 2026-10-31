@@ -607,9 +607,12 @@ timed enough of its own work ([what a waiting reader sees](telegram-ui.md#waitin
 off that start was.
 
 A `picture` row ends each scene's picture: `outcome` (`ready`, `failed`, `cancelled`, or `skipped` when the card was
-not ready), `describeMs` of the description call, `imageMs` on the image server from submit to file and
+not ready, the description found no slot in its 10 minutes, or the code is `picture_queue_full`, a newer frame having
+taken its place in the reader's queue), `describeRetries`, when it asked for a slot more than once, `describeMs` of the
+description call, `imageMs` on the image server from submit to file and
 `imageQueueMs` from submit to the job's start there, as its socket heard it, `photoMs` and `photoBytes` of the upload
-to Telegram, and `pictureSeconds`, what the reader waited from the end of the scene. A job that waited on the card
+to Telegram, and `pictureSeconds`, the time from the end of the scene to the picture. `picture_place_gone` says that the
+status line could not become the picture, with Telegram's code, and that the photo went out anew. A job that waited on the card
 behind others has `ahead` and `etaSeconds` as a text request has them.
 `namesStripped`, `withoutLook` and `clothesChanged` count what the prompt assembly did, and `promptCharacters`,
 `pictureTokens` and `styleTokens` give the prompt's size. `pictureAttention` says whether the picture was drawn with the
