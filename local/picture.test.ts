@@ -22,7 +22,7 @@ import { createScheduler } from './scheduler.ts';
 import type { ImageConfig } from './config.ts';
 import { defaultWorkflow, latentSizeOf, referenceSlots } from './image-batch.ts';
 import type { Graph } from './image-batch.ts';
-import { STYLE, sheetOf } from './illustrate.ts';
+import { STYLE, frameRequest, sheetOf } from './illustrate.ts';
 import type { Description } from './illustrate.ts';
 import { createLlama } from './llama.ts';
 import type { ErrorDetails } from './model-error.ts';
@@ -31,8 +31,11 @@ import type { GenerateControls, GenerationResult, ModelRequest, Provider } from 
 import { createServing, readerScope } from './serving.ts';
 import { PORTRAIT_CLOTHES, PORTRAIT_STYLE } from './image-portraits.ts';
 import { clothesOf, createIllustrator, foldedPrompt, personTag, rewrittenSheet, wornAt } from './picture.ts';
+import { FRAME_SWAPS, G_SWAPS, LEAN_SWAPS, settleWear, wearAt, wearG, wearLine, wearRequest } from './picture-wear.ts';
 import { PRESETS, PROMPT_CHARS } from './picture-style.ts';
 import { guided } from './picture-guide.ts';
+import { gRequest } from './picture-g.ts';
+import { leanRequest } from './picture-lean.ts';
 import type { LeanDescription } from './picture-lean.ts';
 import { frameReferences, pinReferences } from './picture-references.ts';
 import { POSE_VIEW_LABEL_CHARS, poseCandidates, poseRequest, viewsOf } from './pose-set.ts';
@@ -264,6 +267,8 @@ type Options = {
   holdFinal?: number; holdPhotos?: number; scheduler?: boolean; compactAtTokens?: number; keepScenes?: number;
   // A workflow that ends in SaveImage, as the ones pinned in gpu/ do, or one of those pinned graphs itself.
   saveImage?: boolean; graphFile?: string; references?: boolean; pictureOwner?: string; referenceUsers?: string[];
+  // Reader 1 has the things of each person (local/picture-wear.ts).
+  wear?: boolean;
   // How long a description waits past the scenes that keep it from a slot, and how often it asks, and what holds the
   // frame's call.
   describeWaitMs?: number; describeRetryMs?: number; frameGate?: () => Promise<void>;
@@ -355,7 +360,7 @@ async function fixture(t: TestContext, options: Options = {}) {
   const images: ImageConfig | undefined = url === undefined ? undefined : {
     url, workflow, checkpoint: 'synthetic.safetensors', style: options.style,
     users: new Set(options.users ?? ['1']), waitMs: 5000, timeoutMs: 5000, references: options.references,
-    referenceUsers: new Set(options.referenceUsers),
+    referenceUsers: new Set(options.referenceUsers), ...options.wear ? { clothesUsers: new Set(['1']), wearUsers: new Set(['1']) } : {},
   };
   // A test that wants whole seconds of wait moves the bot's clock forward by `offsetMs`. `restart` builds the bot and
   // its illustrator again over the same store and Telegram, and so forgets whatever they kept in memory.
@@ -1031,6 +1036,82 @@ test('the description a reader writes survives a failed retelling, a look of the
     [['picture_look_retold', undefined, 'ready', ...sizes(WRITTEN[0].description!)], ['look_retold', 'provider_failed', 'failed', 1, undefined, [...kept].length],
       ['picture_look_retold', undefined, 'ready', ...sizes(kept)], ['picture_look_retold', undefined, 'ready', ...sizes(kept)]]);
   assert.doesNotMatch(JSON.stringify(f.rows), PRIVATE);
+});
+
+// What a frame's snapshot holds is seen in no message: a thing that does not reach the next frame, a line of nothing on
+// that nobody said and a reader's line written over are each found only by looking at the pictures.
+test('each person\'s things go down one line of the story, and only the model says they have nothing on', async t => {
+  const sheetReply = { characters: [{ name: 'Степан', description: 'Синтетический седой мужчина.', changes: '', outfit: 'wearing a grey coat, a white shirt and black boots' }] };
+  const reply = (body: string, ...things: [string, string, string][]) => ({ ...FRAME, people: [{ ...FRAME.people[0], who: 'Степан', clothes: '' }],
+    wear: [{ who: 'Степан', happened: 'x', body, things: things.map(([item, worn, how]) => ({ item, worn, how })) }] });
+  const coat: [string, string, string] = ['a grey coat', 'off', 'on a hook'];
+  let refused = 0;
+  const f = await fixture(t, { card: {}, wear: true, sheetReply, frameGate: async () => {
+    if (refused-- > 0) throw Object.assign(new Error('unparsed_description'), { code: 'unparsed_description' });
+  }, frameReplies: [
+    reply('a bandage on the left hand', coat, ['a white shirt', 'on', 'torn at the left sleeve'], ['black boots', 'on', '']),
+    reply('', coat, ['a white shirt', 'off', 'on the floor'], ['black boots', 'off', 'by the door']),
+    reply('', coat, ['a white shirt', 'off', 'on the floor'], ['black boots', 'off', 'by the door'], ['nothing', 'on', '']),
+    reply('', coat, ['a white shirt', 'on', ''], ['black boots', 'on', '']),
+    reply('', ['a blue robe', 'on', 'tied at the waist']),
+    { ...FRAME, people: [{ ...FRAME.people[0], who: 'Степан', clothes: 'wearing a red scarf' }] },
+    reply('', ['a blue robe', 'on', 'tied at the waist']),
+  ] });
+  await f.start();
+  await f.bot.idle();
+  const step = async (move: string) => { await f.bot.handle(f.message(move)); await f.bot.idle(); };
+  const frames = () => f.requests.filter(request => kindOf(request) === 'frame').map(request => request.messages.at(-1)!.content);
+  const nodes = () => { const state = f.store.read('1'); return state.stories[state.active!.storyId].nodes; };
+  const hurt = 'wearing a white shirt, torn at the left sleeve; black boots; a bandage on the left hand';
+  await step('Снять рубашку');
+  assert.match(frames()[1], /надето, верхнее первым:\n {4}- a white shirt: torn at the left sleeve\n {4}- black boots\n {4}снято:\n {4}- a grey coat: on a hook\n {4}на теле: a bandage on the left hand/);
+  assert.ok(f.comfy.submitted.map(promptOf)[0].includes(hurt));
+  await step('Лечь в ванну');
+  assert.deepEqual(Object.values(nodes()).map(node => node.clothes?.['Степан']), [hurt, hurt, 'wearing nothing'], 'all taken off and nothing said of what is on says nothing');
+  await step('Одеться');
+  assert.ok(Object.values(nodes()).at(-1)!.clothes?.['Степан']?.startsWith('wearing a white shirt, torn at the left sleeve; black boots'), 'a thing back on is as it was on them');
+  // A frame whose snapshot never came is today's, whether no answer parsed or the one that did has none, and the next one
+  // reads its scene as well.
+  refused = 1;
+  await step('Выйти');
+  await step('Постоять');
+  assert.deepEqual(f.rows.filter(row => row.event === 'picture').slice(-2).map(row => row.wearFellBack), [true, true]);
+  assert.deepEqual(Object.values(nodes()).slice(-2).map(node => node.clothes), [undefined, undefined]);
+  // A reader's line takes the place of everything above it, word by word.
+  f.store.mutate('1', saved => {
+    const story = saved.stories[saved.active!.storyId];
+    story.nodes[story.branches[saved.active!.branchId].head!].clothes = { Степан: 'wearing a blue robe' };
+  });
+  await step('Отдохнуть');
+  assert.match(frames().at(-1)!, /Степан \(записано сцен назад: 1\):\n {4}надето, верхнее первым:\n {4}- a blue robe\n/);
+  // A snapshot holds down its own line of the story and never in another that forks above it.
+  const worn = { on: [{ name: 'a green jacket', how: 'torn' }], off: [], body: '' };
+  const fork = { nodes: { a: { parent: null }, b: { parent: 'a', clothes: { Степан: wearLine(worn) }, wear: { Степан: worn } }, c: { parent: 'a' } } } as unknown as Story;
+  const sheet = [{ name: 'Степан', look: 'a look', outfit: 'wearing a coat' }];
+  assert.deepEqual(wearAt(fork, 'b', [{ ...sheet[0], outfit: wearLine(worn) }]).get('Степан')!.on, worn.on);
+  assert.deepEqual(wearAt(fork, 'c', sheet).get('Степан')!.on, [{ name: 'a coat', how: '' }]);
+  // A raincoat is no coat, a thing of somebody else's name stays on the person who has it, and a phrase stands for a thing
+  // only if it says the thing's name.
+  const two = [{ name: 'Степан', look: 'a look', outfit: 'wearing a coat, a shirt, trousers and boots' }, { name: 'Пётр', look: 'a look', outfit: 'wearing a yellow raincoat' }];
+  const on = (item: string, how = '') => ({ item, worn: 'on', how });
+  const settled = settleWear([{ who: 'Степан', happened: 'x', body: '', things: [{ item: 'a coat', worn: 'off', how: 'on a hook' }, on('a shirt', 'coated with white plaster'), on('trousers'), { item: 'boots', worn: 'gone', how: '' },
+    on('a yellow raincoat', 'buttoned wrong')] }], two, wearAt({ nodes: {} }, 'none', two));
+  assert.deepEqual([settled.crossed, settled.lines['Степан'], settled.lines['Пётр']],
+    [1, 'wearing a shirt, coated with white plaster; trousers; a yellow raincoat, buttoned wrong', 'wearing a yellow raincoat']);
+  assert.deepEqual(settled.worn['Степан'].off.map(thing => thing.name), ['a coat']);
+});
+
+// A sentence of the rules that moved would leave the frame asking for two things at once, and nothing would fail.
+test('the rules a snapshot replaces stand where it replaces them', () => {
+  const sheet = [{ name: 'Степан', look: 'a look', outfit: 'wearing a coat' }];
+  const context = { system: '', messages: [{ role: 'user' as const, content: 'Сцена.' }] };
+  const held = wearAt({ nodes: {} }, 'none', sheet);
+  for (const [request, swaps] of [[wearRequest(frameRequest(context, sheet), sheet, held), FRAME_SWAPS],
+    [wearRequest(leanRequest(context, sheet, sheet[0]), sheet, held, sheet[0]), LEAN_SWAPS], [wearG(gRequest(context, sheet)), G_SWAPS]] as const) {
+    const content = request.messages.at(-1)!.content;
+    for (const [from, to] of swaps) assert.ok(content.includes(to) && !content.includes(from), from);
+    assert.ok(!content.includes('Одежда людей из списка до этой сцены:'));
+  }
 });
 
 // The seed dressed a person once; the story changed their clothes later, and a sheet that kept clothes never let the

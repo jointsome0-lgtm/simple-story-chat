@@ -32,6 +32,8 @@ export type ImageConfig = {
   // The tester's complaint of 2026-09-28 about clothes, for these readers alone and nobody by default: a frame names what
   // each person wears and what of them is bare, and says it before the reference wording (local/picture-clothes.ts).
   clothesUsers?: Set<string>;
+  // The readers of `clothesUsers` whose frames keep each person's things from scene to scene (local/picture-wear.ts).
+  wearUsers?: Set<string>;
   // The readers whose frames are drawn from a whole prompt the story model writes in one more request after the frame's
   // (local/picture-g.ts), as the owner decided on 2026-09-29. Nobody by default.
   gPromptUsers?: Set<string>;
@@ -178,6 +180,7 @@ export function gpuConfig(env: Env, provider: string): GpuConfig | undefined {
 //   SIMPLE_CHAT_SHEET_VERSION_USERS=123456789                 # optional; readers whose people change along the story
 //   SIMPLE_CHAT_POSE_SET_USERS=123456789                      # optional; readers who send many pictures of a person
 //   SIMPLE_CHAT_CLOTHES_USERS=123456789                       # optional; a frame says what each person wears and bares
+//   SIMPLE_CHAT_WEAR_USERS=123456789                          # optional; each person's things are kept from scene to scene
 //   SIMPLE_CHAT_G_PROMPT_USERS=123456789                      # optional; the story model writes a frame's whole prompt
 //   SIMPLE_CHAT_IMAGE_PROVIDER=simple-serving                 # optional; comfyui by default
 //   SIMPLE_CHAT_IMAGE_API_KEY=...                             # the picture gateway's client key, with simple-serving
@@ -263,6 +266,11 @@ export function imageConfig(env: Env, directory: string, allowedUsers: Set<strin
   for (const user of clothesUsers) if (!users.has(user)) {
     throw new Error('Every SIMPLE_CHAT_CLOTHES_USERS entry must be one of SIMPLE_CHAT_IMAGE_USERS');
   }
+  // The things of each person (local/picture-wear.ts), a step further for the same readers: measured on top of that change.
+  const wearUsers = new Set((env.SIMPLE_CHAT_WEAR_USERS || '').split(',').map(one => one.trim()).filter(Boolean));
+  for (const user of wearUsers) if (!clothesUsers.has(user)) {
+    throw new Error('Every SIMPLE_CHAT_WEAR_USERS entry must be one of SIMPLE_CHAT_CLOTHES_USERS');
+  }
   // G (local/picture-g.ts), read as the versions: a stray ID is a typo.
   const gPromptUsers = new Set((env.SIMPLE_CHAT_G_PROMPT_USERS || '').split(',').map(one => one.trim()).filter(Boolean));
   for (const user of gPromptUsers) if (!users.has(user)) {
@@ -275,7 +283,7 @@ export function imageConfig(env: Env, directory: string, allowedUsers: Set<strin
   // itself: it may be short even when a picture may take minutes.
   return { url: url.origin, workflow: resolve(directory, workflow), checkpoint, style, users,
     waitMs: seconds * 1000, timeoutMs: Math.min(60000, seconds * 1000), references: references === 'true', referenceUsers, versionUsers,
-    clothesUsers, ...poseSetUsers.size ? { poseSetUsers, captioner } : {}, ...gPromptUsers.size ? { gPromptUsers } : {},
+    clothesUsers, ...wearUsers.size ? { wearUsers } : {}, ...poseSetUsers.size ? { poseSetUsers, captioner } : {}, ...gPromptUsers.size ? { gPromptUsers } : {},
     ...(provider === 'simple-serving' ? { serving: { key } } : {}) };
 }
 

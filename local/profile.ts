@@ -34,6 +34,9 @@ export const MAY_BE_EMPTY: readonly ProfileField[] = ['changes', 'prompt'];
 export const DETAILS_CHARS = 1500;
 export const CHANGES_CHARS = 300;
 export const CLOTHES_CHARS = 300;
+// For a reader whose frames keep each person's things (local/picture-wear.ts) the frame repeats no line, and a line made
+// from a snapshot was 912 characters at most in the probe: a reader must be able to change a word of it and send it back.
+export const WORN_CLOTHES_CHARS = 1200;
 export const PROFILE_CHARS: Record<ProfileField, number> = { description: DESCRIPTION_CHARS, changes: CHANGES_CHARS, details: DETAILS_CHARS,
   look: LOOK_CHARS, clothes: CLOTHES_CHARS, prompt: PROMPT_CHARS };
 

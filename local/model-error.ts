@@ -137,6 +137,9 @@ const COUNTS = ['sceneCount', 'missingCount', 'connectionAgeMs', 'factCount', 'r
   // The clothes of a frame (local/picture.ts): how many people of the sheet it shows in other clothes than the
   // picture before it in that line of the story, which is how a change of clothes in the story is seen to arrive.
   'clothesChanged',
+  // The things of each person (local/picture-wear.ts): how many people a frame's snapshot changed, and how many things
+  // it put on somebody while somebody else had them and has them still.
+  'wearPeople', 'wearCrossed',
   // The prompt a picture was drawn from, as the note under it gives its size (local/picture.ts `promptSize`): its
   // characters, its tokens as the picture model's text encoder reads them, and how many of those the style line is.
   'promptCharacters', 'pictureTokens', 'styleTokens',
@@ -206,6 +209,8 @@ export type ErrorDetails = {
   pov?: boolean;
   // A sheet written in place of an older one that still had the clothes in its appearance lines.
   sheetRewritten?: boolean;
+  // Whether a frame's snapshot of things never came and today's frame stood in for it (local/picture.ts `describeFrame`).
+  wearFellBack?: boolean;
   // A profile a reader sent back: which of its fields it changed, whether the details and the look are retold from it,
   // how much of the profile its message showed and where new clothes went, or why it was refused.
   profileDescription?: boolean; profileChanges?: boolean; profileDetails?: boolean; profileLook?: boolean;
@@ -266,6 +271,7 @@ export function safeErrorDetails(value: unknown = {}): ErrorDetails {
   if (typeof input?.ownPrompt === 'boolean') result.ownPrompt = input.ownPrompt;
   if (typeof input?.pov === 'boolean') result.pov = input.pov;
   if (typeof input?.sheetRewritten === 'boolean') result.sheetRewritten = input.sheetRewritten;
+  if (typeof input?.wearFellBack === 'boolean') result.wearFellBack = input.wearFellBack;
   for (const key of ['profileDescription', 'profileChanges', 'profileDetails', 'profileLook', 'profileClothes', 'profilePrompt', 'profileRetell'] as const) {
     if (typeof input?.[key] === 'boolean') result[key] = input[key];
   }

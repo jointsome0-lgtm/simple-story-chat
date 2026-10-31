@@ -27,7 +27,7 @@ import { DESCRIPTION_CHARS, LOOK_CHARS, ownPortraitPrompt, personAt, personTag }
 import { seesThrough } from './picture-pov.ts';
 import { countVersions, descriptionOf, editableFrom, landEdit, personHere, personKey } from './picture-versions.ts';
 import { portraitText } from './image-portraits.ts';
-import { MAY_BE_EMPTY, PROFILE_CHARS, applyProfile, changedFields, fieldsMask, maskFields, parseProfile, profileHash, profileOf } from './profile.ts';
+import { MAY_BE_EMPTY, PROFILE_CHARS, WORN_CLOTHES_CHARS, applyProfile, changedFields, fieldsMask, maskFields, parseProfile, profileHash, profileOf } from './profile.ts';
 import type { ProfileField } from './profile.ts';
 import type { ArchiveRefusal, ErrorDetails, Log } from './model-error.ts';
 import { errorCode, member, safeErrorDetails, unavailable } from './model-error.ts';
@@ -187,7 +187,8 @@ const READS_AT_ONCE = 2;
 // (local/ui.ts `RenderDetails`). The Mini App's card has the same (local/mini-app.ts).
 export const pictureInfo = (illustrator: Illustrator | undefined, userId: string) => ({ pictures: illustrator?.enabledFor(userId) ?? false,
   standardStyle: illustrator?.standardStyle, textTokens: illustrator?.textTokens, references: illustrator?.referencesFor(userId) ?? false,
-  versions: illustrator?.versionsFor(userId) ?? false, ...illustrator?.poseSetFor(userId) ? { poseSet: true } : {} });
+  versions: illustrator?.versionsFor(userId) ?? false, ...illustrator?.poseSetFor(userId) ? { poseSet: true } : {},
+  ...illustrator?.wearFor(userId) ? { wear: true } : {} });
 
 export function createBot({ store, api, provider, gpu, illustrator, readSeedFile, readPicture, captioner: captionerConfig, readArchive, miniApp, render: renderUi, scenePrefix = () => '', sceneKeyboard, allowedUsers, ownerId = '', maxOutputTokens,
   contextTokens = 65536, compactAtTokens = 54000, keepScenes = 4, memoryMode = 'plain', repairCoverage = false, model = 'unknown', providerName = 'claude-code', log = () => {} }: BotOptions) {
@@ -935,7 +936,8 @@ export function createBot({ store, api, provider, gpu, illustrator, readSeedFile
     const changed = changedFields(profile, parsed.values, fields);
     for (const [field, value] of Object.entries(changed) as [ProfileField, string][]) {
       if (!value && !MAY_BE_EMPTY.includes(field)) return refused({ text: c.profileEmpty(c.profileHeadings[field]) }, 'empty');
-      if ([...value].length > PROFILE_CHARS[field]) return refused({ text: c.profileLong(c.profileHeadings[field], PROFILE_CHARS[field]) }, 'too_long');
+      const limit = field === 'clothes' && pictureInfo.wear ? WORN_CLOTHES_CHARS : PROFILE_CHARS[field];
+      if ([...value].length > limit) return refused({ text: c.profileLong(c.profileHeadings[field], limit) }, 'too_long');
     }
     state.ui = null;
     const retell = applyProfile(state, story, index, profile, changed);

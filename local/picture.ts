@@ -72,6 +72,8 @@ import { POV_CFG, POV_RECIPE, POV_STEPS, guided } from './picture-guide.ts';
 import { isLean, leanOf, leanPrompt, leanReferences, leanRequest, leanSeen } from './picture-lean.ts';
 import { seenBy, viewerOf } from './picture-pov.ts';
 import { clothesRequest } from './picture-clothes.ts';
+import { settleWear, wearAt, wearG, wearRequest, wornFrame, wornSheet } from './picture-wear.ts';
+import type { SettledWear } from './picture-wear.ts';
 import { gKept, gLine, gRequest, gTagged } from './picture-g.ts';
 import type { GCounts, GFallback, GKept, GTagMiss } from './picture-g.ts';
 import { poseCandidates, poseRequest, viewsOf } from './pose-set.ts';
@@ -557,6 +559,9 @@ export function createIllustrator(config: ImageConfig, deps: {
   // The tester's frame change of 2026-09-28 for its own readers (SIMPLE_CHAT_CLOTHES_USERS): a frame names what each
   // person wears and what of them is bare, and says it before the reference wording. Without it every request is as it was.
   const clothesFor = (userId: string) => config.users.has(userId) && !!config.clothesUsers?.has(userId);
+  // Whether a reader's frames keep each person's things from scene to scene (SIMPLE_CHAT_WEAR_USERS,
+  // local/picture-wear.ts). Without it every request is as it was.
+  const wearFor = (userId: string) => clothesFor(userId) && !!config.wearUsers?.has(userId);
   // Whether a reader's frames are drawn from a whole prompt the story model writes after the frame (config
   // SIMPLE_CHAT_G_PROMPT_USERS, local/picture-g.ts). Without it every request is as it was.
   const gFor = (userId: string) => config.users.has(userId) && !!config.gPromptUsers?.has(userId);
@@ -566,7 +571,7 @@ export function createIllustrator(config: ImageConfig, deps: {
   // thrown: a failure, or the picture stopped meanwhile, leaves the reason today's prompt is drawn for, and the frame's
   // answer stands as if G had not been asked. The counts are the time and the tokens of both tries, where the server
   // reported them.
-  async function askG(model: Provider, context: Excerpt, sheet: Character[], anchor: number | null, signal: AbortSignal): Promise<{ kept: GKept; counts: GCounts }> {
+  async function askG(model: Provider, context: Excerpt, sheet: Character[], anchor: number | null, signal: AbortSignal, worn: boolean): Promise<{ kept: GKept; counts: GCounts }> {
     const started = now();
     let finish: GenerationResult['finishReason'] | undefined;
     const tokens: Omit<GCounts, 'gMs'> = {};
@@ -581,7 +586,8 @@ export function createIllustrator(config: ImageConfig, deps: {
     } };
     let kept: GKept;
     try {
-      const { value } = await askJson(watched, trusted(model, gRequest(context, sheet), anchor), { signal });
+      const request = gRequest(context, sheet);
+      const { value } = await askJson(watched, trusted(model, worn ? wearG(request) : request, anchor), { signal });
       kept = finish === 'length' ? { fallback: 'truncated' } : gKept(value, sheet);
     } catch (error) {
       kept = { fallback: errorCode(error) === 'unparsed_description'
@@ -644,6 +650,10 @@ export function createIllustrator(config: ImageConfig, deps: {
     let poseSetPeople: number | undefined;
     // For a reader who has G: what the frame keeps of it, and its request's counts for the row (`askG`).
     let g: { kept: GKept; counts: GCounts } | undefined;
+    // For a reader who has the things of each person: what this frame's answer made of them (local/picture-wear.ts), and
+    // whether the answer never came and today's frame stands in for it, with nothing recorded.
+    let settled: SettledWear | undefined;
+    let wearFellBack: boolean | undefined;
     // Both calls continue the request the scene itself was written from, so right after the scene they belong in the
     // slot where that prefix is cached and nowhere else: `sharesPrefix` is the scheduler's word for it, and it also
     // ends this turn the moment its own reader asks for the next scene (local/scheduler.ts).
@@ -690,7 +700,9 @@ export function createIllustrator(config: ImageConfig, deps: {
       // haircut already has it. Without them the request is as it was.
       const named = versions ? sheet : [];
       const changing = changesRequest(request, named);
-      const asked = clothesFor(userId) ? clothesRequest(changing) : changing;
+      const today = clothesFor(userId) ? clothesRequest(changing) : changing;
+      // A sheet with no clothes on it has nothing to start a snapshot from: its first frame writes the lines, as ever.
+      const held = wearFor(userId) && sheet.some(one => one.outfit?.trim()) ? wearAt(story, nodeId, sheet) : undefined;
       // For a reader with pose sets, each person of the sheet with a captioned set, the viewer's apart, whose body the
       // frame does not show, names a candidate ID right after `who`: added last, so
       // that it stands before any other field that goes there. Without them the request is as it was.
@@ -699,11 +711,28 @@ export function createIllustrator(config: ImageConfig, deps: {
         const candidates = poseCandidates(current.sheet?.find(other => other.name === one.name) ?? {});
         return candidates.length ? [{ name: one.name, candidates }] : [];
       }) : [];
-      const reply = (await askJson(model, trusted(model, poseRequest(asked, viewed), anchor), { signal })).value;
+      const ask = async (one: ModelRequest) => (await askJson(model, trusted(model, poseRequest(one, viewed), anchor), { signal })).value;
+      // A snapshot is the longest answer a frame has, and JSON mode ran out on both tries of one in 78 of the probe's. An
+      // answer without one has its people's clothes left empty or in the air. Such a frame is today's rather than no
+      // picture or the last one's clothes, and records nothing, so that the next one reads this scene as well.
+      let snapshot: Record<string, unknown> | undefined;
+      if (held) try {
+        const answered = await ask(wearRequest(changing, sheet, held, viewer));
+        if (Array.isArray(answered?.wear)) snapshot = answered;
+      } catch (error) {
+        if (signal.aborted || errorCode(error) !== 'unparsed_description') throw error;
+      }
+      if (held) wearFellBack = !snapshot;
+      const reply = snapshot ?? await ask(today);
       const picked = viewed.length ? viewsOf(reply, viewed) : { answer: reply, views: {} };
-      const answer = picked.answer;
+      const { wear, ...answer } = picked.answer;
       if (current) { views = picked.views; poseSetPeople = viewed.length; }
-      if (!versions) return viewer ? leanOf(answer, sheet, viewer) : answer as unknown as Description;
+      if (held && snapshot) settled = settleWear(wear, sheet, held);
+      const framed = (value: Record<string, unknown>) => {
+        const frame = viewer ? leanOf(value, sheet, viewer) : value as unknown as Description;
+        return settled ? wornFrame(frame, settled, sheet, viewer) : frame;
+      };
+      if (!versions) return framed(answer);
       const { lasting_changes: changes, ...plain } = answer;
       const found = lastingChangesOf(changes, named.map(one => one.name));
       const written = found.size ? store.mutate(userId, saved => {
@@ -717,31 +746,37 @@ export function createIllustrator(config: ImageConfig, deps: {
         await retellVersions(model, { userId, storyId, nodeId, signal, log }, 'picture_version_retold');
         sheet = frameSheet();
       }
-      return viewer ? leanOf(plain, sheet, viewer) : plain as unknown as Description;
+      return framed(plain);
     };
     // G's request continues the same one, in the same turn, with the sheet as the frame's answer left it. A frame seen
     // through somebody's eyes gets none: G has no rule for it, and today's prompt is drawn.
     const description = await inTurn(provider, async model => {
       const answer = await fields(model);
-      if (gFor(userId) && !viewerOf(story, sheet)) g = await askG(model, context, sheet, anchor, signal);
+      if (gFor(userId) && !viewerOf(story, sheet)) g = await askG(model, context, settled ? wornSheet(sheet, settled) : sheet, anchor, signal, settled !== undefined);
       return answer;
     }, { holder: userId, ...slot === 'shared' ? { sharesPrefix: true } : slot === 'beside' ? { beside: true } : {}, work: 'description' });
     const viewer = viewerOf(story, sheet);
     const viewed = viewer && (isLean(description) ? leanSeen(description, viewer) : seenBy(description, viewer, sheet));
     // What the sheet's people wear in this frame is what the next picture below this scene starts from. Somebody whose
     // clothes at this scene changed while the frame was being described, as a reader's profile sent back changes them
-    // (local/profile.ts), keeps the new ones: the frame started from those before.
+    // (local/profile.ts), keeps the new ones: the frame started from those before. With the things of each person
+    // everybody of the sheet is recorded, in the frame or not, since the next frame goes by how far back that was.
     const before = story.nodes[nodeId]?.clothes ?? {};
-    const worn = clothesOf(viewed ? viewed.dressed : description, sheet);
-    if (Object.keys(worn.clothes).length) store.mutate(userId, saved => {
+    const worn = wearFellBack ? { clothes: {}, changed: 0 } : clothesOf(viewed ? viewed.dressed : description, sheet);
+    const lines = { ...worn.clothes, ...settled?.lines };
+    if (Object.keys(lines).length) store.mutate(userId, saved => {
       const node = saved.stories[storyId]?.nodes[nodeId];
-      const kept = Object.entries(worn.clothes).filter(([name]) => node?.clothes?.[name] === before[name]);
-      if (node && kept.length) node.clothes = { ...node.clothes, ...Object.fromEntries(kept) };
+      const kept = Object.entries(lines).filter(([name]) => node?.clothes?.[name] === before[name]);
+      if (!node || !kept.length) return;
+      node.clothes = { ...node.clothes, ...Object.fromEntries(kept) };
+      const things = settled ? kept.flatMap(([name]) => Object.hasOwn(settled!.worn, name) ? [[name, settled!.worn[name]]] : []) : [];
+      if (things.length) node.wear = { ...node.wear, ...Object.fromEntries(things) };
     });
     const pov = viewed ? viewed.seen : undefined;
     const frame = viewed ? viewed.description : description;
     frames.set(userId, { storyId, nodeId, description: frame, sheet, viewer: viewer?.name, pov, ...views ? { views } : {}, ...g ? { g: g.kept } : {} });
-    return { description: frame, sheet, clothesChanged: worn.changed, pov, lastingChanges, views, poseSetPeople, ...g ? { g: g.kept, gCounts: g.counts } : {} };
+    const wear = wearFellBack === undefined ? {} : { wearFellBack, wearPeople: Object.keys(settled?.worn ?? {}).length, wearCrossed: settled?.crossed ?? 0 };
+    return { description: frame, sheet, clothesChanged: worn.changed, wear, pov, lastingChanges, views, poseSetPeople, ...g ? { g: g.kept, gCounts: g.counts } : {} };
   }
 
   // The size of a prompt that ends with the style `line`: its characters, and, with a tokenizer, its tokens and how
@@ -1299,7 +1334,7 @@ export function createIllustrator(config: ImageConfig, deps: {
       await sendPrompt(framed, photo, assembled.prompt, size, true, frame.note);
       log('picture', undefined, { outcome: 'ready', cancelled: signal.aborted, describeMs: frame.describeMs, imageQueueMs: drawn.queueMs, imageMs: drawn.totalMs,
         ...frame.line.waited(), imageSteps: recipe.steps, pictureAttention: drawn.pictureAttention, photoMs, photoBytes: drawn.bytes.length,
-        namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook, clothesChanged: described!.clothesChanged,
+        namesStripped: assembled.namesStripped, withoutLook: assembled.withoutLook, clothesChanged: described!.clothesChanged, ...described!.wear,
         pictureStyle, ...pov === undefined ? {} : { pov }, ...described!.lastingChanges === undefined ? {} : { lastingChanges: described!.lastingChanges },
         ...described!.views ? { poseSetPeople: described!.poseSetPeople, poseViewsPicked: Object.keys(described!.views).length } : {},
         ...result.changed, ...gCounts, ...size, ...frame.retries ? { describeRetries: frame.retries } : {}, ...elapsedOf(frame) });
@@ -1682,6 +1717,8 @@ export function createIllustrator(config: ImageConfig, deps: {
     // Whether a reader has versions of the sheet (`versionsFor`): their wait for a person's text offers «only from this
     // moment» (local/ui.ts).
     versionsFor(userId: string) { return versionsFor(userId); },
+    // Whether a reader's frames keep each person's things (`wearFor`): a line of theirs may be as long as such a line is.
+    wearFor(userId: string) { return wearFor(userId); },
 
     // Whether a reader has pose sets (`poseSetFor`): a person's card offers to send pictures by the dozen, and frames
     // choose one of them by pose (local/pose-set.ts).

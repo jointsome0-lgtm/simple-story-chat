@@ -35,6 +35,10 @@ export type SceneNode = {
   // person's whole profile while this scene is the head of the branch being played writes them here too
   // (local/profile.ts). Only the local bot writes it.
   clothes?: Record<string, string>;
+  // What the people the frame of this scene changed have on them and had, by their sheet name, for the readers who have
+  // that (local/picture-wear.ts): their `clothes` here is the line made from it, and where a reader's line stands in its
+  // place it holds no more. Only the local bot writes it.
+  wear?: Record<string, Worn>;
   // How this scene's own picture was drawn, all but its prompt: a variant of it is drawn with the same, for as long
   // as the scene is kept (local/picture.ts `variant`). Only the local bot writes it.
   picture?: PictureRecipe;
@@ -47,6 +51,11 @@ export type SceneNode = {
   // line through it. Only the local bot writes it.
   appearance?: Record<string, SheetVersion>;
 };
+// One thing a person has on them or had, as a frame named it, and what has become of it, in a free phrase. Taken off,
+// `how` says where it is now and `wore` keeps how it was on them, for when it goes back on.
+export type WornThing = { name: string; how: string; wore?: string };
+// A person's things at one scene (local/picture-wear.ts): what is on them, what they took off, and what shows on the body.
+export type Worn = { on: WornThing[]; off: WornThing[]; body: string };
 // One person's appearance from one scene on (the owner's design of 2026-09-28, local/picture-versions.ts): text alone,
 // since their portrait and their references are the person's whatever the scene. `changes` are the lasting changes the
 // story made by this scene, as a frame named them, one line each in the story's language; `description` and `look` are

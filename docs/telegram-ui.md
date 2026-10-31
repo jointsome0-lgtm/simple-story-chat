@@ -829,6 +829,39 @@ man bound to no picture get no such words. The second reader's requests, graphs,
 nothing of the story reaches a row. The pose sets' and the sheet versions' dry runs give 01abf78's outputs as before.
 No picture has been drawn with the rule on this line.
 
+
+<a id='thing-by-thing'></a>
+
+### Thing by thing
+
+For the readers named in `SIMPLE_CHAT_WEAR_USERS` alone ([setup](setup.md)), on top of the above, in
+`local/picture-wear.ts`. A frame used to write a person's line of clothes anew from the line before it, and what the
+line lost was lost for every frame after it. Now the frame's first answer is a snapshot of the things of each person
+who was in the scenes since their record, in the frame or not: each thing on, partly on or off, with a free phrase for
+how it sits and what became of it, as long as it has to be. Code keeps the snapshot beside the scene and makes the line
+from it, so that `clothes` is what it always was and the picture, the next frame, G and the card read it as before.
+
+- **What holds:** a torn thing stays torn and a thing taken off stays known, with where it is and how it was, until the
+  story ends it, said or only implied. A person who changed altogether is a snapshot like any other.
+- **The reader's line:** a line changed in the person's profile takes the place of the snapshot above it and is split
+  into things again. Such a reader's line may run to 1200 characters, since a line made here may be long.
+- **Nothing on:** only the model's own word, a thing named `nothing`. A snapshot with everything off and nothing on is
+  dropped and the person keeps their line: in both runs of one scene of the probe the model wrote that of somebody out
+  of the frame who went home and changed, and «wearing nothing» would have drawn them so.
+- **What ends:** a thing taken off stays on the person's list, so that a torn shirt put back on is still torn, until the
+  model says it is gone for good: burnt, shredded, thrown out. It then leaves what follows and stays in the scenes
+  before, each with its own snapshot, as a file does after `git rm`: a branch from an earlier scene still has it. What
+  nothing ends, clothes left at home, goes by a limit of 12 things for a person, the newest staying, since every frame's
+  request reads the list.
+- **Whose:** not solved. One sentence of the probe with no owner named gave the damage to the wrong man five times out
+  of five, with a rule on whose a thing is or without one, and to the right one with the owner's name in the sentence. A
+  thing new on somebody while somebody else has it on is counted (`wearCrossed` in the log) and left where it is: it
+  may be their own of the same name, and moving it could take a person's own thing from them.
+- **If it fails:** a snapshot that does not parse on both tries, or an answer with none, leaves today's frame in its
+  place and records nothing (`wearFellBack`), so that the next frame reads that scene as well.
+
+The measurements are in [the clothes probe](knowledge/clothes-state-2026-10-31.md).
+
 <a id='along-the-story'></a>
 
 ### Along the story

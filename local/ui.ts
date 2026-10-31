@@ -17,7 +17,7 @@ import { ARCHIVE_BYTES } from './pose-archive.ts';
 import type { ArchiveLabels } from './pose-archive.ts';
 import { seesThrough } from './picture-pov.ts';
 import { editableFrom, ownVersions, personKey, sceneOf, sheetAt, versionsOf } from './picture-versions.ts';
-import { CHANGES_CHARS, CLOTHES_CHARS, DETAILS_CHARS, fieldsMask, maskFields, profileBlock, profileHash, profileOf, roundTrips } from './profile.ts';
+import { CHANGES_CHARS, CLOTHES_CHARS, DETAILS_CHARS, WORN_CLOTHES_CHARS, fieldsMask, maskFields, profileBlock, profileHash, profileOf, roundTrips } from './profile.ts';
 import type { ProfileField } from './profile.ts';
 import { OWN_NAME_CHARS, OWN_STYLE_CHARS, OWN_STYLES_MAX, PRESETS, PROMPT_CHARS, lineOf, ownStyle, ownStyles, pickerKeys, presetOf, styleKey } from './picture-style.ts';
 import { seedNarration } from './story-text.ts';
@@ -49,7 +49,7 @@ export type GpuInfo = {
 export type RenderDetails = {
   modelInfo?: ModelInfo | null; gpuInfo?: GpuInfo | null; contextStats?: ContextStats | null; pictures?: boolean; standardStyle?: string;
   textTokens?: (text: string) => number | null;
-  retainsPortraits?: boolean; references?: boolean; versions?: boolean; poseSet?: boolean; poseTally?: PoseTally; miniApp?: string;
+  retainsPortraits?: boolean; references?: boolean; versions?: boolean; poseSet?: boolean; wear?: boolean; poseTally?: PoseTally; miniApp?: string;
 };
 // `unread`: the files of the wait still in the reader's queue; `finishing`: the wait is over, and they are still read.
 export type PoseTally = { storyId: string; name: string; at: number; kept: number; labeled: number; refused: Partial<Record<PoseSetRefusal, number>>;
@@ -788,7 +788,7 @@ function profileInputScreen(state: State, details: RenderDetails) {
   if (!story || !person) return home(state, null, details.modelInfo, gpuFor(details), details.pictures === true);
   const branch = profileOf(state, story, person).clothesAt === null ? null : activeRef(state)?.branch;
   return payload([c.profileEditTitle(line(person.name, 60), storyName(state, story)), '',
-    c.profileEditNote(DESCRIPTION_CHARS, CHANGES_CHARS, DETAILS_CHARS, LOOK_CHARS, CLOTHES_CHARS, PROMPT_CHARS), '',
+    c.profileEditNote(DESCRIPTION_CHARS, CHANGES_CHARS, DETAILS_CHARS, LOOK_CHARS, details.wear ? WORN_CLOTHES_CHARS : CLOTHES_CHARS, PROMPT_CHARS), '',
     branch ? c.profileClothesBranch(quote(t, branch.name)) : c.profileClothesStart, '', c.profileLeave],
     [[btn(c.backToCard, `view:character:${personRef(story, person)}`)]]);
 }
