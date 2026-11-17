@@ -537,6 +537,37 @@ checkpoint rather than a candidate for a bot that earns money, and if this featu
 owner and the tester, Qwen has to be decided again. The opt-in stays a flag of the session
 (`SIMPLE_CHAT_IMAGE_QWEN=true`), off by default, because the default download is what a rental is priced by.
 
+## Colab
+
+Since 2026-11-17 the card can be a Google Colab G4 runtime, on the owner's word: one RTX PRO 6000 of 96 GB, 176 GB of
+RAM, 236 GB of disk, paid from the owner's prepaid compute units at 10.05 units an hour, at most 30 a day
+([rule 5](#while-the-cards-are-paid-for)). Both lanes fit on it: in the trial of 2026-11-17 the text lane held 49 GB
+with half the card for vLLM and the pictures about 15 GB more, a frame of 1280×720 took 4.6 s, and text ran at 170 to
+180 tokens a second, 75 to 90 while a frame was drawn. From creation to both lanes ready took about ten minutes; the
+downloads came at 100 to 900 MB/s, so Google Drive is not needed.
+
+The tester's first session on it, 2026-11-18 from 00:35 to 01:16 MSK through `gpu/colab.sh`, about 7 units: both
+lanes answered 8 minutes after creation, the engine's first load held, 14 scenes and 14 frames, and the runtime went
+13 minutes after the last request by the kernel's guard. Medians against the Vast pair of 2026-11-01 (19 scenes): a
+scene 6.7 s (9.2), its first token 0.14 s (0.21), a frame's description 13.5 s (15.8), the frame 5.0 s (6.2), the
+picture after its scene 26.8 s (35.7). Multi-token prediction accepted 1.67 tokens a step (1.68 to 1.93). The card
+held at most 73.5 GB with reference portraits, so the KV cache of 32 GiB leaves the pictures 24 GB.
+
+```bash
+SIMPLE_SERVING_DIR=~/work/simple-serving-min-p-main bash gpu/colab.sh up    # both lanes, returns when they answer
+bash gpu/colab.sh status
+bash gpu/colab.sh down
+```
+
+`gpu/colab.sh` says in its header what differs from a Vast card and how it is covered without changing either lane:
+a Python shim whose venvs uv makes, ninja from uv, a placeholder for Vast's instance key with console.vast.ai on
+loopback, and a fixed KV cache (`SIMPLE_CHAT_COLAB_KV_MIB`, 32 GiB) so that the pictures keep the rest. A runtime
+cannot be stopped and resumed, only released; two guards release it when the text lane falls asleep or the hours run
+out, one in the notebook kernel and one here. Colab lets one `colab ssh` in at a time, so commands and the tunnel
+share one connection, and `simple-chat-colab-inner` reaches the runtime's own sshd through it for a tool that turns
+sharing off. `colab ssh --proxy-mode -s card` creates a runtime when none is assigned: do not ssh to the aliases
+after the runtime is gone.
+
 <a id='story-text-boundary'></a>
 
 ## Story text on a rented card
