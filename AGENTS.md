@@ -12,7 +12,7 @@ in [docs/improve-log.md](docs/improve-log.md).
 
 When you delegate: Opus subagents run at `medium` reasoning effort for routine work and at `high` for code and for
 anything that touches card money or private data, while the main session stays at `max`; GPT-6 (codex) sessions,
-Astra's reviews included, at `high` at most; GPT-6 Astra, not Sol or Luna, is kept for the steps that decide
+Astra's reviews included, at `high` at most; GPT-6.2 Astra, not Sol or Luna, is kept for the steps that decide
 something, and Fable no longer is (the owner, 2026-11-20). The owner's rules of 2026-09-21 and 2026-09-28; details in
 the same document.
 
