@@ -11,6 +11,92 @@ line per decision. A new step gets its full entry here, on top, and its line the
 Paths to result directories say where the numbers came from at the time. They do not promise that the files still
 exist or that you may read them.
 
+<a id='scene-thinking-card-2026-10-28'></a>
+
+## 2026-10-28 · Opus 5.5 · O3, phase 2: trap scenes that think, on the tester's model on the card (measurement)
+
+Not a step of the loop: phase 2 of O3 ([phase 1](#scene-thinking-2026-09-28)), which the owner approved on 2026-10-28
+with a dry run first and a GPT-6.1 Terra review before the rental, a measurement that accepts no change. The question is
+phase 1's, asked of the tester's model: on `gemma-4-31b-heretic-nvfp4` behind simple-serving, does thinking before a
+scene cut its continuity and number errors on the pack's traps, and what does it cost a scene in reasoning tokens and
+seconds?
+
+The job, `~/simple-story-chat-runs/2026-10-28/o3/job.mts`, is phase 1's prepared card job brought up to simple-serving's
+contract v2; `notes.txt` beside it holds its plan, its minutes and its dry run against simple-serving's own gateway with
+a fake engine. Each arm is a probe of branch `o3-card` (c7a1835, which lets a probe resume a `RECALL_FROM` run) that
+writes every trap scene and its `then` scene again over the heretic's own replays of 2026-09-27 ([L2](#l2-2026-09-28),
+`hospital-1` and `serving-1` under `~/simple-story-chat-runs/2026-09-28/serving/tmp/`), so both arms write from the same
+states, other states than phase 1's. `on` turns thinking on with `chat_template_kwargs.enable_thinking` and `max_tokens`
+8192, the thought and the scene together; `off` is the bot's own request, 4096. Every request went as class `internal`
+through the job's proxy, at most two in flight. simple-serving reports no reasoning tokens, so the job counted each
+scene's visible text on the count route after its arm: the output less that count is the reasoning, and the arms without
+thinking give its error, 1 or 2 tokens. The budget arm, a capped thought, was not in this rental.
+
+The run, on the text card of 2026-10-28 (an RTX 5090) after the stand's text phase, `--arms off,on --minutes 40`: from
+03:19:48 to 03:35:14 UTC, before its deadline at 03:59:48. All four units completed, 130 trap and `then` scenes, none
+cut at its `max_tokens`. Other readers were on the card: the bot's technical log has 9 of their scenes completed in
+those 15 minutes. 4 generations ended as `client_left`, their probe closing the connection after 3 to 9 s; no unit
+lacked a generation, and none was asked again. The count of one scene's visible text on `assault` on failed at 5 s and
+ended that arm's counting, so its reasoning estimate covers 29 of its 33 scenes. The four commands of `card/judge.txt`
+ran from the main tree (3323aa7) with Opus 5.5 through the Claude CLI from 04:44 to 05:05 UTC and judged all 130 scenes.
+
+Numbers, one run an arm, judged by Opus 5.5:
+
+| Scenario, arm | Older traps | o2 | open `confirmed` | open `kept` | P | Recall /12 | Boundary |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `hospital`, off | 11/12 | 9/11 | 2/6 | 6/6 | 2/6 | 3 | 6/11 |
+| `hospital`, on | 6/12 | 9/11 | 3/6 | 6/6 | 3/6 | 3 | 6/11 |
+| `assault`, off | 11/12 | 11/15 | 3/7 | 7/7 | 3/7 | 8 | 8/10 |
+| `assault`, on | 10/12 | 13/15 | 4/7 | 6/7 | 3/7 | 8 | 8/10 |
+
+- The questions that flipped, 13 of 76. `hospital`: without thinking only, the older traps `order_explained`,
+  `folder_delivered`, `closed_bridge_crossed`, `nazar_knows_in_advance` and `garden_lamp_lit`, and
+  `open_attic_confirmed_h`; with thinking only, `open_promise_confirmed_h` and `open_route_confirmed_h`. `assault`:
+  without thinking only, `gauge_source` and `open_water_kept`; with thinking only, `open_water_confirmed`,
+  `o2_seven_corrected` and `o2_seven_accepted`.
+- Both arms asked the recall and the boundary checks without thinking over the same final state, as in phase 1, and
+  answered them alike.
+
+Reasoning and time, a scene of the 32 on `hospital` and the 33 on `assault`, in the job's seconds through the gateway,
+median and most:
+
+| | `hospital` off | `hospital` on | `assault` off | `assault` on |
+| --- | --- | --- | --- | --- |
+| Seconds a scene | 5.1 · 10.3 | 12.1 · 55.4 | 5.7 · 9.1 | 11.9 · 25.4 |
+| Output tokens a scene, reasoning included | 340 · 611 | 1082 · 4570 | 365 · 489 | 1036 · 2254 |
+| Reasoning tokens a scene, estimated | 1 · 1 | 704 · 4241 | 1 · 2 | 626 · 1807 (29 scenes) |
+| Visible text in tokens | 339 · 610 | 326 · 544 | 364 · 488 | 379 · 522 (29 scenes) |
+| Reasoning in characters | 0 | 2214 · 13808 | 0 | 2016 · 6362 |
+| Wait in the gateway's queue, ms | 47 · 59 | 49 · 64 | 41 · 87 | 40 · 102 |
+| All the arm's scenes, seconds | 168 | 461 | 200 | 460 |
+
+The heretic reasoned a little longer than hosted Gemma had: 704 and 626 tokens at the median against 621 and 498, 921
+and 833 on average against 855 and 754, and 4241 at most against 2678. A scene's prompt was about 8,400 tokens on
+`hospital` and 6,600 on `assault`, of which 8,224 and 6,336 came from the card's cache at the median. Phase 1 had
+expected the median thought to add 4 to 5 s a scene on an idle card; beside the readers and with two of ours at once it
+added 7.0 and 6.3 s, and the longest scene took 55 s for 4570 output tokens. In the bot a reader would see a thinking
+scene's first word only after its whole thought.
+
+The cost: about 15 minutes of the text card's time, shared with the readers, about $0.16 at $0.637 an hour; the judge
+ran through the Claude CLI and spent no channel tokens.
+
+Conclusion: no gain on the tester's model either. Over the same states thinking before a scene moved 13 of 76 questions
+and lost three net: 60 to 57, the older traps 22 to 16 of 24, o2 20 to 22 of 26, open 18 to 19 of 26, P 5 to 6 of 13.
+Five of the six older traps lost were on `hospital`, a fall larger than any set moved in phase 1; with one run an arm it
+does not show that thinking harms them, only that it does not help. The price, at the median: about 3 times the output
+tokens a scene and 2.1 to 2.4 times its seconds. The bot's scenes do not think, as before, and `SCENE_THINKING` stays an
+eval switch, off by default.
+
+Limitations:
+- One run an arm, one state a scenario, one judge (Opus 5.5), judging once.
+- The seconds are a shared card's: other readers' turns and two of ours at once.
+- Reasoning tokens are an estimate, the output less the visible text's count; 4 scenes of `assault` on have none.
+- The traps test continuity at fixed points. The walk, longer stories and `sgr` memory were not run, nor the budget arm.
+- Results in `~/simple-story-chat-runs/2026-10-28/o3/`: `card/` with `job.jsonl`, `requests.jsonl`, `scenes.jsonl`,
+  `events.jsonl`, `summary.json` (the per-arm numbers above) and the probes' directories under `card/tmp/`;
+  `judge-run.log`; `tables.txt` from phase 1's `tables.mts`, whose reasoning tokens column stays empty for
+  simple-serving.
+
 <a id='open-past-2026-09-29'></a>
 
 ## 2026-09-29 · Opus 5.5 · the open past: a narrator rule that confirms a compatible claim about an unshown past (not accepted)
@@ -176,7 +262,8 @@ same day, a measurement that accepts no change. [Thinking at the read end](#read
 recall from 3.7 and 8.3 to 11.3 and 12 of 12, and the bot's scenes never think. The question: does thinking before a
 scene cut the scene's continuity and number errors, and what does it cost a scene in reasoning tokens and seconds?
 Phase 1 asks it of hosted Gemma 4 31B over the pack's traps on both scenarios. Phase 2, a job for the next text card
-that asks it of the tester's model, is prepared and not run (below).
+that asks it of the tester's model, is prepared and not run (below); it ran on 2026-10-28
+([phase 2](#scene-thinking-card-2026-10-28)).
 
 The switch, in eval code only ([eval.md](../eval.md#scene-thinking), 45400b2). `SCENE_THINKING=true` gives every trap
 scene, and the `then` scene over it, `thinking`, which OpenRouter gets as `reasoning: { enabled: true }`, and 4096 more

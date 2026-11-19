@@ -8,6 +8,12 @@ and the main result with its limit. A new step gets its full entry there and its
 accepted**: tried and reverted. **Measurement**: numbers without a decision on a change. **Open**: a decision still
 waits. An open line is unfinished work, not an order to finish it.
 
+- 2026-10-28 · **measurement** · [O3, phase 2: trap scenes that think, on the tester's model on the card](knowledge/improve-runs.md#scene-thinking-card-2026-10-28).
+  Phase 2 of O3, which the owner approved; no change. Over the heretic's own replays of 2026-09-27,
+  `gemma-4-31b-heretic-nvfp4` on the text card passed 60 of 76 trap questions without thinking and 57 with it: the
+  older traps 22 and 16 of 24, five of the six lost on `hospital`, o2 20 and 22 of 26, open 18 and 19 of 26 (P 5 and
+  6 of 13). A thinking scene reasoned 704 and 626 tokens at the median by an estimate, 4241 at most, and took 12.1 and
+  11.9 s at the median against 5.1 and 5.7, beside other readers. One run an arm, one judge; the budget arm was not run.
 - 2026-09-29 · **not accepted** · [The open past: a narrator rule that confirms a compatible claim about an unshown past](knowledge/improve-runs.md#open-past-2026-09-29).
   The owner approved the rule on 2026-09-28: a claim about a past no scene showed, which nothing in the record rules
   out, is confirmed and kept. Three `assault` replays a side on the main group on 2026-09-29: the open traps passed on
