@@ -42,8 +42,8 @@ The seed and previousMemory are given only for understanding. Do not repeat prev
 
   pace: {
     moment: {
-      hero: "Pace — a moment: the scene covers no more than 15 minutes, in up to 4 paragraphs. The message above is the hero's move. Start with it: show how the hero does it, what came of it and how the world answered. Take the hero's words and deeds only from the move and add nothing: no lines, no decisions, no new actions. Stop at the nearest moment where the hero has to answer, choose or act, and do not decide it for the hero.",
-      narrator: "Pace — a moment: the scene covers no more than 15 minutes, in up to 4 paragraphs. The move is yours: take one small step for the hero, the most obvious continuation of what the hero is already doing. Show how the world answered, and stop at the nearest moment where the hero has to answer, choose or act.",
+      hero: "Pace — a moment: the scene covers no more than 15 minutes. The message above is the hero's move. Start with it: show how the hero does it, what came of it and how the world answered. Take the hero's words and deeds only from the move and add nothing: no lines, no decisions, no new actions. Stop at the nearest moment where the hero has to answer, choose or act, and do not decide it for the hero.",
+      narrator: "Pace — a moment: the scene covers no more than 15 minutes. The move is yours: take one small step for the hero, the most obvious continuation of what the hero is already doing. Show how the world answered, and stop at the nearest moment where the hero has to answer, choose or act.",
     },
     chapter: {
       hero: "Pace — a chapter: the scene spans hours or days, told briefly. The message above is the hero's move: show what came of it and how the world answered. After that the hero keeps to their routine: skip it and stop at the nearest important fork, where the hero's next move is needed.",

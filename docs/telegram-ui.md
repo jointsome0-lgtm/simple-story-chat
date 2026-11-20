@@ -71,7 +71,8 @@ The tester asked for it and the owner approved it on 2026-09-29. «⏱ Темп:
 (`view:pace:<storyId>`) picks the pace of the current story (`pace:<storyId>:<moment|scene|chapter>`), kept as
 `Story.pace`:
 
-- «⚡ Миг» ("Moment"): up to 15 minutes a turn, in at most 4 paragraphs against the rule's 12. The narrator shows how
+- «⚡ Миг» ("Moment"): up to 15 minutes a turn, with no paragraph cap of its own since the owner took «до 4 абзацев»
+  out on 2026-11-20 (it cut a scene short before the hero's next move). The narrator shows how
   the hero makes the written move and what came of it, adds no line, decision or action of the hero's, and stops at
   the nearest point where the hero has to answer, choose or act.
 - «🎬 Сцена» ("Scene"): the default and the bot as it was. A story without a pace, in an older library too, has it.
