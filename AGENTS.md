@@ -68,7 +68,10 @@ assistant, so the rule lives here too.
   an excerpt.
 - **One exception: the tester's pose archives.** The owner, 2026-11-20, with the tester's consent given through the
   owner: the four archives in `~/Downloads` (`elin-six-references-0102.zip`, `lina-six-references-selected.zip`,
-  `marina-six-references-0138.zip`, `elin-add-all-36.zip`; 54 pictures with `labels.csv`) may be used in probes.
+  `marina-six-references-0138.zip`, `elin-add-all-36.zip`; 54 pictures with `labels.csv`) may be used in probes,
+  and so may the fuller sets of the same people made for the owner on 2026-11-20 in
+  `~/Documents/Codex/2026-11-20/new-chat-2/outputs/` (`elin-complete-52.zip`, `lina/lina-complete-v3.zip`,
+  `marina-v9/marina-complete.zip`; 97 pictures).
   Their labels may be read; their pictures may go to the card as references; frames drawn with them are judged by
   the owner and by GPT-6.2 Sol. Not to other external models, not into public docs or Drive; the bot's copies in
   `data/` stay closed.
