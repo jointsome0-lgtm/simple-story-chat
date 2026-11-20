@@ -52,6 +52,8 @@ comments or automatic imports to make a size count smaller.
 | Telegram screens and pictures | [telegram-ui.md](docs/telegram-ui.md) |
 | The agent CLI and MCP server | [agent-interface.md](docs/agent-interface.md) |
 | A rental, the picture card, image privacy | [gpu.md](docs/gpu.md), from [the owner's rules](docs/gpu.md#while-the-cards-are-paid-for) |
+| Work for the next card, experiment readiness and time estimates | [experiment-queue.md](docs/experiment-queue.md) |
+| The tester's actual build and the next integration candidate | [tester-build.md](docs/tester-build.md) |
 | Prompts, memory, the eval | [improve-loop.md](docs/improve-loop.md), [eval.md](docs/eval.md) |
 | The identity, action or llama.cpp experiment | [identity-experiment.md](docs/identity-experiment.md), [action-experiment.md](docs/action-experiment.md), [llama-measurement.md](docs/llama-measurement.md) |
 

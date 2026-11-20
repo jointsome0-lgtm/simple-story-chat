@@ -34,6 +34,8 @@ Open the one for the task at hand.
 - [The Telegram interface and pictures](docs/telegram-ui.md)
 - [The agent CLI and MCP server](docs/agent-interface.md), for stories without Telegram
 - [Renting cards and the picture card](docs/gpu.md)
+- [The experiment queue and expected card workload](docs/experiment-queue.md)
+- [The observed tester build and the next integration candidate](docs/tester-build.md)
 - [The loop for improving prompts and memory](docs/improve-loop.md), [the eval's commands](docs/eval.md) and
   [the decisions taken](docs/improve-log.md). The open scenarios are published as
   [a dataset](https://huggingface.co/datasets/Teadomi/simple-story-chat-eval) whose card lists the known limitations of

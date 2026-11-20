@@ -1,0 +1,368 @@
+{
+  "snapshotVersion": 1,
+  "runtimeObservedAtUtc": "2026-10-01T12:05:30.916222+00:00",
+  "settingsReconstructedAtUtc": "2026-10-01T12:19:11.135Z",
+  "sourceScope": [
+    "local/",
+    "lib/",
+    "captioner/",
+    "package.json",
+    "package-lock.json",
+    "tsconfig.json"
+  ],
+  "limitations": [
+    "Current source and reconstructed settings are observed, not proven launch-time bytes.",
+    "Untracked runtime dependencies and launcher files are outside the source fingerprint.",
+    "No model, Telegram or provider health request was performed."
+  ],
+  "botProcessCount": 2,
+  "bots": [
+    {
+      "script": "/home/jo/work/simple-chat-mini-app/local/main.ts",
+      "cwd": "/home/jo/work/simple-chat",
+      "nodeExecutable": "/home/jo/.nvm/versions/node/v24.9.0/bin/node",
+      "startedAtUtc": "2026-09-29T19:32:12.630000+00:00",
+      "checkout": "/home/jo/work/simple-chat-mini-app",
+      "head": "7ad1afcc991d6241b5159a980b9a35f2b9d2087a",
+      "headTree": "51b300ce234f1e376a818d3c3319a12e675be866",
+      "branch": "mini-app",
+      "checkoutChangedFileCount": 0,
+      "trackedSourceFileCount": 177,
+      "sourceReadFailures": 0,
+      "trackedSourcesMatchIndex": true,
+      "trackedSourcesMatchHead": true,
+      "sourceDifferences": [],
+      "sourceDifferencesFromHead": [],
+      "sourceSha256": "c03b7d2cafaf182a01c423a10db463be82f42d2d7717047fa50f04de567049d8",
+      "settings": {
+        "inheritedEnvironmentObserved": true,
+        "keyPresent": {
+          "SIMPLE_CHAT_IMAGE_REFERENCE_USERS": false,
+          "SIMPLE_CHAT_IMAGE_USERS": true,
+          "SIMPLE_CHAT_MINI_APP_USERS": true,
+          "SIMPLE_CHAT_SHEET_VERSION_USERS": false,
+          "SIMPLE_CHAT_OWNER_ID": false,
+          "SIMPLE_CHAT_ALLOWED_USER_IDS": true,
+          "SIMPLE_CHAT_PROVIDER": true,
+          "SIMPLE_CHAT_IMAGE_PROVIDER": false,
+          "SIMPLE_CHAT_MEMORY_REPAIR_COVERAGE": false,
+          "SIMPLE_CHAT_MEMORY_THINKING": false,
+          "SIMPLE_CHAT_MEMORY_MODE": false,
+          "SIMPLE_CHAT_MINI_APP_URL": true
+        },
+        "ownerConfigured": null,
+        "accessListCount": 1,
+        "ownerOnAccessList": null,
+        "providerIsSimpleServing": false,
+        "providerIsHosted": true,
+        "pictureProviderIsSimpleServing": null,
+        "coverageRepairEnabled": null,
+        "memoryThinkingEnabled": null,
+        "memoryModeIsPlain": null,
+        "miniAppUrlConfigured": true,
+        "featureCounts": {
+          "SIMPLE_CHAT_IMAGE_REFERENCE_USERS": {
+            "count": null,
+            "ownerIncluded": null,
+            "allOnAccessList": null
+          },
+          "SIMPLE_CHAT_IMAGE_USERS": {
+            "count": 1,
+            "ownerIncluded": null,
+            "allOnAccessList": true
+          },
+          "SIMPLE_CHAT_MINI_APP_USERS": {
+            "count": 1,
+            "ownerIncluded": null,
+            "allOnAccessList": true
+          },
+          "SIMPLE_CHAT_SHEET_VERSION_USERS": {
+            "count": null,
+            "ownerIncluded": null,
+            "allOnAccessList": null
+          }
+        }
+      }
+    },
+    {
+      "script": "/home/jo/work/simple-chat-live-pace/local/main.ts",
+      "cwd": "/home/jo/work/simple-chat",
+      "nodeExecutable": "/home/jo/.nvm/versions/node/v24.9.0/bin/node",
+      "startedAtUtc": "2026-09-30T21:32:58.460000+00:00",
+      "checkout": "/home/jo/work/simple-chat-live-pace",
+      "head": "4febee6c12dd2cf863be3ae5fc856377f6c0b147",
+      "headTree": "9e2c643f70b9b80d7093394bf1c0c9cd5c8fa4b1",
+      "branch": "live-pace",
+      "checkoutChangedFileCount": 2,
+      "trackedSourceFileCount": 177,
+      "sourceReadFailures": 0,
+      "trackedSourcesMatchIndex": true,
+      "trackedSourcesMatchHead": true,
+      "sourceDifferences": [],
+      "sourceDifferencesFromHead": [],
+      "sourceSha256": "87e7af69ee4ccbc57b910835f66d1d0cb12f39850299846f4d2b2f7328195d8a",
+      "settings": {
+        "inheritedEnvironmentObserved": true,
+        "keyPresent": {
+          "SIMPLE_CHAT_CLOTHES_USERS": true,
+          "SIMPLE_CHAT_G_PROMPT_USERS": true,
+          "SIMPLE_CHAT_IMAGE_REFERENCE_USERS": true,
+          "SIMPLE_CHAT_IMAGE_USERS": true,
+          "SIMPLE_CHAT_MINI_APP_USERS": true,
+          "SIMPLE_CHAT_POSE_SET_USERS": true,
+          "SIMPLE_CHAT_SHEET_VERSION_USERS": true,
+          "SIMPLE_CHAT_OWNER_ID": false,
+          "SIMPLE_CHAT_ALLOWED_USER_IDS": false,
+          "SIMPLE_CHAT_PROVIDER": true,
+          "SIMPLE_CHAT_IMAGE_PROVIDER": false,
+          "SIMPLE_CHAT_MEMORY_REPAIR_COVERAGE": true,
+          "SIMPLE_CHAT_MEMORY_THINKING": false,
+          "SIMPLE_CHAT_MEMORY_MODE": false,
+          "SIMPLE_CHAT_MINI_APP_URL": true
+        },
+        "ownerConfigured": null,
+        "accessListCount": null,
+        "ownerOnAccessList": null,
+        "providerIsSimpleServing": true,
+        "providerIsHosted": false,
+        "pictureProviderIsSimpleServing": null,
+        "coverageRepairEnabled": true,
+        "memoryThinkingEnabled": null,
+        "memoryModeIsPlain": null,
+        "miniAppUrlConfigured": true,
+        "featureCounts": {
+          "SIMPLE_CHAT_CLOTHES_USERS": {
+            "count": 1,
+            "ownerIncluded": null,
+            "allOnAccessList": null
+          },
+          "SIMPLE_CHAT_G_PROMPT_USERS": {
+            "count": 1,
+            "ownerIncluded": null,
+            "allOnAccessList": null
+          },
+          "SIMPLE_CHAT_IMAGE_REFERENCE_USERS": {
+            "count": 1,
+            "ownerIncluded": null,
+            "allOnAccessList": null
+          },
+          "SIMPLE_CHAT_IMAGE_USERS": {
+            "count": 2,
+            "ownerIncluded": null,
+            "allOnAccessList": null
+          },
+          "SIMPLE_CHAT_MINI_APP_USERS": {
+            "count": 2,
+            "ownerIncluded": null,
+            "allOnAccessList": null
+          },
+          "SIMPLE_CHAT_POSE_SET_USERS": {
+            "count": 1,
+            "ownerIncluded": null,
+            "allOnAccessList": null
+          },
+          "SIMPLE_CHAT_SHEET_VERSION_USERS": {
+            "count": 1,
+            "ownerIncluded": null,
+            "allOnAccessList": null
+          }
+        }
+      }
+    }
+  ],
+  "settingsReconstructedNow": [
+    {
+      "checkout": "/home/jo/work/simple-chat-mini-app",
+      "processStillObserved": true,
+      "reconstructedConfigValid": true,
+      "settingsSource": "inherited_environment_plus_current_dotenv",
+      "configFileExists": true,
+      "configFileMtimePrecedesProcessStart": true,
+      "ownerConfigured": true,
+      "ownerOnAccessList": true,
+      "accessListCount": 1,
+      "accessListContainsOnlyOwner": true,
+      "providerIsSimpleServing": false,
+      "providerIsHosted": true,
+      "clientModelMatchesPublicServerManifest": false,
+      "memoryModeIsPlain": true,
+      "coverageRepairEnabled": false,
+      "memoryThinkingEnabled": false,
+      "contextTokens": 65536,
+      "compactAtTokens": 44000,
+      "keepScenes": 4,
+      "managedGpuConfigured": false,
+      "picturesConfigured": true,
+      "pictureProviderIsSimpleServing": false,
+      "miniAppConfigured": true,
+      "featureCounts": {
+        "users": {
+          "count": 1,
+          "ownerIncluded": true,
+          "allOnAccessList": true
+        },
+        "referenceUsers": {
+          "count": 0,
+          "ownerIncluded": false,
+          "allOnAccessList": true
+        },
+        "versionUsers": {
+          "count": 0,
+          "ownerIncluded": false,
+          "allOnAccessList": true
+        },
+        "poseSetUsers": {
+          "count": 0,
+          "ownerIncluded": false,
+          "allOnAccessList": true
+        },
+        "clothesUsers": {
+          "count": 0,
+          "ownerIncluded": false,
+          "allOnAccessList": true
+        },
+        "gPromptUsers": {
+          "count": 0,
+          "ownerIncluded": false,
+          "allOnAccessList": true
+        },
+        "miniAppUsers": {
+          "count": 1,
+          "ownerIncluded": true,
+          "allOnAccessList": true
+        }
+      }
+    },
+    {
+      "checkout": "/home/jo/work/simple-chat-live-pace",
+      "processStillObserved": true,
+      "reconstructedConfigValid": true,
+      "settingsSource": "inherited_environment_plus_current_dotenv",
+      "configFileExists": true,
+      "configFileMtimePrecedesProcessStart": true,
+      "ownerConfigured": true,
+      "ownerOnAccessList": true,
+      "accessListCount": 2,
+      "accessListContainsOnlyOwner": false,
+      "providerIsSimpleServing": true,
+      "providerIsHosted": false,
+      "clientModelMatchesPublicServerManifest": true,
+      "memoryModeIsPlain": true,
+      "coverageRepairEnabled": true,
+      "memoryThinkingEnabled": false,
+      "contextTokens": 65536,
+      "compactAtTokens": 44000,
+      "keepScenes": 4,
+      "managedGpuConfigured": false,
+      "picturesConfigured": true,
+      "pictureProviderIsSimpleServing": false,
+      "miniAppConfigured": true,
+      "featureCounts": {
+        "users": {
+          "count": 2,
+          "ownerIncluded": true,
+          "allOnAccessList": true
+        },
+        "referenceUsers": {
+          "count": 1,
+          "ownerIncluded": false,
+          "allOnAccessList": true
+        },
+        "versionUsers": {
+          "count": 1,
+          "ownerIncluded": false,
+          "allOnAccessList": true
+        },
+        "poseSetUsers": {
+          "count": 1,
+          "ownerIncluded": false,
+          "allOnAccessList": true
+        },
+        "clothesUsers": {
+          "count": 1,
+          "ownerIncluded": false,
+          "allOnAccessList": true
+        },
+        "gPromptUsers": {
+          "count": 1,
+          "ownerIncluded": false,
+          "allOnAccessList": true
+        },
+        "miniAppUsers": {
+          "count": 2,
+          "ownerIncluded": true,
+          "allOnAccessList": true
+        }
+      }
+    }
+  ],
+  "processIsolation": {
+    "sameTelegramToken": false,
+    "sameDatabasePath": false,
+    "sameDatabaseFile": false,
+    "sameModel": false
+  },
+  "publicModelDeclaration": {
+    "source": "/home/jo/work/simple-serving/card/manifest.env",
+    "alias": "gemma-4-31b-heretic-nvfp4",
+    "repository": "llmfan46/gemma-4-31B-it-uncensored-heretic-NVFP4",
+    "revision": "24ac337ecd25c89d9211d40139696dae84591f1f"
+  },
+  "selectedTechnicalLog": {
+    "lastReadyAtUtc": "2026-09-30T21:33:02.200Z",
+    "lastSelectedPollingFailureAtUtc": "2026-10-01T07:47:12.510Z",
+    "stoppedAfterLastReady": false
+  },
+  "rentalInfrastructure": {
+    "baseRevision": "5b918bc192cc2049c690ae6c71ff4f26f1ffd526",
+    "sourceFileCount": 41,
+    "verifiedSourceFileCount": 41,
+    "manifestSha256": "995ffd68541821c17b60a9396e136d7864670cc40ff1ba4ea0726f5f83bd9608"
+  },
+  "nextCandidate": {
+    "status": "composition_only_not_assembled",
+    "integrationBase": "b877a84bf177564af4095b2be9e7e6630a24a200",
+    "backendSource": "c7f55338dfd6e67b7054352d53001e0678b5d154",
+    "frontendSourceCommits": [
+      "c9565e26acf496b628d39b1955949af0e38f036b",
+      "4febee6c12dd2cf863be3ae5fc856377f6c0b147"
+    ],
+    "currentPaceParityCommit": "f01a06743a96c1acc53854c9a41b121715be1d0c",
+    "currentProductSource": "4febee6c12dd2cf863be3ae5fc856377f6c0b147",
+    "baseSourceSnapshot": {
+      "head": "b877a84bf177564af4095b2be9e7e6630a24a200",
+      "headTree": "402247b05aad78950b7a006103419118867a4f54",
+      "branch": "codex/comfyui-integration",
+      "checkoutChangedFileCount": 5,
+      "trackedSourceFileCount": 171,
+      "sourceReadFailures": 0,
+      "trackedSourcesMatchIndex": true,
+      "trackedSourcesMatchHead": true,
+      "sourceDifferences": [],
+      "sourceDifferencesFromHead": [],
+      "sourceSha256": "0f667a3145bf5ca74d5df1f9c5646a991ec676961d7e1e2e4a6bd4ee66ded2f9"
+    },
+    "deployed": false,
+    "acceptanceChecks": [
+      "Existing offline tests and TypeScript checks on assembled candidate.",
+      "Synthetic G/clothes/pose/reference/library/Mini App parity checks with no reader data.",
+      "One separately defined pace experiment after integration parity."
+    ],
+    "excluded": [
+      "faces",
+      "automatic picture-gateway activation",
+      "thinking-budget activation",
+      "vision activation",
+      "new memory hypothesis",
+      "bulk historical branch merge"
+    ],
+    "preservePrivateConfigurationOnAssembly": true,
+    "productBlocks": [
+      "G",
+      "clothes",
+      "pose sets",
+      "Mini App",
+      "pace parity"
+    ]
+  }
+}

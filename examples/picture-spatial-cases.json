@@ -1,0 +1,1026 @@
+{
+  "schema_version": "simple-chat.spatial-cases.v1",
+  "date": "2026-10-04",
+  "status": "fixtures_prepared_runner_and_references_required",
+  "scope": "Синтетические взрослые P1–P4 в обычной одежде; один момент; без частных сюжетов.",
+  "coordinate_convention": "Стороны рук относительно участника; перед/за относительно направления камеры; экранная сторона не подменяет сторону тела.",
+  "roster": {
+    "P1": {
+      "adult": true,
+      "outfit": "зелёная куртка, тёмные прямые брюки, закрытая обувь",
+      "identity": "невысокий, широкие плечи, устойчивый прямой силуэт"
+    },
+    "P2": {
+      "adult": true,
+      "outfit": "синяя куртка, серые брюки, закрытая обувь",
+      "identity": "высокий, узкие плечи, устойчивый вытянутый силуэт"
+    },
+    "P3": {
+      "adult": true,
+      "outfit": "бордовая куртка, тёмные брюки, закрытая обувь",
+      "identity": "средний рост, округлый устойчивый силуэт"
+    },
+    "P4": {
+      "adult": true,
+      "outfit": "жёлтая куртка, тёмные брюки, закрытая обувь",
+      "identity": "средний рост, широкие плечи, устойчивый силуэт"
+    }
+  },
+  "reference_requirements": {
+    "source": "synthetic_only",
+    "status": "not_prepared",
+    "pins_required": [
+      "file_sha256",
+      "participant_id",
+      "canonical_view"
+    ],
+    "pov_observer_reference": "follow_frozen_actual_route; do not introduce an external full observer"
+  },
+  "pilot": {
+    "units": [
+      "S01/right",
+      "S01/left",
+      "S03/front",
+      "S03/behind",
+      "S05/mirror",
+      "S05/matte",
+      "S07/water",
+      "S09/four"
+    ],
+    "arms": [
+      "A-current-instruction",
+      "B-spatial-instruction-only"
+    ],
+    "image_seeds": [
+      7,
+      11
+    ],
+    "images": 32,
+    "text_outputs": 16,
+    "text_output_reused_across_image_seeds": true
+  },
+  "rating_values": [
+    "pass",
+    "fail",
+    "not-visible",
+    "uncertain"
+  ],
+  "rating_rules": [
+    "not-visible у обязательного видимого условия считается fail",
+    "Естественная окклюзия формы исключается из знаменателя формы, а не становится pass",
+    "При uncertain не угадывать владельца или скрытую анатомию",
+    "Кадр с несколькими тяжёлыми метками считается один раз в severe-rate",
+    "Ожидаемые true и false проверяются по вопросу и заданию, а не по полярности формулировки",
+    "Глобальный roster не означает присутствие всех P1–P4: для входа брать только participants выбранного варианта; логический участник может быть вне прямого поля зрения."
+  ],
+  "fixtures": [
+    {
+      "id": "S01",
+      "problem_ids": [
+        "SP03"
+      ],
+      "purpose": "Принадлежность руки и сторона тела",
+      "camera": "Внешняя камера перед P1, на высоте груди; P1 обращён к ней, руки не скрещены, обе кисти видны.",
+      "variants": [
+        {
+          "id": "right",
+          "scene": "P1 стоит лицом к камере. Правой рукой P1 держит красную чашку; левая ладонь лежит на столе.",
+          "constraints": [
+            "Чашка в правой руке P1.",
+            "Левая ладонь P1 на столе.",
+            "Правая сторона тела не заменяется правой стороной изображения."
+          ],
+          "checks": [
+            {
+              "id": "cup-owner",
+              "question": "Чашку держит правая рука P1?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "left-support",
+              "question": "Левая ладонь P1 опирается на стол?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "extra-hand",
+              "question": "Есть отдельная третья кисть P1?",
+              "expected": false,
+              "visibility": "required",
+              "severe_if_wrong": true
+            }
+          ],
+          "participants": [
+            "P1"
+          ]
+        },
+        {
+          "id": "left",
+          "scene": "P1 стоит лицом к камере. Левой рукой P1 держит красную чашку; правая ладонь лежит на столе.",
+          "constraints": [
+            "Это зеркальная пара right относительно тела P1.",
+            "Чашка в левой руке, правая ладонь на столе."
+          ],
+          "checks": [
+            {
+              "id": "cup-owner",
+              "question": "Чашку держит левая рука P1?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "right-support",
+              "question": "Правая ладонь P1 опирается на стол?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "extra-hand",
+              "question": "Есть отдельная третья кисть P1?",
+              "expected": false,
+              "visibility": "required",
+              "severe_if_wrong": true
+            }
+          ],
+          "participants": [
+            "P1"
+          ]
+        }
+      ],
+      "participants": [
+        "P1"
+      ],
+      "camera_owner": null
+    },
+    {
+      "id": "S02",
+      "problem_ids": [
+        "SP04"
+      ],
+      "purpose": "Удерживаемый предмет и предмет на опоре",
+      "camera": "Внешняя камера под углом 30 градусов к P1 и столу; рука и чашка видны без перекрытия.",
+      "variants": [
+        {
+          "id": "held",
+          "scene": "P1 держит синюю чашку за ручку правой рукой на десять сантиметров выше стола.",
+          "constraints": [
+            "Кисть замкнута вокруг ручки.",
+            "Между дном чашки и столом видимый зазор."
+          ],
+          "checks": [
+            {
+              "id": "grip",
+              "question": "Правая кисть P1 удерживает ручку чашки?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "on-table",
+              "question": "Дно чашки опирается на стол?",
+              "expected": false,
+              "visibility": "required",
+              "severe_if_wrong": true
+            }
+          ],
+          "participants": [
+            "P1"
+          ]
+        },
+        {
+          "id": "placed",
+          "scene": "P1 только что поставил синюю чашку на стол и убрал правую кисть на десять сантиметров от ручки.",
+          "constraints": [
+            "Дно чашки на столе.",
+            "Правая кисть P1 больше не держит чашку.",
+            "Не совмещать два момента движения."
+          ],
+          "checks": [
+            {
+              "id": "on-table",
+              "question": "Дно чашки опирается на стол?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "still-held",
+              "question": "Кисть P1 всё ещё держит ручку чашки?",
+              "expected": false,
+              "visibility": "required",
+              "severe_if_wrong": true
+            }
+          ],
+          "participants": [
+            "P1"
+          ]
+        }
+      ],
+      "participants": [
+        "P1"
+      ],
+      "camera_owner": null
+    },
+    {
+      "id": "S03",
+      "problem_ids": [
+        "SP01",
+        "SP02"
+      ],
+      "purpose": "Положение участника относительно POV",
+      "camera": "Камера в глазах стоящего P1, смотрит вперёд и немного вниз; перед P1 открытая ровная площадка без отражающих поверхностей.",
+      "variants": [
+        {
+          "id": "front",
+          "scene": "P1 смотрит на собственную карту в руках. P2 стоит в двух метрах прямо перед P1, лицом к нему.",
+          "constraints": [
+            "Обе собственные кисти P1 с картой внизу кадра.",
+            "P2 находится впереди P1 и виден над картой.",
+            "P1 не рисуется отдельным человеком."
+          ],
+          "checks": [
+            {
+              "id": "p2-visible",
+              "question": "P2 виден непосредственно перед камерой?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "own-hands",
+              "question": "Внизу видны собственные кисти P1, удерживающие карту?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "p1-external",
+              "question": "P1 нарисован отдельным человеком перед камерой?",
+              "expected": false,
+              "visibility": "required",
+              "severe_if_wrong": true
+            }
+          ],
+          "participants": [
+            "P1",
+            "P2"
+          ]
+        },
+        {
+          "id": "behind",
+          "scene": "P1 смотрит на собственную карту в руках. P2 стоит в двух метрах точно за спиной P1; поза P2 та же, что в front.",
+          "constraints": [
+            "P2 вне прямого поля зрения.",
+            "Камера не разворачивается ради P2.",
+            "Отражения отсутствуют.",
+            "Внизу видны собственные кисти P1 с картой."
+          ],
+          "checks": [
+            {
+              "id": "p2-direct",
+              "question": "P2 нарисован непосредственно перед камерой?",
+              "expected": false,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "own-hands",
+              "question": "Внизу видны собственные кисти P1 с картой?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "invented-reflection",
+              "question": "Добавлено отражение P2?",
+              "expected": false,
+              "visibility": "required",
+              "severe_if_wrong": true
+            }
+          ],
+          "participants": [
+            "P1",
+            "P2"
+          ]
+        }
+      ],
+      "participants": [
+        "P1",
+        "P2"
+      ],
+      "camera_owner": "P1"
+    },
+    {
+      "id": "S04",
+      "problem_ids": [
+        "SP01"
+      ],
+      "purpose": "Видимое собственное тело зависит от направления взгляда",
+      "camera": "POV стоящего P1; глаза на высоте 1.65 м, корпус прямой. Пол перед P1 свободен; никаких зеркал или воды.",
+      "variants": [
+        {
+          "id": "down",
+          "scene": "P1 держит небольшую коробку обеими руками у пояса и опускает взгляд на неё под углом примерно 65 градусов.",
+          "constraints": [
+            "Камера остаётся в глазах P1.",
+            "Коробка, кисти и части предплечий находятся впереди внизу.",
+            "Собственная обувь на полу попадает в нижнюю часть кадра.",
+            "Нет второго внешнего тела P1."
+          ],
+          "checks": [
+            {
+              "id": "box-hands",
+              "question": "Видны коробка и связанные с ней собственные кисти P1?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "shoes",
+              "question": "Внизу видна собственная обувь на полу?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "external-p1",
+              "question": "Показан отдельный полный P1 перед камерой?",
+              "expected": false,
+              "visibility": "required",
+              "severe_if_wrong": true
+            }
+          ],
+          "participants": [
+            "P1"
+          ]
+        },
+        {
+          "id": "level",
+          "scene": "P1 держит ту же коробку у пояса в той же позе, но поднимает взгляд к горизонту; коробка ниже поля зрения.",
+          "constraints": [
+            "Меняется только направление взгляда.",
+            "Глаза остаются на той же высоте.",
+            "Не добавлять привычный шаблон коленей или обуви в прямой горизонтальный вид."
+          ],
+          "checks": [
+            {
+              "id": "own-knees",
+              "question": "В прямом горизонтальном кадре появились собственные колени P1?",
+              "expected": false,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "external-p1",
+              "question": "Показан отдельный полный P1 перед камерой?",
+              "expected": false,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "horizon",
+              "question": "Направление кадра соответствует взгляду к горизонту?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            }
+          ],
+          "participants": [
+            "P1"
+          ]
+        }
+      ],
+      "participants": [
+        "P1"
+      ],
+      "camera_owner": "P1"
+    },
+    {
+      "id": "S05",
+      "problem_ids": [
+        "SP01",
+        "SP06"
+      ],
+      "purpose": "Одно согласованное отражение и отсутствие выдуманного отражения",
+      "camera": "POV P1 на расстоянии 1 м от плоской вертикальной панели; взгляд направлен на её центр. Справа от P1 стоит P2.",
+      "variants": [
+        {
+          "id": "mirror",
+          "scene": "Панель является зеркалом. P1 вытягивает правое предплечье вперёд: кисть в красной перчатке видна примерно в 60 сантиметрах перед корпусом, ниже уровня глаз. P2 стоит справа от P1 и держит зелёную папку обеими руками.",
+          "constraints": [
+            "Отражение соответствует тому же моменту.",
+            "Отражение P1 не является третьим участником.",
+            "Отражение P2 не меняет хват папки или позу.",
+            "Не оценивать собственную правую руку по экранной стороне отражения."
+          ],
+          "checks": [
+            {
+              "id": "same-instant",
+              "question": "Поза отражения P1 согласована с видимой собственной кистью в красной перчатке?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "p2-grip",
+              "question": "Отражённый P2 держит ту же папку тем же хватом?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "extra-real-person",
+              "question": "Вместо отражения появился дополнительный действительный участник?",
+              "expected": false,
+              "visibility": "required",
+              "severe_if_wrong": true
+            }
+          ],
+          "participants": [
+            "P1",
+            "P2"
+          ]
+        },
+        {
+          "id": "matte",
+          "scene": "Та же панель является матовой стеной. P1 и P2 сохраняют положение, позы и предметы из mirror.",
+          "constraints": [
+            "Меняется только тип поверхности.",
+            "Стена не показывает зеркального отражения.",
+            "Не переносить P1 перед камеру ради его внешности."
+          ],
+          "checks": [
+            {
+              "id": "reflection",
+              "question": "На матовой стене показано отражение участников?",
+              "expected": false,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "external-p1",
+              "question": "P1 появился отдельным человеком перед камерой?",
+              "expected": false,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "same-own-hand",
+              "question": "Сохранилась та же собственная кисть P1 с перчаткой?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            }
+          ],
+          "participants": [
+            "P1",
+            "P2"
+          ]
+        }
+      ],
+      "participants": [
+        "P1",
+        "P2"
+      ],
+      "camera_owner": "P1"
+    },
+    {
+      "id": "S06",
+      "problem_ids": [
+        "SP02",
+        "SP06"
+      ],
+      "purpose": "Прозрачная граница не превращается в зеркало",
+      "camera": "Внешняя камера сбоку, видны взрослые P1 и P2 по разные стороны прямоугольной рамы; руки, рама и граница в фокусе.",
+      "variants": [
+        {
+          "id": "glass",
+          "scene": "Между P1 и P2 прозрачная стеклянная панель. P1 касается её левой ладонью с одной стороны, P2 правой ладонью с другой стороны напротив.",
+          "constraints": [
+            "Два действительных участника по разные стороны стекла.",
+            "Ладони упираются в разные стороны одной панели.",
+            "Кисти не проходят сквозь стекло.",
+            "Панель не является проходом или зеркалом."
+          ],
+          "checks": [
+            {
+              "id": "plane",
+              "question": "Обе ладони опираются на одну видимую стеклянную плоскость с разных сторон?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "penetration",
+              "question": "Кисть проходит сквозь стекло?",
+              "expected": false,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "duplicated-reflection",
+              "question": "Один участник заменён отражённой копией другого?",
+              "expected": false,
+              "visibility": "required",
+              "severe_if_wrong": true
+            }
+          ],
+          "participants": [
+            "P1",
+            "P2"
+          ]
+        },
+        {
+          "id": "open",
+          "scene": "В той же раме стекла нет. P1 и P2 находятся на тех же местах и соединяют левую ладонь P1 с правой ладонью P2 внутри открытой рамы.",
+          "constraints": [
+            "Рама открыта, ладони соприкасаются непосредственно.",
+            "Не добавлять невидимую панель или зеркальное отражение."
+          ],
+          "checks": [
+            {
+              "id": "contact",
+              "question": "Левая ладонь P1 касается правой ладони P2 внутри рамы?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "pane",
+              "question": "Между соприкасающимися ладонями добавлена панель?",
+              "expected": false,
+              "visibility": "required",
+              "severe_if_wrong": true
+            }
+          ],
+          "participants": [
+            "P1",
+            "P2"
+          ]
+        }
+      ],
+      "participants": [
+        "P1",
+        "P2"
+      ],
+      "camera_owner": null
+    },
+    {
+      "id": "S07",
+      "problem_ids": [
+        "SP05",
+        "SP08"
+      ],
+      "purpose": "Непрерывность тела у границы окружения",
+      "camera": "Внешняя камера на высоте пояса под углом 30 градусов; P1 стоит прямо, руки вдоль тела, видна вся фигура и поверхность под ней.",
+      "variants": [
+        {
+          "id": "water",
+          "scene": "P1 стоит в прозрачной воде по колено на ровном дне. Над водой видны корпус и бёдра, ниже поверхности просматриваются обе голени и обувь.",
+          "constraints": [
+            "Один непрерывный корпус и две ноги.",
+            "У поверхности воды допустим оптический сдвиг, но не обрыв или слияние с плиткой.",
+            "Не превращать поверхность воды в сиденье или бортик."
+          ],
+          "checks": [
+            {
+              "id": "continuity",
+              "question": "Обе ноги имеют прослеживаемое продолжение через поверхность воды?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "merged-floor",
+              "question": "Видимое тело заканчивается как часть пола или бортика?",
+              "expected": false,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "supports",
+              "question": "Поза допускает опору обеих стоп на дно?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            }
+          ],
+          "participants": [
+            "P1"
+          ]
+        },
+        {
+          "id": "dry",
+          "scene": "P1 стоит на том же ровном дне в той же позе, но вода отсутствует.",
+          "constraints": [
+            "Меняется только наличие воды.",
+            "Вся фигура видна до обуви.",
+            "Сохраняются опоры и принадлежность ног."
+          ],
+          "checks": [
+            {
+              "id": "continuity",
+              "question": "Непрерывно видны две ноги от корпуса до обуви?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "extra-leg",
+              "question": "Есть третья действительная нога?",
+              "expected": false,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "supports",
+              "question": "Обе стопы стоят на одном ровном полу?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            }
+          ],
+          "participants": [
+            "P1"
+          ]
+        }
+      ],
+      "participants": [
+        "P1"
+      ],
+      "camera_owner": null
+    },
+    {
+      "id": "S08",
+      "problem_ids": [
+        "SP03",
+        "SP07"
+      ],
+      "purpose": "Контакт двух участников без перепутанных цепочек рук",
+      "camera": "Внешняя камера перед двумя участниками, немного сверху; плечи, локти и кисти видны, P1 слева в кадре, P2 справа.",
+      "variants": [
+        {
+          "id": "touch",
+          "scene": "P1 правой кистью касается левого предплечья P2. Левая кисть P1 на его собственном поясе. Правая кисть P2 свободно опущена.",
+          "constraints": [
+            "Единственный контакт: правая кисть P1 и левое предплечье P2.",
+            "Каждая видимая кисть соединена с предплечьем своего владельца.",
+            "Нет слияния предплечий."
+          ],
+          "checks": [
+            {
+              "id": "touch-owner",
+              "question": "Контакт осуществляет правая кисть P1 с левым предплечьем P2?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "own-chain",
+              "question": "Правая кисть P1 прослеживается до его локтя и плеча?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "extra-hand",
+              "question": "В контакте появилась дополнительная кисть без владельца?",
+              "expected": false,
+              "visibility": "required",
+              "severe_if_wrong": true
+            }
+          ],
+          "participants": [
+            "P1",
+            "P2"
+          ]
+        },
+        {
+          "id": "gap",
+          "scene": "P1 держит правую кисть на десять сантиметров перед левым предплечьем P2, не касаясь его. Остальные положения те же, что в touch.",
+          "constraints": [
+            "Меняется только наличие зазора у целевого контакта.",
+            "Сохранить владельцев и стороны рук."
+          ],
+          "checks": [
+            {
+              "id": "touch",
+              "question": "Правая кисть P1 касается левого предплечья P2?",
+              "expected": false,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "gap",
+              "question": "Между целевой кистью и предплечьем виден зазор?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "own-chain",
+              "question": "Кисть P1 по-прежнему связана с его собственной рукой?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            }
+          ],
+          "participants": [
+            "P1",
+            "P2"
+          ]
+        }
+      ],
+      "participants": [
+        "P1",
+        "P2"
+      ],
+      "camera_owner": null
+    },
+    {
+      "id": "S09",
+      "problem_ids": [
+        "SP03",
+        "SP07"
+      ],
+      "purpose": "Три и четыре близких участника с отдельными контактами",
+      "camera": "Внешняя камера с высоты 2.8 м под углом вниз 40 градусов; прямоугольный лёгкий поднос на высоте пояса, все активные кисти и ручки должны быть видны.",
+      "variants": [
+        {
+          "id": "three",
+          "scene": "P1, P2 и P3 держат лёгкий поднос: P1 левой кистью за ближнюю левую ручку, P2 правой за ближнюю правую, P3 левой за дальнюю правую. Каждый другой свободной рукой касается собственного пояса. Дальняя левая ручка свободна.",
+          "constraints": [
+            "Три действительных участника.",
+            "Три контакта привязаны к разным ручкам и владельцам.",
+            "Не заполнять свободную ручку четвёртым человеком."
+          ],
+          "checks": [
+            {
+              "id": "cast",
+              "question": "В кадре ровно три действительных участника?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "handles",
+              "question": "Все три активные кисти держат назначенные ручки?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "fourth",
+              "question": "Появился четвёртый действительный участник?",
+              "expected": false,
+              "visibility": "required",
+              "severe_if_wrong": true
+            }
+          ],
+          "participants": [
+            "P1",
+            "P2",
+            "P3"
+          ]
+        },
+        {
+          "id": "four",
+          "scene": "P1, P2, P3 и P4 стоят вокруг лёгкого подноса. Контакты P1–P3 те же, что в three. P4 правой кистью держит дальнюю левую ручку; свободной касается собственного пояса.",
+          "constraints": [
+            "Четыре действительных участника.",
+            "У каждой из четырёх ручек ровно один назначенный владелец.",
+            "Свободные кисти принадлежат своим участникам.",
+            "Одно общее положение подноса и один момент действия."
+          ],
+          "checks": [
+            {
+              "id": "cast",
+              "question": "В кадре ровно четыре действительных участника?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "handles",
+              "question": "Четыре назначенные активные кисти держат четыре разные ручки?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "chains",
+              "question": "Каждую активную кисть можно проследить до её владельца?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            },
+            {
+              "id": "floating-hand",
+              "question": "Есть отдельная активная кисть без прослеживаемого владельца?",
+              "expected": false,
+              "visibility": "required",
+              "severe_if_wrong": true
+            }
+          ],
+          "participants": [
+            "P1",
+            "P2",
+            "P3",
+            "P4"
+          ]
+        }
+      ],
+      "participants": [
+        "P1",
+        "P2",
+        "P3",
+        "P4"
+      ],
+      "camera_owner": null
+    },
+    {
+      "id": "S10",
+      "problem_ids": [
+        "SP08"
+      ],
+      "purpose": "Видимая форма и естественная окклюзия оцениваются отдельно",
+      "camera": "Внешняя камера перед P1 на расстоянии 3 м; постоянные высота камеры, объектив и масштаб; P1 стоит прямо без поворота.",
+      "variants": [
+        {
+          "id": "visible",
+          "scene": "P1 стоит перед однотонной стеной, руки немного отведены от корпуса. Его одежда не скрывает общий силуэт.",
+          "constraints": [
+            "Сохраняются рост и характерный силуэт из закреплённого synthetic reference.",
+            "Не выводить изменение телосложения только из перспективы.",
+            "Сравнение требует действительного закреплённого reference."
+          ],
+          "checks": [
+            {
+              "id": "silhouette",
+              "question": "Видимый силуэт согласован с закреплённым reference при том же ракурсе?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": false
+            },
+            {
+              "id": "support",
+              "question": "Полностью видны обе ноги и их опора?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": true
+            }
+          ],
+          "participants": [
+            "P1"
+          ]
+        },
+        {
+          "id": "occluded",
+          "scene": "P1 сохраняет ту же позу и камеру, но перед нижней половиной фигуры стоит непрозрачная ширма.",
+          "constraints": [
+            "Меняется только добавленная окклюзия.",
+            "Скрытые пропорции не считаются сохранёнными или искажёнными.",
+            "Видимую верхнюю часть оценивать отдельно."
+          ],
+          "checks": [
+            {
+              "id": "upper-shape",
+              "question": "Видимая верхняя часть силуэта согласована с reference?",
+              "expected": true,
+              "visibility": "required",
+              "severe_if_wrong": false
+            },
+            {
+              "id": "hidden-shape",
+              "question": "Пропорции скрытой нижней части можно непосредственно оценить?",
+              "expected": false,
+              "visibility": "intentionally-hidden",
+              "severe_if_wrong": false,
+              "measure": "observability",
+              "include_in_shape_score": false
+            },
+            {
+              "id": "leak",
+              "question": "Скрытая часть тела проступает сквозь непрозрачную ширму?",
+              "expected": false,
+              "visibility": "required",
+              "severe_if_wrong": true
+            }
+          ],
+          "participants": [
+            "P1"
+          ]
+        }
+      ],
+      "participants": [
+        "P1"
+      ],
+      "camera_owner": null
+    }
+  ],
+  "text_context_cases": [
+    {
+      "id": "TC01",
+      "problem_ids": [
+        "SP09"
+      ],
+      "stage": "owner_input_to_narration",
+      "purpose": "Авторская ремарка не является речью персонажа",
+      "variants": [
+        {
+          "id": "note",
+          "context": "Взрослые P1 и P2 впервые встретились в мастерской. P1 рассматривает рабочий стол.",
+          "owner_turn": "Авторская ремарка: P2 пока не знает, кто такой P1. P1 ещё ничего не произнёс. Продолжи сцену.",
+          "checks": [
+            {
+              "id": "spoken-note",
+              "question": "Авторская ремарка превращена в произнесённую реплику P1?",
+              "expected": false
+            },
+            {
+              "id": "prior-acquaintance",
+              "question": "Участники названы знакомыми до этой встречи?",
+              "expected": false
+            }
+          ]
+        },
+        {
+          "id": "speech",
+          "context": "Взрослые P1 и P2 впервые встретились в мастерской. P1 рассматривает рабочий стол.",
+          "owner_turn": "P1 спрашивает P2: «Мы раньше встречались?» Продолжи сцену.",
+          "checks": [
+            {
+              "id": "question-happened",
+              "question": "В сцене сохранена произнесённая P1 реплика-вопрос?",
+              "expected": true
+            },
+            {
+              "id": "prior-acquaintance",
+              "question": "Вопрос сам по себе превращён в доказанный факт прежнего знакомства?",
+              "expected": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "TC02",
+      "problem_ids": [
+        "SP04"
+      ],
+      "stage": "source_to_frame",
+      "purpose": "Последний момент и отрицание действия",
+      "variants": [
+        {
+          "id": "before",
+          "context": "P1 правой рукой несёт единственную синюю чашку к столу. Затем ставит её, отводит кисть и замирает.",
+          "frame_request": "Выбран момент до размещения чашки на столе.",
+          "checks": [
+            {
+              "id": "held",
+              "question": "Чашка удерживается правой рукой над столом?",
+              "expected": true
+            },
+            {
+              "id": "on-table",
+              "question": "Чашка уже стоит на столе?",
+              "expected": false
+            }
+          ]
+        },
+        {
+          "id": "after",
+          "context": "P1 правой рукой несёт единственную синюю чашку к столу. Затем ставит её, отводит кисть и замирает.",
+          "frame_request": "Выбран последний момент после всех перечисленных событий: P1 больше не держит чашку и не двигает кистью.",
+          "checks": [
+            {
+              "id": "held",
+              "question": "Чашка всё ещё удерживается рукой?",
+              "expected": false
+            },
+            {
+              "id": "on-table",
+              "question": "Чашка стоит на столе?",
+              "expected": true
+            },
+            {
+              "id": "moving",
+              "question": "Кисть продолжает движение в выбранном моменте?",
+              "expected": false
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "experiment_limits": {
+    "text_context_cases": "TC01 отдельный контроль рассказчика, не эффект инструкции картинки; TC02 проверка выбранного кадра. Не добавлять их к знаменателю 32 изображений.",
+    "expanded_render": "Все 20 визуальных вариантов × 2 arms × 2 seeds = 80 кадров только в отдельном заранее ограниченном плане после решения о продолжении пилота; не автоматически."
+  },
+  "candidate_instruction": "выбери один момент и сохрани установленные состояния и отрицания. Различай собственные стороны участников и стороны экрана. Из положения глаз наблюдателя вычисли видимость; не перемещай скрытого участника ради показа внешности. Сохраняй владельцев рук, контакты, опоры и состояние предметов. Отражение допускай только при заданной поверхности и согласованной геометрии. Неизвестное отмечай, не заменяя догадкой."
+}

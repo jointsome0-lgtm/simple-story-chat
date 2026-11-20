@@ -5,7 +5,9 @@
       "Read(./.env.gpu)",
       "Read(./data/**)",
       "Read(./backups/**)",
-      "Read(./.tgcloud/**)"
+      "Read(./.tgcloud/**)",
+      "Read(./illustrations/action/sealed/**)",
+      "Read(./illustrations/action-1/sealed/**)"
     ]
   }
 }
