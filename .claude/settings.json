@@ -7,7 +7,13 @@
       "Read(./backups/**)",
       "Read(./.tgcloud/**)",
       "Read(./illustrations/action/sealed/**)",
-      "Read(./illustrations/action-1/sealed/**)"
+      "Read(./illustrations/action-1/sealed/**)",
+      "Read(//home/jo/simple-story-chat-runs/2026-11-20/card-1/clothes/run/pictures/**)",
+      "Read(//home/jo/simple-story-chat-runs/2026-11-20/card-1/clothes/run/portraits/**)",
+      "Read(//home/jo/simple-story-chat-runs/2026-11-20/card-1/clothes/run/judge/**)",
+      "Read(//home/jo/simple-story-chat-runs/2026-11-20/card-1/clothes/run/owner-likeness/**)",
+      "Read(//home/jo/simple-story-chat-runs/2026-11-20/card-1/look-words/run/**)",
+      "Read(//home/jo/simple-story-chat-runs/2026-11-20/card-1/look-words/rehearsal/refs/**)"
     ]
   }
 }

@@ -73,8 +73,9 @@ assistant, so the rule lives here too.
   `~/Documents/Codex/2026-11-20/new-chat-2/outputs/` (`elin-complete-52.zip`, `lina/lina-complete-v3.zip`,
   `marina-v9/marina-complete.zip`; 97 pictures).
   Their labels may be read; their pictures may go to the card as references; frames drawn with them are judged by
-  the owner and by GPT-6.2 Sol. Not to other external models, not into public docs or Drive; the bot's copies in
-  `data/` stay closed.
+  the owner and by GPT-6.2 Sol, and may go to Gemini 4 Neon, the product advisor (the tester's consent given through
+  the owner, 2026-11-20). Not to other external models, not into public docs or Drive; the bot's copies in `data/`
+  stay closed.
 - **Do not open `data/`, `backups/`, `.env` or `.env.gpu`** with file tools, `sqlite3` or a throwaway script. When you
   need a fact from them, write code that prints booleans, counts and sizes, never values. Example: whether
   `SIMPLE_CHAT_OWNER_ID` is set and is on the access list.

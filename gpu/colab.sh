@@ -36,7 +36,8 @@
 #   simple-chat-colab-inner  ProxyCommand ssh -W 127.0.0.1:2222 simple-chat-colab, UserKnownHostsFile
 #                            ~/.ssh/known_hosts-colab: the runtime's own sshd, for a tool that sets ControlPath=none
 #
-# Settings: SIMPLE_CHAT_COLAB_HOURS (default 2.5, at most 2.9: 10.05 units an hour against the cap of 30 a day),
+# Settings: SIMPLE_CHAT_COLAB_HOURS (default 2.5), at most SIMPLE_CHAT_COLAB_DAY_UNITS / 10.05 less 0.1 h for the release
+# (DAY_UNITS defaults to the owner's 30 a day, so 2.9 h; the owner may raise it for a day, e.g. 55 on 2026-11-21),
 # SIMPLE_CHAT_COLAB_KV_MIB (32768), SIMPLE_CHAT_COLAB_OFFLOAD_GIB (0: the KV cache's copy in RAM, unmeasured).
 set -euo pipefail
 
@@ -44,6 +45,7 @@ here=$(cd "$(dirname "$0")/.." && pwd)
 state=${XDG_STATE_HOME:-$HOME/.local/state}/simple-chat-colab
 mkdir -p "$state"
 hours=${SIMPLE_CHAT_COLAB_HOURS:-2.5}
+day_units=${SIMPLE_CHAT_COLAB_DAY_UNITS:-30}
 kv_mib=${SIMPLE_CHAT_COLAB_KV_MIB:-32768}
 offload_gib=${SIMPLE_CHAT_COLAB_OFFLOAD_GIB:-0}
 card=/workspace/simple-serving-card
@@ -59,7 +61,7 @@ say() { echo "$(date +%H:%M:%S) $*"; }
 colab() { command colab "$@" > >(grep -v --line-buffered 'new version\|colab update\|silence this\|^$' || true); }
 on_card() { timeout "${ON_CARD_S:-60}" ssh -n -T "$alias" "$@"; }
 feed_card() { timeout "${ON_CARD_S:-60}" ssh -T "$alias" "$@"; }
-cap_s() { python3 -I -c "import sys; h=float(sys.argv[1]); assert 0 < h <= 2.9; print(int(h*3600))" "$hours"; }
+cap_s() { python3 -I -c "import sys; h, u = float(sys.argv[1]), float(sys.argv[2]); m = round(u / 10.05 - 0.1, 1); assert 0 < h <= m, f'SIMPLE_CHAT_COLAB_HOURS {h} is over {m} h for {u} units a day'; print(int(h*3600))" "$hours" "$day_units"; }
 alive() { colab sessions 2>/dev/null | grep -q "^\[$session\] "; }
 
 # The shared connection, with the lanes' ports when the runtime has a GPU. It goes to the background once it is up.
@@ -209,6 +211,9 @@ case $command in
       done
     fi
     say "creating the runtime ($session)"
+    # From here on a failed step must not leave the runtime assigned: release it and say so.
+    # (an EXIT trap, since set -e leaves from inside functions without firing an ERR trap)
+    trap 'echo "colab.sh up stopped after creating $session; releasing it" >&2; if ((cpu)); then bash "$0" down --cpu; else bash "$0" down; fi' EXIT
     if ((cpu)); then colab new -s "$session"; else colab new -s "$session" --gpu G4; fi
     date +%s > "$state/started"
     arm_kernel "$cap"
@@ -222,9 +227,10 @@ case $command in
     prepare
     start_text
     start_pictures_bootstrap
-    if ((cpu)); then say "prepared; the bootstraps run on (see /workspace/*-bootstrap.log); bash gpu/colab.sh down --cpu ends it"; exit 0; fi
+    if ((cpu)); then trap - EXIT; say "prepared; the bootstraps run on (see /workspace/*-bootstrap.log); bash gpu/colab.sh down --cpu ends it"; exit 0; fi
     wait_text
     wait_pictures
+    trap - EXIT
     colab usage | grep -i 'balance\|rate' || true
     say "both lanes answer; the runtime goes when the text lane sleeps, or after $hours h"
     ;;
@@ -241,10 +247,17 @@ case $command in
     ;;
   down)
     [[ ! -e $state/keep.pid ]] || kill "$(cat "$state/keep.pid")" 2>/dev/null || true
-    colab stop -s "$session" || true
+    # The stop is verified: the runtime bills until `colab sessions` no longer lists it.
+    for try in 1 2 3; do
+      colab stop -s "$session" || true
+      alive || break
+      sleep 10
+    done
     ssh -O exit "$alias" 2>/dev/null || true
     rm -f "$state/keep.pid"
     colab usage | grep -i 'balance\|rate' || true
+    if alive; then echo "The Colab session $session is STILL ASSIGNED after three stops; stop it by hand in Colab now." >&2; exit 1; fi
+    say "released: $session is no longer assigned"
     ;;
   *)
     sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
